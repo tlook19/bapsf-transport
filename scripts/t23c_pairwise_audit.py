@@ -138,10 +138,7 @@ def build_context(sim):
     solve = sim.solve_cathode_boundary(state=state, update_cache=False)
     spec = sim._cathode_jet_spec(solve)
     carrier_out = {}
-    if sim._characteristic_boundary:
-        boundary = sim.characteristic_boundary_rhs
-    else:
-        boundary = sim.boundary_absorption_rhs
+    boundary = sim.characteristic_boundary_rhs
     boundary_on = boundary(
         state=state, cathode_solve=solve, carrier_out=carrier_out
     )

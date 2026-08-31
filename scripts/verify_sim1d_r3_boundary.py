@@ -1,31 +1,31 @@
 """R3.1 characteristic ghost-cell Bohm outflow: pre-registered unit gates.
 
-Static gates for R3.1, the ghost-cell Bohm outflow boundary approach
-(audit A1/A16). The characteristic boundary replaces the closed-
-reflecting-face + one-sided volumetric absorber with a one-sided ghost-cell
-KEP/Rusanov flux against the Bohm outflow state (n_se = n*presheath_alpha,
-u = c_s into the wall, Te, Ti). These gates check the boundary in isolation on a
-controlled state; the *dynamics* (u -> c_s established, the settled boundary as a
-net energy sink) are validated by the separate short startup run
-(verify_sim1d_r3_boundary_startup.py), NOT here -- R3.1 changes the dynamics.
+Static gates for the ghost-cell Bohm outflow boundary (audit A1/A16): a
+one-sided ghost-cell KEP/Rusanov flux against the Bohm outflow state
+(n_se = n*presheath_alpha, u = c_s into the wall, Te, Ti). These gates check the
+boundary in isolation on a controlled state; the *dynamics* (u -> c_s
+established, the settled boundary as a net energy sink) are validated by the
+separate short startup run (verify_sim1d_r3_boundary_startup.py), NOT here.
 
-Gates (fixed before implementation):
+Gates:
   G1 both outward normals drain their live cell (Bohm particle SINK, source-left
      and collector-right), and only the live cell (the plenum is untouched);
   G2 the particle sink is the sonic flux ~ n * c_s * A to the flux's KEP
      dissipation band (the ghost n_se = alpha*n plus Rusanov upwinding);
   G3 restoring momentum: at the A1 ANOMALY state (interior flowing AWAY from each
-     wall) the characteristic boundary's momentum flux is well below the
-     reflecting closed-wall pressure p_live it replaces -- so relative to the old
-     reflecting wall the interior is pulled toward the wall (the mechanism that
-     drives u -> c_s), and its reconstructed-kinetic source is far smaller than
-     the old volumetric sink's;
+     wall) the boundary's momentum flux is well below the reflecting closed-wall
+     pressure p_live, so the interior is pulled toward the wall -- the mechanism
+     that drives u -> c_s;
   G4 at the physical Bohm outflow state (u = outward*c_s) the boundary is a net
      energy sink (electron internal + ion internal + reconstructed kinetic < 0),
-     i.e. NOT the A1 +18.5 kW kinetic source;
-  G5 off-path presence: the RHS ledger carries a zero characteristic_boundary
-     term and an unchanged boundary_absorption term when the flag is off, and the
-     flag perturbs the operator when on.
+     i.e. NOT the A1 +18.5 kW kinetic source.
+
+RETIRED 2026-08-31 (Tom), with the legacy volumetric absorber they compared
+against: G5 (off-path presence and flag perturbation) in full, and G3's
+"reconstructed-kinetic source smaller than the old volumetric sink's" half.
+Neither is constructible now that the absorber and its flag are gone -- G3's
+restoring-momentum statement, which is measured against the reflecting-wall
+pressure rather than against the other operator, is unaffected and still runs.
 
 The SETTLED-window net sink and u -> c_s establishment are the RUN gate
 (verify_sim1d_r3_boundary_startup.py), NOT this static probe.
@@ -40,7 +40,6 @@ from cablp.solvers._sim1d import LAPDSim1D, default_config
 from cablp.solvers._sim1d.core.state import conservative_from_primitives
 from cablp.solvers._sim1d.physics.flux import ion_sound_speed
 from cablp.solvers._sim1d.physics.sources import (
-    boundary_absorption_rhs,
     characteristic_boundary_rhs,
     presheath_alpha,
     presheath_length_cm,
@@ -50,12 +49,11 @@ from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 ERG_TO_W = 1e-7
 
 
-def _resolved_sim(characteristic=False, extra_flags=None):
+def _resolved_sim(extra_flags=None):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
     params["nx"] = 120
-    flags["characteristic_boundary"] = characteristic
     if extra_flags:
         flags.update(extra_flags)
     return LAPDSim1D(params, flags)
@@ -102,7 +100,7 @@ def _net_power(term, geo):
 
 def main():
     ok = True
-    sim = _resolved_sim(characteristic=True)
+    sim = _resolved_sim()
     geo = sim.geometry
     mu = sim._mu
     m_i = sim.ion_mass_g
@@ -145,9 +143,6 @@ def main():
         state=anom_state, floors=sim._floors, ion_mass_g=m_i, mu=mu,
         geometry=geo, alpha_isat=float(np.exp(-0.5)), b_surface_loss=1.0,
     )
-    ba_a = boundary_absorption_rhs(
-        state=anom_state, floors=sim._floors, ion_mass_g=m_i, mu=mu, geometry=geo,
-    )
     g3 = True
     for face, live in anom_edges.items():
         p_live = float(dv_a.p[live])
@@ -158,14 +153,10 @@ def main():
         u_l = float(dv_a.u[live])
         dK_new = float((u_l * ch_a.M[live] - 0.5 * m_i * u_l**2 * ch_a.n[live])
                        * Vp[live] * ERG_TO_W)
-        dK_old = float((u_l * ba_a.M[live] - 0.5 * m_i * u_l**2 * ba_a.n[live])
-                       * Vp[live] * ERG_TO_W)
         restoring = f_M < 0.5 * p_live  # far below the reflecting wall it replaces
-        smaller_source = abs(dK_new) < abs(dK_old)
-        g3 &= restoring and smaller_source
+        g3 &= restoring
         print(f"G3 face {face:3d}: anomaly F_M {f_M:.3e} vs p_live {p_live:.3e} "
-              f"(ratio {f_M/p_live:.3f}<0.5); reconstructed KE new {dK_new:+.2e} "
-              f"vs old {dK_old:+.2e} W")
+              f"(ratio {f_M/p_live:.3f}<0.5); reconstructed KE {dK_new:+.2e} W")
 
     # --- G4: net energy sink at the physical Bohm outflow state -----------
     def reconstructed_kinetic(term, u):
@@ -180,43 +171,12 @@ def main():
     print(f"G4 Bohm-outflow state [W]: e {P['electron']:+.3e}  i {P['ion']:+.3e}"
           f"  kinetic {P_kin:+.3e}  NET {net:+.3e}  (sink: {g4})")
 
-    # Contrast: the OLD volumetric sink at the SAME physical outflow state books
-    # the reconstructed kinetic with the opposite (source) tendency.
-    ba = boundary_absorption_rhs(
-        state=state, floors=sim._floors, ion_mass_g=m_i, mu=mu, geometry=geo,
-    )
-    ba_kin = reconstructed_kinetic(ba, u_bohm)
-    print(f"   (old volumetric-sink reconstructed kinetic at same state: "
-          f"{ba_kin:+.3e} W)")
+    # G5 (off-path presence + flag perturbation) was RETIRED 2026-08-31 (Tom)
+    # with the flag it switched: there is no off path to be present, and no
+    # second operator to perturb away from.
 
-    # --- G5: off-path presence + construction rejection -------------------
-    off = _resolved_sim(characteristic=False)
-    off_terms = off.rhs_terms()
-    g5_zero = bool(np.all(off_terms["characteristic_boundary"].n == 0.0)
-                   and np.all(off_terms["characteristic_boundary"].M == 0.0)
-                   and np.all(off_terms["characteristic_boundary"].Ee == 0.0)
-                   and np.all(off_terms["characteristic_boundary"].Ei == 0.0))
-    # boundary_absorption is untouched off-path (active in-phase); check the
-    # method still returns the historical term.
-    g5_ba = bool(np.any(off.boundary_absorption_rhs(state=off.state).n != 0.0))
-    print(f"G5 off-path characteristic term is zero         : {g5_zero}")
-    print(f"G5 off-path boundary_absorption unchanged/active: {g5_ba}")
-
-    # Perturbation (R1d): turning the flag on must change the operator. Compare
-    # the on/off boundary contribution at a common flowing state.
-    on = _resolved_sim(characteristic=True)
-    st_on, _, _ = _uniform_state(on, n0, Te0, Ti0, u_edge_frac=1.0)
-    on_ch = on.characteristic_boundary_rhs(state=st_on)
-    off_ba = off.boundary_absorption_rhs(state=st_on)
-    g5_perturb = not np.allclose(on_ch.M, off_ba.M)
-    print(f"G5 flag ON perturbs the boundary operator       : {g5_perturb}")
-    print("   (the no-absorbing-faces construction guard is defensive; every "
-          "resolved geometry has absorbing faces since resolved_boundaries=False "
-          "was removed at D2)")
-
-    ok = (g1 and g1_plenum and g2 and g3 and g4 and g5_zero and g5_ba
-          and g5_perturb)
-    print("\nR3.1 boundary unit gates:", "OK" if ok else "FAILED")
+    ok = g1 and g1_plenum and g2 and g3 and g4
+    print("\nboundary unit gates:", "OK" if ok else "FAILED")
     return 0 if ok else 1
 
 

@@ -1,23 +1,25 @@
-"""R3.1 characteristic ghost-cell Bohm outflow: short startup RUN gate.
+"""Characteristic ghost-cell Bohm outflow: short startup RUN gate.
 
-R3.1 changes the boundary dynamics, so its decisive validation is a run, not a
-static probe.
-This runs the live ES1 stance to a short startup window (through main discharge)
-twice -- with the characteristic ghost-cell Bohm outflow ON and with the
-historical closed-face + volumetric absorber (OFF) -- and checks that the
-characteristic boundary:
+The boundary sets the edge dynamics, so its decisive validation is a run, not a
+static probe. This runs the live ES1 stance to a short startup window (through
+main discharge) and checks that the boundary:
 
   (a) establishes the Bohm outflow at the edge: the source-cathode and collector
       edge cells flow INTO their walls at ~ the sound speed (u sign = outward
       normal, |u| a good fraction of c_s), instead of the A1 "away from the wall"
       signature;
   (b) is a net ENERGY SINK over the main-discharge window (electron internal +
-      ion internal + reconstructed kinetic < 0);
-  (c) is no longer the A1 +18.5 kW reconstructed-kinetic SOURCE the historical
-      boundary_absorption books at the same stance.
+      ion internal + reconstructed kinetic < 0).
+
+RETIRED 2026-08-31 (Tom): gate (c) -- "the reconstructed kinetic is no longer
+the A1 source the historical boundary_absorption books at the same stance" --
+and with it the second, characteristic-OFF run this script used to make. That
+comparison arm is not constructible now that the legacy volumetric absorber and
+its flag are gone. The last measurement of record on this fixture, at base
+commit 967ff0c, was new -16.01 kW vs old +0.20 kW.
 
 A short startup run is a diagnostic, NOT an ES campaign point; longer runs need
-Tom's go-ahead. This is minutes-long (two partial production runs).
+Tom's go-ahead. This is minutes-long (one partial production run).
 
 Usage:  python scripts/verify_sim1d_r3_boundary_startup.py [--t-end-ms 6]
 """
@@ -34,12 +36,11 @@ MI = 4.0 * 1.6726e-24  # He ion mass [g]
 ERG_TO_W = 1e-7
 
 
-def run(characteristic, t_end):
+def run(t_end):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
     params["nx"] = 120
-    flags["characteristic_boundary"] = characteristic
     sim = LAPDSim1D(params, flags)
     status = "completed"
     try:
@@ -110,24 +111,20 @@ def main(argv=None):
     args = parser.parse_args(argv)
     t_end = args.t_end_ms * 1e-3
 
-    sim_on, res_on, st_on = run(True, t_end)
-    print(f"characteristic ON : {st_on}")
+    sim_on, res_on, st_on = run(t_end)
+    print(f"characteristic boundary: {st_on}")
     edge_ok, net_on, kin_on = summarize(sim_on, res_on, "characteristic_boundary")
-    print()
-    sim_off, res_off, st_off = run(False, t_end)
-    print(f"characteristic OFF: {st_off}")
-    _, net_off, kin_off = summarize(sim_off, res_off, "boundary_absorption")
 
-    print("\n--- R3.1 run gate ---")
+    print("\n--- boundary run gate ---")
     a = edge_ok
     b = net_on < 0.0
-    c = kin_on < kin_off  # no longer the larger A1 kinetic source
     print(f"(a) Bohm outflow established at both edges     : {a}")
     print(f"(b) characteristic boundary is a net sink      : {b} ({net_on/1e3:+.2f} kW)")
-    print(f"(c) kinetic no longer the A1 source vs old     : {c} "
-          f"(new {kin_on/1e3:+.2f} kW vs old {kin_off/1e3:+.2f} kW)")
-    ok = a and b and c and st_on == "completed"
-    print("R3.1 startup run:", "OK" if ok else "FAILED / NULL (deliverable)")
+    print(f"    reconstructed kinetic = {kin_on/1e3:+.2f} kW "
+          f"(base-commit reference: -16.01 kW; the old absorber booked +0.20 kW "
+          f"before it was retired 2026-08-31)")
+    ok = a and b and st_on == "completed"
+    print("startup run:", "OK" if ok else "FAILED / NULL (deliverable)")
     return 0 if ok else 1
 
 

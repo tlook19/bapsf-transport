@@ -69,8 +69,7 @@ def gate_scalar_correctness():
         "tau_breakdown": 0.0, "tau_discharge": 1.0, "tau_afterglow": 0.0,
         "nx": 60,
     })
-    flags.update({"Plasma": True, "cathode_coupling": False,
-                  "characteristic_boundary": True})
+    flags.update({"Plasma": True, "cathode_coupling": False})
     sim = LAPDSim1D(params, flags)
     sim.start_simulation(t_end=3.2e-3)
     snap = sim._trajectory_snapshot(sim._time)

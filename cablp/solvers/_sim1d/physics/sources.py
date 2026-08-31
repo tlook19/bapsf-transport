@@ -685,7 +685,7 @@ def cathode_jet_backscatter_speed(cathode_jet, Ti_eV, ion_mass_g):
 
     THE ONE SPEC. Every consumer of the backscattered atoms' kinetic energy
     reads it here -- the directed momentum booked by
-    :func:`boundary_absorption_rhs` and :func:`characteristic_boundary_rhs`,
+    :func:`characteristic_boundary_rhs`,
     and the ``En`` the solver's ``cathode_jet_neutral_energy`` term hands the
     neutral gas -- so the momentum and the energy can never describe atoms
     moving at two different speeds.
@@ -793,239 +793,6 @@ def anode_jet_backscatter_speed(anode_jet, Ti_eV, ion_mass_g):
     )
 
 
-def boundary_absorption_rhs(
-    state,
-    floors,
-    ion_mass_g,
-    mu,
-    geometry,
-    alpha_isat=np.exp(-0.5),
-    b_surface_loss=1.0,
-    b_presheath_length=1.0,
-    gas_type=None,
-    cathode_jet=None,
-    Tn_presheath_eV=None,
-    end_recycle_annulus_volume_cm3=None,
-    cathode_carrier_out=None,
-):
-    """Return the plasma absorbed by the plasma-terminating surfaces.
-
-    ``cathode_carrier_out``: when given (a dict), the directed hot surface
-    carrier is ARMED and this term stops booking the backscatter share of the
-    cathode recycle itself -- see
-    :func:`~.jet_carrier.cathode_jet_carrier_rhs`, which spends it instead.
-    Two things change on the cathode faces alone, and both are the same
-    withholding: the ``R_N`` share of the recycle flux is removed from the
-    neutral rebirth row (the implanted ``1 - R_N`` effusive share stays,
-    cold at the surface temperature), and the jet's per-particle momentum
-    drops from ``R_N v_back + (1 - R_N) v_eff`` to ``(1 - R_N) v_eff``. The
-    withheld particle rate [s^-1] per cell is written back into the dict as
-    ``"launch_per_s"``, so the carrier's launch and this withdrawal are ONE
-    number rather than two estimates of it. ``None`` (the default, and every
-    historical caller) leaves both bookings exactly as they were, bit for
-    bit. The PLASMA sink is untouched either way: the surface absorbs the
-    same flux, only its re-emission changes.
-
-    ``end_recycle_annulus_volume_cm3``: when given (the per-cell annulus
-    volume [cm^3], supplied only under the ``end_recycle_to_annulus``
-    closure), the recycle stream rebirthed at faces whose live cell has the
-    ``collector`` role is deposited into the ANNULUS row ``nn_a`` at
-    ``dN_loss / V_ann`` instead of into the column row ``nn``. CATHODE faces
-    are untouched, so the jet/debit closure that owns them is unchanged. The
-    routed atoms are thermal and diffuse: no directed momentum is booked
-    anywhere for them, on either ``M_n`` or ``M_n_a``. ``None`` (the default,
-    and every historical caller) keeps the whole stream on the column row, so
-    that path is unchanged bit for bit.
-
-    ENERGY PAIRING for the routed stream. The recycled atoms are booked at
-    the wall temperature exactly ONCE. This term's column ``nn`` row is what
-    the ``"wall"`` entry of the solver's neutral-energy routing table turns
-    into a ``(3/2) k T_wall`` column-``En`` credit, so moving the routed
-    particles off that row removes their credit with them -- which is
-    correct, because the annulus carries no energy field and the zone-exchange
-    convention re-supplies wall-temperature enthalpy when annulus gas re-enters
-    the column. Booking both would plant the same energy twice.
-
-    ``Tn_presheath_eV``: optional PER-CELL neutral temperature [eV] for the
-    presheath collisionality's ``T_eff``. ``None`` (the default, and every
-    historical caller) keeps the fixed cold-gas value, so this path is
-    unchanged bit for bit; the kinetic DVM arm supplies the measured
-    ``Tn(z)`` here when its Tn-feedback switch is on.
-
-    ``cathode_jet``: when given (a dict with
-    ``R_N``, ``R_E``, ``phi_c_V``, ``T_s_K``, and optionally
-    ``energy_convention``) and the state carries ``M_n``,
-    the recycle flux rebirthed at a *cathode* face is a directed jet instead
-    of gas at rest: the reflected fraction ``R_N`` backscatters at the
-    ``v_back`` of :func:`cathode_jet_backscatter_speed` (which is also what
-    the solver's ``En`` term books, so momentum and energy describe the same
-    atoms) and the implanted remainder
-    ``1 - R_N`` desorbs as a directed effusive flux off the hot disc at
-    ``v_eff = sqrt(pi k T_s / (2 m))`` (the per-particle directed momentum
-    of a cosine-law effusive flux). The momentum rides in the SAME term
-    that rebirths the particles, so the two are consistent by construction;
-    the surface absorbs the difference between the incoming sonic momentum
-    and the re-emitted jet momentum, as any wall does. Collector faces stay
-    momentum-free (their sheath is the ~Te-scale ambipolar drop, not the
-    cathode fall). The reflected atoms' kinetic energy beyond the mean-flow
-    momentum is NOT booked -- neutrals carry no energy field (the standing
-    M2 convention); see the campaign log for the surface-debit sensitivity
-    arm that bounds the omission.
-
-    The cathode and collector surfaces end the plasma domain, so the Bohm
-    criterion applies to the face itself: plasma leaves at
-    the sound speed and is neutralized on the surface.
-
-    Applied one-sidedly to the live cell rather than as a face flux, because the
-    flux array telescopes: an *interior* absorbing face would otherwise hand the
-    plasma it removes to the plasma-dead plenum behind it, and kick that cell with
-    sonic momentum while its density sits on the floor.
-
-    The sonic condition is what distinguishes this from the historical volumetric
-    surface term: momentum leaves at ``c_s`` directed *into* the surface, not at
-    the cell's own drift ``u``, so the loss actually drives flow toward the wall
-    instead of deleting plasma that was never moving there. Legacy geometry has no
-    absorbing faces, so it leaves resolved boundary absorption unchanged.
-    """
-    zeros = np.zeros(geometry.cells, dtype=float)
-    absorbing = np.asarray(
-        getattr(geometry, "plasma_absorbing", np.zeros(0)), dtype=bool
-    )
-    if not np.any(absorbing) or b_surface_loss == 0.0:
-        return ConservativeState1D(
-            n=zeros,
-            nn=zeros.copy(),
-            M=zeros.copy(),
-            Ee=zeros.copy(),
-            Ei=zeros.copy(),
-        )
-
-    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    roles = np.asarray(geometry.cell_role)
-    active = np.asarray(geometry.plasma_active, dtype=bool)
-    cells = roles.size
-    dN_loss = np.zeros(cells, dtype=float)
-    sonic_momentum = np.zeros(cells, dtype=float)
-    route_active = end_recycle_annulus_volume_cm3 is not None
-    dN_routed = np.zeros(cells, dtype=float) if route_active else None
-    jet_active = cathode_jet is not None and state.M_n is not None
-    jet_M_n = np.zeros(cells, dtype=float) if jet_active else None
-    carrier_active = jet_active and cathode_carrier_out is not None
-    dN_withheld = np.zeros(cells, dtype=float) if carrier_active else None
-    if jet_active:
-        # Directed effusive desorption off the hot disc: per-particle
-        # momentum of a cosine-law effusive flux at the surface temperature.
-        v_eff = np.sqrt(
-            np.pi * kb_cgs * max(float(cathode_jet["T_s_K"]), 0.0)
-            / (2.0 * ion_mass_g)
-        )
-    for face in np.flatnonzero(absorbing):
-        face = int(face)
-        live = int(geometry.plasma_face_live_cell[face])
-        if live < 0:
-            continue
-        live_is_right = live == face
-        # Outward normal: plasma on the high-z side of the surface flows toward
-        # -z to reach it, and vice versa.
-        outward = -1.0 if live_is_right else 1.0
-        cs = ion_sound_speed(derived.Te[live], mu)
-        # Apply only the portion of the presheath drop that the cell actually
-        # spans: the full exp(-1/2) is valid when the presheath fits inside the
-        # cell, and tends to no correction when the cell is buried inside a
-        # presheath much longer than it.
-        presheath_cm = b_presheath_length * presheath_length_cm(
-            nn=state.nn[live],
-            Te=derived.Te[live],
-            Ti=derived.Ti[live],
-            mu=mu,
-            ion_mass_g=ion_mass_g,
-            gas_type=gas_type,
-            Tn_eV=(
-                None
-                if Tn_presheath_eV is None
-                else float(np.asarray(Tn_presheath_eV, dtype=float)[live])
-            ),
-        )
-        alpha_eff = presheath_alpha(
-            alpha_isat=alpha_isat,
-            cell_length_cm=geometry.length_cm[live],
-            presheath_cm=presheath_cm,
-        )
-        loss = _cell_surface_particle_loss(
-            n=state.n[live],
-            Te=derived.Te[live],
-            mu=mu,
-            area_cm2=float(geometry.plasma_face_area_cm2[face]),
-            alpha_isat=alpha_eff,
-        )
-        dN_loss[live] += loss
-        sonic_momentum[live] += ion_mass_g * outward * cs * loss
-        if route_active and roles[live] == "collector":
-            dN_routed[live] += loss
-        if jet_active and roles[live] == "cathode":
-            v_back = cathode_jet_backscatter_speed(
-                cathode_jet, derived.Ti[live], ion_mass_g
-            )
-            R_N = float(cathode_jet["R_N"])
-            if carrier_active:
-                # The carrier owns the backscatter share: it leaves as its own
-                # directed beam instead of as this cell's cold rebirth.
-                dN_withheld[live] += R_N * loss
-                v_mix = (1.0 - R_N) * v_eff
-            else:
-                v_mix = R_N * v_back + (1.0 - R_N) * v_eff
-            # Directed into the plasma: opposite the face's outward normal.
-            jet_M_n[live] += (
-                -outward
-                * ion_mass_g
-                * v_mix
-                * loss
-                / (
-                    geometry.plasma_volume_cm3[live]
-                    if state.M_n_a is not None
-                    else geometry.neutral_volume_cm3[live]
-                )
-            )
-    dN_loss *= float(b_surface_loss)
-    sonic_momentum *= float(b_surface_loss)
-    if route_active:
-        dN_routed *= float(b_surface_loss)
-    if jet_active:
-        jet_M_n *= float(b_surface_loss)
-    if carrier_active:
-        dN_withheld *= float(b_surface_loss)
-        cathode_carrier_out["launch_per_s"] = dN_withheld
-
-    plasma_loss_rate = dN_loss / geometry.plasma_volume_cm3
-    # Two-zone state: the cathode disc and collector are recycle faces and
-    # feed the COLUMN (the jet momentum stays chamber-mean on M_n). Under the
-    # end-recycle routing the collector's share is split off to the annulus
-    # instead; the column row is then the remainder, exactly zero on a cell
-    # whose only absorbing face is a collector one.
-    dN_column = dN_loss if not route_active else dN_loss - dN_routed
-    if carrier_active:
-        dN_column = dN_column - dN_withheld
-    nn_a_row = (
-        None
-        if not route_active
-        else _annulus_deposit_row(dN_routed, end_recycle_annulus_volume_cm3)
-    )
-    return ConservativeState1D(
-        n=-plasma_loss_rate,
-        nn=dN_column
-        / (
-            geometry.plasma_volume_cm3
-            if state.nn_a is not None
-            else geometry.neutral_volume_cm3
-        ),
-        M=-sonic_momentum / geometry.plasma_volume_cm3,
-        Ee=-1.5 * ev_to_erg * derived.Te * plasma_loss_rate,
-        Ei=-1.5 * ev_to_erg * derived.Ti * plasma_loss_rate,
-        M_n=jet_M_n,
-        nn_a=nn_a_row,
-    )
-
-
 def characteristic_boundary_rhs(
     state,
     floors,
@@ -1039,50 +806,88 @@ def characteristic_boundary_rhs(
     cathode_jet=None,
     wave_speed="isothermal",
     energy_consistent=False,
-    sheath_energy_routing=False,
     end_recycle_annulus_volume_cm3=None,
     cathode_carrier_out=None,
 ):
-    """Return the R3.1 characteristic ghost-cell Bohm outflow at absorbing faces.
+    """Return the characteristic ghost-cell Bohm outflow at absorbing faces.
 
-    The R3.1 boundary approach (ghost-cell Bohm outflow; audit A1/A16)
-    replaces the closed-reflecting-face + one-sided
-    volumetric sink of ``boundary_absorption_rhs``. At each plasma-terminating
-    (absorbing) face a ghost state is set to the Bohm outflow condition
+    THE plasma-terminating boundary operator: since the legacy volumetric
+    absorber was retired 2026-08-31 (Tom) this is the only discretization of
+    the cathode/collector surfaces, and it always runs. At each
+    plasma-terminating (absorbing) face a ghost state is set to the Bohm
+    outflow condition
 
         n_se = n * presheath_alpha,  u = c_s directed into the wall,  Te, Ti
 
     and the committed R2 KEP/Rusanov flux (``flux.kep_rusanov_face_scalar``) is
-    evaluated between the interior live cell and the ghost. Unlike the historical
-    volumetric sink -- which removed outward momentum at ``c_s`` from a cell that
-    was already flowing outward and so drove ``u`` further outward, booking the
-    absorbing wall as a net kinetic SOURCE (the A1/A16 ``+18.5 kW``) -- the ghost
-    flux DRIVES the interior toward the Bohm state and is a net energy sink.
+    evaluated between the interior live cell and the ghost. The ghost flux
+    DRIVES the interior toward the Bohm state and is a net energy sink.
 
-    The flux is applied **one-sidedly to the live cell**, exactly as the old sink
-    was: the shared face-flux array telescopes, so an interior absorbing face
-    would otherwise hand the removed plasma to the plasma-dead plenum behind it.
-    When the flag is on the advective flux carries nothing at these faces
-    (``flux._apply_plasma_walls`` zeroes them), so the ghost flux -- which
-    includes its own pressure term ``M_g u_g + p_g`` -- is the complete face
-    condition, not an addition to the reflecting wall pressure.
+    The flux is applied **one-sidedly to the live cell**: the shared face-flux
+    array telescopes, so an interior absorbing face would otherwise hand the
+    removed plasma to the plasma-dead plenum behind it. The advective flux
+    carries nothing at these faces (``flux._apply_plasma_walls`` zeroes them),
+    so the ghost flux -- which includes its own pressure term ``M_g u_g +
+    p_g`` -- is the complete face condition, not an addition to a reflecting
+    wall pressure.
 
-    The neutral return and the cathode jet are booked exactly as in
-    ``boundary_absorption_rhs``, and so is the optional
-    ``end_recycle_annulus_volume_cm3`` routing of the COLLECTOR faces' recycle
-    stream into ``nn_a`` (including its energy pairing -- see that function's
-    docstring; cathode faces are untouched there too). ``None`` is every
-    historical caller and leaves this path unchanged bit for bit.
+    ELECTRON ENERGY ROW. The electron wall loss is the flux-weighted sheath
+    value ``2 Te``, and the sheath-fall ``phi`` is electrode energy, never the
+    plasma thermal store. At DRIVEN electrodes (the cathode) the circuit owns
+    it -- it is booked once by ``cathode_source_terms`` as
+    ``P_cathode_e_thermal`` -- so this term adds nothing there. At the
+    COLLECTOR (a floating zero-net-current exhaust with no circuit branch)
+    this term IS the electron sheath: ``2 Te`` per electron at the Bohm flux
+    (electron flux = ion flux).
 
-    ``cathode_carrier_out`` arms the directed hot surface carrier and is booked
-    exactly as in ``boundary_absorption_rhs`` -- the ``R_N`` share of the
-    cathode recycle is withheld from the neutral rebirth row and from the jet
-    momentum, and the withheld rate is written back as ``"launch_per_s"``. See
-    that function's docstring; ``None`` leaves this path unchanged bit for bit.
+    ``end_recycle_annulus_volume_cm3``: when given (the per-cell annulus
+    volume [cm^3], supplied only under the ``end_recycle_to_annulus``
+    closure), the recycle stream rebirthed at faces whose live cell has the
+    ``collector`` role is deposited into the ANNULUS row ``nn_a`` at
+    ``dN_loss / V_ann`` instead of into the column row ``nn``. CATHODE faces
+    are untouched, so the jet/debit closure that owns them is unchanged. The
+    routed atoms are thermal and diffuse: no directed momentum is booked for
+    them on either ``M_n`` or ``M_n_a``. ``None`` keeps the whole stream on
+    the column row, bit for bit.
 
-    The sheath-``phi`` -> electrode-surface power routing and the circuit's
-    read of the same ``n_se`` are the R3.2 control-surface ledger, layered on
-    top of this term. Default off; golden bit-exact.
+    ENERGY PAIRING for the routed stream. The recycled atoms are booked at the
+    wall temperature exactly ONCE. This term's column ``nn`` row is what the
+    ``"wall"`` entry of the solver's neutral-energy routing table turns into a
+    ``(3/2) k T_wall`` column-``En`` credit, so moving the routed particles off
+    that row removes their credit with them -- which is correct, because the
+    annulus carries no energy field and the zone-exchange convention
+    re-supplies wall-temperature enthalpy when annulus gas re-enters the
+    column. Booking both would plant the same energy twice.
+
+    ``cathode_jet``: when given (a dict with ``R_N``, ``R_E``, ``phi_c_V``,
+    ``T_s_K``, and optionally ``energy_convention``) and the state carries
+    ``M_n``, the recycle flux rebirthed at a *cathode* face is a directed jet
+    instead of gas at rest: the reflected fraction ``R_N`` backscatters at the
+    ``v_back`` of :func:`cathode_jet_backscatter_speed` (which is also what the
+    solver's ``En`` term books, so momentum and energy describe the same atoms)
+    and the implanted remainder ``1 - R_N`` desorbs as a directed effusive flux
+    off the hot disc at ``v_eff = sqrt(pi k T_s / (2 m))`` (the per-particle
+    directed momentum of a cosine-law effusive flux). The momentum rides in the
+    SAME term that rebirths the particles, so the two are consistent by
+    construction. Collector faces stay momentum-free (their sheath is the
+    ~Te-scale ambipolar drop, not the cathode fall). The reflected atoms'
+    kinetic energy beyond the mean-flow momentum is NOT booked -- neutrals
+    carry no energy field (the standing M2 convention).
+
+    ``cathode_carrier_out``: when given (a dict), the directed hot surface
+    carrier is ARMED and this term stops booking the backscatter share of the
+    cathode recycle itself -- see
+    :func:`~.jet_carrier.cathode_jet_carrier_rhs`, which spends it instead.
+    Two things change on the cathode faces alone, and both are the same
+    withholding: the ``R_N`` share of the recycle flux is removed from the
+    neutral rebirth row (the implanted ``1 - R_N`` effusive share stays, cold
+    at the surface temperature), and the jet's per-particle momentum drops from
+    ``R_N v_back + (1 - R_N) v_eff`` to ``(1 - R_N) v_eff``. The withheld
+    particle rate [s^-1] per cell is written back into the dict as
+    ``"launch_per_s"``, so the carrier's launch and this withdrawal are ONE
+    number rather than two estimates of it. ``None`` leaves both bookings
+    unchanged, bit for bit. The PLASMA sink is untouched either way: the
+    surface absorbs the same flux, only its re-emission changes.
     """
     cells = geometry.cells
     zeros = np.zeros(cells, dtype=float)
@@ -1193,22 +998,12 @@ def characteristic_boundary_rhs(
         d_n[live] += scale * f_n
         d_M[live] += scale * f_M
         d_Ei[live] += scale * f_Ei
-        # Electron energy row. R3.1: the ghost enthalpy flux (~3/2 Te). R3.2/A16
-        # sheath-transmission routing:
-        # the electron wall loss is the flux-weighted sheath value 2 Te, and the
-        # sheath-fall phi is electrode energy (never the plasma thermal store).
-        # At DRIVEN electrodes (cathode) the circuit owns it -- it is booked once
-        # by cathode_source_terms as P_cathode_e_thermal, so the boundary adds
-        # nothing here (removing the R3.1 electron double-book). At the COLLECTOR
-        # (floating zero-net-current exhaust, no circuit branch) the boundary IS
-        # the electron sheath: 2 Te per electron at the Bohm flux (electron flux =
-        # ion flux), the missing collector electron sheath power.
-        if sheath_energy_routing:
-            if roles[live] == "collector":
-                d_Ee[live] += 2.0 * Te_l * ev_to_erg * (scale * f_n)
-            # cathode / other driven electrode: electron energy owned by circuit.
-        else:
-            d_Ee[live] += scale * f_Ee
+        # Electron energy row -- the sheath-transmission routing (A16), the
+        # only routing since the pure-ghost enthalpy alternative was retired
+        # 2026-08-31 (Tom). See the module docstring's ELECTRON ENERGY ROW.
+        if roles[live] == "collector":
+            d_Ee[live] += 2.0 * Te_l * ev_to_erg * (scale * f_n)
+        # cathode / other driven electrode: electron energy owned by circuit.
 
         # Particles/s leaving through this face (density sink-rate x cell volume).
         cell_loss = -scale * f_n * Vp[live]
@@ -1221,8 +1016,8 @@ def characteristic_boundary_rhs(
             )
             R_N = float(cathode_jet["R_N"])
             if carrier_active:
-                # The carrier owns the backscatter share (see
-                # boundary_absorption_rhs's ``cathode_carrier_out``).
+                # The carrier owns the backscatter share (see this function's
+                # ``cathode_carrier_out``).
                 withheld_abs[live] += R_N * cell_loss
                 v_mix = (1.0 - R_N) * v_eff
             else:
@@ -1254,7 +1049,7 @@ def characteristic_boundary_rhs(
         cathode_carrier_out["launch_per_s"] = withheld_abs
 
     # Neutral return: the absorbed plasma flux is rebirthed as neutrals on the
-    # column (two-zone) or chamber-mean volume, exactly as boundary_absorption
+    # column (two-zone) or chamber-mean volume
     # -- and, under the end-recycle routing, the collector faces' share goes to
     # the annulus instead, leaving the column row exactly zero there.
     column_abs = loss_abs if not route_active else loss_abs - routed_abs
@@ -1326,7 +1121,7 @@ def anode_collection_rhs(
     flow between them.
 
     The full ``alpha_isat`` applies here, and that is the *same* rule
-    ``boundary_absorption_rhs`` uses rather than an exception to it. The factor is
+    ``characteristic_boundary_rhs`` uses rather than an exception to it. The factor is
     attenuated by how much of the presheath a cell spans (``presheath_alpha``),
     and a mesh's presheath is **geometric**, not collisional: only ``eta`` of the
     cross-section terminates and the rest streams past, so each wire carries its

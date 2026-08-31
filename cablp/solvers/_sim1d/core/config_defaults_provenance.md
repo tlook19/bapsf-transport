@@ -1135,11 +1135,15 @@ there are RATIFICATION-PENDING and nothing in the kernel was tuned to them.
 The DEFAULT stays `"rates"` because the frozen production arm ran on it and
 must stay bit-reproducible; `scripts/k5_frozen_bitexact.py` is the check.
 
-**`neutral_kinetic_dvm_tn_feedback = False` — ASSUMED (a stance, not a value).**
-Off means the fluid keeps its fixed cold-gas neutral temperature where it needs
-one, exactly as today, while the arm reports its measured `Tn(z)` as a
-diagnostic. Default-off is what makes the assumed-300 K versus measured
-comparison a clean A/B rather than a confounded change of two things at once.
+**`neutral_kinetic_dvm_tn_feedback` — RETIRED 2026-08-31 (Tom).** The key is
+removed from the parameter template and is now rejected as an unknown key at
+construction. It switched whether the DVM's measured `Tn(z)` was consumed by
+the collisional presheath depth behind the sheath-edge sampling, and that
+consumer lived only in the legacy volumetric absorber, which was retired in the
+same pass. With no consumer left the switch could only have been inert, so it
+went with it. The DVM's `Tn` moment is unchanged and is still computed and
+reported as an in-process DIAGNOSTIC; no saved field moved. Its former default
+was `False`, so retiring it changes no shipped behaviour.
 
 **`neutral_kinetic_dvm_transfer_relax_fraction = 0.5` — ASSUMED (a numerical
 safety margin, not a physical quantity).** The share of a cell's ion-energy

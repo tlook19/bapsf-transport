@@ -42,13 +42,14 @@ equations these schemes discretize, see [`MODEL.md`](MODEL.md).
   thermal-energy flux and keeps the live cell's pressure as its momentum flux
   — the 0D closed-wall behavior. Under `resolved_boundaries` that closed set
   is not the two domain ends but every face bounding the plasma inside the
-  neutral domain. At the plasma-terminating (absorbing) subset the treatment
-  depends on `characteristic_boundary` (**on by default**): with it on the
-  advective flux carries NOTHING there, momentum included, because the
+  neutral domain. At the plasma-terminating (absorbing) subset the advective
+  flux carries NOTHING, momentum included, because the
   one-sided ghost-cell Bohm outflow (`sources.characteristic_boundary_rhs`)
   supplies the particle, momentum and energy flux together with its own
-  pressure term and the wall pressure on top would double-count; with it off
-  the closed-wall form above stands, which is the 0D legacy behaviour.
+  pressure term and the wall pressure on top would double-count. This is
+  unconditional: the closed-wall alternative at those faces, and the
+  `characteristic_boundary` selector that chose it, were retired 2026-08-31
+  (Tom).
 - **Front filling** (optional): a sonic-relaxation "front-filling" face flux
   (`front_filling_fluxes`, `alpha_front`) models plasma filling into unfilled
   cells, added alongside the Rusanov flux.
@@ -302,8 +303,8 @@ physically-motivated candidate bounds, then clamps to `[dt_min, dt_max]`:
   exact conservative temperature margins
   `Ee-3/2 n Te_floor` / `Ei-3/2 n Ti_floor`. The corresponding rates include
   the change in floor energy when density changes. The boundary half is the
-  operator the *stance* runs (the characteristic ghost-cell flux, or the
-  legacy volumetric absorber when `characteristic_boundary` is off), and an
+  characteristic ghost-cell flux -- the only plasma-terminating operator since
+  it was made unconditional on 2026-08-31 (Tom) -- and an
   engaged `kinetic_dvm` arm adds its plasma-side coupling term, which is
   otherwise a volumetric ion momentum/energy source no bound could see.
 
@@ -908,12 +909,13 @@ layered on top of Rusanov's own). Rusanov/LLF is retained; a contact-restoring
 numerical-diffusion evidence. The pre-registered gate suite G1–G7 lives in
 `scripts/verify_sim1d_r2_hyperbolic.py`.
 
-## R3 characteristic material boundaries (2026-07-24)
+## Characteristic material boundaries (introduced R3, 2026-07-24)
 
-As introduced at R3 the `characteristic_boundary` selector was default-off, and
-default-off was bit-exact against the R3-era checkpoint golden; in the current
-package it is **on by default**. The selector changes how the plasma-
-terminating faces are discretized.
+As introduced at R3 this was the `characteristic_boundary` selector, default-off
+and bit-exact off against the R3-era checkpoint golden; it later became the
+shipped default, and on 2026-08-31 (Tom) the selector and the legacy volumetric
+absorber it chose against were retired. The plasma-terminating faces are now
+discretized exactly one way, described below.
 
 - **Boundary flux.** At each absorbing face a ghost state is set to the Bohm
   outflow (`n_se = n·presheath_alpha`, `u = c_s` into the wall, `Te`, `Ti`) and
@@ -1044,7 +1046,7 @@ dn/dt = γ(z; background) · n + S(z, t)
 
 Neither `γ` nor `S` is re-derived here. `physics.tracer` builds both by
 evaluating the solver's OWN term functions (`reactions.reaction_rates`,
-`sources.boundary_absorption_rhs`, `cathode.beam_ionization_rhs_terms`) on a
+`sources.characteristic_boundary_rhs`, `cathode.beam_ionization_rhs_terms`) on a
 probe state and dividing out the known homogeneity degree of each channel in
 `n` — degree 1 for bulk ionization and surface loss, 2 for radiative
 recombination, 3 for three-body, 0 for the beam birth. That is exact, and it
@@ -1119,7 +1121,7 @@ balance**, refreshed on the same cadence as `γ`:
   power, and the `1.5·Te` the surface absorption carries out with each lost
   particle), `L₂` the degree-2 loss (electron–ion line power + electron–ion
   thermal exchange). All come from `energy.electron_cooling_rhs_terms`,
-  `energy.electron_ion_exchange_rhs` and `sources.boundary_absorption_rhs` on
+  `energy.electron_ion_exchange_rhs` and `sources.characteristic_boundary_rhs` on
   the same probe state, divided by their own degree. The surface term is in the
   balance because it is genuinely per-cell and because `γ` already consumes the
   same term function for the particle channel; taking one row without the other
@@ -1352,7 +1354,7 @@ Two honest caveats on the comparison, neither of which changes the outcome:
   max) do **not** reproduce against the shipped code at the shipped stance; the
   as-booked column above (75.5 eV at cell 2) is what the current code gives,
   and 49.4 eV is its cell-3 value. The original text attributes the difference
-  to the surface-loss row, and at the shipped `characteristic_boundary` stance
+  to the surface-loss row, and under the shipped electrode routing
   that row's `Ee` is routed to the cathode term and is zero at the cathode
   cell. The ×1 refusal, the ×1000 multi-valuedness and the ×10⁴ floor all
   reproduce exactly, as does every non-conduction row of the channel table to

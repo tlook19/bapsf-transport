@@ -277,21 +277,18 @@ def cathode_sample_indices(geometry):
 
 
 def cathode_circuit_alpha_sheath(
-    state, derived, geometry, cathode_index, mu, ion_mass_g, input_dict, input_flags
+    state, derived, geometry, cathode_index, mu, ion_mass_g, input_dict
 ):
-    """Return the cathode sheath-edge factor ``n_se/n`` for the circuit, or None.
+    """Return the cathode sheath-edge factor ``n_se/n`` for the circuit.
 
-    R3.2 (A16): under the unified-sampling stance
-    (``characteristic_boundary``), the circuit's cathode ion current must be
+    Unified sampling (A16): the circuit's cathode ion current is
     drawn at the SAME sheath-edge density the fluid boundary uses, so both call
     ``sources.electrode_sheath_alpha`` on the same cathode-adjacent cell (verified
     identical: ``beam_launch(geometry)[0]`` == the source cathode's live cell).
-    Returns ``None`` off-stance so ``solve_idriven`` keeps its exact flat
-    ``exp(-1/2)`` and the golden / M2 equivalence gate stay bit-exact. The anode
+    Unconditional since the legacy volumetric-absorber stance, which sampled a
+    flat ``exp(-1/2)`` here instead, was retired 2026-08-31 (Tom). The anode
     is not sampled here -- its geometric mesh presheath stays flat ``exp(-1/2)``.
     """
-    if not bool(input_flags.get("characteristic_boundary", False)):
-        return None
     return electrode_sheath_alpha(
         nn=float(state.nn[cathode_index]),
         Te=float(derived.Te[cathode_index]),
@@ -868,7 +865,7 @@ def idriven_result_evaluator(
     bridge = bool(input_flags.get("cathode_emission_bridge", False))
     cap = float(input_dict.get("cathode_phi_c_cap_V", 1000.0))
     alpha_sheath = cathode_circuit_alpha_sheath(
-        state, derived, geometry, idx, mu, ion_mass_g, input_dict, input_flags
+        state, derived, geometry, idx, mu, ion_mass_g, input_dict
     )
 
     def solve_at(I_A):
@@ -1338,7 +1335,7 @@ def solve_cathode_boundary(
             anode_T_e=anode_source[1],
             alpha_sheath=cathode_circuit_alpha_sheath(
                 state, derived, geometry, beam_launch(geometry, end=0)[0],
-                mu, ion_mass_g, input_dict, input_flags,
+                mu, ion_mass_g, input_dict,
             ),
             b_beam_excitation=float(
                 input_dict.get("b_beam_excitation", 0.0)
@@ -2722,9 +2719,6 @@ def cathode_source_terms(
     anode_power_loss_W = zeros.copy()
     cathode_cells = cathode_adjacent_cells(geometry)
     anode_pairs = anode_flanking_cells(geometry)
-    # R3.2/A16: under the repaired boundary stance, route only the plasma-thermal
-    # electron power to the plasma; the sheath-fall phi is booked on the electrode.
-    thermal_only = bool(input_flags.get("characteristic_boundary", False))
     # anode_sheath_full_debit: complete the anode side of that routing by
     # charging the plasma electrons the sheath fall they climbed as well.
     anode_full_debit = bool(
@@ -2739,7 +2733,6 @@ def cathode_source_terms(
             anode_pair=anode_pairs[0] if anode_pairs else None,
             state=state,
             derived=derived,
-            thermal_only=thermal_only,
             anode_full_debit=anode_full_debit,
         )
         if (
@@ -2754,7 +2747,6 @@ def cathode_source_terms(
                 anode_pair=anode_pairs[-1] if len(anode_pairs) > 1 else None,
                 state=state,
                 derived=derived,
-                thermal_only=thermal_only,
                 anode_full_debit=anode_full_debit,
             )
     else:
@@ -3598,7 +3590,7 @@ def _cathode_particle_loss_rate(result, eta):
 
 def _deposit_electrode_power(
     cathode_power_loss_W, anode_power_loss_W, result, cathode_cell, anode_pair,
-    state, derived, thermal_only=False, anode_full_debit=False,
+    state, derived, anode_full_debit=False,
 ):
     """Land P_cathode_e and P_anode_e in their OWN per-electrode accumulators.
 
@@ -3620,15 +3612,16 @@ def _deposit_electrode_power(
     the anode row can be nonzero at the cathode cell, and it is the one
     configuration in which the two rows share a cell.
 
-    ``thermal_only`` (R3.2/A16 routing, the repaired stance): deposit only the
-    PLASMA-THERMAL part (2Te per electron), leaving the sheath-fall ``phi`` on the
-    electrode/circuit surface instead of removing it from the plasma thermal
-    store. Off (the golden default) deposits the full historical P_*_e.
+    THERMAL-ONLY ROUTING (A16), unconditional since the legacy
+    volumetric-absorber stance was retired 2026-08-31 (Tom): only the
+    PLASMA-THERMAL part (2Te per electron) is deposited, leaving the
+    sheath-fall ``phi`` on the electrode/circuit surface instead of removing it
+    from the plasma thermal store.
 
     ``anode_full_debit`` (``anode_sheath_full_debit``): add the anode's
     sheath-fall share ``phi_a * I_e_coll`` back onto the plasma electron
     store, so the ANODE debit is the sheath-edge ``(2 Te + phi_a)`` per
-    collected electron while the cathode side keeps its ``thermal_only``
+    collected electron while the cathode side keeps its thermal-only
     routing -- at the cathode the accelerated species is the ion, so the
     electron fall there is not plasma-electron energy. ``I_e_coll`` is the
     collected electron current ``I_i_a * fe_a``, and its ``phi_a`` moment is
@@ -3651,15 +3644,14 @@ def _deposit_electrode_power(
     both on the cathode diagnostics of an armed run. A non-finite ``phi_a``
     belongs to neither regime and raises.
 
-    Composition with ``thermal_only``: the two are armed together (the solver
-    refuses ``anode_sheath_full_debit`` without ``characteristic_boundary``),
-    so the repelling-regime anode deposit is
+    Composition with the thermal-only routing above, which always runs, so
+    the repelling-regime anode deposit is
     ``P_anode_e_thermal + P_anode_e_phi``. The unresolved-cathode fallback
     below this function already deposits the full ``P_anode_e`` and so is
     already on the corrected anode convention.
     """
-    p_cathode_e = result.P_cathode_e_thermal if thermal_only else result.P_cathode_e
-    p_anode_e = result.P_anode_e_thermal if thermal_only else result.P_anode_e
+    p_cathode_e = result.P_cathode_e_thermal
+    p_anode_e = result.P_anode_e_thermal
     if anode_full_debit:
         phi_a = float(result.phi_a)
         if not np.isfinite(phi_a):

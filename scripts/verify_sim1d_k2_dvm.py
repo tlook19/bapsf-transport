@@ -42,12 +42,12 @@ Gates:
       per annulus treatment, and on the in-solver default arm -- all at the
       tolerance the particle ledger is held to
   S1  recycle identity: what the arm sources at a plasma-terminating surface
-      equals what the ACTIVE boundary term removed from the plasma there,
+      equals what the boundary term removed from the plasma there,
       per face, on all three geometries of RECYCLE_GEOMETRIES -- the shipped
       uniform bore, the R5 stand-in (whose plenum obstruction puts the
       cathode's live cell at index 2 rather than at the mesh start) and the
-      PRODUCTION machine read from the stance file -- in both stances of
-      ``characteristic_boundary``; and the arm deposits it in that same cell
+      PRODUCTION machine read from the stance file; and the arm deposits it
+      in that same cell
   S2  per-end pump fidelity: at each end the sticking coefficient times that
       end's OWN open area times the incident one-way flux is the configured
       pumping speed, with ``pump_elbow_conductance_lps`` folded in series on
@@ -902,23 +902,26 @@ RECYCLE_GEOMETRIES = (
 )
 
 
-def recycle_identity(geometry_keys, characteristic_boundary, steps=40):
+def recycle_identity(geometry_keys, steps=40):
     """Compare the arm's wall-return channels with the plasma actually removed.
 
-    The DESIGN INVARIANT: whatever the active plasma-terminating boundary
-    term takes out of the plasma at an absorbing face, the arm re-injects as
-    neutrals at that same face -- per face, to roundoff, in either stance.
-    The two sides are read independently: the channel rates from
-    ``_kinetic_channel_rates`` (what the arm will source), the removal from
-    the boundary term's PLASMA row ``-n * V_plasma`` (what left the plasma).
-    Nothing here reads the ``nn`` return row the implementation samples, so a
-    channel that samples the wrong operator, or the wrong cell, cannot satisfy
-    both sides at once.
+    The DESIGN INVARIANT: whatever the plasma-terminating boundary term takes
+    out of the plasma at an absorbing face, the arm re-injects as neutrals at
+    that same face -- per face, to roundoff. The two sides are read
+    independently: the channel rates from ``_kinetic_channel_rates`` (what the
+    arm will source), the removal from the boundary term's PLASMA row
+    ``-n * V_plasma`` (what left the plasma). Nothing here reads the ``nn``
+    return row the implementation samples, so a channel that samples the wrong
+    cell cannot satisfy both sides at once.
+
+    The stance sweep this used to run (both values of the retired
+    ``characteristic_boundary`` flag) went with that flag on 2026-08-31 (Tom);
+    the invariant itself is unchanged and is now asserted against the single
+    surviving operator, still across all three geometries.
     """
     overrides = {
         "neutral_kinetic_dvm_nvz": 16,
         "neutral_kinetic_dvm_nvp": 6,
-        "flag:characteristic_boundary": bool(characteristic_boundary),
     }
     overrides.update(geometry_keys)
     sim = make_sim(**overrides)
@@ -928,11 +931,7 @@ def recycle_identity(geometry_keys, characteristic_boundary, steps=40):
     roles = np.asarray(geom.cell_role)
     Vp = np.asarray(geom.plasma_volume_cm3, dtype=float)
     state = sim.state
-    term = (
-        sim.characteristic_boundary_rhs(state=state)
-        if characteristic_boundary
-        else sim.boundary_absorption_rhs(state=state)
-    )
+    term = sim.characteristic_boundary_rhs(state=state)
     removed = -np.asarray(term.n, dtype=float) * Vp
     rates = sim._kinetic_channel_rates(state, sim.derived, sim.time)
     by_role = absorbing_live_cells_by_role(geom)
@@ -1307,48 +1306,45 @@ def gate_s1():
     lines = []
     ok = True
     for geometry_name, geometry_keys in RECYCLE_GEOMETRIES:
-        for characteristic_boundary in (False, True):
-            sim, roles, faces = recycle_identity(
-                geometry_keys, characteristic_boundary
+        sim, roles, faces = recycle_identity(geometry_keys)
+        label = f"{geometry_name}"
+        for face in faces:
+            cell = face["cell"]
+            # The invariant, plus the two structural statements the
+            # positional-constant defect violated: the channel is live and
+            # it sits on the role-resolved cell -- which is cell 2 on the
+            # R5 stand-in, whose plenum obstruction is the only geometry
+            # here that moves the cathode off the mesh start.
+            face_ok = (
+                face["rel"] < ROUNDOFF_REL
+                and face["removed"] > 0.0
+                and face["recycled"] > 0.0
+                and face["off_face"] == 0.0
+                and str(roles[cell]) == face["role"]
             )
-            label = f"{geometry_name}/char={int(characteristic_boundary)}"
-            for face in faces:
-                cell = face["cell"]
-                # The invariant, plus the two structural statements the
-                # positional-constant defect violated: the channel is live and
-                # it sits on the role-resolved cell -- which is cell 2 on the
-                # R5 stand-in, whose plenum obstruction is the only geometry
-                # here that moves the cathode off the mesh start.
-                face_ok = (
-                    face["rel"] < ROUNDOFF_REL
-                    and face["removed"] > 0.0
-                    and face["recycled"] > 0.0
-                    and face["off_face"] == 0.0
-                    and str(roles[cell]) == face["role"]
-                )
-                ok = ok and face_ok
-                lines.append(
-                    f"{label} {face['role']}@cell{cell}: "
-                    f"recycled {fmt(face['recycled'])} vs removed "
-                    f"{fmt(face['removed'])}, rel {fmt(face['rel'])}, "
-                    f"off-face {fmt(face['off_face'])}"
-                )
-            dep = (
-                f"{label} deposit cells: cath={sim._dvm.cath_cell} "
-                f"coll={sim._dvm.coll_cell}"
+            ok = ok and face_ok
+            lines.append(
+                f"{label} {face['role']}@cell{cell}: "
+                f"recycled {fmt(face['recycled'])} vs removed "
+                f"{fmt(face['removed'])}, rel {fmt(face['rel'])}, "
+                f"off-face {fmt(face['off_face'])}"
             )
-            expected = {
-                f["role"]: f["cell"] for f in faces
-            }
-            dep_ok = (
-                sim._dvm.cath_cell == expected.get("cathode")
-                and sim._dvm.coll_cell == expected.get("collector")
-            )
-            ok = ok and dep_ok
-            lines.append(dep + f" (matches the sampled faces: {dep_ok})")
+        dep = (
+            f"{label} deposit cells: cath={sim._dvm.cath_cell} "
+            f"coll={sim._dvm.coll_cell}"
+        )
+        expected = {
+            f["role"]: f["cell"] for f in faces
+        }
+        dep_ok = (
+            sim._dvm.cath_cell == expected.get("cathode")
+            and sim._dvm.coll_cell == expected.get("collector")
+        )
+        ok = ok and dep_ok
+        lines.append(dep + f" (matches the sampled faces: {dep_ok})")
     return (
-        "S1 recycle identity: what the arm re-injects equals what the active "
-        "boundary removed, per face, on all three geometries and both stances",
+        "S1 recycle identity: what the arm re-injects equals what the "
+        "boundary removed, per face, on all three geometries",
         ok,
         ("\n        ").join(lines) + f"\n        tol {fmt(ROUNDOFF_REL)}",
     )
@@ -2362,16 +2358,6 @@ REFUSALS = (
             d.__setitem__("gas_puff_local_ionization_fraction", 0.2),
             None,
         )[1],
-    ),
-    (
-        "G9 Tn feedback with characteristic_boundary refused",
-        dict(),
-        "characteristic_boundary",
-        lambda d, fl: (
-            d.__setitem__("neutral_kinetic_dvm_tn_feedback", True),
-            fl.__setitem__("characteristic_boundary", True),
-            None,
-        )[2],
     ),
     (
         "G10 odd v_z bin count refused",

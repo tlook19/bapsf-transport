@@ -918,9 +918,10 @@ def run_arm(spec, n_updates, verbose=True):
         "burn_through_max": max(tick_burn) if tick_burn else 0.0,
         "puff_ticks_active": int(sum(1 for v in tick_birth_puff if v > 0.0)),
         "puff_births_total": float(sum(tick_birth_puff)),
-        "tn_feedback": bool(
-            sim._input_dict["neutral_kinetic_dvm_tn_feedback"]
-        ),
+        # neutral_kinetic_dvm_tn_feedback was RETIRED 2026-08-31 (Tom) with
+        # its only consumer. The DVM's Tn moment stays an in-process
+        # diagnostic that nothing consumes, which is what this row now records.
+        "tn_feedback": False,
     }
     record.update(floors)
     arrays = {
@@ -1904,9 +1905,9 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
     )
     tn_fb = {bool(a["tn_feedback"]) for a in arms.values()}
     lines.append(
-        f"| Tn feedback | `neutral_kinetic_dvm_tn_feedback` = "
-        f"{sorted(tn_fb)} -- O6 (column Tn) is DIAGNOSTIC-ONLY at the "
-        "shipped `False`: it is not fed back to the plasma |"
+        f"| Tn feedback | none ({sorted(tn_fb)}) -- O6 (column Tn) is "
+        "DIAGNOSTIC-ONLY: the `neutral_kinetic_dvm_tn_feedback` switch and "
+        "its consumer were retired 2026-08-31, so Tn is never fed back |"
     )
     lines.append("")
 

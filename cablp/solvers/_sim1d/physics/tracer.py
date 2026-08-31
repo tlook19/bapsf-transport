@@ -177,15 +177,10 @@ def growth_rate(
     ``gamma*n + S ==`` the fluid's summed ``n`` row holds bit-for-bit there.
 
     ``boundary_rhs`` is a callable ``probe_state -> ConservativeState1D``
-    supplied by the caller, NOT a fixed choice of operator. The plasma-
-    terminating faces are discretized two different ways in this package -- the
-    volumetric Bohm absorption ``sources.boundary_absorption_rhs`` and the R3
-    one-sided characteristic ghost-cell outflow -- and which one is live is a
-    config selector. Taking either one unconditionally would make the tracer
-    disagree with the fluid on whichever stance did not match; the shipped
-    default is the characteristic one, so a fixed choice here would have been
-    wrong in production. Both are linear in ``n`` at fixed ``Te``, so the same
-    degree-1 division recovers the frequency from either.
+    supplied by the caller rather than a fixed reference to the operator, so
+    the tracer consumes exactly the term the fluid does and the two cannot
+    disagree. It is linear in ``n`` at fixed ``Te``, so the degree-1 division
+    recovers the frequency from it.
 
     Parallel advection is NOT in ``gamma``: a passive cell exchanges nothing
     across its interface (NUMERICS.md, "Flux at the interface"), and that
