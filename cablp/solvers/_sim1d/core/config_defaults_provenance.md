@@ -1933,18 +1933,44 @@ CLAMPED outside it.
 
 | node | shipped `sigma_m` | class | bracket carried | honest bar |
 |---|---|---|---|---|
-| 5 eV | `6.0e-16 cm^2` | **MEASURED (cited)** | `5.7e-16 - 6.3e-16` | the ±3-5% of the source, propagated |
-| 25 eV | `2.1e-16 cm^2` | **ASSUMED — bracket** | `1.6e-16 - 2.6e-16` | **not verified against a primary table** |
+| 5 eV | `6.280e-16 cm^2` | **DERIVED** | `6.210e-16 - 6.320e-16` | the measured three-set spread, 1.8% |
+| 25 eV | `1.992e-16 cm^2` | **DERIVED** | `1.950e-16 - 2.067e-16` | the measured three-set spread, 6.0% |
 
-The 5 eV node is Milloy & Crompton, PRA 15, 1847 (1977), ±3-5%, consistent with
-Crompton, Elford & Robertson, Aust. J. Phys. 23, 667 (1970); the shipped value
-is the cited central and the bracket is that stated uncertainty. The 25 eV row
-is a BRACKET of the Register/Trajmar/Srivastava-class values as carried in the
-LXCat sets (per Alves et al., J. Phys. D 46, 334002 (2013)); the shipped value
-is its arithmetic midpoint, and **the memo did not verify it against a primary
-table — pull the LXCat set before boxing it**, and until then the row must be
-quoted as a bracket and never cited as a primary measurement. Both brackets are
-published as `HE_EN_MT_SIGMA_BRACKET_CM2` so a result can quote them.
+Both nodes are RE-CENTRED on three published He elastic momentum-transfer sets
+read at the node energy, from the LXCat TXT pull of record of 2026-08-13. The
+parse and interpolation are those of `scripts/kmpull_threeset_check.py`, which
+is the method of record (NB that script's own input path points at a scratch
+download that no longer exists, so it needs its path supplied to re-run). Each
+set is interpolated linearly, the convention those
+tables state for themselves; the shipped node is the three-set arithmetic centre
+and the bracket is `[min, max]` over the three, so the bar is the measured
+set-to-set disagreement rather than an assumed one. Per-set values:
+
+| set | 5 eV | 25 eV |
+|---|---|---|
+| Biagi | `6.2098e-16` | `2.0670e-16` |
+| IST-Lisbon | `6.3100e-16` | `1.9500e-16` |
+| Morgan | `6.3200e-16` | `1.9600e-16` |
+
+Sources: Biagi database (Magboltz 8.97, He set transcribed Sept 2011) /
+IST-Lisbon database / Morgan database, www.lxcat.net, retrieved on August 13,
+2026 — Zotero keys `biagi_lxcat`, `istlisbon_lxcat`, `morgan_lxcat`.
+
+Milloy & Crompton, PRA 15, 1847 (1977), ±3-5%, consistent with Crompton, Elford
+& Robertson, Aust. J. Phys. 23, 667 (1970), remains the PRIMARY PEDIGREE of the
+5 eV node — it is the low-energy measurement the IST-Lisbon set is built on —
+but the shipped number is now the three-set centre rather than that single
+cited central, which is why the class is DERIVED and not MEASURED. The 25 eV
+node is no longer ASSUMED: it was a midpoint of Register/Trajmar/Srivastava-class
+values that the memo had not checked against a primary table, and it is now read
+from the three sets directly. Both brackets are published as
+`HE_EN_MT_SIGMA_BRACKET_CM2` so a result can quote them.
+
+Movement from the previous shipped pair (`6.0e-16`, `2.1e-16`): +4.67% at 5 eV
+and −5.13% at 25 eV. Both are far inside the onset gate's ×400-2500 margin, and
+the re-centring was verified INERT — the 4,000-step golden digest is bit-identical
+(trajectory `cb54b74a…`, `exact=True`) and the config identity is unmoved, as it
+must be for module data no config key names.
 Order-of-magnitude standing overall: `K_m` is formed as `sigma(<E>)·<v>` rather
 than by Maxwellian quadrature, because a two-node table cannot support the
 precision a quadrature would imply. This is tolerable HERE and only here: the

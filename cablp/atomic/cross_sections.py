@@ -1025,12 +1025,20 @@ def phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"):
 # The table is two nodes and nothing is smuggled in between them: the shipped
 # values, their classes and their honest bars live in
 # `solvers/_sim1d/core/config_defaults_provenance.md` under "QL relaxation
-# closure". The 25 eV node is a BRACKET carried as a bracket -- its endpoints
-# are published here as data so a reported result can quote them rather than
-# re-derive them.
+# closure".
+#
+# Both nodes are DERIVED from the same three published He elastic
+# momentum-transfer sets -- Biagi, IST-Lisbon and Morgan (LXCat, retrieved
+# 2026-08-13) -- read at the node energy by linear interpolation, which is the
+# convention those tables state for themselves. The NODE is the three-set
+# arithmetic centre and the BRACKET is [min, max] over the three sets, so the
+# bracket is the measured set-to-set disagreement rather than an assumed bar.
+# Both endpoints are published here as data so a reported result can quote them
+# instead of re-deriving them; `scripts/kmpull_threeset_check.py` re-runs the
+# derivation against the pull of record.
 HE_EN_MT_NODE_EV = (5.0, 25.0)
-HE_EN_MT_SIGMA_CM2 = (6.0e-16, 2.1e-16)
-HE_EN_MT_SIGMA_BRACKET_CM2 = ((5.7e-16, 6.3e-16), (1.6e-16, 2.6e-16))
+HE_EN_MT_SIGMA_CM2 = (6.280e-16, 1.992e-16)
+HE_EN_MT_SIGMA_BRACKET_CM2 = ((6.210e-16, 6.320e-16), (1.950e-16, 2.067e-16))
 
 _HE_EN_MT_LOG_E = np.log(np.asarray(HE_EN_MT_NODE_EV, dtype=float))
 _HE_EN_MT_LOG_SIGMA = np.log(np.asarray(HE_EN_MT_SIGMA_CM2, dtype=float))
