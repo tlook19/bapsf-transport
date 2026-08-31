@@ -1848,6 +1848,42 @@ the golden's literal pin (`golden_baseline_provenance.md`), and `"legacy"` is
 not the defensible reading of the coefficient. Inert when
 `cathode_neutral_jet` is off.
 
+**`neutral_jet_arm_current_A = 0.0`, `neutral_jet_disarm_current_A = 0.0` —
+the SHIPPED DEFAULTS are INERT, and are not a calibration.** `arm = 0`
+declares that no arming criterion applies, so the cathode jets are live
+whenever their own selectors are on. That is the behaviour that predates these
+keys and is bit-identical to it: the golden's 4,000-step digest trajectory is
+unchanged and only the config identity moves. There is nothing to calibrate in
+a value whose meaning is "this mechanism is not declared", which is why these
+two rows carry no class of their own.
+
+**The REGISTERED ARM VALUES are `arm = 50 A`, `disarm = 25 A` — ASSUMED,
+stance-calibrated.** They are set EXPLICITLY by the runs that want the
+criterion (the M1 arms), never inherited from the package, because whether a
+run applies the criterion at all is a stance decision and the A/B is the
+point.
+
+- **`arm = 50 A`** sits 3.5 % above the measured **48.3 A** breakdown-onset
+  maximum, so the criterion arms only once the discharge has left the onset
+  regime the 48.3 A figure bounds. The margin is deliberate and small: it is
+  there so that ordinary step-to-step variation about the onset maximum
+  cannot arm the jet, not to tune where arming happens.
+- **`disarm = 25 A`** makes the band a **2:1 ratio**, which is an
+  ANTI-CHATTER choice rather than a second physical threshold. A latch whose
+  two thresholds are close re-crosses on noise; at 2:1 a current has to fall
+  to half the arming level before the jets are booked out of existence again.
+  Its bracket is the band itself — any disarm in `[0, arm)` is admissible and
+  the criterion's behaviour is monotone in it.
+
+Honest bar: neither number is measured. 48.3 A is, and the 3.5 % offset and
+the 2:1 band are conventions layered on it. A result that turns on the exact
+placement of either threshold is a result about the convention, and the
+per-arm A/B against `arm = 0` — which is what the M1 arms run — is what
+separates the two. The measured behaviour of the pair at the shipped stance
+(2 latch transitions over the full cycle, censoring the sub-50 A ramp before
+`t = 0.2246` ms and the late afterglow after `t = 21.676` ms) is recorded with
+the arms, not here.
+
 ### Beam
 
 **`beam_excitation_energy_eV = 21.218` eV — MEASURED**, the He 2^1P excitation

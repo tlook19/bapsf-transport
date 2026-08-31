@@ -87,7 +87,7 @@ GATE REGISTRY
 
 **G5 -- the J = 0 limit (negative control at the statement level).**
   QUANTITY: (i) every cell of the operator's total row at zero current;
-  (ii) the magnitude of the discontinuity the operator's guard removes.
+  (ii) the magnitude of the CLOSURE-FAMILY discontinuity the guard removes.
   SITE: the ``electron_drift_transport`` RHS term; the operator called
   directly at zero current; and the face currents rebuilt with the guard
   BYPASSED.
@@ -103,8 +103,19 @@ GATE REGISTRY
   current only reaches an early return: (i) alone certifies that the guard
   fires and says nothing about what it is for. The cathode-face work channel
   rides the difference velocity ``u_e - u_i`` and does not vanish with the
-  current, so the guard is cutting out a real discontinuity; pinning its size
-  is what stops a future change to that channel moving it silently.
+  current, so the guard is cutting out a real residue; pinning its size is
+  what stops a future change to that channel moving it silently.
+
+  WHAT THE RESIDUE IS (wording corrected 2026-08-31 (Tom)). It is a
+  discontinuity in the CLOSURE FAMILY, not in the physics. The GUARDED zero
+  IS the continuum limit -- at J = 0 the two species leave together, the
+  plasma is ambipolar and the ion-velocity pressure work is already exact --
+  while the residue is the DRIVEN face closure evaluated outside its own
+  validity, where the repelling-sheath statement its work channel encodes no
+  longer holds. So the number below is not a physical jump, and it is
+  fixture-specific by nature: it equals T_e[launch] x that face's ion current
+  on the state it is measured at, which is why the fixture is pinned with it.
+  A run crosses this boundary ONCE, at cathode-solve shutoff.
 
 **G6 -- the afterglow clause (REPORTED, NOT GATED).**
   QUANTITY: the operator's net over the source region during afterglow.
