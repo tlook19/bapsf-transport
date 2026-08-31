@@ -188,6 +188,91 @@ closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
 
+**2026-08-31 — IDENTITY-ONLY ROTATION, BY REMOVAL (the
+[legacy-boundary-retirement] keys). NOTHING WAS RECAPTURED.** Merge `1fc05c9`
+retired two `input` keys and their whole code chains — `characteristic_boundary`
+(an `input_flags` key, shipped default **True**) and
+`neutral_kinetic_dvm_tn_feedback` (an `input_dict` key, shipped default
+`False`). What the retirement deleted is the NON-DEFAULT path in both cases, so
+the golden — which runs the defaults — is untouched: this is the first rotation
+since D3 in which the config surface SHRINKS, and the sidecar therefore LOSES
+fields rather than gaining them. The rotation commit `3e2d5a9` regenerated
+THREE pinned identities in one event, the reviewer authoring it from each
+pin's own expression:
+
+| reference | before | after |
+|---|---|---|
+| `golden_digest_4k.json` `config_identity` | `c5f7f3f7347ce2d62fd354d73d472fb62f4f17cdef53fa664619ac2dfc74b760` | `c22691e5a4f0ecf75edf7db2bca8b43851e3ee8eb25749974e49d0cc194475c8` |
+| `golden_digest_4k.json` checkpoints 0/1000/2000/3000/4000, final digest, `steps`, `cells`, `fields_per_cell`, `checkpoint_interval`, `final_time` | — | UNCHANGED (final digest `cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2`, `final_time` 0.0004714055010197914) |
+| `production_discharge.json` params | 255 keys | 254 keys: `neutral_kinetic_dvm_tn_feedback` REMOVED, 0 added, 0 survivor values moved |
+| `production_discharge.json` flags | 54 keys | 53 keys: `characteristic_boundary` REMOVED, 0 added, 0 survivor values moved; `saves` 2620, `cells` 72, `fields_per_cell` 8, the 16-field `summary`, `description` and `result_format` CARRIED |
+| `verify_sim1d_edt.py` `BASE_CONFIG_IDENTITY` | `21a9b4764df68bc9c201d5ea11589223358bd9ca19d2801f82ac7bd75db632c3` | `7f2eadcb0b0610fa1ab6c8cd4fe174d61227ce1e2973e1d146cbbb1e91993d87` |
+| sidecar `sha256` | `9046adf879fa343d0c9a092ad30d1bfea544aecf0c49fea139630132336f4eaa` | `8776b13dcfc349e2e2adf12ce429ecdd0ee40a15a0c5fdbab50e5c0dc0ddda64` |
+| digest reference `sha256` | `e041c30b03fc6dd9309cceea86b34630b9ca6ff4a847d9b77e0850b7d4d8e0be` | `f5fe1bb29853ff194a0b06457d9fe8da46c1da4ce29f3faa8ce2e91fea6cdcbf` |
+| NPZ `sha256` | `2c02ccd882261a0b01e0a1e8f0e313113b8431fadd526fa9d4859694e5704306` | UNCHANGED (md5 `fd8ac896ccba10c66a7c18ec609ec48e` before and after; the file is not rewritten) |
+
+**A third pin rotates here, which is new.** `verify_sim1d_edt.py`'s G1 strip
+control pins the golden identity WITHOUT the electron-drift member's three
+keys. That quantity moves for the same reason the two golden references do, so
+leaving it behind would have failed G1 at this tip for a reason that has
+nothing to do with the electron-drift member. It is computed through the strip
+control G1 itself runs, not through either golden expression — the three
+expressions legitimately carry three different identities, and a control
+computed through the wrong one matches none of them.
+
+Proof that the move is the two retired keys and nothing else, all verified at
+the merge tip BEFORE anything was written. A **RESTORE-2 CONTROL** puts both
+keys back at the defaults they carried at the base commit
+(`characteristic_boundary=True`, `neutral_kinetic_dvm_tn_feedback=False`) and
+recomputes through the gate's OWN expression: it reproduces `c5f7f3f7…`
+bit for bit. A **WRONG-VALUE CONTROL** restoring the flag at `False` instead
+gives `894afe9c…`, so the control discriminates rather than merely agreeing.
+The same restore, applied on top of the edt strip-3, reproduces `21a9b476…`
+exactly. For the sidecar the load-bearing half of a REMOVAL rotation is the
+SURVIVOR check rather than the count: a removal that also perturbed a surviving
+key would show up as a smaller diff, not a larger one, so the tool refuses to
+write unless `gained == []`, `lost` is exactly the entitled pair, and no
+surviving key's value moved. Its guard was exercised against a NEGATIVE
+CONTROL — an injected `b_presheath_length` 2.0 → 1.0 — which it refused with
+`REFUSING TO WRITE: the manifest moved beyond the two retired keys` and exit 1.
+Route identity across all four representative routes moves by exactly these two
+removals, and `config_snapshots.json` regenerated at the merge tip is
+byte-identical to the merged file (`params=254, flags=53, cases=4`).
+
+**The deletion was dead code, which is the cardinal claim of a retirement
+pass, and it was verified independently rather than inferred from the golden.**
+The four electron-energy electrode channels
+(`beam_power_deposition + beam_ionization_cost + cathode_surface_loss +
+anode_e_sheath_loss`) were evaluated at the base commit with
+`characteristic_boundary=True` — the surviving path, explicitly selected —
+and at this tip where the flag no longer exists. The rows are BIT-IDENTICAL
+between the two (row hash `f16b421b89d0e7be` on both, `cathode_surface_loss`
+min −1.135568e-05, `anode_e_sheath_loss` min −4.608156e-07). Selecting the
+retired path at base instead gives a different answer (`cathode_surface_loss`
+max +2.560624e-05, four cells with a net POSITIVE electron deposit). So the
+retirement removed a path rather than changing one.
+
+Gates at the rotated tip `3e2d5a9`, each run with an in-process
+import-provenance assertion — `cablp.__file__` resolving inside this checkout,
+printed with `KERNEL_ID` in the same process as the gate, and for the compiled
+leg the compiled path asserted BEFORE the run: COMPILED golden `baseline verify
+OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00,
+time_max_abs=0.000e+00 s` (`KERNEL_ID`
+`cython/_cathode_kernels_cy/tierA+csda`); PURE 4k digest leg `digest gate OK:
+steps=4000, digest=cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2,
+exact=True` against the ROTATED reference, `kernels=pure`; smoke exit 0 at 119
+cases with the registry byte-identical to base and all five compiled-kernel
+equivalence blocks LIVE; `verify_sim1d_k2_dvm.py` 112/112 (G9 retired — both
+keys it set are now refused by the generic unknown-key check, so it would have
+passed coincidentally rather than off the specific guard it was written for);
+`verify_sim1d_edt.py` 31/31 (26 plus the five arms the bundled G12 widen adds);
+`declm_block_gate.py` 35 checks, 0 failed; `sgfs_census.py --assert-clean`
+PASS; `batch11_restart_citations.py` 52 cites PASS;
+`m1_verdict_invariance.py --self-test` 7 of 7.
+
+The stance file `g1atrim.toml` is untouched by this event; the golden's
+trajectory is the 2026-08-28 capture's, unchanged.
+
 **2026-08-31 — IDENTITY-ONLY ROTATION (the [ue-pressure-work] drift-transport
 keys). NOTHING WAS RECAPTURED.** Merge `935dba3` ([ue-pressure-work], the
 electron drift-transport and EMF-work operator) added ONE `input_flags` key and
