@@ -496,6 +496,36 @@ def gate_refusals():
         must_name=["cathode_jet_R_N", "one declared value"],
     )
 
+    # kinetic_two_moment's INTERNAL-MEMBER refusal, on the FLAT route. The two
+    # internal members of the radial closure are armed while the selector is
+    # left at its default, which is the shape the mistake actually takes: a
+    # reader arms the partition and its cross section without engaging the
+    # closure that gives them a reading. The refusal must collect BOTH members
+    # in one message and name the selection that would make them readable --
+    # the whole decision, not the first guard hit. Until this check, only
+    # scripts/preset_resolver_demo.py (unregistered, so nothing runs it in a
+    # gate) reached this branch.
+    def _two_moment_members_armed():
+        params, flags = default_config()
+        params["nx"] = 60
+        flags["neutral_wall_momentum_partition"] = True
+        params["neutral_wall_partition_sigma_hehe_cm2"] = 1.26e-15
+        from cablp.solvers._sim1d import LAPDSim1D
+
+        LAPDSim1D(params, flags)
+
+    refuses(
+        "kinetic_two_moment internal members armed without the selection",
+        _two_moment_members_armed,
+        must_name=[
+            "flags:neutral_wall_momentum_partition",
+            "params:neutral_wall_partition_sigma_hehe_cm2",
+            "neutral_momentum_radial='kinetic_two_moment'",
+            "have no reading under",
+            "engaging it is the whole decision",
+        ],
+    )
+
 
 def gate_none_valued():
     """``none_valued`` declares a member as ``None``; TOML has no null."""
