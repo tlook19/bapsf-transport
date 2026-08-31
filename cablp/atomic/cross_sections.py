@@ -1033,12 +1033,15 @@ def phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"):
 # convention those tables state for themselves. The NODE is the three-set
 # arithmetic centre and the BRACKET is [min, max] over the three sets, so the
 # bracket is the measured set-to-set disagreement rather than an assumed bar.
+# The endpoints are rounded OUTWARD (low end down, high end up) so that every
+# set stays inside the bracket the constant declares: rounding the 5 eV minimum
+# 6.209760e-16 to 6.210e-16 would have put Biagi 0.004 % outside it.
 # Both endpoints are published here as data so a reported result can quote them
 # instead of re-deriving them; `scripts/kmpull_threeset_check.py` re-runs the
 # derivation against the pull of record.
 HE_EN_MT_NODE_EV = (5.0, 25.0)
 HE_EN_MT_SIGMA_CM2 = (6.280e-16, 1.992e-16)
-HE_EN_MT_SIGMA_BRACKET_CM2 = ((6.210e-16, 6.320e-16), (1.950e-16, 2.067e-16))
+HE_EN_MT_SIGMA_BRACKET_CM2 = ((6.209e-16, 6.320e-16), (1.950e-16, 2.067e-16))
 
 _HE_EN_MT_LOG_E = np.log(np.asarray(HE_EN_MT_NODE_EV, dtype=float))
 _HE_EN_MT_LOG_SIGMA = np.log(np.asarray(HE_EN_MT_SIGMA_CM2, dtype=float))

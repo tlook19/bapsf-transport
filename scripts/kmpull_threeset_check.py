@@ -1,5 +1,6 @@
 """Three-set verification of the shipped He e-n momentum-transfer nodes
-against the LXCat TXT pull of 2026-08-13 (~/Downloads/crosssec.txt:
+against the LXCat TXT pull of record of 2026-08-13
+(``~/bapsf/docs/data/lxcat_He_mt_threeset_2026-08-13.txt``:
 Biagi + IST-Lisbon + Morgan, He ELASTIC momentum transfer each).
 
 This is the pull OF RECORD (standard LXCat TXT format; supersedes the
@@ -10,6 +11,7 @@ HE_EN_MT_* (5 eV and 25 eV, values + brackets).
 Read-only on the repo; stdout only (tee to kmpull_threeset_check.txt).
 """
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -23,8 +25,34 @@ from cablp.atomic.cross_sections import (  # noqa: E402
     HE_EN_MT_SIGMA_BRACKET_CM2,
 )
 
-TXT = str(Path.home() / "Downloads" / "crosssec.txt")
-text = open(TXT).read()
+#: The PULL OF RECORD. The LXCat sets are not redistributable in this public
+#: repository, so the TXT lives in the local docs repository alongside the other
+#: retrieved data. (Before 2026-08-30 this pointed at a ~/Downloads scratch copy
+#: that no longer exists, which left the script unrunnable and its results
+#: unreproducible.)
+DEFAULT_TXT = (
+    Path.home() / "bapsf" / "docs" / "data"
+    / "lxcat_He_mt_threeset_2026-08-13.txt"
+)
+
+_parser = argparse.ArgumentParser(description=__doc__)
+_parser.add_argument(
+    "--input",
+    type=Path,
+    default=DEFAULT_TXT,
+    help="LXCat TXT pull to read (default: the pull of record)",
+)
+_args = _parser.parse_args()
+
+TXT = _args.input
+if not TXT.exists():
+    raise SystemExit(
+        f"LXCat TXT pull not found: {TXT}\n"
+        "The three He ELASTIC momentum-transfer sets (Biagi / IST-Lisbon / "
+        "Morgan) are not redistributable here; the pull of record lives in the "
+        "local docs repository. Pass --input to read a different copy."
+    )
+text = TXT.read_text()
 
 # Each DB section: "DATABASE:  <name>" ... ELASTIC block with a
 # dashed-line-delimited two-column table.

@@ -1947,7 +1947,7 @@ CLAMPED outside it.
 
 | node | shipped `sigma_m` | class | bracket carried | honest bar |
 |---|---|---|---|---|
-| 5 eV | `6.280e-16 cm^2` | **DERIVED** | `6.210e-16 - 6.320e-16` | the measured three-set spread, 1.8% |
+| 5 eV | `6.280e-16 cm^2` | **DERIVED** | `6.209e-16 - 6.320e-16` | the measured three-set spread, 1.8% |
 | 25 eV | `1.992e-16 cm^2` | **DERIVED** | `1.950e-16 - 2.067e-16` | the measured three-set spread, 6.0% |
 
 Both nodes are RE-CENTRED on three published He elastic momentum-transfer sets
@@ -1958,7 +1958,10 @@ download that no longer exists, so it needs its path supplied to re-run). Each
 set is interpolated linearly, the convention those
 tables state for themselves; the shipped node is the three-set arithmetic centre
 and the bracket is `[min, max]` over the three, so the bar is the measured
-set-to-set disagreement rather than an assumed one. Per-set values:
+set-to-set disagreement rather than an assumed one. The endpoints are rounded
+OUTWARD, so every set lies inside the bracket as shipped: the 5 eV minimum
+6.209760e-16 rounds DOWN to 6.209e-16, since rounding it to 6.210e-16 would
+have placed Biagi 0.004 % outside the bracket its own minimum defines. Per-set values:
 
 | set | 5 eV | 25 eV |
 |---|---|---|
