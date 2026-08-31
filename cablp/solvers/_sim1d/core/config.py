@@ -840,6 +840,43 @@ def model_mode_defaults():
         sensitivity arm on the transport timescale, not the production closure.
         Selecting it without ``neutral_energy`` raises at construction, because
         there is no per-cell ``Tn`` for it to read.
+    electron_drift_charge_death:
+        Where the launched beam's CHARGE is taken to die, and hence which
+        faces of the source region still carry beam current in the drift flux
+        ``Gamma_d = (I_tot - I_beam) / (e A)``. ``"cell_1"`` puts the death in
+        the cathode cell, so only that cell's cathode-side face carries beam
+        current and every face downstream carries the full loop current as
+        thermal-electron drift. ``"cell_2"`` puts it in the next cell, so the
+        cathode cell's downstream face carries it too. Read only under the
+        ``electron_drift_transport`` flag, and refused at a non-default value
+        without it.
+    electron_drift_anode_handshake:
+        Which of the operator's channels the anode mesh face closes. The face
+        carries two: the ENTHALPY-and-thermal-force flux ``2.21 T_e I / e``,
+        and the pressure-drift WORK ``1.00 T_e I / e`` that the volume
+        identity's ``3.21`` boundary coefficient is completed by.
+
+        ``"sheath_row_closes_all"`` (the DEFAULT, and the registered closure,
+        ruled 2026-08-31) closes BOTH — the full ``3.21``. The kinetic anode
+        sheath row ``(2 T_e + phi_a) Gamma`` IS the total electron energy flux
+        at the sheath edge for the THERMAL population, so any fluid export
+        there double-counts it. The beam electrons that reach the mesh
+        directly lie outside both bookings: the circuit's own bypass row
+        carries them, and ``Gamma_d = (I_tot - I_beam) / (e A)`` carries the
+        thermal drift only by construction.
+
+        ``"sheath_row_closes"`` closes the ``2.21`` channel alone and
+        ``"export_counts"`` closes neither, booking the whole ``3.21`` as an
+        export out of the plasma. Both are RETAINED as disclosed INSTRUMENT
+        arms that bound the size of the double count; neither is
+        claim-bearing.
+
+        Under every reading the ``anode_sheath_full_debit`` booking is
+        untouched, and the anode PRESHEATH term is NOT booked here -- it
+        belongs to the separate anode-potential-debit question, and only one
+        of the two may ever book it. Read only under the
+        ``electron_drift_transport`` flag, and refused at a non-default value
+        without it.
     neutral_model:
         Which engine carries the neutral population. ``"moment"`` integrates
         the fluid neutral density (and, with the ``neutral_momentum`` flag,
@@ -1247,6 +1284,13 @@ def model_mode_defaults():
         # the neutral_energy flag, which ships ON.
         "neutral_knudsen_temperature": "frozen",
         "neutral_model": "moment",
+        # The two DECLARED conventions of the electron drift-transport
+        # operator. Both are bracket ENDPOINTS, not chosen readings: the
+        # deliverable of that operator is the spread across them. Inert -- and
+        # refused at anything but these values -- unless the
+        # electron_drift_transport flag is armed.
+        "electron_drift_charge_death": "cell_1",
+        "electron_drift_anode_handshake": "sheath_row_closes_all",
         # 2nd-order operator-split pair; both are needed together with
         # heat_picard_iterations > 0 for the step to reach second order.
         "operator_splitting": "strang",
@@ -4029,6 +4073,50 @@ input_flags_template_1d = {
     # A non-finite phi_a belongs to neither regime and raises RuntimeError.
     # Must be a real bool. Bit-exact when off.
     "anode_sheath_full_debit": False,
+    # The electron drift-transport and EMF-work operator, default OFF. The
+    # electron energy equation books its pressure work with the ION velocity,
+    # which is exact where J = 0 but not in the current-carrying source region:
+    # there the electron drift u_e = u - J/(e n) differs, and the transport and
+    # non-resistive field work it carries,
+    #
+    #     Delta = -div(3/2 T_e Gamma_d) - p_e div(Gamma_d / n) - div(q_u)
+    #             + 0.71 Gamma_d . grad(T_e),
+    #     Gamma_d = (I_tot - I_beam) / (e A),  q_u = 0.71 T_e Gamma_d,
+    #
+    # is absent from the ledger. The RESISTIVE part of the field work is not:
+    # eta j^2 is already booked as P_ohmic, and this operator does not touch
+    # it. Armed, Delta is added as its own named RHS term on the ELECTRON row
+    # only -- n, nn, M and Ei are exactly zero -- over the cells between the
+    # cathode face and the anode mesh, with the drift current terminating on
+    # the mesh rather than continuing downstream. The ion side is untouched:
+    # u there is the ion velocity, the total-grad-p momentum booking is
+    # already exact, and the electron-ion friction cancels, so the coupling
+    # back to the ions is indirect, through Q_ie alone.
+    #
+    # At the CATHODE face the enthalpy and thermal-force channels are exactly
+    # zero: they would carry the returning thermal-electron current, and the
+    # cathode sheath repels plasma electrons (P_cathode_e is 0.06 W on the ES1
+    # artifact, a return current of order 0.3 mA). The work channel there rides
+    # the model's OWN face-1 particle flux, so it is the exact partner of the
+    # expansion cooling pressure_work_rhs books at that face and cancels it to
+    # roundoff.
+    #
+    # electron_drift_charge_death is a DECLARED bracket ENDPOINT: the claim
+    # this operator supports is the spread across its two values, not either
+    # arm alone. electron_drift_anode_handshake selects the registered closure
+    # by default and retains two disclosed instrument arms beside it. Setting
+    # either away from its default without this flag raises, because there it
+    # would be inert.
+    #
+    # Refused at construction under TwinCathode, without a resolved anode
+    # face, and without active_plasma_topology: each of those leaves the face
+    # the operator has to terminate on, or the face convention it reads,
+    # undefined, and a silently-guessed answer there is worse than a refusal.
+    # Presence-gated; the off path never evaluates Gamma_d. The term key is
+    # present with all-zero rows from step 1 either way, so the saved term
+    # structure is stable across the phase change and across the flag.
+    # Bit-exact when off.
+    "electron_drift_transport": False,
     # Operator home of the beam's electron-energy deposition, default OFF.
     # Armed, the beam_power_deposition Ee row leaves the explicit operator A
     # and is applied instead by the implicit heat substep B, as a source held

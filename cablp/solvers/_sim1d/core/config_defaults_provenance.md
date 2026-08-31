@@ -589,6 +589,71 @@ required the single `C_R` re-trim recorded in
 `scripts/production_stance_provenance.md`; the golden was recaptured in the
 same change.
 
+### Electron drift transport conventions (`electron_drift_*`)
+
+Both keys are inert under the shipped `electron_drift_transport = False`; they
+are read only when that flag arms the drift-transport operator, and the solver
+REFUSES either at a non-default value with the flag off rather than letting it
+sit there doing nothing.
+
+**`electron_drift_charge_death = "cell_1"` — ASSUMED (declared bracket
+endpoint).** Where the launched beam's charge is taken to die, and hence which
+faces still carry beam current rather than the full loop current as
+thermal-electron drift. `"cell_1"` puts the death in the cathode cell;
+`"cell_2"` in the first gap cell. The measured beam profile motivates the
+default — gap survival ~2e-3 over `l_b` ~ 16 cm puts essentially the whole
+charge in the launch cell — but the CELL is a mesh object, not a measured
+length, so no instrument pins the choice and the honest claim is the bracket.
+
+A continuous survival profile is NOT the substitute and could not be: `n_beam`
+is launch-cell-only and the saved `l_b_profile` disagrees with the ray survival
+by a factor of order 300, so the declared STEP is what stands in for it. That
+is a disclosed limitation of the bracket, not a modelling preference.
+
+Measured spread between the two arms on `scripts/mgcr1_confirm.h5`, under the
+registered anode closure: the source-region sum moves +18.95 → +14.50 kW, and
+the compression piece over the cells strictly downstream of the death cell
++35.4 → +29.9 kW. (On the `export_counts` instrument arm the same compression
+piece reads +13.6 → +8.2 kW — a different quantity, not a different value, and
+it must be labelled wherever it is quoted: the registered closure hands the
+mesh face's work term to the sheath row and it lands in these same cells.) The
+cathode face is identical under both charge-death arms, since it carries beam
+current either way. Memo: advisor consult, 2026-08-26, as amended by the
+advisor adjudication of 2026-08-31.
+
+**`electron_drift_anode_handshake = "sheath_row_closes_all"` — DERIVED (ruled
+2026-08-31), NOT a bracket endpoint.** Which of the operator's channels the
+anode mesh face closes. This key was registered as a bracket axis on
+2026-08-26, when the consult could not settle it; the ruling of 2026-08-31
+closed it. The kinetic anode sheath row (2 T_e + phi_a)·Γ IS the total electron
+energy flux at the sheath edge for the THERMAL population, so any fluid export
+at that face double-counts it, and the beam electrons that reach the mesh
+directly lie outside both bookings — the circuit's own bypass row carries them,
+and Γ_d = (I_tot − I_beam)/(eA) carries the thermal drift only by construction.
+Every fluid channel therefore closes there.
+
+`"sheath_row_closes"` (the 2.21 channel alone) and `"export_counts"` (neither
+channel) are RETAINED as disclosed INSTRUMENT arms that bound the size of that
+double count. **They are not claim-bearing, and they are not bracket endpoints
+either** — quoting their source-region sums as a physical range would be
+reporting the double count as physics. Measured on `scripts/mgcr1_confirm.h5`
+(cell_1 / cell_2): +18.95 / +14.50 kW under the closure, −2.82 / −7.27 kW
+closing 2.21 only, −53.03 / −57.48 kW closing neither.
+
+Nothing here is fitted and no scored quantity entered the selection. The anode
+PRESHEATH term (−T_e/2 · I/e, order −11 kW) is NOT booked under any reading; it
+belongs to the separate anode-potential-debit question and only one of the two
+may ever book it. Memo: advisor adjudication, 2026-08-31 (Tom-ratified).
+
+Honest bar. `electron_drift_charge_death` is a CONVENTION about which mesh cell
+absorbs a length the mesh cannot resolve: it cannot be measured from the model,
+because the model is what it configures, and the spread across it is what any
+claim built on this operator has to carry.
+`electron_drift_anode_handshake`'s default is a different class — a physics
+RULING about which existing ledger row already owns a face, resting on the
+sheath's kinetic boundary condition rather than on a fit. Its alternatives
+remain runnable so the size of the error the ruling avoids stays measurable.
+
 ### Transient DVM neutral arm (`neutral_kinetic_dvm_*`)
 
 All six keys are inert under the shipped `neutral_model = "moment"`; they are

@@ -1968,3 +1968,79 @@ timescale argument above.
 the node is armed, so a payload from a run without it is structurally what it
 always was. `regime_vessel_node` is a **structural flag key**, so a resume
 that changes the arming refuses rather than reading half a node.
+
+## Electron drift transport face discretization (`electron_drift_transport`)
+
+MODEL.md states the operator; this states how its divergences are taken and
+why the volume identity closes to ROUNDOFF rather than to truncation.
+
+**Face convention.** The same one `velocity_divergence` uses, and shared
+deliberately: face $k$ lies between cells $k-1$ and $k$, face arrays carry
+`cells + 1` entries, a cell-centred quantity reaches an interior face by the
+arithmetic mean and a topology-closed face by its one live cell. Sharing the
+rule is what makes the boundary terms come out as $T_e$ of the LIVE cell —
+which is what $3.21\,T_e I/e$ means at a wall — instead of an average taken
+against a plasma-dead plenum. The operator refuses to construct without
+`active_plasma_topology` precisely so that there is only one such rule to obey.
+
+**No face areas appear.** $\Gamma_d A = I/e$ by construction, so every term
+reduces to $(\text{coefficient}) \times T_e[\mathrm{eV}] \times I[\mathrm{A}]$,
+which is watts exactly: the eV-to-erg conversion cancels against coulombs per
+elementary charge. The conservative row converts back to the solver's
+$\mathrm{erg\,cm^{-3}\,s^{-1}}$ once, at the end.
+
+**Two face arrays, not one, and per-cell rather than shared.** The drift
+current is INTERCEPTED at the anode mesh, so the faces are carried as a
+per-cell $(\text{low}, \text{high})$ pair: the mesh face debits the cell
+upstream of it and credits nothing downstream. A single shared face array would
+telescope that asymmetry away and turn an open-system exchange with the
+electrodes into an internal redistribution. Separately, the enthalpy channel
+and the pressure-work channel carry their own currents, because the two
+bounding faces treat them differently.
+
+**The cathode face carries a different current in each channel**, and this is
+the one place the operator's face current is not read off the circuit. The
+enthalpy channel is zero there (the *returning* thermal-electron current, which
+the sheath holds at ~0.3 mA). The work channel carries
+$-e\,n\,u_\text{face}A$ — the model's own face-1 particle flux, on
+`velocity_divergence`'s face velocity and on the FLOORED density, which is the
+one `derive_state` builds $p_e$ from. Both choices are what make the operator's
+face-1 work term the exact partner of `pressure_work_rhs`'s booking at the same
+face rather than a near-cancellation: the one-sided face rule gives
+$n_\text{face} = n_\text{live}$ there, so the cell's $p_e$ divides out and the
+term reduces to $T_e$ times that current. Riding the circuit's ion current
+instead would over-correct by $\sim2.4$ kW, because the three ion currents at
+that face (circuit $I_i$, the ghost-Bohm $n$ row, and $nuA$) differ by nearly a
+factor of two and only the last is the one the pressure work was taken on.
+
+**Why the identity is exact and not merely consistent.** Write $F_k$ for the
+face power and $w_k = \Gamma_{d,k}/n_k$ for the face drift velocity. The
+enthalpy and thermal-force rows are conservative differences, so their volume
+sum telescopes to $2.21\,T_e I/e$ at the two boundary faces exactly. The
+pressure-drift row does not telescope; its volume sum is recovered by discrete
+summation by parts,
+
+$$\sum_j -p_{e,j}\left[(A w)_{j+1} - (A w)_j\right]
+  = \left[p_e\,A w\right]_\text{in} - \left[p_e\,A w\right]_\text{out}
+  + \sum_{k\ \text{interior}} (A w)_k \left(p_{e,k} - p_{e,k-1}\right),$$
+
+which is an ALGEBRAIC identity, true for any choice of face $w$. Two
+consequences are load-bearing:
+
+1. at a boundary face the one-sided rule gives $n_\text{face} = n_\text{live}$,
+   so $p_e\,A w = T_e\,\Gamma_d A = T_e I/e$ exactly — this is the $1.00$ that
+   completes the $3.21$;
+2. the trailing face sum IS the discrete $\int (\Gamma_d/n)\cdot\nabla p_e\,dV$,
+   so $W_\text{EMF}$ can be assembled INDEPENDENTLY of the identity's residual
+   (its pressure half as that face sum, its thermal-force half as the
+   `edt_emf_work_W` row's own volume sum) rather than being defined by it.
+
+Because both sides are then exact rearrangements of the same finite sums, the
+identity holds to floating-point roundoff. Measured worst case
+$7.9\times10^{-15}$ relative, over all six arm/reading combinations at both the
+golden config and the ES1 source region (`scripts/verify_sim1d_edt.py`, gate
+G2, whose bar is $10^{-10}$). Had $W_\text{EMF}$ been
+defined as the residual, the gate would have been a tautology; had it been
+taken as a cell-centred quadrature instead, the identity would close only to
+truncation and the $10^{-10}$ bar would be measuring the mesh rather than the
+implementation.

@@ -2045,3 +2045,217 @@ so a seed equilibrated on one machine is simply wrong for another.
 gated on the flag: it constrains any two-zone geometry, including one built
 from the scalar radii, because the collapse it refuses is a property of the
 volumes and not of how they were specified.)
+
+## Electron drift transport and EMF work (`electron_drift_transport`, default off)
+
+The electron energy equation books its compressional work with the ION
+velocity: the glossary's $-p_e\,\nabla\!\cdot\mathbf{u}$ is evaluated on
+$\mathbf{u}$, the single fluid velocity the momentum equation carries. That is
+exact wherever $J = 0$. In the current-carrying gap between the cathode and the
+anode mesh it is not: the electron drift is
+
+$$\mathbf{u}_e = \mathbf{u} - \frac{\mathbf{J}}{e n},$$
+
+and the transport and non-resistive field work that difference carries is
+absent from the ledger. The RESISTIVE part of the field work is *not* absent —
+$\eta_\parallel j^2$ is booked as $P_\text{ohmic}$ through the circuit, and the
+electrode sheath rows are current-proportional — so what this flag adds is the
+drift TRANSPORT (enthalpy convection plus the Braginskii thermal-force heat
+flux) and the NON-RESISTIVE (pressure-gradient and thermoelectric) field work:
+
+$$\Delta = -\nabla\!\cdot\!\left(\tfrac32 T_e \Gamma_d\right)
+          - p_e\,\nabla\!\cdot\!\left(\frac{\Gamma_d}{n}\right)
+          - \nabla\!\cdot\mathbf{q}_u
+          + 0.71\,\Gamma_d\!\cdot\!\nabla T_e,$$
+
+with the thermal-electron drift flux and the thermal-force heat flux
+
+$$\Gamma_d = \frac{I_\text{tot} - I_\text{beam}}{e A},
+\qquad \mathbf{q}_u = 0.71\,T_e\,\Gamma_d .$$
+
+$\Gamma_d$ is positive toward $+z$ — the electrons carry the discharge current
+from the cathode to the anode, so the conventional current runs the other way.
+$I_\text{tot}$ is the loop current the cathode solve booked and
+$I_\text{beam}$ the beam current it launched, so the operator is driven by the
+model's OWN current rather than by a second opinion about it.
+
+**The ion side is untouched.** $\mathbf{u}$ in the momentum equation is already
+the ion velocity, the total-$\nabla p$ momentum booking is exact, and the
+electron-ion friction cancels between the two species; the only coupling back
+to the ions is the indirect one through $Q_{ie}$. The term therefore writes the
+$E_e$ row alone, with $n$, $n_n$, $M$ and $E_i$ exactly zero.
+
+**Volume identity.** Integrated over the operator's support the four terms
+telescope to a boundary pair plus the EMF work,
+
+$$\int \Delta\,dV = \left[3.21\,T_e\,\frac{I}{e}\right]_\text{in}
+   - \left[3.21\,T_e\,\frac{I}{e}\right]_\text{out} + W_\text{EMF},
+\qquad
+W_\text{EMF} = \int \Gamma_d\!\cdot\!\left(\frac{\nabla p_e}{n}
+   + 0.71\,\nabla T_e\right) dV,$$
+
+where $3.21 = \tfrac52 + 0.71$ is the enthalpy flux plus the thermal-force heat
+flux. Note the split: $\tfrac32 + 0.71 = 2.21$ of that coefficient arrives as a
+face FLUX, and the remaining $1.00$ comes from the pressure-drift work term by
+summation by parts. That split is what the anode reading below selects on:
+`"sheath_row_closes"` closes the $2.21$ channel alone, while the registered
+`"sheath_row_closes_all"` closes the full $3.21$. The discrete form of the
+identity, and why it closes to roundoff rather than to truncation, is in
+NUMERICS.md.
+
+**The operator is an open system.** The drift current terminates ON the anode
+mesh, so the face at the mesh debits the cell upstream of it and credits
+nothing downstream. $\int\Delta\,dV$ is therefore not zero and is not meant to
+be: the partners of its boundary terms are the electrode and circuit rows.
+
+### The cathode face
+
+Both flux channels are exactly ZERO there. They would carry the *returning*
+thermal-electron current, and the cathode sheath repels plasma electrons —
+$P_{\text{cathode},e}$ is 0.06 W on the ES1 artifact, a return current of order
+0.3 mA. The sheath's kinetic boundary condition sets the electron energy flux
+at that face, not a bulk Braginskii closure evaluated on the ghost *ion*
+velocity, and R3.2 already books the face at zero for that reason.
+
+The WORK channel there is not zero, because `pressure_work_rhs` books a real
+expansion cooling at that face on the ion velocity. Its current is the model's
+own face-1 particle flux $-e\,n\,u_\text{face}A$, with $u_\text{face}$ the value
+`velocity_divergence` uses, so the operator's face-1 work term is that
+booking's exact partner: measured $+4.298$ kW against $-4.298$ kW, summing to
+zero.
+
+**Retracted (2026-08-31).** An earlier form credited $+14.8$ kW at this face,
+riding the *circuit's* ion current $I_i$. That current is carried by ions, not
+by any electron drift, so the credit had no physical carrier and no ledger
+partner; the claim that it cancelled a ghost-Bohm electron booking was a stale
+read of a legacy row inert on the shipped stance since R3.2, and that row
+measures 0.000 W. It is recorded here rather than deleted so the number is not
+re-derived.
+
+With no booked current the operator books nothing at all. The work channel does
+not vanish with the current on its own — it rides the difference velocity
+$u_e - u_i$, and its value encodes a repelling sheath, which is a driven-state
+statement. **That transition is not resolved**, and the boundary is stated
+rather than smoothed.
+
+### The anode face: a ruling, not a bracket
+
+The kinetic anode sheath row $(2T_e + \varphi_a)\Gamma$ IS the total electron
+energy flux at the sheath edge for the THERMAL population, so any fluid export
+there double-counts it. The beam electrons that reach the mesh directly lie
+outside both bookings: the circuit's own bypass row carries them, and
+$\Gamma_d = (I_\text{tot} - I_\text{beam})/(eA)$ carries the thermal drift only
+by construction. Every fluid channel therefore closes at that face.
+
+`electron_drift_anode_handshake = "sheath_row_closes_all"` is the DEFAULT and
+the registered closure (ruled 2026-08-31). `"sheath_row_closes"` (the $2.21$
+channel alone) and `"export_counts"` (neither channel) are RETAINED as
+disclosed INSTRUMENT arms that bound the size of the double count; **neither is
+claim-bearing.** Under every reading the `anode_sheath_full_debit` booking
+stands untouched, and the anode PRESHEATH term ($-T_e/2 \cdot I/e$, order
+$-11$ kW) is NOT booked here — it belongs to the separate anode-potential-debit
+question, and only one of the two may ever book it.
+
+### The declared bracket axis
+
+`electron_drift_charge_death` — where the launched beam's CHARGE dies, hence
+which faces still carry $I_\text{beam}$ rather than the full loop current as
+thermal-electron drift. `"cell_1"` puts the death in the cathode cell (the
+measured gap survival is $\sim2\times10^{-3}$ over $l_b \approx 16$ cm, so
+essentially all of it is deposited there), `"cell_2"` in the first gap cell. It
+is an `input_dict` selector and is refused at a non-default value with the flag
+off, where it would be inert. The spread across it is a first-order effect, not
+a small one: see the magnitudes below.
+
+A continuous survival profile is NOT used, and could not be: `n_beam` is
+launch-cell-only, and the saved `l_b_profile` disagrees with the ray survival
+by a factor of order 300. The charge-death STEP is the declared substitute.
+
+### Refusals
+
+The flag raises at construction, rather than choosing silently, when the
+geometry or the configuration leaves one of its forms open: with no resolved
+anode face (the drift would have nothing to terminate on, and running it off
+the end of the machine would invent an outflow boundary); under `TwinCathode`
+(two cathode faces drive one column and the split of the loop current between
+two drift channels is not readable off the circuit); and without
+`active_plasma_topology` (the solver then carries a second face convention and
+the operator would have to pick between them silently).
+
+### Magnitudes, and what may not be claimed
+
+Measured on `scripts/mgcr1_confirm.h5` over 0.1–20.1 ms at a mean loop current
+of 2772 A. Source-region sums, by charge-death arm and anode reading:
+
+| anode reading | `cell_1` | `cell_2` | status |
+|---|---|---|---|
+| `sheath_row_closes_all` | $+18.95$ kW | $+14.50$ kW | **registered closure** |
+| `sheath_row_closes` | $-2.82$ kW | $-7.27$ kW | instrument arm |
+| `export_counts` | $-53.03$ kW | $-57.48$ kW | instrument arm |
+
+Under the registered closure the net is POSITIVE on both arms of the declared
+bracket, $+14.5$ to $+19.0$ kW. The two instrument arms measure what a double
+count at the mesh face would be worth; they are not competing physical
+readings.
+
+The reversible-compression warming of the cells strictly downstream of the
+death cell, under the registered closure, is $+35.4$ kW (`cell_1`) /
+$+29.9$ kW (`cell_2`). The instrument arms read $+13.6$ / $+8.2$ kW, and the
+difference is not a discrepancy: under `"sheath_row_closes_all"` the mesh
+face's work term is handed to the sheath row and lands in these same cells, so
+the row is a **different quantity** there rather than a different value of one
+quantity. Say which reading a compression number belongs to, always.
+
+**It is not handshake-independent and it is not robust across the bracket.**
+Over the fixed cells 2–5 that an earlier form used, `cell_2` reads $-5.3$ kW,
+because that range sweeps in the death cell's own large negative. Quote it over
+the downstream cells, with its reading named, or not at all.
+
+In afterglow the term is small but NOT identically zero, and it is confined to
+the $\sim$1.5 ms ring-down. Under the registered closure it reads $+0.25$
+(`cell_1`) / $+0.12$ (`cell_2`) kW as a window mean at a mean loop current of
+218 A, and $+1.6$ / $-1.0$ W at 26 ms. The instrument arms run the other way —
+`export_counts` gives $-0.68$ / $-0.81$ kW over the same window — so the
+afterglow sign, like the discharge sign, is a statement about the anode reading
+and not about the plasma alone.
+
+In that window $\Gamma_d$ is **NEGATIVE**: the emission outlasts the loop
+current ($I_\text{beam}$ 297.5 A against $I_\text{tot}$ 217.8 A, window means;
+$-79.7$ A of net drift), so the drift reverses. Any afterglow reading of this
+operator has to carry that clause, because a term whose driving flux has
+changed sign is not "the same term, smaller".
+
+The missing EMF work corresponds to an in-plasma EMF of $+3.7$ to $+5.9$ V
+(current-weighted window means; the range is the SUPPORT bracket — faces 2–5,
+the declared support, against faces 2–6, which includes the mesh face's
+pressure jump), against the $V_p \approx 0.35$ V the circuit books, and close
+to the Boltzmann estimate $T_e\ln(n_5/n_1) = 5.76$ V. So **this is also a
+missing member of the R3.2 $V_\text{dis}$ partition** and is saved as
+`edt_inplasma_emf_V`. That $V_p$ is the RESISTIVE drop only, and the EMF is a
+few per cent of $V_\text{dis}$; no falsification of R3.2 follows unless it
+claimed the partition to better than that. **A pre-breakdown small-current
+frame makes `edt_inplasma_emf_V` read tens of volts — 61 V on a short demo run
+at this tip — because it is then a ratio of two small numbers. That is not a
+physics reading. Read the column CURRENT-WEIGHTED over a window,
+$\sum W_\text{EMF} / \sum I$, never as the average of the saved samples.**
+
+**The $\sim$19 % cold ES1 electron-temperature residual MUST NOT be advanced as
+explained by this term, in either direction.** The magnitude is sufficient and
+the SIGN was not established by the evidence that registered the operator; the
+sign the registered closure now gives is a RULING on the anode, not a bracket
+result, and a ruling cannot carry a residual it was not derived from.
+
+### Interactions carried as caveats
+
+These are flagged, not adjudicated, by this build:
+
+- **[anode-1.5Te-row-foldin] / [anode-phi-debit]** — the arrival flux and the
+  EMF both change what the anode rows *should* debit. This operator does not
+  move those rows; it makes the question sharper by putting a named number on
+  the enthalpy the drift delivers to the sheath edge.
+- **[stage-te-bias]** — the source-region electron temperature set-point moves
+  at tens-of-kW scale, which is the same scale as this operator. A stance that
+  arms this flag and a stance that re-cuts that bias are not independent.
+- The per-cell `heat_conduction` ledger row is a save-instant sample of a stiff
+  operator rather than an effective transport, so it **cannot referee** the
+  redistribution this operator performs.

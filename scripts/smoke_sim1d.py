@@ -7805,6 +7805,11 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         "boundary_absorption",
         "characteristic_boundary",
         "pressure_work",
+        # Present with all-zero rows whether or not electron_drift_transport
+        # is armed: the term key is what keeps the saved term structure stable
+        # across the pre-breakdown phase change AND across the flag, so it
+        # belongs in the unarmed enumeration too.
+        "electron_drift_transport",
         "hyperbolic_energy_correction",
         "ei_exchange",
         "ionization_energy_cost",

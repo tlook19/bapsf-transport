@@ -6,7 +6,7 @@ from cablp.atomic.cross_sections import (
     phelps_cx_rate_cm3_s,
     phelps_momentum_transfer_rate_cm3_s,
 )
-from cablp.constants import ev_to_erg, kb_cgs
+from cablp.constants import ev_to_erg, kb_cgs, qe_SI
 
 from .flux import (
     ion_sound_speed,
@@ -62,6 +62,363 @@ def pressure_work_rhs(
         Ee=-float(electron_scale) * derived.pe * div_u,
         Ei=-float(ion_scale) * derived.pi * div_u,
     )
+
+
+#: The coefficient a drift face flux carries into the electron energy: 3/2 from
+#: the internal energy it convects plus 0.71 from the Braginskii thermal-force
+#: heat flux ``q_u``. The remaining 1.0 that completes the 3.21 of the volume
+#: identity's boundary term comes from the pressure-drift WORK term by
+#: summation by parts, not from a face flux -- which is why the anode handshake
+#: toggles 2.21 and not 3.21.
+_DRIFT_FACE_COEFFICIENT = 1.5 + 0.71
+
+#: The Braginskii thermal-force coefficient, in both the heat flux
+#: ``q_u = 0.71 T_e Gamma_d`` and the work term ``0.71 Gamma_d . grad(T_e)``.
+_DRIFT_THERMAL_FORCE = 0.71
+
+#: The drift operator's per-cell power rows [W], in the order they are saved.
+#: The first four are the operator's own four terms and sum to its total, which
+#: is what lets the volume identity be checked against a SAVED trajectory
+#: instead of only against a live solver.
+ELECTRON_DRIFT_DIAGNOSTIC_ROWS = (
+    "edt_enthalpy_convection_W",
+    "edt_pressure_drift_work_W",
+    "edt_thermal_force_flux_W",
+    "edt_emf_work_W",
+)
+
+#: The drift operator's scalar-per-save diagnostics.
+#:
+#: ``edt_inplasma_emf_V`` is the V_dis partition member missing from the R3.2
+#: partition: W_EMF per ampere of the current doing the work. **A single
+#: save's value is NOT a physics reading when the current is small** -- it is
+#: then a ratio of two small numbers, and a pre-breakdown frame has been
+#: measured at tens of volts against the 3.7-5.9 V a current-weighted window
+#: mean gives at the stance point. Read it CURRENT-WEIGHTED over a window,
+#: sum(W_EMF)/sum(I), never as the average of this column.
+#:
+#: ``edt_cathode_face_handshake_W`` is the enthalpy-plus-thermal-force influx
+#: at the cathode face, which is ZERO by construction since 2026-08-31 -- it
+#: is kept as a standing cancellation check, not as a magnitude. The +14.8 kW
+#: it once carried is RETIRED as measured-wrong. ``edt_total_W`` is the
+#: per-step ledger total over the operator's support.
+#:
+#: The last three exist so the volume identity
+#: ``total == boundary_in - boundary_out + W_EMF`` is checkable from a SAVED
+#: trajectory rather than only from a live solver. That needs the boundary
+#: terms as their own rows: ``W_EMF`` alone would make the check a tautology,
+#: since the identity would then be defining it rather than testing it.
+ELECTRON_DRIFT_DIAGNOSTIC_SCALARS = (
+    "edt_total_W",
+    "edt_inplasma_emf_V",
+    "edt_cathode_face_handshake_W",
+    "edt_W_EMF_W",
+    "edt_boundary_in_W",
+    "edt_boundary_out_W",
+)
+
+
+def _drift_face_values(values, geometry):
+    """Carry a cell-centred quantity to faces, on the typed-topology rule.
+
+    Exactly :func:`velocity_divergence`'s convention and for the same reason:
+    an interior face takes the arithmetic mean of its two neighbours, and a
+    face the topology has closed takes its one live cell (or zero, where there
+    is none). Sharing the rule is what makes the drift operator's boundary
+    terms come out as ``T_e`` of the live cell -- which is what the volume
+    identity's ``3.21 T_e I / e`` means -- instead of an average against a
+    plasma-dead plenum.
+    """
+    values = np.asarray(values, dtype=float)
+    face = np.zeros(geometry.cells + 1, dtype=float)
+    face[1:-1] = 0.5 * (values[:-1] + values[1:])
+    for f in np.flatnonzero(~np.asarray(geometry.plasma_open, dtype=bool)):
+        f = int(f)
+        live = int(geometry.plasma_face_live_cell[f])
+        face[f] = 0.0 if live < 0 else values[live]
+    return face
+
+
+def _drift_face_currents(
+    geometry, spec, I_tot_A, I_beam_A, n_safe, u_face, face_area
+):
+    """Return the per-cell ``(low, high)`` drift-current face pairs, in amperes.
+
+    Four arrays, because the two faces that bound the operator treat the
+    ENTHALPY channel (the ``2.21 T_e`` face flux) and the pressure-drift WORK
+    channel differently, and a single face array could not say so.
+
+    The pairs are per-cell rather than one shared face array because the drift
+    current is INTERCEPTED at the mesh: the anode face debits the cell upstream
+    of it and credits nothing downstream. That asymmetry is the whole reason
+    the operator is an open-system exchange with the electrodes rather than an
+    internal redistribution, and a shared face array would silently telescope
+    it away.
+
+    **The cathode face** (amended 2026-08-31 after the advisor adjudication;
+    the earlier ``+14.8 kW`` reading is RETIRED as measured-wrong). The
+    enthalpy and thermal-force channels there carry the RETURNING
+    thermal-electron current, and the cathode sheath repels plasma electrons:
+    ``P_cathode_e`` is 0.06 W on the ES1 artifact, a return current of order
+    0.3 mA. Those channels are therefore taken as exactly zero — the sheath's
+    kinetic boundary condition sets the electron energy flux there, not a bulk
+    Braginskii closure evaluated on the ghost ION velocity, and R3.2 already
+    books this face at zero for that reason. Crediting ``2.21 T_e I_i / e``
+    there would be an unsourced credit with no physical carrier and no ledger
+    partner, which is what it was.
+
+    The WORK channel at that face is legitimate in kind, because
+    ``pressure_work_rhs`` books a real expansion cooling there on the ion
+    velocity. Its current is therefore the model's OWN face-1 particle flux,
+    ``-e n u_face A`` with ``u_face`` the very value ``velocity_divergence``
+    uses at that face, so the operator's face-1 work term is the exact partner
+    of that booking and cancels it to roundoff. Riding the circuit's ion
+    current ``I_i`` instead would over-correct: the three ion currents at that
+    face (circuit ``I_i``, the ghost-Bohm ``n`` row, and ``n u A``) differ by
+    nearly a factor of two, and only the last is the one the pressure work was
+    taken on.
+    """
+    cells = geometry.cells
+    lo_flux = np.zeros(cells, dtype=float)
+    hi_flux = np.zeros(cells, dtype=float)
+    lo_work = np.zeros(cells, dtype=float)
+    hi_work = np.zeros(cells, dtype=float)
+
+    cathode_face = spec["cathode_face"]
+    anode_face = spec["anode_face"]
+    last = anode_face - 1
+    # How many faces downstream of the cathode face still carry beam current:
+    # one under "cell_1" (the charge dies in the launch cell), two under
+    # "cell_2".
+    beam_faces = 1 if spec["charge_death"] == "cell_1" else 2
+
+    for cell in range(spec["launch_cell"], last + 1):
+        # The low face of cell ``cell`` is face ``cell``; the high face is
+        # ``cell + 1``.
+        lo_beam = I_beam_A if (cell - cathode_face) < beam_faces else 0.0
+        hi_beam = I_beam_A if (cell + 1 - cathode_face) < beam_faces else 0.0
+        lo_flux[cell] = I_tot_A - lo_beam
+        hi_flux[cell] = I_tot_A - hi_beam
+        lo_work[cell] = lo_flux[cell]
+        hi_work[cell] = hi_flux[cell]
+
+    # The cathode face. See the docstring: the enthalpy/thermal-force channels
+    # carry a ~0.3 mA return current and are taken as exactly zero, while the
+    # work channel rides the model's own face-1 particle flux so that it is the
+    # exact partner of pressure_work_rhs's booking at the same face.
+    launch = spec["launch_cell"]
+    lo_flux[launch] = 0.0
+    lo_work[launch] = (
+        -qe_SI * n_safe[launch] * face_area[launch] * u_face[launch]
+    )
+
+    # The anode face. "sheath_row_closes_all" is the registered closure (ruled
+    # 2026-08-31): the kinetic anode sheath row (2 T_e + phi_a) Gamma IS the
+    # total electron energy flux at the sheath edge for the THERMAL population,
+    # so EVERY fluid channel closes there and any fluid export double-counts
+    # it. The beam electrons that reach the mesh directly are outside both --
+    # the circuit's own bypass row books them, and Gamma_d carries the thermal
+    # drift only by construction. The other two values are retained as
+    # disclosed instrument arms that bound the double count.
+    handshake = spec["anode_handshake"]
+    if handshake in ("sheath_row_closes", "sheath_row_closes_all"):
+        hi_flux[last] = 0.0
+    if handshake == "sheath_row_closes_all":
+        hi_work[last] = 0.0
+    return lo_flux, hi_flux, lo_work, hi_work
+
+
+def electron_drift_transport_rhs(
+    state,
+    floors,
+    ion_mass_g,
+    geometry,
+    spec,
+    I_tot_A,
+    I_beam_A,
+):
+    """Return the electron drift-transport and EMF-work operator.
+
+    The electron energy equation books its pressure work with the ION velocity
+    (:func:`pressure_work_rhs`). That is exact where ``J = 0``, but in the
+    current-carrying source region the electron drift ``u_e = u - J/(e n)``
+    differs, and the transport and non-resistive field work it carries,
+
+        ``Delta = -div(3/2 T_e Gamma_d) - p_e div(Gamma_d / n) - div(q_u)
+                  + 0.71 Gamma_d . grad(T_e)``,
+
+    with ``Gamma_d = (I_tot - I_beam) / (e A)`` and ``q_u = 0.71 T_e Gamma_d``,
+    is absent from the ledger. The RESISTIVE part of the field work is not
+    absent -- ``eta j^2`` is booked as ``P_ohmic`` -- and this operator does
+    not touch it.
+
+    ``I_tot_A`` is the loop current the cathode solve booked and ``I_beam_A``
+    the beam current it launched, so ``Gamma_d`` is built from the model's OWN
+    current rather than from a second opinion about it. Both are read from the
+    same solve, which is what keeps the drift consistent with the electrode
+    rows that are proportional to the same current.
+
+    The ELECTRON row alone is written; ``n``, ``nn``, ``M`` and ``Ei`` are
+    exactly zero. The ion side needs nothing: ``u`` there is already the ion
+    velocity, the total-``grad p`` momentum booking is exact, the
+    electron-ion friction cancels, and the only coupling back is the indirect
+    one through ``Q_ie``.
+
+    Returns ``(rhs, rows)``: the conservative state, and the four named
+    per-cell power rows [W] plus the scalars the ledger reads. The rows are
+    the operator's own four terms and sum to its total, so the volume identity
+
+        ``sum(Delta dV) == [3.21 T_e I/e]_in - [3.21 T_e I/e]_out + W_EMF``
+
+    can be checked against them rather than re-derived. ``W_EMF`` is assembled
+    INDEPENDENTLY of that residual -- its thermal-force half is the
+    ``emf_work_W`` row and its pressure half is the discrete summation-by-parts
+    partner of ``pressure_drift_work_W``, a sum over the faces interior to the
+    operator's support -- so the identity is a real test and not a tautology.
+
+    UNITS. Every power below is ``coefficient x T_e[eV] x I[A]``, which is
+    watts exactly: ``Gamma_d A = I / e``, so the face areas cancel and the
+    eV-to-erg conversion cancels against coulombs per elementary charge. The
+    conservative row converts back to the solver's ``erg cm^-3 s^-1`` at the
+    end, once, where it is easy to see.
+    """
+    cells = geometry.cells
+    zeros = np.zeros(cells, dtype=float)
+    if I_tot_A == 0.0 and I_beam_A == 0.0:
+        # NO BOOKED CURRENT, NO OPERATOR. With J = 0 the electron drift IS the
+        # ion velocity, the model's ion-velocity pressure work is exact, and
+        # there is nothing here to correct.
+        #
+        # This guard is load-bearing rather than an optimization, because the
+        # cathode-face work channel does NOT vanish with the current on its
+        # own: it rides the difference velocity u_e - u_i, and its value
+        # -e n u_face A encodes a REPELLING sheath holding the electron flux
+        # at that face to ~0 while the ions keep leaving. That is a
+        # driven-state statement. With no drive there is no such sheath, the
+        # two species leave together, and the difference is zero. The
+        # transition between the two regimes is NOT resolved here -- it would
+        # need the cathode solve's own returning-electron current, which the
+        # amended registration deliberately replaces with "take it as zero" --
+        # so the operator is armed only where the model books a current at
+        # all, and that boundary is stated rather than smoothed.
+        return (
+            ConservativeState1D(
+                n=zeros,
+                nn=zeros.copy(),
+                M=zeros.copy(),
+                Ee=zeros.copy(),
+                Ei=zeros.copy(),
+            ),
+            {
+                name: np.zeros(cells, dtype=float)
+                for name in ELECTRON_DRIFT_DIAGNOSTIC_ROWS
+            }
+            | {name: 0.0 for name in ELECTRON_DRIFT_DIAGNOSTIC_SCALARS},
+        )
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    Te = np.asarray(derived.Te, dtype=float)
+    # The FLOORED density, which is the one ``derive_state`` builds ``pe`` from
+    # and the one ``pressure_work_rhs`` therefore books on. Sharing it is what
+    # makes the cathode-face cancellation exact by construction rather than by
+    # the floor happening to be inactive.
+    n = np.maximum(np.asarray(state.n, dtype=float), floors["n"])
+
+    Te_face = _drift_face_values(Te, geometry)
+    n_face = _drift_face_values(n, geometry)
+    # ``velocity_divergence``'s own face velocity, reused rather than
+    # re-derived: the cathode-face work partner has to ride exactly the
+    # velocity the booking it cancels was taken on.
+    u_face = _drift_face_values(np.asarray(derived.u, dtype=float), geometry)
+    face_area = np.asarray(geometry.plasma_face_area_cm2, dtype=float)
+    lo_flux, hi_flux, lo_work, hi_work = _drift_face_currents(
+        geometry, spec, I_tot_A, I_beam_A, n, u_face, face_area
+    )
+
+    index = np.arange(cells)
+    Te_lo = Te_face[index]
+    Te_hi = Te_face[index + 1]
+    n_lo = n_face[index]
+    n_hi = n_face[index + 1]
+
+    # -div(3/2 T_e Gamma_d) and -div(q_u): the same face structure, in minus
+    # out, split into two rows because the consult isolates them separately.
+    face_power = Te_lo * lo_flux - Te_hi * hi_flux
+    enthalpy_W = 1.5 * face_power
+    thermal_force_W = _DRIFT_THERMAL_FORCE * face_power
+    # -p_e div(Gamma_d / n): the divergence is of the drift VELOCITY, so the
+    # face current is carried by the face density. A face with no live
+    # neighbour carries n_face = 0 and contributes nothing, which is the same
+    # statement as its current being zero there.
+    drift_hi = np.divide(
+        hi_work, n_hi, out=np.zeros(cells, dtype=float), where=n_hi > 0.0
+    )
+    drift_lo = np.divide(
+        lo_work, n_lo, out=np.zeros(cells, dtype=float), where=n_lo > 0.0
+    )
+    pressure_drift_work_W = -Te * n * (drift_hi - drift_lo)
+    # +0.71 Gamma_d . grad(T_e), cell-centred on the same face pair.
+    emf_work_W = (
+        _DRIFT_THERMAL_FORCE * 0.5 * (lo_flux + hi_flux) * (Te_hi - Te_lo)
+    )
+
+    total_W = (
+        enthalpy_W + thermal_force_W + pressure_drift_work_W + emf_work_W
+    )
+
+    # W_EMF's pressure half: the summation-by-parts partner of the
+    # pressure-drift work, summed over the faces INTERIOR to the support.
+    support = slice(spec["launch_cell"], spec["anode_face"])
+    interior = range(spec["launch_cell"] + 1, spec["anode_face"])
+    pe = Te * n
+    w_emf_pressure_W = 0.0
+    for face in interior:
+        if n_face[face] > 0.0:
+            w_emf_pressure_W += (
+                lo_work[face] / n_face[face] * (pe[face] - pe[face - 1])
+            )
+    w_emf_W = w_emf_pressure_W + float(emf_work_W[support].sum())
+    # The V_dis partition member: the in-plasma EMF the drift works against,
+    # which is W_EMF per ampere of the current doing the work.
+    inplasma_emf_V = w_emf_W / I_tot_A if I_tot_A != 0.0 else 0.0
+
+    rhs = ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        # W -> erg cm^-3 s^-1, the solver's conservative energy-rate unit.
+        Ee=total_W * 1.0e7 / np.asarray(geometry.plasma_volume_cm3, dtype=float),
+        Ei=zeros.copy(),
+    )
+    # The identity's two boundary terms, assembled from the ACTUAL face
+    # quantities each convention selects: the 2.21 enthalpy-plus-heat-flux
+    # channel plus the 1.00 the pressure-drift work contributes by summation
+    # by parts, which together are the consult's 3.21. Building them this way
+    # rather than as a literal ``3.21 T_e I / e`` is what keeps the identity
+    # exact under "sheath_row_closes", where the anode face's enthalpy export
+    # is held closed by the sheath row and its coefficient is 1.00, not 3.21.
+    launch = spec["launch_cell"]
+    last = spec["anode_face"] - 1
+    cathode_handshake_W = float(
+        _DRIFT_FACE_COEFFICIENT * Te_lo[launch] * lo_flux[launch]
+    )
+    boundary_in_W = cathode_handshake_W + float(pe[launch] * drift_lo[launch])
+    boundary_out_W = float(
+        _DRIFT_FACE_COEFFICIENT * Te_hi[last] * hi_flux[last]
+        + pe[last] * drift_hi[last]
+    )
+    rows = {
+        "edt_enthalpy_convection_W": enthalpy_W,
+        "edt_pressure_drift_work_W": pressure_drift_work_W,
+        "edt_thermal_force_flux_W": thermal_force_W,
+        "edt_emf_work_W": emf_work_W,
+        "edt_total_W": float(total_W[support].sum()),
+        "edt_inplasma_emf_V": float(inplasma_emf_V),
+        "edt_cathode_face_handshake_W": cathode_handshake_W,
+        "edt_W_EMF_W": float(w_emf_W),
+        "edt_boundary_in_W": boundary_in_W,
+        "edt_boundary_out_W": boundary_out_W,
+    }
+    return rhs, rows
 
 
 def _pressure_flux_divergence(p, geometry, active_plasma_topology):
