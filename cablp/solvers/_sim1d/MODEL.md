@@ -529,6 +529,56 @@ plasma-removed / anode-heat / sheath split (settled artifact: 163.56 = 123.26 +
 40.43 kW, residual ~0.1 kW = `V_p`) is what a scheme-efficiency analysis
 (plasma-useful vs electrode-lost power) across I/V-ratio operating points will use.
 
+### The A2a anode-current split
+
+The bypass primaries above are not the only electrons that reach the mesh
+without the anode sheath having to pass them. The anode current the sheath does
+have to pass is formed by subtracting every directly-collected population from
+the loop current (`circuit.py:489` and `:717`, the two residuals;
+`circuit.py:1197` and `circuit_idriven.py:909`, the two recoveries):
+
+```
+J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
+```
+
+The two subtracted terms are the split's two populations, and they enter with
+the same sign for the same reason:
+
+- `eta * beam_bypass_fraction * J_star` — CATHODE-BORNE primaries. `J_star` is
+  the space-charge-allowed thermionic emission, `beam_bypass_fraction` the
+  survival probability across the cathode-anode gap, `eta` the mesh solid
+  fraction.
+- `J_tail_a` — COLUMN-BORNE quasilinear tail walkers, which strike the same
+  wires from either side. It is the deposition module's collected tail current
+  scaled like every other current here,
+  `J_tail_a = tail_anode_current_A * R_p / T_e` (`circuit.py:963`,
+  `circuit_idriven.py:618`).
+
+Both reduce `J_anode`, so both raise the anode sheath logarithmically.
+`J_anode`'s only consumer is that sheath: `psi_a = Lambda - log(max(1 +
+J_anode / J_i_a, 1e-300))` and `phi_a = psi_a * T_e_anode`
+(`circuit.py:1200-1206`, `circuit_idriven.py:911-912`; the clamp guards the
+logarithm's argument). `J_anode` is not itself a result field — `phi_a` is what
+leaves the circuit.
+
+**The two populations are NOT symmetric in the power ledger, and the split must
+not be described as if they were.** The bypass carries an explicit power row
+(`_P_beam_bypass`) and shrinks `P_prim` by its own factor
+(`circuit_idriven.py:964`, `:1010`). The tail current touches the circuit ONLY
+through `phi_a`; its energy is booked on the fluid side, into
+`anode_intercepted_erg_s` (`beam_deposition.py`), not on the circuit's.
+
+`tail_anode_current_A` carries a ONE-STEP LAG by construction: deposition runs
+after the circuit within a step, so the current a step's deposition collects is
+an input to the NEXT accepted step's circuit solve. It is threaded as
+`tail_anode_current_prev_A` and committed only when a step is accepted
+(`cathode.py:1425-1429`, `solver.py:9249` and `:9274-9276`); RESTART.md carries
+it as restart state, restoring `0.0` for pre-A2a payloads.
+
+The channel is armed by `beam_tail_anode_interception`, default off and
+requiring `beam_anode_interception`; with it off `tail_anode_current_A` is
+`0.0` and `J_anode` is exactly the bypass-only expression it was before A2a.
+
 ## R4.2 unified ionization birth energy moments (2026-07-24)
 
 As introduced at R4.2 the `ionization_birth_energy_model` selector was
