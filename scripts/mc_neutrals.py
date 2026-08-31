@@ -139,22 +139,22 @@ def vt_cm_s(T_eV):
 def boundary_recycle_row(f):
     """Name the ``rhs_terms`` row carrying this run's boundary recycle.
 
-    Returns ``(row_name, stance)``, ``stance`` being the saved
-    ``characteristic_boundary`` flag.
+    Returns ``(row_name, stance)``. The row is ALWAYS
+    ``characteristic_boundary``: the legacy volumetric absorber was retired
+    2026-08-31 (Tom), so ``boundary_absorption`` is identically zero on every
+    run this package can now produce, and it was already identically zero on
+    every run made at the shipped stance before that. An offline reader that
+    selected the legacy row would get a zero channel and silently drop the
+    end-wall return from its source menu.
 
-    Under ``characteristic_boundary`` -- the shipped production stance since
-    R5 -- the solver zeroes the WHOLE ``boundary_absorption`` state, plasma
-    removal and neutral return ``nn`` alike, and books both under
-    ``characteristic_boundary``. An offline reader that hardcodes the legacy
-    row therefore gets an identically-zero channel on every production run and
-    silently drops the end-wall return from its source menu. Pre-R5 artifacts
-    carry no ``characteristic_boundary`` key in ``flags_json`` (and usually no
-    such row at all) and keep the legacy row.
+    ``stance`` is retained for the caller's report line and is True whenever
+    the artifact records the retired flag as on OR carries no such key at all
+    (every post-retirement run). It is a provenance label, not a selector.
     """
     raw = f.attrs.get("flags_json")
     flags = json.loads(raw) if raw is not None else {}
-    stance = bool(flags.get("characteristic_boundary", False))
-    return ("characteristic_boundary" if stance else "boundary_absorption"), stance
+    stance = bool(flags.get("characteristic_boundary", True))
+    return "characteristic_boundary", stance
 
 
 def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_ms):

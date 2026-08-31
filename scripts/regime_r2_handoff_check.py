@@ -113,7 +113,6 @@ def _faces(sim, geometry):
         active_plasma_topology=sim._active_plasma_topology,
         wave_speed=sim._hyperbolic_wave_speed,
         energy_consistent=sim._hyperbolic_energy_consistent,
-        characteristic_boundary=sim._characteristic_boundary,
     )
 
 

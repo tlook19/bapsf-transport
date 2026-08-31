@@ -21,10 +21,10 @@ From the ES baseline, single-toggle each named suspect and add an all-three
 positive control that reverts toward the historical stance:
 
   baseline      ES stance as-is                          (see ANCHORS below)
-  char_off      characteristic_boundary = False          (R3.1 Bohm outflow off)
+  char_off      RETIRED 2026-08-31 (Tom) -- NO LONGER CONSTRUCTIBLE
   birth_legacy  ionization_birth_energy_model = legacy   (hot legacy birth)
   sgp3400       S_gp = 3400 (config default; ES override is 3000)
-  all3          char_off + birth_legacy + sgp3400        (positive control)
+  all3          RETIRED 2026-08-31 (Tom) -- NO LONGER CONSTRUCTIBLE
   no_equil      neutral_equilibration = False            (historical control)
 
 SUPERSEDED 2026-08-21: sccm now MEANS meter-sccm (4.171431e17 particles/s per
@@ -58,7 +58,9 @@ ANCHORS (measured 2026-08-04, nx = 120, t_probe = 0.2 ms):
   baseline n_b/n_e = 0.106 -- the QL cutoff BINDS on ~95% of the pre-ignition
                      window and never releases on baseline; the ~5% complement
                      is saves carrying no ray at all, not releases.
-  char_off and all3 both release the QL cutoff at t = 0.020 ms.
+  char_off and all3 both released the QL cutoff at t = 0.020 ms. Those two
+                     arms were RETIRED 2026-08-31 (Tom) and are no longer
+                     constructible; this line is the record of what they read.
 
 SAMPLING TIME. ``--t-probe`` is model time measured from t = 0, and under the
 sequencing stance -- ``tau_neutral_prebreakdown = 0.0``, the config default --
@@ -104,17 +106,19 @@ from compare_sim1d_es1 import PARAM_OVERRIDES, FLAG_OVERRIDES
 
 VARIANTS = {
     "baseline": (dict(), dict()),
-    "char_off": (dict(), {"characteristic_boundary": False}),
+    # RETIRED 2026-08-31 (Tom): "char_off" set characteristic_boundary = False,
+    # and "all3" was char_off + birth_legacy + sgp3400. That flag, and the
+    # legacy volumetric absorber it selected, are gone -- the key is now an
+    # unknown key and both arms raise at construction, so they are NOT
+    # constructible and are removed from VARIANTS rather than left to fail.
+    # The A/B they produced is preserved in the record; nothing else in this
+    # repo was its only witness.
     "birth_legacy": ({"ionization_birth_energy_model": "legacy"}, dict()),
     # SUPERSEDED 2026-08-21 (see the module docstring): the two 3400 literals
     # below are pre-changeover sccm, so they now ship ~6.85 % less flux than
     # when the arms ran, and 3400 is no longer the config default. Left AS A
     # RECORD of what this dated probe ran.
     "sgp3400": ({"S_gp": 3400}, dict()),
-    "all3": (
-        {"ionization_birth_energy_model": "legacy", "S_gp": 3400},
-        {"characteristic_boundary": False},
-    ),
     # CONTROL for historical attribution (see the re-registered DECISION RULE in
     # the module docstring): skip the 100-cycle neutral pre-equilibration, so
     # the run starts from the bare nn0 seed and builds its fill only from the
@@ -365,7 +369,7 @@ def main():
     ap.add_argument("--t-probe", type=float, default=2.0e-4,
                     help="model time to stop at [s], measured from drive-on "
                          "when tau_neutral_prebreakdown = 0 (the default)")
-    ap.add_argument("--variants", default="baseline,char_off,birth_legacy,sgp3400,all3")
+    ap.add_argument("--variants", default="baseline,birth_legacy,sgp3400")
     ap.add_argument("--trace", metavar="VARIANT", default=None,
                     help="run VARIANT to completion with progress instead of probing")
     ap.add_argument("--out-h5", default=None, help="save the --trace run to this H5")

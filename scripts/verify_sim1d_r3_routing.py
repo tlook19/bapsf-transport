@@ -23,8 +23,10 @@ Gates:
      (deposited < full P_cathode_e);
   G5 no electron double-book + collector sheath present: the characteristic
      boundary contributes ZERO electron energy at the (driven) cathode and the
-     2Te floating-sheath loss at the collector, while pure-ghost (routing off)
-     keeps its enthalpy flux at both.
+     2Te floating-sheath loss at the collector. (The pure-ghost comparison arm
+     -- sheath_energy_routing=False -- was retired with that parameter on
+     2026-08-31 (Tom); the routing it selected is now the only one, so G5
+     asserts its two values directly.)
 
 Usage:  python scripts/verify_sim1d_r3_routing.py
 """
@@ -46,17 +48,16 @@ from cablp.constants import ev_to_erg
 from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 
 
-def _sim(characteristic):
+def _sim():
     p, f = default_config()
     p.update(PARAM_OVERRIDES)
     f.update(FLAG_OVERRIDES)
     p["nx"] = 120
-    f["characteristic_boundary"] = characteristic
     return LAPDSim1D(p, f)
 
 
 def main():
-    sim = _sim(characteristic=True)
+    sim = _sim()
     cfg = cathode_device_config(
         sim._input_dict,
         sim._effective_cathode_flags(time=None, active_only=False),
@@ -115,7 +116,7 @@ def main():
     print(f"   plasma-thermal {r.P_cathode_e_thermal:.4e} < full P_cathode_e "
           f"{r.P_cathode_e:.4e}  (phi to electrode {r.P_cathode_e_phi:.4e})")
 
-    # G5 fluid boundary electron routing: cathode 0, collector 2Te; vs pure ghost.
+    # G5 fluid boundary electron routing: cathode 0, collector 2Te.
     geo = sim.geometry
     mu, mi = sim._mu, sim.ion_mass_g
     roles = np.asarray(geo.cell_role)
@@ -135,20 +136,24 @@ def main():
     kw = dict(state=st, floors=sim._floors, ion_mass_g=mi, mu=mu, geometry=geo,
               alpha_isat=np.exp(-0.5), b_surface_loss=1.0,
               gas_type=sim._gas_type)
-    routed = characteristic_boundary_rhs(sheath_energy_routing=True, **kw)
-    ghost = characteristic_boundary_rhs(sheath_energy_routing=False, **kw)
+    routed = characteristic_boundary_rhs(**kw)
     g5 = True
     for face, live in edges.items():
         role = roles[live]
         if role == "cathode":
-            g5 &= routed.Ee[live] == 0.0 and ghost.Ee[live] != 0.0
+            # Driven electrode: the circuit books its electron power, so the
+            # boundary must add exactly nothing here (no double-book).
+            g5 &= routed.Ee[live] == 0.0
         elif role == "collector":
+            # Floating exhaust: the boundary IS the electron sheath, 2Te per
+            # electron at the Bohm flux.
             expect = 2.0 * Te * ev_to_erg * routed.n[live]
             g5 &= math.isclose(routed.Ee[live], expect, rel_tol=1e-12)
-        # ion internal + particle sink unchanged either way
-        g5 &= routed.Ei[live] == ghost.Ei[live] and routed.n[live] == ghost.n[live]
+        # Non-vacuous: the particle and ion-internal rows are live at each face,
+        # so a term that booked nothing at all could not pass the Ee statements.
+        g5 &= routed.n[live] != 0.0 and routed.Ei[live] != 0.0
         print(f"G5 {role:9s} cell {live}: routed Ee={routed.Ee[live]:+.3e} "
-              f"ghost Ee={ghost.Ee[live]:+.3e}")
+              f"n={routed.n[live]:+.3e} Ei={routed.Ei[live]:+.3e}")
 
     # G6 load-power closure: in a physical (uncapped) emitting regime the
     # current-resolved ledger closes to machine zero and the cathode current
