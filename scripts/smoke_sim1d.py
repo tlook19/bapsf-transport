@@ -289,7 +289,6 @@ def _pin_operator_algebra_stance(params, flags):
     flags["active_plasma_topology"] = False
     flags["raw_stage_validation"] = False
     flags["hyperbolic_energy_consistent"] = False
-    flags["characteristic_boundary"] = False
     flags["front_flux"] = True
     params["hyperbolic_wave_speed"] = "isothermal"
     return _pin_pre_r2a_neutral_stance(params, flags)
@@ -321,7 +320,6 @@ _HISTORICAL_PIN_KEYS = (
     "active_plasma_topology",
     "raw_stage_validation",
     "hyperbolic_energy_consistent",
-    "characteristic_boundary",
     "front_flux",
     "hyperbolic_wave_speed",
 )
@@ -444,7 +442,6 @@ def _cathode_unit_config():
     })
     f.update({
         "hyperbolic_energy_consistent": False,
-        "characteristic_boundary": False,
         "front_flux": True,
     })
     # These unit tests are about the cathode and the fluid, and several of them
@@ -1402,15 +1399,15 @@ def _case_variable_area_well_balancedness(
     # plasma the quasi-1D p*dA/dz geometric source cancels the area-weighted
     # pressure flux bit-for-bit -- but this property applies only across the
     # INTERIOR expansion cells (role "end"). The terminating "collector" cell is
-    # a plasma-OPEN boundary: under characteristic_boundary (R3.1, the production
-    # default) it carries a Bohm outflow (ghost u_g = c_s) whose flux is supplied
-    # by characteristic_boundary_rhs (a term not summed here), so a uniform
-    # stationary state is deliberately NOT its equilibrium -- the plasma flows
-    # out. Under the legacy reflecting wall the collector cancels like the
-    # interior. (hyperbolic_energy_consistent and hyperbolic_wave_speed have no
-    # effect on this state: at u=0 with no gradients the KEP convective term and
-    # the Rusanov dissipation both vanish at every interior face, so only the
-    # collector ghost -- gated by characteristic_boundary -- can be nonzero.)
+    # a plasma-OPEN boundary: it carries a Bohm outflow (ghost u_g = c_s) whose
+    # flux is supplied by characteristic_boundary_rhs (a term not summed here),
+    # so a uniform stationary state is deliberately NOT its equilibrium -- the
+    # plasma flows out. (hyperbolic_energy_consistent and hyperbolic_wave_speed
+    # have no effect on this state: at u=0 with no gradients the KEP convective
+    # term and the Rusanov dissipation both vanish at every interior face, so
+    # only the collector ghost can be nonzero.) The legacy reflecting-wall
+    # alternative, under which the collector cancelled like the interior, was
+    # retired 2026-08-31 (Tom).
     resolved_params, resolved_flags = _resolved_config()
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
@@ -1440,16 +1437,10 @@ def _case_variable_area_well_balancedness(
         expansion_momentum_residual[interior_expansion_cells],
         np.zeros(interior_expansion_cells.size),
     )
-    # Terminating collector cell: an open Bohm outflow under the characteristic
-    # boundary (directed toward +z, so a net positive momentum residual), or an
-    # exact wall cancellation under the legacy reflecting boundary.
-    if expansion_sim._characteristic_boundary:
-        assert np.all(expansion_momentum_residual[collector_cells] > 0.0)
-    else:
-        assert np.array_equal(
-            expansion_momentum_residual[collector_cells],
-            np.zeros(collector_cells.size),
-        )
+    # Terminating collector cell: an open Bohm outflow, directed toward +z, so
+    # a net POSITIVE momentum residual -- the load-bearing contrast against the
+    # interior cells' exact cancellation asserted just above.
+    assert np.all(expansion_momentum_residual[collector_cells] > 0.0)
     assert np.allclose(expansion_geometric.n, 0.0)
     assert np.allclose(expansion_geometric.Ee, 0.0)
     assert np.allclose(expansion_geometric.Ei, 0.0)
@@ -1680,7 +1671,7 @@ def _case_variable_area_well_balancedness(
 
     # The absorbing face drains its live cell and returns the plasma as gas
     # there, conserving particles.
-    absorbed = resolved_sim.boundary_absorption_rhs(state=flowing_state)
+    absorbed = resolved_sim.characteristic_boundary_rhs(state=flowing_state)
     assert absorbed.n[cathode_face] < 0.0  # cathode cell drains to the surface
     assert absorbed.nn[cathode_face] > 0.0
     assert absorbed.n[-1] < 0.0  # collector drains too
@@ -7090,8 +7081,40 @@ def _case_ionization_birth_energy_model(csda_params, csda_sim, csda_terms):
         raise AssertionError("ionization_birth_energy_model must reject unknown values")
 
     rhs = sim.plasma_flux_rhs(include_front=False)
-    for values in (rhs.n, rhs.nn, rhs.M, rhs.Ee, rhs.Ei):
+    # A uniform stationary plasma has no advective divergence -- exactly, on
+    # every row, everywhere EXCEPT the momentum row at the plasma-terminating
+    # faces. There the advective flux is deliberately zeroed and the ghost
+    # boundary supplies the complete face condition (including its own
+    # pressure), so the reflecting-wall pressure that used to cancel here is
+    # gone. That is the retirement of the legacy closed-wall alternative
+    # (2026-08-31, Tom), not a loss of well-balancedness: the interior still
+    # cancels bit-for-bit, which is what the assertions below pin.
+    _ib_absorbing = np.asarray(geom.plasma_absorbing, dtype=bool)
+    _ib_live = np.asarray(geom.plasma_face_live_cell)
+    _ib_term = sorted(
+        {int(_ib_live[f]) for f in np.flatnonzero(_ib_absorbing)
+         if int(_ib_live[f]) >= 0}
+    )
+    assert len(_ib_term) == 2, _ib_term
+    # The plenum cell behind the cathode's interior absorbing face loses the
+    # same wall pressure, so it moves too and is excluded with them.
+    _ib_moved = set(_ib_term) | {
+        int(f) - 1 for f in np.flatnonzero(_ib_absorbing) if int(f) - 1 >= 0
+    }
+    _ib_interior = np.array(
+        [c for c in range(geom.cells) if c not in _ib_moved], dtype=int
+    )
+    for values in (rhs.n, rhs.nn, rhs.Ee, rhs.Ei):
         assert np.allclose(values, 0.0, atol=1e-20)
+    _ib_M = np.asarray(rhs.M, dtype=float)
+    assert np.allclose(_ib_M[_ib_interior], 0.0, atol=1e-20)
+    # Non-vacuous, and directed OUT of the domain at each terminating cell:
+    # -z at the cathode (plasma on its high-z side), +z at the collector.
+    _ib_cath, _ib_coll = _ib_term
+    assert str(geom.cell_role[_ib_cath]) == "cathode"
+    assert str(geom.cell_role[_ib_coll]) == "collector"
+    assert _ib_M[_ib_cath] < 0.0
+    assert _ib_M[_ib_coll] > 0.0
     pressure_rhs = sim.pressure_work_rhs()
     for values in (
         pressure_rhs.n,
@@ -9035,36 +9058,39 @@ def _case_cathode_power_balance_warming(
     assert np.all(
         cathode_run_result.cathode_diagnostics["source_I_tot"][:4] >= 0.0
     )
-    # These three rode the retired _sim3 aliases. Two of them (S_ion_beam
-    # against beam_ionization_birth, Qeb against the four-term sum) restated
-    # the alias's own definition and say nothing once the definition is gone;
-    # the third is a claim about the SOLVER -- that the electron beam and
-    # sheath channels deposit net positive power somewhere -- so it is kept,
-    # rewritten against the terms the alias summed.
-    assert np.any(
-        sum(
-            np.asarray(
-                cathode_run_result.electron_energy_terms_W_cm3[_term],
-                dtype=float,
-            )
-            for _term in (
-                "beam_power_deposition",
-                "beam_ionization_cost",
-                "cathode_surface_loss",
-                "anode_e_sheath_loss",
-            )
+    # A claim about the SOLVER, over the terms a retired _sim3 alias summed.
+    # It used to read "np.any(sum > 0)" -- these channels deposit net POSITIVE
+    # electron power somewhere -- which was true only because this fixture
+    # pinned the legacy full-P_*_e electrode routing: the cathode row then
+    # deposited the sheath fall phi_c into the plasma electron store and ran
+    # +2.56e-05 W/cm^3 POSITIVE. With the A16 thermal-only routing
+    # unconditional (2026-08-31, Tom) phi is the ELECTRODE's, the cathode row
+    # is a pure sink, and the sum is <= 0 everywhere. So the surviving --
+    # and strictly stronger -- statement is asserted instead: the channels are
+    # LIVE, and they never deposit net positive electron power into the plasma.
+    _pb_sum = sum(
+        np.asarray(
+            cathode_run_result.electron_energy_terms_W_cm3[_term],
+            dtype=float,
         )
-        > 0.0
+        for _term in (
+            "beam_power_deposition",
+            "beam_ionization_cost",
+            "cathode_surface_loss",
+            "anode_e_sheath_loss",
+        )
     )
+    assert np.all(np.isfinite(_pb_sum))
+    assert np.any(_pb_sum != 0.0)  # non-vacuous: the channels are live
+    assert np.all(_pb_sum <= 0.0)  # the sheath fall is the electrode's
     # The split is honest about which electrode paid. The load-bearing
     # property is DISJOINT SUPPORT: with a resolved anode the cathode share
     # lands at the cathode cell and the anode share at the flanking cells, so
     # no cell receives both -- which is what makes the pair's sum bit-exactly
     # the single row it replaced. (Which of the two is LARGER is a property of
-    # the routing, not of the split: this fixture runs the historical
-    # characteristic_boundary=False routing, where the cathode keeps its full
-    # phi_c and can exceed the anode; under the production thermal-only
-    # routing the anode dominates by orders of magnitude.)
+    # the routing, not of the split: under the thermal-only electrode routing
+    # -- unconditional since 2026-08-31 (Tom) -- the anode dominates by orders
+    # of magnitude.)
     _cathode_Ee = np.asarray(
         cathode_run_result.electron_energy_terms_W_cm3["cathode_surface_loss"],
         dtype=float,
@@ -12587,80 +12613,68 @@ def _case_end_recycle_routing(p2z_flags, p2z_params):
             "expected end_recycle_to_annulus with V_ann = 0 to fail"
         )
 
-    for er_char in (False, True):
-        er_row = (
-            "characteristic_boundary" if er_char else "boundary_absorption"
-        )
-        er_off = LAPDSim1D(
-            dict(er_base_p), dict(er_base_f, characteristic_boundary=er_char)
-        )
-        er_on = LAPDSim1D(
-            dict(er_base_p),
-            dict(
-                er_base_f,
-                characteristic_boundary=er_char,
-                end_recycle_to_annulus=True,
-            ),
-        )
-        er_geo = er_on.geometry
-        er_Vp = np.asarray(er_geo.plasma_volume_cm3, dtype=float)
-        er_Va = np.maximum(
-            np.asarray(er_geo.neutral_volume_cm3, dtype=float) - er_Vp, 0.0
-        )
-        er_coll = list(absorbing_live_cells_by_role(er_geo)["collector"])
-        assert er_coll, er_row
-        er_mask = np.zeros(er_geo.cells, dtype=bool)
-        er_mask[er_coll] = True
-        er_t_off = er_off.rhs_terms()[er_row]
-        er_t_on = er_on.rhs_terms()[er_row]
-        # The plasma side is untouched, bit for bit: this moves where the
-        # returning atoms land, not how much plasma the surface takes.
-        for er_field in ("n", "M", "Ee", "Ei"):
-            assert np.array_equal(
-                getattr(er_t_off, er_field), getattr(er_t_on, er_field)
-            ), (er_row, er_field)
-        assert er_t_off.nn_a is None and er_t_on.nn_a is not None, er_row
-        # (a) PARTICLE CLOSURE: what the collector faces take out of the
-        # plasma is exactly what lands in those cells' annulus, and nothing
-        # lands anywhere else.
-        er_loss = float((-er_t_on.n * er_Vp)[er_mask].sum())
-        er_dep = float((er_t_on.nn_a * er_Va)[er_mask].sum())
-        assert er_loss > 0.0, er_row
-        assert abs(er_dep - er_loss) <= 1e-12 * er_loss, (er_row, er_dep, er_loss)
-        assert np.all(er_t_on.nn_a[~er_mask] == 0.0), er_row
-        # The column row loses exactly the routed share and nothing else --
-        # exactly zero on a cell whose only absorbing face is a collector one,
-        # and bit-identical (the cathode face) everywhere else.
-        assert np.all(er_t_on.nn[er_mask] == 0.0), er_row
+    # The end-recycle routing is checked against THE plasma-terminating
+    # operator; the sweep over the retired second discretization went with
+    # it on 2026-08-31 (Tom).
+    er_row = "characteristic_boundary"
+    er_off = LAPDSim1D(dict(er_base_p), dict(er_base_f))
+    er_on = LAPDSim1D(
+        dict(er_base_p),
+        dict(er_base_f, end_recycle_to_annulus=True),
+    )
+    er_geo = er_on.geometry
+    er_Vp = np.asarray(er_geo.plasma_volume_cm3, dtype=float)
+    er_Va = np.maximum(
+        np.asarray(er_geo.neutral_volume_cm3, dtype=float) - er_Vp, 0.0
+    )
+    er_coll = list(absorbing_live_cells_by_role(er_geo)["collector"])
+    assert er_coll, er_row
+    er_mask = np.zeros(er_geo.cells, dtype=bool)
+    er_mask[er_coll] = True
+    er_t_off = er_off.rhs_terms()[er_row]
+    er_t_on = er_on.rhs_terms()[er_row]
+    # The plasma side is untouched, bit for bit: this moves where the
+    # returning atoms land, not how much plasma the surface takes.
+    for er_field in ("n", "M", "Ee", "Ei"):
         assert np.array_equal(
-            er_t_on.nn[~er_mask], er_t_off.nn[~er_mask]
-        ), er_row
-        # LEDGER ATTRIBUTION consistency: the routing moves gas between two
-        # rows of the same term; it creates and destroys none. (Both rows are
-        # rates on their own zone volume -- nn on the column, nn_a on the
-        # annulus -- which is exactly how the artifact must be read.)
-        er_tot_off = float((er_t_off.nn * er_Vp).sum())
-        er_tot_on = float(
-            (er_t_on.nn * er_Vp + er_t_on.nn_a * er_Va).sum()
-        )
-        assert abs(er_tot_on - er_tot_off) <= 1e-12 * abs(er_tot_off), er_row
-        # (c) FLAG OFF is bit-identical through a stepped trajectory, on this
-        # very fixture, for this discretization.
-        er_id_a = LAPDSim1D(
-            dict(er_base_p), dict(er_base_f, characteristic_boundary=er_char)
-        )
-        er_id_b = LAPDSim1D(
-            dict(er_base_p),
-            dict(
-                er_base_f,
-                characteristic_boundary=er_char,
-                end_recycle_to_annulus=False,
-            ),
-        )
-        for _ in range(3):
-            er_id_a.advance_one_step(dt=1.0e-9)
-            er_id_b.advance_one_step(dt=1.0e-9)
-        assert np.array_equal(er_id_a._y, er_id_b._y), er_row
+            getattr(er_t_off, er_field), getattr(er_t_on, er_field)
+        ), (er_row, er_field)
+    assert er_t_off.nn_a is None and er_t_on.nn_a is not None, er_row
+    # (a) PARTICLE CLOSURE: what the collector faces take out of the
+    # plasma is exactly what lands in those cells' annulus, and nothing
+    # lands anywhere else.
+    er_loss = float((-er_t_on.n * er_Vp)[er_mask].sum())
+    er_dep = float((er_t_on.nn_a * er_Va)[er_mask].sum())
+    assert er_loss > 0.0, er_row
+    assert abs(er_dep - er_loss) <= 1e-12 * er_loss, (er_row, er_dep, er_loss)
+    assert np.all(er_t_on.nn_a[~er_mask] == 0.0), er_row
+    # The column row loses exactly the routed share and nothing else --
+    # exactly zero on a cell whose only absorbing face is a collector one,
+    # and bit-identical (the cathode face) everywhere else.
+    assert np.all(er_t_on.nn[er_mask] == 0.0), er_row
+    assert np.array_equal(
+        er_t_on.nn[~er_mask], er_t_off.nn[~er_mask]
+    ), er_row
+    # LEDGER ATTRIBUTION consistency: the routing moves gas between two
+    # rows of the same term; it creates and destroys none. (Both rows are
+    # rates on their own zone volume -- nn on the column, nn_a on the
+    # annulus -- which is exactly how the artifact must be read.)
+    er_tot_off = float((er_t_off.nn * er_Vp).sum())
+    er_tot_on = float(
+        (er_t_on.nn * er_Vp + er_t_on.nn_a * er_Va).sum()
+    )
+    assert abs(er_tot_on - er_tot_off) <= 1e-12 * abs(er_tot_off), er_row
+    # (c) FLAG OFF is bit-identical through a stepped trajectory, on this
+    # very fixture, for this discretization.
+    er_id_a = LAPDSim1D(dict(er_base_p), dict(er_base_f))
+    er_id_b = LAPDSim1D(
+        dict(er_base_p),
+        dict(er_base_f, end_recycle_to_annulus=False),
+    )
+    for _ in range(3):
+        er_id_a.advance_one_step(dt=1.0e-9)
+        er_id_b.advance_one_step(dt=1.0e-9)
+    assert np.array_equal(er_id_a._y, er_id_b._y), er_row
 
     # (b) ENERGY SINGLE-BOOKING. Under neutral_energy the "wall" entry of
     # _NEUTRAL_ENERGY_TERM_BOOKING turns a boundary term's COLUMN nn row into
@@ -12677,11 +12691,7 @@ def _case_end_recycle_routing(p2z_flags, p2z_params):
     er_en_f["neutral_momentum"] = True
     er_en_f["neutral_two_zone"] = True
     er_en_f["neutral_energy"] = True
-    er_en_row = (
-        "characteristic_boundary"
-        if er_en_f["characteristic_boundary"]
-        else "boundary_absorption"
-    )
+    er_en_row = "characteristic_boundary"
     er_en_off = LAPDSim1D(dict(er_en_p), dict(er_en_f))
     er_en_on = LAPDSim1D(
         dict(er_en_p), dict(er_en_f, end_recycle_to_annulus=True)
@@ -12824,7 +12834,6 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
     kd_flags = dict(p2z_flags)
     kd_flags["neutral_prebreakdown"] = False
     kd_flags["neutral_equilibration"] = False
-    kd_flags["characteristic_boundary"] = False
 
     # Every refusal, and the offender it must name.
     for kd_bad_params, kd_bad_flags, kd_offender in (
@@ -12872,11 +12881,6 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
             kd_params,
             dict(kd_flags, coupled_circuit_picard=True),
             "coupled_circuit_picard",
-        ),
-        (
-            dict(kd_params, neutral_kinetic_dvm_tn_feedback=True),
-            dict(kd_flags, characteristic_boundary=True),
-            "characteristic_boundary",
         ),
         (
             dict(kd_params, neutral_kinetic_dvm_annulus_flights="chord"),
@@ -12931,8 +12935,6 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
     kd_sim = LAPDSim1D(dict(kd_params), dict(kd_flags))
     assert kd_sim._dvm is not None
     # Tn consumption is its OWN switch and defaults off.
-    assert kd_sim._dvm_tn_feedback is False
-    assert kd_sim._dvm_presheath_Tn_eV() is None
     # Pre-engagement: the coupling key exists and is all-zero, and the fluid
     # neutral rows are still live (the moment terms carry the fill).
     kd_pre = kd_sim.rhs_terms()
@@ -13066,23 +13068,13 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
     assert np.array_equal(kd_dvm.f_c, kd_snap["f_c"])
     assert np.array_equal(kd_dvm.ion_debt, kd_snap["ion_debt"])
 
-    # Tn consumption A/B: with the switch on, the measured Tn reaches the
-    # presheath collisionality and the boundary absorption moves.
-    kd_tn_sim = LAPDSim1D(
-        dict(kd_params, neutral_kinetic_dvm_tn_feedback=True), dict(kd_flags)
-    )
-    for _ in range(6):
-        kd_tn_sim.advance_one_step(dt=1.0e-9)
-    assert kd_tn_sim._dvm_tn_feedback is True
-    kd_tn = kd_tn_sim._dvm_presheath_Tn_eV()
-    assert kd_tn is not None and np.all(np.isfinite(kd_tn))
-    # The two builds are identical except for the switch, so any difference
-    # in the absorption term is the Tn feedback and nothing else.
-    kd_off_abs = kd_sim.boundary_absorption_rhs(state=kd_tn_sim.state).n
-    kd_on_abs = kd_tn_sim.boundary_absorption_rhs(state=kd_tn_sim.state).n
-    assert np.any(kd_off_abs != kd_on_abs), (
-        "the Tn-consumption switch changed nothing"
-    )
+    # The DVM's Tn moment stays an in-process DIAGNOSTIC: it is computed
+    # whenever the arm is on and consumed by nothing. Its one consumer -- the
+    # presheath collisionality behind the legacy volumetric absorber, reached
+    # only through neutral_kinetic_dvm_tn_feedback -- was retired with that
+    # absorber on 2026-08-31 (Tom), so the consumption A/B that used to sit
+    # here has no operand left. The moment itself is still asserted finite
+    # and positive by the census block above.
     return locals()
 
 
@@ -13154,11 +13146,10 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
     assert kd_obs_rates["cath_cells"][0] == 0.0
     assert kd_obs_rates["cath_cells"][1] == 0.0
     assert kd_obs_rates["coll_cells"][kd_obs_coll] == kd_obs_rates["coll"]
-    # Recycled == removed, per face, against the boundary term this stance
-    # actually runs (kd_obs_flags keeps characteristic_boundary off).
-    assert kd_obs_sim._characteristic_boundary is False
+    # Recycled == removed, per face, against the boundary term that actually
+    # runs -- the single plasma-terminating operator.
     kd_obs_removed = -np.asarray(
-        kd_obs_sim.boundary_absorption_rhs(state=kd_obs_sim.state).n,
+        kd_obs_sim.characteristic_boundary_rhs(state=kd_obs_sim.state).n,
         dtype=float,
     ) * np.asarray(kd_obs_sim.geometry.plasma_volume_cm3, dtype=float)
     for kd_obs_cell, kd_obs_key in (
@@ -13251,7 +13242,6 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
         "neutral_sources",
     )
     # And the timestep bundle reads the boundary operator THIS stance runs.
-    assert kd_lim_sim._characteristic_boundary is False
     kd_lim_bundle = kd_lim_sim._plasma_source_timestep_rhs(
         state=kd_lim_sim.state, time=kd_lim_sim.time
     )
@@ -15198,7 +15188,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     # Cathode channel: momentum only at the cathode cell, directed into the
     # column (+z at the source end), and the volume-integrated M_n source
     # equals m * v_mix * (the term's own rebirthed flux) exactly.
-    jet_ba = jet_sim.boundary_absorption_rhs(cathode_solve=jet_solve)
+    jet_ba = jet_sim.characteristic_boundary_rhs(cathode_solve=jet_solve)
     jet_cath = int(np.flatnonzero(jet_roles == "cathode")[0])
     assert jet_ba.M_n is not None
     assert np.array_equal(np.flatnonzero(jet_ba.M_n), [jet_cath])
@@ -15240,7 +15230,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     jet_float = jet_sim.solve_cathode_boundary(
         floating=True, update_cache=False
     )
-    jet_ba_float = jet_sim.boundary_absorption_rhs(cathode_solve=jet_float)
+    jet_ba_float = jet_sim.characteristic_boundary_rhs(cathode_solve=jet_float)
     assert np.all(np.isfinite(jet_ba_float.M_n))
     assert np.all(jet_ba_float.M_n >= 0.0)
 
@@ -15249,7 +15239,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     jet_off_sim = LAPDSim1D(dict(m3_params), jet_flags)
     jet_off_sim._circuit_I_loop = 800.0
     jet_off_solve = jet_off_sim.solve_cathode_boundary(update_cache=True)
-    assert jet_off_sim.boundary_absorption_rhs(
+    assert jet_off_sim.characteristic_boundary_rhs(
         cathode_solve=jet_off_solve
     ).M_n is None
     assert jet_off_sim.anode_collection_rhs(
@@ -15375,7 +15365,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         dict(jet_params, cathode_jet_energy_convention="legacy"), jet_flags
     )
     jet_legacy_sim._circuit_I_loop = 800.0
-    jet_legacy_ba = jet_legacy_sim.boundary_absorption_rhs(
+    jet_legacy_ba = jet_legacy_sim.characteristic_boundary_rhs(
         cathode_solve=jet_legacy_sim.solve_cathode_boundary(update_cache=True)
     )
     assert np.array_equal(jet_legacy_ba.M_n, jet_ba.M_n)
@@ -15415,7 +15405,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         )
         jet_en_spec = jet_en_sim._cathode_jet_spec(jet_en_solve)
         assert jet_en_spec["energy_convention"] == jet_conv
-        jet_en_ba = jet_en_sim.boundary_absorption_rhs(
+        jet_en_ba = jet_en_sim.characteristic_boundary_rhs(
             state=jet_en_state, cathode_solve=jet_en_solve
         )
         jet_en_term = jet_en_sim.cathode_jet_neutral_energy_rhs(
@@ -19512,8 +19502,11 @@ def _case_tracer_fluid_n_row_identity(_r2):
     )
     _r2_id_terms = _r2_id_sim.rhs_terms(include_heat_conduction=False)
     # The four n-row channels gamma is built from. Both boundary spellings are
-    # summed because exactly one of them is live (the other is identically
-    # zero), which is precisely the selector gamma has to follow.
+    # summed because exactly one of them is live: boundary_absorption is
+    # identically zero everywhere since the legacy absorber was retired
+    # 2026-08-31 (Tom), and the row is kept only for saved-ledger schema
+    # stability. Summing both is what keeps this identity readable against
+    # artifacts written on either side of that retirement.
     _r2_id_fluid = sum(
         np.asarray(_r2_id_terms[name].n, dtype=float)
         for name in (
