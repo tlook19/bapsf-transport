@@ -28,6 +28,20 @@ Usage::
     python scripts/r3lane_equivalence.py --corpus
     python scripts/r3lane_equivalence.py --random 400
     python scripts/r3lane_equivalence.py --corpus --random 400
+
+**Run it on the PURE path: leave ``CABLP_COMPILED_KERNELS`` unset.** The
+instrument is pure-path-only by design, because the compiled tail path does not
+route through ``_tail_lane_chains`` at all -- with compiled kernels selected,
+zero batches march as lanes, every comparison degenerates to the recursive
+route against itself, and ``--corpus`` fails its non-vacuity condition. That
+failure is the instrument reporting that it was given nothing to compare, not a
+finding about the lane route.
+
+``--corpus`` is a VERDICT INPUT: its exit status is the lane-equivalence
+verdict, and non-vacuity is one of the four conditions it gates on (alongside
+zero flipped walkers, zero differing anode takes, and the flip-energy bar), so
+a self-comparing run cannot exit 0. ``--random`` does not route through
+``report()`` and carries no such gate.
 """
 
 import argparse
@@ -205,7 +219,14 @@ class Census:
                 "actually marched as lanes, so nothing compared the lane route "
                 "against the recursive one -- every comparison was the "
                 "recursive route against itself. This run is zero evidence for "
-                "lane equivalence, not a pass."
+                "lane equivalence, not a pass. Cause, if this run set "
+                "CABLP_COMPILED_KERNELS: this instrument is PURE-PATH-ONLY BY "
+                "DESIGN -- the compiled tail path does not route through "
+                "_tail_lane_chains, so under compiled kernels no batch can "
+                "ever march as a lane and this failure is the expected "
+                "outcome, not a defect in the lane route. Re-run with the "
+                "variable unset. Otherwise: every batch fell below "
+                "beam_deposition.LANE_MARCH_MIN_LEGS."
             )
         for line in self.notes[:20]:
             print(f"    {line}")

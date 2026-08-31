@@ -6427,9 +6427,23 @@ def _case_beam_ql_power_disposal_pd1(
     #
     # (b) THE BRANCHING ANCHORS. The formula is the one the pd0 read
     # cross-checked against the QL-onset memo, and these are that read's own
-    # printed numbers (scripts/pd0_branching.txt). They are asserted BEFORE the
+    # printed numbers (scripts/pd0_branching.py). They are asserted BEFORE the
     # closure is exercised, so a drift in K_m, in the omega_pe coefficient or
     # in the Bohm-Gross term fails here rather than downstream.
+    #
+    # THE LITERALS ARE K_m-DERIVED AND ROTATE WITH THE K_m NODES. That is the
+    # point of the tripwire, not a defect in it: nu_en = nn*K_m(Te), so an
+    # UNINTENDED drift in the table must fail here, and an INTENDED re-boxing
+    # of the table rotates these numbers in the same reviewed change. Rotated
+    # 2026-08-30 with the three-set re-centring of HE_EN_MT_SIGMA_CM2
+    # ((6.0, 2.1)e-16 -> (6.280, 1.992)e-16, [km-node-boxing-decision]):
+    # nu_en(25 eV) 1.405e6 -> 1.333123e6 (-5.12%) and the four-point branching
+    # table up by +0.0007..+0.0073. Re-derive with scripts/pd0_branching.py.
+    #
+    # The Landau-exponent anchor below is deliberately NOT in that list: it
+    # recovers gamma_L by dividing nu_en back out, so it is K_m-INDEPENDENT by
+    # construction and held at 37.02 across the re-centring (measured drift
+    # 7.1e-15, against its 1e-9 tolerance).
     cathode_flags = _cathode_flags()
     _pd1_branch = _beam_deposition_mod.landau_branching_fraction
     _pd1_stance_nn = np.full(1, 2.0e13)
@@ -6438,7 +6452,7 @@ def _case_beam_ql_power_disposal_pd1(
     _pd1_nu_en = 2.0e13 * float(
         _cross_mod.he_electron_momentum_transfer_rate_cm3_s(25.0)
     )
-    assert abs(_pd1_nu_en - 1.405e6) / 1.405e6 < 1.0e-3, _pd1_nu_en
+    assert abs(_pd1_nu_en - 1.333123e6) / 1.333123e6 < 1.0e-3, _pd1_nu_en
     # The Landau exponent at Te 5 is e^-37.0 (the memo's own anchor): recover
     # it from the shipped function by dividing out the prefactor, which pins
     # the -3/2 Bohm-Gross term and the (v_phi/v_te)^2 = 2E/Te conversion
@@ -6464,7 +6478,7 @@ def _case_beam_ql_power_disposal_pd1(
     assert abs(_pd1_expo - 37.02) < 1.0e-9, _pd1_expo
     # The stance branching table, to the four decimals pd0 printed.
     for _pd1_ne, _pd1_want in (
-        (1.0e8, 0.8316), (1.0e9, 0.9398), (1.0e10, 0.9802), (1.0e11, 0.9936),
+        (1.0e8, 0.8389), (1.0e9, 0.9427), (1.0e10, 0.9812), (1.0e11, 0.9940),
     ):
         _pd1_got = float(
             _pd1_branch(np.full(1, _pd1_ne), np.full(1, 25.0), _pd1_stance_nn,
@@ -10687,6 +10701,7 @@ def _case_non_ignition_guards(
 
     # Scorer hard-fail (scripts): a non-ignited run must raise, an ignited one
     # must score its origin from the first main_discharge sample.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     import compare_sim1d_es1 as _cmp_es1
     import fingerprints_sim1d as _fingerprints
 
@@ -20402,7 +20417,14 @@ def _case_ql_relaxation_passive_cell_booking(_r2, _r2ql_config):
 @_case("ql-relaxation-km-table")
 def _case_ql_relaxation_km_table():
     # ---- (h) the K_m table is the boxed table ----
-    # Two nodes, and the numbers are the memo's. Interpolation is log-log
+    # Two nodes. The numbers are DERIVED from the three published LXCat He
+    # elastic momentum-transfer sets (Biagi / IST-Lisbon / Morgan, retrieved
+    # 2026-08-13): each node is the three-set arithmetic centre and each
+    # bracket is [min, max] over the three. Rotated 2026-08-30 from the memo's
+    # earlier pair by [km-node-boxing-decision] -- nodes (6.0, 2.1)e-16 ->
+    # (6.280, 1.992)e-16, the 25 eV bracket (1.6, 2.6)e-16 ->
+    # (1.950, 2.067)e-16. These literals pin the SHIPPED table, so they rotate
+    # with it and only with it. Interpolation is log-log
     # inside the span and CLAMPED outside it, so no structure is manufactured
     # where the table has none.
     # The nodes round-trip through the log-log interpolation, so they are
@@ -20417,7 +20439,7 @@ def _case_ql_relaxation_km_table():
             / _qlr_sigma
             - 1.0
         ) < 1e-12, _qlr_node
-    assert _cross_mod.HE_EN_MT_SIGMA_CM2 == (6.0e-16, 2.1e-16)
+    assert _cross_mod.HE_EN_MT_SIGMA_CM2 == (6.280e-16, 1.992e-16)
     assert _cross_mod.HE_EN_MT_NODE_EV == (5.0, 25.0)
     assert _cross_mod.he_electron_momentum_transfer_cm2(
         1.0
@@ -20426,13 +20448,13 @@ def _case_ql_relaxation_km_table():
         500.0
     ) == _cross_mod.he_electron_momentum_transfer_cm2(25.0)
     assert (
-        2.1e-16
+        1.992e-16
         < _cross_mod.he_electron_momentum_transfer_cm2(11.18)
-        < 6.0e-16
+        < 6.280e-16
     )
     # The 25 eV row is carried AS a bracket, and the shipped value sits in it.
     _qlr_lo, _qlr_hi = _cross_mod.HE_EN_MT_SIGMA_BRACKET_CM2[1]
-    assert _qlr_lo == 1.6e-16 and _qlr_hi == 2.6e-16
+    assert _qlr_lo == 1.950e-16 and _qlr_hi == 2.067e-16
     assert _qlr_lo < _cross_mod.HE_EN_MT_SIGMA_CM2[1] < _qlr_hi
     _qlr_lo5, _qlr_hi5 = _cross_mod.HE_EN_MT_SIGMA_BRACKET_CM2[0]
     assert _qlr_lo5 < _cross_mod.HE_EN_MT_SIGMA_CM2[0] < _qlr_hi5

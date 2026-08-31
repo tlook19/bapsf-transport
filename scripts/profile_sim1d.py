@@ -7,13 +7,29 @@ be analysed later without re-running it.
 Config authority
 ----------------
 The configuration is IMPORTED from ``compare_sim1d_es1.run_model`` (the same
-no-drift rule ``baseline_sim1d.py`` follows), never reimplemented here.  The
-default invocation reproduces the 25 ms-stance production revalidation
-(``es1_prod_25ms_nx240.cmd``) exactly::
+no-drift rule ``baseline_sim1d.py`` follows), never reimplemented here.  That
+function builds ``default_config()`` plus ``PARAM_OVERRIDES``/``FLAG_OVERRIDES``,
+and ``PARAM_OVERRIDES`` reads its values from the STANCE OF RECORD,
+``scripts/stances/g1atrim.toml``.  The default invocation is therefore::
 
-    run_model(nx=240, exchange_model="knudsen", extra={"tau_afterglow": 0.006})
+    run_model(nx=PRODUCTION_NX, exchange_model="knudsen",
+              extra={"tau_afterglow": PRODUCTION_TAU_AFTERGLOW})
 
-so the profile describes the configuration the campaign actually runs.
+which profiles the g1atrim stance's shared production package -- circuit, rate
+model, numerics -- at the stance's OWN mesh.  The two keyword values supply
+exactly the keys ``PARAM_OVERRIDES`` deliberately does NOT import from the
+stance, because they are grid-coupled or run-cost settings that every
+``run_model`` caller passes for itself; both are read from
+``scripts/stances/g1atrim.toml`` here rather than transcribed, so they cannot
+drift from it: ``nx = 268`` and ``tau_afterglow = 0.006`` (the latter against a
+config default of 5e-3).
+
+Note that this module's ``PRODUCTION_NX`` is the STANCE's nx, which is NOT
+``compare_sim1d_es1.PRODUCTION_NX`` -- that name is the no-stance FALLBACK mesh
+(240), which this instrument previously defaulted to, profiling the production
+package on a mesh the production stance does not run.  Costs that scale with
+cell count are therefore reported against 268.  Pass ``--nx 240`` to reproduce
+the older fallback-mesh profiles.
 
 Two profilers, because they answer different questions
 ------------------------------------------------------
@@ -83,11 +99,28 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from cablp.solvers._sim1d import LAPDSim1D  # noqa: E402
 from cablp.solvers._sim1d.results.io import save_result_hdf5  # noqa: E402
-from compare_sim1d_es1 import PRODUCTION_NX, run_model  # noqa: E402
+from compare_sim1d_es1 import (  # noqa: E402
+    PRODUCTION_STANCE,
+    load_stance,
+    run_model,
+)
 
-# The production stance's afterglow budget (es1_prod_25ms_nx240.cmd:
-# `compare_sim1d_es1.py --tau-afterglow 0.006`, defaults otherwise).
-PRODUCTION_TAU_AFTERGLOW = 0.006
+# The two keys compare_sim1d_es1.PARAM_OVERRIDES deliberately does NOT import
+# from the stance -- its grid-coupled mesh and its run-cost budget, both left to
+# each run_model caller -- are READ FROM THE STANCE FILE here rather than
+# hand-copied, so this instrument cannot drift from
+# scripts/stances/g1atrim.toml the way a transcribed literal can.
+_STANCE_PARAMS = load_stance(PRODUCTION_STANCE).params
+
+#: The MESH OF RECORD: the stance's own nx (g1atrim: 268). NOT
+#: compare_sim1d_es1.PRODUCTION_NX, which is the no-stance FALLBACK mesh (240)
+#: and which this instrument used to take by default -- profiling the production
+#: package on a mesh the production stance does not use.
+PRODUCTION_NX = int(_STANCE_PARAMS["nx"])
+
+#: The stance of record's afterglow budget (g1atrim: 0.006, against a config
+#: default of 5e-3).
+PRODUCTION_TAU_AFTERGLOW = float(_STANCE_PARAMS["tau_afterglow"])
 
 # Repo root, used only to shorten frame filenames in the folded stacks.
 _REPO_ROOT = SCRIPT_DIR.parent

@@ -1298,7 +1298,7 @@ def main(argv=None):
     out_dir.mkdir(parents=True, exist_ok=True)
     dvm_path = out_dir / f"neutral_arch_e0_dvm_{args.tag}.txt"
     mc_path = out_dir / f"neutral_arch_e0_mc_{args.tag}.txt"
-    sum_path = out_dir / "neutral_arch_e0_summary.md"
+    sum_path = out_dir / f"neutral_arch_e0_summary_{args.tag}.md"
 
     print(f"E0 bench: {args.load_note}")
     bg = load_background(args.run, tuple(args.window))

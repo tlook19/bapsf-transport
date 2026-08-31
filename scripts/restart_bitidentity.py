@@ -116,6 +116,18 @@ def scenario_config(name):
             "heating_anomalous_tail_ionization": "on",
         })
         flags["coverage_closure"] = True
+        # neutral_energy REFUSES coverage_closure at construction (the coverage
+        # deficit partitions nn alone, so one mean En over a concentrated gas
+        # would assert an unstated temperature relation between the covered and
+        # uncovered fractions). It ships ON, so this scenario has to clear it
+        # explicitly or it cannot build at all -- and clearing it means clearing
+        # the hot channel it carries: neutral_hot_internal_wall (also ON by
+        # default) walls that channel's ballistic flight and REQUIRES it, so
+        # dropping one without the other only moves the refusal. The rest of the
+        # hot-channel set (neutral_hot_birth_drift, cathode_jet_hot_carrier,
+        # neutral_knudsen_temperature) already ships at its off values.
+        flags["neutral_energy"] = False
+        flags["neutral_hot_internal_wall"] = False
         # Beam-live, and f_cov still climbing at the handoff (it saturates at
         # 1.0 by ~3e-4 s), so both coverage members are moving when exported.
         return params, flags, 1.5e-4, 2.5e-4

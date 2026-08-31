@@ -197,6 +197,17 @@ def save_result_hdf5(path, result, params=None, flags=None):
         dvm_ledger = getattr(result, "dvm_transfer_ledger", None)
         if dvm_ledger:
             _write_census(h5.create_group("dvm_transfer_ledger"), dvm_ledger)
+        # How many times the neutral clock ticked. Presence-gated on the same
+        # condition as the census above -- only a run that built the DVM arm
+        # carries the attribute -- so a moment-model file is BYTE-unchanged by
+        # this dataset's existence. Absent means "never recorded", not zero.
+        # Kept OUTSIDE the ledger group because it is a property of the run
+        # rather than a row of the transfer census, and because that group is
+        # written only when the census is non-empty.
+        if hasattr(result, "dvm_tick_count"):
+            h5.create_dataset(
+                "dvm_tick_count", data=np.int64(result.dvm_tick_count)
+            )
         if hasattr(result, "atomic_rate_domain"):
             _write_field_arrays(
                 h5.create_group("atomic_rate_domain"),
@@ -367,6 +378,8 @@ def load_result_hdf5(path):
         # run whose census was never persisted from one whose census is zero.
         if "dvm_transfer_ledger" in h5:
             result.dvm_transfer_ledger = _read_census(h5["dvm_transfer_ledger"])
+        if "dvm_tick_count" in h5:
+            result.dvm_tick_count = int(h5["dvm_tick_count"][()])
         if "ignition_abort" in h5:
             result.ignition_abort = {
                 key: (

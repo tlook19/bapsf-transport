@@ -1849,14 +1849,28 @@ already in the model:
 CROSS-CHECKED before use, and the anchors are smoke-pinned: the same expression
 reproduces the QL-onset memo's independent §4 anchors — the `e^-37.0` Landau
 exponent at Te 5 eV, the ~4e14 Landau-limited threshold at Te 25 eV, and
-`nu_en(25 eV) = 1.405e6` s^-1 at the stance neutral density — and the stance
-branching table `f_Landau = 0.8316 / 0.9398 / 0.9802 / 0.9936` at
+`nu_en(25 eV) = 1.333e6` s^-1 at the stance neutral density — and the stance
+branching table `f_Landau = 0.8389 / 0.9427 / 0.9812 / 0.9940` at
 `n_e = 1e8 / 1e9 / 1e10 / 1e11`. Sensitivity to the `K_m` 25 eV bracket is
-<= 0.04 in `f_Landau`, i.e. immaterial. Memos:
+<= 0.008 in `f_Landau`, i.e. immaterial. Memos:
 `QL_ONSET_MEMO_2026-08-12.md` (including its 2026-08-13 addendum, which records
 that the memo's §4 prose puts the 50% crossing higher than its own formula
 gives — the error is in the conservative direction) and the pd0 read
-`scripts/pd0_branching.txt`, which is the artifact these anchors are taken from.
+`scripts/pd0_branching.py`, which is the instrument these anchors are taken
+from.
+
+**These four rows are K_m-DERIVED and rotate with the `K_m` nodes.** They were
+re-derived on 2026-08-30 with the three-set re-centring of
+`HE_EN_MT_SIGMA_CM2` ([km-node-boxing-decision]): `nu_en(25 eV)` 1.405e6 ->
+1.333e6 (-5.12%), the branching table up by +0.0007..+0.0073, and the bracket
+sensitivity down from <= 0.04 to <= 0.008 because the 25 eV bracket itself
+narrowed from `(1.6, 2.6)e-16` to `(1.950, 2.067)e-16`. The two anchors that
+did NOT move are the ones that do not depend on the table: the `e^-37.0`
+exponent (which recovers `gamma_L` by dividing `nu_en` back out — measured
+drift 7.1e-15) and the ~4e14 threshold. The banked artifact
+`scripts/pd0_branching.txt` is the PRE-2026-08-30 read and still carries the
+old numbers; it is left as the record of that read, and
+`scripts/pd0_branching.py` is what re-derives them.
 
 Honest bars, both DOCUMENTED rather than sized: (i) the asymptotic Landau
 expression is a large-argument expansion, quantitative for `v_phi/v_te`
@@ -1877,7 +1891,7 @@ REFUSED under `coverage_closure`, by design and not by omission: the two-stream
 march shares ONE withholding bank between the channel and reservoir arms, so
 the reservoir's extraction cannot be branched on the reservoir's own state; and
 the reservoir carries `n_e = ` the density floor (a numerical constant standing
-for "no plasma") against the mean-field `Te`, which returns `f_Landau` ~ 0.83
+for "no plasma") against the mean-field `Te`, which returns `f_Landau` ~ 0.84
 at Te 25 eV and ~0.98 at Te 55 eV — a branching owned by the floor convention
 rather than by the plasma. The coverage arms are deferred until that stance is
 designed.
@@ -1933,18 +1947,47 @@ CLAMPED outside it.
 
 | node | shipped `sigma_m` | class | bracket carried | honest bar |
 |---|---|---|---|---|
-| 5 eV | `6.0e-16 cm^2` | **MEASURED (cited)** | `5.7e-16 - 6.3e-16` | the ±3-5% of the source, propagated |
-| 25 eV | `2.1e-16 cm^2` | **ASSUMED — bracket** | `1.6e-16 - 2.6e-16` | **not verified against a primary table** |
+| 5 eV | `6.280e-16 cm^2` | **DERIVED** | `6.209e-16 - 6.320e-16` | the measured three-set spread, 1.8% |
+| 25 eV | `1.992e-16 cm^2` | **DERIVED** | `1.950e-16 - 2.067e-16` | the measured three-set spread, 6.0% |
 
-The 5 eV node is Milloy & Crompton, PRA 15, 1847 (1977), ±3-5%, consistent with
-Crompton, Elford & Robertson, Aust. J. Phys. 23, 667 (1970); the shipped value
-is the cited central and the bracket is that stated uncertainty. The 25 eV row
-is a BRACKET of the Register/Trajmar/Srivastava-class values as carried in the
-LXCat sets (per Alves et al., J. Phys. D 46, 334002 (2013)); the shipped value
-is its arithmetic midpoint, and **the memo did not verify it against a primary
-table — pull the LXCat set before boxing it**, and until then the row must be
-quoted as a bracket and never cited as a primary measurement. Both brackets are
-published as `HE_EN_MT_SIGMA_BRACKET_CM2` so a result can quote them.
+Both nodes are RE-CENTRED on three published He elastic momentum-transfer sets
+read at the node energy, from the LXCat TXT pull of record of 2026-08-13. The
+parse and interpolation are those of `scripts/kmpull_threeset_check.py`, which
+is the method of record (NB that script's own input path points at a scratch
+download that no longer exists, so it needs its path supplied to re-run). Each
+set is interpolated linearly, the convention those
+tables state for themselves; the shipped node is the three-set arithmetic centre
+and the bracket is `[min, max]` over the three, so the bar is the measured
+set-to-set disagreement rather than an assumed one. The endpoints are rounded
+OUTWARD, so every set lies inside the bracket as shipped: the 5 eV minimum
+6.209760e-16 rounds DOWN to 6.209e-16, since rounding it to 6.210e-16 would
+have placed Biagi 0.004 % outside the bracket its own minimum defines. Per-set values:
+
+| set | 5 eV | 25 eV |
+|---|---|---|
+| Biagi | `6.2098e-16` | `2.0670e-16` |
+| IST-Lisbon | `6.3100e-16` | `1.9500e-16` |
+| Morgan | `6.3200e-16` | `1.9600e-16` |
+
+Sources: Biagi database (Magboltz 8.97, He set transcribed Sept 2011) /
+IST-Lisbon database / Morgan database, www.lxcat.net, retrieved on August 13,
+2026 — Zotero keys `biagi_lxcat`, `istlisbon_lxcat`, `morgan_lxcat`.
+
+Milloy & Crompton, PRA 15, 1847 (1977), ±3-5%, consistent with Crompton, Elford
+& Robertson, Aust. J. Phys. 23, 667 (1970), remains the PRIMARY PEDIGREE of the
+5 eV node — it is the low-energy measurement the IST-Lisbon set is built on —
+but the shipped number is now the three-set centre rather than that single
+cited central, which is why the class is DERIVED and not MEASURED. The 25 eV
+node is no longer ASSUMED: it was a midpoint of Register/Trajmar/Srivastava-class
+values that the memo had not checked against a primary table, and it is now read
+from the three sets directly. Both brackets are published as
+`HE_EN_MT_SIGMA_BRACKET_CM2` so a result can quote them.
+
+Movement from the previous shipped pair (`6.0e-16`, `2.1e-16`): +4.67% at 5 eV
+and −5.13% at 25 eV. Both are far inside the onset gate's ×400-2500 margin, and
+the re-centring was verified INERT — the 4,000-step golden digest is bit-identical
+(trajectory `cb54b74a…`, `exact=True`) and the config identity is unmoved, as it
+must be for module data no config key names.
 Order-of-magnitude standing overall: `K_m` is formed as `sigma(<E>)·<v>` rather
 than by Maxwellian quadrature, because a two-node table cannot support the
 precision a quadrature would imply. This is tolerable HERE and only here: the
@@ -2089,7 +2132,7 @@ each side; physically it means Te within 0.1% of `Te_floor`.
 
 **`dt_min_lock_max_steps = 250000` — DERIVED from a census of saved runs.**
 Memo: `scripts/dtmin_census_runlengths.txt` (2026-08-05). All 209 result h5
-files then present in `cablp/scripts/` were scanned for the per-step
+files then present in `scripts/` were scanned for the per-step
 `active_constraint` label, which under the pre-2026-08-05 semantics read
 `"dt_min"` on exactly the steps that were clamped. 80 files clamp at least
 once, and the two populations separate cleanly on CONSECUTIVENESS:
@@ -2587,6 +2630,6 @@ afterglow dt-cost pair; golden re-anchored in the same event). The
 authoritative provenance entries — value, class (DERIVED, A/B-selected
 under pre-registered gates), the corrected floor-honesty bar, and the
 near-floor resolution bracket — live in
-`cablp/scripts/production_stance_provenance.md`; this file deliberately
+`scripts/production_stance_provenance.md`; this file deliberately
 carries only this pointer so the adoption evidence stays with the stance
 history.

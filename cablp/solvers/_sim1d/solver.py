@@ -904,7 +904,7 @@ class LAPDSim1D:
         self._progress_interval_s = (
             1.0e-4 if progress_interval_s is None else progress_interval_s
         )
-        self._gas_type = self._input_dict.get("gas_type", "He")
+        self._gas_type = self._input_dict.get("gas_type")
         (
             self._ion_mass_g,
             self._mu,
@@ -919,31 +919,31 @@ class LAPDSim1D:
         # this is an either/or, and it is False on every uniform-column
         # configuration -- including the golden, which pins both flags off.
         self._variable_area_geometry = bool(
-            self._flags.get("end_expansion_geometry", False)
-        ) or bool(self._flags.get("prescribed_area_geometry", False))
+            self._flags.get("end_expansion_geometry")
+        ) or bool(self._flags.get("prescribed_area_geometry"))
         self._active_plasma_topology = bool(
-            self._flags.get("active_plasma_topology", False)
+            self._flags.get("active_plasma_topology")
         )
         self._raw_stage_validation = bool(
-            self._flags.get("raw_stage_validation", False)
+            self._flags.get("raw_stage_validation")
         )
         self._hyperbolic_wave_speed = str(
-            self._input_dict.get("hyperbolic_wave_speed", "isothermal")
+            self._input_dict.get("hyperbolic_wave_speed")
         )
         self._hyperbolic_energy_consistent = bool(
-            self._flags.get("hyperbolic_energy_consistent", False)
+            self._flags.get("hyperbolic_energy_consistent")
         )
         self._characteristic_boundary = bool(
-            self._flags.get("characteristic_boundary", False)
+            self._flags.get("characteristic_boundary")
         )
         self._beam_anode_interception = bool(
-            self._flags.get("beam_anode_interception", True)
+            self._flags.get("beam_anode_interception")
         )
         # R4.3 / audit A7+A8: the moment-closed reduced ion-neutral collision
         # operator (Phelps He+/He). Presence-gated -- when on it replaces the
         # four legacy ion-neutral terms; when off it is a strict no-op. He-only.
         self._ion_neutral_moment_closure = bool(
-            self._flags.get("ion_neutral_moment_closure", False)
+            self._flags.get("ion_neutral_moment_closure")
         )
         if self._ion_neutral_moment_closure and self._gas_type != "He":
             raise ValueError(
@@ -953,7 +953,7 @@ class LAPDSim1D:
         # The presheath sigma_in model shares the He-only Phelps cross
         # section. Its two legacy arms ("constant", "cx_derived") were the
         # only non-helium path in the solver and were removed at D3.
-        _sigma_in_model = str(self._input_dict.get("sigma_in_model", "phelps"))
+        _sigma_in_model = str(self._input_dict.get("sigma_in_model"))
         if _sigma_in_model != "phelps":
             raise ValueError(
                 f"sigma_in_model={_sigma_in_model!r} is not available: the "
@@ -977,19 +977,19 @@ class LAPDSim1D:
         """
         validate_neutral_seed_cache_config(self._input_dict, self._flags)
         validate_equilibration_gas_puff_on(self._input_dict)
-        _x = float(self._input_dict.get("R_comp_partition", 1.0))
+        _x = float(self._input_dict.get("R_comp_partition"))
         if not (0.0 <= _x <= 1.0):
             raise ValueError(
                 "R_comp_partition (the external fraction of R_comp) must be in "
                 f"[0, 1] (got {_x})"
             )
-        _R_mesh = float(self._input_dict.get("R_mesh_ohm", 0.0))
+        _R_mesh = float(self._input_dict.get("R_mesh_ohm"))
         if _R_mesh < 0.0:
             raise ValueError(
                 f"R_mesh_ohm (anode-mesh resistance) must be >= 0 (got {_R_mesh})"
             )
         exchange_model = str(
-            self._input_dict.get("neutral_exchange_model", "knudsen")
+            self._input_dict.get("neutral_exchange_model")
         )
         if exchange_model not in ("constant", "knudsen"):
             raise ValueError(
@@ -1000,7 +1000,7 @@ class LAPDSim1D:
             self._phase_transition_mode(), self._prebreakdown_timeout_action()
         )
         validate_gas_puff_config(self._input_dict)
-        if str(self._input_dict.get("gas_puff_profile", "cell")) == "orifice":
+        if str(self._input_dict.get("gas_puff_profile")) == "orifice":
             # Derive the row ONCE, here, for the refusals that need the mesh:
             # a port off the grid and a column that is not inside the vessel
             # wall are configuration errors, and they must not first surface
@@ -1009,7 +1009,7 @@ class LAPDSim1D:
             gas_puff_rate_profile(
                 self._geometry,
                 1.0,
-                float(self._input_dict.get("gas_puff_valves", 2)),
+                float(self._input_dict.get("gas_puff_valves")),
                 profile="orifice",
                 z_cm=self._input_dict.get("gas_puff_z_cm"),
                 orifice_id_cm=self._input_dict.get("gas_puff_orifice_id_cm"),
@@ -1017,10 +1017,10 @@ class LAPDSim1D:
                     "gas_puff_orifice_length_cm"
                 ),
             )
-        self._neutral_momentum = bool(self._flags.get("neutral_momentum", False))
+        self._neutral_momentum = bool(self._flags.get("neutral_momentum"))
         if (
             self._neutral_momentum
-            and self._input_dict.get("ion_neutral_drag_model", "constant")
+            and self._input_dict.get("ion_neutral_drag_model")
             == "slip"
         ):
             raise ValueError(
@@ -1028,10 +1028,10 @@ class LAPDSim1D:
                 "ion_neutral_drag_model='slip': the slip closure is the "
                 "evolved M_n equation's own local steady state"
             )
-        self._neutral_two_zone = bool(self._flags.get("neutral_two_zone", False))
+        self._neutral_two_zone = bool(self._flags.get("neutral_two_zone"))
         if self._neutral_two_zone:
             if (
-                str(self._input_dict.get("neutral_exchange_model", "knudsen"))
+                str(self._input_dict.get("neutral_exchange_model"))
                 != "knudsen"
             ):
                 raise ValueError(
@@ -1046,15 +1046,15 @@ class LAPDSim1D:
             self._check_annulus_not_collapsed()
             self._zone_exchange_cm3_s = neutral_zone_exchange_conductance(
                 geometry=self._geometry,
-                Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
+                Tn_K=float(self._input_dict.get("Tn_K")),
                 mu_neutral=self._mu_neutral,
             )
             self._zone_axial_coeffs = two_zone_knudsen_coefficients(
                 geometry=self._geometry,
-                Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
+                Tn_K=float(self._input_dict.get("Tn_K")),
                 mu_neutral=self._mu_neutral,
                 clausing_scale=float(
-                    self._input_dict.get("neutral_clausing_scale", 1.0)
+                    self._input_dict.get("neutral_clausing_scale")
                 ),
             )
         else:
@@ -1062,7 +1062,7 @@ class LAPDSim1D:
             self._zone_exchange_cm3_s = None
             self._zone_axial_coeffs = None
         self._neutral_model = str(
-            self._input_dict.get("neutral_model", "moment")
+            self._input_dict.get("neutral_model")
         )
         if self._neutral_model not in ("moment", "kinetic", "kinetic_dvm"):
             raise ValueError(
@@ -1075,7 +1075,7 @@ class LAPDSim1D:
         # topology, resolved once (see absorbing_live_cells_by_role).
         self._recycle_cells = absorbing_live_cells_by_role(self._geometry)
         self._end_recycle_to_annulus = bool(
-            self._flags.get("end_recycle_to_annulus", False)
+            self._flags.get("end_recycle_to_annulus")
         )
         if self._end_recycle_to_annulus:
             if not self._neutral_two_zone:
@@ -1124,14 +1124,14 @@ class LAPDSim1D:
                 next_refresh_s=0.0,
                 next_update_s=0.0,
                 refresh_s=float(
-                    self._input_dict.get("neutral_kinetic_refresh_s", 5e-4)
+                    self._input_dict.get("neutral_kinetic_refresh_s")
                 ),
                 refresh_tol=float(
-                    self._input_dict.get("neutral_kinetic_refresh_tol", 0.2)
+                    self._input_dict.get("neutral_kinetic_refresh_tol")
                 ),
                 update_s=1.0e-5,
-                nvz=int(self._input_dict.get("neutral_kinetic_nvz", 48)),
-                nvp=int(self._input_dict.get("neutral_kinetic_nvp", 12)),
+                nvz=int(self._input_dict.get("neutral_kinetic_nvz")),
+                nvp=int(self._input_dict.get("neutral_kinetic_nvp")),
             )
             if self._kinetic.refresh_s <= 0.0:
                 raise ValueError(
@@ -1145,6 +1145,11 @@ class LAPDSim1D:
         self._dvm_engaged = False
         self._dvm_next_s = 0.0
         self._dvm_last_s = 0.0
+        # How many times the neutral clock has actually ticked. The cadence
+        # states what was ASKED for; this is what the run DID, which is not
+        # recoverable from the saved trajectory because a tick fires on the
+        # neutral clock rather than on the save schedule.
+        self._dvm_tick_count = 0
         self._dvm_transfer_relax_fraction = 1.0
         self._dvm_transfer_hold = KINETIC_DVM_TRANSFER_HOLDS[0]
         self._dvm_step_transfer = None
@@ -1203,7 +1208,7 @@ class LAPDSim1D:
             # selector that silently does nothing is the trap this refuses.
             flights = str(
                 self._input_dict.get(
-                    "neutral_kinetic_dvm_annulus_flights", "rates"
+                    "neutral_kinetic_dvm_annulus_flights"
                 )
             )
             if flights != "rates":
@@ -1236,7 +1241,7 @@ class LAPDSim1D:
             )
             reflection = str(
                 self._input_dict.get(
-                    "neutral_kinetic_dvm_wall_reflection", inert
+                    "neutral_kinetic_dvm_wall_reflection"
                 )
             )
             if reflection != inert:
@@ -1274,7 +1279,7 @@ class LAPDSim1D:
             # them and forgets the arm is loud rather than silently inert.
             if bool(
                 self._input_dict.get(
-                    "neutral_kinetic_dvm_cathode_jet", False
+                    "neutral_kinetic_dvm_cathode_jet"
                 )
             ):
                 raise ValueError(
@@ -1308,7 +1313,7 @@ class LAPDSim1D:
             # DVM's COUNTED anode-mesh collection, and no other neutral model
             # carries one to split.
             if bool(
-                self._input_dict.get("neutral_kinetic_dvm_anode_jet", False)
+                self._input_dict.get("neutral_kinetic_dvm_anode_jet")
             ):
                 raise ValueError(
                     "neutral_kinetic_dvm_anode_jet splits the transient DVM's "
@@ -1349,7 +1354,7 @@ class LAPDSim1D:
         """
         # R5.1 / audit A11: gated fluid<->circuit Picard coupling (default off).
         self._coupled_circuit_picard = bool(
-            self._flags.get("coupled_circuit_picard", False)
+            self._flags.get("coupled_circuit_picard")
         )
         if self._coupled_circuit_picard:
             if self._kinetic is not None:
@@ -1367,10 +1372,10 @@ class LAPDSim1D:
                     "Accepted: kinetic_dvm with coupled_circuit_picard off"
                 )
             self._circuit_picard_tol_rel = float(
-                self._input_dict.get("circuit_picard_tol_rel", 1.0e-2)
+                self._input_dict.get("circuit_picard_tol_rel")
             )
             self._circuit_picard_max_iter = int(
-                self._input_dict.get("circuit_picard_max_iter", 3)
+                self._input_dict.get("circuit_picard_max_iter")
             )
             if self._circuit_picard_tol_rel <= 0.0:
                 raise ValueError(
@@ -1389,10 +1394,10 @@ class LAPDSim1D:
             self._picard_extra_solves = 0
         # R5.2 / audit A9: flux-limited electron heat conduction (default on).
         self._electron_heat_flux_limit = bool(
-            self._flags.get("electron_heat_flux_limit", False)
+            self._flags.get("electron_heat_flux_limit")
         )
         self._heat_flux_limiter_f = float(
-            self._input_dict.get("heat_flux_limiter_f", 0.3)
+            self._input_dict.get("heat_flux_limiter_f")
         )
         if self._electron_heat_flux_limit and self._heat_flux_limiter_f <= 0.0:
             raise ValueError(
@@ -1400,7 +1405,7 @@ class LAPDSim1D:
                 f"is on (got {self._heat_flux_limiter_f})"
             )
         self._heat_flux_limiter_exponent = float(
-            self._input_dict.get("heat_flux_limiter_exponent", 1.0)
+            self._input_dict.get("heat_flux_limiter_exponent")
         )
         if self._electron_heat_flux_limit and self._heat_flux_limiter_exponent <= 0.0:
             raise ValueError(
@@ -1411,7 +1416,7 @@ class LAPDSim1D:
         # ON; presence-gated: None disables the exemption branch entirely so
         # the off path is bit-exact historical behavior).
         _surface_loss_floor_exempt = bool(
-            self._flags.get("surface_loss_floor_exempt", False)
+            self._flags.get("surface_loss_floor_exempt")
         )
         self._surface_loss_floor_exempt_rtol = (
             SURFACE_LOSS_FLOOR_EXEMPT_RTOL if _surface_loss_floor_exempt else None
@@ -1422,7 +1427,7 @@ class LAPDSim1D:
         # enough to be a permanent exemption -- or one armed with the
         # exemption itself off is refused before any compute.
         _exempt_exit_rtol = self._input_dict.get(
-            "surface_loss_floor_exempt_exit_rtol", 0.0
+            "surface_loss_floor_exempt_exit_rtol"
         )
         try:
             _exempt_exit_value = float(_exempt_exit_rtol)
@@ -1476,7 +1481,7 @@ class LAPDSim1D:
             {} if self._surface_loss_floor_exempt_exit_rtol is not None else None
         )
         _max_steps_action = str(
-            self._input_dict.get("max_steps_action", "raise")
+            self._input_dict.get("max_steps_action")
         )
         if _max_steps_action not in ("raise", "stop"):
             raise ValueError(
@@ -1488,7 +1493,7 @@ class LAPDSim1D:
         # construction, so a misconfigured guard cannot be discovered hours
         # into a run.
         _dt_min_lock_max_steps = self._input_dict.get(
-            "dt_min_lock_max_steps", 250000
+            "dt_min_lock_max_steps"
         )
         try:
             _dt_min_lock_value = float(_dt_min_lock_max_steps)
@@ -1508,7 +1513,7 @@ class LAPDSim1D:
         # budgets the simulated-time guards cannot see. Validated here so a
         # misconfigured guard cannot be discovered hours into the very crawl
         # it exists to catch.
-        _wall_cap = self._input_dict.get("ignition_wall_clock_cap_s", 0.0)
+        _wall_cap = self._input_dict.get("ignition_wall_clock_cap_s")
         try:
             _wall_cap_value = float(_wall_cap)
         except (TypeError, ValueError):
@@ -1519,7 +1524,7 @@ class LAPDSim1D:
                 f"number of seconds, 0 to disable (got {_wall_cap!r})"
             )
         self._ignition_wall_clock_cap_s = _wall_cap_value
-        _step_cap = self._input_dict.get("ignition_accepted_step_cap", 0)
+        _step_cap = self._input_dict.get("ignition_accepted_step_cap")
         try:
             _step_cap_value = float(_step_cap)
         except (TypeError, ValueError):
@@ -1536,7 +1541,7 @@ class LAPDSim1D:
         self._ignition_accepted_step_cap = int(_step_cap_value)
         # Accelerated dt_growth re-approach. Validated at construction so a
         # factor that could never engage is refused before any compute.
-        _growth_patience = self._input_dict.get("dt_growth_recovery_patience", 0)
+        _growth_patience = self._input_dict.get("dt_growth_recovery_patience")
         try:
             _growth_patience_value = float(_growth_patience)
         except (TypeError, ValueError):
@@ -1552,13 +1557,13 @@ class LAPDSim1D:
                 f"(got {_growth_patience!r})"
             )
         self._dt_growth_recovery_patience = int(_growth_patience_value)
-        _growth_recovery = self._input_dict.get("dt_growth_recovery_factor", 4.0)
+        _growth_recovery = self._input_dict.get("dt_growth_recovery_factor")
         try:
             _growth_recovery_value = float(_growth_recovery)
         except (TypeError, ValueError):
             _growth_recovery_value = np.nan
         if self._dt_growth_recovery_patience > 0:
-            _growth_base = self._input_dict.get("dt_growth_factor", 1.25)
+            _growth_base = self._input_dict.get("dt_growth_factor")
             try:
                 _growth_base_value = float(_growth_base)
             except (TypeError, ValueError):
@@ -1599,8 +1604,8 @@ class LAPDSim1D:
         # key at construction, but only to compare it against the recovery
         # factor and only when the recovery patience is armed, so the key's own
         # domain went unchecked until run().
-        _dt_growth_enabled = bool(self._input_dict.get("dt_growth_enabled", True))
-        _dt_growth_factor = self._input_dict.get("dt_growth_factor", 1.25)
+        _dt_growth_enabled = bool(self._input_dict.get("dt_growth_enabled"))
+        _dt_growth_factor = self._input_dict.get("dt_growth_factor")
         try:
             _dt_growth_factor_value = float(_dt_growth_factor)
         except (TypeError, ValueError):
@@ -1618,10 +1623,10 @@ class LAPDSim1D:
         # rather than restated so a scheme added to either set is legal here
         # the moment it is legal there.
         validate_operator_splitting(
-            self._input_dict.get("operator_splitting", "lie")
+            self._input_dict.get("operator_splitting")
         )
         validate_implicit_heat_scheme(
-            self._input_dict.get("implicit_heat_scheme", "backward_euler")
+            self._input_dict.get("implicit_heat_scheme")
         )
         # ion_neutral_drag_model. This is the one of the four that was not
         # merely late but UNREACHABLE on the shipped stance: the moment closure
@@ -1631,7 +1636,7 @@ class LAPDSim1D:
         # closure off. The construction-time mutual-exclusion check against
         # neutral_momentum that already exists reads the key's VALUE without
         # checking that the value is one the solver implements.
-        _drag_model = self._input_dict.get("ion_neutral_drag_model", "constant")
+        _drag_model = self._input_dict.get("ion_neutral_drag_model")
         if _drag_model not in ION_NEUTRAL_DRAG_MODELS:
             raise ValueError(
                 "ion_neutral_drag_model must be one of "
@@ -1651,7 +1656,7 @@ class LAPDSim1D:
         # 'cdsa' constructs and runs at base commit ca444dd; that is the
         # negative control, and declm_block_gate.py carries the recipe.
         _deposition_model = self._input_dict.get(
-            "beam_deposition_model", "beer_lambert"
+            "beam_deposition_model"
         )
         if _deposition_model not in BEAM_DEPOSITION_MODELS:
             raise ValueError(
@@ -1666,13 +1671,13 @@ class LAPDSim1D:
         # Presence gate for the beam_ionization_birth timestep bound. Reading
         # it once here keeps the off path out of the branch entirely.
         self._beam_ionization_birth_timestep_bound = bool(
-            self._flags.get("beam_ionization_birth_timestep_bound", False)
+            self._flags.get("beam_ionization_birth_timestep_bound")
         )
         # Global dt-refinement instrument. Validated here so a factor that
         # would loosen the step (>1) or stop the run dead (0, negative) is
         # refused before any compute, and read once so the unarmed run's
         # arithmetic never enters the multiply.
-        _dt_global_scale = self._input_dict.get("dt_global_scale", 1.0)
+        _dt_global_scale = self._input_dict.get("dt_global_scale")
         try:
             _dt_global_scale_value = float(_dt_global_scale)
         except (TypeError, ValueError):
@@ -1694,7 +1699,7 @@ class LAPDSim1D:
         # and an int or a string smuggled in there would arm a first-order
         # rate channel while reading like a value.
         _rates_at_accepted_state = self._flags.get(
-            "rates_at_accepted_state", False
+            "rates_at_accepted_state"
         )
         if not isinstance(_rates_at_accepted_state, bool):
             raise ValueError(
@@ -1706,7 +1711,7 @@ class LAPDSim1D:
         # same reason: the flag arms a ~10^2 kW plasma electron sink, and an
         # int or a string smuggled in there would read like a value.
         _anode_sheath_full_debit = self._flags.get(
-            "anode_sheath_full_debit", False
+            "anode_sheath_full_debit"
         )
         if not isinstance(_anode_sheath_full_debit, bool):
             raise ValueError(
@@ -1714,12 +1719,12 @@ class LAPDSim1D:
                 f"{_anode_sheath_full_debit!r})"
             )
         if _anode_sheath_full_debit and not bool(
-            self._flags.get("characteristic_boundary", False)
+            self._flags.get("characteristic_boundary")
         ):
             raise ValueError(
                 "anode_sheath_full_debit requires characteristic_boundary "
                 "(got characteristic_boundary="
-                f"{self._flags.get('characteristic_boundary', False)!r}): the "
+                f"{self._flags.get('characteristic_boundary')!r}): the "
                 "flag COMPLETES the thermal-only electrode routing by adding "
                 "the sheath-fall share back onto the plasma electron store, "
                 "and with that routing off the full P_anode_e "
@@ -1732,7 +1737,7 @@ class LAPDSim1D:
         # flag MOVES a ~10^5 W source between operators, and an int or a string
         # there would read like a value.
         _beam_deposition_in_heat_substep = self._flags.get(
-            "beam_deposition_in_heat_substep", False
+            "beam_deposition_in_heat_substep"
         )
         if not isinstance(_beam_deposition_in_heat_substep, bool):
             raise ValueError(
@@ -1740,12 +1745,12 @@ class LAPDSim1D:
                 f"{_beam_deposition_in_heat_substep!r})"
             )
         if _beam_deposition_in_heat_substep and not bool(
-            self._flags.get("implicit_heat_conduction", False)
+            self._flags.get("implicit_heat_conduction")
         ):
             raise ValueError(
                 "beam_deposition_in_heat_substep requires "
                 "implicit_heat_conduction (got implicit_heat_conduction="
-                f"{self._flags.get('implicit_heat_conduction', False)!r}): the "
+                f"{self._flags.get('implicit_heat_conduction')!r}): the "
                 "flag re-homes the beam electron-energy source from the "
                 "explicit operator A into the implicit heat substep B, and "
                 "with the split off there is no B to host it -- the source "
@@ -1768,7 +1773,7 @@ class LAPDSim1D:
         self._plateau_edge_clamped_steps = 0
         self._plateau_edge_clamped_last_time_s = np.nan
         self._plateau_multigroup = str(
-            self._input_dict.get("heating_anomalous_transport", "local")
+            self._input_dict.get("heating_anomalous_transport")
         ) == "plateau_multigroup"
 
     def _init_neutral_momentum_and_energy(self):
@@ -1780,7 +1785,7 @@ class LAPDSim1D:
         something to act on, so no selector here can be silently inert.
         """
         self._neutral_momentum_radial = str(
-            self._input_dict.get("neutral_momentum_radial", "uniform")
+            self._input_dict.get("neutral_momentum_radial")
         )
         if self._neutral_momentum_radial not in (
             "uniform",
@@ -1815,10 +1820,10 @@ class LAPDSim1D:
         # can never fall back on a defaulted number and a stray cross section
         # can never be silently inert.
         self._neutral_wall_momentum_partition = bool(
-            self._flags.get("neutral_wall_momentum_partition", False)
+            self._flags.get("neutral_wall_momentum_partition")
         )
         _wall_sigma = self._input_dict.get(
-            "neutral_wall_partition_sigma_hehe_cm2", None
+            "neutral_wall_partition_sigma_hehe_cm2"
         )
         if self._neutral_wall_momentum_partition:
             if not self._neutral_two_momentum:
@@ -1862,7 +1867,7 @@ class LAPDSim1D:
         # no consistent reading of it under a coverage deficit or a kinetic
         # neutral model -- so each of those is refused here rather than
         # silently resolved.
-        self._neutral_energy = bool(self._flags.get("neutral_energy", False))
+        self._neutral_energy = bool(self._flags.get("neutral_energy"))
         if self._neutral_energy:
             if not self._ion_neutral_moment_closure:
                 raise ValueError(
@@ -1882,7 +1887,7 @@ class LAPDSim1D:
                     "meaning without an evolved neutral wind. Accepted: "
                     "ion_neutral_moment_closure with neutral_momentum"
                 )
-            if bool(self._flags.get("coverage_closure", False)):
+            if bool(self._flags.get("coverage_closure")):
                 raise ValueError(
                     "the neutral_energy flag is incompatible with "
                     "coverage_closure: the coverage deficit partitions nn "
@@ -1914,7 +1919,7 @@ class LAPDSim1D:
         # into the flight kinematics is the hot channel's own launch velocity,
         # so the flag is meaningless without the channel that launches.
         self._neutral_hot_birth_drift = bool(
-            self._flags.get("neutral_hot_birth_drift", False)
+            self._flags.get("neutral_hot_birth_drift")
         )
         if self._neutral_hot_birth_drift and not self._neutral_energy:
             raise ValueError(
@@ -1930,7 +1935,7 @@ class LAPDSim1D:
         # where the hot channel's flights stop, and without the channel there
         # is no flight to stop.
         self._neutral_hot_internal_wall = bool(
-            self._flags.get("neutral_hot_internal_wall", False)
+            self._flags.get("neutral_hot_internal_wall")
         )
         if self._neutral_hot_internal_wall and not self._neutral_energy:
             raise ValueError(
@@ -1943,7 +1948,7 @@ class LAPDSim1D:
                 "neutral_hot_internal_wall=False"
             )
         self._neutral_energy_alpha = float(
-            self._input_dict.get("neutral_energy_wall_accommodation", 0.40)
+            self._input_dict.get("neutral_energy_wall_accommodation")
         )
         if not (0.0 <= self._neutral_energy_alpha <= 1.0):
             raise ValueError(
@@ -1956,7 +1961,7 @@ class LAPDSim1D:
         # them by sqrt(Tn_local/Tn_K), which only exists where a per-cell Tn
         # does.
         self._neutral_knudsen_temperature = str(
-            self._input_dict.get("neutral_knudsen_temperature", "frozen")
+            self._input_dict.get("neutral_knudsen_temperature")
         )
         if self._neutral_knudsen_temperature not in ("frozen", "local"):
             raise ValueError(
@@ -1985,7 +1990,7 @@ class LAPDSim1D:
                 self._wind_wall_rate,
             ) = neutral_wind_two_zone_factors(
                 geometry=self._geometry,
-                Tn_eV=float(self._input_dict.get("Tn_fit", 0.1)),
+                Tn_eV=float(self._input_dict.get("Tn_fit")),
                 ion_mass_g=self._ion_mass_g,
             )
         else:
@@ -2053,11 +2058,11 @@ class LAPDSim1D:
     def _init_atomic_package_refusals(self):
         """Refuse atomic-package combinations that would double-book photons."""
         self._recombination_energy_return = bool(
-            self._input_dict.get("recombination_energy_return", False)
+            self._input_dict.get("recombination_energy_return")
         )
         if self._recombination_energy_return:
             if (
-                str(self._input_dict.get("atomic_rate_model", "adas"))
+                str(self._input_dict.get("atomic_rate_model"))
                 != "adas"
             ):
                 raise ValueError(
@@ -2065,15 +2070,15 @@ class LAPDSim1D:
                     "atomic_rate_model='adas' (the PRB radiated-power "
                     "booking has no janev counterpart)"
                 )
-            if bool(self._flags.get("icool_recomb", False)):
+            if bool(self._flags.get("icool_recomb")):
                 raise ValueError(
                     "recombination_energy_return already charges the full "
                     "PRB; combining it with icool_recomb double-charges "
                     "the recombination photons"
                 )
         if bool(
-            self._input_dict.get("adas_low_te_extension", False)
-        ) and bool(self._flags.get("icool_recomb", False)):
+            self._input_dict.get("adas_low_te_extension")
+        ) and bool(self._flags.get("icool_recomb")):
             raise ValueError(
                 "adas_low_te_extension must not be combined with "
                 "icool_recomb: icool_recomb charges bare PRB, and "
@@ -2180,17 +2185,17 @@ class LAPDSim1D:
         # solve and is formed from the bank/capacitor source, so a
         # configuration that has neither would turn it on and get nothing --
         # exactly the silent no-op the house rules forbid.
-        if bool(self._flags.get("cathode_circuit_voltage_bound", False)):
-            if not bool(self._flags.get("cathode_coupling", False)):
+        if bool(self._flags.get("cathode_circuit_voltage_bound")):
+            if not bool(self._flags.get("cathode_coupling")):
                 raise ValueError(
                     "cathode_circuit_voltage_bound requires the "
                     "cathode_coupling flag: with no cathode solve there is "
                     "no device voltage to bound"
                 )
-            if not float(self._input_dict.get("V_bank", 0.0)) > 0.0:
+            if not float(self._input_dict.get("V_bank")) > 0.0:
                 raise ValueError(
                     "cathode_circuit_voltage_bound requires a positive "
-                    f"V_bank (got {self._input_dict.get('V_bank', 0.0)!r}); "
+                    f"V_bank (got {self._input_dict.get('V_bank')!r}); "
                     "the bound is the source voltage minus the series "
                     "resistive drop, so a zero source would leave it "
                     "permanently inactive"
@@ -2241,7 +2246,7 @@ class LAPDSim1D:
         # Cathode warming state: the evolving emitter surface temperature [K]
         # (config cathode_warming_model). None = static T_s.
         warming_model = str(
-            self._input_dict.get("cathode_warming_model", "none")
+            self._input_dict.get("cathode_warming_model")
         )
         if warming_model not in ("none", "power_balance"):
             raise ValueError(
@@ -2259,18 +2264,18 @@ class LAPDSim1D:
                     "surface temperature)"
                 )
             if float(
-                self._input_dict.get("cathode_heat_capacity_J_per_K", 3.0)
+                self._input_dict.get("cathode_heat_capacity_J_per_K")
             ) <= 0.0:
                 raise ValueError(
                     "cathode_heat_capacity_J_per_K must be positive"
                 )
-            eps = float(self._input_dict.get("cathode_emissivity", 0.7))
+            eps = float(self._input_dict.get("cathode_emissivity"))
             if not 0.0 < eps <= 1.0:
                 raise ValueError(
                     f"cathode_emissivity must be in (0, 1] (got {eps})"
                 )
             if float(
-                self._input_dict.get("cathode_conduction_W_per_K", 0.0)
+                self._input_dict.get("cathode_conduction_W_per_K")
             ) < 0.0:
                 raise ValueError(
                     "cathode_conduction_W_per_K must be non-negative"
@@ -2290,7 +2295,7 @@ class LAPDSim1D:
         # which is the only coverage channel, so theta is monotonically
         # non-increasing). None = static phi_wf (historical).
         surface_model = str(
-            self._input_dict.get("cathode_surface_model", "none")
+            self._input_dict.get("cathode_surface_model")
         )
         if surface_model not in ("none", "ads_des"):
             raise ValueError(
@@ -2310,7 +2315,7 @@ class LAPDSim1D:
                     "cathode_phiwf_clean_eV must be below phi_wf (the "
                     "contaminated shot-start value)"
                 )
-            if float(self._input_dict.get("cathode_cleaning_sigma_cm2", 0.0)) < 0.0:
+            if float(self._input_dict.get("cathode_cleaning_sigma_cm2")) < 0.0:
                 raise ValueError(
                     "cathode_cleaning_sigma_cm2 must be non-negative"
                 )
@@ -2366,7 +2371,7 @@ class LAPDSim1D:
         combination the walk machinery could not act on is an incomplete
         configuration rather than a silent no-op.
         """
-        if float(self._input_dict.get("beam_deposition_smoothing_cm", 0.0)) < 0.0:
+        if float(self._input_dict.get("beam_deposition_smoothing_cm")) < 0.0:
             raise ValueError(
                 "beam_deposition_smoothing_cm must be >= 0 (got "
                 f"{self._input_dict.get('beam_deposition_smoothing_cm')})"
@@ -2377,14 +2382,14 @@ class LAPDSim1D:
         # beer_lambert is an INCOMPLETE configuration -- that path never
         # launches the CSDA module, so the requested physics could not act --
         # and raises rather than silently doing nothing.
-        _bpt = str(self._input_dict.get("beam_product_transport", "local"))
+        _bpt = str(self._input_dict.get("beam_product_transport"))
         if _bpt not in ("local", "nonlocal", "terminal_nonlocal"):
             raise ValueError(
                 "beam_product_transport must be 'local', 'nonlocal' or "
                 f"'terminal_nonlocal' (got {_bpt!r})"
             )
         if _bpt != "local" and str(
-            self._input_dict.get("beam_deposition_model", "beer_lambert")
+            self._input_dict.get("beam_deposition_model")
         ) != "csda":
             raise ValueError(
                 f"beam_product_transport={_bpt!r} requires "
@@ -2407,7 +2412,7 @@ class LAPDSim1D:
         # too, but a bad selector must fail at CONSTRUCTION rather than on the
         # first cathode solve, and selecting a closure the deposition path
         # never launches is an INCOMPLETE configuration, not a no-op.
-        _bam = str(self._input_dict.get("beam_anomalous_model", "none"))
+        _bam = str(self._input_dict.get("beam_anomalous_model"))
         if _bam not in ANOMALOUS_MODELS:
             raise ValueError(
                 "beam_anomalous_model must be one of "
@@ -2415,7 +2420,7 @@ class LAPDSim1D:
             )
         if _bam == "ql_relaxation":
             if str(
-                self._input_dict.get("beam_deposition_model", "beer_lambert")
+                self._input_dict.get("beam_deposition_model")
             ) != "csda":
                 raise ValueError(
                     "beam_anomalous_model='ql_relaxation' requires "
@@ -2424,7 +2429,7 @@ class LAPDSim1D:
                     "closure could not act and the run would read as though "
                     "the middle leg were live when nothing is booked"
                 )
-            _qlrc = self._input_dict.get("ql_relaxation_coeff", None)
+            _qlrc = self._input_dict.get("ql_relaxation_coeff")
             if _qlrc is None:
                 raise ValueError(
                     "beam_anomalous_model='ql_relaxation' requires "
@@ -2446,7 +2451,7 @@ class LAPDSim1D:
         # INCOMPLETE configuration rather than a silent no-op. The walk needs
         # (a) the CSDA module to be the thing depositing, and (b) an anomalous
         # channel actually producing the power it carries.
-        _hat = str(self._input_dict.get("heating_anomalous_transport", "local"))
+        _hat = str(self._input_dict.get("heating_anomalous_transport"))
         if _hat not in ("local", "tail_walk", "plateau_multigroup"):
             raise ValueError(
                 "heating_anomalous_transport must be 'local', 'tail_walk' or "
@@ -2461,9 +2466,10 @@ class LAPDSim1D:
             # under it. Inert is exactly what this repo refuses to be silent
             # about: each is rejected here, at construction, rather than
             # accepted and ignored. Their DEFAULTS are accepted, so an armed
-            # stance states the selector and nothing else.
+            # stance states the selector; a block-form stance also states the
+            # inert dials at their defaults, which the guard accepts.
             if self._input_dict.get(
-                "heating_anomalous_tail_phi_c_fraction", None
+                "heating_anomalous_tail_phi_c_fraction"
             ) is not None:
                 raise ValueError(
                     "heating_anomalous_tail_phi_c_fraction was supplied with "
@@ -2477,7 +2483,7 @@ class LAPDSim1D:
                 )
             if float(
                 self._input_dict.get(
-                    "heating_anomalous_tail_energy_eV", 75.0
+                    "heating_anomalous_tail_energy_eV"
                 )
             ) != 75.0:
                 raise ValueError(
@@ -2491,7 +2497,7 @@ class LAPDSim1D:
                 )
             if str(
                 self._input_dict.get(
-                    "heating_anomalous_tail_energy_keying", "phi_c"
+                    "heating_anomalous_tail_energy_keying"
                 )
             ) != "phi_c":
                 raise ValueError(
@@ -2502,7 +2508,7 @@ class LAPDSim1D:
                     "select and the keying selector is inert. Drop it, or "
                     "select heating_anomalous_transport='tail_walk'"
                 )
-            if bool(self._flags.get("coverage_closure", False)):
+            if bool(self._flags.get("coverage_closure")):
                 raise ValueError(
                     "heating_anomalous_transport='plateau_multigroup' does "
                     "not support coverage_closure: the two-stream march "
@@ -2519,7 +2525,7 @@ class LAPDSim1D:
         # it verbatim, and the two selectors are checked together below rather
         # than in parallel blocks that could drift apart.
         _disposal = str(
-            self._input_dict.get("heating_anomalous_disposal", "local")
+            self._input_dict.get("heating_anomalous_disposal")
         )
         if _disposal not in ("local", "landau_branched"):
             raise ValueError(
@@ -2536,7 +2542,7 @@ class LAPDSim1D:
                 "corner, so naming both states two dispositions for one bank. "
                 "Select the branch with heating_anomalous_transport='local'"
             )
-        if _branch and bool(self._flags.get("coverage_closure", False)):
+        if _branch and bool(self._flags.get("coverage_closure")):
             raise ValueError(
                 "heating_anomalous_disposal='landau_branched' does not "
                 "support coverage_closure: the two-stream march shares ONE "
@@ -2555,7 +2561,7 @@ class LAPDSim1D:
                 else f"heating_anomalous_transport={_hat!r}"
             )
             if str(
-                self._input_dict.get("beam_deposition_model", "beer_lambert")
+                self._input_dict.get("beam_deposition_model")
             ) != "csda":
                 raise ValueError(
                     f"{_sel} requires "
@@ -2564,7 +2570,7 @@ class LAPDSim1D:
                     "would be a silent no-op)"
                 )
             if str(
-                self._input_dict.get("beam_anomalous_model", "none")
+                self._input_dict.get("beam_anomalous_model")
             ) == "none":
                 raise ValueError(
                     f"{_sel} requires an "
@@ -2574,7 +2580,7 @@ class LAPDSim1D:
                     "be a silent no-op"
                 )
             _tail_eV = float(
-                self._input_dict.get("heating_anomalous_tail_energy_eV", 75.0)
+                self._input_dict.get("heating_anomalous_tail_energy_eV")
             )
             if not math.isfinite(_tail_eV) or _tail_eV <= 0.0:
                 raise ValueError(
@@ -2589,7 +2595,7 @@ class LAPDSim1D:
         # their siblings have.
         _keying = str(
             self._input_dict.get(
-                "heating_anomalous_tail_energy_keying", "phi_c"
+                "heating_anomalous_tail_energy_keying"
             )
         )
         if _keying not in ("phi_c", "fixed"):
@@ -2599,7 +2605,7 @@ class LAPDSim1D:
             )
         _cath_bnd = str(
             self._input_dict.get(
-                "heating_anomalous_tail_cathode_boundary", "reflect"
+                "heating_anomalous_tail_cathode_boundary"
             )
         )
         if _cath_bnd not in ("reflect", "escape"):
@@ -2610,7 +2616,7 @@ class LAPDSim1D:
         # f is a DECLARED BRACKET, never a fitted number, so a value off the
         # bracket is refused everywhere rather than only where it is read.
         _phi_frac = self._input_dict.get(
-            "heating_anomalous_tail_phi_c_fraction", None
+            "heating_anomalous_tail_phi_c_fraction"
         )
         if _phi_frac is not None and float(_phi_frac) not in (0.25, 0.5, 1.0):
             raise ValueError(
@@ -2668,7 +2674,7 @@ class LAPDSim1D:
                     "through heating_anomalous_tail_phi_c_fraction"
                 )
             if _cath_bnd == "reflect" and bool(
-                self._flags.get("TwinCathode", False)
+                self._flags.get("TwinCathode")
             ):
                 raise ValueError(
                     "heating_anomalous_tail_cathode_boundary='reflect' does "
@@ -2703,7 +2709,7 @@ class LAPDSim1D:
         # HE_EII_EDGE_REL_TOL (the module owns both the constant and the
         # comparison; here it is imported, not restated).
         _tion = str(
-            self._input_dict.get("heating_anomalous_tail_ionization", "off")
+            self._input_dict.get("heating_anomalous_tail_ionization")
         )
         if _tion not in ("off", "on"):
             raise ValueError(
@@ -2746,13 +2752,13 @@ class LAPDSim1D:
         # first cathode solve. The module keeps its copies -- it is called
         # directly by instruments that never build a solver.
         _tail_cull = bool(
-            self._flags.get("beam_tail_anode_interception", False)
+            self._flags.get("beam_tail_anode_interception")
         )
         _R_e = float(
-            self._input_dict.get("beam_tail_anode_reflected_particles", 0.0)
+            self._input_dict.get("beam_tail_anode_reflected_particles")
         )
         _eta_E = float(
-            self._input_dict.get("beam_tail_anode_reflected_energy", 0.0)
+            self._input_dict.get("beam_tail_anode_reflected_energy")
         )
         for _name, _val in (
             ("beam_tail_anode_reflected_particles", _R_e),
@@ -2797,7 +2803,7 @@ class LAPDSim1D:
                     "of them there are no walkers to cull and the flag would "
                     "do nothing"
                 )
-            if not bool(self._flags.get("beam_anode_interception", False)):
+            if not bool(self._flags.get("beam_anode_interception")):
                 raise ValueError(
                     "beam_tail_anode_interception requires "
                     "beam_anode_interception: the tail cull fires at the same "
@@ -2807,27 +2813,27 @@ class LAPDSim1D:
                     "two views of one mesh disagreeing about whether it is "
                     "there"
                 )
-        _fc = float(self._input_dict.get("beam_clump_fraction", 0.0))
+        _fc = float(self._input_dict.get("beam_clump_fraction"))
         if not 0.0 <= _fc < 1.0:
             raise ValueError(
                 f"beam_clump_fraction must be in [0, 1) (got {_fc})"
             )
-        if float(self._input_dict.get("beam_clump_enhancement", 1.0)) < 1.0:
+        if float(self._input_dict.get("beam_clump_enhancement")) < 1.0:
             raise ValueError(
                 "beam_clump_enhancement must be >= 1 (got "
                 f"{self._input_dict.get('beam_clump_enhancement')})"
             )
-        _fli = float(self._input_dict.get("gas_puff_local_ionization_fraction", 0.0))
+        _fli = float(self._input_dict.get("gas_puff_local_ionization_fraction"))
         if not 0.0 <= _fli < 1.0:
             raise ValueError(
                 f"gas_puff_local_ionization_fraction must be in [0, 1) (got {_fli})"
             )
-        if _fli > 0.0 and self._flags.get("neutral_two_zone", False):
+        if _fli > 0.0 and self._flags.get("neutral_two_zone"):
             raise ValueError(
                 "gas_puff_local_ionization_fraction is not supported with "
                 "neutral_two_zone (annulus puff routing); disable one"
             )
-        _fgp = float(self._input_dict.get("gas_puff_delivery_fraction", 1.0))
+        _fgp = float(self._input_dict.get("gas_puff_delivery_fraction"))
         if not np.isfinite(_fgp) or not 0.0 < _fgp <= 1.0:
             raise ValueError(
                 "gas_puff_delivery_fraction must be finite and in (0, 1] "
@@ -2894,7 +2900,7 @@ class LAPDSim1D:
         # overwrites the initial condition that everything above just built,
         # so it must run after all of it and after every validator.
         self._load_restart_if_configured()
-        if self._flags.get("debug_checks", False):
+        if self._flags.get("debug_checks"):
             assert_finite_state(self._state, self._derived)
 
     def _advance_emitting_area_fraction(self, dt):
@@ -2915,7 +2921,7 @@ class LAPDSim1D:
         Called only from the accept path, so a rejected attempt leaves the
         fraction untouched and a re-tried step re-runs against the same value.
         """
-        r = float(self._input_dict.get("coverage_growth_rate_per_s", 0.0))
+        r = float(self._input_dict.get("coverage_growth_rate_per_s"))
         dt = float(dt)
         if r == 0.0 or dt <= 0.0:
             return
@@ -3274,15 +3280,15 @@ class LAPDSim1D:
         self._tracer_census = None
         self._tracer_refreshes = 0
         self._tracer_first_activation = None
-        if not self._flags.get("regime_tracer", False):
+        if not self._flags.get("regime_tracer"):
             return
-        if not self._flags.get("Plasma", True):
+        if not self._flags.get("Plasma"):
             raise ValueError(
                 "regime_tracer describes the PLASMA's pre-breakdown build and "
                 "has nothing to integrate with the Plasma flag off; accepted: "
                 "Plasma on"
             )
-        if not self._flags.get("cathode_coupling", False):
+        if not self._flags.get("cathode_coupling"):
             raise ValueError(
                 "regime_tracer needs the cathode solve: the affine source S is "
                 "the beam-impact ionization birth the cathode/beam solver "
@@ -3298,7 +3304,7 @@ class LAPDSim1D:
                 "no notion of the live cell at a closed face, so it cannot "
                 "represent the interface. Accepted: active_plasma_topology on"
             )
-        neutral_model = str(self._input_dict.get("neutral_model", "moment"))
+        neutral_model = str(self._input_dict.get("neutral_model"))
         if neutral_model in RESTART_REFUSED_NEUTRAL_MODELS:
             raise ValueError(
                 f"regime_tracer refuses neutral_model={neutral_model!r}: the "
@@ -3309,10 +3315,10 @@ class LAPDSim1D:
                 f"{sorted(set(('moment',)) )} and any other moment closure"
             )
         anomalous_model = str(
-            self._input_dict.get("beam_anomalous_model", "none")
+            self._input_dict.get("beam_anomalous_model")
         )
         deposition_model = str(
-            self._input_dict.get("beam_deposition_model", "beer_lambert")
+            self._input_dict.get("beam_deposition_model")
         )
         if anomalous_model != "none" and deposition_model != "csda":
             raise ValueError(
@@ -3328,7 +3334,7 @@ class LAPDSim1D:
                 "beam_anomalous_model, or beam_anomalous_model='none' with any "
                 "deposition model"
             )
-        if self._input_dict.get("restart_from", None) is not None:
+        if self._input_dict.get("restart_from") is not None:
             raise ValueError(
                 "regime_tracer cannot be combined with restart_from: the "
                 "restart payload carries no tracer mask and no neutral-"
@@ -3365,16 +3371,16 @@ class LAPDSim1D:
             "node": 0.0,
             "abs": 0.0,
         }
-        if not self._flags.get("regime_vessel_node", False):
+        if not self._flags.get("regime_vessel_node"):
             return
-        if not self._flags.get("cathode_coupling", False):
+        if not self._flags.get("cathode_coupling"):
             raise ValueError(
                 "regime_vessel_node needs the cathode solve: the electron "
                 "current landing on the wall IS the transmitted beam, and "
                 "without a beam the node has nothing to charge it. Accepted: "
                 "cathode_coupling on"
             )
-        if not self._flags.get("Plasma", True):
+        if not self._flags.get("Plasma"):
             raise ValueError(
                 "regime_vessel_node needs the plasma: the ion wall flux that "
                 "balances the beam leakage -- the bootstrap the node exists "
@@ -3382,7 +3388,7 @@ class LAPDSim1D:
                 "flag off the node would charge in one direction forever. "
                 "Accepted: Plasma on"
             )
-        if not self._flags.get("cathode_circuit_voltage_bound", False):
+        if not self._flags.get("cathode_circuit_voltage_bound"):
             raise ValueError(
                 "regime_vessel_node requires cathode_circuit_voltage_bound: "
                 "the climb V_cm is subtracted from the beam's birth energy, "
@@ -3393,7 +3399,7 @@ class LAPDSim1D:
                 "Accepted: cathode_circuit_voltage_bound on"
             )
         deposition_model = str(
-            self._input_dict.get("beam_deposition_model", "beer_lambert")
+            self._input_dict.get("beam_deposition_model")
         )
         if deposition_model != "csda":
             raise ValueError(
@@ -3687,7 +3693,7 @@ class LAPDSim1D:
     def _tracer_launch_cells(self):
         """Return ``{end: launch cell index}`` for the beams criterion (b) sums."""
         launches = {0: int(beam_launch(self._geometry, end=0)[0])}
-        if self._flags.get("TwinCathode", False):
+        if self._flags.get("TwinCathode"):
             launches[-1] = int(beam_launch(self._geometry, end=-1)[0])
         return launches
 
@@ -3716,7 +3722,7 @@ class LAPDSim1D:
             "alpha_isat": surface["alpha_isat"],
             "b_surface_loss": surface["b_surface_loss"],
             "b_presheath_length": float(
-                self._input_dict.get("b_presheath_length", 1.0)
+                self._input_dict.get("b_presheath_length")
             ),
             "gas_type": self._gas_type,
         }
@@ -3840,7 +3846,7 @@ class LAPDSim1D:
             + np.asarray(terms["beam_excitation_radiation"].Ee, dtype=float)
         )
         if str(
-            self._input_dict.get("beam_anomalous_model", "none")
+            self._input_dict.get("beam_anomalous_model")
         ) != "quasilinear":
             return S, P_full.copy(), P_full
         P_ql = beam_anomalous_power_density(**beam_kwargs)
@@ -3891,7 +3897,7 @@ class LAPDSim1D:
         state = self.state
         time = self._time
         cathode_solve = self._cathode_solve
-        if cathode_solve is None and self._flags.get("cathode_coupling", False):
+        if cathode_solve is None and self._flags.get("cathode_coupling"):
             cathode_solve = self.solve_cathode_boundary(
                 state=state, time=time, update_cache=False
             )
@@ -4106,7 +4112,7 @@ class LAPDSim1D:
                 E_beam_eV=prepared["E_beam_eV"],
                 launch_cells=self._tracer_launch_cells(),
                 coulomb_model=str(
-                    self._input_dict.get("beam_coulomb_model", "fast_electron")
+                    self._input_dict.get("beam_coulomb_model")
                 ),
             ) / criteria["thinness"],
             # An empty cell (nn == 0) has no neutrals left to burn, so its
@@ -4280,7 +4286,7 @@ class LAPDSim1D:
                 f"velocity grid); got {self._gas_type!r}"
             )
         if float(
-            self._input_dict.get("gas_puff_local_ionization_fraction", 0.0)
+            self._input_dict.get("gas_puff_local_ionization_fraction")
         ) > 0.0:
             raise ValueError(
                 "neutral_model='kinetic_dvm' is incompatible with "
@@ -4290,7 +4296,7 @@ class LAPDSim1D:
                 "gas_puff_local_ionization_fraction = 0"
             )
         cadence = float(
-            self._input_dict.get("neutral_kinetic_dvm_cadence_s", 2.5e-5)
+            self._input_dict.get("neutral_kinetic_dvm_cadence_s")
         )
         if not (cadence > 0.0):
             raise ValueError(
@@ -4298,7 +4304,7 @@ class LAPDSim1D:
                 f"(got {cadence})"
             )
         accommodation = float(
-            self._input_dict.get("neutral_kinetic_dvm_accommodation", 1.0)
+            self._input_dict.get("neutral_kinetic_dvm_accommodation")
         )
         if not 0.0 <= accommodation <= 1.0:
             raise ValueError(
@@ -4307,8 +4313,7 @@ class LAPDSim1D:
             )
         reflection = str(
             self._input_dict.get(
-                "neutral_kinetic_dvm_wall_reflection",
-                KINETIC_DVM_WALL_REFLECTION_MODELS[0],
+                "neutral_kinetic_dvm_wall_reflection"
             )
         )
         if reflection not in KINETIC_DVM_WALL_REFLECTION_MODELS:
@@ -4317,7 +4322,7 @@ class LAPDSim1D:
                 f"{KINETIC_DVM_WALL_REFLECTION_MODELS} (got {reflection!r})"
             )
         elastic = str(
-            self._input_dict.get("neutral_kinetic_dvm_elastic", "phelps_iso")
+            self._input_dict.get("neutral_kinetic_dvm_elastic")
         )
         if elastic not in KINETIC_DVM_ELASTIC_MODELS:
             raise ValueError(
@@ -4325,7 +4330,7 @@ class LAPDSim1D:
                 f"{KINETIC_DVM_ELASTIC_MODELS} (got {elastic!r})"
             )
         exchange = str(
-            self._input_dict.get("neutral_kinetic_dvm_exchange", "cauchy_chord")
+            self._input_dict.get("neutral_kinetic_dvm_exchange")
         )
         if exchange not in KINETIC_DVM_EXCHANGE_MODELS:
             raise ValueError(
@@ -4334,7 +4339,7 @@ class LAPDSim1D:
             )
         flights = str(
             self._input_dict.get(
-                "neutral_kinetic_dvm_annulus_flights", "rates"
+                "neutral_kinetic_dvm_annulus_flights"
             )
         )
         if flights not in KINETIC_DVM_ANNULUS_FLIGHT_MODELS:
@@ -4343,7 +4348,7 @@ class LAPDSim1D:
                 f"{KINETIC_DVM_ANNULUS_FLIGHT_MODELS} (got {flights!r})"
             )
         tn_feedback = bool(
-            self._input_dict.get("neutral_kinetic_dvm_tn_feedback", False)
+            self._input_dict.get("neutral_kinetic_dvm_tn_feedback")
         )
         if tn_feedback and self._characteristic_boundary:
             raise ValueError(
@@ -4356,7 +4361,7 @@ class LAPDSim1D:
             )
         relax_fraction = float(
             self._input_dict.get(
-                "neutral_kinetic_dvm_transfer_relax_fraction", 0.5
+                "neutral_kinetic_dvm_transfer_relax_fraction"
             )
         )
         if not 0.0 < relax_fraction <= 1.0:
@@ -4379,7 +4384,7 @@ class LAPDSim1D:
                 "neutral_kinetic_dvm_transfer_hold must be one of "
                 f"{KINETIC_DVM_TRANSFER_HOLDS} (got {transfer_hold!r})"
             )
-        if bool(self._input_dict.get("gas_puff_enabled", True)):
+        if bool(self._input_dict.get("gas_puff_enabled")):
             # The arm births the puff into the ANNULUS distribution, so a
             # puff cell with no annulus volume has nowhere to put it: the
             # 1/V_ann guard would drop the atoms while the particle ledger
@@ -4389,14 +4394,14 @@ class LAPDSim1D:
             share = gas_puff_rate_profile(
                 self._geometry,
                 1.0,
-                float(self._input_dict.get("gas_puff_valves", 2)),
-                profile=str(self._input_dict.get("gas_puff_profile", "cell")),
+                float(self._input_dict.get("gas_puff_valves")),
+                profile=str(self._input_dict.get("gas_puff_profile")),
                 z_cm=self._input_dict.get("gas_puff_z_cm"),
                 sigma_cm=float(
-                    self._input_dict.get("gas_puff_sigma_cm", 50.0)
+                    self._input_dict.get("gas_puff_sigma_cm")
                 ),
                 throw_cm=float(
-                    self._input_dict.get("gas_puff_throw_cm", 100.0)
+                    self._input_dict.get("gas_puff_throw_cm")
                 ),
                 orifice_id_cm=self._input_dict.get(
                     "gas_puff_orifice_id_cm"
@@ -4405,7 +4410,7 @@ class LAPDSim1D:
                     "gas_puff_orifice_length_cm"
                 ),
                 delivery_fraction=float(
-                    self._input_dict.get("gas_puff_delivery_fraction", 1.0)
+                    self._input_dict.get("gas_puff_delivery_fraction")
                 ),
             )
             V_ann = np.asarray(self._zone_volumes[1], dtype=float)
@@ -4434,7 +4439,7 @@ class LAPDSim1D:
         # arm changes with the family in the config.
         cathode_jet = None
         if bool(
-            self._input_dict.get("neutral_kinetic_dvm_cathode_jet", False)
+            self._input_dict.get("neutral_kinetic_dvm_cathode_jet")
         ):
             refuse_cathode_backscatter_double_book(self._input_dict)
             refuse_dvm_cathode_jet_without_cathode_coupling(
@@ -4443,12 +4448,12 @@ class LAPDSim1D:
             cathode_jet = {
                 "R_N": float(
                     self._input_dict.get(
-                        "neutral_kinetic_dvm_cathode_jet_R_N", 0.34
+                        "neutral_kinetic_dvm_cathode_jet_R_N"
                     )
                 ),
                 "R_E": float(
                     self._input_dict.get(
-                        "neutral_kinetic_dvm_cathode_jet_R_E", 0.18
+                        "neutral_kinetic_dvm_cathode_jet_R_E"
                     )
                 ),
                 "T_launch_eV": self._input_dict.get(
@@ -4471,7 +4476,7 @@ class LAPDSim1D:
         # coefficient interval is checked inside the engine -- so a config
         # error names itself rather than tripping the geometry check first.
         anode_jet = None
-        if bool(self._input_dict.get("neutral_kinetic_dvm_anode_jet", False)):
+        if bool(self._input_dict.get("neutral_kinetic_dvm_anode_jet")):
             refuse_anode_backscatter_double_book(self._input_dict)
             refuse_dvm_anode_jet_without_cathode_coupling(
                 self._input_dict, self._flags
@@ -4500,12 +4505,12 @@ class LAPDSim1D:
             anode_jet = {
                 "R_N": float(
                     self._input_dict.get(
-                        "neutral_kinetic_dvm_anode_jet_R_N", 0.63
+                        "neutral_kinetic_dvm_anode_jet_R_N"
                     )
                 ),
                 "R_E": float(
                     self._input_dict.get(
-                        "neutral_kinetic_dvm_anode_jet_R_E", 0.41
+                        "neutral_kinetic_dvm_anode_jet_R_E"
                     )
                 ),
                 "T_launch_eV": self._input_dict.get(
@@ -4515,8 +4520,8 @@ class LAPDSim1D:
         self._dvm_anode_jet = anode_jet
         self._dvm = TransientDVM(
             geometry=self._geometry,
-            nvz=int(self._input_dict.get("neutral_kinetic_dvm_nvz", 48)),
-            nvp=int(self._input_dict.get("neutral_kinetic_dvm_nvp", 12)),
+            nvz=int(self._input_dict.get("neutral_kinetic_dvm_nvz")),
+            nvp=int(self._input_dict.get("neutral_kinetic_dvm_nvp")),
             accommodation=accommodation,
             wall_reflection=reflection,
             elastic_model=elastic,
@@ -4524,7 +4529,7 @@ class LAPDSim1D:
             annulus_flights=flights,
             cathode_jet=cathode_jet,
             anode_jet=anode_jet,
-            transparency=1.0 - float(self._input_dict.get("eta", 0.358)),
+            transparency=1.0 - float(self._input_dict.get("eta")),
             mesh_face=int(anode_faces[0]) if anode_faces.size else -999,
             s_L=self._dvm_end_sticking("S_pump_L"),
             s_R=self._dvm_end_sticking("S_pump_R"),
@@ -4739,11 +4744,11 @@ class LAPDSim1D:
         if self._variable_area_geometry:
             geometry_terms["flux_tube_geometry"] = (
                 self._zero_rhs_state()
-                if not self._flags.get("Plasma", True)
+                if not self._flags.get("Plasma")
                 or self._neutral_prebreakdown_active(time=time)
                 else self.flux_tube_geometry_rhs(state=state)
             )
-        if not self._flags.get("Plasma", True) or self._neutral_prebreakdown_active(
+        if not self._flags.get("Plasma") or self._neutral_prebreakdown_active(
             time=time,
         ):
             kinetic_terms = {}
@@ -5114,7 +5119,7 @@ class LAPDSim1D:
         if state.En is None:
             return terms
         Tn = ionization_birth_neutral_temperature_eV(
-            state, self._floors, self._input_dict.get("Tn_K", 300.0)
+            state, self._floors, self._input_dict.get("Tn_K")
         )
         wall_energy = NEUTRAL_ENERGY_FLOOR_T_K * kb_cgs
         derived = derive_state(
@@ -5176,7 +5181,7 @@ class LAPDSim1D:
         summed into a state, an RHS ledger, or a timestep bound.
         """
         Ti_birth_ionization = self._input_dict.get(
-            "Ti_birth_ionization", "floor"
+            "Ti_birth_ionization"
         )
         Ti_birth = _birth_temperature(
             Ti_birth_ionization,
@@ -5430,7 +5435,7 @@ class LAPDSim1D:
     def _attempt_step(self, dt=None, operator_split=None):
         """Return a candidate step without committing state, time, or caches."""
         if operator_split is None:
-            operator_split = self._flags.get("implicit_heat_conduction", False)
+            operator_split = self._flags.get("implicit_heat_conduction")
         if self._beam_deposition_in_heat_substep and not operator_split:
             # Construction already refuses the flag without
             # implicit_heat_conduction, so the only way here is a caller
@@ -5522,7 +5527,7 @@ class LAPDSim1D:
         try:
             try:
                 if (
-                    not self._flags.get("Plasma", True)
+                    not self._flags.get("Plasma")
                     or self._neutral_prebreakdown_active()
                 ):
                     if self._raw_stage_validation:
@@ -5910,7 +5915,7 @@ class LAPDSim1D:
         if negative_energy_fields:
             return "negative_energy", {"fields": negative_energy_fields}
 
-        density_limit = float(self._input_dict.get("max_density_step_fraction", 0.0))
+        density_limit = float(self._input_dict.get("max_density_step_fraction"))
         if density_limit > 0.0 and _max_relative_change(
             state0.n,
             state1.n,
@@ -5918,7 +5923,7 @@ class LAPDSim1D:
         ) > density_limit:
             return "density_step_fraction", {}
 
-        neutral_limit = float(self._input_dict.get("max_neutral_step_fraction", 0.0))
+        neutral_limit = float(self._input_dict.get("max_neutral_step_fraction"))
         if neutral_limit > 0.0 and _max_relative_change(
             state0.nn,
             state1.nn,
@@ -5926,7 +5931,7 @@ class LAPDSim1D:
         ) > neutral_limit:
             return "neutral_step_fraction", {}
 
-        energy_limit = float(self._input_dict.get("max_energy_step_fraction", 0.0))
+        energy_limit = float(self._input_dict.get("max_energy_step_fraction"))
         energy_floor = (
             1.5
             * self._floors["n"]
@@ -5945,11 +5950,11 @@ class LAPDSim1D:
         return self._step_rejection_info(attempt, y0=y0)[0]
 
     def _attempt_step_with_retries(self, dt, operator_split, diag):
-        dt_min = float(self._input_dict.get("dt_min", 1e-12))
-        max_retries = int(self._input_dict.get("max_step_retries", 8))
+        dt_min = float(self._input_dict.get("dt_min"))
+        max_retries = int(self._input_dict.get("max_step_retries"))
         reject_factor = DT_REJECT_FACTOR
         retries_enabled = bool(
-            self._input_dict.get("adaptive_retries_enabled", True)
+            self._input_dict.get("adaptive_retries_enabled")
         )
         if max_retries < 0:
             raise ValueError(f"max_step_retries must be non-negative ({max_retries})")
@@ -6141,7 +6146,7 @@ class LAPDSim1D:
         # stays moment).
         if (
             self._kinetic is not None
-            and self._flags.get("Plasma", True)
+            and self._flags.get("Plasma")
             and not self._neutral_prebreakdown_active()
         ):
             kin = self._kinetic
@@ -6173,7 +6178,7 @@ class LAPDSim1D:
         # so a rejected attempt cannot touch the distribution.
         if (
             self._dvm is not None
-            and self._flags.get("Plasma", True)
+            and self._flags.get("Plasma")
             and not self._neutral_prebreakdown_active()
         ):
             if not self._dvm_engaged:
@@ -6215,8 +6220,8 @@ class LAPDSim1D:
             # runaway (seen: I_prev -> 5e22 A). Real loop currents sit ~50x
             # below this ceiling, so the clamp is inert in normal operation.
             I_ceiling = 5.0 * float(
-                self._input_dict.get("V_bank", 0.0)
-            ) / max(float(self._input_dict.get("R_comp", 1.0)), 1e-6)
+                self._input_dict.get("V_bank")
+            ) / max(float(self._input_dict.get("R_comp")), 1e-6)
             self._circuit_I_prev = min(
                 max(float(solve.beam_result.result.I_tot), 0.0),
                 max(I_ceiling, 0.0),
@@ -6318,13 +6323,13 @@ class LAPDSim1D:
                     )
                 )
                 C_th = float(
-                    self._input_dict.get("cathode_heat_capacity_J_per_K", 3.0)
+                    self._input_dict.get("cathode_heat_capacity_J_per_K")
                 )
                 # Semi-implicit in the linearized loss: dT = dt*P_net/(C_th
                 # + dt*dP_loss/dT). At production dt/tau ~ 5e-5 this is the
                 # explicit update to 4 decimal places; for tiny C_th it
                 # cannot overshoot the radiative equilibrium and ring.
-                eps = float(self._input_dict.get("cathode_emissivity", 0.7))
+                eps = float(self._input_dict.get("cathode_emissivity"))
                 area = math.pi * float(self._input_dict["R_cath"]) ** 2
                 G_lin = (
                     4.0
@@ -6335,7 +6340,7 @@ class LAPDSim1D:
                     + max(I_emis, 0.0) * 2.0 * 8.617333262e-5
                     + float(
                         self._input_dict.get(
-                            "cathode_conduction_W_per_K", 0.0
+                            "cathode_conduction_W_per_K"
                         )
                     )
                 )
@@ -6389,7 +6394,7 @@ class LAPDSim1D:
             area_cm2 = math.pi * float(self._input_dict["R_cath"]) ** 2
             Gamma_i = I_i_A / (qe_SI * area_cm2)
             sigma_cl = float(
-                self._input_dict.get("cathode_cleaning_sigma_cm2", 0.0)
+                self._input_dict.get("cathode_cleaning_sigma_cm2")
             )
             # Energy-dependent ion-stimulated desorption yield (M5a',
             # Tom-approved with literature backing 2026-07-21): the
@@ -6448,7 +6453,7 @@ class LAPDSim1D:
                 and self._circuit_V_cap is None
             ):
                 self._circuit_V_cap = float(
-                    self._input_dict.get("V_bank", 0.0)
+                    self._input_dict.get("V_bank")
                 )
             V_src = self._circuit_source_voltage_V(step_phase)
             vdis = idriven_vdis_evaluator(
@@ -6479,9 +6484,9 @@ class LAPDSim1D:
                 # core/config.py): the x*R_comp subtracted here and the
                 # (1-x)*R_comp inside vdis_of_I sum back to the total R_comp.
                 # Only R_mesh genuinely lowers the current.
-                R_comp_ohm=float(self._input_dict.get("R_comp", 0.0))
-                * float(self._input_dict.get("R_comp_partition", 1.0)),
-                L_H=float(self._input_dict.get("L_parasitic_H", 0.0)),
+                R_comp_ohm=float(self._input_dict.get("R_comp"))
+                * float(self._input_dict.get("R_comp_partition")),
+                L_H=float(self._input_dict.get("L_parasitic_H")),
                 vdis_of_I=vdis,
                 C_bank_F=None if bank_off else C_bank_id,
                 V_cap_prev_V=self._circuit_V_cap,
@@ -6748,7 +6753,7 @@ class LAPDSim1D:
         any import, so a non-restart run neither opens a file nor touches a
         single attribute this method would otherwise overwrite.
         """
-        source = self._input_dict.get("restart_from", None)
+        source = self._input_dict.get("restart_from")
         if source is None:
             return
         from .results.restart import (
@@ -6757,7 +6762,7 @@ class LAPDSim1D:
             REFUSED_NEUTRAL_MODELS,
         )
 
-        if self._flags.get("neutral_equilibration", False):
+        if self._flags.get("neutral_equilibration"):
             raise ValueError(
                 "restart_from cannot be combined with neutral_equilibration: "
                 "start_simulation() would run the puff/off accumulation and "
@@ -7040,7 +7045,7 @@ class LAPDSim1D:
 
     def _operator_splitting(self):
         return validate_operator_splitting(
-            self._input_dict.get("operator_splitting", "lie")
+            self._input_dict.get("operator_splitting")
         )
 
     def advance_one_step_operator_split(self, dt=None):
@@ -7066,7 +7071,7 @@ class LAPDSim1D:
         resume = self._restart_run_loop
         self._restart_run_loop = None
         if (
-            self._flags.get("neutral_equilibration", False)
+            self._flags.get("neutral_equilibration")
             and not self._run_via_start_simulation
         ):
             warnings.warn(
@@ -7087,13 +7092,13 @@ class LAPDSim1D:
         if t_end < self._time:
             raise ValueError(f"t_end must be >= current time ({t_end} < {self._time})")
         if max_steps is None:
-            max_steps = int(self._input_dict.get("max_steps", 0))
+            max_steps = int(self._input_dict.get("max_steps"))
         max_steps = int(max_steps)
         unlimited_steps = max_steps <= 0
 
-        dt_save = float(self._input_dict.get("dt_save", 1e-5))
-        t_save_start = float(self._input_dict.get("t_save_start", 0.0))
-        max_output_steps = int(self._input_dict.get("max_output_steps", 0))
+        dt_save = float(self._input_dict.get("dt_save"))
+        t_save_start = float(self._input_dict.get("t_save_start"))
+        max_output_steps = int(self._input_dict.get("max_output_steps"))
         saved = []
         diagnostics = []
         timestep_rejection_events = []
@@ -7114,8 +7119,8 @@ class LAPDSim1D:
             # from the handoff instant: the carried value is the whole two-stage
             # run's start.
             run_start = float(self._run_start_for_phase_events)
-        dt_growth_enabled = bool(self._input_dict.get("dt_growth_enabled", True))
-        dt_growth_factor = float(self._input_dict.get("dt_growth_factor", 1.25))
+        dt_growth_enabled = bool(self._input_dict.get("dt_growth_enabled"))
+        dt_growth_factor = float(self._input_dict.get("dt_growth_factor"))
         if dt_growth_enabled and dt_growth_factor <= 1.0:
             raise ValueError(
                 "dt_growth_factor must be > 1 when dt growth is enabled "
@@ -7123,13 +7128,13 @@ class LAPDSim1D:
             )
         dynamic_current_t_end = (
             not explicit_t_end
-            and self._flags.get("Plasma", True)
+            and self._flags.get("Plasma")
             and self._phase_transition_mode() == "current"
         )
         # A switch-open abort shortens t_end the same way a breakdown trigger
         # does, in EITHER phase-transition mode, so an aborted run winds down
         # and stops instead of crawling to the configured end time.
-        dynamic_t_end = not explicit_t_end and self._flags.get("Plasma", True)
+        dynamic_t_end = not explicit_t_end and self._flags.get("Plasma")
 
         def should_save(t):
             if max_output_steps > 0 and saved_frames_before + len(saved) >= max_output_steps:
@@ -7202,7 +7207,7 @@ class LAPDSim1D:
         consecutive_dt_min_clamps = 0
         # The floor the accepted-dt clamp signal below is measured against --
         # the same value suggest_timestep clamps its raw candidate minimum to.
-        dt_min = float(self._input_dict.get("dt_min", 1e-12))
+        dt_min = float(self._input_dict.get("dt_min"))
         # Presence gate for the wall-clock/step-count non-ignition guards: with
         # both caps off nothing below is evaluated and no clock is read.
         ignition_budget_guards = (
@@ -7249,7 +7254,7 @@ class LAPDSim1D:
                 include_heat_conduction=not (
                     operator_split
                     if operator_split is not None
-                    else self._flags.get("implicit_heat_conduction", False)
+                    else self._flags.get("implicit_heat_conduction")
                 )
             )
             step_dt = diag.dt if dt is None else float(dt)
@@ -7608,7 +7613,7 @@ class LAPDSim1D:
         final_nn = np.asarray(result.nn[-1], dtype=float)
         return SimpleNamespace(
             cycles=int(cycles),
-            tau_cycle=float(self._input_dict.get("tau_cycle", 0.0)),
+            tau_cycle=float(self._input_dict.get("tau_cycle")),
             final_time=float(result.final_time),
             mean_nn=float(np.mean(final_nn)),
             std_nn=float(np.std(final_nn)),
@@ -7708,25 +7713,25 @@ class LAPDSim1D:
 
     def default_t_end(self):
         """Return the configured end time used by ``start_simulation`` [s]."""
-        if not self._flags.get("Plasma", True):
-            cycles = int(self._input_dict.get("cycles", 1))
+        if not self._flags.get("Plasma"):
+            cycles = int(self._input_dict.get("cycles"))
             if cycles <= 0:
                 raise ValueError(f"cycles must be positive (got {cycles})")
-            tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
+            tau_cycle = max(float(self._input_dict.get("tau_cycle")), 0.0)
             if tau_cycle <= 0.0:
                 tau_cycle = max(
-                    float(self._input_dict.get("tau_discharge", 0.0)),
+                    float(self._input_dict.get("tau_discharge")),
                     0.0,
                 )
             return float(cycles) * tau_cycle
 
         tau_prebreakdown = max(
-            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            float(self._input_dict.get("tau_prebreakdown")),
             0.0,
         )
-        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
-        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
-        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown")), 0.0)
+        tau_discharge = max(float(self._input_dict.get("tau_discharge")), 0.0)
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow")), 0.0)
         return (
             self._neutral_prebreakdown_duration()
             + tau_prebreakdown
@@ -7750,8 +7755,8 @@ class LAPDSim1D:
         This mirrors the _sim3 entry-point style while preserving ``run(...)`` as
         the direct result-returning API.
         """
-        if self._flags.get("neutral_equilibration", False):
-            use_db = self._flags.get("use_cached_neutral_seed", False)
+        if self._flags.get("neutral_equilibration"):
+            use_db = self._flags.get("use_cached_neutral_seed")
             seed = self._lookup_cached_neutral_seed() if use_db else None
             if seed is not None:
                 # Database HIT: reuse the equilibrated neutral seed (bit-identical
@@ -7768,7 +7773,7 @@ class LAPDSim1D:
                 )
                 if use_db:
                     self._store_cached_neutral_seed(neutral_result)
-                if not self._flags.get("launch_plasma_after_equilibration", False):
+                if not self._flags.get("launch_plasma_after_equilibration"):
                     self._last_result = neutral_result
                     return
                 self._apply_neutral_equilibration_result(neutral_result)
@@ -7846,16 +7851,15 @@ class LAPDSim1D:
         if time is None:
             time = self._time
         plasma_enabled = self._flags.get(
-            "Plasma",
-            True,
+            "Plasma"
         ) and not self._neutral_prebreakdown_active(time=time)
         if include_heat_conduction is None:
             include_heat_conduction = (
                 plasma_enabled
-                and not self._flags.get("implicit_heat_conduction", False)
+                and not self._flags.get("implicit_heat_conduction")
             )
-        dt_min = float(self._input_dict.get("dt_min", 1e-12))
-        dt_max = float(self._input_dict.get("dt_max", 1e-6))
+        dt_min = float(self._input_dict.get("dt_min"))
+        dt_max = float(self._input_dict.get("dt_max"))
         dvm_superseded = plasma_enabled and self._dvm_rows_superseded()
         plasma_source_rhs = None
         # The bundle's historical trigger is the raw-stage stance. An engaged
@@ -7917,21 +7921,21 @@ class LAPDSim1D:
             ),
             source_floor_exempt_latch=self._surface_loss_floor_exempt_latch,
             neutral_rows_superseded=dvm_superseded,
-            cfl=float(self._input_dict.get("cfl", 0.4)),
+            cfl=float(self._input_dict.get("cfl")),
             density_dt_fraction=float(
-                self._input_dict.get("density_dt_fraction", 0.25)
+                self._input_dict.get("density_dt_fraction")
             ),
             neutral_dt_fraction=float(
-                self._input_dict.get("neutral_dt_fraction", 0.25)
+                self._input_dict.get("neutral_dt_fraction")
             ),
             circuit_dt_fraction=float(
-                self._input_dict.get("circuit_dt_fraction", 0.25)
+                self._input_dict.get("circuit_dt_fraction")
             ),
             dt_min=dt_min,
             dt_max=dt_max,
             dt_global_scale=self._dt_global_scale,
-            include_front=plasma_enabled and self._flags.get("front_flux", True),
-            alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
+            include_front=plasma_enabled and self._flags.get("front_flux"),
+            alpha_front=float(self._input_dict.get("alpha_front")),
             # With the R2 tracer engaged this mask also excludes the cells the
             # tracer owns. That is the whole point of the bridge: their update
             # has no stability limit, so the floor-poisoned fractional bounds
@@ -8124,11 +8128,11 @@ class LAPDSim1D:
 
     def _neutral_prebreakdown_duration(self):
         if not (
-            self._flags.get("Plasma", True)
-            and self._flags.get("neutral_prebreakdown", False)
+            self._flags.get("Plasma")
+            and self._flags.get("neutral_prebreakdown")
         ):
             return 0.0
-        return max(float(self._input_dict.get("tau_neutral_prebreakdown", 0.0)), 0.0)
+        return max(float(self._input_dict.get("tau_neutral_prebreakdown")), 0.0)
 
     def _neutral_prebreakdown_active(self, time=None):
         if time is None:
@@ -8148,14 +8152,14 @@ class LAPDSim1D:
         ``equilibration_gas_puff_on_s`` unset (``None``) falls back to
         ``tau_discharge`` -- the historical double duty, kept bit-exact.
         """
-        override = self._input_dict.get("equilibration_gas_puff_on_s", None)
+        override = self._input_dict.get("equilibration_gas_puff_on_s")
         if override is None:
-            return max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+            return max(float(self._input_dict.get("tau_discharge")), 0.0)
         return float(override)
 
     def _equilibration_puff_on_reason(self):
         """Name of the quantity that closes the equilibration puff window."""
-        if self._input_dict.get("equilibration_gas_puff_on_s", None) is None:
+        if self._input_dict.get("equilibration_gas_puff_on_s") is None:
             return "tau_discharge"
         return "equilibration_gas_puff_on_s"
 
@@ -8185,7 +8189,7 @@ class LAPDSim1D:
         long the run happens to be.
         """
         time = max(float(time), 0.0)
-        tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
+        tau_cycle = max(float(self._input_dict.get("tau_cycle")), 0.0)
         puff_on = self._equilibration_puff_on_duration()
         tol = 1e-12 * max(time, tau_cycle, puff_on)
         if tau_cycle <= 0.0:
@@ -8217,7 +8221,7 @@ class LAPDSim1D:
                 return False
             return t_end is None or boundary <= t_end + time_tol
 
-        if not self._flags.get("Plasma", True):
+        if not self._flags.get("Plasma"):
             # Equilibration lattice: read the cycle position from the SHARED
             # helper and compare boundaries against that snapped position. The
             # run loop's t_end-scaled ``time_tol`` governs only the t_end
@@ -8228,7 +8232,7 @@ class LAPDSim1D:
                 return t_end is None or boundary <= t_end + time_tol
 
             puff_on = self._equilibration_puff_on_duration()
-            tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
+            tau_cycle = max(float(self._input_dict.get("tau_cycle")), 0.0)
             cycle_index, cycle_time = self._equilibration_cycle_position(time)
             if tau_cycle <= 0.0:
                 # One puff window, never repeated: its close is the only
@@ -8253,12 +8257,12 @@ class LAPDSim1D:
             return None
 
         tau_prebreakdown = max(
-            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            float(self._input_dict.get("tau_prebreakdown")),
             0.0,
         )
-        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
-        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
-        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown")), 0.0)
+        tau_discharge = max(float(self._input_dict.get("tau_discharge")), 0.0)
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow")), 0.0)
         plasma_origin = self._plasma_phase_time_origin()
         boundaries = []
         if plasma_origin > 0.0:
@@ -8322,7 +8326,7 @@ class LAPDSim1D:
     def plasma_flux_rhs(self, y=None, include_front=None):
         """Return the conservative plasma flux RHS for inspection/testing."""
         state = self.state if y is None else self._unpack(y)
-        use_front = self._flags.get("front_flux", True)
+        use_front = self._flags.get("front_flux")
         if include_front is not None:
             use_front = include_front
         return plasma_flux_rhs(
@@ -8332,7 +8336,7 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._plasma_geometry(),
             include_front=use_front,
-            alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
+            alpha_front=float(self._input_dict.get("alpha_front")),
             active_plasma_topology=self._active_plasma_topology,
             wave_speed=self._hyperbolic_wave_speed,
             energy_consistent=self._hyperbolic_energy_consistent,
@@ -8343,7 +8347,7 @@ class LAPDSim1D:
         """Return split conservative plasma face-flux RHS terms."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
-        use_front = self._flags.get("front_flux", True)
+        use_front = self._flags.get("front_flux")
         if include_front is not None:
             use_front = include_front
         return plasma_flux_rhs_terms(
@@ -8353,7 +8357,7 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._plasma_geometry(),
             include_front=use_front,
-            alpha_front=float(self._input_dict.get("alpha_front", 1.0)),
+            alpha_front=float(self._input_dict.get("alpha_front")),
             active_plasma_topology=self._active_plasma_topology,
             wave_speed=self._hyperbolic_wave_speed,
             energy_consistent=self._hyperbolic_energy_consistent,
@@ -8535,7 +8539,7 @@ class LAPDSim1D:
         T_s = float(
             self._cathode_Ts_K
             if self._cathode_Ts_K is not None
-            else float(self._input_dict.get("T_s", 0.0))
+            else float(self._input_dict.get("T_s"))
         )
         return {
             "R_N": self._cathode_jet_R_N,
@@ -8621,7 +8625,7 @@ class LAPDSim1D:
                 else ionization_rate
             ),
             I_ion=self._I_ion,
-            eta=float(self._input_dict.get("eta", 0.0)),
+            eta=float(self._input_dict.get("eta")),
         )
         if cache_diagnostics:
             self._jet_carrier_diagnostics = diagnostics
@@ -8653,7 +8657,7 @@ class LAPDSim1D:
             alpha_isat=surface_kwargs["alpha_isat"],
             b_surface_loss=surface_kwargs["b_surface_loss"],
             b_presheath_length=float(
-                self._input_dict.get("b_presheath_length", 1.0)
+                self._input_dict.get("b_presheath_length")
             ),
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
@@ -8695,7 +8699,7 @@ class LAPDSim1D:
             alpha_isat=surface_kwargs["alpha_isat"],
             b_surface_loss=surface_kwargs["b_surface_loss"],
             b_presheath_length=float(
-                self._input_dict.get("b_presheath_length", 1.0)
+                self._input_dict.get("b_presheath_length")
             ),
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
@@ -8727,7 +8731,7 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             mu=self._mu,
             geometry=self._plasma_geometry(),
-            eta=float(self._input_dict.get("eta", 0.0)),
+            eta=float(self._input_dict.get("eta")),
             anode_jet=self._anode_jet_spec(cathode_solve),
             sheath_edge_energy=self._anode_sheath_full_debit,
         )
@@ -8758,7 +8762,7 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             Rm_cm=self._geometry.Rm_cm,
-            Tn_fit=float(self._input_dict.get("Tn_fit", 0.1)),
+            Tn_fit=float(self._input_dict.get("Tn_fit")),
             wall_rate_1_s=self._wind_wall_rate,
         )
 
@@ -8796,7 +8800,7 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._geometry,
-            Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
+            Tn_K=float(self._input_dict.get("Tn_K")),
             sigma_hehe_cm2=self._neutral_wall_partition_sigma,
         )
 
@@ -8903,14 +8907,14 @@ class LAPDSim1D:
         if self._ion_neutral_moment_closure:
             # Replaced by the moment-closed ion_neutral_collision term.
             return self._zero_rhs_state()
-        if not self._flags.get("ion_neutral_thermalization", False):
+        if not self._flags.get("ion_neutral_thermalization"):
             return self._zero_rhs_state()
         b_thermalization = self._input_dict.get("b_ion_neutral_thermalization")
         return ion_neutral_thermalization_rhs(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            Tn_fit=float(self._input_dict.get("Tn_fit", 0.1)),
+            Tn_fit=float(self._input_dict.get("Tn_fit")),
             b_ion_neutral_thermalization=(
                 None if b_thermalization is None else float(b_thermalization)
             ),
@@ -9113,7 +9117,7 @@ class LAPDSim1D:
         if state is None:
             state = self.state if y is None else self._unpack(y)
         zeros = np.zeros(self._geometry.cells, dtype=float)
-        if not self._flags.get("Plasma", True) or self._neutral_prebreakdown_active(
+        if not self._flags.get("Plasma") or self._neutral_prebreakdown_active(
             time=time,
         ):
             return zeros
@@ -9366,13 +9370,12 @@ class LAPDSim1D:
             geometry=self._plasma_geometry(),
             dt=dt,
             implicit_heat_scheme=self._input_dict.get(
-                "implicit_heat_scheme",
-                "backward_euler",
+                "implicit_heat_scheme"
             ),
             heat_picard_iterations=int(
-                self._input_dict.get("heat_picard_iterations", 0)
+                self._input_dict.get("heat_picard_iterations")
             ),
-            heat_picard_tol=float(self._input_dict.get("heat_picard_tol", 1e-10)),
+            heat_picard_tol=float(self._input_dict.get("heat_picard_tol")),
             **self._heat_conduction_kwargs(),
         )
 
@@ -9412,7 +9415,7 @@ class LAPDSim1D:
         """
         if self._neutral_knudsen_temperature != "local" or state.En is None:
             return None
-        Tn_ref = float(self._input_dict.get("Tn_K", 300.0)) * kb_cgs / ev_to_erg
+        Tn_ref = float(self._input_dict.get("Tn_K")) * kb_cgs / ev_to_erg
         Tn = neutral_temperature_eV(
             state, floors=self._floors, Tn_eV=Tn_ref
         )
@@ -9453,13 +9456,13 @@ class LAPDSim1D:
         """Return internal-face neutral exchange coefficients [cm^3/s]."""
         return neutral_exchange_coefficients(
             geometry=self._geometry,
-            model=self._input_dict.get("neutral_exchange_model", "knudsen"),
+            model=self._input_dict.get("neutral_exchange_model"),
             constant_coeff_cm3_s=float(
-                self._input_dict.get("neutral_exchange_coeff_cm3_s", 1.0e5)
+                self._input_dict.get("neutral_exchange_coeff_cm3_s")
             ),
-            Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
+            Tn_K=float(self._input_dict.get("Tn_K")),
             mu_neutral=self._mu_neutral,
-            clausing_scale=float(self._input_dict.get("neutral_clausing_scale", 1.0)),
+            clausing_scale=float(self._input_dict.get("neutral_clausing_scale")),
         )
 
     def neutral_source_sink_rhs(self, y=None, state=None, time=None):
@@ -9553,7 +9556,7 @@ class LAPDSim1D:
         """Return the fresh-puff clump local-ionization source (default off)."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
-        f = float(self._input_dict.get("gas_puff_local_ionization_fraction", 0.0))
+        f = float(self._input_dict.get("gas_puff_local_ionization_fraction"))
         if f <= 0.0:
             return self._zero_rhs_state()
         nk = self._neutral_source_kwargs(time=time)
@@ -9585,15 +9588,15 @@ class LAPDSim1D:
             fraction=f,
             I_ion=self._I_ion,
             Te_birth_ionization=self._input_dict.get(
-                "Te_birth_ionization", "local"
+                "Te_birth_ionization"
             ),
             Ti_birth_ionization=self._input_dict.get(
-                "Ti_birth_ionization", "floor"
+                "Ti_birth_ionization"
             ),
             ionization_birth_energy_model=str(
-                self._input_dict.get("ionization_birth_energy_model", "legacy")
+                self._input_dict.get("ionization_birth_energy_model")
             ),
-            Tn_K=float(self._input_dict.get("Tn_K", 300.0)),
+            Tn_K=float(self._input_dict.get("Tn_K")),
         )
 
     def reaction_rhs(self, y=None, state=None):
@@ -9619,11 +9622,11 @@ class LAPDSim1D:
             gas_type=self._gas_type,
             I_ion=self._I_ion,
             atomic_rate_model=str(
-                self._input_dict.get("atomic_rate_model", "adas")
+                self._input_dict.get("atomic_rate_model")
             ),
             enabled=self._recombination_energy_return,
             adas_low_te_extension=bool(
-                self._input_dict.get("adas_low_te_extension", False)
+                self._input_dict.get("adas_low_te_extension")
             ),
         )
 
@@ -9643,7 +9646,7 @@ class LAPDSim1D:
         if time is None:
             time = self._time
         switches = self.phase_switches_at_time(time)
-        configured = bool(self._flags.get("cathode_coupling", False))
+        configured = bool(self._flags.get("cathode_coupling"))
         cathode_enabled = configured and bool(switches["cathode_enabled"])
         floating = configured and bool(switches["floating"])
         # Inductive tail: after the bank transistors open (the "floating"
@@ -9655,7 +9658,7 @@ class LAPDSim1D:
         inductive_tail = (
             configured
             and floating
-            and float(self._input_dict.get("L_parasitic_H", 0.0)) > 0.0
+            and float(self._input_dict.get("L_parasitic_H")) > 0.0
             and self._circuit_I_prev > 1.0
         )
         if inductive_tail:
@@ -9687,7 +9690,7 @@ class LAPDSim1D:
             and self._circuit_V_cap is not None
         ):
             return float(self._circuit_V_cap)
-        return float(self._input_dict.get("V_bank", 0.0))
+        return float(self._input_dict.get("V_bank"))
 
     def _circuit_timestep_kwargs(self, state=None, time=None):
         """Bundle for the loop-relaxation timestep bound, or ``None``.
@@ -9706,7 +9709,7 @@ class LAPDSim1D:
         built at the state the step starts from, so the bound and the step
         cannot disagree about the device relation.
         """
-        if not bool(self._flags.get("cathode_circuit_voltage_bound", False)):
+        if not bool(self._flags.get("cathode_circuit_voltage_bound")):
             return None
         if time is None:
             time = self._time
@@ -9732,13 +9735,13 @@ class LAPDSim1D:
         return {
             "vdis_of_I": vdis,
             "I_A": float(self._circuit_I_loop),
-            "L_H": float(self._input_dict.get("L_parasitic_H", 0.0)),
+            "L_H": float(self._input_dict.get("L_parasitic_H")),
             "V_src_V": self._circuit_source_voltage_V(step_phase),
             # The external partition, exactly as the advance passes it: the
             # internal partition and R_mesh are already inside vdis_of_I, and
             # the two sum back to the total loop resistance.
-            "R_series_ohm": float(self._input_dict.get("R_comp", 0.0))
-            * float(self._input_dict.get("R_comp_partition", 1.0)),
+            "R_series_ohm": float(self._input_dict.get("R_comp"))
+            * float(self._input_dict.get("R_comp_partition")),
         }
 
     def _effective_cathode_flags(self, time=None, active_only=True, floating=None):
@@ -9764,24 +9767,24 @@ class LAPDSim1D:
         return {
             "S_gp": S_gp,
             "Twin_S_gp": Twin_S_gp,
-            "S_pump_L": float(self._input_dict.get("S_pump_L", 0.0)),
-            "S_pump_R": float(self._input_dict.get("S_pump_R", 0.0)),
-            "twin_cathode": self._flags.get("TwinCathode", False),
+            "S_pump_L": float(self._input_dict.get("S_pump_L")),
+            "S_pump_R": float(self._input_dict.get("S_pump_R")),
+            "twin_cathode": self._flags.get("TwinCathode"),
             "gas_puff_enabled": bool(phase_switches["gas_puff_enabled"]),
-            "pump_enabled": bool(self._input_dict.get("pump_enabled", True)),
-            "gas_puff_valves": float(self._input_dict.get("gas_puff_valves", 2)),
+            "pump_enabled": bool(self._input_dict.get("pump_enabled")),
+            "gas_puff_valves": float(self._input_dict.get("gas_puff_valves")),
             "pump_elbow_conductance_lps": self._input_dict.get(
                 "pump_elbow_conductance_lps"
             ),
             "gas_puff_profile": str(
-                self._input_dict.get("gas_puff_profile", "cell")
+                self._input_dict.get("gas_puff_profile")
             ),
             "gas_puff_z_cm": self._input_dict.get("gas_puff_z_cm"),
             "gas_puff_sigma_cm": float(
-                self._input_dict.get("gas_puff_sigma_cm", 50.0)
+                self._input_dict.get("gas_puff_sigma_cm")
             ),
             "gas_puff_throw_cm": float(
-                self._input_dict.get("gas_puff_throw_cm", 100.0)
+                self._input_dict.get("gas_puff_throw_cm")
             ),
             "gas_puff_orifice_id_cm": self._input_dict.get(
                 "gas_puff_orifice_id_cm"
@@ -9790,7 +9793,7 @@ class LAPDSim1D:
                 "gas_puff_orifice_length_cm"
             ),
             "gas_puff_delivery_fraction": float(
-                self._input_dict.get("gas_puff_delivery_fraction", 1.0)
+                self._input_dict.get("gas_puff_delivery_fraction")
             ),
         }
 
@@ -9821,7 +9824,7 @@ class LAPDSim1D:
         ``_smoothed_sample_state`` returns its argument unchanged and the
         two sides read the identical state bit for bit.
         """
-        raw = self._input_dict.get("cathode_sample_smoothing", None)
+        raw = self._input_dict.get("cathode_sample_smoothing")
         self._sample_smoothing = None
         self._sample_ema = None
         self._sample_smooth_cells = ()
@@ -9909,42 +9912,42 @@ class LAPDSim1D:
         )
 
     def _phase_transition_mode(self):
-        return self._input_dict.get("phase_transition_mode", "scheduled")
+        return self._input_dict.get("phase_transition_mode")
 
     def _prebreakdown_timeout_action(self):
-        return self._input_dict.get("prebreakdown_timeout_action", "switch_open")
+        return self._input_dict.get("prebreakdown_timeout_action")
 
     def _main_discharge_start_time(self):
         if self._phase_transition_mode() == "current":
             return self._t_breakdown_trigger
         plasma_origin = self._plasma_phase_time_origin()
         tau_prebreakdown = max(
-            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            float(self._input_dict.get("tau_prebreakdown")),
             0.0,
         )
-        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown")), 0.0)
         return plasma_origin + tau_prebreakdown + tau_breakdown
 
     def _current_trigger_t_end(self):
         if (
-            not self._flags.get("Plasma", True)
+            not self._flags.get("Plasma")
             or self._phase_transition_mode() != "current"
             or self._t_breakdown_trigger is None
         ):
             return None
-        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
-        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        tau_discharge = max(float(self._input_dict.get("tau_discharge")), 0.0)
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow")), 0.0)
         return float(self._t_breakdown_trigger) + tau_discharge + tau_afterglow
 
     def _effective_gas_puff_sccm(self, time=None):
         if time is None:
             time = self._time
         phase, phase_elapsed = self._phase_info(time)
-        S_gp = float(self._input_dict.get("S_gp", 0.0))
-        Twin_S_gp = float(self._input_dict.get("Twin_S_gp", 0.0))
-        if not self._flags.get("Plasma", True):
+        S_gp = float(self._input_dict.get("S_gp"))
+        Twin_S_gp = float(self._input_dict.get("Twin_S_gp"))
+        if not self._flags.get("Plasma"):
             return S_gp, Twin_S_gp
-        mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
+        mode = self._input_dict.get("gas_puff_mode")
         if mode == "square":
             # Measured valve behaviour (Tom, 2026-07-21): the piezo is driven
             # by a SQUARE voltage pulse fired by the SAME trigger that closes
@@ -9962,26 +9965,26 @@ class LAPDSim1D:
             # closes). No prebreakdown full-rate flow: breakdown rides the
             # inter-shot residual fill, as in the machine.
             rise_center = float(
-                self._input_dict.get("gas_puff_rise_center_s", 5.0e-4)
+                self._input_dict.get("gas_puff_rise_center_s")
             )
             rise_width = float(
-                self._input_dict.get("gas_puff_rise_width_s", 5.0e-4)
+                self._input_dict.get("gas_puff_rise_width_s")
             )
             close_lag = float(
-                self._input_dict.get("gas_puff_close_lag_s", 5.0e-4)
+                self._input_dict.get("gas_puff_close_lag_s")
             )
             t_on = self._plasma_phase_time_origin() + rise_center
             rise = 0.5 * (1.0 + math.erf((float(time) - t_on) / rise_width))
             tau_discharge = max(
-                float(self._input_dict.get("tau_discharge", 0.0)), 0.0
+                float(self._input_dict.get("tau_discharge")), 0.0
             )
             if self._phase_transition_mode() == "current":
                 main_start = self._t_breakdown_trigger
             else:
                 main_start = (
                     self._plasma_phase_time_origin()
-                    + max(float(self._input_dict.get("tau_prebreakdown", 0.0)), 0.0)
-                    + max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
+                    + max(float(self._input_dict.get("tau_prebreakdown")), 0.0)
+                    + max(float(self._input_dict.get("tau_breakdown")), 0.0)
                 )
             fall = 0.0
             if main_start is not None:
@@ -10008,26 +10011,26 @@ class LAPDSim1D:
             plasma_origin = self._plasma_phase_time_origin()
             main_start = (
                 plasma_origin
-                + max(float(self._input_dict.get("tau_prebreakdown", 0.0)), 0.0)
-                + max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
+                + max(float(self._input_dict.get("tau_prebreakdown")), 0.0)
+                + max(float(self._input_dict.get("tau_breakdown")), 0.0)
             )
             t_rel = float(time) - main_start
             rise = 0.5 * (
                 1.0
                 + math.erf(
-                    (t_rel - float(self._input_dict.get("tau_gp_rise_center", -5e-3)))
-                    / float(self._input_dict.get("tau_gp_rise_width", 1e-3))
+                    (t_rel - float(self._input_dict.get("tau_gp_rise_center")))
+                    / float(self._input_dict.get("tau_gp_rise_width"))
                 )
             )
             drop = 0.5 * (
                 1.0
                 + math.erf(
-                    (t_rel - float(self._input_dict.get("tau_gp_drop_center", 1e-3)))
-                    / float(self._input_dict.get("tau_gp_drop_width", 1e-3))
+                    (t_rel - float(self._input_dict.get("tau_gp_drop_center")))
+                    / float(self._input_dict.get("tau_gp_drop_width"))
                 )
             )
-            target = float(self._input_dict.get("S_gp_decay_target", 0.0))
-            twin_target = float(self._input_dict.get("Twin_S_gp_decay_target", 0.0))
+            target = float(self._input_dict.get("S_gp_decay_target"))
+            twin_target = float(self._input_dict.get("Twin_S_gp_decay_target"))
             return (
                 max(S_gp * rise - (S_gp - target) * drop, 0.0),
                 max(Twin_S_gp * rise - (Twin_S_gp - twin_target) * drop, 0.0),
@@ -10040,28 +10043,28 @@ class LAPDSim1D:
             return 0.0, 0.0
 
         if mode == "pulse_decay_to_level":
-            pulse_duration = float(self._input_dict.get("tau_gp_pulse_duration", 0.0))
+            pulse_duration = float(self._input_dict.get("tau_gp_pulse_duration"))
             if phase_elapsed <= pulse_duration:
                 return S_gp, Twin_S_gp
             decay_elapsed = phase_elapsed - pulse_duration
-            tau_decay = float(self._input_dict.get("tau_gp_decay_duration", 1e-3))
+            tau_decay = float(self._input_dict.get("tau_gp_decay_duration"))
             decay = float(np.exp(-decay_elapsed / tau_decay))
-            target = float(self._input_dict.get("S_gp_decay_target", 0.0))
-            twin_target = float(self._input_dict.get("Twin_S_gp_decay_target", 0.0))
+            target = float(self._input_dict.get("S_gp_decay_target"))
+            twin_target = float(self._input_dict.get("Twin_S_gp_decay_target"))
             return (
                 target + (S_gp - target) * decay,
                 twin_target + (Twin_S_gp - twin_target) * decay,
             )
 
-        tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown", None)
+        tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown")
         if tau_after_breakdown is None:
             return S_gp, Twin_S_gp
         tau_after_breakdown = float(tau_after_breakdown)
         if phase_elapsed <= tau_after_breakdown:
             return S_gp, Twin_S_gp
-        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
+        tau_discharge = max(float(self._input_dict.get("tau_discharge")), 0.0)
         tau_decay = (tau_discharge - tau_after_breakdown) * float(
-            self._input_dict.get("tau_gp_decay_factor", 1.0)
+            self._input_dict.get("tau_gp_decay_factor")
         )
         if tau_decay <= 0.0:
             return S_gp, Twin_S_gp
@@ -10092,21 +10095,21 @@ class LAPDSim1D:
 
     def _gas_puff_event_time(self):
         if not (
-            self._flags.get("Plasma", True)
-            and bool(self._input_dict.get("gas_puff_enabled", True))
+            self._flags.get("Plasma")
+            and bool(self._input_dict.get("gas_puff_enabled"))
         ):
             return None
         main_start = self._main_discharge_start_time()
         if main_start is None:
             return None
-        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
-        mode = self._input_dict.get("gas_puff_mode", "decay_after_breakdown")
+        tau_discharge = max(float(self._input_dict.get("tau_discharge")), 0.0)
+        mode = self._input_dict.get("gas_puff_mode")
         if mode == "pulse_decay_to_level":
             event = main_start + float(
-                self._input_dict.get("tau_gp_pulse_duration", 0.0)
+                self._input_dict.get("tau_gp_pulse_duration")
             )
         else:
-            tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown", None)
+            tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown")
             if tau_after_breakdown is None:
                 return None
             event = main_start + float(tau_after_breakdown)
@@ -10301,7 +10304,7 @@ class LAPDSim1D:
         """Return the wind-down end time [s] after a switch-open abort."""
         if self._t_ignition_abort is None:
             return None
-        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow")), 0.0)
         return float(self._t_ignition_abort) + tau_afterglow
 
     def _dynamic_t_end(self, current_trigger_enabled):
@@ -10316,7 +10319,7 @@ class LAPDSim1D:
     def _update_current_phase_triggers(self):
         if (
             self._phase_transition_mode() != "current"
-            or not self._flags.get("Plasma", True)
+            or not self._flags.get("Plasma")
             or self._neutral_prebreakdown_active()
         ):
             return
@@ -10345,11 +10348,11 @@ class LAPDSim1D:
 
         I_now = self._cathode_total_current_A(cathode_solve=converged_solve)
         tau_prebreakdown = max(
-            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            float(self._input_dict.get("tau_prebreakdown")),
             0.0,
         )
-        I_prebreakdown = float(self._input_dict.get("I_prebreakdown", 0.0))
-        I_breakdown = float(self._input_dict.get("I_breakdown", 0.0))
+        I_prebreakdown = float(self._input_dict.get("I_prebreakdown"))
+        I_breakdown = float(self._input_dict.get("I_breakdown"))
         time_tol = max(1e-15, 1e-12 * max(abs(tau_prebreakdown), 1.0))
         plasma_origin = self._plasma_phase_time_origin()
         current_phase_elapsed = max(self._time - plasma_origin, 0.0)
@@ -10930,6 +10933,7 @@ class LAPDSim1D:
         # census is ABSENT rather than zero wherever it was never kept.
         if self._dvm is not None:
             result.dvm_transfer_ledger = self._dvm_ledger_census(saved)
+            result.dvm_tick_count = int(self._dvm_tick_count)
         result.atomic_rate_domain = _atomic_rate_domain(result)
         return result
 
@@ -10950,11 +10954,11 @@ class LAPDSim1D:
             events.append((time, phase, reason))
 
         append_event(run_start, self.phase_at_time(run_start), "initial")
-        if not self._flags.get("Plasma", True):
+        if not self._flags.get("Plasma"):
             # Same window the run loop actually delivers (item 37).
             puff_on = self._equilibration_puff_on_duration()
             puff_reason = self._equilibration_puff_on_reason()
-            tau_cycle = max(float(self._input_dict.get("tau_cycle", 0.0)), 0.0)
+            tau_cycle = max(float(self._input_dict.get("tau_cycle")), 0.0)
             if tau_cycle <= 0.0:
                 append_event(puff_on, "equilibrium_off", puff_reason)
                 return _phase_event_arrays(events)
@@ -10974,12 +10978,12 @@ class LAPDSim1D:
             return _phase_event_arrays(events)
 
         tau_prebreakdown = max(
-            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            float(self._input_dict.get("tau_prebreakdown")),
             0.0,
         )
-        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
-        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
-        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown")), 0.0)
+        tau_discharge = max(float(self._input_dict.get("tau_discharge")), 0.0)
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow")), 0.0)
         plasma_origin = self._plasma_phase_time_origin()
         if plasma_origin > 0.0:
             append_event(plasma_origin, "pre_breakdown", "tau_neutral_prebreakdown")
@@ -11062,8 +11066,8 @@ class LAPDSim1D:
 
     def _phase_info(self, time):
         time = max(float(time), 0.0)
-        tau_discharge = max(float(self._input_dict.get("tau_discharge", 0.0)), 0.0)
-        if not self._flags.get("Plasma", True):
+        tau_discharge = max(float(self._input_dict.get("tau_discharge")), 0.0)
+        if not self._flags.get("Plasma"):
             puff_on = self._equilibration_puff_on_duration()
             _, cycle_time = self._equilibration_cycle_position(time)
             if cycle_time < puff_on:
@@ -11071,11 +11075,11 @@ class LAPDSim1D:
             return "equilibrium_off", cycle_time - puff_on
 
         tau_prebreakdown = max(
-            float(self._input_dict.get("tau_prebreakdown", 0.0)),
+            float(self._input_dict.get("tau_prebreakdown")),
             0.0,
         )
-        tau_breakdown = max(float(self._input_dict.get("tau_breakdown", 0.0)), 0.0)
-        tau_afterglow = max(float(self._input_dict.get("tau_afterglow", 0.0)), 0.0)
+        tau_breakdown = max(float(self._input_dict.get("tau_breakdown")), 0.0)
+        tau_afterglow = max(float(self._input_dict.get("tau_afterglow")), 0.0)
         plasma_origin = self._plasma_phase_time_origin()
         if plasma_origin > 0.0 and time < plasma_origin:
             return "neutral_prebreakdown", time
@@ -11133,7 +11137,7 @@ class LAPDSim1D:
             return {
                 "cathode_enabled": False,
                 "gas_puff_enabled": bool(
-                    self._input_dict.get("gas_puff_enabled", True)
+                    self._input_dict.get("gas_puff_enabled")
                 ),
                 "floating": False,
             }
@@ -11141,7 +11145,7 @@ class LAPDSim1D:
             return {
                 "cathode_enabled": False,
                 "gas_puff_enabled": bool(
-                    self._input_dict.get("gas_puff_enabled", True)
+                    self._input_dict.get("gas_puff_enabled")
                 ),
                 "floating": False,
             }
@@ -11153,11 +11157,11 @@ class LAPDSim1D:
             }
         return {
             "cathode_enabled": (
-                bool(self._flags.get("cathode_coupling", False))
+                bool(self._flags.get("cathode_coupling"))
                 and phase in discharge_phases
             ),
             "gas_puff_enabled": (
-                bool(self._input_dict.get("gas_puff_enabled", True))
+                bool(self._input_dict.get("gas_puff_enabled"))
                 and (
                     phase in discharge_phases
                     # The square valve keeps delivering through its erf
@@ -11231,13 +11235,13 @@ class LAPDSim1D:
             float(self._circuit_V_dis_time_integral),
         )
         diag = {
-            "enabled": float(bool(self._flags.get("cathode_coupling", False))),
+            "enabled": float(bool(self._flags.get("cathode_coupling"))),
             # Instantaneous emitter surface temperature [K]: the configured
             # T_s, or the evolving value under cathode_warming_model.
             "T_s_surface": float(
                 self._cathode_Ts_K
                 if self._cathode_Ts_K is not None
-                else float(self._input_dict.get("T_s", 0.0))
+                else float(self._input_dict.get("T_s"))
             ),
             "configured": float(cathode_phase["configured"]),
             # Current-driven circuit state (0.0 under the voltage-driven
@@ -11323,13 +11327,13 @@ class LAPDSim1D:
             "phi_wf_eff": float(
                 self._cathode_phi_wf_eff()
                 if self._cathode_theta is not None
-                else float(self._input_dict.get("phi_wf", 0.0))
+                else float(self._input_dict.get("phi_wf"))
             ),
             "phase_enabled": float(cathode_phase["cathode_enabled"]),
             "rhs_enabled": float(cathode_phase["cathode_enabled"]),
             "solve_enabled": float(cathode_phase["solve_enabled"]),
             "floating": float(cathode_phase["floating"]),
-            "twin_cathode": float(bool(self._flags.get("TwinCathode", False))),
+            "twin_cathode": float(bool(self._flags.get("TwinCathode"))),
             "has_solution": 0.0,
             "has_twin_solution": 0.0,
             "x0_next": np.nan,
@@ -11855,7 +11859,7 @@ class LAPDSim1D:
         geometry = self._geometry
         kin = self._kinetic
         nu_ion, nu_cx = self._kinetic_absorption_fields(state, derived)
-        T_s = float(self._input_dict.get("T_s", 1910.0))
+        T_s = float(self._input_dict.get("T_s"))
         anode_faces = np.asarray(
             getattr(geometry, "anode_face_indices", ()), dtype=int
         )
@@ -11870,9 +11874,9 @@ class LAPDSim1D:
             "Ti": np.asarray(derived.Ti, dtype=float),
             "u": np.asarray(derived.u, dtype=float),
             "T_s": T_s,
-            "S_pump_L": float(self._input_dict.get("S_pump_L", 0.0)),
-            "S_pump_R": float(self._input_dict.get("S_pump_R", 0.0)),
-            "eta": float(self._input_dict.get("eta", 0.358)),
+            "S_pump_L": float(self._input_dict.get("S_pump_L")),
+            "S_pump_R": float(self._input_dict.get("S_pump_R")),
+            "eta": float(self._input_dict.get("eta")),
             "mesh_edge": int(anode_faces[0]) if anode_faces.size else -999,
             "sources": {},
         }
@@ -12869,7 +12873,7 @@ class LAPDSim1D:
             T_s_K=(
                 float(self._cathode_Ts_K)
                 if self._cathode_Ts_K is not None
-                else float(self._input_dict.get("T_s", 1910.0))
+                else float(self._input_dict.get("T_s"))
             ),
         )
         if (
@@ -12892,6 +12896,7 @@ class LAPDSim1D:
             )
         self._dvm_last_s = self._time
         self._dvm_next_s = self._time + self._dvm_cadence_s
+        self._dvm_tick_count += 1
         # Freeze the hold's tick state against the SAME accepted rows the
         # transfer above was booked against, before the republish below
         # rewrites anything.
@@ -13015,7 +13020,7 @@ class LAPDSim1D:
         self._y = self.floor_state_vector(y)
         self._state = self._unpack(self._y)
         self._derived = derive_state(self._state, self._floors, self._ion_mass_g)
-        if self._flags.get("debug_checks", False):
+        if self._flags.get("debug_checks"):
             assert_finite_state(self._state, self._derived)
 
     def _check_annulus_not_collapsed(self):
@@ -13033,7 +13038,7 @@ class LAPDSim1D:
         so a collapsing annulus does not switch off, it stiffens the step.
         """
         threshold = float(
-            self._input_dict.get("neutral_annulus_volume_fraction_min", 0.0)
+            self._input_dict.get("neutral_annulus_volume_fraction_min")
         )
         if not np.isfinite(threshold) or not 0.0 <= threshold < 1.0:
             raise ValueError(
@@ -13072,9 +13077,9 @@ class LAPDSim1D:
         gate :meth:`_initial_state` reads: the off path resolves the scalar
         fill exactly as it always has and never touches an array from here.
         """
-        enabled = bool(self._flags.get("neutral_initial_profile", False))
-        column = self._input_dict.get("nn0_profile", None)
-        annulus = self._input_dict.get("nn0_annulus_profile", None)
+        enabled = bool(self._flags.get("neutral_initial_profile"))
+        column = self._input_dict.get("nn0_profile")
+        annulus = self._input_dict.get("nn0_annulus_profile")
         if not enabled:
             configured = [
                 name
@@ -13110,7 +13115,7 @@ class LAPDSim1D:
                 "of absolute neutral densities [cm^-3]). There is no default: "
                 "the flag's whole content is the profile the caller computed"
             )
-        if self._input_dict.get("nn0", None) is not None:
+        if self._input_dict.get("nn0") is not None:
             raise ValueError(
                 "neutral_initial_profile supersedes the scalar nn0 for BOTH "
                 f"zones, but nn0={self._input_dict['nn0']!r} was supplied as "
@@ -13119,7 +13124,7 @@ class LAPDSim1D:
                 "nn0=None on a shaped run, and put the uniform level into "
                 "nn0_profile if that is what is wanted"
             )
-        if self._flags.get("neutral_equilibration", False):
+        if self._flags.get("neutral_equilibration"):
             raise ValueError(
                 "neutral_initial_profile cannot be combined with "
                 "neutral_equilibration: start_simulation() seeds nn (and nn_a) "
@@ -13128,7 +13133,7 @@ class LAPDSim1D:
                 "trace. The two are alternative ways to state the same "
                 "initial condition -- clear the flag on a shaped run"
             )
-        if self._input_dict.get("restart_from", None) is not None:
+        if self._input_dict.get("restart_from") is not None:
             raise ValueError(
                 "neutral_initial_profile cannot be combined with restart_from "
                 "for the same reason neutral_equilibration cannot: the restart "
@@ -13155,7 +13160,7 @@ class LAPDSim1D:
             if self._nn0_profile is None
             else self._nn0_profile.copy()
         )
-        u0 = np.full(cells, float(self._input_dict.get("u0", 0.0)))
+        u0 = np.full(cells, float(self._input_dict.get("u0")))
         Te0 = np.full(cells, float(self._input_dict["Te0"]))
         Ti0 = np.full(cells, float(self._input_dict["Ti0"]))
         return conservative_from_primitives(
