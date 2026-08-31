@@ -5834,6 +5834,7 @@ def bf_box(
     nn_ann=None,
     T_K=300.0,
     vmax_cm_s=None,
+    annulus_flights="rates",
 ):
     """Return a SEALED uniform tube carrying one annular baffle at ``face``.
 
@@ -5855,6 +5856,7 @@ def bf_box(
         nvp=nvp,
         accommodation=0.0,
         exchange_model=EXCHANGE_MODEL,
+        annulus_flights=annulus_flights,
         s_L=0.0,
         s_R=0.0,
     )
@@ -5954,6 +5956,16 @@ def gate_bf1():
     bit-identical for the difference to land on the rebuild at all, which is
     the other half of "tallied exactly as the mesh's ``mesh_a``".
 
+    BOTH OPERATORS, ONE CHANNEL PAIR: everything above is the ``rates``
+    march's. Under ``bounded_chord`` the annulus is not marched at all -- it is
+    carried as flights and the baffle is an annular THROAT in the frozen flight
+    map -- so the interception is a different operator, and the claim that it
+    books into the SAME pair is proved on the ledger rather than asserted: the
+    rows non-vacuous, equal to each other, and the ledger closed. The map's own
+    routing residual (every launched particle routed exactly once, which now
+    sums the baffle stops too) is checked at construction and RAISES if it
+    fails, so reaching this line at all is part of the statement.
+
     The engine's construction-time refusal of ``R_clear < R_col`` is asserted
     here too: it is the ENGINE-side half of G32, and the only half reachable
     without the solver's geometry (which refuses the same thing first).
@@ -6036,6 +6048,31 @@ def gate_bf1():
         abs(column_share), 1e-300
     )
 
+    # BOTH OPERATORS, ONE CHANNEL PAIR. The statements above are the ``rates``
+    # march's. Under ``bounded_chord`` the annulus is not marched at all -- it
+    # is carried as flights, and the baffle is an annular THROAT in the frozen
+    # flight map -- so the interception is a different operator entirely. It
+    # must book into the SAME pair, and that is proved on the ledger rather
+    # than asserted: the rows must be non-vacuous, equal to each other, and
+    # the map's own routing-residual check (every launched particle routed
+    # exactly once, which now sums the baffle stops too) must have passed at
+    # construction, which it does by raising if it has not.
+    jump_arm = bf_box(
+        nz=nz, Rp=Rp, Rm=Rm, clear=clear_b, face=face,
+        annulus_flights="bounded_chord",
+    )
+    led_j = bf_tick(jump_arm)
+    jump_blocked = float(led_j["loss_baffle_blocked"])
+    jump_paired = jump_blocked == float(led_j["birth_baffle_reemit"])
+    jump_res = ledger_residual(led_j)
+    jump_ledger = max(
+        abs(jump_res["distribution_rel"]), abs(jump_res["domain_rel"])
+    )
+    jump_map_stops = sum(
+        int(jump_arm.flights.baffle_src[name].size)
+        for name in jump_arm.flights.baffle_src
+    )
+
     engine_refusal = ""
     try:
         bf_box(nz=nz, Rp=Rp, Rm=Rm, clear=Rp - 1.0, face=face)
@@ -6053,6 +6090,10 @@ def gate_bf1():
         and noop
         and control_extra > 0.0
         and control_rel < BF_FLUX_REL
+        and jump_blocked > 0.0
+        and jump_paired
+        and jump_map_stops > 0
+        and jump_ledger < BF_LEDGER_REL
         and "clear radius" in engine_refusal
     )
     detail_rows = "; ".join(
@@ -6086,6 +6127,12 @@ def gate_bf1():
         f"{fmt(control_rel)} relative (tol {fmt(BF_FLUX_REL)}); the excess is "
         f"EXACTLY the column share the baffle does not take, which also "
         f"requires the two ANNULUS tallies to be bit-identical\n        "
+        f"BOTH OPERATORS, ONE PAIR: under annulus_flights='bounded_chord' the "
+        f"annulus is flights and the baffle is an annular THROAT in the frozen "
+        f"map ({jump_map_stops} routed stop entries); it books "
+        f"{fmt(jump_blocked)} particles into the SAME pair, blocked == "
+        f"re-emitted: {jump_paired}, worst ledger residual "
+        f"{fmt(jump_ledger)} (tol {fmt(BF_LEDGER_REL)})\n        "
         f"engine refuses R_clear < R_col naming it: {engine_refusal[:88]!r}"
     )
 
