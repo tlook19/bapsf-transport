@@ -10687,6 +10687,7 @@ def _case_non_ignition_guards(
 
     # Scorer hard-fail (scripts): a non-ignited run must raise, an ignited one
     # must score its origin from the first main_discharge sample.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     import compare_sim1d_es1 as _cmp_es1
     import fingerprints_sim1d as _fingerprints
 
