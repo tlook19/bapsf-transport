@@ -2464,6 +2464,38 @@ def cathode_defaults():
         share), ``cathode_jet_surface_debit`` (the surface must give the
         energy up) and the ``neutral_energy`` flag (the partner atoms need an
         energy field to be born into); raises at construction otherwise.
+    neutral_jet_arm_current_A:
+        Arming threshold [A] of the cathode-jet ARMING CRITERION: the cathode
+        jets launch only while the latch is ARMED, and it arms on the first
+        accepted step whose cathode solve booked an ion current ``I_i`` at or
+        above this value. ``0.0`` (the default) declares NO criterion -- the
+        jets are then live whenever their own selectors are on, which is the
+        behaviour that predates this key and is bit-identical to it.
+
+        Covers BOTH cathode channels from one latch: the fluid
+        ``cathode_neutral_jet`` and the DVM
+        ``neutral_kinetic_dvm_cathode_jet``. The ANODE jets are not covered --
+        they are driven by the anode-collected current, not by this one.
+
+        While DISARMED the jets launch nothing AND the cathode surface is not
+        debited for them: both sides of that pair are gated by the same latch
+        state read from the same solve, so the surface is never debited for
+        atoms that were never born. The DVM launch representability guard is
+        unaffected and still fires on every armed step.
+
+        Must be >= 0. A positive value additionally requires
+        ``0 <= neutral_jet_disarm_current_A < neutral_jet_arm_current_A``;
+        anything else raises at construction.
+    neutral_jet_disarm_current_A:
+        Disarming threshold [A] of the same latch: once armed, the jets stay
+        armed until an accepted step's booked ``I_i`` falls BELOW this value.
+        That is what makes the criterion a latched hysteresis rather than a
+        per-step comparison, and it is why a current dwelling near the arming
+        threshold cannot chatter the jets on and off.
+
+        Must be ``0.0`` when ``neutral_jet_arm_current_A`` is ``0.0`` (no
+        criterion is declared, so there is no band to describe); otherwise
+        ``0 <= disarm < arm``. Negative values raise at construction.
     neutral_mesh_accommodation:
         Accommodates the evolved neutral wind's momentum on the anode mesh
         WIRES. The mesh's open area already throttles what the wind carries
@@ -2657,6 +2689,15 @@ def cathode_defaults():
         # bookings it replaces are withheld. Requires cathode_neutral_jet,
         # cathode_jet_surface_debit and the neutral_energy flag.
         "cathode_jet_hot_carrier": False,
+        # Cathode-jet arming criterion, ONE latch for both cathode channels
+        # (fluid and DVM). Ships INERT: arm = 0 declares no criterion, so the
+        # jets are live whenever their own selectors are on and the shipped
+        # stance is bit-identical to the behaviour that predates these keys.
+        # A run that wants the criterion sets both explicitly; the registered
+        # arm/disarm pair and its calibration are in
+        # config_defaults_provenance.md, not here.
+        "neutral_jet_arm_current_A": 0.0,
+        "neutral_jet_disarm_current_A": 0.0,
         # Mesh momentum accommodation for the evolved wind: the momentum
         # the anode wires intercept lands on the anode structure instead
         # of staying in the gas (the open-area throttle alone leaves the

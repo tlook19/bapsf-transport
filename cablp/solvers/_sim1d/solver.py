@@ -68,6 +68,7 @@ from .core.validation import (
     resolve_coverage_config,
     resolve_electron_drift_transport_config,
     resolve_emitting_area_config,
+    resolve_jet_arming_criterion,
     resolve_neutral_jet_config,
     resolve_neutral_probe_config,
     validate_equilibration_gas_puff_on,
@@ -2081,6 +2082,27 @@ class LAPDSim1D:
         self._jet_carrier_diagnostics = {}
         self._mesh_faces = _jet.mesh_faces
         self._mesh_blocked_area_cm2 = _jet.mesh_blocked_area_cm2
+        # Cathode-jet arming criterion. Validated unconditionally (the keys
+        # are always present), but ARMED only by a positive arm threshold:
+        # ``_jet_arming_active`` is the presence gate every consumer below
+        # tests first, so the inert declaration cannot reach the latch at all.
+        (
+            self._jet_arm_current_A,
+            self._jet_disarm_current_A,
+            self._jet_arming_active,
+        ) = resolve_jet_arming_criterion(self._input_dict)
+        # The latch itself. With no criterion declared it is permanently True
+        # and no consumer can distinguish this build from the one before it.
+        # With a criterion it starts DISARMED: before the discharge has drawn
+        # its arming current there is no bombardment for the jets to model,
+        # and the first accepted step at or above the arm threshold is what
+        # brings them into existence.
+        self._jet_armed = not self._jet_arming_active
+        # Census of the criterion's own behaviour, for the run summary: how
+        # many accepted steps were censored and where the latch transitioned.
+        self._jet_arming_censored_steps = 0
+        self._jet_arming_transitions = 0
+        self._jet_arming_last_transition_s = float("nan")
 
     def _init_atomic_package_refusals(self):
         """Refuse atomic-package combinations that would double-book photons."""
@@ -6196,11 +6218,26 @@ class LAPDSim1D:
             jet_energy_booking = getattr(
                 attempt, "cathode_jet_energy_booking", None
             )
-            if jet_energy_booking is not None:
+            if jet_energy_booking is not None and not (
+                self._cathode_jet_censored()
+            ):
                 # B5: commit this step's counted incident energy to the tick
                 # accumulator FIRST, so the tick that may fire later in this
                 # same accept sees it, and hold the increment for the surface
                 # debit below. One committed number, both books.
+                #
+                # ARMING CRITERION, DVM side of the conservation pair: while
+                # the latch is disarmed this whole block is skipped, so the
+                # tick accumulator never receives the energy (nothing is
+                # launched) AND ``step_backscatter_erg`` stays at its 0.0
+                # initialisation (the surface is never debited). Both sides of
+                # the pair are gated by the SAME latch reading, which is what
+                # keeps the cumulative identity
+                #     backscatter row == sum of the ticks' birth_cathode_jet
+                #                        energy + R_E * the not-yet-ticked
+                #                        accumulator
+                # true across an arm/disarm/re-arm sequence without a new
+                # ledger row: a censored step contributes zero to both sides.
                 self._dvm_cathode_jet_energy_booked = (
                     self._dvm_cathode_jet_energy_booked + jet_energy_booking
                 )
@@ -6427,11 +6464,21 @@ class LAPDSim1D:
                 # The surface keeps (1 - R_E) of the ion power when the jet's
                 # reflected-energy debit sensitivity arm is on (retention is
                 # 1.0 otherwise -- the M5a' calibration convention).
+                # ARMING CRITERION, fluid side of the conservation pair: while
+                # the latch is disarmed no backscattered atoms were launched
+                # this step, so the surface gives nothing up and keeps ALL of
+                # its ion bombardment power. Read from the SAME latch state
+                # the launch above consulted, so the surface can never be
+                # debited for atoms that were never born.
+                _retention = (
+                    1.0
+                    if self._cathode_jet_censored()
+                    else self._cathode_surface_ion_retention
+                )
                 P_heat, P_ion, P_rad, P_emis, P_cond = (
                     cathode_power_balance_terms_W(
                         T_s_K=self._cathode_Ts_K,
-                        P_ion_W=float(result.P_cathode_i)
-                        * self._cathode_surface_ion_retention,
+                        P_ion_W=float(result.P_cathode_i) * _retention,
                         I_eth_star_A=I_emis,
                         input_dict=self._surface_effective_input_dict(),
                     )
@@ -6612,11 +6659,58 @@ class LAPDSim1D:
             )
             if V_cap_new is not None:
                 self._circuit_V_cap = V_cap_new
+        # ARMING CRITERION, latch update. LAST in the accept path, and
+        # deliberately after every consumer above. This step's jets launched
+        # under the latch state the step STARTED with, and its surface debit
+        # was taken under that same state; moving the latch here is what keeps
+        # that pair together. The new state takes effect from the next step --
+        # the first step whose RHS can actually launch under it.
+        #
+        # Judged on the ion current THIS step's own committed cathode solve
+        # booked, which is the same solve every row above read, so the
+        # criterion and the books it gates are one reading of one state.
+        if self._jet_arming_active:
+            if not self._jet_armed:
+                self._jet_arming_censored_steps += 1
+            self._update_jet_arming_latch(solve)
         # Vessel common-mode node: one closed-form step of
         # C dV_cm/dt = I_wall_net, after the circuit so the wall currents are
         # read at the fully accepted state. Absent unless armed.
         self._vessel_advance(float(attempt.dt))
         return self.get_initial_snapshot()
+
+    def _update_jet_arming_latch(self, cathode_solve):
+        """Advance the cathode-jet arming latch on one ACCEPTED step.
+
+        Latched hysteresis on the booked ion current: it ARMS at or above
+        ``neutral_jet_arm_current_A`` and DISARMS below
+        ``neutral_jet_disarm_current_A``, so a current dwelling between the
+        two leaves the latch wherever it already was. That band is the whole
+        point -- a bare single-threshold comparison would toggle the jets on
+        every step a noisy current re-crossed it.
+
+        A step with no cathode solve, or one whose solve returned a non-finite
+        ``I_i``, leaves the latch untouched: there is no current to judge it
+        by, and guessing a state would be worse than holding the last one that
+        was actually measured.
+
+        Called only while the criterion is declared; the presence gate is the
+        caller's.
+        """
+        if cathode_solve is None or cathode_solve.beam_result is None:
+            return
+        I_i = float(cathode_solve.beam_result.result.I_i)
+        if not np.isfinite(I_i):
+            return
+        was_armed = self._jet_armed
+        if not was_armed:
+            if I_i >= self._jet_arm_current_A:
+                self._jet_armed = True
+        elif I_i < self._jet_disarm_current_A:
+            self._jet_armed = False
+        if self._jet_armed != was_armed:
+            self._jet_arming_transitions += 1
+            self._jet_arming_last_transition_s = float(self._time)
 
     # Every attribute one accepted step mutates (fluid attempt cathode cache +
     # accept), for the R5.1/A11 Picard snapshot. The persistent step cache is
@@ -6640,6 +6734,14 @@ class LAPDSim1D:
         # records are copied below because they are mutable containers.
         "_vessel_V_cm",
         "_vessel_wall_currents_A",
+        # Cathode-jet arming latch and its census: all four are written on the
+        # accepted step, so a Picard re-run must start from the values the
+        # step started from. Omitting the latch here would let a re-run launch
+        # under a state a LATER step established.
+        "_jet_armed",
+        "_jet_arming_censored_steps",
+        "_jet_arming_transitions",
+        "_jet_arming_last_transition_s",
     )
 
     def _picard_snapshot(self):
@@ -8672,12 +8774,31 @@ class LAPDSim1D:
         self._electron_drift_rows = rows
         return rhs
 
+    def _cathode_jet_censored(self):
+        """True when the arming criterion is declared and currently DISARMED.
+
+        The ONE reading of the latch that every consumer takes: both cathode
+        launch channels (fluid and DVM) and the cathode surface debit. Reading
+        it in one place is what makes it impossible for a launch and its debit
+        to disagree about whether the jet existed on a given step.
+
+        Always ``False`` when no criterion is declared, which is the presence
+        gate: the inert default cannot reach the latch.
+        """
+        return self._jet_arming_active and not self._jet_armed
+
     def _cathode_jet_spec(self, cathode_solve):
-        """Return the cathode-jet parameters from the current solve, or None."""
+        """Return the cathode-jet parameters from the current solve, or None.
+
+        ``None`` while the arming criterion is declared and disarmed: below
+        the arming current the jet is booked as NOT YET IN EXISTENCE rather
+        than launched and then censored downstream.
+        """
         if (
             not self._cathode_jet_enabled
             or cathode_solve is None
             or cathode_solve.beam_result is None
+            or self._cathode_jet_censored()
         ):
             return None
         phi_c = float(cathode_solve.beam_result.result.phi_c)
