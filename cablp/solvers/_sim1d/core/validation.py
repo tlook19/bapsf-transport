@@ -22,6 +22,7 @@ import numpy as np
 from .config import (
     coverage_closure_defaults,
     emitting_area_defaults,
+    model_mode_defaults,
     neutral_probe_source_defaults,
 )
 from .geometry import _anode_neutral_transparency
@@ -1037,6 +1038,137 @@ def resolve_coverage_config(input_dict, flags, *, geometry, neutral_model):
         reservoir_debit=None,
         reservoir_burn_accum=None,
     )
+
+
+#: The declared endpoints of the charge-death bracket. ``"cell_1"`` is the
+#: advisor consult's bracket A -- the beam's charge dies in the cathode cell.
+ELECTRON_DRIFT_CHARGE_DEATHS = ("cell_1", "cell_2")
+
+#: The declared endpoints of the anode-handshake bracket. Neither reading was
+#: settled by the consult, which is why both ship as bracket arms.
+ELECTRON_DRIFT_ANODE_HANDSHAKES = ("export_counts", "sheath_row_closes")
+
+
+def resolve_electron_drift_transport_config(
+    input_dict, flags, *, geometry, active_plasma_topology
+):
+    """Validate and RESOLVE the electron drift-transport operator.
+
+    Every failure here is a construction-time ``ValueError``: an operator that
+    cannot say which faces its drift current enters and terminates on, or a
+    declared convention that would be silently inert, must never reach the
+    first step. With the flag off both convention keys must sit at their
+    shipped values, so a run that picks a bracket arm and forgets the flag is
+    loud rather than silently on the other arm.
+
+    Returns the resolved record -- the two conventions plus the two faces the
+    operator is bounded by -- or ``None`` when the flag is off, which is the
+    presence gate every consumer reads.
+
+    The three geometric refusals are refusals rather than fallbacks because
+    each leaves a physics form open that this function has no authority to
+    close. Without a resolved anode face the drift current has nothing to
+    terminate on, and letting it run off the end of the machine would invent a
+    boundary condition. Under ``TwinCathode`` there are two cathode faces
+    driving one column and the split of the loop current between them is not
+    something the operator can read off the circuit. Without
+    ``active_plasma_topology`` there are two live face conventions in the
+    solver and the operator would have to pick one silently.
+    """
+    enabled = bool(flags.get("electron_drift_transport", False))
+    defaults = model_mode_defaults()
+    conventions = {}
+    for name in (
+        "electron_drift_charge_death",
+        "electron_drift_anode_handshake",
+    ):
+        default = defaults[name]
+        value = input_dict.get(name, default)
+        if not enabled:
+            if value != default:
+                raise ValueError(
+                    f"{name} was configured ({value!r}) without the "
+                    "electron_drift_transport flag, where it is inert; set "
+                    "the flag or drop the parameter"
+                )
+            continue
+        conventions[name] = value
+    if not enabled:
+        return None
+
+    charge_death = conventions["electron_drift_charge_death"]
+    if charge_death not in ELECTRON_DRIFT_CHARGE_DEATHS:
+        raise ValueError(
+            f"unknown electron_drift_charge_death {charge_death!r}. "
+            f"Accepted: {', '.join(ELECTRON_DRIFT_CHARGE_DEATHS)}"
+        )
+    anode_handshake = conventions["electron_drift_anode_handshake"]
+    if anode_handshake not in ELECTRON_DRIFT_ANODE_HANDSHAKES:
+        raise ValueError(
+            "unknown electron_drift_anode_handshake "
+            f"{anode_handshake!r}. Accepted: "
+            f"{', '.join(ELECTRON_DRIFT_ANODE_HANDSHAKES)}"
+        )
+    if not active_plasma_topology:
+        raise ValueError(
+            "electron_drift_transport requires active_plasma_topology: the "
+            "operator carries T_e and n to faces by the typed-topology rule "
+            "(arithmetic mean between two live cells, one-sided where the "
+            "neighbour is plasma-dead), and with that flag off the solver "
+            "carries a second face convention the operator would have to "
+            "choose between silently. Accepted: "
+            "electron_drift_transport=True with "
+            "active_plasma_topology=True, or "
+            "electron_drift_transport=False"
+        )
+    if bool(flags.get("TwinCathode", False)):
+        raise ValueError(
+            "electron_drift_transport does not support TwinCathode: two "
+            "cathode faces drive one column, and how the booked loop current "
+            "divides between the two drift channels is not something the "
+            "operator can read off the circuit -- it would have to be "
+            "assumed. Accepted: electron_drift_transport=True with "
+            "TwinCathode=False, or electron_drift_transport=False"
+        )
+    cathode_faces = np.asarray(
+        getattr(geometry, "cathode_face_indices", ()), dtype=int
+    )
+    anode_faces = np.asarray(
+        getattr(geometry, "anode_face_indices", ()), dtype=int
+    )
+    if cathode_faces.size != 1 or anode_faces.size != 1:
+        raise ValueError(
+            "electron_drift_transport needs exactly one cathode face and one "
+            "anode face to bound the drift current; this geometry carries "
+            f"cathode_face_indices={cathode_faces.tolist()} and "
+            f"anode_face_indices={anode_faces.tolist()}. Without a resolved "
+            "anode the drift has nothing to terminate on and the operator "
+            "would be inventing its own outflow boundary"
+        )
+    cathode_face = int(cathode_faces[0])
+    anode_face = int(anode_faces[0])
+    if anode_face <= cathode_face:
+        raise ValueError(
+            "electron_drift_transport expects the anode face downstream of "
+            f"the cathode face (got cathode_face={cathode_face}, "
+            f"anode_face={anode_face}): the operator books the drift as "
+            "flowing from the cathode toward the anode, and a mirrored "
+            "layout would silently reverse every sign it produces"
+        )
+    launch_cell = int(geometry.plasma_face_live_cell[cathode_face])
+    if launch_cell < 0:
+        raise ValueError(
+            "electron_drift_transport found no live plasma cell against the "
+            f"cathode face {cathode_face}; there is nowhere for the drift to "
+            "enter"
+        )
+    return {
+        "charge_death": charge_death,
+        "anode_handshake": anode_handshake,
+        "cathode_face": cathode_face,
+        "anode_face": anode_face,
+        "launch_cell": launch_cell,
+    }
 
 
 def resolve_emitting_area_config(input_dict, flags):

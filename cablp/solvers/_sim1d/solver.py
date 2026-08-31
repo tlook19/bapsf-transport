@@ -65,6 +65,7 @@ from .core.validation import (
     refuse_dvm_anode_jet_without_cathode_coupling,
     refuse_dvm_cathode_jet_without_cathode_coupling,
     resolve_coverage_config,
+    resolve_electron_drift_transport_config,
     resolve_emitting_area_config,
     resolve_neutral_jet_config,
     resolve_neutral_probe_config,
@@ -181,6 +182,9 @@ from .physics.sources import (
     boundary_absorption_rhs,
     cathode_jet_backscatter_speed,
     characteristic_boundary_rhs,
+    ELECTRON_DRIFT_DIAGNOSTIC_ROWS,
+    ELECTRON_DRIFT_DIAGNOSTIC_SCALARS,
+    electron_drift_transport_rhs,
     ion_neutral_collision_rhs,
     ionization_birth_neutral_temperature_eV,
     neutral_cx_channel_rhs,
@@ -317,6 +321,9 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "plasma_advective_flux": "none",
     "plasma_front_flux": "none",
     "pressure_work": "none",
+    # The drift operator writes the ELECTRON row alone; it moves no particles
+    # of any species, so it has no neutrals to carry a birth temperature for.
+    "electron_drift_transport": "none",
     "hyperbolic_energy_correction": "none",
     "flux_tube_geometry": "none",
     "ei_exchange": "none",
@@ -2891,6 +2898,21 @@ class LAPDSim1D:
             neutral_model=self._neutral_model,
             neutral_two_zone=self._neutral_two_zone,
         )
+        # Electron drift transport and EMF work (default off, bit-exact off).
+        # ``None`` when unarmed IS the presence gate: the RHS reads it to
+        # decide whether to evaluate Gamma_d at all, so the off path never
+        # enters the operator.
+        self._electron_drift = resolve_electron_drift_transport_config(
+            self._input_dict,
+            self._flags,
+            geometry=self._geometry,
+            active_plasma_topology=self._active_plasma_topology,
+        )
+        # The operator's named power rows from the LAST RHS evaluation, for the
+        # saved diagnostics. Same discipline as the hot-channel rows: written
+        # by the evaluation, read by the snapshot that triggered it, never
+        # recomputed from the saved sample.
+        self._electron_drift_rows = None
 
     def _init_run_machinery(self):
         """Initialize the run-loop bookkeeping and apply any restart payload."""
@@ -4826,6 +4848,11 @@ class LAPDSim1D:
                 "boundary_absorption": self._zero_rhs_state(),
                 "characteristic_boundary": self._zero_rhs_state(),
                 "pressure_work": self._zero_rhs_state(),
+                # Present with zero rows whether or not the flag is armed, so
+                # the saved term structure is stable across the phase change
+                # AND across the flag. There is no drive in this branch, so an
+                # armed run books zero here too.
+                "electron_drift_transport": self._zero_rhs_state(),
                 "hyperbolic_energy_correction": self._zero_rhs_state(),
                 "ei_exchange": self._zero_rhs_state(),
                 "ionization_energy_cost": self._zero_rhs_state(),
@@ -4976,6 +5003,18 @@ class LAPDSim1D:
                 else self._zero_rhs_state()
             ),
             "pressure_work": self.pressure_work_rhs(state=state),
+            # The electron-velocity correction to the row above: pressure_work
+            # books with the ION velocity, which is exact only where J = 0.
+            # Presence-gated -- unarmed, the zero state is recorded and
+            # Gamma_d is never evaluated -- and always present, so the saved
+            # term structure does not move with the flag.
+            "electron_drift_transport": (
+                self.electron_drift_transport_rhs(
+                    state=state, cathode_solve=cathode_solve
+                )
+                if self._electron_drift is not None
+                else self._zero_rhs_state()
+            ),
             "hyperbolic_energy_correction": (
                 self.hyperbolic_energy_correction_rhs(state=state)
                 if self._hyperbolic_energy_consistent
@@ -8578,6 +8617,46 @@ class LAPDSim1D:
             update_cache=True,
         )
 
+    def electron_drift_transport_rhs(self, state, cathode_solve):
+        """Return the electron drift-transport and EMF-work term.
+
+        Presence-gated on ``self._electron_drift``: unarmed, this method is
+        never called and ``Gamma_d`` is never evaluated. Armed but with no
+        cathode solve carrying a current -- the pre-drive phases, and any
+        afterglow frame whose solve did not converge -- the operator books
+        exactly zero, because with no current there is no drift.
+
+        The two currents come from the SAME solve, and therefore carry the
+        same lag as every other row built on it: the cathode solve is
+        evaluated against the loop current the last ACCEPTED step committed
+        (``_circuit_I_loop``), frozen across the step and part of the solve's
+        own memo key. Reading both from one object is what keeps ``I_beam``
+        from being subtracted off a different ``I_tot`` than the one the
+        electrode rows are proportional to.
+        """
+        if cathode_solve is None or cathode_solve.beam_result is None:
+            self._electron_drift_rows = None
+            return self._zero_rhs_state()
+        result = cathode_solve.beam_result.result
+        I_tot_A = float(result.I_tot)
+        I_beam_A = float(result.I_eth_star)
+        if not (np.isfinite(I_tot_A) and np.isfinite(I_beam_A)):
+            # A solve that did not resolve its currents cannot say what the
+            # drift is; booking a guess would be worse than booking nothing.
+            self._electron_drift_rows = None
+            return self._zero_rhs_state()
+        rhs, rows = electron_drift_transport_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            geometry=self._plasma_geometry(),
+            spec=self._electron_drift,
+            I_tot_A=I_tot_A,
+            I_beam_A=I_beam_A,
+        )
+        self._electron_drift_rows = rows
+        return rhs
+
     def _cathode_jet_spec(self, cathode_solve):
         """Return the cathode-jet parameters from the current solve, or None."""
         if (
@@ -11487,6 +11566,35 @@ class LAPDSim1D:
                     )
                 )
             )
+        if self._electron_drift is not None:
+            # The drift operator's named rows, PRESENCE-GATED so an unarmed
+            # run's saved diagnostic structure -- the golden included -- is
+            # byte-identical to before the operator existed. They ride the
+            # electrode-diagnostics channel because that is where the current
+            # they are built from already lives (``circuit_I_loop``), so a
+            # reader can check a row against its own input in one group.
+            #
+            # The four per-cell power rows [W] are the operator's own four
+            # terms and sum to its total, so the volume identity is checkable
+            # from a saved trajectory rather than only from a live solver.
+            # ``edt_inplasma_emf_V`` is the V_dis partition member: the
+            # in-plasma EMF the drift works against, W_EMF per ampere.
+            # ``edt_total_W`` is the per-step ledger total over the operator's
+            # support.
+            #
+            # Zeros, not absence, on a save whose RHS evaluation found no
+            # solve to read a current from: the row structure must not move
+            # between saves of one run, and "no current" is a measurement.
+            rows = self._electron_drift_rows
+            zeros = np.zeros(self._geometry.cells, dtype=float)
+            for name in ELECTRON_DRIFT_DIAGNOSTIC_ROWS:
+                diag[name] = (
+                    zeros.copy()
+                    if rows is None
+                    else np.asarray(rows[name], dtype=float).copy()
+                )
+            for name in ELECTRON_DRIFT_DIAGNOSTIC_SCALARS:
+                diag[name] = 0.0 if rows is None else float(rows[name])
         if self._anode_sheath_full_debit:
             # anode_sheath_full_debit census, PRESENCE-GATED so an unarmed
             # run's saved diagnostic structure -- the golden included -- is
