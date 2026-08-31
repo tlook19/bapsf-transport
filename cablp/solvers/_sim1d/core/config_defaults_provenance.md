@@ -2089,7 +2089,7 @@ each side; physically it means Te within 0.1% of `Te_floor`.
 
 **`dt_min_lock_max_steps = 250000` — DERIVED from a census of saved runs.**
 Memo: `scripts/dtmin_census_runlengths.txt` (2026-08-05). All 209 result h5
-files then present in `cablp/scripts/` were scanned for the per-step
+files then present in `scripts/` were scanned for the per-step
 `active_constraint` label, which under the pre-2026-08-05 semantics read
 `"dt_min"` on exactly the steps that were clamped. 80 files clamp at least
 once, and the two populations separate cleanly on CONSECUTIVENESS:
@@ -2587,6 +2587,6 @@ afterglow dt-cost pair; golden re-anchored in the same event). The
 authoritative provenance entries — value, class (DERIVED, A/B-selected
 under pre-registered gates), the corrected floor-honesty bar, and the
 near-floor resolution bracket — live in
-`cablp/scripts/production_stance_provenance.md`; this file deliberately
+`scripts/production_stance_provenance.md`; this file deliberately
 carries only this pointer so the adoption evidence stays with the stance
 history.
