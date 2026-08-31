@@ -5239,11 +5239,37 @@ def gate_ja6():
         # comparison, because nothing consults it.
         cathode_jet_energy_convention="legacy",
     )
-    supra = _ja_fluid_run(
+    # The supra-threshold leg is a MATCHED-STATE A/B rather than a whole-run
+    # comparison, and the fluid channel is why. Its jet books from the FIRST
+    # accepted step (the DVM channel's first booking is step 2), and the latch
+    # necessarily starts disarmed -- there is no discharge current yet -- so
+    # an armed fluid run and an inert one differ on step 1 no matter how low
+    # the arm threshold is set. That difference is the criterion WORKING, not
+    # the thing this leg is about. So: advance one sim until the latch is
+    # armed, then step it twice from the SAME state through the solver's own
+    # Picard snapshot -- once under the criterion, once with the criterion
+    # stood down -- and compare. That is the actual claim: with the latch
+    # armed, the criterion is not in the way.
+    supra_sim = _ja_fluid_sim(
         neutral_jet_arm_current_A=JA_IMMEDIATE_ARM_A,
         neutral_jet_disarm_current_A=0.0,
     )
-    inert = _ja_fluid_run(neutral_jet_arm_current_A=0.0)
+    for _ in range(JA_FLUID_STEPS):
+        advance_one_step(supra_sim)
+    latch_armed = bool(supra_sim._jet_armed)
+    snap = supra_sim._picard_snapshot()
+    advance_one_step(supra_sim)
+    supra = {
+        "y": np.asarray(supra_sim._y, dtype=float).copy(),
+        "Ts_K": float(supra_sim._cathode_Ts_K),
+    }
+    supra_sim._picard_restore(snap)
+    supra_sim._jet_arming_active = False
+    advance_one_step(supra_sim)
+    inert = {
+        "y": np.asarray(supra_sim._y, dtype=float).copy(),
+        "Ts_K": float(supra_sim._cathode_Ts_K),
+    }
     sub_ok = (
         np.array_equal(_ja_bits(sub["y"]), _ja_bits(absent["y"]))
         and sub["Ts_K"] == absent["Ts_K"]
@@ -5251,11 +5277,12 @@ def gate_ja6():
         and sub["censored"] == JA_FLUID_STEPS
     )
     supra_ok = (
-        np.array_equal(_ja_bits(supra["y"]), _ja_bits(inert["y"]))
+        latch_armed
+        and np.array_equal(_ja_bits(supra["y"]), _ja_bits(inert["y"]))
         and supra["Ts_K"] == inert["Ts_K"]
     )
     non_vacuous = not np.array_equal(
-        _ja_bits(inert["y"]), _ja_bits(absent["y"])
+        _ja_bits(sub["y"]), _ja_bits(_ja_fluid_run()["y"])
     )
     ok = sub_ok and supra_ok and non_vacuous
     return (
@@ -5269,12 +5296,14 @@ def gate_ja6():
         f"on {sub['spec_live']} steps (0 required), censored "
         f"{sub['censored']} of {JA_FLUID_STEPS}, T_s {fmt(sub['Ts_K'])} K "
         f"against the absent build's {fmt(absent['Ts_K'])} K\n        "
-        f"SUPRA-THRESHOLD (arm={fmt(JA_IMMEDIATE_ARM_A)} A) bit-identical to "
-        f"the inert declaration: {supra_ok} -- T_s {fmt(supra['Ts_K'])} K "
-        f"against {fmt(inert['Ts_K'])} K\n        "
-        f"NON-VACUOUS: the jet-absent build really does differ from the live "
-        f"one ({non_vacuous}), so the sub-threshold equivalence is a "
-        f"censoring result and not an identity between two identical runs",
+        f"SUPRA-THRESHOLD, matched-state A/B after {JA_FLUID_STEPS} steps "
+        f"(latch armed: {latch_armed}): one step under the criterion vs one "
+        f"step with it stood down, from the SAME state through the solver's "
+        f"Picard snapshot -- bit-identical: {supra_ok}, T_s "
+        f"{fmt(supra['Ts_K'])} K against {fmt(inert['Ts_K'])} K\n        "
+        f"NON-VACUOUS: the censored run really does differ from the live "
+        f"shipped build ({non_vacuous}), so the sub-threshold equivalence is "
+        f"a censoring result and not an identity between two identical runs",
     )
 
 

@@ -185,6 +185,40 @@ PINS_Q2 = {
 #: The afterglow window the Q2 pins are taken over [s].
 Q2_WINDOW_S = (2.01e-2, 2.61e-2)
 
+#: W_EMF CROSS-CHECK, measured 2026-08-31 over the Q2 window; recorded here
+#: because the obvious form of it is a tautology and the next reader will
+#: otherwise re-derive that the hard way.
+#:
+#: Comparing ``W_EMF`` against ``(net - cathode_face_work)`` gives a RATIO OF
+#: EXACTLY 1 on the registered ``sheath_row_closes_all`` arm -- but that is an
+#: IDENTITY BY CONSTRUCTION, not a confirmation. On that arm the closure hands
+#: both anode channels to the sheath row and the cathode face carries no
+#: enthalpy, so all four of ``cathode_face_flux``, ``anode_face_flux``,
+#: ``anode_face_work`` are zero and the volume identity collapses to
+#: ``net == cathode_face_work + W_EMF``. Any correct evaluator returns 1 there
+#: whatever W_EMF is.
+#:
+#: The INDEPENDENT test is the ``export_counts`` instrument arm, where the
+#: anode face does NOT vanish (window means: anode flux 645.762 W, anode work
+#: 276.586 W). There the same simplified partner reads
+#: -0.2697 (``cell_1``) / -0.0731 (``cell_2``) -- it is not W_EMF at all, and
+#: the shortfall is exactly the anode boundary pair it omits. Against the FULL
+#: boundary term the identity closes to 1 on BOTH arms and BOTH brackets, at a
+#: worst per-sample relative residual of 1.8e-15.
+#:
+#: READING: the simplified ``net - cathode work`` partner is CLOSURE-SPECIFIC
+#: and must not be quoted as a general check. The volume identity with its
+#: full boundary term is the general one, and it is what ``volume_identity``
+#: already computes.
+Q2_WEMF_CROSSCHECK = {
+    "closure_arm_ratio__IDENTITY_BY_CONSTRUCTION": 1.0,
+    "export_counts_arm_ratio__SIMPLIFIED_PARTNER": (-0.269700, -0.073055),
+    "export_counts_arm_ratio__FULL_BOUNDARY_PARTNER": 1.0,
+    "export_counts_anode_face_flux_W": 645.762,
+    "export_counts_anode_face_work_W": 276.586,
+    "worst_volume_identity_relative_residual": 1.8e-15,
+}
+
 #: The enthalpy/heat-flux face coefficient, 1.5 + 0.71 -- the same ``_C_FACE``
 #: the operator carries, named here because the Q2b export estimate is built
 #: from it.
