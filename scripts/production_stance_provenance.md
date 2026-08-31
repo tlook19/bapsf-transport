@@ -634,10 +634,12 @@ sheath-edge values in the same arming. The circuit/load ledger is IDENTICALLY
 untouched: the `phi_a` those electrons pay is field energy the loop and the
 anode ions already book. The electron-ATTRACTING regime (`phi_a <= 0`) keeps
 the unarmed thermal-only booking, because there the bank pays the fall, and
-that branch is COUNTED rather than silent (`anode_attracting_steps`). Requires
-`characteristic_boundary`, whose thermal-only electrode routing it completes;
-the combination without it is a construction-time `ValueError`. Adoption gates:
-campaign log 2026-08-25ab.
+that branch is COUNTED rather than silent (`anode_attracting_steps`). It
+completes the thermal-only electrode routing, which became unconditional when
+the legacy volumetric absorber and its `characteristic_boundary` selector were
+RETIRED 2026-08-31 (Tom); the construction-time `ValueError` that used to
+refuse the unarmed-routing combination went with them, the combination no
+longer being constructible. Adoption gates: campaign log 2026-08-25ab.
 
 **`beam_deposition_in_heat_substep = true`** (flags) — ARMED 2026-08-25; the
 class-1 fix for the staged Te bias. The beam's electron-energy deposition row

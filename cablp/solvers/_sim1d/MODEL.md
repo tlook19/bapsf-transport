@@ -246,14 +246,14 @@ statement of "no flux through the wall, but the wall still pushes back"
 (`flux._apply_plasma_walls`). That condition holds on every face with
 `plasma_open` False, which under `resolved_boundaries` is not the pair of
 domain ends but the whole set of faces bounding the plasma inside the neutral
-domain. The plasma-terminating (absorbing) subset is the exception: with
-`characteristic_boundary` — **on by default** — the one-sided ghost-cell Bohm
-outflow supplies the particle, momentum and energy flux together with its own
-pressure term, so the advective flux there must carry nothing at all, $F_M$
-included, or the wall momentum is counted twice. With that selector off the
-closed-wall form above stands, which is the 0D legacy behaviour. (The same
-carve-out is stated under *R3.1 -- characteristic ghost-cell Bohm outflow*
-below.)
+domain. The plasma-terminating (absorbing) subset is the exception: the
+one-sided ghost-cell Bohm outflow supplies the particle, momentum and energy
+flux together with its own pressure term, so the advective flux there carries
+nothing at all, $F_M$ included, or the wall momentum would be counted twice.
+This is unconditional — the legacy alternative, a closed reflecting face plus a
+one-sided volumetric absorber, was **retired 2026-08-31 (Tom)** along with the
+selector that chose it. (The same carve-out is stated under *characteristic
+ghost-cell Bohm outflow* below.)
 
 ## Reductions relative to full 3D Braginskii
 
@@ -424,16 +424,17 @@ that repaired configuration.
 
 ## R3 characteristic material boundaries + closed circuit power balance (2026-07-24)
 
-As introduced at R3 the `characteristic_boundary` selector was default-off, and
-default-off was bit-exact against the R3-era checkpoint golden; in the current
-package it is **on by default**, and the live golden-at-stance fixture is
-captured with it on. The selector rebuilds the plasma-terminating
-(cathode/collector) surfaces as one control surface feeding both the fluid sink
+As introduced at R3 this was the `characteristic_boundary` selector, default-off
+and bit-exact off against the R3-era checkpoint golden; it later became the
+shipped default, and the legacy alternative it selected against was **retired
+2026-08-31 (Tom)**, selector and all. There is now ONE plasma-terminating
+boundary operator and no stance to choose. It makes the
+(cathode/collector) surfaces one control surface feeding both the fluid sink
 and the circuit. The audit findings are A1, A13, A16 (plus the A11 convergence
 gate).
 
 **R3.1 -- characteristic ghost-cell Bohm outflow (A1).** The closed reflecting
-face plus one-sided volumetric absorber is replaced by a ghost-cell Bohm outflow
+face plus one-sided volumetric absorber was replaced by a ghost-cell Bohm outflow
 computed with the committed R2 KEP/Rusanov flux against a ghost state
 (`n_se = n*presheath_alpha`, `u = c_s` into the wall, `Te`, `Ti`). The flux is
 applied one-sidedly to the live cell (the shared face array would telescope the
@@ -451,7 +452,8 @@ loop current, deposited on the electrode, never through the plasma thermal store
 boxed transmission coefficients `gamma_e = 2 + phi/Te`, `gamma_i = 1/2 + phi/Te`,
 Stangeby; the existing `_P_elec`/`_P_ion` forms), from the plasma; (3) the *plasma-
 heating* book -- the beam `P_prim` and gap ohmic, into the plasma. The fluid
-boundary removes only the plasma-thermal part; the sheath fall goes to the
+boundary removes only the plasma-thermal part (unconditionally, since the
+retirement above); the sheath fall goes to the
 electrode; both the fluid sink and the circuit read one mesh-independent
 sheath-edge density `n_se` (`presheath_alpha`, shared; the circuit's flat
 `exp(-1/2)` is upgraded, with the electron lift generalized `Lambda -> Lambda -
