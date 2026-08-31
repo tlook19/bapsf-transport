@@ -3091,6 +3091,10 @@ def beam_ionization_rhs_terms(
 
 
 _BEAM_SMOOTH_CACHE = {}
+# Memo of the CACHE KEY itself, so the four content fingerprints below are
+# taken once per geometry rather than once per RHS evaluation. See
+# :func:`_beam_smoothing_key` for why keying it on ``id(geometry)`` is sound.
+_BEAM_SMOOTH_KEY_CACHE = {}
 
 
 def _array_fingerprint(values, dtype):
@@ -3121,8 +3125,33 @@ def _beam_smoothing_key(geometry, sigma_cm):
     ``cathode_face_indices`` (the reflecting image sources), and
     ``plasma_active`` (the support -- two meshes agreeing in z/lengths/faces
     but differing in cell ROLES build different matrices).
+
+    The key itself is memoized on ``id(geometry)``, which is sound here and
+    only here because the memo HOLDS A STRONG REFERENCE to the geometry it
+    keyed: an address CPython still has a live reference to cannot be handed
+    to a later allocation, so the reuse hazard the paragraph above describes
+    is closed structurally rather than by re-fingerprinting. Evicting an entry
+    is equally safe -- the geometry may then be collected and its address
+    reused, but the entry that named it is gone, so the next lookup is a miss.
+    The one thing identity keying cannot see is a content edit made IN PLACE
+    on a live geometry, so the four fingerprinted arrays are marked read-only
+    on the first key build: such an edit now raises instead of silently
+    returning the previous mesh's matrix. ``Sim1DGeometry`` is a frozen
+    dataclass built at exactly one site and no consumer writes to it.
     """
-    return (
+    memo_key = (id(geometry), round(float(sigma_cm), 8))
+    entry = _BEAM_SMOOTH_KEY_CACHE.get(memo_key)
+    if entry is not None:
+        return entry[1]
+    for values in (
+        geometry.z_cm,
+        geometry.length_cm,
+        geometry.z_edges_cm,
+        geometry.plasma_active,
+    ):
+        if isinstance(values, np.ndarray):
+            values.flags.writeable = False
+    key = (
         round(float(sigma_cm), 8),
         _array_fingerprint(geometry.z_cm, float),
         _array_fingerprint(geometry.length_cm, float),
@@ -3130,6 +3159,10 @@ def _beam_smoothing_key(geometry, sigma_cm):
         _array_fingerprint(geometry.plasma_active, bool),
         tuple(int(i) for i in np.asarray(geometry.cathode_face_indices, dtype=int)),
     )
+    # The geometry is stored, not just its id: the strong reference is what
+    # makes the id unique for as long as the entry lives.
+    _BEAM_SMOOTH_KEY_CACHE[memo_key] = (geometry, key)
+    return key
 
 
 def _beam_smoothing_matrix(geometry, sigma_cm):
