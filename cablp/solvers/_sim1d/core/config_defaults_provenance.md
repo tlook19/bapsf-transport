@@ -613,8 +613,12 @@ is a disclosed limitation of the bracket, not a modelling preference.
 Measured spread between the two arms on `scripts/mgcr1_confirm.h5`, under the
 registered anode closure: the source-region sum moves +18.95 → +14.50 kW, and
 the compression piece over the cells strictly downstream of the death cell
-+13.6 → +8.2 kW. The cathode face is identical under both (it carries beam
-current either way). Memo: advisor consult, 2026-08-26, as amended by the
++35.4 → +29.9 kW. (On the `export_counts` instrument arm the same compression
+piece reads +13.6 → +8.2 kW — a different quantity, not a different value, and
+it must be labelled wherever it is quoted: the registered closure hands the
+mesh face's work term to the sheath row and it lands in these same cells.) The
+cathode face is identical under both charge-death arms, since it carries beam
+current either way. Memo: advisor consult, 2026-08-26, as amended by the
 advisor adjudication of 2026-08-31.
 
 **`electron_drift_anode_handshake = "sheath_row_closes_all"` — DERIVED (ruled

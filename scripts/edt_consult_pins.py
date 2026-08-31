@@ -122,20 +122,32 @@ PINS = {
     # The work channel's partner, which pressure_work_rhs books at that face.
     "cathode_face_work_kW": 4.298,
     # Over the cells strictly DOWNSTREAM of the death cell (bracket A, B).
-    "compression_downstream_kW": (13.6, 8.2),
+    # EVERY row below names its anode reading, because the compression row and
+    # the afterglow net are DIFFERENT QUANTITIES under the registered closure
+    # and under the instrument arms -- the closure hands the mesh face's work
+    # term to the sheath row and it lands in these same cells. Quoting one
+    # without its reading was a review finding, twice.
+    "compression_downstream_kW__CLOSURE": (35.4, 29.9),
+    "compression_downstream_kW__export_counts_ARM": (13.6, 8.2),
     # RETIRED: over the fixed cells 2-5 this reads -5.3 kW under bracket B, so
     # the consult's "robust, handshake-independent +13.6 kW" was
     # bracket-A-specific rather than robust.
     "compression_cells_2_5_kW_RETIRED": 13.6,
     # Corrected source-region sums, per anode reading (bracket A, B).
-    "gap_sum_export_counts_kW": (-53.0, -57.5),
-    "gap_sum_sheath_row_closes_kW": (-2.8, -7.3),
-    "gap_sum_sheath_row_closes_all_kW": (19.0, 14.5),
-    # The EMF is a BRACKET over the support, not a point.
+    "gap_sum_kW__CLOSURE": (19.0, 14.5),
+    "gap_sum_kW__sheath_row_closes_ARM": (-2.8, -7.3),
+    "gap_sum_kW__export_counts_ARM": (-53.0, -57.5),
+    # The EMF is a BRACKET over the SUPPORT, not a point, and is
+    # current-weighted; it is insensitive to the anode reading.
     "inplasma_emf_V_range": (3.7, 6.2),
     "inplasma_emf_boltzmann_V": 5.7,  # Te ln(n_5/n_1)
-    "afterglow_window_kW": (-0.55, -0.68),
-    "afterglow_instant_26ms_kW": -0.017,
+    # Afterglow, by reading. The closure and the arms differ in SIGN.
+    "afterglow_window_kW__CLOSURE": (0.25, 0.12),
+    "afterglow_window_kW__export_counts_ARM": (-0.68, -0.81),
+    "afterglow_instant_26ms_W__CLOSURE": (1.6, -1.0),
+    # RETIRED: the as-built figures, moved by the 2026-08-31 cathode amendment.
+    "afterglow_window_kW_RETIRED": (-0.55, -0.68),
+    "afterglow_instant_26ms_kW_RETIRED": -0.017,
 }
 
 CHARGE_DEATH_CHOICES = ("cell_1", "cell_2")

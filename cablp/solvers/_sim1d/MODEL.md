@@ -2199,11 +2199,17 @@ count at the mesh face would be worth; they are not competing physical
 readings.
 
 The reversible-compression warming of the cells strictly downstream of the
-death cell is $+13.6$ kW (`cell_1`) / $+8.2$ kW (`cell_2`). **It is not
-handshake-independent and it is not robust across the bracket**: over the fixed
-cells 2–5 that an earlier form used, `cell_2` reads $-5.3$ kW, because that
-range sweeps in the death cell's own large negative. Quote it over the
-downstream cells or not at all.
+death cell, under the registered closure, is $+35.4$ kW (`cell_1`) /
+$+29.9$ kW (`cell_2`). The instrument arms read $+13.6$ / $+8.2$ kW, and the
+difference is not a discrepancy: under `"sheath_row_closes_all"` the mesh
+face's work term is handed to the sheath row and lands in these same cells, so
+the row is a **different quantity** there rather than a different value of one
+quantity. Say which reading a compression number belongs to, always.
+
+**It is not handshake-independent and it is not robust across the bracket.**
+Over the fixed cells 2–5 that an earlier form used, `cell_2` reads $-5.3$ kW,
+because that range sweeps in the death cell's own large negative. Quote it over
+the downstream cells, with its reading named, or not at all.
 
 In afterglow the term is small but NOT identically zero, and it is confined to
 the $\sim$1.5 ms ring-down. Under the registered closure it reads $+0.25$
