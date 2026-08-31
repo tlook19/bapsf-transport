@@ -89,7 +89,7 @@ GATE REGISTRY
 
 **G5 -- the J = 0 limit (negative control at the statement level).**
   QUANTITY: (i) every cell of the operator's total row at zero current;
-  (ii) the magnitude of the discontinuity the operator's guard removes.
+  (ii) the magnitude of the CLOSURE-FAMILY discontinuity the guard removes.
   SITE: the ``electron_drift_transport`` RHS term; the operator called
   directly at zero current; and the face currents rebuilt with the guard
   BYPASSED.
@@ -105,8 +105,19 @@ GATE REGISTRY
   current only reaches an early return: (i) alone certifies that the guard
   fires and says nothing about what it is for. The cathode-face work channel
   rides the difference velocity ``u_e - u_i`` and does not vanish with the
-  current, so the guard is cutting out a real discontinuity; pinning its size
-  is what stops a future change to that channel moving it silently.
+  current, so the guard is cutting out a real residue; pinning its size is
+  what stops a future change to that channel moving it silently.
+
+  WHAT THE RESIDUE IS (wording corrected 2026-08-31 (Tom)). It is a
+  discontinuity in the CLOSURE FAMILY, not in the physics. The GUARDED zero
+  IS the continuum limit -- at J = 0 the two species leave together, the
+  plasma is ambipolar and the ion-velocity pressure work is already exact --
+  while the residue is the DRIVEN face closure evaluated outside its own
+  validity, where the repelling-sheath statement its work channel encodes no
+  longer holds. So the number below is not a physical jump, and it is
+  fixture-specific by nature: it equals T_e[launch] x that face's ion current
+  on the state it is measured at, which is why the fixture is pinned with it.
+  A run crosses this boundary ONCE, at cathode-solve shutoff.
 
 **G6 -- the afterglow clause (REPORTED, NOT GATED).**
   QUANTITY: the operator's net over the source region during afterglow.
@@ -233,7 +244,23 @@ BASE_CONFIG_IDENTITY = (
 )
 
 #: The keys this branch adds, by namespace, for G1's strip control.
-ADDED_PARAMS = ("electron_drift_charge_death", "electron_drift_anode_handshake")
+#:
+#: EXTENDED 2026-08-31 by the two cathode-jet arming keys. They are not this
+#: member's physics -- they belong to the arming criterion -- but G1 measures
+#: the identity of the WHOLE golden config against a fixed pre-edt baseline,
+#: so every key added downstream of that baseline has to be stripped for the
+#: control to reach it. The alternative was to re-baseline
+#: ``BASE_CONFIG_IDENTITY`` on every unrelated config addition, which would
+#: destroy exactly the property it exists to pin: that this baseline is the
+#: config with the edt keys REMOVED, not merely some earlier config. Adding a
+#: name here is inert unless that key really is present, because the strip is
+#: a dict comprehension over keys that exist.
+ADDED_PARAMS = (
+    "electron_drift_charge_death",
+    "electron_drift_anode_handshake",
+    "neutral_jet_arm_current_A",
+    "neutral_jet_disarm_current_A",
+)
 ADDED_FLAGS = ("electron_drift_transport",)
 
 #: Accepted steps the golden-config leg of G2 walks. A cost knob, not physics:
@@ -308,8 +335,9 @@ def gate1_strip_control(report):
     report.check(
         "G1",
         recovered == BASE_CONFIG_IDENTITY and live != BASE_CONFIG_IDENTITY,
-        "strip control: the identity moves ONLY by the three added keys "
-        "(computed through the digest gate's own expression)",
+        f"strip control: the identity moves ONLY by the "
+        f"{len(ADDED_PARAMS) + len(ADDED_FLAGS)} keys added since this "
+        f"baseline (computed through the digest gate's own expression)",
     )
 
 

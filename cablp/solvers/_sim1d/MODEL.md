@@ -824,6 +824,56 @@ The representation of $\varepsilon_{\rm back}$ on a discrete velocity grid is a
 numerics question and belongs to `NUMERICS.md` (§ "The DVM cathode jet's launch
 spectrum").
 
+#### The arming criterion (`neutral_jet_arm_current_A`, inert by default)
+
+The jet models neutral ejection from the cathode surface UNDER DISCHARGE ION
+BOMBARDMENT. That is a conditional statement, and below the condition the
+model does not merely become small — it stops describing anything. A cathode
+drawing a few tens of milliamps has no bombardment-driven backscatter stream;
+what the unconditioned channel books there is the same algebra evaluated on a
+current that is not doing the thing the algebra is about.
+
+The **arming criterion** makes that condition explicit. The cathode jets —
+both of them, the fluid `cathode_neutral_jet` and the DVM
+`neutral_kinetic_dvm_cathode_jet`, from one latch — launch only while ARMED.
+The latch is a HYSTERESIS on the ion current the accepted step's own cathode
+solve booked: it arms at `neutral_jet_arm_current_A` and disarms below
+`neutral_jet_disarm_current_A`, so a current dwelling near the threshold
+cannot switch the jet on and off step after step. It starts DISARMED, because
+before the discharge has drawn its arming current there is nothing for the jet
+to model.
+
+Below the arming current the jet is booked as **not yet in existence**, which
+is a different statement from energy-censoring an existing one: nothing is
+launched AND the surface is not debited. Both sides of that pair read the same
+latch state from the same solve, so the surface is never debited for atoms
+that were never born, and the cumulative identity
+
+> `backscatter` row $=\sum_{\rm ticks}$ `birth_cathode_jet` energy $+\,R_E\times$ the not-yet-ticked accumulator
+
+holds across an arbitrary arm/disarm history with no new ledger row: a
+censored step contributes zero to both sides.
+
+The criterion is **per-run, and inert by default.** `arm = 0` declares NO
+criterion — the jets are live whenever their own selectors are on, which is
+the behaviour that predates these keys and is bit-identical to it. The
+registered arm/disarm pair is a stance decision that lives in the run that
+makes it, not in the package defaults; the values and their calibration are in
+`core/config_defaults_provenance.md`.
+
+**The DVM launch representability guard is unchanged and stays live on every
+armed step.** The two answer different questions: the guard is the loud stop
+for a jet that is significant but cannot be represented on the velocity grid,
+while the criterion says the jet is not there yet. Arming narrows where the
+guard fires; it never replaces it.
+
+**The ANODE jets are deliberately outside the criterion.** They are driven by
+the anode-COLLECTED ion current — `anode_collection_rhs`'s own counted row and
+the solve's $\phi_a$, with $I_{i,a}=2\eta I_i$ by default and independently
+overridable — not by the cathode's booked $I_i$. Applying a cathode-current
+latch to them would gate one surface's stream on another surface's drive, so
+the anode channels keep their own driver and are left alone.
+
 
 ### Anode-side energetic recycle (`neutral_kinetic_dvm_anode_jet`, default off)
 
@@ -2105,6 +2155,29 @@ summation by parts. That split is what the anode reading below selects on:
 identity, and why it closes to roundoff rather than to truncation, is in
 NUMERICS.md.
 
+**The $J=0$ guard is a discontinuity in the CLOSURE FAMILY, not in the
+physics** (wording corrected 2026-08-31 (Tom)). With no booked current the
+operator returns exactly zero rather than evaluating its arithmetic, and it is
+worth being precise about what that guard removes. The GUARDED value **is the
+continuum limit**: at $J=0$ the two species leave together, the plasma is
+ambipolar, and the model's ion-velocity pressure work is exact — there is
+nothing to correct, and zero is the right answer rather than a convenient one.
+What does not vanish on its own is the cathode-face WORK channel, because it
+rides the difference velocity $u_e-u_i$ and its value encodes a REPELLING
+sheath holding the electron flux at that face near zero while the ions keep
+leaving. That is a driven-state statement, so the residue the guard cuts out
+is the driven face closure evaluated outside its own validity — a jump between
+two members of the closure family, not a jump in any physical quantity.
+
+The residue is therefore **fixture-specific and state-dependent**, equal to
+$T_e[\text{launch}]$ times that face's ion current on whatever state it is
+measured at, which is why the gate that pins it pins its fixture with it
+rather than quoting a universal number. A run crosses this boundary **once**,
+at cathode-solve shutoff, and the transition is deliberately not resolved:
+resolving it would need the cathode solve's own returning-electron current,
+which the registration replaces with "take it as zero". The boundary is stated
+rather than smoothed.
+
 **The operator is an open system.** The drift current terminates ON the anode
 mesh, so the face at the mesh debits the cell upstream of it and credits
 nothing downstream. $\int\Delta\,dV$ is therefore not zero and is not meant to
@@ -2226,6 +2299,38 @@ current ($I_\text{beam}$ 297.5 A against $I_\text{tot}$ 217.8 A, window means;
 $-79.7$ A of net drift), so the drift reverses. Any afterglow reading of this
 operator has to carry that clause, because a term whose driving flux has
 changed sign is not "the same term, smaller".
+
+Three further clauses attach to every afterglow reading of this operator
+(adopted 2026-08-31 (Tom)):
+
+1. **What the positive window mean IS.** Under the registered closure the
+   window-mean net over the source region is $+253.9$ W, of which $+205.3$ W
+   is $W_\text{EMF}$ (`cell_1`; $+120.8$ W and $+72.2$ W under `cell_2`). That
+   is **non-resistive field work of the ring-down current against the standing
+   pressure gradient** — it is CIRCUIT-SOURCED, energy the decaying loop
+   current does on the plasma, not stored thermal energy re-emerging. It is
+   not a heating mechanism the plasma supplies to itself.
+2. **The arm is valid only while $I_\text{tot}\ge 0$.** The closure is built
+   on a loop current with a defined direction; a REVERSAL of the loop current
+   voids the arm rather than flipping its sign, because the anode handshake
+   that closes the boundary term is a statement about which way the drift
+   crosses the mesh. Over the measured window the minimum $I_\text{tot}$ is
+   $+10.9$ A, so the arm holds there — but the check is part of the reading,
+   not an assumption.
+3. **Afterglow magnitudes are DISCLOSURE-GRADE, not claim-bearing.** Two
+   independent reasons, both measured. The cathode-face enthalpy-ZERO premise
+   is a drive-phase statement and is far out of regime in this window: the
+   circuit's own `source_P_cathode_e` runs $0.0584$ W in the drive against
+   $95.3$ W as an afterglow-window mean (peak $2392$ W) — a factor $\sim$1630
+   — and the un-booked cathode-return export
+   $2.21\,T_e[\text{launch}]\,(I_\text{beam}-I_\text{tot})/e$ is $+35.0$ W as a
+   conditional mean over the returning-electron samples. And $T_e$ at the
+   launch cell sits at $0.28$ eV as a window mean, below the $1$ eV
+   semi-quantitative bar the measurement error model sets. **Only the
+   window-mean SIGN is robust.** Instants at the tail are never quotable for
+   sign, and the three Q2 export readings above disagree in sign with each
+   other depending on construction — see `scripts/edt_consult_pins.py`'s Q2
+   section, which is the citable source and labels every one of them.
 
 The missing EMF work corresponds to an in-plasma EMF of $+3.7$ to $+5.9$ V
 (current-weighted window means; the range is the SUPPORT bracket — faces 2–5,

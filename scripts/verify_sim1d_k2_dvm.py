@@ -4794,6 +4794,572 @@ def gate_cj4():
     )
 
 
+# ------------------------------ cathode-jet ARMING CRITERION (the latch)
+#
+# The criterion ships INERT (``neutral_jet_arm_current_A = 0`` declares no
+# criterion), so every gate below names its own arm/disarm pair explicitly.
+# That is deliberate: the registered 50/25 pair belongs to the M1 arms, not to
+# the package, and a suite that inherited it from the defaults would stop
+# testing the thing it is about the moment the defaults moved.
+
+
+#: The REGISTERED ARM values, set explicitly by the M1 arms. NOT defaults.
+JA_ARM_A = 50.0
+JA_DISARM_A = 25.0
+
+#: An arm threshold BELOW the ion current the FIRST accepted step books, so
+#: the latch arms at the end of step 1. Measured on this arm: step 1 books
+#: I_i = 2.657700e-02 A, and the cathode jet books no energy at all on that
+#: step (the first booking is step 2). That is what lets the
+#: immediately-armed run be BIT-IDENTICAL to the inert one rather than merely
+#: close -- the one censored step had nothing to censor.
+JA_IMMEDIATE_ARM_A = 0.02
+
+#: Steps each latch comparison runs: long enough for the jet to book on many
+#: steps and for the neutral clock to tick at least once.
+JA_STEPS = 40
+
+#: Steps the FLUID parity legs run. Shorter only because the fluid arm carries
+#: the full moment neutral package and costs more per step; the statement is
+#: the same one.
+JA_FLUID_STEPS = 12
+
+#: Step cap for the JA5 identity run, which continues past ``JA_STEPS`` until
+#: the neutral clock has ticked at least once so BOTH right-hand terms of the
+#: identity carry energy.
+JA_IDENTITY_MAX_STEPS = 900
+
+#: The DVM cathode-jet arm these gates ride, on the same coefficients the B5
+#: gates above use.
+JA_JET_KW = {
+    "neutral_kinetic_dvm_cathode_jet": True,
+    "neutral_kinetic_dvm_cathode_jet_R_N": CJ_R_N,
+    "neutral_kinetic_dvm_cathode_jet_R_E": CJ_R_E,
+}
+
+
+def _ja_solve(I_i):
+    """A stand-in cathode solve carrying one booked ion current."""
+    return SimpleNamespace(
+        beam_result=SimpleNamespace(result=SimpleNamespace(I_i=float(I_i)))
+    )
+
+
+def _ja_bits(y):
+    """Raw uint64 view of a state vector, for bit-identity comparisons."""
+    return np.ascontiguousarray(y, dtype=float).view(np.uint64)
+
+
+def _ja_run(steps=JA_STEPS, drive=None, **overrides):
+    """Run a DVM cathode-jet arm and return its end-of-run fingerprint.
+
+    ``drive``, when given, maps a step index to a latch state forced BEFORE
+    that step. It is how the arm/disarm/re-arm gate reaches latch histories
+    this arm's monotonically rising ion current cannot produce on its own; the
+    gates that are about the latch's OWN decisions never use it.
+    """
+    sim = make_sim(**JA_JET_KW, **overrides)
+    tick_energy = 0.0
+    ticks = 0
+    I_i_max = 0.0
+    for k in range(steps):
+        if drive is not None and k in drive:
+            sim._jet_armed = bool(drive[k])
+        before = sim._dvm.updates
+        advance_one_step(sim)
+        solve = sim._cathode_solve
+        if solve is not None and solve.beam_result is not None:
+            candidate = float(solve.beam_result.result.I_i)
+            if np.isfinite(candidate):
+                I_i_max = max(I_i_max, candidate)
+        if sim._dvm.updates > before:
+            ticks += 1
+            tick_energy += float(
+                sim._dvm.last_ledger["energy"]["birth_cathode_jet"]
+            )
+    return {
+        "y": np.asarray(sim._y, dtype=float).copy(),
+        "backscatter_J": float(sim._cathode_energy_ledger_J["backscatter"]),
+        "pending_erg": float(np.sum(sim._dvm_cathode_jet_energy_booked)),
+        "tick_energy_erg": tick_energy,
+        "ticks": ticks,
+        "censored": int(sim._jet_arming_censored_steps),
+        "transitions": int(sim._jet_arming_transitions),
+        "I_i_max": I_i_max,
+        "arming_active": bool(sim._jet_arming_active),
+    }
+
+
+def _ja_fluid_sim(**overrides):
+    """A FLUID cathode-jet build (the shipped moment package, no DVM arm)."""
+    d, fl = default_config()
+    d = dict(d)
+    fl = dict(fl)
+    d.update(overrides)
+    return LAPDSim1D(input_dict=d, input_flags=fl)
+
+
+def _ja_fluid_run(steps=JA_FLUID_STEPS, **overrides):
+    """Run a fluid cathode-jet arm and return its end-of-run fingerprint."""
+    sim = _ja_fluid_sim(**overrides)
+    spec_live = 0
+    I_i_max = 0.0
+    for _ in range(steps):
+        advance_one_step(sim)
+        solve = sim._cathode_solve
+        if solve is not None and solve.beam_result is not None:
+            candidate = float(solve.beam_result.result.I_i)
+            if np.isfinite(candidate):
+                I_i_max = max(I_i_max, candidate)
+        if sim._cathode_jet_spec(sim._cathode_solve) is not None:
+            spec_live += 1
+    return {
+        "y": np.asarray(sim._y, dtype=float).copy(),
+        "Ts_K": float(sim._cathode_Ts_K),
+        "spec_live": spec_live,
+        "censored": int(sim._jet_arming_censored_steps),
+        "transitions": int(sim._jet_arming_transitions),
+        "I_i_max": I_i_max,
+    }
+
+
+def gate_ja1():
+    """JA1 sub-threshold: nothing is launched AND nothing is debited.
+
+    QUANTITY: both sides of the conservation pair the criterion gates -- the
+    launch (the tick's ``birth_cathode_jet`` energy plus the not-yet-ticked
+    accumulator) and the debit (the surface energy ledger's ``backscatter``
+    row).
+    SITE: the DVM cathode-jet channel through ``LAPDSim1D``'s accepted-step
+    path, on the kinetic arm.
+    FIXTURE: ``arm_config`` + the B5 jet coefficients, at the REGISTERED
+    50 A / 25 A pair, run ``JA_STEPS`` accepted steps.
+    PASS: exactly zero on BOTH sides -- not small, zero -- with the latch
+    never arming, over a run whose ion current stayed below the disarm
+    threshold throughout.
+
+    Showing both sides is the whole point. A censoring that suppressed the
+    launch but left the debit standing would book the surface for atoms that
+    were never born, and the totals would still close.
+    """
+    r = _ja_run(
+        neutral_jet_arm_current_A=JA_ARM_A,
+        neutral_jet_disarm_current_A=JA_DISARM_A,
+    )
+    sub_threshold = r["I_i_max"] < JA_DISARM_A
+    ok = (
+        r["arming_active"]
+        and sub_threshold
+        and r["pending_erg"] == 0.0
+        and r["tick_energy_erg"] == 0.0
+        and r["backscatter_J"] == 0.0
+        and r["transitions"] == 0
+        and r["censored"] == JA_STEPS
+    )
+    return (
+        "JA1 arming criterion, sub-threshold: the cathode jet launches "
+        "NOTHING and the surface is debited NOTHING",
+        ok,
+        f"{JA_STEPS} accepted steps at arm={fmt(JA_ARM_A)} A / "
+        f"disarm={fmt(JA_DISARM_A)} A; worst booked I_i over the run "
+        f"{fmt(r['I_i_max'])} A, below the disarm threshold throughout: "
+        f"{sub_threshold}\n        "
+        f"LAUNCH side: tick birth_cathode_jet energy "
+        f"{fmt(r['tick_energy_erg'])} erg over {r['ticks']} ticks, "
+        f"not-yet-ticked accumulator {fmt(r['pending_erg'])} erg "
+        f"(exactly 0 required)\n        "
+        f"DEBIT side: surface backscatter row {fmt(r['backscatter_J'])} J "
+        f"(exactly 0 required); latch transitions {r['transitions']}, "
+        f"censored steps {r['censored']} of {JA_STEPS}",
+    )
+
+
+def gate_ja2():
+    """JA2 supra-threshold: an armed latch is bit-identical to no criterion.
+
+    QUANTITY: the packed conservative state ``y`` at raw uint64, plus both
+    sides of the conservation pair.
+    SITE / FIXTURE: as JA1, comparing an arm whose latch arms at the end of
+    step 1 (``JA_IMMEDIATE_ARM_A``, below the current step 1 books) against
+    the INERT declaration ``arm = 0``.
+    PASS: every bit of ``y`` identical, and both ledger sides identical.
+
+    The one censored step is step 1, on which this arm's cathode jet books no
+    energy at all -- so the comparison is exact rather than approximate, and
+    it says what it should: once armed, the criterion is not in the way.
+    """
+    armed = _ja_run(
+        neutral_jet_arm_current_A=JA_IMMEDIATE_ARM_A,
+        neutral_jet_disarm_current_A=0.0,
+    )
+    inert = _ja_run(neutral_jet_arm_current_A=0.0)
+    bits_ok = np.array_equal(_ja_bits(armed["y"]), _ja_bits(inert["y"]))
+    ledger_ok = (
+        armed["backscatter_J"] == inert["backscatter_J"]
+        and armed["pending_erg"] == inert["pending_erg"]
+        and armed["tick_energy_erg"] == inert["tick_energy_erg"]
+    )
+    non_vacuous = inert["tick_energy_erg"] + inert["pending_erg"] > 0.0
+    ok = (
+        bits_ok
+        and ledger_ok
+        and non_vacuous
+        and armed["transitions"] == 1
+        and armed["censored"] == 1
+    )
+    return (
+        "JA2 arming criterion, supra-threshold: once armed the latch is "
+        "bit-identical to declaring no criterion at all",
+        ok,
+        f"{JA_STEPS} accepted steps; armed arm={fmt(JA_IMMEDIATE_ARM_A)} A "
+        f"(arms at the end of step 1) against the inert arm=0 declaration\n"
+        f"        state vector bit-identical at raw uint64: {bits_ok}; "
+        f"backscatter row {fmt(armed['backscatter_J'])} vs "
+        f"{fmt(inert['backscatter_J'])} J, accumulator "
+        f"{fmt(armed['pending_erg'])} vs {fmt(inert['pending_erg'])} erg, "
+        f"tick energy {fmt(armed['tick_energy_erg'])} vs "
+        f"{fmt(inert['tick_energy_erg'])} erg\n        "
+        f"latch armed once ({armed['transitions']} transitions) and censored "
+        f"exactly the one pre-booking step ({armed['censored']}); the "
+        f"comparison is NON-VACUOUS -- the inert run really does launch "
+        f"({non_vacuous})",
+    )
+
+
+def gate_ja3():
+    """JA3 the hysteresis holds and does not chatter.
+
+    QUANTITY: the latch state after each of the crossing sequence
+    30 -> 60 -> 40 -> 20 A, at the registered 50/25 pair.
+    SITE: ``LAPDSim1D._update_jet_arming_latch``, driven directly on
+    stand-in solves so the sequence is exactly the registered one rather than
+    whatever a run happens to produce.
+    PASS: disarmed at 30 (never armed), ARMS at 60, STAYS ARMED at 40, and
+    DISARMS at 20 -- two transitions, not four.
+
+    The 40 A step is the gate. A bare single-threshold comparator at 50 A
+    would drop the jet there and pick it up again on the next excursion
+    above; the band is what stops a current dwelling near the threshold from
+    switching the jet on and off step after step.
+    """
+    sim = make_sim(
+        **JA_JET_KW,
+        neutral_jet_arm_current_A=JA_ARM_A,
+        neutral_jet_disarm_current_A=JA_DISARM_A,
+    )
+    sequence = (30.0, 60.0, 40.0, 20.0)
+    expected = (False, True, True, False)
+    observed = []
+    for I_i in sequence:
+        sim._update_jet_arming_latch(_ja_solve(I_i))
+        observed.append(bool(sim._jet_armed))
+    # What a single-threshold comparator at the ARM level would have done, so
+    # the no-chatter claim is measured against a STATED alternative rather
+    # than asserted. The two agree everywhere except the 40 A step -- which is
+    # the whole difference between a band and a threshold, and is why the
+    # comparison is made state-by-state rather than by counting flips (over
+    # this four-point sequence both forms happen to move twice; the naive one
+    # simply never comes back).
+    naive = tuple(I_i >= JA_ARM_A for I_i in sequence)
+    diverges_at_40 = naive[2] is False and observed[2] is True
+    ok = (
+        tuple(observed) == expected
+        and sim._jet_arming_transitions == 2
+        and diverges_at_40
+    )
+    return (
+        "JA3 arming criterion: latched hysteresis over a 30->60->40->20 A "
+        "crossing, no chatter",
+        ok,
+        f"arm={fmt(JA_ARM_A)} A, disarm={fmt(JA_DISARM_A)} A; sequence "
+        f"{sequence} -> armed {tuple(observed)} (expected {expected})\n"
+        f"        latch transitions {sim._jet_arming_transitions} "
+        f"(2 required: one arm at 60 A, one disarm at 20 A). The 40 A step "
+        f"stays ARMED: {observed[2]}\n        "
+        f"a bare single-threshold comparator at {fmt(JA_ARM_A)} A would read "
+        f"{naive} over the same sequence and DROP the jet at 40 A; the latch "
+        f"holds it ({diverges_at_40}). That one step is the chatter the band "
+        f"removes -- a current oscillating about the arm threshold toggles "
+        f"the comparator every crossing and leaves the latch alone",
+    )
+
+
+def gate_ja4():
+    """JA4 NEGATIVE CONTROL: the censoring is real, not vacuous.
+
+    QUANTITY: the launch and debit a LATCH-DISABLED evaluation books over the
+    same steps on which the registered 50/25 pair books nothing.
+    SITE / FIXTURE: two runs of the JA1 arm, one at ``arm = 0`` (no criterion
+    -- the pre-change behaviour) and one at 50/25.
+    PASS: the disabled run launches AND debits strictly positive amounts
+    while the armed-config run is exactly zero on both.
+
+    Without this leg JA1 proves nothing: a jet that never fires under ANY
+    configuration would pass it. This is the leg that shows the zeros are the
+    criterion's doing.
+    """
+    disabled = _ja_run(neutral_jet_arm_current_A=0.0)
+    armed = _ja_run(
+        neutral_jet_arm_current_A=JA_ARM_A,
+        neutral_jet_disarm_current_A=JA_DISARM_A,
+    )
+    launched = disabled["tick_energy_erg"] + disabled["pending_erg"]
+    ok = (
+        launched > 0.0
+        and disabled["backscatter_J"] > 0.0
+        and armed["tick_energy_erg"] == 0.0
+        and armed["pending_erg"] == 0.0
+        and armed["backscatter_J"] == 0.0
+    )
+    return (
+        "JA4 arming criterion NEGATIVE CONTROL: the latch-disabled "
+        "evaluation launches and debits where the registered pair does not",
+        ok,
+        f"same {JA_STEPS}-step arm, same state history, two declarations\n"
+        f"        latch DISABLED (arm=0, the pre-change behaviour): launched "
+        f"{fmt(launched)} erg (ticks {fmt(disabled['tick_energy_erg'])} + "
+        f"accumulator {fmt(disabled['pending_erg'])}), surface debited "
+        f"{fmt(disabled['backscatter_J'])} J\n        "
+        f"latch at arm={fmt(JA_ARM_A)}/disarm={fmt(JA_DISARM_A)} A: launched "
+        f"{fmt(armed['tick_energy_erg'] + armed['pending_erg'])} erg, "
+        f"debited {fmt(armed['backscatter_J'])} J (exactly 0 on both)\n"
+        f"        the censored energy is REAL and its magnitude is the "
+        f"disabled run's own booking",
+    )
+
+
+def gate_ja5():
+    """JA5 the cumulative backscatter identity survives arm/disarm/re-arm.
+
+    QUANTITY: the B5 cumulative identity
+
+        surface ``backscatter`` row
+            == sum over ticks of ``birth_cathode_jet`` energy
+               + R_E x the not-yet-ticked accumulator
+
+    SITE / FIXTURE: the JA1 arm, run ``JA_STEPS`` steps with the latch DRIVEN
+    disarmed part-way and re-armed later, so the run carries censored and
+    uncensored steps on both sides of at least one neutral tick.
+    PASS: the identity closes to ``ROUNDOFF_REL``, with no new ledger row.
+
+    The identity is what makes the criterion safe: a censored step
+    contributes zero to BOTH sides, so the books stay paired across an
+    arbitrary latch history rather than only on runs that never switch.
+    """
+    drive = {JA_STEPS // 3: False, 2 * JA_STEPS // 3: True}
+    sim = make_sim(
+        **JA_JET_KW,
+        neutral_jet_arm_current_A=JA_IMMEDIATE_ARM_A,
+        neutral_jet_disarm_current_A=0.0,
+    )
+    tick_energy = 0.0
+    ticks = 0
+    steps = 0
+    # Run past the drive sequence AND past the first neutral tick, so the
+    # identity is tested with energy on BOTH of its right-hand terms: the
+    # ticked ``birth_cathode_jet`` rows and the accumulator still in hand.
+    while steps < JA_IDENTITY_MAX_STEPS and (
+        steps < JA_STEPS or ticks < 1
+    ):
+        if steps in drive:
+            sim._jet_armed = drive[steps]
+        before = sim._dvm.updates
+        advance_one_step(sim)
+        steps += 1
+        if sim._dvm.updates > before:
+            ticks += 1
+            tick_energy += float(
+                sim._dvm.last_ledger["energy"]["birth_cathode_jet"]
+            )
+    lhs = float(sim._cathode_energy_ledger_J["backscatter"])
+    pending_J = (
+        CJ_R_E * float(np.sum(sim._dvm_cathode_jet_energy_booked)) * 1.0e-7
+    )
+    rhs = tick_energy * 1.0e-7 + pending_J
+    scale = max(abs(lhs), abs(rhs), 1e-300)
+    rel = abs(lhs - rhs) / scale
+    censored = int(sim._jet_arming_censored_steps)
+    ok = (
+        rel < ROUNDOFF_REL
+        and censored > 0
+        and censored < steps
+        and lhs > 0.0
+        and ticks >= 1
+        and tick_energy > 0.0
+    )
+    return (
+        "JA5 arming criterion: the cumulative backscatter identity holds "
+        "across an arm/disarm/re-arm sequence, with no new ledger row",
+        ok,
+        f"{steps} accepted steps, latch driven disarmed at step "
+        f"{JA_STEPS // 3} and re-armed at step {2 * JA_STEPS // 3}; "
+        f"{censored} censored and {steps - censored} live steps over "
+        f"{ticks} neutral ticks\n        "
+        f"backscatter row {fmt(lhs)} J == tick birth energy "
+        f"{fmt(tick_energy * 1.0e-7)} J + R_E x accumulator "
+        f"{fmt(pending_J)} J = {fmt(rhs)} J; relative {fmt(rel)} "
+        f"(tol {fmt(ROUNDOFF_REL)})\n        "
+        f"the run carries BOTH censored and live steps ({censored} of "
+        f"{steps}), which is what makes this a statement about the latch "
+        f"history rather than about a run that never switched",
+    )
+
+
+def gate_ja6():
+    """JA6 FLUID parity: the same latch, the same two statements.
+
+    QUANTITY: (a) sub-threshold -- a fluid arm at 50/25 against one with the
+    cathode jet ABSENT (``cathode_neutral_jet=False`` and its debit off);
+    (b) supra-threshold -- an immediately-arming fluid arm against the inert
+    declaration.
+    SITE: the fluid ``cathode_neutral_jet`` channel and the cathode surface
+    power balance's retention factor, through ``LAPDSim1D``.
+    FIXTURE: ``default_config()`` (which ships the fluid jet and its debit
+    armed), ``JA_FLUID_STEPS`` accepted steps.
+    PASS: (a) bit-identical to the jet-absent build -- which is ZERO SOURCE
+    and ZERO DEBIT in one statement, since the absent build books neither;
+    (b) bit-identical to the inert declaration.
+
+    (a) is deliberately an equivalence against ABSENCE rather than two
+    separate "is zero" reads: the momentum source and the retention factor
+    are different quantities in different equations, and the only way to say
+    both are gone at once is to compare against the build that has neither.
+    """
+    sub = _ja_fluid_run(
+        neutral_jet_arm_current_A=JA_ARM_A,
+        neutral_jet_disarm_current_A=JA_DISARM_A,
+    )
+    absent = _ja_fluid_run(
+        cathode_neutral_jet=False,
+        cathode_jet_surface_debit=False,
+        # The template ships the 'total_reflected' reading, which is refused
+        # without the jet it rescales. It is read only by the launch-speed
+        # spec, which the absent build never calls, so standing it down is
+        # what lets this build exist at all -- and it cannot perturb the
+        # comparison, because nothing consults it.
+        cathode_jet_energy_convention="legacy",
+    )
+    # The supra-threshold leg is a MATCHED-STATE A/B rather than a whole-run
+    # comparison, and the fluid channel is why. Its jet books from the FIRST
+    # accepted step (the DVM channel's first booking is step 2), and the latch
+    # necessarily starts disarmed -- there is no discharge current yet -- so
+    # an armed fluid run and an inert one differ on step 1 no matter how low
+    # the arm threshold is set. That difference is the criterion WORKING, not
+    # the thing this leg is about. So: advance one sim until the latch is
+    # armed, then step it twice from the SAME state through the solver's own
+    # Picard snapshot -- once under the criterion, once with the criterion
+    # stood down -- and compare. That is the actual claim: with the latch
+    # armed, the criterion is not in the way.
+    supra_sim = _ja_fluid_sim(
+        neutral_jet_arm_current_A=JA_IMMEDIATE_ARM_A,
+        neutral_jet_disarm_current_A=0.0,
+    )
+    for _ in range(JA_FLUID_STEPS):
+        advance_one_step(supra_sim)
+    latch_armed = bool(supra_sim._jet_armed)
+    snap = supra_sim._picard_snapshot()
+    advance_one_step(supra_sim)
+    supra = {
+        "y": np.asarray(supra_sim._y, dtype=float).copy(),
+        "Ts_K": float(supra_sim._cathode_Ts_K),
+    }
+    supra_sim._picard_restore(snap)
+    supra_sim._jet_arming_active = False
+    advance_one_step(supra_sim)
+    inert = {
+        "y": np.asarray(supra_sim._y, dtype=float).copy(),
+        "Ts_K": float(supra_sim._cathode_Ts_K),
+    }
+    sub_ok = (
+        np.array_equal(_ja_bits(sub["y"]), _ja_bits(absent["y"]))
+        and sub["Ts_K"] == absent["Ts_K"]
+        and sub["spec_live"] == 0
+        and sub["censored"] == JA_FLUID_STEPS
+    )
+    supra_ok = (
+        latch_armed
+        and np.array_equal(_ja_bits(supra["y"]), _ja_bits(inert["y"]))
+        and supra["Ts_K"] == inert["Ts_K"]
+    )
+    non_vacuous = not np.array_equal(
+        _ja_bits(sub["y"]), _ja_bits(_ja_fluid_run()["y"])
+    )
+    ok = sub_ok and supra_ok and non_vacuous
+    return (
+        "JA6 arming criterion, FLUID parity: sub-threshold books zero source "
+        "AND zero debit; supra-threshold is bit-identical to base",
+        ok,
+        f"{JA_FLUID_STEPS} accepted steps on the shipped fluid package; "
+        f"worst booked I_i {fmt(sub['I_i_max'])} A\n        "
+        f"SUB-THRESHOLD (arm={fmt(JA_ARM_A)}/disarm={fmt(JA_DISARM_A)} A) "
+        f"bit-identical to the jet-ABSENT build: {sub_ok} -- jet spec live "
+        f"on {sub['spec_live']} steps (0 required), censored "
+        f"{sub['censored']} of {JA_FLUID_STEPS}, T_s {fmt(sub['Ts_K'])} K "
+        f"against the absent build's {fmt(absent['Ts_K'])} K\n        "
+        f"SUPRA-THRESHOLD, matched-state A/B after {JA_FLUID_STEPS} steps "
+        f"(latch armed: {latch_armed}): one step under the criterion vs one "
+        f"step with it stood down, from the SAME state through the solver's "
+        f"Picard snapshot -- bit-identical: {supra_ok}, T_s "
+        f"{fmt(supra['Ts_K'])} K against {fmt(inert['Ts_K'])} K\n        "
+        f"NON-VACUOUS: the censored run really does differ from the live "
+        f"shipped build ({non_vacuous}), so the sub-threshold equivalence is "
+        f"a censoring result and not an identity between two identical runs",
+    )
+
+
+def gate_ja7():
+    """JA7 the shipped INERT default is structurally inert.
+
+    QUANTITY: the presence gate, the latch census, and the trajectory.
+    SITE / FIXTURE: the JA1 arm built three ways -- with both keys omitted
+    from ``input_dict`` entirely (so the template default applies), with both
+    named explicitly at 0, and at the registered 50/25 pair.
+    PASS: the two arm=0 builds agree bit-for-bit AND report the presence gate
+    OFF with zero censored steps; and both differ from the 50/25 build.
+
+    The differing leg is what stops this being a tautology: it shows the
+    comparison can tell the two apart, so the agreement of the first two is
+    a statement rather than an artefact.
+
+    The corresponding statement AT THE GOLDEN STANCE -- that the inert
+    default leaves the 4,000-step digest trajectory exact while the config
+    identity moves by exactly these two keys -- is the digest additive proof,
+    which is where the shipped-stance claim is actually made.
+    """
+    default = _ja_run()
+    explicit = _ja_run(
+        neutral_jet_arm_current_A=0.0, neutral_jet_disarm_current_A=0.0
+    )
+    criterion = _ja_run(
+        neutral_jet_arm_current_A=JA_ARM_A,
+        neutral_jet_disarm_current_A=JA_DISARM_A,
+    )
+    agree = np.array_equal(_ja_bits(default["y"]), _ja_bits(explicit["y"]))
+    differs = not np.array_equal(
+        _ja_bits(default["y"]), _ja_bits(criterion["y"])
+    )
+    inert_ok = (
+        not default["arming_active"]
+        and not explicit["arming_active"]
+        and default["censored"] == 0
+        and default["transitions"] == 0
+    )
+    ok = agree and differs and inert_ok
+    return (
+        "JA7 arming criterion: the shipped inert default (arm = 0) declares "
+        "no criterion and cannot reach the latch",
+        ok,
+        f"{JA_STEPS} accepted steps; keys omitted vs both named at 0 "
+        f"bit-identical: {agree}\n        "
+        f"presence gate OFF on both ({not default['arming_active']}), "
+        f"censored steps {default['censored']}, latch transitions "
+        f"{default['transitions']} (0 required on each)\n        "
+        f"and BOTH differ from the {fmt(JA_ARM_A)}/{fmt(JA_DISARM_A)} A "
+        f"build ({differs}), so the agreement above is a measurement and not "
+        f"a comparison of one run with itself",
+    )
+
+
 # --------------------------------- B4 anode-side energetic recycle (jet)
 
 
@@ -5784,6 +6350,41 @@ BF_LEDGER_REL = 1.0e-14
 #: Relative tolerance of the B6 momentum-row antisymmetry (AJ4's class).
 BF_MOMENTUM_REL = 1.0e-12
 
+#: Double-precision unit of least precision, for the BF3 energy bound below.
+DOUBLE_EPS = float(np.finfo(float).eps)
+
+#: [bf3] BF3's ENERGY-closure bound, in ULP of the tick's own energy SCALE:
+#: the gate accepts ``|distribution residual| <= k x eps x scale``.
+#:
+#: DERIVATION of k = 8. The quantity BF3 bounds is a WHOLE-LEDGER roundoff
+#: accumulation, and the form this replaces divided it by the BAFFLE'S OWN
+#: energy row -- a single channel. Numerator and denominator were therefore
+#: different objects, and the resulting headroom was set by whichever way the
+#: roundoff happened to fall: measured across three DVM velocity grids the
+#: residual is 0.725 / 0.021 / 0.574 ULP of the ledger scale at (16,6) --
+#: the registered grid -- (48,12) and (64,24), while the old form's margin
+#: against ROUNDOFF_REL swung 3.83x / 134.36x / 4.99x over the same three
+#: runs. The swing is entirely the numerator's: the baffle row varies by
+#: 3.3 % across the grids and the ledger scale by 0.2 %, so neither
+#: denominator collapses (measured 2026-08-31; a denominator FLOOR was tried
+#: first and is arithmetically inert at any value at or below the ~1.5e4 erg
+#: row).
+#:
+#: k = 8 is the next power of two above 11x the worst measured case (0.725
+#: ULP), which is the headroom this suite gives a quantity that is already at
+#: the floating-point noise floor. It is expressed in ULP rather than as a
+#: bare relative constant because that is what the measurement is in: saying
+#: "eight units in the last place of the energy that moved" states the noise
+#: floor the bound is derived from, where a fixed relative tolerance would
+#: hide it.
+BF_ENERGY_ULP_K = 8.0
+
+#: [bf3] Size of the injected violation the BF3 negative control adds, in the
+#: same ULP units. Comfortably outside ``BF_ENERGY_ULP_K`` from any residual
+#: the gate would otherwise accept, so the control is a statement about the
+#: BOUND and not about how close the live residual happens to sit to it.
+BF_ENERGY_CONTROL_ULP = 32.0
+
 #: The BF1 closed box's target transparency at its one baffle face.
 BF_TARGET_TRANSPARENCY = 0.5
 
@@ -6307,11 +6908,22 @@ def gate_bf3():
       cells flanking the stance's baffle face, and exactly zero everywhere
       else. A channel depositing on a positional constant rather than on the
       face it belongs to (the S1 defect class) fails here.
-    * ENERGY CLOSURE -- the every-channel energy ledger, reported in BOTH
-      normalizations per the 2026-08-30 rule: THROUGHPUT-normalized (what a
-      residual gate sees) and ROW-RELATIVE against the baffle's own energy row
-      (what a misbooking moving only its own row by O(1) shows up in). The
-      gate asserts the ROW-RELATIVE form.
+    * ENERGY CLOSURE -- the every-channel energy ledger. The gate asserts an
+      ABSOLUTE bound in ULP of the tick's own energy scale,
+      ``|distribution residual| <= BF_ENERGY_ULP_K x eps x scale`` (amended
+      2026-08-31; see that constant for the derivation and the measurement it
+      rests on). Both older normalizations are still REPORTED per the
+      2026-08-30 rule -- throughput-normalized, and row-relative against the
+      baffle's own energy row -- because a misbooking that moves only its own
+      row by O(1) shows up in the row-relative figure. What changed is which
+      one is load-bearing: the residual here is a WHOLE-LEDGER roundoff
+      accumulation, so dividing it by a SINGLE channel's row compared two
+      different objects and left the headroom to the luck of the rounding
+      (measured: a 3.83x / 134.36x / 4.99x swing across three velocity grids
+      whose denominators vary by 3.3 % and 0.2 %). The ULP form states the
+      floating-point noise floor the bound is derived from.
+      NEGATIVE CONTROL: an injected ``BF_ENERGY_CONTROL_ULP`` violation must
+      trip the bound, so a pass cannot come from an unreachable tolerance.
     * MOMENTUM -- ``momentum_baffle_absorbed``. Its VALUE statement is AJ4's
       MIRROR ANTISYMMETRY, and for AJ4's stated reason: a second implementation
       of the tally inside the gate would be the same reduction over the same
@@ -6341,6 +6953,24 @@ def gate_bf3():
     row = abs(e["loss_baffle_blocked"]) + abs(e["birth_baffle_reemit"])
     row_relative = abs(e_res["distribution"]) / max(row, 1e-300)
     throughput_normalized = abs(e_res["distribution_rel"])
+    # [bf3] THE ENERGY LEG THE GATE ASSERTS: the absolute distribution
+    # residual against a bound of BF_ENERGY_ULP_K units in the last place of
+    # the tick's own energy scale. See that constant for the derivation and
+    # for what the row-relative form did instead.
+    energy_abs = abs(e_res["distribution"])
+    energy_bound = BF_ENERGY_ULP_K * DOUBLE_EPS * abs(e_res["scale"])
+    energy_ulp = (
+        energy_abs / (DOUBLE_EPS * abs(e_res["scale"]))
+        if e_res["scale"]
+        else float("inf")
+    )
+    energy_ok = energy_abs <= energy_bound
+    # [bf3] NEGATIVE CONTROL for the new form, at the statement level: perturb
+    # the residual by a violation just outside the bound and confirm the bound
+    # REJECTS it. Without this the gate could be passing because the bound is
+    # unreachable rather than because the ledger closes.
+    control_injected = BF_ENERGY_CONTROL_ULP * DOUBLE_EPS * abs(e_res["scale"])
+    control_trips = not (energy_abs + control_injected <= energy_bound)
 
     def mirror_row(side):
         nz, Rp, Rm = 8, 15.0, 50.0
@@ -6374,7 +7004,7 @@ def gate_bf3():
     ok = (
         on_face > 0.0
         and off_face == 0.0
-        and row_relative < ROUNDOFF_REL
+        and energy_ok
         and abs(n_res["distribution_rel"]) < BF_LEDGER_REL
         and solver_row_ok
         and n_low > 0.0
@@ -6382,6 +7012,7 @@ def gate_bf3():
         and p_low > 0.0
         and p_high < 0.0
         and mirror < BF_MOMENTUM_REL
+        and control_trips
     )
     return (
         "BF3 in-solver, stance baffle armed: booked on the flanking cells "
@@ -6391,9 +7022,18 @@ def gate_bf3():
         f"{len(ledgers)} ticks; per-cell baffle counts {fmt(on_face)} on the "
         f"flanking pair {flanking} and {fmt(off_face)} everywhere else "
         f"(exactly 0 required)\n        "
-        f"energy closure ROW-RELATIVE (the gate) {fmt(row_relative)} against "
-        f"a baffle energy row of {fmt(row)} erg, THROUGHPUT-normalized (what "
-        f"a residual gate sees) {fmt(throughput_normalized)}; particle "
+        f"energy closure THE GATE: |distribution residual| "
+        f"{fmt(energy_abs)} erg = {energy_ulp:.3f} ULP of the tick's energy "
+        f"scale {fmt(abs(e_res['scale']))} erg, against a bound of "
+        f"{BF_ENERGY_ULP_K:.0f} ULP = {fmt(energy_bound)} erg\n        "
+        f"NEGATIVE CONTROL: an injected {fmt(BF_ENERGY_CONTROL_ULP)}-ULP "
+        f"conservation violation ({fmt(control_injected)} erg) trips the "
+        f"bound: {control_trips}\n        "
+        f"INFORMATIONAL, not gated -- row-relative against the baffle's own "
+        f"energy row {fmt(row_relative)} (row {fmt(row)} erg; this is the "
+        f"form this gate asserted before 2026-08-31, whose margin was "
+        f"grid-dependent), throughput-normalized "
+        f"{fmt(throughput_normalized)}; particle "
         f"distribution residual {fmt(abs(n_res['distribution_rel']))} "
         f"(tol {fmt(BF_LEDGER_REL)})\n        "
         f"in-solver rows: loss_baffle_blocked "
@@ -6515,6 +7155,13 @@ def main():
         gate_cj2,
         gate_cj3,
         gate_cj4,
+        gate_ja1,
+        gate_ja2,
+        gate_ja3,
+        gate_ja4,
+        gate_ja5,
+        gate_ja6,
+        gate_ja7,
         gate_aj1,
         gate_aj2,
         gate_aj3,

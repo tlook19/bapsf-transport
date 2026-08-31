@@ -152,6 +152,80 @@ PINS = {
     "afterglow_instant_26ms_kW_RETIRED": -0.017,
 }
 
+#: Q2 -- the cathode-face pins of the 2026-08-31 amendment, measured on
+#: ``scripts/mgcr1_confirm.h5`` and reported by the Q2 section of this
+#: evaluator. They exist because the amendment's clause (iii) rests on them:
+#: the cathode-face enthalpy-ZERO premise is a drive-phase statement, and the
+#: afterglow window is far outside the regime it was taken in.
+#:
+#: EVERY Q2b entry carries its CONSTRUCTION in its name and none is quotable
+#: without it. ``Te[launch]`` and the drift current covary hard across the
+#: ring-down -- 22 of 600 window samples run ``I_tot > I_beam`` at ``Te`` up
+#: to 7.96 eV -- so the mean of the per-sample product and the product of the
+#: window means differ IN SIGN. That is the same class of trap the EMF column
+#: carries (read current-weighted, never as a straight sample average), and
+#: it is why a bare "the export is ~N W" sentence is not a reading.
+PINS_Q2 = {
+    # (i) The circuit's own cathode electron-power row, drive vs afterglow.
+    "q2a_source_P_cathode_e_drive_mean_W": 0.0584097,
+    "q2a_source_P_cathode_e_afterglow_window_mean_W": 95.3081,
+    "q2a_source_P_cathode_e_afterglow_window_peak_W": 2392.13,
+    # (ii) The un-booked cathode-return export, 2.21 x Te[launch] x
+    # (I_beam - I_tot) / e, over the afterglow window. THREE labelled pins.
+    # The CONDITIONAL mean is the physical one: the export is a
+    # returning-electron channel, so it is defined on the samples where there
+    # are returning electrons to carry it (I_beam > I_tot).
+    "q2b_export_conditional_mean_W__RETURNING_SAMPLES_ONLY": 35.0176,
+    "q2b_export_unconditional_mean_W__COVARIANCE_DOMINATED": -122.317,
+    "q2b_export_product_of_means_W__NOT_A_SAMPLE_MEAN": 49.2947,
+    "q2b_export_window_peak_W": 251.547,
+    # (iii) The registered closure arm is valid while I_tot >= 0; this is the
+    # window minimum that says so.
+    "q2c_min_I_tot_over_afterglow_window_A": 10.9039,
+}
+
+#: The afterglow window the Q2 pins are taken over [s].
+Q2_WINDOW_S = (2.01e-2, 2.61e-2)
+
+#: W_EMF CROSS-CHECK, measured 2026-08-31 over the Q2 window; recorded here
+#: because the obvious form of it is a tautology and the next reader will
+#: otherwise re-derive that the hard way.
+#:
+#: Comparing ``W_EMF`` against ``(net - cathode_face_work)`` gives a RATIO OF
+#: EXACTLY 1 on the registered ``sheath_row_closes_all`` arm -- but that is an
+#: IDENTITY BY CONSTRUCTION, not a confirmation. On that arm the closure hands
+#: both anode channels to the sheath row and the cathode face carries no
+#: enthalpy, so all four of ``cathode_face_flux``, ``anode_face_flux``,
+#: ``anode_face_work`` are zero and the volume identity collapses to
+#: ``net == cathode_face_work + W_EMF``. Any correct evaluator returns 1 there
+#: whatever W_EMF is.
+#:
+#: The INDEPENDENT test is the ``export_counts`` instrument arm, where the
+#: anode face does NOT vanish (window means: anode flux 645.762 W, anode work
+#: 276.586 W). There the same simplified partner reads
+#: -0.2697 (``cell_1``) / -0.0731 (``cell_2``) -- it is not W_EMF at all, and
+#: the shortfall is exactly the anode boundary pair it omits. Against the FULL
+#: boundary term the identity closes to 1 on BOTH arms and BOTH brackets, at a
+#: worst per-sample relative residual of 1.8e-15.
+#:
+#: READING: the simplified ``net - cathode work`` partner is CLOSURE-SPECIFIC
+#: and must not be quoted as a general check. The volume identity with its
+#: full boundary term is the general one, and it is what ``volume_identity``
+#: already computes.
+Q2_WEMF_CROSSCHECK = {
+    "closure_arm_ratio__IDENTITY_BY_CONSTRUCTION": 1.0,
+    "export_counts_arm_ratio__SIMPLIFIED_PARTNER": (-0.269700, -0.073055),
+    "export_counts_arm_ratio__FULL_BOUNDARY_PARTNER": 1.0,
+    "export_counts_anode_face_flux_W": 645.762,
+    "export_counts_anode_face_work_W": 276.586,
+    "worst_volume_identity_relative_residual": 1.8e-15,
+}
+
+#: The enthalpy/heat-flux face coefficient, 1.5 + 0.71 -- the same ``_C_FACE``
+#: the operator carries, named here because the Q2b export estimate is built
+#: from it.
+Q2_EXPORT_COEFF = _C_FACE
+
 CHARGE_DEATH_CHOICES = ("cell_1", "cell_2")
 
 #: ``sheath_row_closes_all`` first: it is the registered closure and the
@@ -725,10 +799,109 @@ def main(argv=None):
             "are reported above."
         )
 
+        # ---- Q2: the cathode-face pins of the 2026-08-31 amendment --------
+        q2_lo, q2_hi = Q2_WINDOW_S
+        drive_sel = np.flatnonzero((t >= args.t_lo) & (t <= args.t_hi))
+        q2_sel = np.flatnonzero((t >= q2_lo) & (t <= q2_hi))
+        print(
+            f"\n# Q2 CATHODE-FACE PINS  (drive {args.t_lo * 1e3:.3f}-"
+            f"{args.t_hi * 1e3:.3f} ms, afterglow window "
+            f"{q2_lo * 1e3:.3f}-{q2_hi * 1e3:.3f} ms)"
+        )
+        P_ce = cd["source_P_cathode_e"][:]
+        print("  Q2a source_P_cathode_e -- the circuit's own cathode electron")
+        print("  power row. The drive-phase mean is the number the")
+        print("  cathode-face enthalpy-ZERO premise was taken against; the")
+        print("  afterglow mean is what that premise meets in the window.")
+        print(
+            f"    drive-phase mean          {np.nanmean(P_ce[drive_sel]):.6g} W"
+            f"   (N={drive_sel.size})"
+        )
+        print(
+            f"    afterglow-window mean     {np.nanmean(P_ce[q2_sel]):.6g} W"
+            f"   (N={q2_sel.size})"
+        )
+        _pk = int(np.nanargmax(P_ce[q2_sel]))
+        print(
+            f"    afterglow-window peak     {np.nanmax(P_ce[q2_sel]):.6g} W"
+            f"   at t={t[q2_sel][_pk] * 1e3:.4f} ms"
+        )
+        print(
+            f"    ratio afterglow/drive     "
+            f"{np.nanmean(P_ce[q2_sel]) / np.nanmean(P_ce[drive_sel]):.6g}"
+        )
+
+        I_tot_q2 = cd["circuit_I_loop"][:]
+        I_beam_q2 = cd["source_I_eth_star"][:]
+        Te_launch = h5["Te"][:, geom.cathode_cell]
+        drift = I_beam_q2 - I_tot_q2
+        export_W = Q2_EXPORT_COEFF * Te_launch * drift
+        returning = drift[q2_sel] > 0.0
+        print(
+            f"  Q2b un-booked cathode-return export "
+            f"{Q2_EXPORT_COEFF} x Te[{geom.cathode_cell}] x "
+            f"(I_beam - I_tot) / e."
+        )
+        print("  THREE readings, and they DISAGREE IN SIGN. Quote none of")
+        print("  them without the label: Te[launch] and the drift current")
+        print("  covary across the ring-down, so the mean of the product is")
+        print("  not the product of the means.")
+        print(
+            f"    CONDITIONAL mean, returning-electron samples only "
+            f"(I_beam > I_tot)  "
+            f"{np.nanmean(export_W[q2_sel][returning]):.6g} W"
+        )
+        print(
+            f"      -- the PHYSICAL reading: the channel is defined where "
+            f"there are returning"
+        )
+        print(
+            f"         electrons to carry it. {int(returning.sum())} of "
+            f"{q2_sel.size} samples; strictly positive"
+        )
+        print(
+            f"         (min {np.nanmin(export_W[q2_sel][returning]):.6g} W, "
+            f"max {np.nanmax(export_W[q2_sel][returning]):.6g} W)"
+        )
+        print(
+            f"    UNCONDITIONAL per-sample mean, COVARIANCE-DOMINATED       "
+            f"{np.nanmean(export_W[q2_sel]):.6g} W"
+        )
+        print(
+            f"      -- the {int((~returning).sum())} samples with "
+            f"I_tot >= I_beam mean "
+            f"{np.nanmean(export_W[q2_sel][~returning]):.6g} W and carry it"
+        )
+        print(
+            f"         negative; they sit in the first ~0.1 ms of ring-down "
+            f"at Te up to "
+            f"{np.nanmax(Te_launch[q2_sel]):.4g} eV"
+        )
+        print(
+            f"    PRODUCT OF WINDOW MEANS, not a sample mean               "
+            f"{Q2_EXPORT_COEFF * np.nanmean(Te_launch[q2_sel]) * np.nanmean(drift[q2_sel]):.6g} W"
+        )
+        _epk = int(np.nanargmax(export_W[q2_sel]))
+        print(
+            f"    window peak                                              "
+            f"{np.nanmax(export_W[q2_sel]):.6g} W   at "
+            f"t={t[q2_sel][_epk] * 1e3:.4f} ms"
+        )
+        print(
+            f"  Q2c min I_tot over the window "
+            f"{np.nanmin(I_tot_q2[q2_sel]):.6g} A "
+            f"({int((I_tot_q2[q2_sel] < 0).sum())} samples below zero) -- the "
+            f"registered closure arm is valid while I_tot >= 0, and over this "
+            f"window it is."
+        )
+
         print("\n# PINS OF RECORD (amended 2026-08-31), for comparison")
         for k, v in PINS.items():
             tag = "  [RETIRED]" if k.endswith("_RETIRED") else ""
             print(f"    {k}: {v}{tag}")
+        print("\n# Q2 PINS OF RECORD (2026-08-31), for comparison")
+        for k, v in PINS_Q2.items():
+            print(f"    {k}: {v}")
     return 0
 
 

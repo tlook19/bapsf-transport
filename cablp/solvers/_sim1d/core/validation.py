@@ -449,6 +449,62 @@ def validate_gas_puff_orifice_config(input_dict):
         )
 
 
+def resolve_jet_arming_criterion(input_dict):
+    """Validate and RESOLVE the cathode-jet arming criterion.
+
+    Returns ``(arm_A, disarm_A, active)``. ``active`` is the PRESENCE GATE:
+    it is ``False`` for the inert declaration ``arm == 0``, and with it false
+    the latch is never constructed, never evaluated, and the cathode jets keep
+    the always-live behaviour that predates these keys.
+
+    The criterion covers the two CATHODE channels (the fluid
+    ``cathode_neutral_jet`` and the DVM ``neutral_kinetic_dvm_cathode_jet``)
+    from ONE latch. The anode jets are driven by the anode-collected current
+    rather than by the cathode's booked ``I_i`` and are outside it.
+
+    Raises ``ValueError`` at construction on a non-finite or negative
+    threshold, on a disarm threshold declared without an arm threshold, and on
+    a band that is not ``0 <= disarm < arm``.
+    """
+    arm = float(input_dict.get("neutral_jet_arm_current_A", 0.0))
+    disarm = float(input_dict.get("neutral_jet_disarm_current_A", 0.0))
+    if not (np.isfinite(arm) and np.isfinite(disarm)):
+        raise ValueError(
+            "neutral_jet_arm_current_A and neutral_jet_disarm_current_A must "
+            "be finite currents in amperes (got "
+            f"arm={arm!r}, disarm={disarm!r})"
+        )
+    if arm < 0.0 or disarm < 0.0:
+        raise ValueError(
+            "neutral_jet_arm_current_A and neutral_jet_disarm_current_A are "
+            "ion-current thresholds in amperes and cannot be negative (got "
+            f"arm={arm}, disarm={disarm}). Accepted: arm = 0 for no arming "
+            "criterion, or 0 <= disarm < arm"
+        )
+    if arm == 0.0:
+        if disarm != 0.0:
+            raise ValueError(
+                "neutral_jet_disarm_current_A="
+                f"{disarm} was declared while neutral_jet_arm_current_A is 0, "
+                "which declares NO arming criterion: there is no latch for a "
+                "disarm threshold to describe, so the value would sit inert "
+                "and silently do nothing. Accepted: set "
+                "neutral_jet_arm_current_A > 0 to arm the criterion, or leave "
+                "both at 0"
+            )
+        return 0.0, 0.0, False
+    if not disarm < arm:
+        raise ValueError(
+            "the cathode-jet arming criterion is a LATCHED HYSTERESIS and "
+            "requires 0 <= neutral_jet_disarm_current_A < "
+            f"neutral_jet_arm_current_A (got disarm={disarm}, arm={arm}). "
+            "With disarm >= arm the band is empty or inverted and the latch "
+            "would chatter on every step that crosses it, which is the one "
+            "thing the hysteresis exists to prevent"
+        )
+    return arm, disarm, True
+
+
 def resolve_neutral_jet_config(
     input_dict, *, geometry, neutral_momentum, neutral_energy
 ):
