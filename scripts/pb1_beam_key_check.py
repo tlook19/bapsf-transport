@@ -11,11 +11,24 @@ checks pin the three properties that makes sound:
   (b) two distinct geometries that agree in cell count but differ in cell
       positions still get DIFFERENT keys and different matrices -- the memo
       does not collapse them;
-  (c) an in-place write into a fingerprinted geometry array raises, so the one
-      hazard identity keying cannot see is loud rather than silent.
+  (c) an in-place write into EVERY array the key reads raises, so the one
+      hazard identity keying cannot see is loud rather than silent. All five
+      components are attempted, not a representative one: the first version of
+      this check probed only ``z_cm``, which is exactly the component the code
+      did freeze, so the instrument's coverage matched the code's gap and
+      neither caught that ``cathode_face_indices`` stayed writeable. A guard
+      check that does not enumerate what the guard claims to cover proves
+      nothing about the components it skipped;
+  (d) the memo is BOUNDED and evicts: building more geometries than the cap
+      leaves the entry count at the cap, and a geometry whose entry was
+      evicted becomes collectable once the caller drops its own reference --
+      the memo holds strong references, so an uncapped one would pin every
+      geometry a process ever built.
 """
 
+import gc
 import sys
+import weakref
 from pathlib import Path
 
 import numpy as np
@@ -67,19 +80,54 @@ def main():
     if not distinct:
         failures.append("two geometries collapsed onto one key")
 
-    # (c) the read-only guard.
-    try:
-        geometry.z_cm[0] = -1.0
-    except ValueError as exc:
-        print(f"(c) in-place write raised ValueError: {exc}")
-    else:
-        print("(c) in-place write SUCCEEDED -- the guard is not armed")
-        failures.append("fingerprinted geometry array is still writeable")
+    # (c) the read-only guard, on EVERY component the key reads.
+    for name in (
+        "z_cm",
+        "length_cm",
+        "z_edges_cm",
+        "plasma_active",
+        "cathode_face_indices",
+    ):
+        values = getattr(geometry, name)
+        before = np.asarray(values).copy()
+        try:
+            values[0] = values[0]
+        except ValueError as exc:
+            print(f"(c) in-place write to {name} raised ValueError: {exc}")
+            continue
+        print(f"(c) in-place write to {name} SUCCEEDED -- the guard is not armed")
+        failures.append(f"{name} is still writeable")
+        # Leave the geometry as it was found, so a later check is not misled.
+        np.asarray(values)[...] = before
+
+    # (d) the memo is bounded, and an evicted geometry is collectable.
+    cap = cathode._BEAM_SMOOTH_KEY_CACHE_ENTRIES
+    cathode._BEAM_SMOOTH_KEY_CACHE.clear()
+    victim = _geometry(80)
+    victim_ref = weakref.ref(victim)
+    cathode._beam_smoothing_key(victim, SIGMA_CM)
+    for nx in range(81, 81 + 2 * cap):
+        cathode._beam_smoothing_key(_geometry(nx), SIGMA_CM)
+    resident = len(cathode._BEAM_SMOOTH_KEY_CACHE)
+    bounded = resident <= cap
+    print(f"(d) cap={cap}; entries after {1 + 2 * cap} geometries: {resident} "
+          f"-> bounded: {bounded}")
+    if not bounded:
+        failures.append(f"memo grew to {resident} entries past a cap of {cap}")
+    del victim
+    gc.collect()
+    collected = victim_ref() is None
+    print(f"(d) evicted geometry collectable after caller drops it: {collected}")
+    if not collected:
+        failures.append("an evicted geometry is still pinned by the memo")
 
     if failures:
         print("BEAM KEY MEMO FAIL: " + "; ".join(failures))
         return 1
-    print("BEAM KEY MEMO OK: key equal, matrix bit-identical, guard armed")
+    print(
+        "BEAM KEY MEMO OK: key equal, matrix bit-identical, all five "
+        "components guarded, memo bounded and evicting"
+    )
     return 0
 
 
