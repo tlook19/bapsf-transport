@@ -1145,6 +1145,11 @@ class LAPDSim1D:
         self._dvm_engaged = False
         self._dvm_next_s = 0.0
         self._dvm_last_s = 0.0
+        # How many times the neutral clock has actually ticked. The cadence
+        # states what was ASKED for; this is what the run DID, which is not
+        # recoverable from the saved trajectory because a tick fires on the
+        # neutral clock rather than on the save schedule.
+        self._dvm_tick_count = 0
         self._dvm_transfer_relax_fraction = 1.0
         self._dvm_transfer_hold = KINETIC_DVM_TRANSFER_HOLDS[0]
         self._dvm_step_transfer = None
@@ -10931,6 +10936,7 @@ class LAPDSim1D:
         # census is ABSENT rather than zero wherever it was never kept.
         if self._dvm is not None:
             result.dvm_transfer_ledger = self._dvm_ledger_census(saved)
+            result.dvm_tick_count = int(self._dvm_tick_count)
         result.atomic_rate_domain = _atomic_rate_domain(result)
         return result
 
@@ -12893,6 +12899,7 @@ class LAPDSim1D:
             )
         self._dvm_last_s = self._time
         self._dvm_next_s = self._time + self._dvm_cadence_s
+        self._dvm_tick_count += 1
         # Freeze the hold's tick state against the SAME accepted rows the
         # transfer above was booked against, before the republish below
         # rewrites anything.
