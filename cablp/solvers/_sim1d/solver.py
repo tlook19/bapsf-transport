@@ -2461,7 +2461,8 @@ class LAPDSim1D:
             # under it. Inert is exactly what this repo refuses to be silent
             # about: each is rejected here, at construction, rather than
             # accepted and ignored. Their DEFAULTS are accepted, so an armed
-            # stance states the selector and nothing else.
+            # stance states the selector; a block-form stance also states the
+            # inert dials at their defaults, which the guard accepts.
             if self._input_dict.get(
                 "heating_anomalous_tail_phi_c_fraction", None
             ) is not None:
