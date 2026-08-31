@@ -5770,8 +5770,8 @@ def gate_aj5():
 
 # ------------------------------------------------- B6 baffle interception
 #
-# The registered gates of plan row B6 (DVM_ADDED_VS_EMERGENT_2026-08-23 item
-# 4). The fluid books each thin annular baffle as a zero-thickness SERIES
+# The registered gates of plan row B6. The fluid books each thin annular
+# baffle as a zero-thickness SERIES
 # ORIFICE on the annulus conductance alone (``physics/neutrals.py``:
 # ``orifice = clausing_scale * 0.25 * v_th * open_ann`` with
 # ``open_ann = pi (R_clear^2 - R_col^2)``, the column untouched because
@@ -5780,8 +5780,8 @@ def gate_aj5():
 # B6 intercepts that flux at every baffle face and re-emits it on the side it
 # was intercepted from, particle-conserving, exactly as the anode-mesh channel
 # does -- the same full accommodation at ``T_wall`` on the wall spectrum, which
-# is the 28hx Q1 correction (the scalar alpha covers the cylinder and the ends;
-# mesh and closed faces run alpha = 1) extended to baffles.
+# is the campaign log 28hx correction (the scalar alpha covers the cylinder and
+# the ends; mesh and closed faces run alpha = 1) extended to baffles.
 
 #: Relative tolerance of the B6 FLUX statements. The transparency enters the
 #: march as a per-bin scaling inside a sum, so a statement formed as
@@ -6167,14 +6167,17 @@ def gate_bf2():
     * BAFFLE ON -- ``DVM / fluid``, expected ``~1``. The residual is the
       free-molecular-vs-discrete-grid gap: the DVM's one-way flux is a finite
       sum ``sum_bins f |v_z| A`` over a stretched grid while the fluid's is the
-      continuum ``n vbar / 4``. It is MEASURED at both bin counts and must come
-      in under :data:`BF_GRID_GAP_MAX` on the GAS-MATCHED grid, and refining
-      the grid must improve it.
-    * The SHIPPED grid extent is reported beside the matched one, not gated.
-      The production velocity grid is sized for ion-temperature drift caps
-      (``vmax ~ 4 v_th(Ti_cap) + 1.5 u_cap``), so a 300 K gas occupies a small
-      part of it; that resolution is a property of the grid, not of the baffle,
-      and separating the two is what the matched grid is for.
+      continuum ``n vbar / 4``. It is MEASURED at both bin counts and on BOTH
+      grid extents, and EVERY row must come in under
+      :data:`BF_GRID_GAP_MAX` with refinement improving it on both.
+    * TWO GRID EXTENTS, both gated. The matched extent is sized to the 300 K
+      gas the box actually holds; the SHIPPED one is the production
+      construction (``vmax ~ 4 v_th(Ti_cap) + 1.5 u_cap``), sized for ion drift
+      caps, so a cold gas occupies a small part of it. Running both separates
+      "the baffle passes the right area" from "the velocity grid resolves a
+      cold Maxwellian", which are different questions; gating both says the
+      answer to the second is not currently load-bearing for the first (the
+      shipped rows come in with 28-57x margin on the bound).
 
     The fluid's own conductances at that face on the real stance geometry are
     quoted beside the bare orifice, so the reference number is on record with
@@ -6258,14 +6261,18 @@ def gate_bf2():
                 }
             )
 
-    matched = [r for r in rows if r["label"] == "matched"]
     worst_structure = max(r["structure"] for r in rows)
-    gap_coarse = abs(matched[0]["ratio_on"] - 1.0)
-    gap_fine = abs(matched[1]["ratio_on"] - 1.0)
-    improves = gap_fine <= gap_coarse
+    gaps = {}
+    improves = True
+    for label in ("matched", "shipped"):
+        pair = [r for r in rows if r["label"] == label]
+        coarse, fine = (abs(r["ratio_on"] - 1.0) for r in pair)
+        gaps[label] = (coarse, fine)
+        improves = improves and fine <= coarse
+    worst_gap = max(g for pair in gaps.values() for g in pair)
     ok = (
         worst_structure < BF_FLUX_REL
-        and gap_fine < BF_GRID_GAP_MAX
+        and worst_gap < BF_GRID_GAP_MAX
         and improves
     )
     detail = "\n        ".join(
@@ -6282,7 +6289,7 @@ def gate_bf2():
         ok,
         f"g1atrim baffle face {stance_face}: R_clear {clear} cm, R_col (face "
         f"average) {R_col:.6f} cm, Rm {Rm:.4f} cm; open_ann {open_ann:.6f} "
-        f"cm^2; A_ann/open_ann {matched[0]['geometric']:.9f} (the plan's "
+        f"cm^2; A_ann/open_ann {rows[0]['geometric']:.9f} (the plan's "
         f"'~1.75x', MEASURED)\n        "
         f"fluid reference: 0.25 vbar open_ann = {orifice:.6e} cm^3/s at 300 K "
         f"(vbar {v_th:.6e} cm/s, clausing_scale 1)\n        "
@@ -6290,9 +6297,11 @@ def gate_bf2():
         f"across the face, one {dt:.1e} s tick\n        {detail}\n        "
         f"OFF/ON structural identity worst {worst_structure:.3e} "
         f"(tol {fmt(BF_FLUX_REL)}); MEASURED free-molecular-vs-discrete-grid "
-        f"gap on the gas-matched grid: {gap_coarse:.3e} at (48, 12) and "
-        f"{gap_fine:.3e} at (64, 24) (bound {BF_GRID_GAP_MAX}), refining "
-        f"improves it: {improves}\n        "
+        f"gap, gas-matched grid {gaps['matched'][0]:.3e} at (48, 12) and "
+        f"{gaps['matched'][1]:.3e} at (64, 24), shipped grid extent "
+        f"{gaps['shipped'][0]:.3e} and {gaps['shipped'][1]:.3e} "
+        f"(bound {BF_GRID_GAP_MAX} on EVERY row); refining improves it on "
+        f"both extents: {improves}\n        "
         f"fluid conductances at the same face on the real stance geometry "
         f"(quoted, not gated): two_zone_knudsen_coefficients annulus "
         f"{fluid_two_zone:.6e} cm^3/s, knudsen_flow_coefficients "

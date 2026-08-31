@@ -952,10 +952,17 @@ through the whole annulus face area with nothing standing in it. At the
 g1atrim baffle ($R_b = 39.75$ cm, $R_m = 50$ cm, $R_p = 18.415$ cm at face 43)
 that overstates the annulus throughput by
 
-$$\frac{A_{\rm ann}}{A_{\rm open}} = \frac{6788.63}{3898.56} = 1.7413 ,$$
+$$\frac{A_{\rm ann}}{A_{\rm open}} = \frac{6788.63}{3898.56} = 1.7413 .$$
 
-measured by `scripts/verify_sim1d_k2_dvm.py` gate BF2 and matching the fluid's
-own orifice to $2.7\times10^{-4}$ once the baffle is armed.
+The two areas are printed by `scripts/b6bf_base_pins.py`; their RATIO is what
+`scripts/verify_sim1d_k2_dvm.py` gate BF2 emits and gates on. Armed, the DVM's
+net annulus current per unit density difference matches the fluid orifice to
+$9.7\times10^{-4}$ at $(n_{v_z}, n_{v_\perp}) = (48, 12)$ and
+$2.7\times10^{-4}$ at $(64, 24)$ on a velocity grid sized to the 300 K gas, and
+to $1.8\times10^{-3}$ and $8.7\times10^{-4}$ on the shipped grid extent (which
+is sized for ion drift caps, so a cold gas occupies a small part of it). The
+residual is the free-molecular-vs-discrete-grid quadrature gap and shrinks
+under refinement; it is measured, not assumed.
 
 **The form is the anode mesh's, restricted to the annulus.** At each armed
 baffle face the DVM intercepts the blocked share of the annulus flux crossing

@@ -4569,7 +4569,6 @@ class LAPDSim1D:
                     "neutral_baffle_clear_radii_cm, or "
                     "neutral_kinetic_dvm_baffles off"
                 )
-        self._dvm_baffles = tuple(int(f) for f in np.asarray(baffle_faces))
         self._dvm = TransientDVM(
             geometry=self._geometry,
             nvz=int(self._input_dict.get("neutral_kinetic_dvm_nvz")),

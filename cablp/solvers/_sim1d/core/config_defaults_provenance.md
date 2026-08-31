@@ -847,16 +847,16 @@ adds is in `MODEL.md` § "Annular-baffle interception" and its discretization in
 
 **This key introduces NO coefficient of its own.** The clear radius it acts on
 is the geometry's, and its value entry is the MEASURED CAD row
-`neutral_baffle_clear_radii_cm = [39.75]` (with `neutral_baffle_positions_cm =
-[342.65]`) in `scripts/production_stance_provenance.md` — one authoritative
-home, cited here, not restated. The only derived quantity is the per-face
+`neutral_baffle_clear_radii_cm` (with `neutral_baffle_positions_cm`) in
+`scripts/production_stance_provenance.md` — one authoritative home, cited here,
+not restated. The only derived quantity is the per-face
 annulus transparency `t_f = min(pi(R_clear^2 - R_col^2) / A_ann_throat, 1)`,
 which is a function of that radius and the mesh, computed at construction and
 carrying no free parameter.
 
 The one CONVENTION the channel adds, stated because it is a choice and not a
 measurement: the baffle accommodates FULLY at the wall temperature
-(`alpha = 1`). That extends the correction of record (28hx Q1) — the scalar
+(`alpha = 1`). That extends the correction of record (campaign log 28hx) — the scalar
 `neutral_kinetic_dvm_accommodation` covers the cylinder and the two ends, while
 the anode mesh and the interior closed faces already run at `alpha = 1` — to a
 surface of the same kind: a solid plate standing in the gas, not a length of

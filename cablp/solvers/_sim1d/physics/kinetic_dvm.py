@@ -948,7 +948,6 @@ class TransientDVM:
                 f"the DVM baffle clear radii must be finite (got {radii.tolist()})"
             )
         transparency = np.ones(faces.size)
-        open_ann = np.zeros(faces.size)
         tau = [None] * (self.nz + 1)
         throats = []
         for i, (face, clear) in enumerate(zip(faces, radii)):
@@ -972,7 +971,6 @@ class TransientDVM:
                 )
             ring = np.pi * (float(clear) ** 2 - R_col**2)
             area = float(self.face_a[face])
-            open_ann[i] = ring
             if area <= 0.0 or ring >= area:
                 # No annulus to restrict, or an open ring at least as wide as
                 # the annulus itself: unarmed, and therefore bit-exactly inert.
@@ -980,9 +978,13 @@ class TransientDVM:
             transparency[i] = ring / area
             tau[face] = float(transparency[i])
             throats.append((face, ring))
-        self.baffle_faces = faces
-        self.baffle_clear_radius_cm = radii
-        self.baffle_open_area_cm2 = open_ann
+        #: The realized per-face annulus transparency, in the order the faces
+        #: were given. The ONE resolved quantity published: the gates read it
+        #: rather than recomputing it, because every B6 statement is made
+        #: against the value the engine actually used. The constructor's own
+        #: arguments are deliberately not echoed back as attributes -- an
+        #: unread echo is a second copy of the truth with nothing keeping it
+        #: honest.
         self.baffle_transparency = transparency
         #: Per-face transparency lookup for the march, ``None`` where no
         #: baffle is armed. A plain list so the inner loop's test is an

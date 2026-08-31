@@ -88,7 +88,8 @@ def main():
     print("=" * 78)
 
     # STRIP-1 CONTROL. Once B6's key exists the identity above MOVES, and the
-    # 26ft identity-only rotation class requires the move to be attributable
+    # campaign log 26ft identity-only rotation class requires the move to be
+    # attributable
     # to that key and to nothing else. Removing it and recomputing through the
     # SAME expression must return the base identity bit for bit. Computing it
     # through any other expression is the documented rotation trap: the two
