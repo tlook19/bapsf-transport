@@ -823,6 +823,12 @@ rule (default off, presence-gated, bit-exact off), not because at-rest
 re-emission is the better physics. The physics it adds is in `MODEL.md`
 § "Anode-side energetic recycle"; its A/B is the pair of arms.
 
+Memo: **Eckstein, IPP 9/132**, *Calculated Sputtering, Reflection and Range
+Values* — the member's source of record, the same one the fluid
+`anode_jet_R_N` / `anode_jet_R_E` entry cites. No value is read from it for
+this key, which is structural; it is named so all four keys of the member
+point at one memo.
+
 **`neutral_kinetic_dvm_anode_jet_R_N = 0.63`,
 `neutral_kinetic_dvm_anode_jet_R_E = 0.41` — DERIVED (fluid-mirrored),
 bracket = the fluid entry's disclosed PAIR bracket.** Particle and total
@@ -840,6 +846,11 @@ restated here. A campaign that moves one of the two pairs and not the other has
 stopped comparing two closures of one mesh and is comparing two meshes; that is
 a finding, not a configuration.
 
+Memo: **Eckstein, IPP 9/132**, *Calculated Sputtering, Reflection and Range
+Values*, at its 200 eV He → Mo rows — the same memo the fluid entry cites, and
+the actual source of both numbers. The disclosed bracket's other half is
+**Eckstein, IPP 17/12 (2009)**, the sight-verified ⁴He→Mo fit.
+
 Honest bar: the fluid entry's, unchanged — including its zero-fluence caveat,
 which has teeth here because the mesh accumulates helium in service. What the
 kinetic arm adds is not a better coefficient but a better carrier: the
@@ -849,7 +860,7 @@ and the energy that left with them is recorded in the anode's own surface book
 rather than being an unbooked momentum source.
 
 **REGISTERED CONVENTION — zero incident energy, and what the channel does
-there. RULED 2026-08-30 (Tom, campaign log 30kd): FLUID PARITY.** The launch
+there. RULED 2026-08-30 (Tom): FLUID PARITY.** The launch
 energy is built from the fluid channel's own clamp, `max(phi_a + Ti, 0)`, and
 the fluid ANODE spec passes `phi_a` through raw where the fluid CATHODE spec
 clamps `phi_c` at zero first — so unlike its cathode twin this sum genuinely
@@ -857,9 +868,10 @@ reaches zero.
 
 *The measured trigger.* Before breakdown the anode sheath is
 electron-attracting: measured over the arm's opening window
-(`scripts/b4aj_phi_a_probe.py`), `phi_a` runs −0.09 to −6.6 V across **accepted
-steps 2–9** while `Ti` sits at its 0.026 eV floor, so the clamped incident
-energy is exactly zero there while the mesh still collects at ~1e18 s⁻¹. A
+(`scripts/b4aj_phi_a_probe.py`), `phi_a` runs −0.18 to −6.6 V across **accepted
+steps 2–9** while `Ti` rises from its 0.026 eV floor to ~0.9 eV, so the clamped
+incident energy is exactly zero throughout — `phi_a` outruns `Ti` negatively
+the whole way — while the mesh still collects at ~5e16 to ~4e18 s⁻¹. A
 neutral cadence fine enough to fire a tick inside that span — the arm's own
 3.125e-6 s does — hands the channel a counted stream with no committed energy.
 
@@ -898,6 +910,11 @@ on `(48, 12)` and 6.1–8.6 on `(64, 24)` over `0.005–100 eV`, so the grid-tie
 default is representable across the whole band the channel can reach on either
 grid, and 0.22–1.4 on the coarse `(16, 6)` axis, where it is not
 (`scripts/b4aj_smear_margin_probe.py`).
+
+Memo: **Eckstein, IPP 9/132**, *Calculated Sputtering, Reflection and Range
+Values* — the member's source of record, as above. No value is read from it
+for this key, which is a numerics parameter of the discretization and not a
+surface property; the measurement behind its default is the probe cited above.
 
 **`neutral_kinetic_dvm_elastic = "phelps_iso"` — DERIVED.** Whether the
 polarization-elastic ion-neutral channel is carried alongside charge exchange.

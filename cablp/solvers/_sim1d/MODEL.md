@@ -810,9 +810,14 @@ cathode there was no balance for a row to live in. `_anode_energy_ledger_J`
 carries two, both cumulative and both booked per accepted step from the same
 committed (particles, incident energy) pair the birth is formed from:
 `ion_incident`, what the collected ions delivered, and `backscatter`, exactly
-$R_E$ of it, what left again with the energetic share. Their **difference** is
-the $1-R_E$ the structure absorbed, so that statement is a subtraction of two
-measured rows rather than a convention anyone has to remember. The pair is
+$R_E$ of it. Their **difference** is the $1-R_E$ the structure absorbed, so
+that statement is a subtraction of two measured rows rather than a convention
+anyone has to remember. Both rows are booked on the accepted STEP while the gas
+receives its share on the neutral TICK, so `backscatter` LEADS the gas by the
+share that is booked but not yet ticked — 2.2 % of the row at the 800-step
+window's end — and it is exactly AJ2's `outstanding` term, not a discrepancy:
+the cumulative identity the gate closes is `backscatter == the ticks' birth
+energy + what the next tick is still owed`. The pair is
 refused outright against the fluid `anode_neutral_jet`, which would re-emit the
 same collected stream directed a second time.
 
@@ -836,10 +841,11 @@ $\max(\phi_a+T_i,0)$ — and the fluid anode spec passes $\phi_a$ through raw
 where the cathode spec clamps $\phi_c$ at zero first, so unlike the cathode
 side this sum genuinely reaches zero. Before breakdown the anode sheath is
 electron-attracting: measured over the arm's opening window, $\phi_a$ runs
-$-0.09$ to $-6.6$ V across **accepted steps 2–9** while $T_i$ sits at its
-$0.026$ eV floor, so the clamped incident energy is exactly zero while the mesh
-still collects at $\sim10^{18}\ \mathrm{s^{-1}}$
-(`scripts/b4aj_phi_a_probe.py`).
+$-0.18$ to $-6.6$ V across **accepted steps 2–9** while $T_i$ rises from its
+$0.026$ eV floor to $\sim0.9$ eV, so the clamped incident energy is exactly
+zero throughout — $\phi_a$ outruns $T_i$ negatively the whole way — while the
+mesh still collects at $\sim5\times10^{16}$ to $\sim4\times10^{18}\
+\mathrm{s^{-1}}$ (`scripts/b4aj_phi_a_probe.py`).
 
 **The backscatter of an ion that arrives with zero clamped energy is no
 backscatter.** A cell whose committed incident energy is exactly zero launches

@@ -2443,11 +2443,11 @@ class TransientDVM:
         ``R_N`` of the counted particles, ``jet_energy`` is ``R_E`` of the
         counted INCIDENT energy, and the thermal share is the REMAINDER rather
         than ``(1 - R_N)`` of the count, so the two sum to the counted stream
-        to the bit.
+        to roundoff (measured worst 2.1e-16).
 
-        **ZERO INCIDENT ENERGY IS A LEGAL, BOOKED STATE, PER CELL** (ruled
-        2026-08-30). A cell whose committed incident energy is exactly zero
-        launches NOTHING: its whole counted stream is born thermal, its
+        **ZERO INCIDENT ENERGY IS A LEGAL, BOOKED STATE, PER CELL.** A cell
+        whose committed incident energy is exactly zero launches NOTHING: its
+        whole counted stream is born thermal, its
         ``jet`` entry is exactly ``0``, and its energy and momentum
         contributions are exactly ``0`` with them. That is FLUID PARITY, not a
         fallback -- under the fluid spec
