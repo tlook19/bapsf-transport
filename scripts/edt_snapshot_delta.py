@@ -37,7 +37,7 @@ from audit_sim1d_configs import (  # noqa: E402
 #: refused at anything but these values while the flag is off.
 ADDED_PARAMS = {
     "electron_drift_charge_death": "cell_1",
-    "electron_drift_anode_handshake": "export_counts",
+    "electron_drift_anode_handshake": "sheath_row_closes_all",
 }
 
 #: The flags-namespace key this branch adds. Default off, bit-exact off.

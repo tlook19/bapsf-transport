@@ -1044,9 +1044,16 @@ def resolve_coverage_config(input_dict, flags, *, geometry, neutral_model):
 #: advisor consult's bracket A -- the beam's charge dies in the cathode cell.
 ELECTRON_DRIFT_CHARGE_DEATHS = ("cell_1", "cell_2")
 
-#: The declared endpoints of the anode-handshake bracket. Neither reading was
-#: settled by the consult, which is why both ship as bracket arms.
-ELECTRON_DRIFT_ANODE_HANDSHAKES = ("export_counts", "sheath_row_closes")
+#: The anode-handshake readings. ``"sheath_row_closes_all"`` is the DEFAULT and
+#: the registered closure (ruled 2026-08-31): the kinetic anode sheath row is
+#: the total thermal-electron energy flux at the sheath edge, so every fluid
+#: channel closes at that face. The other two are RETAINED as disclosed
+#: INSTRUMENT arms bounding the double count, and are not claim-bearing.
+ELECTRON_DRIFT_ANODE_HANDSHAKES = (
+    "sheath_row_closes_all",
+    "sheath_row_closes",
+    "export_counts",
+)
 
 
 def resolve_electron_drift_transport_config(

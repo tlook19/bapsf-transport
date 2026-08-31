@@ -851,18 +851,32 @@ def model_mode_defaults():
         ``electron_drift_transport`` flag, and refused at a non-default value
         without it.
     electron_drift_anode_handshake:
-        What the anode mesh face does with the drift ENTHALPY flux
-        ``3.21 T_e I / e``. ``"export_counts"`` books it as an export out of
-        the plasma: the cell upstream of the mesh is debited it and nothing
-        downstream is credited, because the drift current terminates on the
-        electrode. ``"sheath_row_closes"`` holds the existing anode electron
-        sheath row to be the complete closure of that face for electron
-        enthalpy, so the operator books no export there and cannot
-        double-count it. The pressure-drift WORK at that face is a volumetric
-        compression of the upstream cell rather than a face export and stands
-        under both. Under both readings the ``anode_sheath_full_debit``
-        booking is untouched. Read only under the ``electron_drift_transport``
-        flag, and refused at a non-default value without it.
+        Which of the operator's channels the anode mesh face closes. The face
+        carries two: the ENTHALPY-and-thermal-force flux ``2.21 T_e I / e``,
+        and the pressure-drift WORK ``1.00 T_e I / e`` that the volume
+        identity's ``3.21`` boundary coefficient is completed by.
+
+        ``"sheath_row_closes_all"`` (the DEFAULT, and the registered closure,
+        ruled 2026-08-31) closes BOTH — the full ``3.21``. The kinetic anode
+        sheath row ``(2 T_e + phi_a) Gamma`` IS the total electron energy flux
+        at the sheath edge for the THERMAL population, so any fluid export
+        there double-counts it. The beam electrons that reach the mesh
+        directly lie outside both bookings: the circuit's own bypass row
+        carries them, and ``Gamma_d = (I_tot - I_beam) / (e A)`` carries the
+        thermal drift only by construction.
+
+        ``"sheath_row_closes"`` closes the ``2.21`` channel alone and
+        ``"export_counts"`` closes neither, booking the whole ``3.21`` as an
+        export out of the plasma. Both are RETAINED as disclosed INSTRUMENT
+        arms that bound the size of the double count; neither is
+        claim-bearing.
+
+        Under every reading the ``anode_sheath_full_debit`` booking is
+        untouched, and the anode PRESHEATH term is NOT booked here -- it
+        belongs to the separate anode-potential-debit question, and only one
+        of the two may ever book it. Read only under the
+        ``electron_drift_transport`` flag, and refused at a non-default value
+        without it.
     neutral_model:
         Which engine carries the neutral population. ``"moment"`` integrates
         the fluid neutral density (and, with the ``neutral_momentum`` flag,
@@ -1276,7 +1290,7 @@ def model_mode_defaults():
         # refused at anything but these values -- unless the
         # electron_drift_transport flag is armed.
         "electron_drift_charge_death": "cell_1",
-        "electron_drift_anode_handshake": "export_counts",
+        "electron_drift_anode_handshake": "sheath_row_closes_all",
         # 2nd-order operator-split pair; both are needed together with
         # heat_picard_iterations > 0 for the step to reach second order.
         "operator_splitting": "strang",
@@ -4079,12 +4093,20 @@ input_flags_template_1d = {
     # already exact, and the electron-ion friction cancels, so the coupling
     # back to the ions is indirect, through Q_ie alone.
     #
-    # Two DECLARED conventions carry the readings the operator cannot settle
-    # by itself -- electron_drift_charge_death and
-    # electron_drift_anode_handshake, both params. They are bracket ENDPOINTS:
-    # the claim this operator supports is the spread across them, not any one
-    # arm. Setting either away from its default without this flag raises,
-    # because there it would be inert.
+    # At the CATHODE face the enthalpy and thermal-force channels are exactly
+    # zero: they would carry the returning thermal-electron current, and the
+    # cathode sheath repels plasma electrons (P_cathode_e is 0.06 W on the ES1
+    # artifact, a return current of order 0.3 mA). The work channel there rides
+    # the model's OWN face-1 particle flux, so it is the exact partner of the
+    # expansion cooling pressure_work_rhs books at that face and cancels it to
+    # roundoff.
+    #
+    # electron_drift_charge_death is a DECLARED bracket ENDPOINT: the claim
+    # this operator supports is the spread across its two values, not either
+    # arm alone. electron_drift_anode_handshake selects the registered closure
+    # by default and retains two disclosed instrument arms beside it. Setting
+    # either away from its default without this flag raises, because there it
+    # would be inert.
     #
     # Refused at construction under TwinCathode, without a resolved anode
     # face, and without active_plasma_topology: each of those leaves the face
