@@ -92,10 +92,10 @@ ELECTRON_DRIFT_DIAGNOSTIC_ROWS = (
 #: ``edt_inplasma_emf_V`` is the V_dis partition member missing from the R3.2
 #: partition: W_EMF per ampere of the current doing the work. **A single
 #: save's value is NOT a physics reading when the current is small** -- it is
-#: then a ratio of two small numbers, and a pre-breakdown frame reads ~16 V
-#: against the 3.7-5.9 V a current-weighted window mean gives at the stance
-#: point. Read it CURRENT-WEIGHTED over a window, sum(W_EMF)/sum(I), never as
-#: the average of this column.
+#: then a ratio of two small numbers, and a pre-breakdown frame has been
+#: measured at tens of volts against the 3.7-5.9 V a current-weighted window
+#: mean gives at the stance point. Read it CURRENT-WEIGHTED over a window,
+#: sum(W_EMF)/sum(I), never as the average of this column.
 #:
 #: ``edt_cathode_face_handshake_W`` is the enthalpy-plus-thermal-force influx
 #: at the cathode face, which is ZERO by construction since 2026-08-31 -- it

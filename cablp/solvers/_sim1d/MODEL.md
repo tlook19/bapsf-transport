@@ -2221,8 +2221,10 @@ missing member of the R3.2 $V_\text{dis}$ partition** and is saved as
 `edt_inplasma_emf_V`. That $V_p$ is the RESISTIVE drop only, and the EMF is a
 few per cent of $V_\text{dis}$; no falsification of R3.2 follows unless it
 claimed the partition to better than that. **A pre-breakdown small-current
-frame makes `edt_inplasma_emf_V` read $\sim$16 V — a ratio of two small
-numbers, not a physics reading.**
+frame makes `edt_inplasma_emf_V` read tens of volts — 61 V on a short demo run
+at this tip — because it is then a ratio of two small numbers. That is not a
+physics reading. Read the column CURRENT-WEIGHTED over a window,
+$\sum W_\text{EMF} / \sum I$, never as the average of the saved samples.**
 
 **The $\sim$19 % cold ES1 electron-temperature residual MUST NOT be advanced as
 explained by this term, in either direction.** The magnitude is sufficient and
