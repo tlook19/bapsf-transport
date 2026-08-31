@@ -37,33 +37,46 @@ upstream of it and credits nothing downstream, which is what makes the operator
 an open-system exchange with the electrodes rather than an internal
 redistribution.
 
-**The two declared conventions** (bracket axes, not chosen readings):
+**The cathode face** carries no enthalpy or thermal-force flux at all: those
+channels would carry the RETURNING thermal-electron current, and the cathode
+sheath repels plasma electrons. Its WORK channel rides the model's own face-1
+particle flux, so it is the exact partner of the expansion cooling
+``pressure_work_rhs`` books there.
 
-``charge_death`` -- where the beam's charge dies, hence which faces still carry
-    ``I_beam``. ``cell_1`` (the consult's bracket A) puts the death in the
-    cathode cell, so only that cell's low face carries beam current; ``cell_2``
-    puts it in the first gap cell, so the cathode cell's high face carries it
-    too.
+**The declared bracket axis**: ``charge_death`` -- where the beam's charge
+dies, hence which faces still carry ``I_beam``. ``cell_1`` puts the death in
+the cathode cell, so only that cell's low face carries beam current;
+``cell_2`` puts it in the first gap cell, so the cathode cell's high face
+carries it too.
 
-``anode_handshake`` -- what the anode face does with the drift ENTHALPY flux.
-    ``export_counts`` books it as an export out of the plasma (the cell upstream
-    of the mesh is debited ``3.21 T_e I / e``); ``sheath_row_closes`` holds the
-    existing anode sheath row to be the complete face closure for that enthalpy,
-    so the operator books no enthalpy export there and would otherwise
-    double-count it. The pressure-drift WORK at that face is a volumetric
-    compression of the upstream cell, not a face export, and stands under both.
+**The anode reading** ``anode_handshake`` is a RULING, not a bracket axis.
+``sheath_row_closes_all`` (default) closes both channels at the mesh face: the
+kinetic anode sheath row is the total electron energy flux at the sheath edge
+for the thermal population, so any fluid export there double-counts it, and the
+beam electrons that reach the mesh directly are outside both bookings.
+``sheath_row_closes`` (the 2.21 channel only) and ``export_counts`` (neither)
+are retained as disclosed INSTRUMENT arms bounding that double count.
 
 **Usage**::
 
     python scripts/edt_consult_pins.py --h5 scripts/mgcr1_confirm.h5
 
-    # every arm of the bracket, and the afterglow clause
+    # every arm, both anode instrument arms, and the afterglow clause
     python scripts/edt_consult_pins.py --h5 scripts/mgcr1_confirm.h5 --all-arms
 
-The consult's numbers were measured on ``scripts/mgcr1_confirm.h5`` over the
-window 0.1-20.1 ms at a mean loop current of 2774 A, and are quoted in the pin
-table below as the comparison target. They are the consult's, not re-derived
-here.
+**Provenance of the pins.** The 2026-08-26 consult measured the first set on
+``scripts/mgcr1_confirm.h5`` over 0.1-20.1 ms at a mean loop current of 2772 A.
+Two of its readings did not survive measurement and were retired by the
+advisor adjudication of 2026-08-31: the ``+14.8 kW`` cathode-face handshake
+(it rode the circuit's ion current at a face whose electron channel carries
+0.3 mA, and its stated rationale was a stale read of a legacy row inert on the
+shipped stance since R3.2), and the ``robust +13.6 kW`` compression piece (over
+a fixed cell range it is bracket-A-specific, reading -5.3 kW under bracket B).
+Its ``16.3/11.8 kW`` W_EMF is reproduced here as the WIDE support leg -- it
+includes the mesh face's pressure jump -- and is reported as one end of a
+bracket rather than as a disagreement. ``PINS`` below carries both the live
+values and the retired ones, because a retired pin that simply vanishes leaves
+the next reader re-deriving the same wrong number.
 """
 
 import argparse
@@ -78,6 +91,10 @@ import numpy as np
 #: needed: the eV->erg and erg->W factors cancel against C/e.
 _QE_C = 1.602176634e-19
 
+#: erg per eV, matching ``cablp.constants.ev_to_erg``. Used only to rebuild
+#: what ``pressure_work_rhs`` books at the cathode face, in the solver's units.
+_EV_TO_ERG = 1.602176634e-12
+
 #: The enthalpy-plus-thermal-force coefficient carried by a drift face flux:
 #: 3/2 from the internal energy convected, 0.71 from the Braginskii thermal
 #: force heat flux q_u. The remaining 1.0 that completes the consult's 3.21
@@ -89,22 +106,48 @@ _C_FACE = 1.5 + 0.71
 #: The consult's boundary coefficient, 5/2 (enthalpy) + 0.71 (thermal force).
 _C_BOUNDARY = 2.5 + 0.71
 
-#: The consult's pins, for the report line. Values are the consult's own
-#: measurement on mgcr1_confirm.h5 over 0.1-20.1 ms; see the module docstring.
-CONSULT_PINS = {
-    "cathode_face_handshake_kW": 14.8,
-    "compression_cells_2_5_kW": 13.6,
-    "cell_1_kW": -50.5,
-    "gap_cells_kW": (5.5, 4.5, 2.6, 2.0),
-    "gap_sum_export_counts_kW": -35.8,
-    "gap_sum_sheath_row_closes_kW": 14.4,
-    "W_EMF_kW": (16.3, 11.8),  # bracket A, bracket B
-    "inplasma_emf_V": (5.9, 4.2),  # bracket A, bracket B
-    "afterglow_kW": (-0.5, -0.6),
+#: The pins of record, AMENDED 2026-08-31 by the advisor adjudication and the
+#: ratified amendment that followed it. Two of the 2026-08-26 consult's
+#: readings did not survive measurement and are recorded here as RETIRED
+#: rather than quietly dropped, because a retired pin that vanishes leaves the
+#: next reader re-deriving the same wrong number.
+PINS = {
+    # RETIRED: the consult's +14.8 kW rode the circuit's ion current at the
+    # cathode face. The channel there carries the RETURNING thermal-electron
+    # current (0.3 mA), so the correct value is zero, and the consult's
+    # rationale -- that it cancels a ghost-Bohm booking -- was a stale read of
+    # a legacy row that has been inert on the shipped stance since R3.2.
+    "cathode_face_enthalpy_kW": 0.0,
+    "cathode_face_enthalpy_kW_RETIRED": 14.8,
+    # The work channel's partner, which pressure_work_rhs books at that face.
+    "cathode_face_work_kW": 4.298,
+    # Over the cells strictly DOWNSTREAM of the death cell (bracket A, B).
+    "compression_downstream_kW": (13.6, 8.2),
+    # RETIRED: over the fixed cells 2-5 this reads -5.3 kW under bracket B, so
+    # the consult's "robust, handshake-independent +13.6 kW" was
+    # bracket-A-specific rather than robust.
+    "compression_cells_2_5_kW_RETIRED": 13.6,
+    # Corrected source-region sums, per anode reading (bracket A, B).
+    "gap_sum_export_counts_kW": (-53.0, -57.5),
+    "gap_sum_sheath_row_closes_kW": (-2.8, -7.3),
+    "gap_sum_sheath_row_closes_all_kW": (19.0, 14.5),
+    # The EMF is a BRACKET over the support, not a point.
+    "inplasma_emf_V_range": (3.7, 6.2),
+    "inplasma_emf_boltzmann_V": 5.7,  # Te ln(n_5/n_1)
+    "afterglow_window_kW": (-0.55, -0.68),
+    "afterglow_instant_26ms_kW": -0.017,
 }
 
 CHARGE_DEATH_CHOICES = ("cell_1", "cell_2")
-ANODE_HANDSHAKE_CHOICES = ("export_counts", "sheath_row_closes")
+
+#: ``sheath_row_closes_all`` first: it is the registered closure and the
+#: default. The other two are disclosed INSTRUMENT arms bounding the double
+#: count at the mesh face, and are not claim-bearing.
+ANODE_HANDSHAKE_CHOICES = (
+    "sheath_row_closes_all",
+    "sheath_row_closes",
+    "export_counts",
+)
 
 
 def _decode(arr):
@@ -182,15 +225,31 @@ class SavedGeometry:
         return z_anode, L_cath
 
 
-def _face_pairs(geom, charge_death, anode_handshake, I_tot, I_beam):
+def _face_pairs(
+    geom, charge_death, anode_handshake, I_tot, I_beam, n, u_face
+):
     """Return the per-cell (low, high) drift-current face pairs, in amperes.
 
-    Two arrays are returned for the enthalpy/heat-flux channel and two for the
-    pressure-drift-work channel, because the anode handshake separates them: the
-    ``sheath_row_closes`` reading holds the existing anode sheath row to be the
-    complete closure of the drift ENTHALPY at that face, while the compression
-    work on the cell upstream of the mesh is not booked by any existing row and
-    stands under both readings.
+    Two arrays for the enthalpy/heat-flux channel and two for the
+    pressure-drift-work channel, because the two faces that bound the operator
+    treat them differently.
+
+    **The cathode face** (amended 2026-08-31 after the advisor adjudication).
+    The enthalpy and thermal-force channels there would carry the RETURNING
+    thermal-electron current, and the cathode sheath repels plasma electrons --
+    ``P_cathode_e`` is 0.06 W on this artifact, a return current of order
+    0.3 mA -- so they are exactly zero. The WORK channel rides the model's own
+    face-1 particle flux ``-e n u_face A``, making it the exact partner of the
+    expansion cooling ``pressure_work_rhs`` books at that face. The earlier
+    ``+14.8 kW`` reading, which rode the circuit's ion current there, is
+    RETIRED as measured-wrong: it was an unsourced credit with no physical
+    carrier and no ledger partner.
+
+    **The anode face.** ``"sheath_row_closes_all"`` is the registered closure
+    (ruled 2026-08-31) and closes BOTH channels: the kinetic anode sheath row
+    is the total electron energy flux at the sheath edge for the thermal
+    population, so any fluid export there double-counts it. The other two
+    values are disclosed instrument arms bounding that double count.
     """
     cells = geom.cells
     lo_flux = np.zeros(cells, dtype=float)
@@ -212,8 +271,18 @@ def _face_pairs(geom, charge_death, anode_handshake, I_tot, I_beam):
         hi_flux[j] = I_tot - n_beam_hi
         lo_work[j] = lo_flux[j]
         hi_work[j] = hi_flux[j]
-    if anode_handshake == "sheath_row_closes":
+    lo_flux[c] = 0.0
+    if not (I_tot == 0.0 and I_beam == 0.0):
+        # See the solver's own guard: the cathode-face work current encodes a
+        # REPELLING sheath and is a driven-state statement, so it is booked
+        # only where the model books a current at all.
+        lo_work[c] = -_QE_C * n[c] * geom.plasma_face_area_cm2[c] * u_face[c]
+    else:
+        lo_work[c] = 0.0
+    if anode_handshake in ("sheath_row_closes", "sheath_row_closes_all"):
         hi_flux[last] = 0.0
+    if anode_handshake == "sheath_row_closes_all":
+        hi_work[last] = 0.0
     return lo_flux, hi_flux, lo_work, hi_work
 
 
@@ -234,12 +303,17 @@ def _face_mean(values, active, cells):
     return face
 
 
-def evaluate(geom, Te, n, I_tot, I_beam, charge_death, anode_handshake):
+def evaluate(geom, Te, n, I_tot, I_beam, charge_death, anode_handshake, u=None):
     """Return the operator's four rows [W per cell] plus its face bookkeeping.
 
-    ``Te`` [eV] and ``n`` [cm^-3] are one saved instant's profiles; ``I_tot``
-    and ``I_beam`` are that instant's currents [A]. Every power below is
-    ``coefficient x T_e[eV] x I[A]``, which is watts exactly.
+    ``Te`` [eV], ``n`` [cm^-3] and ``u`` [cm/s] are one saved instant's
+    profiles; ``I_tot`` and ``I_beam`` are that instant's currents [A]. Every
+    power below is ``coefficient x T_e[eV] x I[A]``, which is watts exactly.
+
+    ``u`` is the ion velocity, needed ONLY for the cathode face, where the work
+    channel has to ride the same velocity ``pressure_work_rhs`` books on. A
+    caller that omits it gets a zero face-1 work current, which is a different
+    (and weaker) statement -- so it is passed everywhere it matters.
 
     A non-finite current is read as zero rather than propagated: the cathode
     solve writes NaN into its per-solve currents on a save where no solve ran
@@ -252,8 +326,13 @@ def evaluate(geom, Te, n, I_tot, I_beam, charge_death, anode_handshake):
     active = geom.plasma_active
     Te_face = _face_mean(Te, active, cells)
     n_face = _face_mean(n, active, cells)
+    u_face = _face_mean(
+        np.zeros(cells) if u is None else np.asarray(u, dtype=float),
+        active,
+        cells,
+    )
     lo_flux, hi_flux, lo_work, hi_work = _face_pairs(
-        geom, charge_death, anode_handshake, I_tot, I_beam
+        geom, charge_death, anode_handshake, I_tot, I_beam, n, u_face
     )
 
     idx = np.arange(cells)
@@ -297,7 +376,42 @@ def evaluate(geom, Te, n, I_tot, I_beam, charge_death, anode_handshake):
             w_emf_pressure += (lo_work[k] / n_face[k]) * (pe_right - pe_left)
     w_emf = w_emf_pressure + float(emf_work[c : last + 1].sum())
 
+    # The SUPPORT-sensitivity leg of the EMF bracket: the same sum extended
+    # across the anode mesh face, i.e. including that face's pressure jump.
+    # This is the support the advisor identified as the consult's (it is what
+    # reproduces the consult's 16.3/11.8 kW), and it is reported as the other
+    # end of a bracket rather than as a correction. The DECLARED support stops
+    # at the last interior face, because the drift is absorbed at the mesh and
+    # never traverses the cell-5-to-6 gradient.
+    #
+    # It carries the PHYSICAL drift current at that face, not the handshake's
+    # closed value: the bracket is about where the operator's support ends, not
+    # about which ledger owns the face, and zeroing it under the registered
+    # closure would collapse the leg into the other one.
+    beam_faces_through = 1 if charge_death == "cell_1" else 2
+    anode_beam = I_beam if (last + 1 - c) < beam_faces_through else 0.0
+    anode_current = I_tot - anode_beam
+    w_emf_pressure_wide = w_emf_pressure
+    if n_face[last + 1] > 0.0 and last + 1 < cells:
+        w_emf_pressure_wide += (anode_current / n_face[last + 1]) * (
+            Te[last + 1] * n[last + 1] - Te[last] * n[last]
+        )
+    w_emf_wide = w_emf_pressure_wide + float(emf_work[c : last + 1].sum())
+
+    # What ``pressure_work_rhs`` books at the cathode face on the SAME state:
+    # -p_e div(u) contributes +p_e A u_face there. The operator's face-1 work
+    # term is its exact partner, so the two must sum to roundoff -- that sum is
+    # gate 3's second half, and it is the whole reason the work current rides
+    # u_face rather than the circuit's ion current.
+    pressure_work_face1_W = (
+        Te[c] * n[c] * _EV_TO_ERG * geom.plasma_face_area_cm2[c] * u_face[c]
+        * 1.0e-7
+    )
+
     return {
+        "W_EMF_wide_W": w_emf_wide,
+        "anode_face_current_A": anode_current,
+        "pressure_work_face1_W": pressure_work_face1_W,
         "enthalpy_W": enthalpy,
         "thermal_flux_W": thermal_flux,
         "pressure_work_W": pressure_work,
@@ -341,6 +455,7 @@ def _window_mean_rows(h5, geom, t_lo, t_hi, charge_death, anode_handshake):
         raise ValueError(f"no saved samples in [{t_lo}, {t_hi}] s")
     Te_all = h5["Te"]
     n_all = h5["n"]
+    u_all = h5["u"]
     I_tot_all = h5["cathode_diagnostics/circuit_I_loop"][:]
     I_beam_all = h5["cathode_diagnostics/source_I_eth_star"][:]
 
@@ -351,8 +466,18 @@ def _window_mean_rows(h5, geom, t_lo, t_hi, charge_death, anode_handshake):
         "anode_face_flux_W": 0.0,
         "anode_face_work_W": 0.0,
         "W_EMF_W": 0.0,
+        "W_EMF_wide_W": 0.0,
         "W_EMF_pressure_W": 0.0,
+        "pressure_work_face1_W": 0.0,
     }
+    # The EMF bracket is reported CURRENT-WEIGHTED: sum(W_EMF) / sum(I), not
+    # the mean of a per-sample ratio. A per-sample ratio is a small-denominator
+    # trap -- the pre-breakdown frames divide a few watts by a few amperes and
+    # dominate any straight average with a number that is not a physics
+    # reading.
+    emf_num = 0.0
+    emf_num_wide = 0.0
+    emf_den = 0.0
     ident_worst = 0.0
     for i in sel:
         res = evaluate(
@@ -363,6 +488,12 @@ def _window_mean_rows(h5, geom, t_lo, t_hi, charge_death, anode_handshake):
             float(I_beam_all[i]),
             charge_death,
             anode_handshake,
+            u=u_all[i, :],
+        )
+        emf_num += res["W_EMF_W"]
+        emf_num_wide += res["W_EMF_wide_W"]
+        emf_den += (
+            float(I_tot_all[i]) if np.isfinite(I_tot_all[i]) else 0.0
         )
         if acc is None:
             acc = {
@@ -392,6 +523,9 @@ def _window_mean_rows(h5, geom, t_lo, t_hi, charge_death, anode_handshake):
     acc["_t_hi"] = float(t[sel[-1]])
     acc["_I_tot_mean"] = float(np.nanmean(I_tot_all[sel]))
     acc["_I_beam_mean"] = float(np.nanmean(I_beam_all[sel]))
+    # The two ends of the EMF support bracket, current-weighted.
+    acc["_emf_V_declared"] = emf_num / emf_den if emf_den else float("nan")
+    acc["_emf_V_wide"] = emf_num_wide / emf_den if emf_den else float("nan")
     return acc
 
 
@@ -399,8 +533,14 @@ def _report_arm(geom, rows, charge_death, anode_handshake, throughput_W):
     c, last = geom.cathode_cell, geom.last_source_cell
     tot = rows["total_W"]
     gap_sum = float(tot[c : last + 1].sum())
-    compression = float(rows["pressure_work_W"][c + 1 : last + 1].sum())
+    # Gate 4 is over the cells strictly DOWNSTREAM of the death cell, not a
+    # fixed cell range: the fixed range was bracket-A-specific, and under
+    # "cell_2" it swept in the death cell's own large negative and reported the
+    # compression heating as a cooling.
+    death_cell = c if charge_death == "cell_1" else c + 1
+    compression = float(rows["pressure_work_W"][death_cell + 1 : last + 1].sum())
     handshake = rows["cathode_face_flux_W"]
+    cathode_work = rows["cathode_face_work_W"]
     print(
         f"  [arm charge_death={charge_death} anode_handshake={anode_handshake}]"
     )
@@ -410,40 +550,47 @@ def _report_arm(geom, rows, charge_death, anode_handshake, throughput_W):
     print(f"    per-cell total kW : {per_cell}")
     print(f"    gap sum           : {gap_sum * 1e-3:+.2f} kW")
     print(
-        f"    cathode-face handshake (2.21 Te I/e, face {geom.cathode_face}) : "
-        f"{handshake * 1e-3:+.3f} kW"
+        f"    cathode-face enthalpy+thermal-force (face {geom.cathode_face}) : "
+        f"{handshake * 1e-3:+.6f} kW   [expected 0; the +14.8 kW pin is "
+        "RETIRED as measured-wrong]"
+    )
+    print(
+        f"    cathode-face work term : {cathode_work * 1e-3:+.4f} kW  "
+        "(the partner of pressure_work_rhs's face-1 piece; the two must sum "
+        "to roundoff)"
     )
     print(
         f"    compression piece (pressure-drift work, cells "
-        f"{c + 1}-{last})                : {compression * 1e-3:+.3f} kW"
+        f"{death_cell + 1}-{last}, strictly downstream of the death cell): "
+        f"{compression * 1e-3:+.3f} kW"
     )
     print(
-        f"    W_EMF             : {rows['W_EMF_W'] * 1e-3:+.3f} kW "
-        f"(pressure half {rows['W_EMF_pressure_W'] * 1e-3:+.3f} kW)"
+        f"    W_EMF             : {rows['W_EMF_W'] * 1e-3:+.3f} kW declared "
+        f"support / {rows['W_EMF_wide_W'] * 1e-3:+.3f} kW across the mesh face"
     )
-    emf_V = (
-        rows["W_EMF_W"] / rows["_I_tot_mean"]
-        if rows["_I_tot_mean"] != 0.0
-        else float("nan")
+    print(
+        f"    in-plasma EMF     : {rows['_emf_V_declared']:+.3f} V (faces "
+        f"{c + 1}-{last}, declared) .. {rows['_emf_V_wide']:+.3f} V (faces "
+        f"{c + 1}-{last + 1}), current-weighted window means"
     )
-    print(f"    in-plasma EMF     : {emf_V:+.3f} V")
     print(
         f"    volume identity   : worst relative residual over the window "
         f"{rows['_identity_worst_rel']:.3e}"
     )
     if throughput_W:
         print(
-            f"    throughput-normalized: handshake "
-            f"{handshake / throughput_W:.4f}, compression "
-            f"{compression / throughput_W:.4f} (of P_prim "
-            f"{throughput_W * 1e-3:.1f} kW)"
+            f"    throughput-normalized: compression "
+            f"{compression / throughput_W:.4f} of P_prim "
+            f"{throughput_W * 1e-3:.1f} kW"
         )
     return {
         "gap_sum_W": gap_sum,
         "compression_W": compression,
         "handshake_W": handshake,
+        "cathode_work_W": cathode_work,
         "W_EMF_W": rows["W_EMF_W"],
-        "emf_V": emf_V,
+        "emf_V": rows["_emf_V_declared"],
+        "emf_V_wide": rows["_emf_V_wide"],
     }
 
 
@@ -454,7 +601,7 @@ def main(argv=None):
     ap.add_argument("--t-hi", type=float, default=2.01e-2)
     ap.add_argument("--charge-death", default="cell_1",
                     choices=CHARGE_DEATH_CHOICES)
-    ap.add_argument("--anode-handshake", default="export_counts",
+    ap.add_argument("--anode-handshake", default="sheath_row_closes_all",
                     choices=ANODE_HANDSHAKE_CHOICES)
     ap.add_argument("--all-arms", action="store_true",
                     help="evaluate all four bracket arms")
@@ -520,14 +667,17 @@ def main(argv=None):
                 float(cd["source_I_eth_star"][i]),
                 charge_death,
                 anode_handshake,
+                u=h5["u"][i, :],
             )
             c, last = geom.cathode_cell, geom.last_source_cell
             net = float(res["total_W"][c : last + 1].sum())
+            I_now = float(cd["circuit_I_loop"][i])
+            I_b_now = float(cd["source_I_eth_star"][i])
             print(
                 f"  [{charge_death}/{anode_handshake}] net "
-                f"{net * 1e-3:+.4f} kW at I_tot="
-                f"{float(cd['circuit_I_loop'][i]):.1f} A, I_beam="
-                f"{float(cd['source_I_eth_star'][i]):.1f} A"
+                f"{net * 1e-3:+.4f} kW at I_tot={I_now:.1f} A, "
+                f"I_beam={I_b_now:.1f} A -> Gamma_d current "
+                f"{I_now - I_b_now:+.1f} A"
             )
 
         # The same clause over the afterglow WINDOW. The consult's "213 A still
@@ -538,7 +688,7 @@ def main(argv=None):
         lo, hi = args.afterglow_window_lo, float(t[-1])
         print(
             f"\n# AFTERGLOW WINDOW {lo * 1e3:.3f}-{hi * 1e3:.3f} ms "
-            "(the reading the consult's 213 A tail belongs to)"
+            "(the reading the 213 A tail belongs to)"
         )
         for charge_death, anode_handshake in arms:
             rows = _window_mean_rows(h5, geom, lo, hi, charge_death,
@@ -549,12 +699,22 @@ def main(argv=None):
                 f"  [{charge_death}/{anode_handshake}] net "
                 f"{net * 1e-3:+.4f} kW over {rows['_samples']} samples at "
                 f"mean I_tot={rows['_I_tot_mean']:.1f} A, mean "
-                f"I_beam={rows['_I_beam_mean']:.1f} A"
+                f"I_beam={rows['_I_beam_mean']:.1f} A -> mean Gamma_d current "
+                f"{rows['_I_tot_mean'] - rows['_I_beam_mean']:+.1f} A "
+                "(NEGATIVE: the emission outlasts the loop current, so the "
+                "drift reverses in afterglow)"
             )
+        print(
+            "  NOTE: the afterglow term is confined to the ~1.5 ms ring-down; "
+            "the loop falls from ~2980 A to ~12 A inside it, so the window "
+            "mean and the 26 ms instant are two different readings and both "
+            "are reported above."
+        )
 
-        print("\n# CONSULT PINS (advisor consult 2026-08-26), for comparison")
-        for k, v in CONSULT_PINS.items():
-            print(f"    {k}: {v}")
+        print("\n# PINS OF RECORD (amended 2026-08-31), for comparison")
+        for k, v in PINS.items():
+            tag = "  [RETIRED]" if k.endswith("_RETIRED") else ""
+            print(f"    {k}: {v}{tag}")
     return 0
 
 
