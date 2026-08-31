@@ -38,10 +38,18 @@ Sites whose key is not template-owned (a literal that no template declares, or
 a non-literal key expression the census cannot resolve) are listed for the
 record and left alone: the reachability argument above does not apply to them.
 
+``--against <git-rev>`` prints the REMOVAL RECORD: every site that carried a
+two-argument fallback at that revision and carries one argument now, with the
+dropped expression beside the template value in force, split into the ones whose
+fallback AGREED with the template and the STALE ones whose fallback stated a
+value the solver never used. That is the record of what the sweep removed, and
+it is regenerated from the tree rather than transcribed.
+
 Usage::
 
     python scripts/sgfs_census.py                     # census, exit 0 if consistent
     python scripts/sgfs_census.py --assert-clean      # additionally require zero remain
+    python scripts/sgfs_census.py --against <rev>     # what a sweep removed, vs <rev>
     python scripts/sgfs_census.py --path <file.py>    # census a different file
 """
 
@@ -49,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import subprocess
 import sys
 from pathlib import Path
 
@@ -97,9 +106,10 @@ def _literal(node):
         return _UNRESOLVED
 
 
-def collect(path):
+def collect(path, source=None):
     """Every ``self._input_dict.get`` / ``self._flags.get`` call site in ``path``."""
-    source = path.read_text()
+    if source is None:
+        source = path.read_text()
     tree = ast.parse(source, filename=str(path))
     sites = []
     for node in ast.walk(tree):
@@ -156,6 +166,55 @@ def classify(sites, path):
     return equal, differs, non_template
 
 
+def removal_record(path, rev):
+    """The two-argument sites at ``rev`` that carry one argument now.
+
+    Keyed by (namespace, key, ordinal) so repeated reads of the same key are
+    matched in source order rather than collapsed.
+    """
+    old_src = subprocess.run(
+        ["git", "show", f"{rev}:{path.relative_to(_REPO_ROOT).as_posix()}"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    old = collect(path, old_src)
+    new = collect(path)
+
+    def index(sites, n_args):
+        out, seen = {}, {}
+        for s in sites:
+            if not isinstance(s["key"], str) or s["n_args"] != n_args:
+                continue
+            k = (s["namespace"], s["key"])
+            seen[k] = seen.get(k, 0) + 1
+            out[(s["namespace"], s["key"], seen[k])] = s
+        return out
+
+    old_two = index(old, 2)
+    new_one = index(new, 1)
+
+    agreed, stale = [], []
+    for key, site in sorted(old_two.items(), key=lambda kv: kv[1]["line"]):
+        if key not in new_one:
+            continue
+        space, template = NAMESPACES[site["namespace"]]
+        if site["key"] not in template:
+            continue
+        expected = template[site["key"]]
+        site["space"] = space
+        site["template_value"] = expected
+        site["new_line"] = new_one[key]["line"]
+        if site["default"] is not _UNRESOLVED and values_equal(
+            site["default"], expected
+        ):
+            agreed.append(site)
+        else:
+            stale.append(site)
+    return agreed, stale
+
+
 def _fmt(site, path):
     space = site.get("space", site["namespace"])
     return (
@@ -177,9 +236,35 @@ def main(argv=None):
         action="store_true",
         help="require that no template-owned two-argument site remains",
     )
+    parser.add_argument(
+        "--against",
+        metavar="REV",
+        help="print the removal record against this git revision",
+    )
     args = parser.parse_args(argv)
 
     path = args.path.resolve()
+
+    if args.against:
+        agreed, stale = removal_record(path, args.against)
+        print(f"=== removal record: {path.name} vs {args.against} ===")
+        print(f"  {len(agreed) + len(stale)} fallback(s) dropped "
+              f"({len(agreed)} agreed with the template, {len(stale)} STALE)")
+        print()
+        print(f"--- fallback AGREED with the template ({len(agreed)}) ---")
+        for s in agreed:
+            print(f"  {path.name}:{s['line']} -> :{s['new_line']}  "
+                  f"{s['space']}:{s['key']!r}  dropped {s['default_src']}"
+                  f"  == template {s['template_value']!r}")
+        print()
+        print(f"--- STALE fallback dropped ({len(stale)}) ---")
+        print("    (each stated a default the solver never used: the key is")
+        print("     always present, so the second argument was unreachable)")
+        for s in stale:
+            print(f"  {path.name}:{s['line']} -> :{s['new_line']}  "
+                  f"{s['space']}:{s['key']!r}  dropped {s['default_src']}"
+                  f"  != template {s['template_value']!r}")
+        return 0
     sites = collect(path)
     equal, differs, non_template = classify(sites, path)
     two_arg = [s for s in sites if s["n_args"] >= 2]
