@@ -1342,6 +1342,22 @@ class LAPDSim1D:
                         f"leave it at {_default!r}, or arm the channel with "
                         f"neutral_model='kinetic_dvm' (got {_given!r})"
                     )
+            # B6: the same statement for the baffle interception. It makes the
+            # geometry's thin annular baffles act on the transient DVM's
+            # ANNULUS, and no other neutral model carries such an annulus for
+            # them to act on -- the fluid's own baffles ride neutral_baffles,
+            # which is a different flag and is untouched here.
+            if bool(self._flags.get("neutral_kinetic_dvm_baffles")):
+                raise ValueError(
+                    "neutral_kinetic_dvm_baffles makes the geometry's thin "
+                    "annular baffles intercept the transient DVM's annulus "
+                    "flux, and has no meaning under "
+                    f"neutral_model={self._neutral_model!r}, which carries no "
+                    "such annulus. The FLUID baffles are the separate "
+                    "neutral_baffles flag and are unaffected. Accepted: leave "
+                    "it off, or set it with neutral_model='kinetic_dvm', the "
+                    "neutral_two_zone flag and neutral_baffles"
+                )
 
     def _init_numerical_guards(self):
         """Validate the step-controller and non-ignition guards.
@@ -4518,6 +4534,42 @@ class LAPDSim1D:
                 ),
             }
         self._dvm_anode_jet = anode_jet
+        # B6: the thin annular baffles, default off and ABSENT rather than
+        # present at a neutral setting, exactly as the two jets are. The
+        # geometry has already validated and mapped them onto faces (and has
+        # already refused a clear radius below the local column radius, and a
+        # baffle array supplied without its flag); what this flag decides is
+        # whether the KINETIC annulus sees them at all. The two refusals below
+        # are the two ways a config can ask for that and mean nothing by it.
+        baffle_faces = ()
+        baffle_radii = ()
+        if bool(self._flags.get("neutral_kinetic_dvm_baffles")):
+            if not bool(self._flags.get("neutral_baffles")):
+                raise ValueError(
+                    "neutral_kinetic_dvm_baffles makes the geometry's thin "
+                    "annular baffles act on the kinetic annulus, and this "
+                    "geometry has none: the fluid neutral_baffles flag is "
+                    "off, so neutral_baffle_positions_cm and "
+                    "neutral_baffle_clear_radii_cm are forbidden and unset. "
+                    "Accepted: arm neutral_baffles with both arrays, or leave "
+                    "neutral_kinetic_dvm_baffles off"
+                )
+            baffle_faces = np.asarray(
+                self._geometry.neutral_baffle_face_indices, dtype=int
+            )
+            baffle_radii = np.asarray(
+                self._geometry.neutral_baffle_clear_radius_cm, dtype=float
+            )
+            if baffle_faces.size == 0:
+                raise ValueError(
+                    "neutral_kinetic_dvm_baffles is armed but the resolved "
+                    "geometry carries no baffle faces, so the channel would "
+                    "be silently inert. Accepted: neutral_baffles with a "
+                    "non-empty neutral_baffle_positions_cm and "
+                    "neutral_baffle_clear_radii_cm, or "
+                    "neutral_kinetic_dvm_baffles off"
+                )
+        self._dvm_baffles = tuple(int(f) for f in np.asarray(baffle_faces))
         self._dvm = TransientDVM(
             geometry=self._geometry,
             nvz=int(self._input_dict.get("neutral_kinetic_dvm_nvz")),
@@ -4531,6 +4583,8 @@ class LAPDSim1D:
             anode_jet=anode_jet,
             transparency=1.0 - float(self._input_dict.get("eta")),
             mesh_face=int(anode_faces[0]) if anode_faces.size else -999,
+            baffle_faces=baffle_faces,
+            baffle_clear_radius_cm=baffle_radii,
             s_L=self._dvm_end_sticking("S_pump_L"),
             s_R=self._dvm_end_sticking("S_pump_R"),
         )

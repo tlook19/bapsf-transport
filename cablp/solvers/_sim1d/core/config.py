@@ -3435,6 +3435,20 @@ input_flags_template_1d = {
     # Thin annular apertures. Positions and clear radii are required together
     # when on and forbidden when off; the plasma channel stays open.
     "neutral_baffles": False,
+    # Make those same baffles act on the transient DVM's annulus as well as on
+    # the fluid neutral field. The fluid books each one as a zero-thickness
+    # series orifice of open area pi(R_clear^2 - R_col^2) on the annulus
+    # conductance alone; on the kinetic arm the annulus flux crossing each
+    # baffle face is INTERCEPTED in the blocked fraction of the face area and
+    # re-emitted at the wall temperature in the cell it came from, particle-
+    # conserving, in the anode mesh's channel form. The column is untouched in
+    # both, because a baffle's bore is at least the local plasma radius. Adds
+    # no coefficient: the clear radius is the geometry's measured CAD value.
+    # REQUIRES neutral_model='kinetic_dvm' and the neutral_baffles flag with
+    # its two arrays; refused at construction otherwise. Default OFF and
+    # bit-exact off, including on a geometry whose baffles are armed for the
+    # fluid.
+    "neutral_kinetic_dvm_baffles": False,
     # Fixed-cell-size source region, so a mesh refinement study is not
     # self-confounding: the column between the anode face and
     # source_region_length_cm is meshed at exactly source_region_dz_cm

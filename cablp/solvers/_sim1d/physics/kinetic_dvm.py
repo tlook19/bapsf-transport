@@ -227,6 +227,13 @@ LEDGER_LOSS_CHANNELS = (
     "elastic",
     "wall",
     "mesh_blocked",
+    # B6: the annulus flux a thin annular baffle intercepts at its face. Its
+    # partner ``birth_baffle_reemit`` is the same count re-emitted on the side
+    # it was intercepted from, so the pair cancels in the domain identity the
+    # way the mesh pair does. Both rows are always PRESENT and are exactly
+    # zero with no baffle armed; what is presence-gated is the code path, and
+    # the momentum diagnostic below.
+    "baffle_blocked",
     "closed_face_blocked",
     "end_out_L",
     "end_out_R",
@@ -237,6 +244,7 @@ LEDGER_BIRTH_CHANNELS = (
     "wall_accommodated",
     "wall_reflected",
     "mesh_reemit",
+    "baffle_reemit",
     "closed_face_reemit",
     "end_return_L",
     "end_return_R",
@@ -275,9 +283,17 @@ LEDGER_ENGINE_SPLIT_BIRTHS = ("cathode_jet", "anode_jet")
 # measurable rather than remembered. They are deliberately NOT named
 # ``birth_*`` or ``loss_*``, because :func:`ledger_residual` sums every row
 # with those prefixes and these are not particle counts.
+#
+# ``momentum_baffle_absorbed`` (B6) is the same kind of reading for the thin
+# annular baffles and is presence-gated on THEM rather than on the anode jet:
+# it is emitted exactly when at least one baffle face is armed, which is when
+# there is a structure for the gas to hand axial momentum to. Like the mesh
+# row it is what the structure KEPT -- the baffle re-emits at rest on the wall
+# spectrum, so every bit of the intercepted axial momentum stays on it.
 LEDGER_MOMENTUM_DIAGNOSTICS = (
     "momentum_anode_jet",
     "momentum_mesh_absorbed",
+    "momentum_baffle_absorbed",
 )
 # Ledger entries that are NOT channels: the tick's own bookkeeping, the
 # counted-ionization handshake's reconciliation record, and the nested
@@ -323,6 +339,7 @@ LEDGER_ENERGY_BIRTH_CHANNELS = LEDGER_BIRTH_CHANNELS
 LEDGER_ENERGY_NET_CHANNELS = (
     "surface_wall",
     "surface_mesh",
+    "surface_baffle",
     "surface_closed_face",
     "surface_end_L",
     "surface_end_R",
@@ -512,6 +529,25 @@ class TransientDVM:
     :data:`LEDGER_MOMENTUM_DIAGNOSTICS`: the signed axial momentum the jet
     launched, and the axial momentum the mesh INTERCEPTED and kept (the wires
     re-emit at rest, so all of it stays on the structure).
+
+    ``baffle_faces`` / ``baffle_clear_radius_cm`` are the THIN ANNULAR
+    BAFFLES, empty (absent) by default. Each is a zero-thickness annular disc
+    standing on the vessel wall at one interior mesh face, solid from its
+    clear radius out to the bore and open inside it. It intercepts the share
+    of the ANNULUS flux crossing that face which the ring blocks, tallies it
+    with the count, the energy and the signed axial momentum, and re-emits it
+    at ``T_wall_K`` on the wall spectrum in the cell it was intercepted FROM
+    -- the anode mesh's channel form exactly, restricted to the annulus,
+    because the disc's bore is at least the local plasma radius and the COLUMN
+    passes untouched. Full accommodation at the wall temperature is the
+    convention: the scalar ``accommodation`` covers the cylinder and the two
+    ends, while mesh, closed faces and now baffles run at ``alpha = 1``.
+    Both annulus treatments carry it -- the ``rates`` march as an interception
+    at the face, the ``bounded_chord`` map as an annular throat -- and both
+    book into the ONE channel pair ``baffle_blocked`` / ``baffle_reemit``.
+    See :meth:`_configure_baffles` for the transparency and its refusals, and
+    ``momentum_baffle_absorbed``, which is presence-gated on the baffles
+    themselves rather than on the anode jet.
     """
 
     def __init__(
@@ -529,6 +565,8 @@ class TransientDVM:
         anode_jet=None,
         transparency=1.0,
         mesh_face=-999,
+        baffle_faces=(),
+        baffle_clear_radius_cm=(),
         s_L=0.0,
         s_R=0.0,
         T_wall_K=T_WALL_K,
@@ -627,6 +665,7 @@ class TransientDVM:
         self._configure_closed_faces(geometry)
         Rp = np.asarray(geometry.Rp_cm, dtype=float)
         Rm = np.asarray(geometry.Rm_cm, dtype=float)
+        self._configure_baffles(baffle_faces, baffle_clear_radius_cm, Rp)
 
         if grid is None:
             if vmax_cm_s is None:
@@ -730,6 +769,7 @@ class TransientDVM:
                 grid=g,
                 mesh_face=self.mesh_face,
                 transparency=self.transparency,
+                baffles=self._baffle_throats,
             )
             self.f_flight = {
                 name: np.zeros(shape) for name in FLIGHT_CLASSES
@@ -777,6 +817,12 @@ class TransientDVM:
         # Last update's closed-face traffic in PARTICLES per cell, keyed by
         # the direction the blocked particles were re-emitted into.
         self.last_closed_counts = None
+        # Last update's annular-baffle interception in PARTICLES per cell, on
+        # the cell each blocked particle arrived FROM. Published for the same
+        # reason the closed-face counts are: the ledger rows are domain totals
+        # and the per-cell placement -- that a baffle books on its own face's
+        # flanking pair and nowhere else -- is not recoverable from them.
+        self.last_baffle_counts = None
         # Last update's NON-accommodated cylindrical-wall return, in PARTICLES
         # per (cell, v_z bin, v_perp bin). Published because the return's
         # spectrum -- its count, its energy and its net v_z -- is the whole
@@ -844,6 +890,111 @@ class TransientDVM:
         self.ion_removed_cum = cells.copy()
         self.ion_shortfall_updates = 0
         self.ion_shortfall_cell_updates = cells.copy()
+
+    # ---------------------------------------------------- annular baffles
+
+    def _configure_baffles(self, faces, clear_radius_cm, Rp):
+        """Resolve the thin annular baffles and their annulus transparencies.
+
+        A baffle is a zero-thickness annular disc standing on the vessel wall
+        at one mesh face: the ring ``R_clear < r < Rm`` is solid and the bore
+        ``r < R_clear`` is open. Its clear radius is at least the local column
+        radius, so the PLASMA CHANNEL is untouched and the object acts on the
+        annulus alone -- the same statement the fluid's series orifice makes
+        (``physics/neutrals.py``, ``open_ann = pi (R_clear^2 - R_col^2)``).
+
+        The per-face ANNULUS TRANSPARENCY is that open ring over the annulus
+        area the march actually transports through, which is the face THROAT
+        ``face_a[f] = min(A_ann[f-1], A_ann[f])``::
+
+            t_f = min(pi (R_clear^2 - R_col^2) / face_a[f], 1)
+
+        so the passed throughput ``t_f F |v_z| face_a[f]`` is exactly
+        ``F |v_z| open_ann``: the open area is what passes, which is the whole
+        content of the free-molecular orifice. ``R_col`` is the FACE AVERAGE
+        ``(Rp[f-1] + Rp[f]) / 2``, which is the fluid's own convention at the
+        same face (``_zone_face_average(Rp)[f - 1]``), so the two channels
+        cannot disagree about how much ring is open.
+
+        The clip at 1 is not cosmetic: a prescribed annulus area can be
+        SMALLER than the geometric ``pi (Rm^2 - Rp^2)`` (support rods are
+        subtracted from it), so an open ring can exceed the area available and
+        a transparency above 1 would AMPLIFY the flux. A face at ``t_f = 1``
+        is not armed at all -- it is a no-op by construction rather than by a
+        multiplication by 1.0, which is what makes an unrestricting baffle
+        bit-exact.
+
+        Raises on a clear radius BELOW the local column radius: that is a disc
+        covering part of the plasma channel, which this object does not model
+        and which would silently seal the annulus (``open_ann <= 0``) instead.
+        ``R_clear == R_col`` is legal and gives ``t_f = 0``, a fully closed
+        annulus -- the same configuration the fluid accepts, where its orifice
+        conductance goes to zero.
+        """
+        faces = np.asarray(faces, dtype=int).reshape(-1)
+        radii = np.asarray(clear_radius_cm, dtype=float).reshape(-1)
+        if faces.shape != radii.shape:
+            raise ValueError(
+                "the DVM baffle face and clear-radius arrays must have equal "
+                f"length (got {faces.size} faces and {radii.size} radii)"
+            )
+        if faces.size and np.unique(faces).size != faces.size:
+            raise ValueError(
+                "the DVM baffles must sit on DISTINCT mesh faces "
+                f"(got {faces.tolist()})"
+            )
+        if faces.size and not np.all(np.isfinite(radii)):
+            raise ValueError(
+                f"the DVM baffle clear radii must be finite (got {radii.tolist()})"
+            )
+        transparency = np.ones(faces.size)
+        open_ann = np.zeros(faces.size)
+        tau = [None] * (self.nz + 1)
+        throats = []
+        for i, (face, clear) in enumerate(zip(faces, radii)):
+            face = int(face)
+            if not 0 < face < self.nz:
+                raise ValueError(
+                    "a DVM baffle intercepts the annulus flux crossing ONE "
+                    "interior mesh face, so it needs a flanking cell on each "
+                    f"side: baffle face {face} on a {self.nz}-cell grid has "
+                    f"none. Accepted: 0 < face < {self.nz}"
+                )
+            R_col = 0.5 * (float(Rp[face - 1]) + float(Rp[face]))
+            if float(clear) < R_col:
+                raise ValueError(
+                    "a DVM baffle leaves the plasma channel open, so its "
+                    "clear radius may not fall below the local column radius: "
+                    f"face {face} has R_clear={clear} cm against "
+                    f"R_col={R_col} cm (the face average of Rp). Accepted: "
+                    "R_clear >= R_col, where R_clear == R_col closes the "
+                    "annulus entirely"
+                )
+            ring = np.pi * (float(clear) ** 2 - R_col**2)
+            area = float(self.face_a[face])
+            open_ann[i] = ring
+            if area <= 0.0 or ring >= area:
+                # No annulus to restrict, or an open ring at least as wide as
+                # the annulus itself: unarmed, and therefore bit-exactly inert.
+                continue
+            transparency[i] = ring / area
+            tau[face] = float(transparency[i])
+            throats.append((face, ring))
+        self.baffle_faces = faces
+        self.baffle_clear_radius_cm = radii
+        self.baffle_open_area_cm2 = open_ann
+        self.baffle_transparency = transparency
+        #: Per-face transparency lookup for the march, ``None`` where no
+        #: baffle is armed. A plain list so the inner loop's test is an
+        #: index and an identity check rather than a numpy scalar read.
+        self._baffle_tau = tau
+        #: ``(face, open_area)`` for every ARMED baffle, for the bounded-chord
+        #: flight map's throat convention.
+        self._baffle_throats = tuple(throats)
+        #: Whether any baffle actually restricts anything. Every baffle code
+        #: path in the update is gated on this, so an unarmed configuration
+        #: runs the arithmetic it ran before B6, bit for bit.
+        self._baffle_any = bool(throats)
 
     # ------------------------------------------------------ closed faces
 
@@ -1564,8 +1715,20 @@ class TransientDVM:
         and must not be blocked by the surface it left. The annulus is not
         touched: it is the clear bore around the disc.
 
-        Returns ``(f_c, f_a, mesh_c, mesh_a, out, mesh_E, closed, mesh_P)``
-        where
+        An ANNULAR BAFFLE face (``_baffle_tau``) throttles the ANNULUS alone:
+        the ``1 - t_f`` share of the upstream annulus flux is tallied onto the
+        cell it came from and the rest passes, in exactly the form the mesh
+        block above uses for its own annulus share, while the COLUMN flux goes
+        by untouched (the disc's bore is at least the plasma radius). It is
+        applied after the mesh, which the geometry forbids it to coincide
+        with; were the two ever placed on one face they would compose
+        multiplicatively, each booking its own share, and both channels would
+        still close. Nothing happens under ``column_only``: that arm carries
+        the annulus as flights rather than as an advected field, and its
+        baffles live in :class:`BoundedChordFlights` instead.
+
+        Returns ``(f_c, f_a, mesh_c, mesh_a, out, mesh_E, closed, mesh_P,
+        baffle)`` where
         the mesh arrays are intercepted PARTICLES per emitting cell, ``out``
         maps ``(zone, end)`` to the outgoing particles per bin, ``mesh_E``
         is the ``(column, annulus)`` pair of intercepted ENERGIES [erg] per
@@ -1574,7 +1737,9 @@ class TransientDVM:
         keyed by the direction the blocked particles are re-emitted into, and
         ``mesh_P`` is the ``(column, annulus)`` pair of intercepted signed
         AXIAL MOMENTA [g cm/s] -- zeros unless the anode jet is armed, which
-        is the only member that publishes them.
+        is the only member that publishes them -- and ``baffle`` is the
+        ``(particles, energies, signed axial momenta)`` triple of the annular
+        baffles, per emitting cell, all zeros unless a baffle is armed.
         All of them are tallied here because these are the channels whose
         interception is summed over velocity bins inside the sweep, so their
         moments cannot be recovered from the particle tally afterwards.
@@ -1594,9 +1759,21 @@ class TransientDVM:
         # signed, which is what distinguishes "the structure took net axial
         # momentum" from "particles hit it".
         mesh_momentum = self.anode_jet is not None
-        P_bin = self._mesh_axial_momentum_weight() if mesh_momentum else None
+        # The baffle row is presence-gated on ITS OWN structure. The weight is
+        # the same array either way and is built once; which tallies read it
+        # is decided per channel, so arming one cannot switch the other on and
+        # move a row that was zero.
+        baffle_momentum = self._baffle_any
+        P_bin = (
+            self._mesh_axial_momentum_weight()
+            if (mesh_momentum or baffle_momentum)
+            else None
+        )
         mesh_c_P = np.zeros(nz)
         mesh_a_P = np.zeros(nz)
+        baffle_a = np.zeros(nz)
+        baffle_a_E = np.zeros(nz)
+        baffle_a_P = np.zeros(nz)
         # Closed-face tallies, keyed by the direction the blocked particles
         # are RE-EMITTED into (the reverse of the direction that delivered
         # them), on the cell of the side they arrived from.
@@ -1615,7 +1792,9 @@ class TransientDVM:
                 end_in, end_out = +1, -1
             vz = np.abs(g.vz[sel])[:, None]
             E_sel = self.E_bin[sel]
-            P_sel = None if P_bin is None else P_bin[sel]
+            P_all = None if P_bin is None else P_bin[sel]
+            P_sel = P_all if mesh_momentum else None
+            P_baf = P_all if baffle_momentum else None
             F_c_prev = inflow_c[end_in][sel]
             F_a_prev = None if column_only else inflow_a[end_in][sel]
             for i in order:
@@ -1705,6 +1884,28 @@ class TransientDVM:
                         )
                     F_c_prev = self.transparency * F_c_prev
                     F_a_prev = self.transparency * F_a_prev
+                if self._baffle_any:
+                    tau_b = self._baffle_tau[fi]
+                    if tau_b is not None:
+                        # ANNULUS ONLY: the disc's bore is at least the plasma
+                        # radius, so the column flux crosses untouched.
+                        blocked_b = (1.0 - tau_b) * F_a_prev
+                        j = min(max(i - direction, 0), nz - 1)
+                        baffle_a[j] += float(
+                            (blocked_b * vz).sum() * self.face_a[fi] * dt
+                        )
+                        baffle_a_E[j] += float(
+                            (blocked_b * vz * E_sel).sum()
+                            * self.face_a[fi]
+                            * dt
+                        )
+                        if P_baf is not None:
+                            baffle_a_P[j] += float(
+                                (blocked_b * vz * P_baf).sum()
+                                * self.face_a[fi]
+                                * dt
+                            )
+                        F_a_prev = tau_b * F_a_prev
                 if self._closed_face[fi]:
                     # The COLUMN alone: the closed face is the cathode
                     # disc's own footprint, and the annulus around it is the
@@ -1749,6 +1950,7 @@ class TransientDVM:
         return (
             f_c, f_a, mesh_c, mesh_a, out, (mesh_c_E, mesh_a_E),
             (closed_n, closed_E), (mesh_c_P, mesh_a_P),
+            (baffle_a, baffle_a_E, baffle_a_P),
         )
 
     def _add_face_inflow(self, inject, counts, default_cell, direction,
@@ -1968,23 +2170,32 @@ class TransientDVM:
             wall_land = np.zeros((self.nz, g.nvz, g.nvp))
             inner_land = np.zeros((self.nz, g.nvz, g.nvp))
             mesh_a_bins = np.zeros((self.nz, g.nvz, g.nvp))
+            baffle_a_bins = np.zeros((self.nz, g.nvz, g.nvp))
             end_a = {-1: np.zeros((g.nvz, g.nvp)), +1: np.zeros((g.nvz, g.nvp))}
             for name in FLIGHT_CLASSES:
                 nu_f = self.flights.nu[name]
                 surviving = 1.0 / (1.0 + nu_f * dt)
                 done = self.f_flight[name] * (nu_f * dt) * surviving * vol_a
                 self.f_flight[name] = self.f_flight[name] * surviving
-                arrive, stopped, meshed, eL, eR = self.flights.route(name, done)
+                arrive, stopped, meshed, baffled, eL, eR = self.flights.route(
+                    name, done
+                )
                 if name == "wi":
                     inner_land += arrive
                 else:
                     wall_land += arrive
                 wall_land += stopped
                 mesh_a_bins += meshed
+                baffle_a_bins += baffled
                 end_a[-1] += eL
                 end_a[+1] += eR
             source_c = inner_land * inv_vc[:, None, None] / dt
-            f_c, f_a, mesh_c, _, out, mesh_E, closed, mesh_P = self._march(
+            # The march runs COLUMN-ONLY here, so its baffle triple is all
+            # zeros by construction: on this arm the annulus is flights, and
+            # the baffles that act on it are the throats in the map above.
+            (
+                f_c, f_a, mesh_c, _, out, mesh_E, closed, mesh_P, _no_baffle
+            ) = self._march(
                 dt, nu_c_loss, None, inflow_c, None, inject_c,
                 source_c=source_c, column_only=True,
             )
@@ -2001,17 +2212,35 @@ class TransientDVM:
                 if self.anode_jet is not None
                 else 0.0
             )
+            # The baffle channel on this arm is entirely the flight map's, so
+            # its three moments are taken off the same bins.
+            baffle_a = baffle_a_bins.sum(axis=(1, 2))
+            e_loss_baffle = self._energy_of(baffle_a_bins)
+            p_loss_baffle = (
+                float(
+                    (
+                        baffle_a_bins * self._mesh_axial_momentum_weight()
+                    ).sum()
+                )
+                if self._baffle_any
+                else 0.0
+            )
             # the column's zone escapes, at the same implicit discretization
             # the march's diagonal used, become inner-surface launches
             escapes = self.nux[:, None, :] * f_c * dt * vol_c
             L_wall = wall_land
         else:
-            f_c, f_a, mesh_c, mesh_a, out, mesh_E, closed, mesh_P = self._march(
+            (
+                f_c, f_a, mesh_c, mesh_a, out, mesh_E, closed, mesh_P, baffle
+            ) = self._march(
                 dt, nu_c_loss, nu_a_loss, inflow_c, inflow_a, inject_c
             )
             L_wall = self.nuw[:, None, :] * f_a * dt * vol_a
             e_loss_mesh = float(mesh_E[0].sum() + mesh_E[1].sum())
             p_loss_mesh = float(mesh_P[0].sum() + mesh_P[1].sum())
+            baffle_a, baffle_a_E, baffle_a_P = baffle
+            e_loss_baffle = float(baffle_a_E.sum())
+            p_loss_baffle = float(baffle_a_P.sum())
 
         # --- substep A tallies, in PARTICLES, from the marched state
         L_ion = nu_ion[:, None, None] * f_c * dt * vol_c
@@ -2073,6 +2302,14 @@ class TransientDVM:
                 + wall_return
                 + mesh_a[:, None, None] * self.M_wall[None, :, :]
             )
+            if self._baffle_any:
+                # The baffle re-emits what it stopped, at the wall temperature,
+                # on the side it stopped it -- as a wall LAUNCH on this arm,
+                # exactly as the mesh's share above.
+                launch_wall = (
+                    launch_wall
+                    + baffle_a[:, None, None] * self.M_wall[None, :, :]
+                )
             if puff.ndim:
                 launch_wall = launch_wall + puff[:, None, None] * self.M_cold
             launch_wall[0] += self.pend_L_a
@@ -2114,6 +2351,16 @@ class TransientDVM:
         f_c += (mesh_c * inv_vc)[:, None, None] * self.M_wall[None, :, :]
         if not jump:
             f_a += (mesh_a * inv_va)[:, None, None] * self.M_wall[None, :, :]
+        # Annular-baffle interception re-emits the same way and into the
+        # ANNULUS only, in the cell it was intercepted from. PRESENCE-GATED so
+        # that a run with no baffle armed adds nothing at all here rather than
+        # adding a zero -- the difference between inert and bit-exactly inert.
+        # Published per cell for the same reason the closed-face counts are.
+        self.last_baffle_counts = baffle_a
+        if self._baffle_any and not jump:
+            f_a += (
+                (baffle_a * inv_va)[:, None, None] * self.M_wall[None, :, :]
+            )
 
         # Closed-face re-emission: what the plate stopped goes back into the
         # side it came from, as a cosine half-flux directed away from the
@@ -2236,6 +2483,8 @@ class TransientDVM:
             mesh_c=mesh_c,
             mesh_a=mesh_a,
             e_loss_mesh=e_loss_mesh,
+            baffle_a=baffle_a,
+            e_loss_baffle=e_loss_baffle,
             e_closed_blocked=e_closed_blocked,
             e_closed_reemit=e_closed_reemit,
             out=out,
@@ -2270,6 +2519,10 @@ class TransientDVM:
             "loss_elastic": float(L_el.sum()),
             "loss_wall": float(N_wall.sum()),
             "loss_mesh_blocked": float(mesh_c.sum() + mesh_a.sum()),
+            # The annular baffles. Exactly zero with none armed, and the pair
+            # below is the same count by construction: the disc transmits
+            # nothing of what it stopped and keeps nothing.
+            "loss_baffle_blocked": float(baffle_a.sum()),
             "loss_closed_face_blocked": n_closed,
             "loss_end_out_L": out_L,
             "loss_end_out_R": out_R,
@@ -2280,6 +2533,7 @@ class TransientDVM:
             "birth_wall_accommodated": float(alpha * N_wall.sum()),
             "birth_wall_reflected": float((1.0 - alpha) * N_wall.sum()),
             "birth_mesh_reemit": float(mesh_c.sum() + mesh_a.sum()),
+            "birth_baffle_reemit": float(baffle_a.sum()),
             # The same count the closed faces blocked, by construction: the
             # plate transmits nothing and keeps nothing.
             "birth_closed_face_reemit": n_closed,
@@ -2310,6 +2564,12 @@ class TransientDVM:
             # intercepted axial momentum stays on the structure.
             ledger["momentum_anode_jet"] = p_anode_jet
             ledger["momentum_mesh_absorbed"] = p_loss_mesh
+        if self._baffle_any:
+            # PRESENCE-GATED on the baffles themselves, so a run without them
+            # carries the ledger it always carried. One reading, not a ledger:
+            # the signed axial momentum the discs KEPT -- they re-emit on the
+            # wall spectrum, which carries none, so all of it stays on them.
+            ledger["momentum_baffle_absorbed"] = p_loss_baffle
         self.last_ledger = ledger
         return ledger
 
@@ -2647,6 +2907,8 @@ class TransientDVM:
         mesh_c,
         mesh_a,
         e_loss_mesh,
+        baffle_a,
+        e_loss_baffle,
         e_closed_blocked,
         e_closed_reemit,
         out,
@@ -2730,6 +2992,10 @@ class TransientDVM:
         e_birth_mesh_reemit = (
             float(mesh_c.sum()) + float(mesh_a.sum())
         ) * self.E_wall_mean
+        # The baffle re-emits at the wall temperature on the wall spectrum, so
+        # its birth energy is the counted number times that spectrum's own mean
+        # -- the same product the annulus received, as for the mesh.
+        e_birth_baffle_reemit = float(baffle_a.sum()) * self.E_wall_mean
         e_birth_puff = float(puff.sum()) * self.E_cold_mean
         e_birth_recombination = (
             float((rec * E_Mi).sum()) if rec.ndim else 0.0
@@ -2750,6 +3016,7 @@ class TransientDVM:
             "loss_elastic": e_loss_elastic,
             "loss_wall": e_loss_wall,
             "loss_mesh_blocked": e_loss_mesh,
+            "loss_baffle_blocked": e_loss_baffle,
             "loss_closed_face_blocked": e_closed_blocked,
             "loss_end_out_L": e_loss_end_L,
             "loss_end_out_R": e_loss_end_R,
@@ -2760,6 +3027,7 @@ class TransientDVM:
             "birth_wall_accommodated": e_birth_wall_accommodated,
             "birth_wall_reflected": e_birth_wall_reflected,
             "birth_mesh_reemit": e_birth_mesh_reemit,
+            "birth_baffle_reemit": e_birth_baffle_reemit,
             "birth_closed_face_reemit": e_closed_reemit,
             "birth_end_return_L": e_return_L,
             "birth_end_return_R": e_return_R,
@@ -2783,6 +3051,10 @@ class TransientDVM:
                 - e_birth_wall_reflected
             ),
             "net_surface_mesh": e_loss_mesh - e_birth_mesh_reemit,
+            # The accommodation exchange at the annular baffles: what the disc
+            # took out of the annulus less what it gave back at the wall
+            # temperature. Exactly zero with no baffle armed.
+            "net_surface_baffle": e_loss_baffle - e_birth_baffle_reemit,
             # The accommodation exchange at the closed faces: what the plate
             # took out of the gas less what it put back at its own surface
             # temperature. Booked exactly like the other surface channels.
@@ -2928,6 +3200,15 @@ class BoundedChordFlights:
       wall landing in the cell it was stopped in.
     - the **anode mesh face**: the transparency passes, the rest is booked
       on the mesh channel exactly as the march books it.
+    - an **annular baffle face** (B6): a zero-thickness annular THROAT of
+      area ``open_ann``, routed through the SAME free-molecular throat
+      convention with ``A_throat = min(A_left, A_right, open_ann)`` -- the
+      narrowest aperture in series wins -- and the stopped remainder booked on
+      the baffle channel, which is the one channel pair the march's own
+      interception books into as well. A baffle whose open ring is already at
+      least the annulus throat changes no transmission at all and is
+      therefore bit-exactly absent here, exactly as it is unarmed in the
+      march.
 
     Every routed weight sums to one per ``(cell, bin)``: ``residual`` is the
     worst departure from that identity over the whole map, and is the
@@ -2936,7 +3217,7 @@ class BoundedChordFlights:
     """
 
     def __init__(self, *, dz, V_ann, A_ann, Rp_cm, Rm_cm, grid, mesh_face,
-                 transparency):
+                 transparency, baffles=()):
         g = grid
         nz = int(np.asarray(dz).size)
         nvz, nvp = g.nvz, g.nvp
@@ -2965,8 +3246,19 @@ class BoundedChordFlights:
         # narrower of the two cells it joins.
         tau_f = np.ones(nz + 1)
         tau_b = np.ones(nz + 1)
+        is_baffle = np.zeros(nz + 1, dtype=bool)
         with np.errstate(divide="ignore", invalid="ignore"):
             throat = np.minimum(A_ann[:-1], A_ann[1:])
+            # A baffle is one more aperture in the same series: the throat at
+            # its face becomes the narrowest of the two cells and its own open
+            # ring. An open ring at least as wide as the geometric throat
+            # leaves ``throat`` untouched, which is why an unrestricting
+            # baffle is bit-exactly absent from this map.
+            for face, open_ann in baffles:
+                is_baffle[int(face)] = True
+                throat[int(face) - 1] = min(
+                    float(throat[int(face) - 1]), float(open_ann)
+                )
             tau_f[1:-1] = np.where(A_ann[:-1] > 0.0, throat / A_ann[:-1], 0.0)
             tau_b[1:-1] = np.where(A_ann[1:] > 0.0, throat / A_ann[1:], 0.0)
         mesh_face = int(mesh_face)
@@ -2996,6 +3288,9 @@ class BoundedChordFlights:
         self.mesh_src = {}
         self.mesh_dst = {}
         self.mesh_w = {}
+        self.baffle_src = {}
+        self.baffle_dst = {}
+        self.baffle_w = {}
         self.residual = 0.0
 
         bin_flat = (np.arange(nvz)[:, None] * nvp + np.arange(nvp)[None, :])
@@ -3016,7 +3311,7 @@ class BoundedChordFlights:
             bwd = half < 0.0
             surv = np.ones(shape)
             hold = j.copy()
-            stops = {"step": [], "mesh": []}
+            stops = {"step": [], "mesh": [], "baffle": []}
             for faces, forward in ((special, True), (special[::-1], False)):
                 for f in faces:
                     tau = tau_f[f] if forward else tau_b[f]
@@ -3033,7 +3328,13 @@ class BoundedChordFlights:
                     blocked = np.where(crossed, surv * (1.0 - tau), 0.0)
                     idx = np.flatnonzero(blocked.ravel() > 0.0)
                     if idx.size:
-                        stops["mesh" if is_mesh[f] else "step"].append(
+                        if is_mesh[f]:
+                            kind = "mesh"
+                        elif is_baffle[f]:
+                            kind = "baffle"
+                        else:
+                            kind = "step"
+                        stops[kind].append(
                             (idx, landing, blocked.ravel()[idx])
                         )
                     surv = np.where(crossed, surv * tau, surv)
@@ -3055,6 +3356,7 @@ class BoundedChordFlights:
             for kind, src, dst, wts in (
                 ("step", self.stop_src, self.stop_dst, self.stop_w),
                 ("mesh", self.mesh_src, self.mesh_dst, self.mesh_w),
+                ("baffle", self.baffle_src, self.baffle_dst, self.baffle_w),
             ):
                 if stops[kind]:
                     src[name] = np.concatenate([s[0] for s in stops[kind]])
@@ -3069,7 +3371,8 @@ class BoundedChordFlights:
                     wts[name] = np.zeros(0)
             total = self.w_pass[name] + self.w_end[name]
             for src, wts in ((self.stop_src, self.stop_w),
-                             (self.mesh_src, self.mesh_w)):
+                             (self.mesh_src, self.mesh_w),
+                             (self.baffle_src, self.baffle_w)):
                 np.add.at(total.reshape(-1), src[name], wts[name])
             live = ~np.broadcast_to(no_ann[:, None, None], shape)
             self.residual = max(
@@ -3086,10 +3389,11 @@ class BoundedChordFlights:
         """Route completed flights of one class.
 
         ``counts`` are PARTICLES per ``(cell, bin)`` completing this tick.
-        Returns ``(arrive, stopped, meshed, end_L, end_R)``: the particles
-        reaching the class's landing surface per destination cell and bin,
-        those stopped at an annular step, those the anode mesh intercepted,
-        and the two end-plane outflows per bin.
+        Returns ``(arrive, stopped, meshed, baffled, end_L, end_R)``: the
+        particles reaching the class's landing surface per destination cell
+        and bin, those stopped at an annular step, those the anode mesh
+        intercepted, those an annular BAFFLE intercepted, and the two
+        end-plane outflows per bin.
         """
         flat = counts.reshape(-1)
         n = self.n_flat
@@ -3108,10 +3412,15 @@ class BoundedChordFlights:
             weights=flat[self.mesh_src[name]] * self.mesh_w[name],
             minlength=n,
         ).reshape(self.shape)
+        baffled = np.bincount(
+            self.baffle_dst[name],
+            weights=flat[self.baffle_src[name]] * self.baffle_w[name],
+            minlength=n,
+        ).reshape(self.shape)
         gone = (counts * self.w_end[name]).sum(axis=0)
         end_R = np.where(self.vz_pos, gone, 0.0)
         end_L = np.where(self.vz_pos, 0.0, gone)
-        return arrive, stopped, meshed, end_L, end_R
+        return arrive, stopped, meshed, baffled, end_L, end_R
 
     def place(self, name, launched):
         """Return launched PARTICLES per holding cell and bin for a class."""

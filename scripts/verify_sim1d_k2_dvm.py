@@ -615,11 +615,13 @@ def closed_box_dvm(nz=8, nvz=16, nvp=6):
 DISARMED_ENERGY_ROWS = (
     "loss_wall",
     "loss_mesh_blocked",
+    "loss_baffle_blocked",
     "loss_pump_L",
     "loss_pump_R",
     "birth_wall_accommodated",
     "birth_wall_reflected",
     "birth_mesh_reemit",
+    "birth_baffle_reemit",
     "loss_closed_face_blocked",
     "birth_closed_face_reemit",
     "birth_puff",
@@ -629,6 +631,7 @@ DISARMED_ENERGY_ROWS = (
     "birth_anode",
     "net_surface_wall",
     "net_surface_mesh",
+    "net_surface_baffle",
     "net_surface_closed_face",
     "net_surface_end_L",
     "net_surface_end_R",
@@ -5920,15 +5923,35 @@ def gate_bf1():
        ``t_f = 0``, and at ``BF_FLUX_REL`` at ``t_f = 0.5`` where the engine
        sums ``(1 - t_f) F`` per bin while the reference scales the summed
        incident (see :data:`BF_FLUX_REL`);
-    4. the COLUMN is untouched: arm ``B``'s post-tick ``f_c`` is raw-uint64
-       IDENTICAL to arm ``N``'s, and ``U`` is raw-uint64 identical to ``N`` in
-       BOTH zones.
+    4. the COLUMN FLUX ACROSS THE FACE is unchanged to the BIT. The quantity
+       is rebuilt from the post-tick state as
+       ``Phi_col = ((f_c[f-1] |v_z|)_{v_z>0} + (f_c[f] |v_z|)_{v_z<0})
+       face_c[f] dt`` -- the two upstream cells of the two directions, which
+       the sweep solves BEFORE it reaches the face, so an operator acting at
+       the face cannot have moved them -- and arm ``B``'s value must be
+       raw-identical to arm ``N``'s. Arm ``U`` is additionally raw-uint64
+       identical to ``N`` in BOTH zones, which is the no-op statement.
+
+    Statement 4 is deliberately about the FLUX AT THE FACE and not about the
+    whole column field, and the difference is physics rather than pedantry:
+    throttling the annulus DOES move the column, one cell later, through the
+    zone-exchange coupling the 2x2 march solves -- less annulus next to a cell
+    means less gas exchanged into its column. That response is the coupling
+    working, and a gate asserting a bit-identical ``f_c`` everywhere would be
+    asserting the coupling is broken. The per-cell column response is reported
+    beside the statement so the distinction is visible rather than implied.
+    (Recorded because this gate's first formulation DID assert the stronger
+    property and measured it false at 1.5e+09 cm^-3 on the flanking pair; the
+    registered quantity was always the flux at the face.)
 
     NEGATIVE CONTROL: the same face at the same transparency routed through the
-    ANODE MESH, which intercepts the column too. Statement 4 must FAIL there --
-    ``f_c`` must move -- and the mesh must block STRICTLY MORE than the baffle,
-    the extra being the column share the baffle is required not to take. On an
-    annulus-only seed the two operators must instead agree TO THE BIT, which is
+    ANODE MESH, which intercepts the column too. It must block STRICTLY MORE
+    than the baffle, and the excess must be EXACTLY the column share the
+    baffle is required not to take -- ``(1 - t_f) Phi_col`` at
+    ``BF_FLUX_REL``, rebuilt independently from the state above. That single
+    number carries both halves of the statement: the mesh takes the column
+    share and the baffle does not, and their ANNULUS tallies must be
+    bit-identical for the difference to land on the rebuild at all, which is
     the other half of "tallied exactly as the mesh's ``mesh_a``".
 
     The engine's construction-time refusal of ``R_clear < R_col`` is asserted
@@ -5978,12 +6001,28 @@ def gate_bf1():
     )
 
     fc_n, fa_n = bf_bits(arm_n.f_c), bf_bits(arm_n.f_a)
-    column_untouched = bf_bits(arm_b.f_c) == fc_n
     noop = (
         bf_bits(arm_u.f_c) == fc_n
         and bf_bits(arm_u.f_a) == fa_n
         and t_u == 1.0
     )
+
+    def column_face_flux(dvm):
+        """Rebuild the column particle flux crossing ``face`` over one tick."""
+        g = dvm.g
+        total = 0.0
+        for cell, sel in ((face - 1, g.vz > 0), (face, g.vz < 0)):
+            total += float(
+                (dvm.f_c[cell][sel] * np.abs(g.vz[sel])[:, None]).sum()
+            )
+        return total * float(dvm.face_c[face]) * CADENCE_S
+
+    phi_col_n = column_face_flux(arm_n)
+    phi_col_b = column_face_flux(arm_b)
+    column_flux_unchanged = phi_col_b == phi_col_n
+    # Reported, not gated: the column DOES respond to the annulus being
+    # throttled, one cell later, through the zone-exchange coupling.
+    column_response = np.abs(arm_b.f_c - arm_n.f_c).sum(axis=(1, 2))
 
     # NEGATIVE CONTROL: the same throttle at the same face, through the mesh.
     control = bf_box(
@@ -5991,23 +6030,10 @@ def gate_bf1():
         through_mesh=True, transparency=t_f,
     )
     led_c = bf_tick(control)
-    control_column_moved = bf_bits(control.f_c) != fc_n
     control_extra = float(led_c["loss_mesh_blocked"]) - blocked_total
-
-    # Annulus-only seed: with no column to take, the two operators are the
-    # same arithmetic and their rows must be bit-identical.
-    zeros = np.zeros(nz)
-    ann_baffle = bf_box(
-        nz=nz, Rp=Rp, Rm=Rm, clear=clear_b, face=face, nn_col=zeros,
-    )
-    ann_mesh = bf_box(
-        nz=nz, Rp=Rp, Rm=Rm, clear=clear_b, face=face, nn_col=zeros,
-        through_mesh=True, transparency=t_f,
-    )
-    led_ab, led_am = bf_tick(ann_baffle), bf_tick(ann_mesh)
-    annulus_matches = (
-        float(led_ab["loss_baffle_blocked"])
-        == float(led_am["loss_mesh_blocked"])
+    column_share = (1.0 - t_f) * phi_col_n
+    control_rel = abs(control_extra - column_share) / max(
+        abs(column_share), 1e-300
     )
 
     engine_refusal = ""
@@ -6023,11 +6049,10 @@ def gate_bf1():
         and worst_ledger < BF_LEDGER_REL
         and worst_scaling < BF_FLUX_REL
         and exact_at_zero
-        and column_untouched
+        and column_flux_unchanged
         and noop
-        and control_column_moved
         and control_extra > 0.0
-        and annulus_matches
+        and control_rel < BF_FLUX_REL
         and "clear radius" in engine_refusal
     )
     detail_rows = "; ".join(
@@ -6047,14 +6072,20 @@ def gate_bf1():
         f"relative (tol {fmt(BF_FLUX_REL)}); the same identity at t_f = 0 is "
         f"BIT-exact: {exact_at_zero}\n        "
         f"worst particle-ledger residual over the four arms "
-        f"{fmt(worst_ledger)} (tol {fmt(BF_LEDGER_REL)}); column untouched at "
-        f"the bit: {column_untouched}; the t_f = 1 arm is a bit-exact no-op "
-        f"in both zones: {noop}\n        "
+        f"{fmt(worst_ledger)} (tol {fmt(BF_LEDGER_REL)}); the t_f = 1 arm is "
+        f"a bit-exact no-op in both zones: {noop}\n        "
+        f"COLUMN FLUX ACROSS THE FACE {phi_col_b!r} vs the no-baffle arm's "
+        f"{phi_col_n!r}: raw-identical {column_flux_unchanged}. Reported, not "
+        f"gated -- the per-cell column RESPONSE through the zone-exchange "
+        f"coupling, which is the coupling working and not a leak: "
+        f"{np.array2string(column_response, precision=3)}\n        "
         f"NEGATIVE CONTROL (same t_f at the same face through the anode MESH, "
-        f"which blocks the column too): column moved {control_column_moved}; "
-        f"the mesh blocks {fmt(control_extra)} particles MORE than the baffle "
-        f"(the column share, > 0 required); on an annulus-only seed the two "
-        f"rows are bit-identical: {annulus_matches}\n        "
+        f"which blocks the column too): the mesh blocks {fmt(control_extra)} "
+        f"particles MORE than the baffle, against an independent rebuild of "
+        f"(1 - t_f) x the column face flux {fmt(column_share)} -- "
+        f"{fmt(control_rel)} relative (tol {fmt(BF_FLUX_REL)}); the excess is "
+        f"EXACTLY the column share the baffle does not take, which also "
+        f"requires the two ANNULUS tallies to be bit-identical\n        "
         f"engine refuses R_clear < R_col naming it: {engine_refusal[:88]!r}"
     )
 

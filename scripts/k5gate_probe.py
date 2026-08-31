@@ -460,8 +460,12 @@ def run_dvm_k5(shared, dt, nvz, nvp, ib, ib2, end_mask, end_mask2, mid_mask,
         # them.
         # ``_mesh_P`` is the B4 anode-jet momentum tally, zeros unless that
         # channel is armed; this instrument does not read it.
+        # ``_baffle`` is the B6 annular-baffle triple (particles, energies,
+        # signed axial momenta per emitting cell), zeros unless a baffle is
+        # armed; this instrument does not read it either.
         (
-            f_c_m, f_a_m, mesh_c, mesh_a, out, _mesh_E, _closed, _mesh_P
+            f_c_m, f_a_m, mesh_c, mesh_a, out, _mesh_E, _closed, _mesh_P,
+            _baffle,
         ) = captured["res"]
         curN, curN2 = inv(end_mask), inv(end_mask2)
         acc["N_end"][k] += 0.5 * (prevN + curN) * dt
