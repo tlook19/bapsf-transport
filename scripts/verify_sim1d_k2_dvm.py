@@ -188,6 +188,11 @@ Gates:
   AJ5 the DVM anode jet and the fluid ``anode_neutral_jet`` refuse to arm
       together: two independent directed re-emissions of the same collected
       stream (the G28 statement, called directly -- see the gate's docstring)
+  AJ6 the ruled zero-incident closure: a cell whose committed incident energy
+      is exactly zero launches NOTHING and is born wholly thermal, per cell
+      and not per tick, with cells carrying positive incident energy in the
+      same tick launching normally beside it. Dropping the one mask -- the
+      pre-ruling arithmetic -- is the negative control, and it RAISES
   G1..G27, G29 construction refusals: each unsupported configuration raises a
       ValueError at construction naming the offender. G2 is the model-preset
       resolver's refusal half -- an explicitly-set family member the
@@ -4939,6 +4944,61 @@ class _AJOneSidedLaunch(TransientDVM):
         )
 
 
+def aj_feed_mixed(dvm, count=AJ_COUNT, per_ion_eV=AJ_PHI_TI_EV):
+    """Return ``(source_counts, incident_erg)`` with BOTH branches live.
+
+    Four fed cells, two on each side of the mesh face, and on each side one
+    carries a positive per-ion incident energy and one carries exactly zero:
+
+    ==========  =========================  ================================
+    cell        side                       branch
+    ==========  =========================  ================================
+    ``face-2``  low-z  (launch ``-z``)     ZERO incident -> wholly thermal
+    ``face-1``  low-z  (launch ``-z``)     positive      -> splits ``R_N``
+    ``face``    high-z (launch ``+z``)     positive      -> splits ``R_N``
+    ``face+1``  high-z (launch ``+z``)     ZERO incident -> wholly thermal
+    ==========  =========================  ================================
+
+    The shares are unequal for the reason :func:`aj_feed`'s are, and the two
+    zero cells sit on OPPOSITE sides so a per-side rather than per-cell
+    implementation of the rule would be caught.
+    """
+    face = int(dvm.mesh_face)
+    rows = {"anode": np.zeros(dvm.nz)}
+    incident = np.zeros(dvm.nz)
+    plan = (
+        (face - 2, 0.30, 0.0),
+        (face - 1, 0.25, per_ion_eV),
+        (face, 0.20, 0.5 * per_ion_eV),
+        (face + 1, 0.25, 0.0),
+    )
+    for cell, share, energy in plan:
+        rows["anode"][cell] = share * count
+        incident[cell] = share * count * energy * EV
+    return rows, incident
+
+
+class _AJZeroThroughJet(TransientDVM):
+    """Harness defect: send the ZERO-incident cells down the jet path anyway.
+
+    The pre-ruling behaviour, reinstated as AJ6's negative control: split
+    ``R_N`` off every fed cell regardless of whether it carries any committed
+    incident energy. It is the exact arithmetic this member ran before the
+    fluid-parity ruling, restored by dropping ONE mask, so the control tests
+    the ruling itself rather than a strawman.
+    """
+
+    def _split_anode_recycle(self, anode, incident_erg):
+        thermal, jet, jet_energy = TransientDVM._split_anode_recycle(
+            self, anode, incident_erg
+        )
+        if jet is None:
+            return thermal, jet, jet_energy
+        counts = np.asarray(anode, dtype=float)
+        unmasked = float(self.anode_jet["R_N"]) * counts
+        return counts - unmasked, unmasked, jet_energy
+
+
 class _AJMeshUnsignedMomentum(TransientDVM):
     """Harness defect: the mesh tallies ``|v_z|`` instead of the signed ``v_z``.
 
@@ -5463,6 +5523,154 @@ def gate_aj4():
     )
 
 
+def gate_aj6():
+    """Zero incident energy is a LEGAL, BOOKED state, and it is PER CELL.
+
+    The ruled fluid-parity closure (2026-08-30): an ion that arrives with zero
+    clamped incident energy backscatters nothing, so that cell's whole counted
+    stream is born thermal. Under the fluid spec the same ion gives
+    ``v_back = 0``, which makes the ``R_N`` share indistinguishable from
+    thermal desorption; the DVM books it as such instead of inventing energy
+    the ion did not bring.
+
+    On the closed box, fed so that BOTH branches are live in the SAME tick and
+    on BOTH sides of the mesh (:func:`aj_feed_mixed`):
+
+    * the two zero cells launch exactly nothing -- ``birth_anode_jet`` is the
+      ``R_N`` share of the POSITIVE cells alone, to the bit;
+    * every cell still conserves: ``thermal + jet == counted`` per cell and
+      bitwise, checked on the split itself rather than on its totals, so the
+      rule cannot have been implemented by moving particles between rows;
+    * the cross-book holds unchanged -- the energy row is ``R_E`` times the
+      counted incident energy, which the zero cells contribute nothing to;
+    * both ledgers close at the tolerance I1/I2/I6 hold the arm to;
+    * the momentum row carries the positive cells only, against an
+      independent rebuild.
+
+    NEGATIVE CONTROL (:class:`_AJZeroThroughJet`): drop the one mask and send
+    the zero cells down the jet path, which is exactly what this member did
+    before the ruling. It RAISES -- the launch guard, on a per-atom launch
+    energy of ``0.0`` erg -- and the gate records that the control fails by
+    raising rather than by misbooking.
+    """
+    nz = 8
+    dvm = aj_closed_box(nz)
+    plasma = geometry_plasma(nz)
+    face = int(dvm.mesh_face)
+    zero_cells = (face - 2, face + 1)
+    live_cells = (face - 1, face)
+
+    worst_part = 0.0
+    worst_ener = 0.0
+    worst_zero = 0.0
+    worst_jet = 0.0
+    worst_split = 0.0
+    worst_cell = 0.0
+    worst_cross = 0.0
+    worst_mom = 0.0
+    for _ in range(4):
+        rows, incident = aj_feed_mixed(dvm)
+        counted = rows["anode"]
+        # The per-cell conservation statement, taken on the SPLIT itself.
+        thermal, jet, _energy = TransientDVM._split_anode_recycle(
+            dvm, counted, incident
+        )
+        worst_cell = max(
+            worst_cell, float(np.max(np.abs((thermal + jet) - counted)))
+        )
+        worst_zero = max(
+            worst_zero, max(abs(float(jet[c])) for c in zero_cells)
+        )
+        led = dvm.update(
+            CADENCE_S,
+            source_counts=rows,
+            anode_jet_incident_erg=incident,
+            **plasma,
+        )
+        live_only = AJ_R_N * sum(float(counted[c]) for c in live_cells)
+        worst_jet = max(
+            worst_jet,
+            abs(led["birth_anode_jet"] - live_only) / max(live_only, 1e-300),
+        )
+        total = float(counted.sum())
+        worst_split = max(
+            worst_split,
+            abs(led["birth_anode_jet"] + led["birth_anode"] - total) / total,
+        )
+        debited = AJ_R_E * float(np.sum(incident))
+        worst_cross = max(
+            worst_cross,
+            abs(led["energy"]["birth_anode_jet"] - debited) / debited,
+        )
+        expected_p = 0.0
+        for cell in live_cells:
+            n_jet = AJ_R_N * float(counted[cell])
+            e_launch = AJ_R_E * float(incident[cell]) / n_jet
+            direction = -1.0 if cell < face else 1.0
+            spec = TransientDVM._anode_jet_launch_spectrum(
+                dvm, e_launch, int(cell), direction
+            )
+            expected_p += n_jet * M_HE * float((spec * dvm.g.VZ).sum())
+        worst_mom = max(
+            worst_mom,
+            abs(led["momentum_anode_jet"] - expected_p)
+            / max(abs(expected_p), 1e-300),
+        )
+        p = ledger_residual(led)
+        e = ledger_energy_residual(led)
+        worst_part = max(
+            worst_part, abs(p["distribution_rel"]), abs(p["domain_rel"])
+        )
+        worst_ener = max(
+            worst_ener, abs(e["distribution_rel"]), abs(e["domain_rel"])
+        )
+
+    control = aj_closed_box(nz, cls=_AJZeroThroughJet)
+    control_raised = ""
+    try:
+        rows, incident = aj_feed_mixed(control)
+        control.update(
+            CADENCE_S,
+            source_counts=rows,
+            anode_jet_incident_erg=incident,
+            **plasma,
+        )
+    except ValueError as exc:
+        control_raised = str(exc)
+
+    ok = (
+        worst_cell == 0.0
+        and worst_zero == 0.0
+        and worst_jet < ROUNDOFF_REL
+        and worst_split < ROUNDOFF_REL
+        and worst_cross < AJ_CROSS_BOOK_REL
+        and worst_mom < AJ_MOMENTUM_REL
+        and worst_part < ROUNDOFF_REL
+        and worst_ener < ROUNDOFF_REL
+        and "positive finite launch energy" in control_raised
+    )
+    return (
+        "AJ6 anode jet, zero incident energy: that cell launches nothing and "
+        "is born wholly thermal, per cell",
+        ok,
+        f"4 ticks, cells {list(zero_cells)} fed at ZERO incident energy and "
+        f"cells {list(live_cells)} at {AJ_PHI_TI_EV} / "
+        f"{0.5 * AJ_PHI_TI_EV} eV per ion, on both sides of mesh face "
+        f"{face}: jet share of the zero cells {fmt(worst_zero)} (exactly 0 "
+        f"required); per-cell |thermal + jet - counted| {fmt(worst_cell)} "
+        f"(exactly 0 required); birth_anode_jet against R_N x the POSITIVE "
+        f"cells alone {fmt(worst_jet)}; |jet + thermal - handed| / handed "
+        f"{fmt(worst_split)} (tol {fmt(ROUNDOFF_REL)})\n        "
+        f"cross-book {fmt(worst_cross)} (tol {fmt(AJ_CROSS_BOOK_REL)}); "
+        f"momentum row vs the positive cells' rebuild {fmt(worst_mom)} "
+        f"(tol {fmt(AJ_MOMENTUM_REL)}); particle residual {fmt(worst_part)}, "
+        f"energy residual {fmt(worst_ener)}\n        "
+        f"NEGATIVE CONTROL (drop the mask, send the zero cells down the jet "
+        f"path -- the pre-ruling arithmetic): RAISES, it does not misbook -- "
+        f"{control_raised[:88]!r}"
+    )
+
+
 def gate_aj5():
     """The two anode backscatter re-emissions cannot be armed together.
 
@@ -5531,7 +5739,7 @@ CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
                       "gate_cf1", "gate_cf3",
                       "gate_wr1", "gate_wr3",
                       "gate_cj1", "gate_cj3",
-                      "gate_aj1", "gate_aj3", "gate_aj4")
+                      "gate_aj1", "gate_aj3", "gate_aj4", "gate_aj6")
 
 
 def main():
@@ -5581,6 +5789,7 @@ def main():
         gate_aj3,
         gate_aj4,
         gate_aj5,
+        gate_aj6,
         gate_x1,
     ]
     gates += [

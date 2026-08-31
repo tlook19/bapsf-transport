@@ -53,6 +53,10 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
+import numpy as np  # noqa: E402
+
+from cablp.solvers._sim1d.physics.kinetic_dvm import TransientDVM  # noqa: E402
+
 from b5cj_bitinert_ab import _parse_extra, capture, compare  # noqa: E402
 
 #: Steps each arm walks, pre-registered. A cost knob, not physics.
@@ -71,19 +75,64 @@ KINETIC_EXTRA = {
 ARMED_EXTRA = {"neutral_kinetic_dvm_anode_jet": True}
 
 
+def capture_armed(steps, extra):
+    """Capture the armed run, recording the COUNTED anode stream per tick.
+
+    The shared harness is channel-agnostic and stays that way: the spy lives
+    here, wrapped around its ``capture``, and records only what the armed
+    statement needs -- the counted stream each tick was handed, so
+    ``jet + thermal == counted`` can be checked per tick rather than asserted.
+    """
+    counted = []
+    update = TransientDVM.update
+
+    def spy(self, dt, **kwargs):
+        rows = (kwargs.get("source_counts") or {}).get("anode")
+        counted.append(0.0 if rows is None else float(np.sum(rows)))
+        return update(self, dt, **kwargs)
+
+    TransientDVM.update = spy
+    try:
+        record = capture(
+            "kinetic_dvm", steps, {**KINETIC_EXTRA, **ARMED_EXTRA, **extra}
+        )
+    finally:
+        TransientDVM.update = update
+    record["anode_counted"] = counted
+    return record
+
+
 def _armed_report(record):
     """Print the armed run's channel numbers, tick by tick and summed."""
     births = 0.0
     energy = 0.0
+    first_live = None
+    worst_conservation = 0.0
+    counted_rows = record.get("anode_counted", [])
     print("-" * 78)
     print("ARMED SANITY -- the anode jet's own rows, per tick")
     for i, rows in enumerate(record["dvm_ledgers"], start=1):
-        births += rows.get("birth_anode_jet", 0.0)
+        jet = rows.get("birth_anode_jet", 0.0)
+        thermal = rows.get("birth_anode", 0.0)
+        births += jet
         energy += rows.get("energy.birth_anode_jet", 0.0)
+        if first_live is None and jet > 0.0:
+            first_live = i
+        counted = counted_rows[i - 1] if i - 1 < len(counted_rows) else None
+        if counted is not None and counted > 0.0:
+            worst_conservation = max(
+                worst_conservation, abs(jet + thermal - counted) / counted
+            )
+        conserved = (
+            "n/a" if counted is None
+            else f"{abs(jet + thermal - counted) / max(counted, 1e-300):.3e}"
+        )
         print(
-            f"  tick {i}: birth_anode_jet {rows.get('birth_anode_jet', 0.0):.6e} "
+            f"  tick {i}: birth_anode_jet {jet:.6e} "
             f"particles, {rows.get('energy.birth_anode_jet', 0.0):.6e} erg; "
-            f"birth_anode (thermal) {rows.get('birth_anode', 0.0):.6e}; "
+            f"birth_anode (thermal) {thermal:.6e}; counted "
+            f"{counted if counted is None else f'{counted:.6e}'}; "
+            f"|jet+thermal-counted|/counted {conserved}; "
             f"momentum_anode_jet {rows.get('momentum_anode_jet', float('nan')):.6e} "
             f"g cm/s; momentum_mesh_absorbed "
             f"{rows.get('momentum_mesh_absorbed', float('nan')):.6e} g cm/s"
@@ -91,6 +140,17 @@ def _armed_report(record):
     print(
         f"  window total: {births:.6e} particles, {energy:.6e} erg born on "
         f"the jet over {record['dvm_ticks']} ticks"
+    )
+    print(
+        "  FIRST TICK WITH A NON-ZERO JET: "
+        + ("none in this window" if first_live is None else str(first_live))
+        + " -- earlier ticks carry zero committed incident energy (the anode "
+        "sheath is electron-attracting before breakdown), so under the ruled "
+        "fluid-parity closure they launch nothing and are born wholly thermal"
+    )
+    print(
+        f"  worst |jet + thermal - counted| / counted over the window: "
+        f"{worst_conservation:.6e}"
     )
     print(f"  anode surface energy book [J]: {record['anode_energy_ledger_J']}")
     print(f"  DVM engaged in the window: {record['dvm_engaged']}")
@@ -129,16 +189,12 @@ def main(argv=None):
         record = capture("kinetic_dvm", args.steps, dict(KINETIC_EXTRA))
         record["arm"] = "kinetic_dvm"
     else:
-        record = capture(
-            "kinetic_dvm",
-            args.steps,
-            {**KINETIC_EXTRA, **ARMED_EXTRA, **extra},
-        )
+        record = capture_armed(args.steps, extra)
         record["arm"] = "kinetic_dvm_anode_jet_armed"
         record["extra"] = dict(extra)
     Path(args.out).write_text(json.dumps(record, indent=2, sort_keys=True))
     for key, value in sorted(record.items()):
-        if key == "dvm_ledgers":
+        if key in ("dvm_ledgers", "anode_counted"):
             print(f"{key}: {len(value)} tick(s) captured")
             continue
         print(f"{key}: {value}")

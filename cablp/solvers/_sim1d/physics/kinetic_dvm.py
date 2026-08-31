@@ -503,6 +503,11 @@ class TransientDVM:
       placement inherited from the channel this splits, not a choice made
       here.
 
+    A cell whose committed incident energy is exactly ZERO launches nothing
+    and is born wholly thermal -- fluid parity with ``v_back = 0``, per cell
+    rather than per tick, and a legal booked state rather than a refusal. See
+    :meth:`_split_anode_recycle`.
+
     Armed, the engine also emits the two PRESENCE-GATED rows of
     :data:`LEDGER_MOMENTUM_DIAGNOSTICS`: the signed axial momentum the jet
     launched, and the axial momentum the mesh INTERCEPTED and kept (the wires
@@ -1348,22 +1353,16 @@ class TransientDVM:
         if not np.isfinite(e_launch) or e_launch <= 0.0:
             raise ValueError(
                 "the DVM anode jet needs a positive finite launch energy per "
-                f"atom at cell {cell} (got {e_launch!r} erg): the "
-                "backscattered share carries (R_E/R_N)(phi_a + Ti), and a "
-                "cell that collects ions at zero incident energy has no "
-                "energetic share to launch. MEASURED CAUSE of the zero at the "
-                "ES1 operating point: the anode sheath is ELECTRON-ATTRACTING "
-                "before breakdown -- phi_a runs -0.09 to -6.6 V over the "
-                "first ~9 accepted steps while Ti sits at its 0.026 eV floor "
-                "-- so the fluid-parity clamp max(phi_a + Ti, 0) is exactly "
-                "zero there while the mesh still collects at ~1e18 s^-1 "
-                "(scripts/b4aj_phi_a_probe.py). A neutral cadence fine "
-                "enough to fire a whole tick inside that window therefore "
-                "hands this channel a counted stream with no committed "
-                "energy. This is REPORTED, not resolved: the registration "
-                "pins the fluid-parity clamp and does not say what the "
-                "backscatter of a zero-energy ion is, and guessing between "
-                "the readings is not this code's call"
+                f"atom at cell {cell} (got {e_launch!r} erg). A cell that "
+                "collects ions at ZERO incident energy is not this case and "
+                "never reaches here: it launches nothing and its whole "
+                "counted stream is born thermal, the fluid-parity reading of "
+                "v_back = 0 (:meth:`_split_anode_recycle`). What is left for "
+                "this guard is the arithmetically impossible one -- a "
+                "POSITIVE committed incident energy whose per-atom launch "
+                "energy came out non-finite or non-positive anyway, which "
+                "means the counted (particles, energy) pair disagree with "
+                "each other rather than that the ions arrived cold"
             )
         v_back = np.sqrt(2.0 * e_launch / M_HE)
         T_launch = self._anode_jet_launch_temperature_eV(v_back)
@@ -2446,6 +2445,25 @@ class TransientDVM:
         than ``(1 - R_N)`` of the count, so the two sum to the counted stream
         to the bit.
 
+        **ZERO INCIDENT ENERGY IS A LEGAL, BOOKED STATE, PER CELL** (ruled
+        2026-08-30). A cell whose committed incident energy is exactly zero
+        launches NOTHING: its whole counted stream is born thermal, its
+        ``jet`` entry is exactly ``0``, and its energy and momentum
+        contributions are exactly ``0`` with them. That is FLUID PARITY, not a
+        fallback -- under the fluid spec
+        :func:`~cablp.solvers._sim1d.physics.sources.anode_jet_backscatter_speed`
+        a zero clamped incident energy gives ``v_back = 0``, which makes the
+        ``R_N`` share indistinguishable from thermal desorption; the DVM books
+        it as such rather than inventing energy the ion did not bring. The
+        state is REACHED, not hypothetical: the anode sheath is
+        electron-attracting before breakdown, so ``max(phi_a + Ti, 0)`` is
+        exactly zero over the discharge's first accepted steps while the mesh
+        still collects (`scripts/b4aj_phi_a_probe.py`).
+
+        **The split is PER CELL, not per tick**: cells that carry a positive
+        incident energy in the same tick launch normally beside cells that
+        carry none.
+
         One thing differs from the cathode form. The counted ``anode`` row is
         per-cell by construction -- the partner folds the mesh's column and
         annulus collection onto the column cells it was collected at -- so
@@ -2501,6 +2519,15 @@ class TransientDVM:
                 )
             counts = np.zeros(self.nz)
         jet = float(self.anode_jet["R_N"]) * counts
+        # THE ZERO-INCIDENT RULE, per cell: no incident energy, no
+        # backscatter. Masking the JET share (rather than the count) is what
+        # makes the whole of that cell's stream fall through to ``thermal``
+        # below -- ``thermal = counts - jet`` is unchanged, so the two shares
+        # still sum to the counted stream to the bit whichever branch a cell
+        # took, and the identity the particle ledger closes on does not
+        # acquire a special case. The energy row needs no mask: it is already
+        # zero exactly where this is.
+        jet = np.where(incident > 0.0, jet, 0.0)
         thermal = counts - jet
         jet_energy = float(self.anode_jet["R_E"]) * incident
         return thermal, jet, jet_energy
