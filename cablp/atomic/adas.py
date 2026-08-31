@@ -184,6 +184,42 @@ def _shared_grid_tables():
     return axes, tables
 
 
+# Memo of the bilinear coordinate solve and the per-table blends, keyed on the
+# EXACT BYTES of the (ne, Te) arguments. One RHS evaluation reaches he_rates
+# from three call sites (reaction_rates, the electron-cooling package, and the
+# recombination energy return) at the same derived state, so without this each
+# site repeated the same log10 + searchsorted solve and the scd/acd/prb1 blends
+# were each computed twice. Byte keying is deliberately conservative: +0.0 and
+# -0.0 hash to different keys and recompute rather than share, and a cached
+# value is only ever returned for an argument that is bitwise the array that
+# produced it. A few entries is all the reuse there is to win -- the state
+# moves at every stage -- so the memo is capped and evicted in insertion order.
+_HE_RATES_CACHE = {}
+_HE_RATES_CACHE_ENTRIES = 4
+
+
+def _he_rates_entry(log_ne_grid, log_te_grid, ne, Te):
+    """Return the ``(coords, blends)`` memo entry for one exact (ne, Te)."""
+    key = (ne.shape, ne.tobytes(), Te.tobytes())
+    entry = _HE_RATES_CACHE.get(key)
+    if entry is None:
+        coords = _interp_coords(
+            log_ne_grid, log_te_grid, np.log10(ne), np.log10(Te)
+        )
+        entry = (coords, {})
+        while len(_HE_RATES_CACHE) >= _HE_RATES_CACHE_ENTRIES:
+            del _HE_RATES_CACHE[next(iter(_HE_RATES_CACHE))]
+        _HE_RATES_CACHE[key] = entry
+    return entry
+
+
+def _freeze(values):
+    """Mark a memoized result read-only, so an in-place write raises."""
+    if isinstance(values, np.ndarray) and values.base is None:
+        values.flags.writeable = False
+    return values
+
+
 def he_rate_temperature_range_eV():
     """Return the exact shared He ADF11 temperature-grid bounds [eV]."""
     (log_ne, log_te), _ = _shared_grid_tables()
@@ -200,6 +236,17 @@ def he_rates(ne_cm3, Te_eV, quantities, low_te_extension=False):
     drawn from {"scd", "acd", "plt1", "plt2", "prb1"}; returns a dict in the
     same units as the corresponding single-table helpers (bit-identical
     values -- both paths share the same blend arithmetic).
+
+    The coordinate solve and each table's blend are MEMOIZED on the exact
+    bytes of ``(ne_cm3, Te_eV)``, so the sharing extends across CALLS at one
+    state and not merely across the tables named in a single call: the three
+    RHS call sites that ask for overlapping quantities at the same derived
+    state pay for one solve and one blend per table between them. The memo
+    returns the same array object each time, so the returned arrays for
+    non-extended quantities are READ-ONLY -- an in-place write raises
+    ``ValueError`` rather than corrupting a later caller's value. Nothing
+    about the returned NUMBERS depends on the memo: an entry is reused only
+    for an argument that is bitwise the one that produced it.
 
     ``low_te_extension`` (default False, bit-exact off): below the adf11
     Te grid edge (0.2 eV) the standard lookup clamps nearest-edge, which
@@ -224,14 +271,18 @@ def he_rates(ne_cm3, Te_eV, quantities, low_te_extension=False):
     Te = np.asarray(Te_eV, dtype=float)
     if np.any(ne <= 0.0) or np.any(Te <= 0.0):
         raise ValueError("ne and Te must be positive")
-    ix, iy, fx, fy = _interp_coords(
-        log_ne_grid, log_te_grid, np.log10(ne), np.log10(Te)
+    (ix, iy, fx, fy), blended = _he_rates_entry(
+        log_ne_grid, log_te_grid, ne, Te
     )
     out = {}
     for name in quantities:
-        table, unit = tables[name]
-        value = 10.0 ** _interp_blend(table, ix, iy, fx, fy)
-        out[name] = value / qe_SI if unit == "power" else value
+        value = blended.get(name)
+        if value is None:
+            table, unit = tables[name]
+            value = 10.0 ** _interp_blend(table, ix, iy, fx, fy)
+            value = _freeze(value / qe_SI if unit == "power" else value)
+            blended[name] = value
+        out[name] = value
     if low_te_extension:
         te_edge = 10.0 ** log_te_grid[0]
         below = Te < te_edge
