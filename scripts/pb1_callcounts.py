@@ -60,8 +60,10 @@ def targets():
     from cablp.solvers._sim1d.core import state as core_state
     from cablp.solvers._sim1d.core import validation as core_validation
     from cablp.solvers._sim1d.physics import cathode as physics_cathode
+    from cablp.solvers._sim1d.physics import sources as physics_sources
 
     return [
+        (physics_sources, "add_state_rhs", "sources.add_state_rhs"),
         (adas, "_interp_coords", "adas._interp_coords"),
         (adas, "_interp_blend", "adas._interp_blend"),
         (adas, "he_rates", "adas.he_rates"),

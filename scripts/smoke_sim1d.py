@@ -243,6 +243,22 @@ from cablp.constants import (
 # The three jet keys travel with neutral_momentum: the jet is M_n momentum
 # physics and requires the flag, the surface debit requires the jet, and the
 # total_reflected convention requires the jet too.
+def _cov_blank_rhs_term(cells, n_row):
+    """Return a fresh 5-row RHS bundle carrying ``n_row`` and zeros elsewhere.
+
+    ``LAPDSim1D._zero_rhs_state()`` hands back the solver's ONE shared
+    all-zero bundle with read-only rows, so a case that needs a term with
+    content of its own builds that term itself.
+    """
+    return ConservativeState1D(
+        n=np.asarray(n_row, dtype=float),
+        nn=np.zeros(cells, dtype=float),
+        M=np.zeros(cells, dtype=float),
+        Ee=np.zeros(cells, dtype=float),
+        Ei=np.zeros(cells, dtype=float),
+    )
+
+
 def _pin_pre_r2a_neutral_stance(params, flags):
     """Pin the pre-R2a 5-field cold-neutral stance in place; return the pair."""
     flags["neutral_momentum"] = False
@@ -18407,8 +18423,12 @@ def _case_coverage_closure_v2(_cov_ref_sim, _coverage_config, deposit_beam):
         np.exp(-np.arange(_cov_w_cells) / 3.0) * 1e14,
         np.full(_cov_w_cells, 7.5e12),
     ):
-        _cov_rate_term = _cov_w_sim._zero_rhs_state()
-        _cov_rate_term.n[:] = np.where(_cov_w_window, _cov_shape, 0.0)
+        # Built directly rather than by writing into _zero_rhs_state(): that
+        # accessor returns the solver's ONE shared read-only zero bundle, so a
+        # scratch term with content of its own has to be its own object.
+        _cov_rate_term = _cov_blank_rhs_term(
+            _cov_w_cells, np.where(_cov_w_window, _cov_shape, 0.0)
+        )
         _cov_w_out = _cov_w_sim.coverage_growth_driver(
             {"beam_ionization_birth": _cov_rate_term}
         )
@@ -18425,8 +18445,9 @@ def _case_coverage_closure_v2(_cov_ref_sim, _coverage_config, deposit_beam):
         )
         # ...and it is blind to the rate's overall SCALE, which is the whole
         # content of "normalized to its own column mean".
-        _cov_scaled_term = _cov_w_sim._zero_rhs_state()
-        _cov_scaled_term.n[:] = _cov_rate_term.n * 3.7e6
+        _cov_scaled_term = _cov_blank_rhs_term(
+            _cov_w_cells, _cov_rate_term.n * 3.7e6
+        )
         assert np.allclose(
             _cov_w_sim.coverage_growth_driver(
                 {"beam_ionization_birth": _cov_scaled_term}

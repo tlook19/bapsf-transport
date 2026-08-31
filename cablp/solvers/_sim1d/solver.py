@@ -1072,6 +1072,9 @@ class LAPDSim1D:
         # of dt and the pump state -- everything else the assembly reads is one
         # of the run constants above. See _two_zone_implicit_matrix.
         self._two_zone_matrix_cache = {}
+        # The one shared all-zero RHS bundle, built on first use. See
+        # _zero_rhs_state.
+        self._zero_rhs_state_shared = None
         self._neutral_model = str(
             self._input_dict.get("neutral_model")
         )
@@ -13074,14 +13077,32 @@ class LAPDSim1D:
         )
 
     def _zero_rhs_state(self):
-        zeros = np.zeros(self._geometry.cells, dtype=float)
-        return ConservativeState1D(
-            n=zeros,
-            nn=zeros.copy(),
-            M=zeros.copy(),
-            Ee=zeros.copy(),
-            Ei=zeros.copy(),
-        )
+        """Return the run's ONE all-zero conservative RHS bundle.
+
+        A structurally absent term is the same object every time it is asked
+        for: the rows are all zeros, nothing distinguishes one instance from
+        another, and a single RHS evaluation asks for tens of them. The five
+        rows are READ-ONLY, so the sharing cannot become a channel between two
+        terms -- an in-place write raises where before it would have edited one
+        caller's private copy. (The mutation census over cablp/ and scripts/ is
+        empty today; the guard is what keeps it so.)
+        """
+        shared = self._zero_rhs_state_shared
+        if shared is None:
+            rows = []
+            for _ in STATE_NAMES_1D:
+                row = np.zeros(self._geometry.cells, dtype=float)
+                row.flags.writeable = False
+                rows.append(row)
+            shared = ConservativeState1D(
+                n=rows[0],
+                nn=rows[1],
+                M=rows[2],
+                Ee=rows[3],
+                Ei=rows[4],
+            )
+            self._zero_rhs_state_shared = shared
+        return shared
 
     def _set_state_vector(self, y):
         self._y = self.floor_state_vector(y)
