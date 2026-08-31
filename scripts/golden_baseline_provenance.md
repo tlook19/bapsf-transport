@@ -188,6 +188,73 @@ closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
 
+**2026-08-31 — IDENTITY-ONLY ROTATION (the [ue-pressure-work] drift-transport
+keys). NOTHING WAS RECAPTURED.** Merge `935dba3` ([ue-pressure-work], the
+electron drift-transport and EMF-work operator) added ONE `input_flags` key and
+TWO `input_dict` keys to the package surface — `electron_drift_transport =
+False`, `electron_drift_charge_death = "cell_1"`,
+`electron_drift_anode_handshake = "sheath_row_closes_all"` — all default-inert:
+the operator is off, and both convention keys are REFUSED at a non-default value
+while it is off, so the golden cannot reach them. The config identity therefore
+moved for the three added keys and for nothing else; the rotation commit
+`b3d201d` regenerated BOTH references in one event, the reviewer authoring it
+from each reference's own expression:
+
+| reference | before | after |
+|---|---|---|
+| `golden_digest_4k.json` `config_identity` | `21a9b4764df68bc9c201d5ea11589223358bd9ca19d2801f82ac7bd75db632c3` | `c5f7f3f7347ce2d62fd354d73d472fb62f4f17cdef53fa664619ac2dfc74b760` |
+| `golden_digest_4k.json` checkpoints 0/1000/2000/3000/4000, final digest, `steps`, `cells`, `fields_per_cell`, `checkpoint_interval`, `final_time` | — | UNCHANGED (final digest `cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2`, `final_time` 0.0004714055010197914) |
+| `production_discharge.json` params | 253 keys | 255 keys: the two ADDED, 0 removed, 0 moved |
+| `production_discharge.json` flags | 53 keys | 54 keys: the one ADDED, 0 removed, 0 moved; `saves` 2620, `cells` 72, `fields_per_cell` 8, the 16-field `summary`, `description` and `result_format` all CARRIED |
+| sidecar `sha256` | `f7bd286409b15945da3f21c1a8d672bde7876d08dad81593700beef2673b3f12` | `9046adf879fa343d0c9a092ad30d1bfea544aecf0c49fea139630132336f4eaa` |
+| digest reference `sha256` | `e05b5dad3029bd65af41205f76ff80fa5f213815b23a9167fe9363afd56fe877` | `e041c30b03fc6dd9309cceea86b34630b9ca6ff4a847d9b77e0850b7d4d8e0be` |
+| NPZ `sha256` | `2c02ccd882261a0b01e0a1e8f0e313113b8431fadd526fa9d4859694e5704306` | UNCHANGED (md5 `fd8ac896ccba10c66a7c18ec609ec48e` before and after; the file is not rewritten) |
+
+Proof that the move is the three keys and nothing else: a STRIP-3 CONTROL at the
+merge tip removes `params['electron_drift_charge_death']`,
+`params['electron_drift_anode_handshake']` and
+`flags['electron_drift_transport']`, recomputes through the gate's OWN
+expression (`config_identity(*build_baseline_config(DIGEST_PARAM_OVERRIDES))`)
+and reproduces `21a9b476…` bit for bit (`params 255 -> 253`, `flags 54 -> 53`);
+and a full 4,000-step pure trajectory at the merge tip agreed with the committed
+reference at every checkpoint BEFORE the rotation was written. The rotation tool
+refuses to write unless each non-identity field is proven unmoved field by field
+first, so the on-disk diff is exactly four lines — one `config_identity` swap and
+three key insertions. The sidecar params and flags were regenerated
+programmatically (`build_baseline_config()` -> `json.dumps(..., sort_keys=True)`),
+never hand-edited.
+
+The event adds keys in BOTH namespaces: one FLAGS key (the arming flag) and two
+PARAMS keys (the declared conventions it gates), which is why this rotation moves
+`params` and `flags` together where B6 moved only `flags` and B4 only `params`.
+Route identity across the four representative routes (`production_golden`,
+`compare_sim1d_es1`, `run_m6_point_es1_sgp3649_defaults`,
+`run_mechanism_ladder_es1_defaults`) moves by exactly these three lines each,
+with no other added, removed or value-moved key on any route, and each route's
+digest with the three keys stripped MATCHES its base-commit digest.
+`config_snapshots.json` was regenerated at the merge tip and is byte-identical to
+the merged file (`params=255, flags=54, cases=4`).
+
+Gates at the rotated tip `b3d201d` (this entry is the markdown-only commit on top
+of it), each run with an in-process import-provenance assertion — `cablp.__file__`
+resolving inside this checkout, printed with `KERNEL_ID` in the same process as
+the gate, and for the compiled leg the compiled path ASSERTED before the run
+rather than read after it: COMPILED golden `baseline verify OK: saves=2620,
+exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s
+(rtol=1.0e-09, atol=0.0e+00)` (`KERNEL_ID`
+`cython/_cathode_kernels_cy/tierA+csda`); PURE 4k digest leg `digest gate OK:
+steps=4000, digest=cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2,
+exact=True` against the ROTATED reference, `kernels=pure`; smoke exit 0 with all
+five compiled-kernel equivalence blocks LIVE (meanfield, coverage, landau,
+emitting_area, initial_profile — bit-identical final state on each);
+`verify_sim1d_k2_dvm.py` 113/113; `verify_sim1d_edt.py` 26/26 (the new member's
+own suite); `declm_block_gate.py` 35 checks, 0 failed; `sgfs_census.py
+--assert-clean` PASS; `batch11_restart_citations.py` 52 cites PASS;
+`m1_verdict_invariance.py --self-test` 7 of 7.
+
+The stance file `g1atrim.toml` is untouched by this event; the golden's
+trajectory is the 2026-08-28 capture's, unchanged.
+
 **2026-08-31 — IDENTITY-ONLY ROTATION (the B6 baffle-interception key). NOTHING
 WAS RECAPTURED.** Merge `a8590e3` ([dvm-b6-baffle-interception], the annular
 baffles acting on the transient DVM's annulus) added ONE `input_flags` key to
