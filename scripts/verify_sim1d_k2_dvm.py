@@ -193,10 +193,25 @@ Gates:
       and not per tick, with cells carrying positive incident energy in the
       same tick launching normally beside it. Dropping the one mask -- the
       pre-ruling arithmetic -- is the negative control, and it RAISES
-  G1..G27, G29 construction refusals: each unsupported configuration raises a
-      ValueError at construction naming the offender. G2 is the model-preset
-      resolver's refusal half -- an explicitly-set family member the
-      selection cannot carry, refused ONCE with the whole member set named
+  BF1 closed box, engine-only: one annular baffle throttles the ANNULUS by
+      exactly its transparency t_f = open_ann / A_ann and leaves the COLUMN
+      bit-identical, with the particle ledger closed. Routing the same
+      throttle through the anode MESH -- which blocks the column too -- is the
+      negative control, and the column-untouched statement fails there
+  BF2 THE PLAN GATE, the matched case: a sealed 300 K tube carrying the
+      g1atrim baffle face's own radii with a density step across the face.
+      The DVM's net annulus current per unit density difference against the
+      fluid's series orifice 0.25 vbar open_ann -- ~1 with the baffle on,
+      A_ann / open_ann (the plan's "~1.75x", measured) with it off, at (48,12)
+      and (64,24) and with the discrete-grid gap MEASURED rather than assumed
+  BF3 in-solver on the engaged production arm with the stance baffle armed:
+      the baffle rows non-zero ONLY on the face's flanking cells, the energy
+      ledger closed in BOTH the row-relative and throughput-normalized forms,
+      and momentum_baffle_absorbed held to AJ4's mirror antisymmetry
+  G1..G27, G29..G32 construction refusals: each unsupported configuration
+      raises a ValueError at construction naming the offender. G2 is the
+      model-preset resolver's refusal half -- an explicitly-set family member
+      the selection cannot carry, refused ONCE with the whole member set named
   X1  the resolver's other half: naming ``neutral_model='kinetic_dvm'`` on an
       otherwise untouched ``default_config()`` constructs, every member of
       the family resolved to the value the selection requires and none of
@@ -227,6 +242,7 @@ caller redirects it (``k2_dvm_verify.txt`` by campaign convention).
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
     python scripts/verify_sim1d_k2_dvm.py
 """
+import hashlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -245,6 +261,7 @@ from cablp.solvers._sim1d import (
 )
 from cablp.solvers._sim1d.core.geometry import (
     absorbing_live_cells_by_role,
+    build_geometry,
     is_plenum_cell,
 )
 from cablp.solvers._sim1d.core.validation import (
@@ -275,7 +292,10 @@ from cablp.solvers._sim1d.physics.kinetic_neutrals import (
 )
 from cablp.solvers._sim1d.physics.neutrals import (
     _effective_pump_speed,
+    knudsen_flow_coefficients,
+    neutral_thermal_speed,
     neutral_zone_volumes,
+    two_zone_knudsen_coefficients,
 )
 from cablp.constants import kb_cgs, m_He_cgs
 
@@ -833,9 +853,11 @@ STANCE_GEOMETRY_PARAMS = (
 )
 #: The two flags that package requires. ``prescribed_area_geometry`` is what
 #: makes the per-cell radii the geometry; ``neutral_baffles`` is what makes the
-#: baffle arrays live. The DVM march itself does not read the baffle faces (the
-#: fluid neutral operator does), so they travel as part of the machine rather
-#: than as a kinetic input.
+#: baffle arrays live. They travel as part of the MACHINE rather than as a
+#: kinetic input: since B6 the DVM march does read the baffle faces, but only
+#: when its own default-off ``neutral_kinetic_dvm_baffles`` flag arms them on
+#: top of these, so this package alone still describes the machine and nothing
+#: kinetic (the BF gates arm the kinetic flag explicitly).
 STANCE_GEOMETRY_FLAGS = ("prescribed_area_geometry", "neutral_baffles")
 
 
@@ -2553,6 +2575,29 @@ REFUSALS = (
             fl.__setitem__("cathode_coupling", False),
             None,
         )[2],
+    ),
+    # --- B6 baffle interception. G32 (a clear radius below the local column
+    # radius) is NOT here: its solver-route refusal belongs to core.geometry
+    # and fires before the kinetic arm is built, so it is made as its own gate
+    # that states BOTH owners -- see gate_bf_g32.
+    (
+        "G30 DVM baffle interception without the DVM arm refused",
+        dict(),
+        "neutral_kinetic_dvm_baffles",
+        lambda d, fl: (
+            fl.__setitem__("neutral_kinetic_dvm_baffles", True),
+            d.__setitem__("neutral_model", "moment"),
+            off_arm(d),
+        )[2],
+    ),
+    (
+        "G31 DVM baffle interception without the fluid baffles refused",
+        dict(),
+        "neutral_baffles",
+        lambda d, fl: (
+            fl.__setitem__("neutral_kinetic_dvm_baffles", True),
+            None,
+        )[1],
     ),
     (
         "G15 gas puff into a cell with no annulus refused",
@@ -5720,6 +5765,618 @@ def gate_aj5():
     )
 
 
+# ------------------------------------------------- B6 baffle interception
+#
+# The registered gates of plan row B6 (DVM_ADDED_VS_EMERGENT_2026-08-23 item
+# 4). The fluid books each thin annular baffle as a zero-thickness SERIES
+# ORIFICE on the annulus conductance alone (``physics/neutrals.py``:
+# ``orifice = clausing_scale * 0.25 * v_th * open_ann`` with
+# ``open_ann = pi (R_clear^2 - R_col^2)``, the column untouched because
+# ``R_clear >= R_p``). The DVM consumed no baffle at all, so its annulus
+# streamed through the FULL annulus area where only the clear ring is open.
+# B6 intercepts that flux at every baffle face and re-emits it on the side it
+# was intercepted from, particle-conserving, exactly as the anode-mesh channel
+# does -- the same full accommodation at ``T_wall`` on the wall spectrum, which
+# is the 28hx Q1 correction (the scalar alpha covers the cylinder and the ends;
+# mesh and closed faces run alpha = 1) extended to baffles.
+
+#: Relative tolerance of the B6 FLUX statements. The transparency enters the
+#: march as a per-bin scaling inside a sum, so a statement formed as
+#: ``sum((1 - t) F v)`` against ``(1 - t) sum(F v)`` is a DISTRIBUTIVE
+#: rearrangement of the same arithmetic and closes at roundoff, not to the bit.
+#: Where the scaling is exact (``t_f = 0``, where ``1.0 * F == F``) the identity
+#: IS bit-exact and the gate says so separately.
+BF_FLUX_REL = 1.0e-12
+
+#: Relative tolerance of the B6 particle-ledger closure (the registered
+#: ``<= 1e-14``; the suite's general roundoff class is 1e-12).
+BF_LEDGER_REL = 1.0e-14
+
+#: Relative tolerance of the B6 momentum-row antisymmetry (AJ4's class).
+BF_MOMENTUM_REL = 1.0e-12
+
+#: The BF1 closed box's target transparency at its one baffle face.
+BF_TARGET_TRANSPARENCY = 0.5
+
+#: BF2's registered bound on the free-molecular-vs-discrete-grid gap, on the
+#: GAS-MATCHED velocity grid. The gap itself is MEASURED and stated; this is
+#: only the bound the measurement has to come in under for the plan gate to be
+#: a statement about the baffle rather than about the grid.
+BF_GRID_GAP_MAX = 0.05
+
+
+def bf_clear_radius(Rp, Rm, transparency):
+    """Return the clear radius whose open ring is ``transparency`` of the annulus.
+
+    Inverts ``t = pi (R_clear^2 - Rp^2) / (pi (Rm^2 - Rp^2))``. The realized
+    transparency is read back off the engine rather than assumed here: the
+    engine forms the annulus face area from ``V_ann / dz``, which is not
+    bit-identical to ``pi (Rm^2 - Rp^2)``, and every BF statement is made
+    against the value the engine actually used.
+    """
+    return float(np.sqrt(Rp**2 + float(transparency) * (Rm**2 - Rp**2)))
+
+
+def bf_box(
+    nz=8,
+    nvz=16,
+    nvp=6,
+    Rp=15.0,
+    Rm=50.0,
+    clear=None,
+    face=None,
+    through_mesh=False,
+    transparency=None,
+    nn_col=None,
+    nn_ann=None,
+    T_K=300.0,
+    vmax_cm_s=None,
+):
+    """Return a SEALED uniform tube carrying one annular baffle at ``face``.
+
+    ``closed_box_dvm``'s class of fixture -- specular ends
+    (``accommodation = 0``), no pumping, no external source, no plasma -- but
+    with a REAL ANNULUS (``Rm > Rp``), because the baffle is an annulus-only
+    object and the closed box proper has ``V_ann = 0`` in every cell.
+
+    ``through_mesh`` is the BF1 NEGATIVE CONTROL routing: the same face at the
+    same transparency is armed as the ANODE MESH instead, which by design
+    intercepts the COLUMN as well as the annulus. Nothing test-only is added to
+    the engine for it -- the control is a second, already-shipped operator that
+    makes the statement B6 is required to satisfy false.
+    """
+    face = nz // 2 if face is None else int(face)
+    kwargs = dict(
+        geometry=uniform_tube(nz, Rp=Rp, Rm=Rm),
+        nvz=nvz,
+        nvp=nvp,
+        accommodation=0.0,
+        exchange_model=EXCHANGE_MODEL,
+        s_L=0.0,
+        s_R=0.0,
+    )
+    if vmax_cm_s is not None:
+        kwargs["vmax_cm_s"] = float(vmax_cm_s)
+    if through_mesh:
+        kwargs.update(mesh_face=face, transparency=float(transparency))
+    elif clear is not None:
+        kwargs.update(
+            baffle_faces=(face,), baffle_clear_radius_cm=(float(clear),)
+        )
+    dvm = TransientDVM(**kwargs)
+    col = (
+        np.full(nz, 1.0e13) if nn_col is None
+        else np.asarray(nn_col, dtype=float)
+    )
+    ann = (
+        np.full(nz, 1.0e13) if nn_ann is None
+        else np.asarray(nn_ann, dtype=float)
+    )
+    dvm.seed_from_density(col, ann, T_K=T_K)
+    return dvm
+
+
+def bf_tick(dvm, dt=CADENCE_S):
+    """Advance one tick with every external channel silent; return the ledger."""
+    return dvm.update(dt, **zero_plasma(dvm))
+
+
+def bf_bits(array):
+    """Return the raw-uint64 sha256 of one float64 array (bit-level identity)."""
+    return hashlib.sha256(
+        np.ascontiguousarray(array, dtype=np.float64).view(np.uint64).tobytes()
+    ).hexdigest()
+
+
+def gate_bf1():
+    """BF1 closed box: the baffle throttles the ANNULUS by exactly ``t_f``.
+
+    Engine-only, on the sealed uniform tube of :func:`bf_box` with one baffle
+    at the middle face and a uniform 300 K seed in BOTH zones. Four arms are
+    ticked ONCE each from the identical seed, which is what makes the
+    comparison exact: the march's upstream flux ``F_a_prev`` arriving at the
+    baffle face is built from cells the baffle has not touched, so on the FIRST
+    tick it is bit-identical across arms whatever the transparency.
+
+    * ``Z`` -- ``R_clear = R_col``, so ``open_ann = 0`` and ``t_f = 0``. Its
+      ``loss_baffle_blocked`` row IS the full one-way incident flux at the
+      face, bit-exactly (``1.0 * F == F``), and PER CELL it is the one-way
+      flux of ONE direction: ``+z`` traffic is tallied on the cell left of the
+      face, ``-z`` traffic on the cell right of it.
+    * ``B`` -- the registered ``t_f = 0.5`` box (the realized value is read off
+      the engine, not assumed).
+    * ``U`` -- ``R_clear`` beyond the vessel bore, so the open ring covers the
+      whole annulus: ``t_f`` clips to 1, the face is NOT armed, and the arm
+      must be a bit-exact no-op against ``N``.
+    * ``N`` -- no baffle configured at all.
+
+    The four statements:
+
+    1. the annulus flux CROSSING the face is ``t_f`` times the unbaffled flux,
+       per direction: ``(incident - blocked) / incident == t_f`` at
+       ``BF_FLUX_REL``, on both flanking cells;
+    2. the particle ledger closes at ``BF_LEDGER_REL`` on every arm;
+    3. ``loss_baffle_blocked == (1 - t_f) * incident`` -- to the BIT at
+       ``t_f = 0``, and at ``BF_FLUX_REL`` at ``t_f = 0.5`` where the engine
+       sums ``(1 - t_f) F`` per bin while the reference scales the summed
+       incident (see :data:`BF_FLUX_REL`);
+    4. the COLUMN is untouched: arm ``B``'s post-tick ``f_c`` is raw-uint64
+       IDENTICAL to arm ``N``'s, and ``U`` is raw-uint64 identical to ``N`` in
+       BOTH zones.
+
+    NEGATIVE CONTROL: the same face at the same transparency routed through the
+    ANODE MESH, which intercepts the column too. Statement 4 must FAIL there --
+    ``f_c`` must move -- and the mesh must block STRICTLY MORE than the baffle,
+    the extra being the column share the baffle is required not to take. On an
+    annulus-only seed the two operators must instead agree TO THE BIT, which is
+    the other half of "tallied exactly as the mesh's ``mesh_a``".
+
+    The engine's construction-time refusal of ``R_clear < R_col`` is asserted
+    here too: it is the ENGINE-side half of G32, and the only half reachable
+    without the solver's geometry (which refuses the same thing first).
+    """
+    nz, Rp, Rm = 8, 15.0, 50.0
+    face = nz // 2
+    clear_b = bf_clear_radius(Rp, Rm, BF_TARGET_TRANSPARENCY)
+
+    arm_n = bf_box(nz=nz, Rp=Rp, Rm=Rm)
+    arm_u = bf_box(nz=nz, Rp=Rp, Rm=Rm, clear=1.5 * Rm, face=face)
+    arm_z = bf_box(nz=nz, Rp=Rp, Rm=Rm, clear=Rp, face=face)
+    arm_b = bf_box(nz=nz, Rp=Rp, Rm=Rm, clear=clear_b, face=face)
+    t_f = float(arm_b.baffle_transparency[0])
+    t_u = float(arm_u.baffle_transparency[0])
+
+    led_n = bf_tick(arm_n)
+    led_u = bf_tick(arm_u)
+    led_z = bf_tick(arm_z)
+    led_b = bf_tick(arm_b)
+
+    incident = np.asarray(arm_z.last_baffle_counts, dtype=float)
+    blocked = np.asarray(arm_b.last_baffle_counts, dtype=float)
+    per_direction = []
+    for cell in (face - 1, face):
+        inc = float(incident[cell])
+        crossing = (inc - float(blocked[cell])) / max(inc, 1e-300)
+        per_direction.append((int(cell), inc, crossing, abs(crossing - t_f)))
+    worst_flux = max(row[3] for row in per_direction)
+
+    inc_total = float(incident.sum())
+    blocked_total = float(blocked.sum())
+    scaled = (1.0 - t_f) * inc_total
+    worst_scaling = abs(blocked_total - scaled) / max(abs(scaled), 1e-300)
+    exact_at_zero = inc_total == float(led_z["loss_baffle_blocked"])
+
+    residuals = {
+        name: ledger_residual(led)
+        for name, led in (
+            ("N", led_n), ("U", led_u), ("Z", led_z), ("B", led_b)
+        )
+    }
+    worst_ledger = max(
+        max(abs(r["distribution_rel"]), abs(r["domain_rel"]))
+        for r in residuals.values()
+    )
+
+    fc_n, fa_n = bf_bits(arm_n.f_c), bf_bits(arm_n.f_a)
+    column_untouched = bf_bits(arm_b.f_c) == fc_n
+    noop = (
+        bf_bits(arm_u.f_c) == fc_n
+        and bf_bits(arm_u.f_a) == fa_n
+        and t_u == 1.0
+    )
+
+    # NEGATIVE CONTROL: the same throttle at the same face, through the mesh.
+    control = bf_box(
+        nz=nz, Rp=Rp, Rm=Rm, clear=clear_b, face=face,
+        through_mesh=True, transparency=t_f,
+    )
+    led_c = bf_tick(control)
+    control_column_moved = bf_bits(control.f_c) != fc_n
+    control_extra = float(led_c["loss_mesh_blocked"]) - blocked_total
+
+    # Annulus-only seed: with no column to take, the two operators are the
+    # same arithmetic and their rows must be bit-identical.
+    zeros = np.zeros(nz)
+    ann_baffle = bf_box(
+        nz=nz, Rp=Rp, Rm=Rm, clear=clear_b, face=face, nn_col=zeros,
+    )
+    ann_mesh = bf_box(
+        nz=nz, Rp=Rp, Rm=Rm, clear=clear_b, face=face, nn_col=zeros,
+        through_mesh=True, transparency=t_f,
+    )
+    led_ab, led_am = bf_tick(ann_baffle), bf_tick(ann_mesh)
+    annulus_matches = (
+        float(led_ab["loss_baffle_blocked"])
+        == float(led_am["loss_mesh_blocked"])
+    )
+
+    engine_refusal = ""
+    try:
+        bf_box(nz=nz, Rp=Rp, Rm=Rm, clear=Rp - 1.0, face=face)
+    except ValueError as exc:
+        engine_refusal = str(exc)
+
+    ok = (
+        inc_total > 0.0
+        and abs(t_f - BF_TARGET_TRANSPARENCY) < 1.0e-9
+        and worst_flux < BF_FLUX_REL
+        and worst_ledger < BF_LEDGER_REL
+        and worst_scaling < BF_FLUX_REL
+        and exact_at_zero
+        and column_untouched
+        and noop
+        and control_column_moved
+        and control_extra > 0.0
+        and annulus_matches
+        and "clear radius" in engine_refusal
+    )
+    detail_rows = "; ".join(
+        f"cell {cell}: incident {fmt(inc)}, crossing {fmt(frac)} "
+        f"(|- t_f| {fmt(dev)})"
+        for cell, inc, frac, dev in per_direction
+    )
+    return (
+        "BF1 closed box: the annular baffle throttles the ANNULUS by exactly "
+        "t_f and leaves the column bit-identical",
+        ok,
+        f"{nz}-cell sealed tube, Rp={Rp} Rm={Rm}, one baffle at face {face}, "
+        f"R_clear={clear_b:.6f} cm -> t_f={t_f:.12f}; one tick per arm from "
+        f"the identical seed\n        "
+        f"crossing per direction -- {detail_rows} (tol {fmt(BF_FLUX_REL)})\n"
+        f"        blocked vs (1 - t_f) x incident {fmt(worst_scaling)} "
+        f"relative (tol {fmt(BF_FLUX_REL)}); the same identity at t_f = 0 is "
+        f"BIT-exact: {exact_at_zero}\n        "
+        f"worst particle-ledger residual over the four arms "
+        f"{fmt(worst_ledger)} (tol {fmt(BF_LEDGER_REL)}); column untouched at "
+        f"the bit: {column_untouched}; the t_f = 1 arm is a bit-exact no-op "
+        f"in both zones: {noop}\n        "
+        f"NEGATIVE CONTROL (same t_f at the same face through the anode MESH, "
+        f"which blocks the column too): column moved {control_column_moved}; "
+        f"the mesh blocks {fmt(control_extra)} particles MORE than the baffle "
+        f"(the column share, > 0 required); on an annulus-only seed the two "
+        f"rows are bit-identical: {annulus_matches}\n        "
+        f"engine refuses R_clear < R_col naming it: {engine_refusal[:88]!r}"
+    )
+
+
+def gate_bf2():
+    """BF2 THE PLAN GATE: the DVM's baffled annulus throughput IS the fluid's.
+
+    The matched case the plan row registers. A sealed 300 K tube with NO plasma
+    carrying the g1atrim baffle face's own radii -- ``R_clear``, the vessel
+    bore ``Rm`` and the face-average column radius ``R_col``, all read from the
+    committed stance geometry rather than restated here -- and a DENSITY STEP
+    in the annulus across the baffle face (two reservoirs). Over the first tick,
+    while the step is still sharp, the net annulus particle current across the
+    face per unit density difference is compared with the fluid's own
+    zero-thickness series orifice ``0.25 * v_th * open_ann`` at
+    ``clausing_scale = 1``.
+
+    The current is read off the engine's OWN face tallies rather than rebuilt:
+    a ``t_f = 0`` twin's per-cell ``loss_baffle_blocked`` is the one-way
+    incident flux at the face in each direction, bit-exactly, and on the first
+    tick it is the flux the UNBAFFLED tube would have passed (the march's
+    upstream sweep never sees the face). The baffled arm's crossing is that
+    incident less its own blocked row.
+
+    Three statements, at (48, 12) and (64, 24) bins:
+
+    * OFF/ON STRUCTURE (exact) -- ``ratio_off == ratio_on * A_ann / open_ann``
+      at ``BF_FLUX_REL``. Both ratios carry the same discrete-grid factor, so
+      this isolates the geometric statement from the quadrature one: the ONLY
+      thing the baffle changes is the area, by exactly ``A_ann / open_ann``.
+      That factor is the plan's predicted "~1.75x", MEASURED here.
+    * BAFFLE ON -- ``DVM / fluid``, expected ``~1``. The residual is the
+      free-molecular-vs-discrete-grid gap: the DVM's one-way flux is a finite
+      sum ``sum_bins f |v_z| A`` over a stretched grid while the fluid's is the
+      continuum ``n vbar / 4``. It is MEASURED at both bin counts and must come
+      in under :data:`BF_GRID_GAP_MAX` on the GAS-MATCHED grid, and refining
+      the grid must improve it.
+    * The SHIPPED grid extent is reported beside the matched one, not gated.
+      The production velocity grid is sized for ion-temperature drift caps
+      (``vmax ~ 4 v_th(Ti_cap) + 1.5 u_cap``), so a 300 K gas occupies a small
+      part of it; that resolution is a property of the grid, not of the baffle,
+      and separating the two is what the matched grid is for.
+
+    The fluid's own conductances at that face on the real stance geometry are
+    quoted beside the bare orifice, so the reference number is on record with
+    the tube conductance it sits in series with rather than only in isolation.
+    """
+    d, fl = arm_config(**PRODUCTION_GEOMETRY_KEYS)
+    geom = build_geometry(d, fl)
+    stance_face = int(
+        np.asarray(geom.neutral_baffle_face_indices, dtype=int)[0]
+    )
+    clear = float(
+        np.asarray(geom.neutral_baffle_clear_radius_cm, dtype=float)[0]
+    )
+    Rp_stance = np.asarray(geom.Rp_cm, dtype=float)
+    Rm_stance = np.asarray(geom.Rm_cm, dtype=float)
+    R_col = 0.5 * (
+        float(Rp_stance[stance_face - 1]) + float(Rp_stance[stance_face])
+    )
+    Rm = 0.5 * (
+        float(Rm_stance[stance_face - 1]) + float(Rm_stance[stance_face])
+    )
+
+    v_th = neutral_thermal_speed(Tn_K=300.0, mu_neutral=4.0)
+    open_ann = np.pi * (clear**2 - R_col**2)
+    orifice = 0.25 * v_th * open_ann
+    fluid_two_zone = float(
+        two_zone_knudsen_coefficients(geom, 300.0, 4.0)[1][stance_face - 1]
+    )
+    fluid_single = float(
+        knudsen_flow_coefficients(geom, 300.0, 4.0)[stance_face - 1]
+    )
+
+    nz = 12
+    face = nz // 2
+    n_hi, n_lo = 2.0e13, 1.0e13
+    dn = n_hi - n_lo
+    step = np.where(np.arange(nz) < face, n_hi, n_lo).astype(float)
+    # A tick short enough that transport and zone exchange inside it stay far
+    # below the quadrature gap the statement is about. Both zones carry the
+    # same step, so the zone channel is in detailed balance at t = 0.
+    dt = 1.0e-8
+    # The gas-matched grid extent: six thermal speeds of the 300 K gas the box
+    # actually holds.
+    matched_vmax = 6.0 * np.sqrt(KB * 300.0 / M_HE)
+
+    rows = []
+    for label, vmax in (("matched", matched_vmax), ("shipped", None)):
+        for nvz, nvp in ((48, 12), (64, 24)):
+            kw = dict(
+                nz=nz, nvz=nvz, nvp=nvp, Rp=R_col, Rm=Rm, face=face,
+                nn_col=step, nn_ann=step, vmax_cm_s=vmax,
+            )
+            arm_z = bf_box(clear=R_col, **kw)
+            arm_b = bf_box(clear=clear, **kw)
+            t_f = float(arm_b.baffle_transparency[0])
+            A_ann = float(arm_b.face_a[face])
+            bf_tick(arm_z, dt)
+            bf_tick(arm_b, dt)
+            inc = np.asarray(arm_z.last_baffle_counts, dtype=float)
+            blk = np.asarray(arm_b.last_baffle_counts, dtype=float)
+            net_off = (float(inc[face - 1]) - float(inc[face])) / dt
+            net_on = (
+                (float(inc[face - 1]) - float(blk[face - 1]))
+                - (float(inc[face]) - float(blk[face]))
+            ) / dt
+            ratio_on = (net_on / dn) / orifice
+            ratio_off = (net_off / dn) / orifice
+            geometric = A_ann / open_ann
+            rows.append(
+                {
+                    "label": label,
+                    "grid": (nvz, nvp),
+                    "vmax": float(arm_b.g.vz.max()),
+                    "t_f": t_f,
+                    "geometric": geometric,
+                    "ratio_on": ratio_on,
+                    "ratio_off": ratio_off,
+                    "structure": abs(
+                        ratio_off - ratio_on * geometric
+                    ) / max(abs(ratio_on * geometric), 1e-300),
+                }
+            )
+
+    matched = [r for r in rows if r["label"] == "matched"]
+    worst_structure = max(r["structure"] for r in rows)
+    gap_coarse = abs(matched[0]["ratio_on"] - 1.0)
+    gap_fine = abs(matched[1]["ratio_on"] - 1.0)
+    improves = gap_fine <= gap_coarse
+    ok = (
+        worst_structure < BF_FLUX_REL
+        and gap_fine < BF_GRID_GAP_MAX
+        and improves
+    )
+    detail = "\n        ".join(
+        f"{r['label']:8s} grid {str(r['grid']):9s} vmax {r['vmax']:.3e} cm/s: "
+        f"t_f {r['t_f']:.9f}; DVM/fluid ON {r['ratio_on']:.9f}, OFF "
+        f"{r['ratio_off']:.9f}; OFF/(ON x A_ann/open_ann) - 1 = "
+        f"{r['structure']:.3e}"
+        for r in rows
+    )
+    return (
+        "BF2 [THE PLAN GATE] matched case: the baffled DVM annulus throughput "
+        "equals the fluid series orifice; unbaffled it overstates it by "
+        "A_ann / open_ann",
+        ok,
+        f"g1atrim baffle face {stance_face}: R_clear {clear} cm, R_col (face "
+        f"average) {R_col:.6f} cm, Rm {Rm:.4f} cm; open_ann {open_ann:.6f} "
+        f"cm^2; A_ann/open_ann {matched[0]['geometric']:.9f} (the plan's "
+        f"'~1.75x', MEASURED)\n        "
+        f"fluid reference: 0.25 vbar open_ann = {orifice:.6e} cm^3/s at 300 K "
+        f"(vbar {v_th:.6e} cm/s, clausing_scale 1)\n        "
+        f"sealed {nz}-cell tube, annulus step {n_hi:.3e} -> {n_lo:.3e} cm^-3 "
+        f"across the face, one {dt:.1e} s tick\n        {detail}\n        "
+        f"OFF/ON structural identity worst {worst_structure:.3e} "
+        f"(tol {fmt(BF_FLUX_REL)}); MEASURED free-molecular-vs-discrete-grid "
+        f"gap on the gas-matched grid: {gap_coarse:.3e} at (48, 12) and "
+        f"{gap_fine:.3e} at (64, 24) (bound {BF_GRID_GAP_MAX}), refining "
+        f"improves it: {improves}\n        "
+        f"fluid conductances at the same face on the real stance geometry "
+        f"(quoted, not gated): two_zone_knudsen_coefficients annulus "
+        f"{fluid_two_zone:.6e} cm^3/s, knudsen_flow_coefficients "
+        f"{fluid_single:.6e} cm^3/s -- each the tube in SERIES with the "
+        f"orifice above"
+    )
+
+
+def gate_bf3():
+    """BF3 in-solver: the baffle books where it should and closes both ledgers.
+
+    The stance baffle armed on the ENGAGED production arm
+    (``engaged_production_sim`` + ``neutral_kinetic_dvm_baffles``), ticked, and
+    read three ways:
+
+    * PLACEMENT -- the per-cell baffle counts are non-zero ONLY on the two
+      cells flanking the stance's baffle face, and exactly zero everywhere
+      else. A channel depositing on a positional constant rather than on the
+      face it belongs to (the S1 defect class) fails here.
+    * ENERGY CLOSURE -- the every-channel energy ledger, reported in BOTH
+      normalizations per the 2026-08-30 rule: THROUGHPUT-normalized (what a
+      residual gate sees) and ROW-RELATIVE against the baffle's own energy row
+      (what a misbooking moving only its own row by O(1) shows up in). The
+      gate asserts the ROW-RELATIVE form.
+    * MOMENTUM -- ``momentum_baffle_absorbed``. Its VALUE statement is AJ4's
+      MIRROR ANTISYMMETRY, and for AJ4's stated reason: a second implementation
+      of the tally inside the gate would be the same reduction over the same
+      arrays and would agree with a sign error. A symmetric sealed box seeded
+      only below the baffle face, and the same box seeded in the exact mirror
+      image above it, must give rows summing to zero. The IN-SOLVER row is then
+      required present, finite and non-vacuous -- the half the mirror box
+      cannot make.
+    """
+    sim = engaged_production_sim(
+        **{"flag:neutral_kinetic_dvm_baffles": True}
+    )
+    ledgers = run_until_updates(sim, 3)
+    geom = sim.geometry
+    face = int(np.asarray(geom.neutral_baffle_face_indices, dtype=int)[0])
+    flanking = sorted({face - 1, face})
+    dvm = sim._dvm
+
+    counts = np.asarray(dvm.last_baffle_counts, dtype=float)
+    off_face = float(np.sum(np.abs(np.delete(counts, flanking))))
+    on_face = float(np.sum(np.abs(counts[flanking])))
+
+    led = ledgers[-1]
+    e = led["energy"]
+    e_res = ledger_energy_residual(led)
+    n_res = ledger_residual(led)
+    row = abs(e["loss_baffle_blocked"]) + abs(e["birth_baffle_reemit"])
+    row_relative = abs(e_res["distribution"]) / max(row, 1e-300)
+    throughput_normalized = abs(e_res["distribution_rel"])
+
+    def mirror_row(side):
+        nz, Rp, Rm = 8, 15.0, 50.0
+        f = nz // 2
+        profile = np.zeros(nz)
+        profile[:f] = 1.0e13
+        if side == "high":
+            profile = profile[::-1].copy()
+        box = bf_box(
+            nz=nz, Rp=Rp, Rm=Rm,
+            clear=bf_clear_radius(Rp, Rm, BF_TARGET_TRANSPARENCY),
+            face=f, nn_col=np.zeros(nz), nn_ann=profile,
+        )
+        return bf_tick(box)
+
+    led_low, led_high = mirror_row("low"), mirror_row("high")
+    p_low = float(led_low["momentum_baffle_absorbed"])
+    p_high = float(led_high["momentum_baffle_absorbed"])
+    n_low = float(led_low["loss_baffle_blocked"])
+    n_high = float(led_high["loss_baffle_blocked"])
+    mirror = abs(p_low + p_high) / max(abs(p_low), abs(p_high), 1e-300)
+
+    in_solver = led.get("momentum_baffle_absorbed")
+    solver_row_ok = (
+        in_solver is not None
+        and np.isfinite(in_solver)
+        and led["loss_baffle_blocked"] > 0.0
+        and led["loss_baffle_blocked"] == led["birth_baffle_reemit"]
+    )
+
+    ok = (
+        on_face > 0.0
+        and off_face == 0.0
+        and row_relative < ROUNDOFF_REL
+        and abs(n_res["distribution_rel"]) < BF_LEDGER_REL
+        and solver_row_ok
+        and n_low > 0.0
+        and n_high > 0.0
+        and p_low > 0.0
+        and p_high < 0.0
+        and mirror < BF_MOMENTUM_REL
+    )
+    return (
+        "BF3 in-solver, stance baffle armed: booked on the flanking cells "
+        "only, both ledgers closed, the momentum row antisymmetric",
+        ok,
+        f"{geom.cells}-cell production mesh, baffle at face {face}; "
+        f"{len(ledgers)} ticks; per-cell baffle counts {fmt(on_face)} on the "
+        f"flanking pair {flanking} and {fmt(off_face)} everywhere else "
+        f"(exactly 0 required)\n        "
+        f"energy closure ROW-RELATIVE (the gate) {fmt(row_relative)} against "
+        f"a baffle energy row of {fmt(row)} erg, THROUGHPUT-normalized (what "
+        f"a residual gate sees) {fmt(throughput_normalized)}; particle "
+        f"distribution residual {fmt(abs(n_res['distribution_rel']))} "
+        f"(tol {fmt(BF_LEDGER_REL)})\n        "
+        f"in-solver rows: loss_baffle_blocked "
+        f"{fmt(led['loss_baffle_blocked'])} == birth_baffle_reemit "
+        f"{fmt(led['birth_baffle_reemit'])}; momentum_baffle_absorbed "
+        f"{fmt(float(in_solver) if in_solver is not None else float('nan'))} "
+        f"g cm/s, present and finite: {solver_row_ok}\n        "
+        f"mirror pair (AJ4's form): low-seed {fmt(p_low)} g cm/s over "
+        f"{fmt(n_low)} intercepted particles, high-seed {fmt(p_high)} over "
+        f"{fmt(n_high)}; |sum| / |each| {fmt(mirror)} "
+        f"(tol {fmt(BF_MOMENTUM_REL)})"
+    )
+
+
+def gate_bf_g32():
+    """G32 a clear radius below the local column radius is REFUSED, both routes.
+
+    Two statements, because the refusal has two owners and only one of them is
+    new. In the SOLVER route ``core.geometry._neutral_baffle_spec`` already
+    demands ``Rp <= R_clear < Rm`` at every baffle face and raises before the
+    kinetic arm is built at all, so the kinetic flag INHERITS that refusal
+    rather than repeating it -- the gate arms the flag and quotes the message
+    it actually gets, so a future relaxation of the geometry guard surfaces
+    here. In the ENGINE route (a ``TransientDVM`` built directly, as the
+    fixtures above do) nothing stands in front, and the engine's own refusal is
+    all that is between a caller and an annulus silently sealed shut.
+    """
+    d, fl = arm_config(**PRODUCTION_GEOMETRY_KEYS)
+    fl["neutral_kinetic_dvm_baffles"] = True
+    d["neutral_baffle_clear_radii_cm"] = [1.0]
+    solver_msg = ""
+    try:
+        LAPDSim1D(input_dict=d, input_flags=fl)
+    except ValueError as exc:
+        solver_msg = str(exc)
+
+    engine_msg = ""
+    try:
+        bf_box(nz=8, Rp=15.0, Rm=50.0, clear=14.0, face=4)
+    except ValueError as exc:
+        engine_msg = str(exc)
+
+    ok = (
+        "clear radius" in solver_msg
+        and "clear radius" in engine_msg
+        and "R_col" in engine_msg
+    )
+    return (
+        "G32 baffle clear radius below the local column radius refused "
+        "(solver route inherits core.geometry; engine route is B6's own)",
+        ok,
+        f"solver route raised: {solver_msg[:96]!r}\n        "
+        f"engine route raised: {engine_msg[:96]!r}",
+    )
+
+
 # ------------------------------------------------------------------ main
 
 
@@ -5739,7 +6396,8 @@ CONSERVATION_GATES = ("gate_i1", "gate_i2", "gate_i4", "gate_i5",
                       "gate_cf1", "gate_cf3",
                       "gate_wr1", "gate_wr3",
                       "gate_cj1", "gate_cj3",
-                      "gate_aj1", "gate_aj3", "gate_aj4", "gate_aj6")
+                      "gate_aj1", "gate_aj3", "gate_aj4", "gate_aj6",
+                      "gate_bf1")
 
 
 def main():
@@ -5790,6 +6448,10 @@ def main():
         gate_aj4,
         gate_aj5,
         gate_aj6,
+        gate_bf1,
+        gate_bf2,
+        gate_bf3,
+        gate_bf_g32,
         gate_x1,
     ]
     gates += [
