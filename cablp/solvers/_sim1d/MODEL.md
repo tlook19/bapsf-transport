@@ -716,7 +716,10 @@ With the transient velocity-grid neutral arm engaged, the moment-closed
 operator above is superseded on the ion momentum and energy rows: the plasma no
 longer evaluates a rate against a fluid $n_n$ but receives **minus the measured
 moments** of the kinetic ionization, charge-exchange, elastic and recombination
-operators, booked once per neutral clock tick.
+operators, booked once per neutral clock tick. That booking carries the ion
+momentum and ion energy rows ONLY — the electron-side costs (ionization
+potential, radiation, excitation) stay on the plasma book unchanged, as
+`core/config.py:863-865` states for the selector itself.
 
 The physics statement this section owns is the **target** the
 charge-exchange/elastic part of that booking relaxes the ion rows towards. It
