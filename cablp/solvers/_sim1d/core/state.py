@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 
@@ -126,6 +127,53 @@ def pack_state(
     return np.vstack(rows).ravel()
 
 
+@lru_cache(maxsize=None)
+def _resolve_optional_layout(
+    fields,
+    neutral_momentum,
+    neutral_two_zone,
+    neutral_annulus_momentum,
+    neutral_energy,
+):
+    """Resolve which optional rows a packed width carries, or ``None``.
+
+    The answer depends only on the row COUNT and the declared hints, both of
+    which are run constants, so the sixteen-candidate enumeration below is
+    memoized on them. Returns the ``(has_mn, has_2z, has_mna, has_en)``
+    reading, or ``None`` when no candidate layout matches -- the caller owns
+    the refusal, because only it knows the sizes to name in the message.
+    """
+    base = len(STATE_NAMES_1D)
+    candidates = [
+        (has_mn, has_2z, has_mna, has_en)
+        for has_mn in (False, True)
+        for has_2z in (False, True)
+        for has_mna in (False, True)
+        for has_en in (False, True)
+        if (neutral_momentum is None or has_mn == bool(neutral_momentum))
+        and (neutral_two_zone is None or has_2z == bool(neutral_two_zone))
+        and (
+            neutral_annulus_momentum is None
+            or has_mna == bool(neutral_annulus_momentum)
+        )
+        and (neutral_energy is None or has_en == bool(neutral_energy))
+        and (not has_mna or (has_mn and has_2z))
+        and (not has_en or has_mn)
+        and base + has_mn + has_2z + has_mna + has_en == fields
+    ]
+    if not candidates:
+        return None
+    if len(candidates) > 1:
+        # Reachable only with unstated hints. Resolve to the HISTORICAL
+        # layout: first drop every En-carrying reading (which is what widens
+        # 7 and 8 fields), then, at 6 fields, the sixth row is M_n.
+        without_en = [entry for entry in candidates if not entry[3]]
+        candidates = without_en or candidates
+    if len(candidates) > 1:
+        candidates = [(True, False, False, False)]
+    return candidates[0]
+
+
 def unpack_state(
     y,
     cells,
@@ -156,37 +204,22 @@ def unpack_state(
             f"{cells} cells"
         )
     fields = y.size // cells
-    candidates = [
-        (has_mn, has_2z, has_mna, has_en)
-        for has_mn in (False, True)
-        for has_2z in (False, True)
-        for has_mna in (False, True)
-        for has_en in (False, True)
-        if (neutral_momentum is None or has_mn == bool(neutral_momentum))
-        and (neutral_two_zone is None or has_2z == bool(neutral_two_zone))
-        and (
-            neutral_annulus_momentum is None
-            or has_mna == bool(neutral_annulus_momentum)
-        )
-        and (neutral_energy is None or has_en == bool(neutral_energy))
-        and (not has_mna or (has_mn and has_2z))
-        and (not has_en or has_mn)
-        and base + has_mn + has_2z + has_mna + has_en == fields
-    ]
-    if not candidates:
+    # The hints are normalized to None/True/False so the memo key is canonical
+    # and hashable for any truthy value a caller passes; the enumeration read
+    # them through bool() anyway, so this changes no reading.
+    layout = _resolve_optional_layout(
+        fields,
+        None if neutral_momentum is None else bool(neutral_momentum),
+        None if neutral_two_zone is None else bool(neutral_two_zone),
+        None if neutral_annulus_momentum is None else bool(neutral_annulus_momentum),
+        None if neutral_energy is None else bool(neutral_energy),
+    )
+    if layout is None:
         raise ValueError(
             f"state vector of size {y.size} does not match the declared "
             f"optional fields for {cells} cells"
         )
-    if len(candidates) > 1:
-        # Reachable only with unstated hints. Resolve to the HISTORICAL
-        # layout: first drop every En-carrying reading (which is what widens
-        # 7 and 8 fields), then, at 6 fields, the sixth row is M_n.
-        without_en = [entry for entry in candidates if not entry[3]]
-        candidates = without_en or candidates
-    if len(candidates) > 1:
-        candidates = [(True, False, False, False)]
-    has_mn, has_2z, has_mna, has_en = candidates[0]
+    has_mn, has_2z, has_mna, has_en = layout
     arr = y.reshape((fields, cells))
     optional = {}
     row = base

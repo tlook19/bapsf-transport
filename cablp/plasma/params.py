@@ -183,8 +183,11 @@ def c_log(Te, n, kind="ei"):
             "this helper computes is 'ei' (electron-ion, NRL 2019 p. 34 case "
             "(b))."
         )
+    # np.where evaluates BOTH branches, so sqrt(n) was computed twice per
+    # call. One evaluation, and the identical value feeds both arms.
+    sqrt_n = np.sqrt(n)
     return np.where(
         Te > 10,
-        24 - np.log(np.sqrt(n) / Te),
-        23 - np.log(np.sqrt(n) * Te**-1.5),
+        24 - np.log(sqrt_n / Te),
+        23 - np.log(sqrt_n * Te**-1.5),
     )

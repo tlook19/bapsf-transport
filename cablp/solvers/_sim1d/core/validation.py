@@ -55,9 +55,13 @@ def _bad_array_summary(values, *, mode="nonfinite", max_indices=8):
         mask = values < 0.0
     else:
         mask = ~np.isfinite(values)
-    bad = np.flatnonzero(mask)
-    if bad.size == 0:
+    # The happy path is the overwhelming majority of the ~10^6 calls a
+    # thousand steps make, and it needs the PREDICATE, not the index list:
+    # answer it with a reduction over the mask already in hand rather than
+    # materializing an empty index array first.
+    if not mask.any():
         return None
+    bad = np.flatnonzero(mask)
     finite = values[np.isfinite(values)]
     return {
         "count": int(bad.size),
@@ -1431,7 +1435,16 @@ def resolve_neutral_probe_config(
 
 
 def validate_raw_stage(y, stage, unpack):
-    """Reject non-finite/negative raw candidates before floor clipping."""
+    """Reject non-finite/negative raw candidates before floor clipping.
+
+    Non-finiteness is decided ONCE, on the packed candidate: ``unpack_state``
+    returns ``.copy()`` of the rows of ``y``, so every unpacked field is a
+    bitwise copy of a value this scan has already seen, and a per-field rescan
+    of a packed vector that passed cannot find anything. (It never could: the
+    packed scan RAISES on the first bad value, so a per-field scan below it was
+    only ever reachable if unpacking could invent one.) The negative-value
+    scans below are a different predicate and are not covered by it.
+    """
     packed_summary = _bad_array_summary(y)
     if packed_summary is not None:
         raise _RawStageError(
@@ -1441,33 +1454,6 @@ def validate_raw_stage(y, stage, unpack):
             {"stage": stage, "fields": {"packed_y": packed_summary}},
         )
     state = unpack(y)
-    fields = {
-        "n": state.n,
-        "nn": state.nn,
-        "M": state.M,
-        "Ee": state.Ee,
-        "Ei": state.Ei,
-    }
-    if state.M_n is not None:
-        fields["M_n"] = state.M_n
-    if state.nn_a is not None:
-        fields["nn_a"] = state.nn_a
-    if state.M_n_a is not None:
-        fields["M_n_a"] = state.M_n_a
-    if state.En is not None:
-        fields["En"] = state.En
-    nonfinite = {
-        name: summary
-        for name, values in fields.items()
-        if (summary := _bad_array_summary(values)) is not None
-    }
-    if nonfinite:
-        raise _RawStageError(
-            y,
-            stage,
-            "nonfinite_state",
-            {"stage": stage, "fields": nonfinite},
-        )
     negative_density = {
         name: summary
         for name, values in (
