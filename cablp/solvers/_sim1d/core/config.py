@@ -3369,11 +3369,40 @@ input_dict_template_1d = build_input_dict_template_1d()
 # is recorded in config_defaults_provenance.md and the per-config notes under
 # scripts/.
 input_flags_template_1d = {
+    # The plasma solve itself. OFF puts the run on the neutral-only implicit
+    # stepper: the plasma RHS returns a zero state, the kinetic and DVM refresh
+    # loops never run, the phase machine follows the equilibration cycle lattice
+    # instead of the discharge schedule, the gas puff loses its waveform, and
+    # default_t_end becomes cycles * tau_cycle (which raises unless cycles is
+    # positive). run_neutral_equilibration pins it off on its inner sim.
+    # regime_tracer and regime_vessel_node each REFUSE it off at construction:
+    # both describe plasma channels that would have nothing to integrate.
+    # A structural restart key -- a payload whose run had it set differently is
+    # refused rather than restored.
     "Plasma": True,
+    # Two-cathode layout: a cathode at BOTH ends, both plasma-terminating faces
+    # mirrored, and the end-side puff Twin_S_gp carrying the second source.
+    # Four construction-time refusals, each where the twin geometry leaves a
+    # single-valued quantity undefined: cathode_solver_model='current_driven';
+    # cathode_Rp_model='resolved_gap' (both cathodes share one DeviceConfig, so
+    # one effective R_cath cannot carry two gaps sampled at different Te);
+    # source_fixed_grid (the fixed source region is not mirrored onto a twin
+    # end); and heating_anomalous_tail_cathode_boundary='reflect' (both walls of
+    # the walk window would be reflecting cathodes, trapping the walkers, and the
+    # walk has no termination convention for that). A structural restart key.
     "TwinCathode": False,
-    # Typed plasma topology, and rejection of raw invalid stages before any
-    # floor projection.
+    # Typed plasma topology.
     "active_plasma_topology": True,
+    # Rejection of raw invalid stages BEFORE any floor projection. When on, a
+    # stage whose packed vector or any of n/nn/M/Ee/Ei/M_n/nn_a/M_n_a/En is
+    # non-finite, or whose n/nn/nn_a has gone negative, is REJECTED and the step
+    # retried at a smaller dt -- rather than clipped up to the floors and
+    # accepted, which is how an invalid stage would otherwise be laundered into
+    # a valid-looking trajectory. The raw-stage error is caught inside the step
+    # attempt and surfaces as a rejection reason, never as a propagated
+    # exception. At construction, and only with Plasma on, it additionally
+    # requires Te0 > Te_floor and Ti0 > Ti_floor, raising otherwise. A
+    # non-default value warns at construction (deprecation register).
     "raw_stage_validation": True,
     # The resolved typed-segment geometry is the only geometry. Retained as a
     # stale-config guard; False raises at construction.
@@ -3415,7 +3444,24 @@ input_flags_template_1d = {
     # on, forbidden when off) and incompatible with TwinCathode. Structurally
     # bit-exact when off.
     "source_fixed_grid": True,
+    # Axial (Spitzer-Harm) electron and ion heat conduction: the RHS term, its
+    # parabolic timestep bound, and the conductivity of the implicit substep.
+    # OFF returns a zero conduction RHS and withdraws the bound (it returns
+    # infinity, so conduction stops constraining dt). Note the implicit substep
+    # still runs with the flag off -- it applies its handed-in source at K = 0,
+    # an exact dt*S, rather than dropping the source.
     "heat_conduction": True,
+    # The operator split. ON steps explicit SSPRK2 for everything but heat
+    # (operator A) and then an implicit heat substep (operator B); the explicit
+    # stage runs with the conduction bound withdrawn, since B is unconditionally
+    # stable in it. OFF takes one fully explicit SSPRK2 step and dt carries the
+    # parabolic conduction bound. The scheme, splitting order and Picard count
+    # of the substep are the implicit_heat_scheme / operator_splitting /
+    # heat_picard_iterations parameters. beam_deposition_in_heat_substep REQUIRES
+    # this flag -- it re-homes the beam electron-energy source out of A and into
+    # B, so with the split off the source would have nowhere to land; that is a
+    # construction-time raise, and a per-step raise if a caller asks a single
+    # step for operator_split=False while it is armed.
     "implicit_heat_conduction": True,
     # Flux-limited electron heat conduction. The classical Spitzer-Harm flux
     # can exceed the free-streaming scale n*Te*v_the at resolved gap faces,
@@ -3476,7 +3522,19 @@ input_flags_template_1d = {
     # cull uses that channel's anode face and eta, and arming one without the
     # other would leave the two views of the same mesh disagreeing.
     "beam_tail_anode_interception": False,
+    # Ion-neutral friction. Implemented as a SCALE TO ZERO rather than a branch:
+    # off forces b_ion_neutral_drag = 0.0 in every collision bundle, which
+    # short-circuits the drag term, its frictional heating, its neutral-energy
+    # channel and its timestep bound alike. The zeroing also reaches the
+    # thermalization term unless b_ion_neutral_thermalization is set explicitly,
+    # which frees that term from this flag. Inert under
+    # ion_neutral_moment_closure, where the drag is folded into the moment-closed
+    # collision term and this flag reaches only that operator's coefficient.
     "ion_neutral_drag": True,
+    # Which collision frequency drives the drag. OFF uses the total ion-neutral
+    # frequency (resonant charge exchange plus elastic momentum transfer); ON
+    # uses the resonant charge-exchange frequency ALONE, dropping the elastic
+    # channel. Inert under ion_neutral_moment_closure.
     "ion_neutral_drag_cx_only": False,
     # Evolve axial neutral momentum M_n as a sixth conservative field:
     # the drag deposits its momentum into the
@@ -3649,6 +3707,14 @@ input_flags_template_1d = {
     # OFF and bit-exact off (presence-gated: the off path builds no profile
     # and the initial condition is the historical uniform fill).
     "neutral_initial_profile": False,
+    # The elastic ion-neutral thermal-equilibration source: an Ei relaxation
+    # toward the neutral temperature Tn_fit, scaled by
+    # b_ion_neutral_thermalization (which falls back to b_ion_neutral_drag when
+    # left at None). Gated SEPARATELY from ion_neutral_drag, so the friction and
+    # the thermal equilibration can be armed independently. Off returns a zero
+    # RHS. Superseded by ion_neutral_moment_closure, which zeroes this term
+    # ahead of the flag entirely. A non-default value warns at construction
+    # (deprecation register).
     "ion_neutral_thermalization": False,
     # Replace the drag + frictional-heating + elastic thermalization +
     # CX-cooling quartet with ONE moment-closed reduced ion-neutral collision
@@ -3670,6 +3736,22 @@ input_flags_template_1d = {
     # strict no-op where the trigger does not fire (one pass == the sequential
     # advance, bit-exact). Incompatible with the kinetic neutral engine.
     "coupled_circuit_picard": False,
+    # The cathode/anode/bank circuit solve. This is the actual coupling control
+    # (cathode_model is compat-only). OFF, no cathode solve is produced for the
+    # whole run: the boundary carries no device current or voltage, the cathode
+    # and anode jets return nothing, and the tracer's beam rows get no source.
+    # run_neutral_equilibration pins it off on its inner sim.
+    # Six construction-time refusals of things that need a solve that would not
+    # exist: cathode_circuit_voltage_bound (no device voltage to bound),
+    # regime_tracer (its affine source IS the beam-impact ionization birth),
+    # regime_vessel_node (the wall electron current IS the transmitted beam),
+    # cathode_emitting_area (it throttles an emission that would not be solved),
+    # and the two DVM jets, whose launch energies are the sheath potentials
+    # phi_c and phi_a -- armed without a solve they would silently launch at the
+    # thermal Ti alone. With the flag ON, a zero anode ion current is a runtime
+    # error rather than a clamp: the circuit cannot close, and the message names
+    # clearing this flag as the way to model a machine with no anode collection.
+    # A structural restart key.
     "cathode_coupling": True,
     # Schottky barrier lowering in the *current-driven* sheath solve only:
     # the extracting sheath field lowers the
@@ -3740,7 +3822,24 @@ input_flags_template_1d = {
     # the silent fallback the house rules forbid. Keeping it True leaves the
     # duration as the single sufficient control.
     "neutral_prebreakdown": True,
+    # The pre-run puff/off neutral accumulation that seeds nn. ONLY
+    # start_simulation() honours it: an inner sim runs with Plasma,
+    # cathode_coupling, this flag and launch_plasma_after_equilibration all off,
+    # for neutral_equilibration_cycles at neutral_equilibration_dt, and its
+    # settled neutral state becomes the outer run's initial fill. Calling run()
+    # directly with this ON performs NO equilibration and WARNS rather than
+    # raising, since the run is well defined -- it just starts from the direct
+    # nn0 fill. One of the three mutually exclusive initial-neutral-state routes.
+    # Refused with restart_from (a restart payload IS the neutral seed, and the
+    # accumulation would overwrite the restored state) and with
+    # neutral_initial_profile (which the accumulation would likewise discard);
+    # both at construction.
     "neutral_equilibration": True,
+    # Whether start_simulation() proceeds into the plasma run after that
+    # accumulation. OFF, it stops and returns the equilibration result itself,
+    # which is how the neutral-only seed is produced. Pinned off on the
+    # equilibration inner sim. use_cached_neutral_seed requires it ON -- with
+    # nothing launched there is nothing for the cached seed to seed.
     "launch_plasma_after_equilibration": True,
     # Reuse a cached neutral-equilibration seed (the equilibrated nn/nn_a
     # profile) instead of re-running the ~1-min 100-cycle equilibration every
@@ -3955,9 +4054,34 @@ input_flags_template_1d = {
     # nothing. It changes the A/B commutator, so the NUMERICS.md split-order
     # table is stale under it until re-measured.
     "beam_deposition_in_heat_substep": False,
+    # The electron-energy sink charged per ionization event, I_ion * S_ion. Off
+    # zeroes that cooling row, so ionizations cost the electrons nothing. This
+    # flag is the whole on/off: the companion scale is hardwired to 1.0 and is
+    # not a config knob. Note atomic_rate_model="janev" double-counts this
+    # channel. Also read by the tracer's quasi-static Te balance.
     "ionization_energy_cost": True,
+    # The ion charge-exchange cooling term (an Ei sink). Off returns a zero RHS
+    # for it. Superseded by ion_neutral_moment_closure, which folds CX cooling
+    # into the moment-closed collision term and zeroes this row ahead of the
+    # flag -- so with that closure on, this flag reaches nothing.
     "cx": True,
+    # Charge the bare ADAS PRB -- the recombination and bremsstrahlung radiated
+    # power -- as an electron cooling channel. Off, the PRB block is not even
+    # requested and the channel is absent from the cooling sum. Two
+    # construction-time refusals, both against double-charging or runaway:
+    # recombination_energy_return (which already charges the full PRB, so the
+    # pair would charge the recombination photons twice) and
+    # adas_low_te_extension (which amplifies the sub-edge PRB enormously, so the
+    # electrons would run away to the Te floor and collapse the cooling timestep
+    # bound; the consistent net booking that would make the pair sound is not
+    # built).
     "icool_recomb": False,
+    # Non-finite state assertions, checked at the end of construction and after
+    # every state-vector set. On, a non-finite value in any state field
+    # (n, nn, M, Ee, Ei, M_n, nn_a, M_n_a, En) or any derived field
+    # (u, Te, Ti, pe, pi, p) raises a ValueError naming that field. Off, the
+    # checks never run. A debugging instrument: it changes no physics, only how
+    # early and how loudly a corrupted state is caught.
     "debug_checks": False,
 }
 
