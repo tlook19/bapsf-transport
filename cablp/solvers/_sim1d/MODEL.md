@@ -935,6 +935,93 @@ The representation of $\varepsilon_{\rm back}$ on the discrete velocity grid is
 `NUMERICS.md` (§ "The DVM anode jet's launch spectrum").
 
 
+### Annular-baffle interception (`neutral_kinetic_dvm_baffles`, default off)
+
+The machine's thin annular baffles are neutral-transport surfaces (§ Geometry
+above): a solid ring from the clear radius $R_b$ out to the bore $R_m$, with
+$R_b \ge R_p$ so the plasma channel passes through untouched. The FLUID has
+always seen them — each is a zero-thickness series orifice
+$C_{\rm or} = \tfrac14 \bar v\, A_{\rm open}$ on the **annulus** conductance
+alone, with
+
+$$A_{\rm open} = \pi\,(R_b^2 - R_{\rm col}^2), \qquad
+  R_{\rm col} = \tfrac12\,(R_p^{\,f-1} + R_p^{\,f})$$
+
+the open ring at the face. The transient DVM did not: its annulus streamed
+through the whole annulus face area with nothing standing in it. At the
+g1atrim baffle ($R_b = 39.75$ cm, $R_m = 50$ cm, $R_p = 18.415$ cm at face 43)
+that overstates the annulus throughput by
+
+$$\frac{A_{\rm ann}}{A_{\rm open}} = \frac{6788.63}{3898.56} = 1.7413 .$$
+
+The two areas are printed by `scripts/b6bf_base_pins.py`; their RATIO is what
+`scripts/verify_sim1d_k2_dvm.py` gate BF2 emits and gates on. Armed, the DVM's
+net annulus current per unit density difference matches the fluid orifice to
+$9.7\times10^{-4}$ at $(n_{v_z}, n_{v_\perp}) = (48, 12)$ and
+$2.7\times10^{-4}$ at $(64, 24)$ on a velocity grid sized to the 300 K gas, and
+to $1.8\times10^{-3}$ and $8.7\times10^{-4}$ on the shipped grid extent (which
+is sized for ion drift caps, so a cold gas occupies a small part of it). The
+residual is the free-molecular-vs-discrete-grid quadrature gap and shrinks
+under refinement; it is measured, not assumed.
+
+**The form is the anode mesh's, restricted to the annulus.** At each armed
+baffle face the DVM intercepts the blocked share of the annulus flux crossing
+it, at the **annulus transparency**
+
+$$t_f = \min\!\left(\frac{A_{\rm open}}{A_{\rm ann}^{\,f}},\; 1\right),
+  \qquad A_{\rm ann}^{\,f} = \min\left(A_{\rm ann}^{\,f-1}, A_{\rm ann}^{\,f}\right)$$
+
+taken against the annulus **throat** area the march transports through, so the
+transmitted throughput $t_f\, F |v_z| A_{\rm ann}^{\,f}$ is exactly
+$F |v_z| A_{\rm open}$: the open area is what passes, which is the whole content
+of a free-molecular orifice. The intercepted particles are re-emitted at
+$T_{\rm wall}$ on the wall spectrum in the cell they were intercepted FROM, so
+the channel conserves particles exactly and its pair
+`baffle_blocked` / `baffle_reemit` cancels in the domain identity the way the
+mesh pair does. **The column is not touched**: the disc's bore is at least the
+plasma radius, and the column flux crossing the face is bit-identical to the
+unbaffled march's (gate BF1). The column state does still respond, one cell
+later, through the zone-exchange coupling — less annulus beside a cell means
+less gas exchanged into its column — and that is the coupling working, not a
+leak.
+
+**Accommodation convention.** The baffle accommodates fully at the wall
+temperature, $\alpha = 1$, and this is a convention rather than a measurement.
+It extends the correction of record: the scalar
+`neutral_kinetic_dvm_accommodation` covers the **cylinder and the two ends**,
+while the anode mesh and the interior closed faces already run at $\alpha = 1$.
+A baffle is a solid plate in the gas like those, not a length of vessel wall,
+so it takes the same treatment.
+
+**No new coefficient.** $R_b$ is the geometry's measured CAD value, shared with
+the fluid channel; the flag adds only the decision to let the kinetic annulus
+see it.
+
+**Both annulus treatments carry it, into ONE channel pair.** Under
+`annulus_flights = "rates"` the interception happens in the implicit march at
+the face; under `"bounded_chord"` the baffle is a zero-thickness annular
+throat in the flight map, routed through that map's existing free-molecular
+throat convention with $A_{\rm throat} = \min(A_{\rm left}, A_{\rm right},
+A_{\rm open})$ — the narrowest aperture in series wins — and its stopped
+remainder is booked into the same pair. A baffle whose open ring is already at
+least the annulus throat restricts nothing, is not armed at all, and is
+bit-exactly absent from both operators.
+
+Armed, the engine also emits `momentum_baffle_absorbed`, the signed axial
+momentum the discs KEPT (they re-emit on the wall spectrum, which carries
+none). It is presence-gated on the baffles themselves rather than on the anode
+jet, and it is a reading, not a ledger — nothing closes over it.
+
+**Refusals.** The flag requires `neutral_model = "kinetic_dvm"` and the fluid
+`neutral_baffles` with its two arrays, and refuses a resolved geometry that
+carries no baffle faces (a silently inert channel). $R_b < R_{\rm col}$ is
+refused by `core/geometry.py` before the kinetic arm is built at all — the flag
+inherits that refusal rather than repeating it — and the engine keeps its own
+for callers that construct a `TransientDVM` directly. $R_b = R_{\rm col}$ is
+legal and closes the annulus entirely, which is the same configuration the
+fluid accepts, where its orifice conductance goes to zero.
+
+
 ## Gas-puff axial placement (`gas_puff_profile`)
 
 The gas puff enters through two azimuthally opposed mid-plane ports at one

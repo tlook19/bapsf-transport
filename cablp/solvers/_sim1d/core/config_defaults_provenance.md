@@ -829,6 +829,39 @@ Values* — the member's source of record, the same one the fluid
 this key, which is structural; it is named so all four keys of the member
 point at one memo.
 
+**`neutral_kinetic_dvm_baffles = False` — ASSUMED (structural: a default-off
+channel).** Whether the geometry's thin annular baffles act on the transient
+DVM's ANNULUS as well as on the fluid neutral field. It is a FLAGS key, filed
+beside the fluid `neutral_baffles` it gates on rather than in params where the
+two DVM jets sit, because that is the pair `core/config.py` owns. Off is the
+shipped reading — the kinetic annulus streams through the whole annulus face
+area with nothing standing in it — and off is a CLOSURE the model makes, not a
+measurement: the baffle is physically there, and the fluid has always booked it
+as a zero-thickness series orifice on the annulus alone. The default is
+default-off because the channel is new physics under the standing rule (default
+off, presence-gated, bit-exact off), not because an unbaffled kinetic annulus is
+the better physics; measured at the shipped stance the unbaffled annulus
+overstates its own throughput by `A_ann / A_open = 1.7413` (BF2). The physics it
+adds is in `MODEL.md` § "Annular-baffle interception" and its discretization in
+`NUMERICS.md`; its A/B is the pair of arms.
+
+**This key introduces NO coefficient of its own.** The clear radius it acts on
+is the geometry's, and its value entry is the MEASURED CAD row
+`neutral_baffle_clear_radii_cm` (with `neutral_baffle_positions_cm`) in
+`scripts/production_stance_provenance.md` — one authoritative home, cited here,
+not restated. The only derived quantity is the per-face
+annulus transparency `t_f = min(pi(R_clear^2 - R_col^2) / A_ann_throat, 1)`,
+which is a function of that radius and the mesh, computed at construction and
+carrying no free parameter.
+
+The one CONVENTION the channel adds, stated because it is a choice and not a
+measurement: the baffle accommodates FULLY at the wall temperature
+(`alpha = 1`). That extends the correction of record (campaign log 28hx) — the scalar
+`neutral_kinetic_dvm_accommodation` covers the cylinder and the two ends, while
+the anode mesh and the interior closed faces already run at `alpha = 1` — to a
+surface of the same kind: a solid plate standing in the gas, not a length of
+vessel wall.
+
 **`neutral_kinetic_dvm_anode_jet_R_N = 0.63`,
 `neutral_kinetic_dvm_anode_jet_R_E = 0.41` — DERIVED (fluid-mirrored),
 bracket = the fluid entry's disclosed PAIR bracket.** Particle and total

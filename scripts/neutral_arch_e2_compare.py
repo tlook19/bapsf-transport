@@ -433,8 +433,12 @@ def run_dvm(shared, dt, nvz, nvp, accommodation, elastic_model, progress=None):
         # them.
         # ``_mesh_P`` is the B4 anode-jet momentum tally, zeros unless that
         # channel is armed; this instrument does not read it.
+        # ``_baffle`` is the B6 annular-baffle triple (particles, energies,
+        # signed axial momenta per emitting cell), zeros unless a baffle is
+        # armed; this instrument does not read it either.
         (
-            f_c_m, f_a_m, mesh_c, mesh_a, out, _mesh_E, _closed, _mesh_P
+            f_c_m, f_a_m, mesh_c, mesh_a, out, _mesh_E, _closed, _mesh_P,
+            _baffle,
         ) = captured["res"]
 
         # --- state moments, trapezoid over the step (second order in dt, so
