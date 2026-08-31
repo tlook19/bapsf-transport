@@ -589,6 +589,47 @@ required the single `C_R` re-trim recorded in
 `scripts/production_stance_provenance.md`; the golden was recaptured in the
 same change.
 
+### Electron drift transport conventions (`electron_drift_*`)
+
+Both keys are inert under the shipped `electron_drift_transport = False`; they
+are read only when that flag arms the drift-transport operator, and the solver
+REFUSES either at a non-default value with the flag off rather than letting it
+sit there doing nothing.
+
+**`electron_drift_charge_death = "cell_1"` — ASSUMED (declared bracket
+endpoint).** Where the launched beam's charge is taken to die, and hence which
+faces still carry beam current rather than the full loop current as
+thermal-electron drift. `"cell_1"` puts the death in the cathode cell;
+`"cell_2"` in the first gap cell. The default is the advisor consult's bracket
+A, which the measured beam profile motivates — gap survival ~1e-3 over
+`l_b` ~ 16 cm puts essentially the whole charge in the launch cell — but the
+CELL is a mesh object, not a measured length, so no instrument pins the choice
+and the honest claim is the bracket. Measured spread between the two arms on
+`scripts/mgcr1_confirm.h5`: the source-region sum moves −35.8 → −40.3 kW and
+the compression piece +13.6 → −5.3 kW, while the cathode-face handshake is
+identical (that face carries beam current under both). Memo: advisor consult,
+2026-08-26.
+
+**`electron_drift_anode_handshake = "export_counts"` — ASSUMED (declared
+bracket endpoint), and the DOMINANT ambiguity.** What the anode mesh face does
+with the drift enthalpy flux: book it as an export out of the plasma, or hold
+the existing `anode_e_sheath_loss` row to be the complete closure of that face
+for electron enthalpy. The consult could not settle it and stated that it
+cannot be settled post hoc; both readings therefore ship as bracket arms and
+neither is a calibration. The two disagree about the SIGN of the source-region
+net — −35.8 kW against +14.4 kW on `scripts/mgcr1_confirm.h5` — so a result
+quoting a net sign without naming the arm is not a result. Under both readings
+the `anode_sheath_full_debit` booking stands untouched, and the pressure-drift
+work at that face stands under both (it is a volumetric compression of the
+upstream cell, not a face export, and no existing row books it). Nothing here
+is fitted and no scored quantity entered the selection of either default. Memo:
+advisor consult, 2026-08-26.
+
+Honest bar for both: these are CONVENTIONS about which ledger owns a face, not
+physical parameters. They cannot be measured from the model, because the model
+is what they configure; they can only be bracketed, and the spread across the
+bracket is what any claim built on this operator has to carry.
+
 ### Transient DVM neutral arm (`neutral_kinetic_dvm_*`)
 
 All six keys are inert under the shipped `neutral_model = "moment"`; they are

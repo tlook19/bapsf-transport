@@ -2045,3 +2045,138 @@ so a seed equilibrated on one machine is simply wrong for another.
 gated on the flag: it constrains any two-zone geometry, including one built
 from the scalar radii, because the collapse it refuses is a property of the
 volumes and not of how they were specified.)
+
+## Electron drift transport and EMF work (`electron_drift_transport`, default off)
+
+The electron energy equation books its compressional work with the ION
+velocity: the glossary's $-p_e\,\nabla\!\cdot\mathbf{u}$ is evaluated on
+$\mathbf{u}$, the single fluid velocity the momentum equation carries. That is
+exact wherever $J = 0$. In the current-carrying gap between the cathode and the
+anode mesh it is not: the electron drift is
+
+$$\mathbf{u}_e = \mathbf{u} - \frac{\mathbf{J}}{e n},$$
+
+and the transport and non-resistive field work that difference carries is
+absent from the ledger. The RESISTIVE part of the field work is *not* absent —
+$\eta_\parallel j^2$ is booked as $P_\text{ohmic}$ through the circuit, and the
+electrode sheath rows are current-proportional — so what this flag adds is the
+drift TRANSPORT (enthalpy convection plus the Braginskii thermal-force heat
+flux) and the NON-RESISTIVE (pressure-gradient and thermoelectric) field work:
+
+$$\Delta = -\nabla\!\cdot\!\left(\tfrac32 T_e \Gamma_d\right)
+          - p_e\,\nabla\!\cdot\!\left(\frac{\Gamma_d}{n}\right)
+          - \nabla\!\cdot\mathbf{q}_u
+          + 0.71\,\Gamma_d\!\cdot\!\nabla T_e,$$
+
+with the thermal-electron drift flux and the thermal-force heat flux
+
+$$\Gamma_d = \frac{I_\text{tot} - I_\text{beam}}{e A},
+\qquad \mathbf{q}_u = 0.71\,T_e\,\Gamma_d .$$
+
+$\Gamma_d$ is positive toward $+z$ — the electrons carry the discharge current
+from the cathode to the anode, so the conventional current runs the other way.
+$I_\text{tot}$ is the loop current the cathode solve booked and
+$I_\text{beam}$ the beam current it launched, so the operator is driven by the
+model's OWN current rather than by a second opinion about it.
+
+**The ion side is untouched.** $\mathbf{u}$ in the momentum equation is already
+the ion velocity, the total-$\nabla p$ momentum booking is exact, and the
+electron-ion friction cancels between the two species; the only coupling back
+to the ions is the indirect one through $Q_{ie}$. The term therefore writes the
+$E_e$ row alone, with $n$, $n_n$, $M$ and $E_i$ exactly zero.
+
+**Volume identity.** Integrated over the operator's support the four terms
+telescope to a boundary pair plus the EMF work,
+
+$$\int \Delta\,dV = \left[3.21\,T_e\,\frac{I}{e}\right]_\text{in}
+   - \left[3.21\,T_e\,\frac{I}{e}\right]_\text{out} + W_\text{EMF},
+\qquad
+W_\text{EMF} = \int \Gamma_d\!\cdot\!\left(\frac{\nabla p_e}{n}
+   + 0.71\,\nabla T_e\right) dV,$$
+
+where $3.21 = \tfrac52 + 0.71$ is the enthalpy flux plus the thermal-force heat
+flux. Note the split: $\tfrac32 + 0.71 = 2.21$ of that coefficient arrives as a
+face FLUX, and the remaining $1.00$ comes from the pressure-drift work term by
+summation by parts. That split is what the anode convention below toggles, and
+it is why the handshake moves $2.21\,T_e I/e$ and not $3.21\,T_e I/e$. The
+discrete form of the identity, and why it closes to roundoff rather than to
+truncation, is in NUMERICS.md.
+
+**The operator is an open system.** The drift current terminates ON the anode
+mesh, so the face at the mesh debits the cell upstream of it and credits
+nothing downstream. $\int\Delta\,dV$ is therefore not zero and is not meant to
+be: the partners of its boundary terms are the electrode and circuit rows, and
+which of those already book a given face is exactly what the two declared
+conventions below bracket.
+
+### The two declared conventions (bracket axes, not chosen readings)
+
+Neither is settled by the model, and the deliverable of this operator is the
+SPREAD across them rather than any one arm. Both are `input_dict` selectors and
+both are refused at a non-default value with the flag off, where they would be
+inert.
+
+`electron_drift_charge_death` — where the launched beam's CHARGE dies, hence
+which faces still carry $I_\text{beam}$ rather than the full loop current as
+thermal-electron drift. `"cell_1"` puts the death in the cathode cell (the
+measured gap survival is $\sim10^{-3}$ over $l_b \approx 16$ cm, so essentially
+all of it is deposited there), `"cell_2"` in the first gap cell. The advisor
+consult (2026-08-26) put the spread across the two below 15 %.
+
+`electron_drift_anode_handshake` — what the anode mesh face does with the drift
+ENTHALPY flux. `"export_counts"` books it as an export out of the plasma;
+`"sheath_row_closes"` holds the existing anode electron sheath row
+(`anode_e_sheath_loss`) to be the complete closure of that face for electron
+enthalpy, so the operator books no export there and cannot double-count it. The
+pressure-drift WORK at that face is a volumetric compression of the upstream
+cell that no existing row books, and it stands under both readings. **Under
+both readings the `anode_sheath_full_debit` booking stands untouched.** This is
+the dominant ambiguity — the consult could not settle it, and said explicitly
+that it cannot be settled post hoc, which is why it ships as a bracket axis.
+
+### Refusals
+
+The flag raises at construction, rather than choosing silently, when the
+geometry or the configuration leaves one of its forms open: with no resolved
+anode face (the drift would have nothing to terminate on, and running it off
+the end of the machine would invent an outflow boundary); under `TwinCathode`
+(two cathode faces drive one column and the split of the loop current between
+two drift channels is not readable off the circuit); and without
+`active_plasma_topology` (the solver then carries a second face convention and
+the operator would have to pick between them silently).
+
+### Magnitudes, and what may not be claimed
+
+Measured on `scripts/mgcr1_confirm.h5` over 0.1–20.1 ms at a mean loop current
+of 2772 A: the cathode cell reads $-50.5$ kW and the gap cells $+5.5$, $+4.5$,
+$+2.6$, $+2.0$ kW, summing to $-35.8$ kW under `"export_counts"` and $+14.4$ kW
+under `"sheath_row_closes"`. **The net sign of the source region is therefore
+UNDETERMINED across the bracket**, which is the registered result: the two
+robust, handshake-independent pieces are the $+13.6$ kW reversible-compression
+warming of the gap cells and the $+14.8$ kW cathode-face influx. In afterglow
+the term is small but NOT identically zero — over the afterglow window, at a
+mean loop current of 218 A, it reads $-0.5$ to $-0.7$ kW.
+
+The missing EMF work corresponds to an in-plasma EMF of a few volts against the
+$V_p \approx 0.35$ V the circuit books, so **this is also a missing member of
+the R3.2 $V_\text{dis}$ partition** and is saved as `edt_inplasma_emf_V`.
+
+**The $\sim$19 % cold ES1 electron-temperature residual MUST NOT be advanced as
+explained by this term, in either direction.** The consult's finding is that
+the magnitude is sufficient and the SIGN is not established; a bracket whose
+two arms disagree in sign cannot explain a signed residual.
+
+### Interactions carried as caveats
+
+These are flagged, not adjudicated, by this build:
+
+- **[anode-1.5Te-row-foldin] / [anode-phi-debit]** — the arrival flux and the
+  EMF both change what the anode rows *should* debit. This operator does not
+  move those rows; it makes the question sharper by putting a named number on
+  the enthalpy the drift delivers to the sheath edge.
+- **[stage-te-bias]** — the source-region electron temperature set-point moves
+  at tens-of-kW scale, which is the same scale as this operator. A stance that
+  arms this flag and a stance that re-cuts that bias are not independent.
+- The per-cell `heat_conduction` ledger row is a save-instant sample of a stiff
+  operator rather than an effective transport, so it **cannot referee** the
+  redistribution this operator performs.
