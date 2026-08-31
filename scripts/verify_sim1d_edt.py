@@ -214,13 +214,20 @@ DEFAULT_H5 = str(Path(__file__).resolve().parent / "mgcr1_confirm.h5")
 #: The consult's window, in seconds.
 WINDOW = (1.0e-4, 2.01e-2)
 
-#: The base commit's golden config identity, measured at agent-staging 056a733
+#: The golden config identity WITHOUT this member's three keys, computed
 #: through the digest gate's OWN expression. G1's strip control must reproduce
 #: it. The two golden references carry different identities by design, so a
 #: control computed through the other expression matches neither.
-BASE_COMMIT = "056a733"
+#:
+#: ROTATED with the golden references when [legacy-boundary-retirement] removed
+#: `characteristic_boundary` and `neutral_kinetic_dvm_tn_feedback` (retired
+#: 2026-08-31 (Tom)). The previous value, 21a9b476..., was this same quantity
+#: while those two keys still existed; stripping the three edt keys AND
+#: restoring those two reproduces it bit-for-bit, which is the proof that the
+#: move is those two keys and nothing else.
+BASE_COMMIT = "1fc05c9 minus the edt keys"
 BASE_CONFIG_IDENTITY = (
-    "21a9b4764df68bc9c201d5ea11589223358bd9ca19d2801f82ac7bd75db632c3"
+    "7f2eadcb0b0610fa1ab6c8cd4fe174d61227ce1e2973e1d146cbbb1e91993d87"
 )
 
 #: The keys this branch adds, by namespace, for G1's strip control.
