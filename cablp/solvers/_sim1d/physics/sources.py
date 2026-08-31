@@ -89,13 +89,21 @@ ELECTRON_DRIFT_DIAGNOSTIC_ROWS = (
 
 #: The drift operator's scalar-per-save diagnostics. ``edt_inplasma_emf_V`` is
 #: the V_dis partition member the consult identified as missing from the R3.2
-#: partition; the rest are the ledger total, the cathode-face handshake the
-#: build was pinned on, and the W_EMF the identity is closed with.
+#: partition, and ``edt_cathode_face_handshake_W`` is the quantity the build
+#: was pinned on. ``edt_total_W`` is the per-step ledger total.
+#:
+#: The last three exist so the volume identity
+#: ``total == boundary_in - boundary_out + W_EMF`` is checkable from a SAVED
+#: trajectory rather than only from a live solver. That needs the boundary
+#: terms as their own rows: ``W_EMF`` alone would make the check a tautology,
+#: since the identity would then be defining it rather than testing it.
 ELECTRON_DRIFT_DIAGNOSTIC_SCALARS = (
     "edt_total_W",
     "edt_inplasma_emf_V",
     "edt_cathode_face_handshake_W",
     "edt_W_EMF_W",
+    "edt_boundary_in_W",
+    "edt_boundary_out_W",
 )
 
 
@@ -286,6 +294,23 @@ def electron_drift_transport_rhs(
         Ee=total_W * 1.0e7 / np.asarray(geometry.plasma_volume_cm3, dtype=float),
         Ei=zeros.copy(),
     )
+    # The identity's two boundary terms, assembled from the ACTUAL face
+    # quantities each convention selects: the 2.21 enthalpy-plus-heat-flux
+    # channel plus the 1.00 the pressure-drift work contributes by summation
+    # by parts, which together are the consult's 3.21. Building them this way
+    # rather than as a literal ``3.21 T_e I / e`` is what keeps the identity
+    # exact under "sheath_row_closes", where the anode face's enthalpy export
+    # is held closed by the sheath row and its coefficient is 1.00, not 3.21.
+    launch = spec["launch_cell"]
+    last = spec["anode_face"] - 1
+    cathode_handshake_W = float(
+        _DRIFT_FACE_COEFFICIENT * Te_lo[launch] * lo_flux[launch]
+    )
+    boundary_in_W = cathode_handshake_W + float(pe[launch] * drift_lo[launch])
+    boundary_out_W = float(
+        _DRIFT_FACE_COEFFICIENT * Te_hi[last] * hi_flux[last]
+        + pe[last] * drift_hi[last]
+    )
     rows = {
         "edt_enthalpy_convection_W": enthalpy_W,
         "edt_pressure_drift_work_W": pressure_drift_work_W,
@@ -293,12 +318,10 @@ def electron_drift_transport_rhs(
         "edt_emf_work_W": emf_work_W,
         "edt_total_W": float(total_W[support].sum()),
         "edt_inplasma_emf_V": float(inplasma_emf_V),
-        "edt_cathode_face_handshake_W": float(
-            _DRIFT_FACE_COEFFICIENT
-            * Te_lo[spec["launch_cell"]]
-            * lo_flux[spec["launch_cell"]]
-        ),
+        "edt_cathode_face_handshake_W": cathode_handshake_W,
         "edt_W_EMF_W": float(w_emf_W),
+        "edt_boundary_in_W": boundary_in_W,
+        "edt_boundary_out_W": boundary_out_W,
     }
     return rhs, rows
 
