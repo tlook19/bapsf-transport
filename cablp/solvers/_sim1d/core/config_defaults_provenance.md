@@ -848,20 +848,38 @@ transported and attacked by the loss channels as the energetic atoms they are,
 and the energy that left with them is recorded in the anode's own surface book
 rather than being an unbooked momentum source.
 
-**REGISTERED DISCLOSURE — the fluid parity that makes the incident energy
-reachably ZERO.** The launch energy is built from the fluid channel's own
-clamp, `max(phi_a + Ti, 0)`, and the fluid ANODE spec passes `phi_a` through
-raw where the fluid CATHODE spec clamps `phi_c` at zero first. Before
-breakdown the anode sheath is electron-attracting: measured over the arm's
-opening window (`scripts/b4aj_phi_a_probe.py`, measured at this branch's base
-before it could be gated on), `phi_a` runs −0.09 to −6.6 V across accepted
-steps 2–9 while `Ti` sits at its 0.026 eV floor, so the clamped incident energy
-is exactly zero there while the mesh still collects at ~1e18 s⁻¹. A neutral
-cadence fine enough to fire a whole tick inside that span hands the channel a
-counted stream with no committed energy and the launch spectrum RAISES. What
-the backscatter of a zero-energy ion is — no energetic share at all, or a
-directed launch at the thermal scale — is a closure neither this entry nor the
-registration states, and it is open.
+**REGISTERED CONVENTION — zero incident energy, and what the channel does
+there. RULED 2026-08-30 (Tom, campaign log 30kd): FLUID PARITY.** The launch
+energy is built from the fluid channel's own clamp, `max(phi_a + Ti, 0)`, and
+the fluid ANODE spec passes `phi_a` through raw where the fluid CATHODE spec
+clamps `phi_c` at zero first — so unlike its cathode twin this sum genuinely
+reaches zero.
+
+*The measured trigger.* Before breakdown the anode sheath is
+electron-attracting: measured over the arm's opening window
+(`scripts/b4aj_phi_a_probe.py`), `phi_a` runs −0.09 to −6.6 V across **accepted
+steps 2–9** while `Ti` sits at its 0.026 eV floor, so the clamped incident
+energy is exactly zero there while the mesh still collects at ~1e18 s⁻¹. A
+neutral cadence fine enough to fire a tick inside that span — the arm's own
+3.125e-6 s does — hands the channel a counted stream with no committed energy.
+
+*The rule.* **The backscatter of an ion that arrives with zero clamped energy
+is no backscatter.** Per column cell and tick, a cell whose committed incident
+energy is exactly zero launches nothing: its whole counted stream is born
+thermal (`birth_anode`), its `birth_anode_jet` particle and energy rows are
+exactly zero, and it contributes exactly zero to `momentum_anode_jet`. The
+anode book still records `ion_incident` and `backscatter` for it — both zero —
+so *created once* holds trivially. The split is **per cell, not per tick**:
+cells carrying a positive incident energy in the same tick launch normally
+beside cells carrying none.
+
+*Why this is parity rather than a fallback.* Under the fluid spec
+`anode_jet_backscatter_speed` the same ion gives `v_back = 0`, and the fluid
+term then adds `direction * R_N * m * 0 * loss / V = 0` to the momentum row —
+i.e. the `R_N` share is launched at rest, which is indistinguishable from
+thermal desorption. The DVM books it as such rather than inventing energy the
+ion did not bring. Gated by AJ6 in `scripts/verify_sim1d_k2_dvm.py`, whose
+negative control drops the one mask (the pre-ruling arithmetic) and raises.
 
 **`neutral_kinetic_dvm_anode_jet_T_launch_eV = None` (grid-tied) — DERIVED
 (numerics, not physics).** The width of the smear the monoenergetic

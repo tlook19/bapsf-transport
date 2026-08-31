@@ -826,20 +826,39 @@ Two disclosures ride this member, and neither is fixed here.
   both. At the operating point $\phi_a$ dominates once the discharge is
   running, so the difference is a small share of the launch energy; it is still
   a difference, and it is named here rather than absorbed.
-* **The channel has a reachable ZERO-launch-energy regime, and it RAISES
-  there.** The incident energy is clamped at the fluid channel's own
-  $\max(\phi_a+T_i,0)$ — and the fluid anode spec passes $\phi_a$ through raw
-  where the cathode spec clamps $\phi_c$ at zero first. Before breakdown the
-  anode sheath is electron-attracting: measured over the arm's opening window,
-  $\phi_a$ runs $-0.09$ to $-6.6$ V across the first nine accepted steps while
-  $T_i$ sits at its $0.026$ eV floor, so the clamped incident energy is exactly
-  zero while the mesh still collects at $\sim10^{18}\ \mathrm{s^{-1}}$
-  (`scripts/b4aj_phi_a_probe.py`). A neutral tick that falls entirely inside
-  that span is handed a counted stream with no committed energy, and the launch
-  spectrum raises rather than launching at an energy nobody booked. What the
-  backscatter of a zero-energy ion IS — no energetic share at all, or a
-  directed launch at the thermal scale — is a closure the registration does not
-  state, so it is reported rather than chosen.
+* **The mesh's own $\tfrac32 kT_{\rm wall}$ on the thermal share is not
+  debited**, the same convention the cathode side ships for its implanted
+  remainder.
+
+**Zero incident energy is a legal, booked state, and the rule is fluid
+parity.** The incident energy is clamped at the fluid channel's own
+$\max(\phi_a+T_i,0)$ — and the fluid anode spec passes $\phi_a$ through raw
+where the cathode spec clamps $\phi_c$ at zero first, so unlike the cathode
+side this sum genuinely reaches zero. Before breakdown the anode sheath is
+electron-attracting: measured over the arm's opening window, $\phi_a$ runs
+$-0.09$ to $-6.6$ V across **accepted steps 2–9** while $T_i$ sits at its
+$0.026$ eV floor, so the clamped incident energy is exactly zero while the mesh
+still collects at $\sim10^{18}\ \mathrm{s^{-1}}$
+(`scripts/b4aj_phi_a_probe.py`).
+
+**The backscatter of an ion that arrives with zero clamped energy is no
+backscatter.** A cell whose committed incident energy is exactly zero launches
+nothing: its whole counted stream is born thermal, its `birth_anode_jet`
+particle and energy rows are exactly zero, and it contributes exactly zero to
+`momentum_anode_jet`. The anode book still records it — `ion_incident` and
+`backscatter` both zero for that cell — so *created once* holds trivially. This
+is FLUID PARITY, not a fallback: under the fluid spec the same ion gives
+$v_{\rm back}=0$, which makes the $R_N$ share indistinguishable from thermal
+desorption, and the DVM books it as such rather than inventing energy the ion
+did not bring.
+
+**The split is per CELL, not per tick.** Cells carrying a positive incident
+energy in the same tick launch normally beside cells carrying none — the two
+sides of the mesh are independent, and a per-side or per-tick implementation
+would be a different physical statement. The launch guard remains for the
+arithmetically impossible case (a *positive* committed incident energy whose
+per-atom launch energy is non-finite or non-positive anyway, i.e. the counted
+particle and energy pair disagreeing with each other).
 
 **Afterglow needs no special case**, and gets none. The channel extinguishes
 there twice over, both times on measured quantities: by FLUX, since the counted

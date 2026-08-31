@@ -1080,9 +1080,16 @@ def model_mode_defaults():
         ``"total_reflected"`` reading of the reflection coefficients -- and
         directed AWAY from the mesh on the side it was collected from, which
         is the fluid channel's own placement rule. The remainder keeps the
-        thermal rebirth. Wire-INTERCEPTED neutrals are untouched: they keep
-        the at-rest re-emission, and the axial momentum they arrived with is
-        booked to the structure as a named diagnostic row. Inert unless
+        thermal rebirth. A cell whose incident energy comes out at exactly
+        zero -- which the fluid-parity clamp ``max(phi_a + Ti, 0)`` reaches
+        while the anode sheath is electron-attracting before breakdown --
+        launches NOTHING and is born wholly thermal, per cell rather than per
+        tick: the same ion gives ``v_back = 0`` under the fluid spec, which
+        is thermal desorption, and this channel books it as such rather than
+        inventing energy the ion did not bring. Wire-INTERCEPTED neutrals are
+        untouched: they keep the at-rest re-emission, and the axial momentum
+        they arrived with is booked to the structure as a named diagnostic
+        row. Inert unless
         ``neutral_model = "kinetic_dvm"``; arming it under any other neutral
         model raises at construction, as does arming it with no cathode
         solve to read ``phi_a`` from, or on a geometry whose anode mesh is
