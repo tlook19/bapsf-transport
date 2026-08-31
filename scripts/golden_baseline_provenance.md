@@ -188,6 +188,64 @@ closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
 
+**2026-08-31 — IDENTITY-ONLY ROTATION (the B6 baffle-interception key). NOTHING
+WAS RECAPTURED.** Merge `a8590e3` ([dvm-b6-baffle-interception], the annular
+baffles acting on the transient DVM's annulus) added ONE `input_flags` key to
+the package surface — `neutral_kinetic_dvm_baffles = False` — default-inert:
+the channel is off, and it is read only under `neutral_model = "kinetic_dvm"`,
+which the golden does not run. The config identity therefore moved for the
+added key and for nothing else; the rotation commit `7a03cd9` regenerated BOTH
+references in one event, the reviewer authoring it from each reference's own
+expression:
+
+| reference | before | after |
+|---|---|---|
+| `golden_digest_4k.json` `config_identity` | `8974b3ec46a944947e6f080ef48e973ecaaf51163e979d14b874fdb02f57563c` | `21a9b4764df68bc9c201d5ea11589223358bd9ca19d2801f82ac7bd75db632c3` |
+| `golden_digest_4k.json` checkpoints 0/1000/2000/3000/4000, final digest, `steps`, `cells`, `fields_per_cell`, `checkpoint_interval`, `final_time` | — | UNCHANGED (final digest `cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2`, `final_time` 0.0004714055010197914) |
+| `production_discharge.json` flags | 52 keys | 53 keys: the one ADDED, 0 removed, 0 moved; `params` 253 unchanged; `saves` 2620, `summary`, `cells` 72, `description`, `result_format` CARRIED |
+| sidecar `sha256` | `c1cd0f639d5b8b3cd93ea0ca5476a5af0734ed62935f88324ea9d6dd79fb3f0c` | `f7bd286409b15945da3f21c1a8d672bde7876d08dad81593700beef2673b3f12` |
+| digest reference `sha256` | `f7403cbc777780e120a50bd3cec5d56037f8c14f528888b60c16a8c2f5bffa64` | `e05b5dad3029bd65af41205f76ff80fa5f213815b23a9167fe9363afd56fe877` |
+| NPZ `sha256` | `2c02ccd882261a0b01e0a1e8f0e313113b8431fadd526fa9d4859694e5704306` | UNCHANGED (md5 `fd8ac896ccba10c66a7c18ec609ec48e` before and after; the file is not rewritten) |
+
+Proof that the move is the one key and nothing else: a STRIP-1 CONTROL at the
+merge tip removes `flags['neutral_kinetic_dvm_baffles']`, recomputes through
+the gate's OWN expression
+(`config_identity(*build_baseline_config(DIGEST_PARAM_OVERRIDES))`) and
+reproduces `8974b3ec…` bit for bit (`flags 53 -> 52`, `params 253` untouched);
+and every checkpoint agreed with the committed reference before the rotation
+was written. The rotation tool refuses to write unless each non-identity field
+is proven unmoved field by field first, so the on-disk diff is exactly two
+lines — one `config_identity` swap and one `"neutral_kinetic_dvm_baffles":
+false` insertion. The sidecar flags were regenerated programmatically
+(`build_baseline_config()` -> `_json_safe` -> `json.dumps(..., sort_keys=True)`),
+never hand-edited.
+
+The KEY is a FLAGS key, not a params key: it is filed beside the fluid
+`neutral_baffles` it gates on rather than beside the two DVM jets, which is why
+this rotation moves `flags` where the B4 rotation moved `params`. Route
+identity across all seven representative routes moves by exactly one line each
+(`+ flags:neutral_kinetic_dvm_baffles = False`), with no other added, removed
+or value-moved key on any route.
+
+Gates at the rotated tip `7a03cd9` (this entry is the markdown-only commit on
+top of it), each run with an in-process import-provenance assertion —
+`cablp.__file__` resolving inside this checkout, printed with `KERNEL_ID` in
+the same process as the gate: COMPILED golden `baseline verify OK: saves=2620,
+exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s`
+(`KERNEL_ID` `cython/_cathode_kernels_cy/tierA+csda` attested in-process, and
+asserted before the run rather than read after it); PURE 4k digest leg
+`digest gate OK: steps=4000,
+digest=cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2,
+exact=True` against the ROTATED reference, `kernels=pure`; smoke exit 0 with
+all five compiled-kernel equivalence blocks LIVE (meanfield, coverage, landau,
+emitting_area, initial_profile — bit-identical final state on each);
+`verify_sim1d_k2_dvm.py` 113/113 including the three new B6 gates and G30–G32;
+`declm_block_gate.py` 35 checks, 0 failed; `sgfs_census.py --assert-clean`
+PASS; `batch11_restart_citations.py` 52 cites PASS.
+
+The stance file `g1atrim.toml` is untouched by this event; the golden's
+trajectory is the 2026-08-28 capture's, unchanged.
+
 **2026-08-30 — IDENTITY-ONLY ROTATION (the B4 anode-jet keys). NOTHING WAS
 RECAPTURED.** Merge `e0beed5` ([dvm-b4-anode-jet], the DVM anode recycle
 triple) added four `input_dict` keys to the package surface —
