@@ -60,7 +60,9 @@ from .core.validation import (
     OPERATOR_SPLITTINGS,
     _RawStageError,
     _bad_array_summary,
+    refuse_anode_backscatter_double_book,
     refuse_cathode_backscatter_double_book,
+    refuse_dvm_anode_jet_without_cathode_coupling,
     refuse_dvm_cathode_jet_without_cathode_coupling,
     resolve_coverage_config,
     resolve_emitting_area_config,
@@ -396,6 +398,7 @@ class StepAttempt1D:
     ion_booking: np.ndarray | None = None
     source_booking: dict | None = None
     cathode_jet_energy_booking: np.ndarray | None = None
+    anode_jet_energy_booking: np.ndarray | None = None
     coverage_burn: np.ndarray | None = None
     coverage_reservoir_burn: np.ndarray | None = None
     coverage_w: np.ndarray | None = None
@@ -1181,6 +1184,17 @@ class LAPDSim1D:
         )
         self._dvm_cathode_jet_energy_stage_accum = None
         self._dvm_cathode_jet_incident_row = None
+        # B4 anode jet: the same five, anode-side. ``_anode_energy_ledger_J``
+        # is the channel's own NAMED surface book and is PRESENCE-GATED --
+        # ``None`` unless the channel is armed -- so an off run's saved
+        # diagnostics and restart payload are the ones they always were.
+        self._dvm_anode_jet = None
+        self._dvm_anode_jet_energy_booked = np.zeros(
+            self._geometry.cells, dtype=float
+        )
+        self._dvm_anode_jet_energy_stage_accum = None
+        self._dvm_anode_jet_incident_row = None
+        self._anode_energy_ledger_J = None
         if self._neutral_model == "kinetic_dvm":
             self._configure_kinetic_dvm()
         else:
@@ -1285,6 +1299,39 @@ class LAPDSim1D:
                         f"{_key} parameterizes the transient DVM's cathode "
                         "backscatter channel and is read only under "
                         "neutral_kinetic_dvm_cathode_jet, which has no "
+                        "meaning under "
+                        f"neutral_model={self._neutral_model!r}. Accepted: "
+                        f"leave it at {_default!r}, or arm the channel with "
+                        f"neutral_model='kinetic_dvm' (got {_given!r})"
+                    )
+            # The same statement, anode-side: the channel splits the transient
+            # DVM's COUNTED anode-mesh collection, and no other neutral model
+            # carries one to split.
+            if bool(
+                self._input_dict.get("neutral_kinetic_dvm_anode_jet", False)
+            ):
+                raise ValueError(
+                    "neutral_kinetic_dvm_anode_jet splits the transient DVM's "
+                    "counted anode-mesh collection into an energetic "
+                    "backscatter share and a thermal remainder, and has no "
+                    "meaning under "
+                    f"neutral_model={self._neutral_model!r}, which carries no "
+                    "such counted stream. Accepted: leave it off, or set it "
+                    "with neutral_model='kinetic_dvm' and the "
+                    "neutral_two_zone flag"
+                )
+            for _key in (
+                "neutral_kinetic_dvm_anode_jet_R_N",
+                "neutral_kinetic_dvm_anode_jet_R_E",
+                "neutral_kinetic_dvm_anode_jet_T_launch_eV",
+            ):
+                _given = self._input_dict.get(_key)
+                _default = input_dict_template_1d.get(_key)
+                if _given != _default:
+                    raise ValueError(
+                        f"{_key} parameterizes the transient DVM's anode "
+                        "backscatter channel and is read only under "
+                        "neutral_kinetic_dvm_anode_jet, which has no "
                         "meaning under "
                         f"neutral_model={self._neutral_model!r}. Accepted: "
                         f"leave it at {_default!r}, or arm the channel with "
@@ -2288,6 +2335,27 @@ class LAPDSim1D:
             # something books into it, so an off run's ledger, its saved
             # diagnostics and its restart payload are the ones it always was.
             self._cathode_energy_ledger_J["backscatter"] = 0.0
+        if self._dvm_anode_jet is not None:
+            # The ANODE's own surface energy book, which did not exist before
+            # this channel: the anode mesh has no warming model and so had no
+            # balance to carry a row in. Two rows, both cumulative [J] and
+            # both booked per ACCEPTED step from the same committed
+            # (particles, incident energy) pair the birth is formed from:
+            #
+            #   ion_incident  what the collected ions delivered to the wires,
+            #                 sum over accepted steps of N (phi_a + Ti);
+            #   backscatter   what left again with the R_N energetic share,
+            #                 exactly R_E of it.
+            #
+            # Their DIFFERENCE is the statement "the anode absorbs 1 - R_E",
+            # which is thereby a subtraction of two measured rows rather than
+            # a remembered convention. PRESENCE-GATED for the reason the
+            # cathode's backscatter row is: absent the channel there is no
+            # book at all (``None``), so an off run's saved diagnostics and
+            # its restart payload are byte-unchanged.
+            self._anode_energy_ledger_J = {
+                "ion_incident": 0.0, "backscatter": 0.0,
+            }
 
     def _init_beam_transport_refusals(self):
         """Refuse incomplete beam-deposition and anomalous-transport configs.
@@ -4395,6 +4463,56 @@ class LAPDSim1D:
         anode_faces = np.asarray(
             getattr(self._geometry, "anode_face_indices", ()), dtype=int
         )
+        # B4: the anode-side energetic recycle, default off and ABSENT rather
+        # than present at a neutral setting, exactly as B5 is. The order of
+        # the three refusals below is deliberate: the pair guard and the
+        # cathode-solve prerequisite are statements about the CONFIGURATION,
+        # the geometry assertion is a statement about the MESH, and the
+        # coefficient interval is checked inside the engine -- so a config
+        # error names itself rather than tripping the geometry check first.
+        anode_jet = None
+        if bool(self._input_dict.get("neutral_kinetic_dvm_anode_jet", False)):
+            refuse_anode_backscatter_double_book(self._input_dict)
+            refuse_dvm_anode_jet_without_cathode_coupling(
+                self._input_dict, self._flags
+            )
+            # The DVM carries ONE mesh face; the fluid carries a LIST of anode
+            # faces. The channel's launch direction is defined against the
+            # single face the DVM took, so a geometry with more than one anode
+            # face (or none) would have the kinetic arm re-emitting off one
+            # mesh while the fluid geometry describes another. Refused rather
+            # than resolved: which face the atoms came off is not a choice
+            # this code is entitled to make.
+            mesh_face = int(anode_faces[0]) if anode_faces.size else -999
+            if anode_faces.size != 1 or not 0 < mesh_face < self._geometry.cells:
+                raise ValueError(
+                    "neutral_kinetic_dvm_anode_jet launches the collected "
+                    "stream back AWAY from the anode mesh, on the side it was "
+                    "collected from, and the transient DVM carries exactly "
+                    "ONE mesh face to define that side against. This geometry "
+                    f"carries anode_face_indices={anode_faces.tolist()} on "
+                    f"{self._geometry.cells} cells, so the kinetic arm's "
+                    f"mesh face ({mesh_face}) is not a single interior face "
+                    "the fluid geometry agrees on. Accepted: a geometry with "
+                    "exactly one interior anode face, or "
+                    "neutral_kinetic_dvm_anode_jet = False"
+                )
+            anode_jet = {
+                "R_N": float(
+                    self._input_dict.get(
+                        "neutral_kinetic_dvm_anode_jet_R_N", 0.63
+                    )
+                ),
+                "R_E": float(
+                    self._input_dict.get(
+                        "neutral_kinetic_dvm_anode_jet_R_E", 0.41
+                    )
+                ),
+                "T_launch_eV": self._input_dict.get(
+                    "neutral_kinetic_dvm_anode_jet_T_launch_eV"
+                ),
+            }
+        self._dvm_anode_jet = anode_jet
         self._dvm = TransientDVM(
             geometry=self._geometry,
             nvz=int(self._input_dict.get("neutral_kinetic_dvm_nvz", 48)),
@@ -4405,6 +4523,7 @@ class LAPDSim1D:
             exchange_model=exchange,
             annulus_flights=flights,
             cathode_jet=cathode_jet,
+            anode_jet=anode_jet,
             transparency=1.0 - float(self._input_dict.get("eta", 0.358)),
             mesh_face=int(anode_faces[0]) if anode_faces.size else -999,
             s_L=self._dvm_end_sticking("S_pump_L"),
@@ -4575,6 +4694,7 @@ class LAPDSim1D:
         # energy half of that pair.
         self._dvm_source_rows = None
         self._dvm_cathode_jet_incident_row = None
+        self._dvm_anode_jet_incident_row = None
         state = self.state if y is None else self._unpack(y)
         # The zone-exchange term exists only in two-zone runs, so the term
         # ledger (and the saved rhs_terms structure) is unchanged when the
@@ -4946,6 +5066,16 @@ class LAPDSim1D:
                     self._dvm_cathode_jet_incident_row = (
                         self._dvm_cathode_jet_incident_energy_row(
                             self._dvm_source_rows["cathode_face"],
+                            state,
+                            cathode_solve,
+                        )
+                    )
+                if self._dvm_anode_jet is not None:
+                    # B4: the same reading for the anode-collected ions, off
+                    # the same evaluation's solve and state.
+                    self._dvm_anode_jet_incident_row = (
+                        self._dvm_anode_jet_incident_energy_row(
+                            self._dvm_source_rows["anode"],
                             state,
                             cathode_solve,
                         )
@@ -5345,6 +5475,12 @@ class LAPDSim1D:
                 self._dvm_cathode_jet_energy_stage_accum = np.zeros(
                     self._geometry.cells, dtype=float
                 )
+            if self._dvm_anode_jet is not None:
+                # B4: the anode channel's incident-ENERGY tally, on the same
+                # stage weight and the same attempt lifetime.
+                self._dvm_anode_jet_energy_stage_accum = np.zeros(
+                    self._geometry.cells, dtype=float
+                )
 
         if self._coverage is not None:
             # Arm the covered-only neutral-debit tally AND the coverage field's
@@ -5438,6 +5574,10 @@ class LAPDSim1D:
                 self._dvm_cathode_jet_energy_stage_accum
             )
             self._dvm_cathode_jet_energy_stage_accum = None
+            attempt_anode_jet_energy_booking = (
+                self._dvm_anode_jet_energy_stage_accum
+            )
+            self._dvm_anode_jet_energy_stage_accum = None
             attempt_coverage_burn = self._coverage_burn_accum
             attempt_coverage_reservoir_burn = (
                 self._coverage_reservoir_burn_accum
@@ -5458,6 +5598,7 @@ class LAPDSim1D:
             ion_booking=attempt_ion_booking,
             source_booking=attempt_source_booking,
             cathode_jet_energy_booking=attempt_jet_energy_booking,
+            anode_jet_energy_booking=attempt_anode_jet_energy_booking,
             coverage_burn=attempt_coverage_burn,
             coverage_reservoir_burn=attempt_coverage_reservoir_burn,
             coverage_w=attempt_coverage_w,
@@ -5913,6 +6054,10 @@ class LAPDSim1D:
         # something below, which is what keeps the surface power balance
         # untouched with the channel off.
         step_backscatter_erg = 0.0
+        # B4: what the anode's collected ions delivered to the wires this
+        # step [erg]. Zero unless the DVM anode jet booked something below,
+        # which is what keeps the anode book absent-and-empty off the channel.
+        step_anode_incident_erg = 0.0
         # Book the DVM deferred-transfer ledger FIRST: it reads the step's
         # start state and the transfer the step was scoped with, both of
         # which the lines below overwrite.
@@ -5943,6 +6088,20 @@ class LAPDSim1D:
                 step_backscatter_erg = float(
                     self._dvm_cathode_jet["R_E"]
                     * np.sum(jet_energy_booking)
+                )
+            anode_jet_energy_booking = getattr(
+                attempt, "anode_jet_energy_booking", None
+            )
+            if anode_jet_energy_booking is not None:
+                # B4: the same discipline anode-side -- commit to the tick
+                # accumulator FIRST so a tick firing later in this same accept
+                # sees it, and hold the increment for the anode book below.
+                self._dvm_anode_jet_energy_booked = (
+                    self._dvm_anode_jet_energy_booked
+                    + anode_jet_energy_booking
+                )
+                step_anode_incident_erg = float(
+                    np.sum(anode_jet_energy_booking)
                 )
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
@@ -6112,6 +6271,21 @@ class LAPDSim1D:
         if "backscatter" in self._cathode_energy_ledger_J:
             self._cathode_energy_ledger_J["backscatter"] += (
                 step_backscatter_erg * 1.0e-7
+            )
+        # B4: the anode's own two rows, on the same accepted-step discipline
+        # and from the same committed pair. The anode has NO warming model at
+        # all, so there is no branch here to be inside of and no temperature
+        # for the debit to come out of: these rows are the MEASUREMENT of what
+        # the wires received and what left again, which is what makes "the
+        # anode absorbs 1 - R_E" a subtraction of two rows.
+        if self._anode_energy_ledger_J is not None:
+            self._anode_energy_ledger_J["ion_incident"] += (
+                step_anode_incident_erg * 1.0e-7
+            )
+            self._anode_energy_ledger_J["backscatter"] += (
+                float(self._dvm_anode_jet["R_E"])
+                * step_anode_incident_erg
+                * 1.0e-7
             )
         # Cathode warming, accepted steps only (rejected attempts never move
         # the surface temperature).
@@ -6516,6 +6690,15 @@ class LAPDSim1D:
                 for key, value in self._cathode_energy_ledger_J.items()
             }
         )
+        if self._anode_energy_ledger_J is not None:
+            # PRESENCE-GATED: off the channel these keys are absent and the
+            # restart payload is byte-unchanged.
+            ledgers.update(
+                {
+                    f"anode_energy_{key}_J": value
+                    for key, value in self._anode_energy_ledger_J.items()
+                }
+            )
         sample_ema = {}
         if self._sample_ema is not None:
             for cell, (n_ema, Te_ema) in self._sample_ema.items():
@@ -6667,6 +6850,11 @@ class LAPDSim1D:
             self._cathode_energy_ledger_J[key] = float(
                 ledgers[f"cathode_energy_{key}_J"]
             )
+        if self._anode_energy_ledger_J is not None:
+            for key in self._anode_energy_ledger_J:
+                self._anode_energy_ledger_J[key] = float(
+                    ledgers[f"anode_energy_{key}_J"]
+                )
         if self._sample_ema is not None:
             stored = payload["sample_ema"]
             for cell in self._sample_smooth_cells:
@@ -11111,6 +11299,20 @@ class LAPDSim1D:
                 f"warming_E_{k}_J": float(v)
                 for k, v in self._cathode_energy_ledger_J.items()
             },
+            # The ANODE's cumulative surface energy book [J], PRESENCE-GATED on
+            # the B4 anode jet: absent the channel these keys do not exist and
+            # the saved diagnostic set is the one it always was. The anode has
+            # no warming model, so unlike the cathode rows these are a pure
+            # measurement -- what the wires received, and what left with the
+            # backscatter.
+            **(
+                {}
+                if self._anode_energy_ledger_J is None
+                else {
+                    f"anode_E_{k}_J": float(v)
+                    for k, v in self._anode_energy_ledger_J.items()
+                }
+            ),
             # Surface-state coverage and the effective work function
             # (cathode_surface_model; 1.0 / static phi_wf when off).
             "surface_theta": float(
@@ -11976,6 +12178,58 @@ class LAPDSim1D:
         )
         return np.asarray(cathode_row, dtype=float) * per_ion_erg
 
+    def _dvm_anode_jet_incident_energy_row(
+        self, anode_row, state, cathode_solve
+    ):
+        """Return the anode collection's INCIDENT ion-energy row [erg/s].
+
+        ``phi_a + Ti`` per collected ion, clamped at zero, times the counted
+        collection rate -- the same per-particle incident energy the fluid
+        channel's
+        :func:`~cablp.solvers._sim1d.physics.sources.anode_jet_backscatter_speed`
+        reads, so the two arms describe ions arriving with one energy. The
+        ions fall through the ion-attracting anode sheath before striking the
+        wires, which is what ``phi_a`` is.
+
+        ``phi_a`` comes from the solve THIS evaluation built -- the SAME solve
+        :meth:`_anode_jet_spec` reads it from, since the cathode, anode and
+        bank are one system and one solve, and it is the A2a-booked ``phi_a``
+        of the two-population anode-current split. It is taken unclamped and
+        the SUM is clamped, exactly as ``_anode_jet_spec`` and
+        ``anode_jet_backscatter_speed`` do it between them: an anode sheath
+        that has gone slightly negative subtracts from the thermal energy the
+        ions arrive with rather than being read as zero.
+
+        The ``Ti``-only branch is reachable only where there is no solve to
+        read -- a configuration with cathode coupling unconfigured, which
+        :func:`~cablp.solvers._sim1d.core.validation.refuse_dvm_anode_jet_without_cathode_coupling`
+        refuses at construction, or a solve that returned a non-finite
+        ``phi_a``.
+
+        NO AFTERGLOW SPECIAL CASE, and none is needed: the channel
+        self-extinguishes there twice over, by FLUX -- the counted anode
+        collection follows the Bohm flux ``n c_s`` and collapses with the
+        plasma -- and by LAUNCH ENERGY, since ``phi_a`` measured on this model
+        is a few volts at the discharge operating point and falls to the
+        ``Ti`` scale on its own as the plasma goes. Both limits are the
+        physics of the same two measured quantities, not a fallback path.
+
+        The row is a RATE because its partner (the counted source row) is, and
+        the stage accumulator integrates both over the step at one weight.
+        """
+        phi_a = 0.0
+        if cathode_solve is not None and cathode_solve.beam_result is not None:
+            candidate = float(cathode_solve.beam_result.result.phi_a)
+            if np.isfinite(candidate):
+                phi_a = candidate
+        Ti = derive_state(
+            state, floors=self._floors, ion_mass_g=self._ion_mass_g
+        ).Ti
+        per_ion_erg = np.maximum(phi_a + np.asarray(Ti, dtype=float), 0.0) * (
+            ev_to_erg
+        )
+        return np.asarray(anode_row, dtype=float) * per_ion_erg
+
     def _accumulate_dvm_source_booking(self):
         """Tally this RHS stage's share of the tick's booked source inflow.
 
@@ -12000,6 +12254,13 @@ class LAPDSim1D:
             self._dvm_cathode_jet_energy_stage_accum += (
                 self._dvm_ion_stage_weight
                 * self._dvm_cathode_jet_incident_row
+            )
+        if self._dvm_anode_jet_energy_stage_accum is not None:
+            # B4: the ENERGY half of the anode channel's counted pair, on the
+            # same stage weight and from the same evaluation's rows.
+            self._dvm_anode_jet_energy_stage_accum += (
+                self._dvm_ion_stage_weight
+                * self._dvm_anode_jet_incident_row
             )
 
     def _dvm_booked_transfer_rhs(self):
@@ -12514,6 +12775,9 @@ class LAPDSim1D:
         self._dvm_cathode_jet_energy_booked = np.zeros(
             self._geometry.cells, dtype=float
         )
+        self._dvm_anode_jet_energy_booked = np.zeros(
+            self._geometry.cells, dtype=float
+        )
 
     def _dvm_advance(self, dt_neutral):
         """Run one transient DVM update and republish the neutral moments.
@@ -12583,6 +12847,12 @@ class LAPDSim1D:
             self._dvm_cathode_jet_energy_booked = np.zeros(
                 self._geometry.cells, dtype=float
             )
+        anode_jet_incident = None
+        if self._dvm_anode_jet is not None:
+            anode_jet_incident = self._dvm_anode_jet_energy_booked
+            self._dvm_anode_jet_energy_booked = np.zeros(
+                self._geometry.cells, dtype=float
+            )
         self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
         self._dvm_source_booked = self._zero_dvm_source_counts()
         self._dvm.update(
@@ -12595,6 +12865,7 @@ class LAPDSim1D:
             sources=sources,
             source_counts=source_counts,
             cathode_jet_incident_erg=jet_incident,
+            anode_jet_incident_erg=anode_jet_incident,
             T_s_K=(
                 float(self._cathode_Ts_K)
                 if self._cathode_Ts_K is not None

@@ -766,6 +766,118 @@ numerics question and belongs to `NUMERICS.md` (§ "The DVM cathode jet's launch
 spectrum").
 
 
+### Anode-side energetic recycle (`neutral_kinetic_dvm_anode_jet`, default off)
+
+The same closure on the other surface, and deliberately the same FORM: one
+statement for the whole counted-surface-recycle class. The arm counts the ions
+the anode mesh collects and neutralizes, and by default every one of them is
+reborn at rest on the wall distribution in the cell it was counted into. Armed,
+this selector splits that counted stream by the mesh's own two reflection
+coefficients — a particle fraction $R_N$ and a **total** reflected energy
+fraction $R_E$ — so each of the $R_N$ backscattered atoms leaves with
+
+$$\varepsilon_{\rm back}=\frac{R_E}{R_N}\,(\phi_a+T_i),$$
+
+the `"total_reflected"` convention of `sources.py`'s anode launch-speed spec,
+with $\phi_a$ read from the same cathode/anode/bank solve the fluid anode jet
+reads it from. The remaining $1-R_N$ keeps the at-rest rebirth unchanged.
+
+**Three things differ from the cathode side, all of them because the mesh is
+not a disc.** The launch is DIRECTED, away from the wires on the side the ion
+was collected from — $-z$ in the cell below the mesh face, $+z$ at or above it,
+which is the fluid channel's own placement rule — so an armed channel requires
+the geometry to carry exactly one interior anode face and refuses otherwise.
+The thermal remainder is a VOLUME rebirth rather than a face inflow: a wire has
+no half-space to emit into. And the ions the mesh collected from the ANNULUS
+ride the column placement, because the counted anode row folds both zones onto
+the column cells and the thermal rebirth has always been a column birth — a
+placement inherited from the channel this splits, disclosed rather than
+redesigned here.
+
+**Wire-intercepted NEUTRALS are untouched.** They are a different population
+from the collected ions: they keep the `mesh_blocked` → `mesh_reemit` pair at
+rest, which is the statement that the wires randomize what hits them. What that
+pair silently dropped until now is the axial MOMENTUM those atoms arrived with,
+and the channel makes it measurable rather than remembered: two named
+diagnostic rows, present exactly when the jet is armed —
+`momentum_anode_jet`, the signed axial momentum the backscatter launched, and
+`momentum_mesh_absorbed`, the axial momentum the mesh intercepted and kept.
+They are readings, not a ledger; nothing closes over them.
+
+**The anode gets its own surface energy book.** It has no warming model — the
+mesh is a fixed structure with no temperature the model evolves — so unlike the
+cathode there was no balance for a row to live in. `_anode_energy_ledger_J`
+carries two, both cumulative and both booked per accepted step from the same
+committed (particles, incident energy) pair the birth is formed from:
+`ion_incident`, what the collected ions delivered, and `backscatter`, exactly
+$R_E$ of it. Their **difference** is the $1-R_E$ the structure absorbed, so
+that statement is a subtraction of two measured rows rather than a convention
+anyone has to remember. Both rows are booked on the accepted STEP while the gas
+receives its share on the neutral TICK, so `backscatter` LEADS the gas by the
+share that is booked but not yet ticked — 2.2 % of the row at the 800-step
+window's end — and it is exactly AJ2's `outstanding` term, not a discrepancy:
+the cumulative identity the gate closes is `backscatter == the ticks' birth
+energy + what the next tick is still owed`. The pair is
+refused outright against the fluid `anode_neutral_jet`, which would re-emit the
+same collected stream directed a second time.
+
+Two disclosures ride this member, and neither is fixed here.
+
+* **A cross-book convention difference in the $T_i$ part.** The plasma-side
+  anode ion debit under `anode_sheath_full_debit` removes $\tfrac52 T_i$ per
+  collected ion — the enthalpy flux — while this channel's launch energy reads
+  the incident energy as $\phi_a+T_i$. The two are different statements about
+  the same ions' thermal energy, and only the sheath drop $\phi_a$ is common to
+  both. At the operating point $\phi_a$ dominates once the discharge is
+  running, so the difference is a small share of the launch energy; it is still
+  a difference, and it is named here rather than absorbed.
+* **The mesh's own $\tfrac32 kT_{\rm wall}$ on the thermal share is not
+  debited**, the same convention the cathode side ships for its implanted
+  remainder.
+
+**Zero incident energy is a legal, booked state, and the rule is fluid
+parity.** The incident energy is clamped at the fluid channel's own
+$\max(\phi_a+T_i,0)$ — and the fluid anode spec passes $\phi_a$ through raw
+where the cathode spec clamps $\phi_c$ at zero first, so unlike the cathode
+side this sum genuinely reaches zero. Before breakdown the anode sheath is
+electron-attracting: measured over the arm's opening window, $\phi_a$ runs
+$-0.18$ to $-6.6$ V across **accepted steps 2–9** while $T_i$ rises from its
+$0.026$ eV floor to $\sim0.9$ eV, so the clamped incident energy is exactly
+zero throughout — $\phi_a$ outruns $T_i$ negatively the whole way — while the
+mesh still collects at $\sim5\times10^{16}$ to $\sim4\times10^{18}\
+\mathrm{s^{-1}}$ (`scripts/b4aj_phi_a_probe.py`).
+
+**The backscatter of an ion that arrives with zero clamped energy is no
+backscatter.** A cell whose committed incident energy is exactly zero launches
+nothing: its whole counted stream is born thermal, its `birth_anode_jet`
+particle and energy rows are exactly zero, and it contributes exactly zero to
+`momentum_anode_jet`. The anode book still records it — `ion_incident` and
+`backscatter` both zero for that cell — so *created once* holds trivially. This
+is FLUID PARITY, not a fallback: under the fluid spec the same ion gives
+$v_{\rm back}=0$, which makes the $R_N$ share indistinguishable from thermal
+desorption, and the DVM books it as such rather than inventing energy the ion
+did not bring.
+
+**The split is per CELL, not per tick.** Cells carrying a positive incident
+energy in the same tick launch normally beside cells carrying none — the two
+sides of the mesh are independent, and a per-side or per-tick implementation
+would be a different physical statement. The launch guard remains for the
+arithmetically impossible case (a *positive* committed incident energy whose
+per-atom launch energy is non-finite or non-positive anyway, i.e. the counted
+particle and energy pair disagreeing with each other).
+
+**Afterglow needs no special case**, and gets none. The channel extinguishes
+there twice over, both times on measured quantities: by FLUX, since the counted
+anode collection follows the Bohm flux $n c_s$ and collapses with the plasma;
+and by LAUNCH ENERGY, since $\phi_a$ on this model is a few volts at the
+discharge operating point and falls to the $T_i$ scale on its own as the plasma
+goes. Neither limit is a classical-sheath formula imposed on the channel — they
+are what the two quantities it reads are measured to do.
+
+The representation of $\varepsilon_{\rm back}$ on the discrete velocity grid is
+`NUMERICS.md` (§ "The DVM anode jet's launch spectrum").
+
+
 ## Gas-puff axial placement (`gas_puff_profile`)
 
 The gas puff enters through two azimuthally opposed mid-plane ports at one
