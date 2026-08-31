@@ -41,6 +41,7 @@
     "neutral_hot_birth_drift": false,
     "neutral_hot_internal_wall": true,
     "neutral_initial_profile": false,
+    "neutral_kinetic_dvm_baffles": false,
     "neutral_momentum": true,
     "neutral_prebreakdown": true,
     "neutral_probe_source": false,
