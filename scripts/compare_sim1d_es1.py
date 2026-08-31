@@ -57,6 +57,7 @@ Usage::
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -690,6 +691,16 @@ def compare(result, geometry, overlay):
             ratio = float(np.mean(model_t[good] / exp_t[good]))
             rel = float(np.sqrt(np.mean(((model_t - exp_t)[good] / exp_t[good]) ** 2)))
             sigma = float(np.mean(np.abs((model_t - exp_t)[good] / err_tot[good])))
+            # The row's uncertainty in the ROW'S OWN UNITS -- the window mean of
+            # sigma_tot = sqrt(SEM^2 + sigma_sys^2), the same denominator the
+            # dimensionless `sigma` above divides by pointwise. Carried so a
+            # consumer can express a tolerance as a fraction of the measurement
+            # error without re-deriving the error model; it is measurement-side
+            # (built from exp_t/sem_t/te_exp_t alone) and depends on the model
+            # only through `window` and `good`, i.e. through which samples the
+            # run's own time coverage admits. Not printed -- `_report`'s table
+            # is unchanged -- and consumed by --json.
+            sigma_tot = float(np.mean(err_tot[good]))
             # Secondary criterion (unchanged): the measured Te regime. It
             # still covers the n rows, which inherit the doubt through the
             # sqrt(Te) sweep inversion.
@@ -725,6 +736,7 @@ def compare(result, geometry, overlay):
                     "ratio": ratio,
                     "rms_rel": rel,
                     "sigma": sigma,
+                    "sigma_tot": sigma_tot,
                     # Union of the two criteria, so re-basing cannot un-flag.
                     "semiquant": bool(te_low or spread_high),
                     "semiquant_te": bool(te_low),
@@ -1845,6 +1857,43 @@ def _report(label, rows, es=1):
             )
 
 
+def _json_scalar(value):
+    """Coerce a numpy scalar to its Python equivalent for ``json.dump``.
+
+    Raises ``TypeError`` on anything else, so a field that is not JSON-native
+    fails loudly at write time rather than being dropped or stringified.
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"cannot serialize {type(value).__name__}")
+
+
+def json_payload(label, es, params, peak, rows, decay_rows, decay_window):
+    """Return the machine-readable form of one scoring pass.
+
+    The same three stages the table prints, keyed by stage, with the rows
+    carried as the ``compare``/``compare_decay`` dicts build them -- including
+    ``sigma_tot``, which the table has no column for. This is a SERIALIZATION
+    of the scored rows and computes nothing: any number here is the number the
+    table rendered, at full precision rather than the table's field widths.
+
+    NaN is written as the bare ``NaN`` token (Python's ``json`` default), which
+    Python reads back as ``float('nan')``; a strict JSON reader will reject it,
+    which is the honest outcome for a row whose fit returned no value.
+    """
+    return {
+        "label": label,
+        "es": int(es),
+        "wpe_arm": wpe_arm_line(params),
+        "peak_current": peak,
+        "rows": rows,
+        "decay": {
+            "window_ms": [float(decay_window[0]), float(decay_window[1])],
+            "rows": decay_rows,
+        },
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--nx", type=int, default=PRODUCTION_NX)
@@ -1957,6 +2006,17 @@ def main(argv=None):
             "semi-quantitative criteria. NB the model config must match the "
             "campaign's operating point; this flag only selects the data, "
             "so N != 1 is accepted with --from-h5 only (see the error)."
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "additionally write the scored rows to PATH as JSON (the same "
+            "three stages the table prints, plus the per-row sigma_tot the "
+            "table has no column for). The printed table is unaffected"
         ),
     )
     parser.add_argument(
@@ -2082,10 +2142,26 @@ def main(argv=None):
             print(f"saved result to {args.save_h5}")
     print(f"\n=== {label} ===")
     print(wpe_arm_line(scored_params))
-    _report_peak_current(compare_peak_current(result, overlay))
-    _report(label, compare(result, geometry, overlay), es=args.es)
+    # Bound to locals rather than passed inline so --json serializes the SAME
+    # row objects the table rendered; nothing is scored twice.
+    peak = compare_peak_current(result, overlay)
+    _report_peak_current(peak)
+    rows = compare(result, geometry, overlay)
+    _report(label, rows, es=args.es)
     decay_rows, window = compare_decay(result, overlay, window_ms=args.decay_window)
     _report_decay(decay_rows, window)
+    if args.json is not None:
+        with open(args.json, "w") as handle:
+            json.dump(
+                json_payload(
+                    label, args.es, scored_params, peak, rows, decay_rows, window
+                ),
+                handle,
+                indent=2,
+                sort_keys=True,
+                default=_json_scalar,
+            )
+        print(f"wrote scored rows to {args.json}")
     return 0
 
 
