@@ -859,7 +859,10 @@ criterion — the jets are live whenever their own selectors are on, which is
 the behaviour that predates these keys and is bit-identical to it. The
 registered arm/disarm pair is a stance decision that lives in the run that
 makes it, not in the package defaults; the values and their calibration are in
-`core/config_defaults_provenance.md`.
+`core/config_defaults_provenance.md`. Per-run does not mean per-*call*: the
+latch and its census ARE carried in the restart record, so a run resumed from a
+handoff holds an armed jet armed rather than re-censoring a stream the
+discharge had already brought into existence (`RESTART.md`).
 
 **The DVM launch representability guard is unchanged and stays live on every
 armed step.** The two answer different questions: the guard is the loud stop

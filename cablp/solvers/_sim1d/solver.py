@@ -6806,6 +6806,17 @@ class LAPDSim1D:
         "_cathode_Ts_K",
         "_cathode_theta",
     )
+    #: Cathode-jet arming latch and its census. These ride the ``cathode``
+    #: group but NOT the strict loop above, because they are PRESENCE-GATED on
+    #: the criterion being declared: with none declared the latch is
+    #: permanently armed and the three counters permanently at their seed, so
+    #: there is nothing to carry and the payload is byte-unchanged.
+    _RESTART_JET_ARMING_ATTRS = (
+        "_jet_armed",
+        "_jet_arming_censored_steps",
+        "_jet_arming_transitions",
+        "_jet_arming_last_transition_s",
+    )
     _RESTART_CIRCUIT_ATTRS = (
         "_circuit_I_loop",
         "_circuit_I_prev",
@@ -6849,6 +6860,18 @@ class LAPDSim1D:
         # reads or leaving an armed closure at its seed.
         if self._cathode_f_em is not None:
             cathode["_cathode_f_em"] = float(self._cathode_f_em)
+        # Cathode-jet arming latch, presence-gated on the criterion being
+        # DECLARED. ``_jet_armed`` decides whether the next step's jets launch
+        # at all and whether the surface is debited for them, so a resume that
+        # reset it would re-censor jets the producing run had already brought
+        # into existence -- a relocation of the channel, not a perturbation of
+        # it. The three census members ride with it so a resumed run reports
+        # ONE run's arming history rather than two. Written on their own keys
+        # rather than joining the strict inventory loop above, so a payload
+        # taken before the latch was carried still loads.
+        if self._jet_arming_active:
+            for name in self._RESTART_JET_ARMING_ATTRS:
+                cathode[name] = getattr(self, name)
         circuit = {
             name: getattr(self, name) for name in self._RESTART_CIRCUIT_ATTRS
         }
@@ -7015,6 +7038,44 @@ class LAPDSim1D:
         )
         if self._cathode_f_em is not None:
             self._cathode_f_em = float(cathode["_cathode_f_em"])
+        # Cathode-jet arming latch, presence-gated on THIS solver's criterion:
+        # with none declared the latch is permanently armed and restoring a
+        # stored one would only mislabel a run summary nothing else reads.
+        #
+        # A payload written before the latch was carried has no such rows, and
+        # so does one from a run that declared no criterion. Rather than
+        # resume an armed discharge as disarmed in silence -- which re-censors
+        # the jets and moves the trajectory -- the load keeps the
+        # constructor's disarmed seed and SAYS so.
+        if self._jet_arming_active:
+            if all(
+                name in cathode for name in self._RESTART_JET_ARMING_ATTRS
+            ):
+                self._jet_armed = bool(cathode["_jet_armed"])
+                self._jet_arming_censored_steps = int(
+                    cathode["_jet_arming_censored_steps"]
+                )
+                self._jet_arming_transitions = int(
+                    cathode["_jet_arming_transitions"]
+                )
+                self._jet_arming_last_transition_s = float(
+                    cathode["_jet_arming_last_transition_s"]
+                )
+            else:
+                warnings.warn(
+                    "restart payload carries no cathode-jet arming latch "
+                    f"({payload.get('path')}), but this run declares an arming "
+                    "criterion. The payload predates the latch's carriage, or "
+                    "was written by a run that declared no criterion. This "
+                    "resumed run therefore starts DISARMED with an empty "
+                    "census: until the booked ion current re-crosses "
+                    "neutral_jet_arm_current_A the cathode jets launch nothing "
+                    "and the surface is debited nothing, so the continuation "
+                    "is NOT bit-identical to the unbroken run. Re-export the "
+                    "handoff from a build that carries the latch to resume "
+                    "armed.",
+                    stacklevel=2,
+                )
         circuit = payload["circuit"]
         for name in self._RESTART_CIRCUIT_ATTRS:
             setattr(self, name, circuit[name])
