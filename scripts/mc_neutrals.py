@@ -97,8 +97,18 @@ T_WALL_K = 300.0
 # than this is a real escape and not a boundary artifact.
 RAY_EPS_CM = 1e-7
 
-# The two mutually exclusive rows the solver books the plasma-terminating
-# boundary under. Exactly one of them is live on any given run.
+# Every ``rhs_terms`` row a plasma-terminating boundary has ever been booked
+# under. There is ONE such operator: the legacy volumetric absorber was retired
+# 2026-08-31 (Tom), so a run this package can now produce books its boundary
+# physics under ``characteristic_boundary`` alone and ``boundary_absorption``
+# is identically zero. The retired name is kept because this tuple is read as a
+# UNION over rows, never as a selector: summing the plasma removal booked by
+# EITHER row gives a nonzero reference on a historical artifact that books
+# under the retired name as well as on a current one, which is what lets an
+# empty recycle channel read as a defect rather than as an empty machine (see
+# ``assert_recycle_channel_live``). Selecting the row is
+# ``boundary_recycle_row``'s job, and it always answers
+# ``characteristic_boundary``. scope_cathode_jet.py reads this same union.
 BOUNDARY_ROWS = ("boundary_absorption", "characteristic_boundary")
 
 # Energy range [eV] over which the Phelps He+/He backscatter cross section
