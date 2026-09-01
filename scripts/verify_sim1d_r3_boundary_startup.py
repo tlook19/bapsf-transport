@@ -122,7 +122,7 @@ def main(argv=None):
     print(f"(b) characteristic boundary is a net sink      : {b} ({net_on/1e3:+.2f} kW)")
     print(f"    reconstructed kinetic = {kin_on/1e3:+.2f} kW "
           f"(base-commit reference: -16.01 kW; the old absorber booked +0.20 kW "
-          f"before it was retired 2026-08-31 (Tom))")
+          f"before it was retired (Tom, 2026-08-31))")
     ok = a and b and st_on == "completed"
     print("startup run:", "OK" if ok else "FAILED / NULL (deliverable)")
     return 0 if ok else 1

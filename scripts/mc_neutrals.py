@@ -168,11 +168,15 @@ def boundary_recycle_row(f):
 
 
 def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_ms):
-    """Raise unless the selected recycle channel carries the boundary return.
+    """Raise unless the boundary recycle channel carries the boundary return.
 
-    ``removal`` is the plasma removal booked by EITHER boundary row, so a
-    channel read from the wrong row is caught rather than quietly contributing
-    nothing to the source menu.
+    ``recycle`` was read from the ONE row a plasma-terminating boundary is
+    booked under today, ``characteristic_boundary`` -- there is no longer a
+    second row to choose between, so this guard is not checking a selection.
+    ``removal`` is the plasma removal summed over BOTH historical boundary
+    rows, which keeps the reference nonzero on a pre-retirement artifact as
+    well as on a current run; that is what lets an empty recycle channel read
+    as a defect rather than as an empty machine.
     """
     if np.any(recycle) or not np.any(removal):
         return
@@ -180,17 +184,17 @@ def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_m
         f"boundary recycle channel is identically zero over "
         f"{window_ms[0]}-{window_ms[1]} ms while the plasma-removal row is "
         f"nonzero, for {path}.\n"
-        f"  stance: characteristic_boundary={stance}\n"
-        f"  row read: rhs_terms/{row}\n"
-        "  likely cause: this artifact predates the retirement of the legacy "
-        "volumetric absorber and books its boundary physics -- including the "
-        "neutral return nn -- under the retired boundary_absorption row, "
-        "which this reader no longer selects. characteristic_boundary is the "
-        "only plasma-terminating operator the package can now produce, so on "
-        "a current run an empty channel against a nonzero removal row instead "
-        "means the boundary neutral return is genuinely absent. Refusing to "
-        "run source-starved either way: the end-wall return would silently "
-        "vanish from the source menu."
+        f"  stance recorded by the artifact: characteristic_boundary={stance} "
+        f"(a provenance label, not a row selector)\n"
+        f"  row read: rhs_terms/{row} -- always, since the legacy volumetric "
+        f"absorber was retired (Tom, 2026-08-31) and is no longer read\n"
+        "  likely cause: this artifact predates that retirement and books its "
+        "boundary physics -- including the neutral return nn -- under the "
+        "retired boundary_absorption row. On a run made after it, an empty "
+        "channel against a nonzero removal row instead means the boundary "
+        "neutral return is genuinely absent. Refusing to run source-starved "
+        "either way: the end-wall return would silently vanish from the "
+        "source menu."
     )
 
 
