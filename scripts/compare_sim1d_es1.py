@@ -31,6 +31,13 @@ Three comparison stages, in tuning order (each scored independently):
       window on the main-discharge clock. The default run carries only
       ``tau_afterglow = 5 ms`` past discharge end; use ``--tau-afterglow``
       to extend it toward the measured 27.5 ms tail.
+      The scored measured trace is the UPSTREAM Mach-probe face. When the
+      overlay also carries the downstream face, the area-normalized geometric
+      mean and the interferometer decay chords, two REPORT-ONLY blocks are
+      appended: the per-face measured bracket ``[tau_dn .. tau_up]`` with the
+      flow-artifact-cancelled geomean as its centre, and the chord line
+      density. Neither changes a scored row above them, and both skip with a
+      printed reason on an overlay vintage that lacks the keys.
 
 Separately, ``--beta-collapse`` runs the simulation-informed sweep-bias
 diagnostic (HYPOTHESIS ON RECORD 2026-07-22 plus its two addenda) over
@@ -954,6 +961,200 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
     return rows, (t0, t1)
 
 
+# --- stage (iii) REPORT-ONLY extensions: the second probe face, the
+# area-normalized geometric mean, and the interferometer decay chords.
+#
+# Nothing below feeds a scored row. `compare_decay` above keeps the UPSTREAM
+# face (`isat_decay_mean_a`, the 'i_sweep' channel ruled the Isat truth
+# channel 2026-08-18) as the measured side of the campaign's stage (iii)
+# numbers, and the model tau these rows quote is that same number, computed
+# once and passed in -- n*sqrt(Te) carries no flow direction, so it has one
+# value per port whichever face it is set beside.
+#
+# What the second face buys: in the Chung two-sided model the two faces carry
+# reciprocal flow factors exp(+K M / 2) and exp(-K M / 2), so each single face
+# holds the flow artifact with the opposite sign and the geometric mean
+# cancels it to first order in M. The measured e-fold time is therefore a
+# BRACKET, [tau_dn .. tau_up], with the geomean as its flow-cancelled centre;
+# a single face is one end of that bracket, not the measurement.
+DECAY_FACE_KEYS = (
+    "isat_decay_dn_mean_a",
+    "isat_decay_geomean_a_per_cm2",
+    "isat_decay_geomean_area_cm2",
+)
+INTERF_DECAY_KEYS = (
+    "interf_decay_time_ms",
+    "interf_decay_line_density_cm2",
+    "interf_decay_port",
+    "interf_decay_z_cm",
+)
+
+
+def _overlay_vintage(overlay):
+    """Return the overlay's schema version as text, for skip messages."""
+    if "schema_version" not in overlay:
+        return "unknown"
+    return str(int(np.asarray(overlay["schema_version"])))
+
+
+def _missing_overlay_keys(overlay, keys):
+    """Return the subset of ``keys`` this overlay does not carry."""
+    return tuple(k for k in keys if k not in overlay)
+
+
+def _quote_clause(text, needle):
+    """Return the first sentence of ``text`` containing ``needle``, or None.
+
+    The overlay's convention strings are prose written by the exporter; a
+    consumer that wants one of their clauses quotes it rather than restating
+    it, so the printed caveat cannot drift from the product it describes.
+    """
+    for sentence in str(text).replace("\n", " ").split(". "):
+        if needle in sentence:
+            return " ".join(sentence.split()).rstrip(".") + "."
+    return None
+
+
+def _measured_efold(t_exp, trace, window_mask, tail_mask):
+    """Return the measured e-fold time [ms] of one decay trace.
+
+    Exactly the recipe `compare_decay` applies to the upstream face: the noise
+    floor is 5x the robust sigma of the trace's own final 5 ms, and the fit is
+    the same log-linear `_efold_time_ms` over the same window mask. Applied
+    unchanged to the downstream face, to the geomean and to a chord's line
+    density so the numbers beside each other are the same measurement.
+    """
+    tail = np.asarray(trace, dtype=float)[tail_mask]
+    noise = 5.0 * 1.4826 * np.nanmedian(np.abs(tail - np.nanmedian(tail)))
+    return _efold_time_ms(
+        t_exp[window_mask], np.asarray(trace, dtype=float)[window_mask], noise
+    )
+
+
+def compare_decay_faces(overlay, decay_rows, window_ms=DECAY_WINDOW_MS):
+    """Return ``(rows, skip_reason)`` for the per-face stage (iii) extension.
+
+    One row per port of ``decay_rows``, carrying the upstream, downstream and
+    geomean measured e-fold times over that stage's window, and the model tau
+    the row above already reported. ``skip_reason`` is a printable sentence
+    when the overlay vintage carries no second face, and ``rows`` is then
+    empty: an old overlay scores exactly as it did before.
+    """
+    missing = _missing_overlay_keys(overlay, DECAY_FACE_KEYS)
+    if missing:
+        return [], (
+            f"this overlay (schema v{_overlay_vintage(overlay)}) carries no "
+            + ", ".join(missing)
+            + " -- the second probe face and the geomean were promoted with a "
+            "later overlay vintage, so there is no downstream trace to fit"
+        )
+    t0, t1 = float(window_ms[0]), float(window_ms[1])
+    t_exp = np.asarray(overlay["isat_decay_time_ms"], dtype=float)
+    up = np.asarray(overlay["isat_decay_mean_a"], dtype=float)
+    dn = np.asarray(overlay["isat_decay_dn_mean_a"], dtype=float)
+    geo = np.asarray(overlay["isat_decay_geomean_a_per_cm2"], dtype=float)
+    areas = np.asarray(overlay["isat_decay_geomean_area_cm2"], dtype=float)
+    ports = list(np.asarray(overlay["isat_decay_port"], dtype=int))
+
+    window_mask = (t_exp >= t0) & (t_exp <= t1)
+    tail_mask = t_exp >= t_exp.max() - 5.0
+    rows = []
+    for row in decay_rows:
+        port = int(row["port"])
+        if port not in ports:
+            continue
+        p = ports.index(port)
+        tau_up = _measured_efold(t_exp, up[p], window_mask, tail_mask)
+        tau_dn = _measured_efold(t_exp, dn[p], window_mask, tail_mask)
+        tau_geo = _measured_efold(t_exp, geo[p], window_mask, tail_mask)
+        tau_model = float(row["tau_model_ms"])
+        rows.append(
+            {
+                "port": port,
+                "z": float(row["z"]),
+                "tau_model_ms": tau_model,
+                "tau_up_ms": tau_up,
+                "tau_dn_ms": tau_dn,
+                "tau_geo_ms": tau_geo,
+                "ratio_up": tau_model / tau_up if np.isfinite(tau_up) else np.nan,
+                "ratio_dn": tau_model / tau_dn if np.isfinite(tau_dn) else np.nan,
+                "ratio_geo": (
+                    tau_model / tau_geo if np.isfinite(tau_geo) else np.nan
+                ),
+                "area_up_cm2": float(areas[p, 0]),
+                "area_dn_cm2": float(areas[p, 1]),
+                "n_finite_geo": int(np.count_nonzero(np.isfinite(geo[p, window_mask]))),
+                "n_window": int(np.count_nonzero(window_mask)),
+            }
+        )
+    return rows, None
+
+
+def compare_decay_interferometer(result, overlay, window_ms=DECAY_WINDOW_MS):
+    """Return ``(rows, skip_reason)`` for the interferometer chord extension.
+
+    One row per chord, pairing it with the NEAREST probe port by z (p29
+    coincides exactly; the others sit a printed offset away) and reporting the
+    measured line-density e-fold time beside the model's density e-fold at the
+    model cell nearest the chord. The model side is a POINT value, not a chord
+    integral -- the report says so rather than manufacturing an integral the
+    model's 1D state cannot supply.
+    """
+    missing = _missing_overlay_keys(overlay, INTERF_DECAY_KEYS)
+    if missing:
+        return [], (
+            f"this overlay (schema v{_overlay_vintage(overlay)}) carries no "
+            + ", ".join(missing)
+            + " -- the interferometer decay chords were promoted with a later "
+            "overlay vintage"
+        )
+    t0, t1 = float(window_ms[0]), float(window_ms[1])
+    t_exp = np.asarray(overlay["interf_decay_time_ms"], dtype=float)
+    line_density = np.asarray(overlay["interf_decay_line_density_cm2"], dtype=float)
+    chord_ports = np.asarray(overlay["interf_decay_port"], dtype=int)
+    chord_z = np.asarray(overlay["interf_decay_z_cm"], dtype=float)
+    probe_ports = np.asarray(overlay["port"], dtype=int)
+    probe_z = np.asarray(overlay["z_cm"], dtype=float)
+    n_shots = (
+        np.asarray(overlay["interf_decay_n_shots"], dtype=int)
+        if "interf_decay_n_shots" in overlay
+        else np.full(chord_ports.size, -1)
+    )
+
+    origin = _main_discharge_origin(result)
+    t_model_ms = (np.asarray(result.time, dtype=float) - origin) * 1.0e3
+    z_model = np.asarray(result.z_cm, dtype=float)
+    n_model = np.asarray(result.n, dtype=float)
+    model_window = (t_model_ms >= t0) & (t_model_ms <= t1)
+
+    window_mask = (t_exp >= t0) & (t_exp <= t1)
+    tail_mask = t_exp >= t_exp.max() - 5.0
+    rows = []
+    for c in range(chord_ports.size):
+        z_c = float(chord_z[c])
+        near = int(np.argmin(np.abs(probe_z - z_c)))
+        iz = int(np.argmin(np.abs(z_model - z_c)))
+        tau_nl = _measured_efold(t_exp, line_density[c], window_mask, tail_mask)
+        tau_model = _efold_time_ms(t_model_ms[model_window], n_model[model_window, iz])
+        rows.append(
+            {
+                "chord_port": int(chord_ports[c]),
+                "chord_z_cm": z_c,
+                "paired_port": int(probe_ports[near]),
+                "paired_z_cm": float(probe_z[near]),
+                "dz_cm": z_c - float(probe_z[near]),
+                "coincident": bool(probe_z[near] == z_c),
+                "tau_line_density_ms": tau_nl,
+                "tau_model_density_ms": tau_model,
+                "ratio": tau_model / tau_nl if np.isfinite(tau_nl) else np.nan,
+                "model_cell_z_cm": float(z_model[iz]),
+                "n_shots": int(n_shots[c]),
+                "n_window": int(np.count_nonzero(window_mask)),
+            }
+        )
+    return rows, None
+
+
 # --- beta-collapse diagnostic (HYPOTHESIS ON RECORD 2026-07-22 + two
 # addenda).  Where the model agrees
 # in Isat space (n*sqrt(Te), sweep-inversion systematics cancel), it is
@@ -1759,6 +1960,10 @@ def _report_decay(rows, window):
     print("   decayed inside the window -- a measurement fact with no threshold in it.")
     print("   Both means below are printed; which one the campaign quotes is not")
     print("   settled here.)")
+    print("   tau_exp is the UPSTREAM Mach-probe face at x = 0 -- the overlay's")
+    print("   isat_decay_mean_a, the 'i_sweep' channel.  The downstream face and")
+    print("   the flow-cancelled geomean are reported below this table and do not")
+    print("   enter it.")
     header = (
         f"{'port':>6} {'z [cm]':>8} {'tau_model':>10} {'tau_exp':>9} "
         f"{'ratio':>7} {'D_exp [%]':>10}"
@@ -1796,6 +2001,120 @@ def _report_decay(rows, window):
             "  mean tau_model/tau_exp, OBSERVED ports only: none -- every one "
             f"of the {len(ratios)} scored port(s) is extrapolated '^'"
         )
+
+
+# The far port's own systematics are the exporter's to state, so the note is
+# QUOTED from the overlay rather than restated here; this is the clause to
+# look for in isat_decay_face_convention.
+P50_CLAUSE_NEEDLE = "p50"
+
+
+def _mean_ratio_line(rows, key, label):
+    """Return the 'all ports / excluding p50' mean line for one ratio column."""
+    every = [r[key] for r in rows if np.isfinite(r[key])]
+    inner = [
+        r[key] for r in rows if np.isfinite(r[key]) and int(r["port"]) != 50
+    ]
+    stem = f"  mean {label + ':':<18}"
+    if not every:
+        return f"{stem} none -- no port produced a finite ratio"
+    text = f"{stem} {np.mean(every):.2f} (all {len(every)} port(s))"
+    if inner:
+        text += f" | {np.mean(inner):.2f} (excl p50, {len(inner)} port(s))"
+    else:
+        text += " | none excluding p50"
+    return text
+
+
+def _report_decay_faces(rows, skip_reason, window, face_convention=None):
+    """Print the per-face stage (iii) block, or the reason it was skipped."""
+    print(
+        f"\n--- stage (iii) faces: both Mach-probe faces at x = 0, window "
+        f"{window[0]:.1f}-{window[1]:.1f} ms ---"
+    )
+    if skip_reason is not None:
+        print(f"  SKIPPED: {skip_reason}.")
+        print("  The upstream table above is unaffected and scores as before.")
+        return
+    print("  (REPORT ONLY -- nothing here changes a scored row.  Same log-linear")
+    print("   fit, same window and the same 5 ms tail noise floor as the table")
+    print("   above, applied to the downstream face (isat_decay_dn_mean_a) and to")
+    print("   the AREA-NORMALIZED geomean sqrt(J_up*J_dn) [A cm^-2].  The two")
+    print("   faces carry the Chung flow factor with opposite sign, so the")
+    print("   measurement is the BRACKET [tau_dn .. tau_up] and the geomean is")
+    print("   its flow-cancelled centre.  tau_model is the SAME n*sqrt(Te) number")
+    print("   the table above reports -- the proxy is flow-free, so it is")
+    print("   compared against the GEOMEAN row.)")
+    header = (
+        f"{'port':>6} {'z [cm]':>8} {'tau_model':>11} {'tau_dn':>10} "
+        f"{'tau_geo':>10} {'tau_up':>10} {'bracket [tau_dn .. tau_up]':>28} "
+        f"{'m/geo':>7}"
+    )
+    print(header)
+    print("-" * len(header))
+    for r in rows:
+        bracket = f"[{r['tau_dn_ms']:7.2f} .. {r['tau_up_ms']:7.2f}] ms"
+        print(
+            f"{r['port']:>6} {r['z']:8.0f} {r['tau_model_ms']:9.2f}ms "
+            f"{r['tau_dn_ms']:8.2f}ms {r['tau_geo_ms']:8.2f}ms "
+            f"{r['tau_up_ms']:8.2f}ms {bracket:>28} {r['ratio_geo']:7.2f}"
+        )
+    print(_mean_ratio_line(rows, "ratio_up", "tau_model/tau_up"))
+    print(_mean_ratio_line(rows, "ratio_dn", "tau_model/tau_dn"))
+    print(_mean_ratio_line(rows, "ratio_geo", "tau_model/tau_geo"))
+    clause = (
+        _quote_clause(face_convention, P50_CLAUSE_NEEDLE)
+        if face_convention is not None
+        else None
+    )
+    if clause is None:
+        print(
+            "  p50 note: the far port carries its own systematics; this "
+            "overlay's isat_decay_face_convention states no p50 clause."
+        )
+    else:
+        print(f"  p50 note (quoted from isat_decay_face_convention): {clause}")
+
+
+def _report_decay_interferometer(rows, skip_reason, window, clock_offset=None):
+    """Print the interferometer chord block, or the reason it was skipped."""
+    print(
+        f"\n--- stage (iii) interferometer: chord line density, window "
+        f"{window[0]:.1f}-{window[1]:.1f} ms ---"
+    )
+    if skip_reason is not None:
+        print(f"  SKIPPED: {skip_reason}.")
+        return
+    print("  (REPORT ONLY.  A chord is a LINE INTEGRAL across the whole column;")
+    print("   the model comparator is its density at the ONE cell nearest the")
+    print("   chord -- a point value, not a chord integral, which this 1D state")
+    print("   cannot supply.  Read the ratio as a decay-SHAPE comparison only.")
+    print("   Chords sit at ports 20/29/40 and are paired with the nearest probe")
+    print("   port; only p29 coincides, and dz prints the offset for the rest.)")
+    clause = (
+        _quote_clause(clock_offset, "LATE by") if clock_offset is not None else None
+    )
+    if clause is not None:
+        print(f"   Clock (quoted from interf_decay_clock_offset): {clause}")
+    else:
+        print(
+            "   Clock: the interferometer time base is the raw digitizer clock "
+            "and is NOT aligned to the SIS grid the Isat rows use."
+        )
+    header = (
+        f"{'chord':>6} {'z [cm]':>8} {'paired':>8} {'dz [cm]':>9} "
+        f"{'tau_N_L':>9} {'tau_model_n':>12} {'ratio':>7}"
+    )
+    print(header)
+    print("-" * len(header))
+    for r in rows:
+        pair = f"p{r['paired_port']}" + ("=" if r["coincident"] else "")
+        print(
+            f"{r['chord_port']:>6} {r['chord_z_cm']:8.0f} {pair:>8} "
+            f"{r['dz_cm']:9.1f} {r['tau_line_density_ms']:7.2f}ms "
+            f"{r['tau_model_density_ms']:10.2f}ms {r['ratio']:7.2f}"
+        )
+    print("    ('=' marks the chord that coincides with its probe port.)")
 
 
 def _report(label, rows, es=1):
@@ -1868,7 +2187,19 @@ def _json_scalar(value):
     raise TypeError(f"cannot serialize {type(value).__name__}")
 
 
-def json_payload(label, es, params, peak, rows, decay_rows, decay_window):
+def json_payload(
+    label,
+    es,
+    params,
+    peak,
+    rows,
+    decay_rows,
+    decay_window,
+    face_rows=(),
+    face_skip=None,
+    interf_rows=(),
+    interf_skip=None,
+):
     """Return the machine-readable form of one scoring pass.
 
     The same three stages the table prints, keyed by stage, with the rows
@@ -1876,6 +2207,13 @@ def json_payload(label, es, params, peak, rows, decay_rows, decay_window):
     ``sigma_tot``, which the table has no column for. This is a SERIALIZATION
     of the scored rows and computes nothing: any number here is the number the
     table rendered, at full precision rather than the table's field widths.
+
+    The report-only per-face and chord rows land under their OWN
+    ``decay_faces`` key, never inside ``decay``: the scored block has to
+    serialize the same bytes it always did, and a consumer reading it must not
+    have to know which overlay vintage produced the file. When the overlay
+    carried no second face or no chords, the corresponding ``skipped`` field
+    records the printed reason and the row list is empty.
 
     NaN is written as the bare ``NaN`` token (Python's ``json`` default), which
     Python reads back as ``float('nan')``; a strict JSON reader will reject it,
@@ -1890,6 +2228,15 @@ def json_payload(label, es, params, peak, rows, decay_rows, decay_window):
         "decay": {
             "window_ms": [float(decay_window[0]), float(decay_window[1])],
             "rows": decay_rows,
+        },
+        "decay_faces": {
+            "window_ms": [float(decay_window[0]), float(decay_window[1])],
+            "rows": list(face_rows),
+            "skipped": face_skip,
+            "interferometer": {
+                "rows": list(interf_rows),
+                "skipped": interf_skip,
+            },
         },
     }
 
@@ -2150,11 +2497,47 @@ def main(argv=None):
     _report(label, rows, es=args.es)
     decay_rows, window = compare_decay(result, overlay, window_ms=args.decay_window)
     _report_decay(decay_rows, window)
+    face_rows, face_skip = compare_decay_faces(
+        overlay, decay_rows, window_ms=window
+    )
+    _report_decay_faces(
+        face_rows,
+        face_skip,
+        window,
+        face_convention=(
+            overlay["isat_decay_face_convention"]
+            if "isat_decay_face_convention" in overlay
+            else None
+        ),
+    )
+    interf_rows, interf_skip = compare_decay_interferometer(
+        result, overlay, window_ms=window
+    )
+    _report_decay_interferometer(
+        interf_rows,
+        interf_skip,
+        window,
+        clock_offset=(
+            overlay["interf_decay_clock_offset"]
+            if "interf_decay_clock_offset" in overlay
+            else None
+        ),
+    )
     if args.json is not None:
         with open(args.json, "w") as handle:
             json.dump(
                 json_payload(
-                    label, args.es, scored_params, peak, rows, decay_rows, window
+                    label,
+                    args.es,
+                    scored_params,
+                    peak,
+                    rows,
+                    decay_rows,
+                    window,
+                    face_rows=face_rows,
+                    face_skip=face_skip,
+                    interf_rows=interf_rows,
+                    interf_skip=interf_skip,
                 ),
                 handle,
                 indent=2,
