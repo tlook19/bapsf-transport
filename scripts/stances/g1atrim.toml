@@ -61,12 +61,30 @@
 # lengths, the puff-pipe position, and since 2026-08-24 the cathode-anode gap
 # with the fixed source region that rides its far side) are config defaults
 # since the R2a fold-in and are no longer named here. What remains is per-cell
-# and per-mesh: the two radius profiles are built offline by
-# scripts/g1_build_profiles.py and are sized to THIS mesh (280 cells: 1 plenum
-# + 5 gap + 5 fixed source + 268 far column + 1 collector), and the baffle
-# arrays go with them. The CAD-span gap adoption (50.0 -> 53.25 cm) left that
-# cell census unchanged but moved every cell downstream of the cathode face,
-# so the profiles below were REBUILT against the new mesh in the same event.
+# and per-mesh: the two radius profiles and the baffle arrays, all sized to
+# THIS mesh (280 cells: 1 plenum + 5 gap + 5 fixed source + 268 far column +
+# 1 collector). The CAD-span gap adoption (50.0 -> 53.25 cm) left that cell
+# census unchanged but moved every cell downstream of the cathode face, so the
+# profiles below were REBUILT against the new mesh in the same event.
+#
+# THE TWO PROFILES NOW COME FROM DIFFERENT SOURCES.
+#
+# plasma_radius_profile_cm is built by scripts/build_msi_field_profile.py from
+# the MEASURED machine-state field record -- the MSI/Magnetic field group every
+# ES1 shot file carries (adopted 2026-09-01). Each recorded profile is
+# normalized to its own plateau, the mean normalized shape B_hat(z) is taken
+# over the retained files, and the flux tube is column-anchored:
+# r(z) = 18.415 * sqrt(1 / B_hat(z)), held exactly flat at 18.415 through the
+# last port before the field leaves its plateau, and capped at sqrt(0.95)*R_m.
+# It ASSUMES z_MSI == z_model (both cathode-referenced) -- an assumption, not a
+# measurement, and one that leaves a coil-location disagreement with the CAD
+# census open. Both the assumption and the disagreement are stated in that
+# script's docstring and in production_stance_provenance.md.
+#
+# machine_radius_profile_cm is UNCHANGED: still the measured CAD bore
+# staircase built by scripts/g1_build_profiles.py, which also remains the
+# independent cross-check for the plasma profile (its census flux traces are
+# what the MSI build is compared against).
 neutral_baffle_positions_cm = [342.65]
 neutral_baffle_clear_radii_cm = [39.75]
 plasma_radius_profile_cm = [
@@ -125,21 +143,21 @@ plasma_radius_profile_cm = [
   18.415, 18.415, 18.415, 18.415,
   18.415, 18.415, 18.415, 18.415,
   18.415, 18.415, 18.415, 18.415,
-  18.415, 18.415, 18.415, 18.415,
-  18.415, 18.415, 18.415, 18.415,
-  18.415, 18.415, 18.415, 18.415,
-  18.415, 18.415, 18.415, 18.415,
-  18.415, 18.415, 18.415, 18.415,
-  18.415, 18.415, 18.415, 18.415,
-  18.415, 18.637693866826417, 19.02664092723048, 19.32617970556995,
-  19.45182754789672, 19.347550815806233, 19.00626888381385, 18.472424575001746,
-  17.827410915085125, 17.167727275825904, 16.58593929427442, 16.159168611351888,
-  15.945033603418201, 15.982255046870085, 16.293364089663466, 16.888015217132942,
-  17.765871319929627, 18.91912367169576, 20.335010107999096, 21.997855944085142,
-  23.890579045873714, 25.995929867040303, 28.297146327466017, 30.778212606702766,
-  33.42416444759869, 36.22113986083813, 39.156287940690746, 42.21783175696253,
-  45.39500619476809, 48.6779354758943, 52.057627598225736, 55.5259117804707,
-  59.07533410303422, 62.69913011395267, 66.3911760840493, 70.22479251718927,
+  18.415, 18.415, 18.67594976129434, 18.87105933212067,
+  19.077435843580737, 19.252035771032368, 19.34467552916215, 19.324139835881198,
+  19.187984631949643, 18.963951863502906, 18.700385667302516, 18.441870054927076,
+  18.21849321810667, 18.04540032307703, 17.92495584414317, 17.854842645054283,
+  17.83242955298836, 17.853999208651743, 17.91891602048894, 18.030217336151903,
+  18.194120025164228, 18.420345692105027, 18.724682196702915, 19.131466639805737,
+  19.66885393538891, 20.374783457353647, 21.296293736780495, 22.479348705076056,
+  23.965469215922766, 25.783870805710173, 27.94010094112392, 30.424224597721413,
+  33.210563654204115, 36.24957481471854, 39.51133533616261, 42.96186578952785,
+  46.55914373518502, 48.733971724044814, 48.733971724044814, 48.733971724044814,
+  61.951416580466564, 65.96503064149049, 70.0267507430843, 74.11596212894328,
+  74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,
+  74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,
+  74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,
+  74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,
 ]
 machine_radius_profile_cm = [
   40.0, 27.728368187412972, 30.45031314638934, 40.0,
