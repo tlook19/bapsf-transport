@@ -559,8 +559,8 @@ adjudication is measured and printed by the builder, not assumed.
 
 **Honest bar: what is pinned, and the one residual.** The registration is no
 longer an assumption — it is the instrument's documented convention closed onto
-the CAD ladder at three stations — so the coordinate question this entry used
-to carry is CLOSED. Two independent checks agree with it: the measured fall-off
+the CAD ladder, corroborated at the two independent stations above — so the
+coordinate question this entry used to carry is CLOSED. Two independent checks agree with it: the measured fall-off
 tracks the census `off` case (end pair unpowered, which is the state the 0 A
 channel records) to a few cm all the way down — same-rule departure +5.91 cm,
 and the `B_hat` = 0.90 / 0.50 / 0.10 crossings at −2.12 / +0.37 / +4.45 cm —
