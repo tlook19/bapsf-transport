@@ -123,15 +123,17 @@ Gates:
       rebuilt from the velocity grid. Emitting the cathode face at the WALL
       temperature is the negative control -- not one particle moves, so B1
       and B2 cannot see it and only this statement does
-  WR1 cylindrical-wall detailed balance, closed box: the registered
-      zero-net-exchange pin is measured verbatim and reported -- it does NOT
-      hold, and the offset is shown to be EXACTLY the accommodated share's
-      velocity-resolution error, present unchanged at the base commit; the
-      statement the reflection selector owns holds at roundoff instead (the
-      two arms exchange the same wall energy at every alpha, and the pure
-      reflection limit alpha = 0 exchanges none). Solving the re-emission
-      temperature against the continuum <E> = 2kT instead of the discrete
-      moment is the negative control
+  WR1 cylindrical-wall detailed balance, closed box: the net wall energy
+      exchange equals the accommodated share's velocity-resolution offset,
+      pinned per alpha at the fixture's grid (the continuum zero-net
+      statement was retired as the pin 2026-08-31 -- a discretized wall does
+      not obey it), and the offset is shown to be EXACTLY the accommodated
+      share; the statement the reflection selector owns holds at roundoff
+      too (the two arms exchange the same wall energy at every alpha, and
+      the pure reflection limit alpha = 0 exchanges none). Two negative
+      controls: perturbing the accommodated share off the pinned offset, and
+      solving the re-emission temperature against the continuum <E> = 2kT
+      instead of the discrete moment
   WR2 the wall-reflection selector in-solver: it reaches the engine, moves
       the state, and both ledgers keep closing over several production-arm
       ticks; at alpha = 1 the two values are bit-identical, in-solver and
@@ -3404,6 +3406,68 @@ WR_ALPHAS = (0.35, 0.40, 0.46, 0.7307)
 #: default first.
 WR_MODES = ("specular", "diffuse_elastic")
 
+#: [WR1] The net wall energy exchange as a fraction of the incident wall
+#: energy, per ``neutral_kinetic_dvm_exchange`` closure and per accommodation
+#: coefficient, on the ``wr_box`` fixture (sealed 10-cell tube, 16 x 6
+#: velocity grid). The wall does NOT exchange zero net energy with a gas
+#: already at its own temperature: the accommodated share re-emits on the
+#: discrete ``wall_emission_spectrum`` while the wall absorbs at
+#: ``nu_w ~ vp`` times the volume Maxwellian, and the two agree only in the
+#: continuum. What is left is the accommodated share's velocity-RESOLUTION
+#: offset, and it is what these values pin.
+#:
+#: The offset is a property of the DISCRETIZATION, not of any wall model: it
+#: scales with alpha exactly (statement (b) in ``gate_wr1`` is that identity)
+#: and it falls with refinement -- 4.1e-2 here at alpha = 0.35 against 5.5e-3
+#: on a 96 x 32 grid. It also depends on the exchange closure, which sets how
+#: much of the column reaches the wall, which is why this table is keyed by
+#: closure and covers every model the suite re-runs these gates under. Any
+#: change to the fixture's grid or to the closure set means re-measuring and
+#: re-registering these values.
+WR1_OFFSET_PINS = {
+    "cauchy_chord": {
+        0.35: 4.0503988540753155e-02,
+        0.40: 4.6290272618003600e-02,
+        0.46: 5.3233813510704095e-02,
+        0.7307: 8.4560755504938020e-02,
+    },
+    "geometric": {
+        0.35: 4.0188576570484996e-02,
+        0.40: 4.5929801794839980e-02,
+        0.46: 5.2819272064065830e-02,
+        0.7307: 8.3902265428723980e-02,
+    },
+}
+
+#: [WR1] Relative tolerance the pinned offsets above are held to. The fixture
+#: is deterministic, so the only spread it must absorb is the last-ulp
+#: difference between the two reflection arms (worst 2.9e-15 as measured); a
+#: tolerance this tight makes the pin a real constraint rather than a band.
+WR1_OFFSET_REL_TOL = 1.0e-6
+
+
+def wr1_pins():
+    """Return the ``WR1_OFFSET_PINS`` row for the exchange closure in force.
+
+    Raises ``KeyError`` naming the closure if the suite is re-run under one
+    the table does not pin -- a silently unpinned pass is exactly what this
+    member exists to prevent.
+    """
+    try:
+        return WR1_OFFSET_PINS[EXCHANGE_MODEL]
+    except KeyError:
+        raise KeyError(
+            f"WR1 has no pinned wall-exchange offsets for "
+            f"neutral_kinetic_dvm_exchange = {EXCHANGE_MODEL!r}; measure them "
+            f"on the wr_box fixture and register them in WR1_OFFSET_PINS"
+        ) from None
+
+#: [WR1] Relative perturbation of the accommodated share the pin's negative
+#: control injects. It must be large against ``WR1_OFFSET_REL_TOL`` and small
+#: enough to be the size of a plausible defect rather than a different physics
+#: problem.
+WR1_CONTROL_PERTURBATION = 1.0e-3
+
 
 def wr_box(alpha, mode, nz=10, nvz=16, nvp=6):
     """Return a sealed uniform tube seeded at the wall temperature.
@@ -3432,57 +3496,80 @@ def wr_wall_rows(dvm, led):
 
 
 def gate_wr1():
-    """Wall detailed balance: the selector moves NO energy across the wall.
+    """Wall detailed balance: the wall exchange IS the accommodated offset.
 
     STATEMENT 1 of the B3 three (the closed-box synthetic case). A uniform
     gas at the wall temperature in a sealed tube, at four accommodation
     coefficients and under BOTH values of
-    ``neutral_kinetic_dvm_wall_reflection``. Three things are measured:
+    ``neutral_kinetic_dvm_wall_reflection``.
 
-    (a) The REGISTERED PIN, verbatim: the net wall energy exchange
-        ``net_surface_wall`` against roundoff. It DOES NOT HOLD, and the
-        reason is not this member. The engine's accommodated share re-emits
-        on ``wall_emission_spectrum`` while the wall ABSORBS at ``nu_w ~ vp``
-        times the volume Maxwellian; the two coincide in the continuum but
-        not bin by bin, so the accommodated share alone carries a
-        velocity-RESOLUTION offset -- 4.1e-2 of the incident wall energy at
-        alpha = 0.35 on the 16x6 gate grid, falling to 5.5e-3 at 96x32. The
-        number is measured and reported here rather than hidden, and it is
-        identical on the branch and on its base commit: the same statement
-        is what L4 above records for the density and temperature split.
+    WHAT THE PIN IS. A wall facing a gas already at its own temperature
+    exchanges no net energy in the continuum, and that zero-net statement was
+    this member's original pin. It is NOT the behaviour of a discretized
+    wall and is retired as a pin (re-registered 2026-08-31, Tom): the
+    accommodated share re-emits on the discrete ``wall_emission_spectrum``
+    while the wall absorbs at ``nu_w ~ vp`` times the volume Maxwellian, and
+    those two agree bin-by-bin only in the continuum limit. The residue is
+    the accommodated share's velocity-RESOLUTION offset. The registered
+    statement is therefore that the net wall energy exchange EQUALS that
+    offset, at its measured per-alpha value, and three things are measured:
 
-    (b) What the offset in (a) EXACTLY is, which localizes it away from this
-        member: ``net_surface_wall == alpha * (E_incident - N_incident *
+    (a) The REGISTERED PIN: ``|net_surface_wall|`` over the incident wall
+        energy, against its pinned value in ``WR1_OFFSET_PINS`` to
+        ``WR1_OFFSET_REL_TOL`` relative, at all four alpha and under both
+        arms. The fixture is deterministic, so this is a per-alpha NUMBER and
+        not a band. The offset is a property of the DISCRETIZATION: it is
+        present unchanged at the base commit (reproduce with
+        ``k2_dvm_wall_detailed_balance_base_probe.py``), it scales with alpha
+        exactly, it falls with refinement, and it moves with the exchange
+        closure -- so the pins are keyed by ``EXCHANGE_MODEL`` as well as by
+        alpha, covering the closure the suite re-runs this member under, and
+        an unpinned closure raises rather than passing silently
+        (``wr1_pins``).
+
+    (b) What that offset EXACTLY is, which is the identity justifying (a)'s
+        reading and which localizes the offset away from this member:
+        ``net_surface_wall == alpha * (E_incident - N_incident *
         E_wall_mean)`` to roundoff, under both values. Every term on the
         right belongs to the ACCOMMODATED share; the non-accommodated share
         -- the only thing the selector touches -- contributes nothing to it.
 
-    (c) The pin the selector owns, at roundoff and in the exact form the
-        registration intended: the two arms exchange the SAME wall energy at
-        every alpha (the diffuse-elastic return is elastic, so it moves no
-        energy across the surface), and at ``alpha = 0`` -- the pure
-        reflection limit, where (a)'s accommodated offset is switched off --
-        the net wall exchange is exactly zero under both.
+    (c) The pin the selector owns, at roundoff: the two arms exchange the
+        SAME wall energy at every alpha (the diffuse-elastic return is
+        elastic, so it moves no energy across the surface), and at
+        ``alpha = 0`` -- the pure reflection limit, where the accommodated
+        offset is switched off -- the net wall exchange is exactly zero under
+        both.
 
-    NEGATIVE CONTROL, owned by this statement: solve the re-emission
-    temperature against the CONTINUUM relation ``<E> = 2 k T`` instead of
-    against the spectrum's discrete mean energy -- the analytic-target
-    booking the member is written to avoid. Statement (c) then fails: the
-    two arms stop exchanging the same wall energy and the alpha = 0 limit
-    stops being zero, while the particle ledger closes to the same roundoff
-    throughout.
+    TWO NEGATIVE CONTROLS, one per pinned statement:
+
+    * (a)'s: perturb the accommodated share by ``WR1_CONTROL_PERTURBATION``
+      relative and re-measure against the SAME pins. Every alpha and both
+      arms move off their pin by that perturbation, far outside the
+      tolerance, while identity (b) still closes at roundoff -- so a
+      mis-sized accommodated share is caught by the pinned value and by
+      nothing else here.
+    * (c)'s: solve the re-emission temperature against the CONTINUUM relation
+      ``<E> = 2 k T`` instead of against the spectrum's discrete mean energy
+      -- the analytic-target booking the member is written to avoid. The two
+      arms then stop exchanging the same wall energy and the alpha = 0 limit
+      stops being zero, while the particle ledger closes to the same roundoff
+      throughout.
     """
-    literal = []
+    pins = wr1_pins()
+    pinned = []
     exact = []
     same_arm = []
     for alpha in WR_ALPHAS:
         by_mode = {}
+        pin = pins[alpha]
         for mode in WR_MODES:
             dvm = wr_box(alpha, mode)
             led = dvm.update(1.0e-5, **zero_plasma(dvm))
             net, offset, loss = wr_wall_rows(dvm, led)
             by_mode[mode] = net
-            literal.append((alpha, mode, abs(net) / loss))
+            ratio = abs(net) / loss
+            pinned.append((alpha, mode, ratio, pin, abs(ratio - pin) / pin))
             exact.append(
                 (alpha, mode, abs(net - offset) / max(abs(offset), 1e-300))
             )
@@ -3497,11 +3584,34 @@ def gate_wr1():
         net, _offset, loss = wr_wall_rows(dvm, led)
         zero_alpha.append((mode, abs(net) / loss))
 
+    pin_ok = all(dev < WR1_OFFSET_REL_TOL for _a, _m, _r, _p, dev in pinned)
     exact_ok = all(rel < ROUNDOFF_REL for _a, _m, rel in exact)
     same_ok = all(rel < ROUNDOFF_REL for _a, _s, _d, rel in same_arm)
     zero_ok = all(rel < ROUNDOFF_REL for _m, rel in zero_alpha)
 
-    # NEGATIVE CONTROL: the continuum target instead of the discrete one.
+    # NEGATIVE CONTROL for (a): a mis-sized accommodated share. Re-measure at
+    # a perturbed alpha against the SAME pins -- every alpha and both arms
+    # must leave the tolerance, while identity (b) still closes at roundoff,
+    # so the pinned VALUE is what catches it and not the identity.
+    off_control = []
+    off_control_exact = 0.0
+    for alpha in WR_ALPHAS:
+        pin = pins[alpha]
+        for mode in WR_MODES:
+            dvm = wr_box(alpha * (1.0 + WR1_CONTROL_PERTURBATION), mode)
+            led = dvm.update(1.0e-5, **zero_plasma(dvm))
+            net, offset, loss = wr_wall_rows(dvm, led)
+            off_control.append(abs(abs(net) / loss - pin) / pin)
+            off_control_exact = max(
+                off_control_exact,
+                abs(net - offset) / max(abs(offset), 1e-300),
+            )
+    off_control_fails = (
+        min(off_control) > WR1_OFFSET_REL_TOL
+        and off_control_exact < ROUNDOFF_REL
+    )
+
+    # NEGATIVE CONTROL for (c): the continuum target, not the discrete one.
     solve = TransientDVM._solve_wall_return_spectra
 
     def continuum(self, e_bar):
@@ -3542,18 +3652,39 @@ def gate_wr1():
         and control_part < ROUNDOFF_REL
     )
 
-    ok = exact_ok and same_ok and zero_ok and control_fails
-    worst_literal = max(rel for _a, _m, rel in literal)
-    detail = (
-        "(a) REGISTERED PIN, as written -- |net wall energy exchange| / "
-        f"incident wall energy: worst {fmt(worst_literal)} over "
-        f"{sorted(set(a for a, _m, _r in literal))}, both arms. This is NOT "
-        "roundoff and is NOT a pass; it is the accommodated share's "
-        "velocity-resolution offset, present unchanged at the base commit "
-        "(see the k2_dvm_wall_detailed_balance_base_probe artifact)"
+    ok = (
+        pin_ok
+        and exact_ok
+        and same_ok
+        and zero_ok
+        and off_control_fails
+        and control_fails
     )
-    for alpha, mode, rel in literal:
-        detail += f"\n            alpha={alpha:g} [{mode}]: {fmt(rel)}"
+    worst_pin = max(dev for _a, _m, _r, _p, dev in pinned)
+    detail = (
+        "(a) REGISTERED PIN -- |net wall energy exchange| / incident wall "
+        "energy against its pinned per-alpha value: worst relative "
+        f"{fmt(worst_pin)} over "
+        f"{sorted(set(a for a, _m, _r, _p, _d in pinned))}, both arms, at "
+        f"neutral_kinetic_dvm_exchange = {EXCHANGE_MODEL!r} "
+        f"(tol {fmt(WR1_OFFSET_REL_TOL)}). The exchange is NOT zero: it is "
+        "the accommodated share's velocity-resolution offset, a property of "
+        "the discretization, present unchanged at the base commit (reproduce "
+        "with k2_dvm_wall_detailed_balance_base_probe.py)"
+    )
+    for alpha, mode, ratio, pin, dev in pinned:
+        detail += (
+            f"\n            alpha={alpha:g} [{mode}]: {fmt(ratio)} vs pin "
+            f"{fmt(pin)}, relative {fmt(dev)}"
+        )
+    detail += (
+        "\n        NEGATIVE CONTROL (accommodated share perturbed by "
+        f"{fmt(WR1_CONTROL_PERTURBATION)} relative, same pins): every alpha "
+        f"and both arms leave the pin by at least {fmt(min(off_control))} "
+        f"while identity (b) still closes at {fmt(off_control_exact)} -- "
+        f"caught only by the pinned value (control behaves as required: "
+        f"{off_control_fails})"
+    )
     detail += (
         "\n        (b) that offset is EXACTLY the accommodated share: worst "
         "|net - alpha (E_inc - N_inc E_wall_mean)| / offset = "
@@ -3581,9 +3712,10 @@ def gate_wr1():
         f"(control behaves as required: {control_fails})"
     )
     return (
-        "WR1 cylindrical-wall detailed balance: the reflection selector "
-        "moves no energy across the wall (the registered zero-net pin is "
-        "measured and does NOT hold -- see (a))",
+        "WR1 cylindrical-wall detailed balance: the net wall energy exchange "
+        "is the accommodated share's velocity-resolution offset at its "
+        "pinned per-alpha value, and the reflection selector moves no energy "
+        "across the wall",
         ok,
         detail,
     )
