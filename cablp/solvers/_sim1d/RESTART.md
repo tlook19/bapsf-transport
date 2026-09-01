@@ -178,6 +178,57 @@ breaks identity. `cathode_emitting_area` is a **structural flag key**: resuming
 across a change of arming would either drop an evolved fraction or leave an
 armed closure sitting at its seed, so the compatibility check refuses instead.
 
+### Cathode-jet arming latch
+
+| state | site | class |
+|---|---|---|
+| `_jet_armed` | `_update_jet_arming_latch` (`solver.py`) | CARRIED (armed only) |
+| `_jet_arming_censored_steps` | `_accept_step_attempt` (`solver.py`) | CARRIED (armed only) |
+| `_jet_arming_transitions` | `_update_jet_arming_latch` (`solver.py`) | CARRIED (armed only) |
+| `_jet_arming_last_transition_s` | `_update_jet_arming_latch` (`solver.py`) | CARRIED (armed only) |
+| `_jet_arm_current_A`, `_jet_disarm_current_A`, `_jet_arming_active` | construction | DERIVABLE |
+
+`_jet_armed` is order-unity, not last-bit. It decides whether the next step's
+cathode jets launch at all AND whether the cathode surface is debited for
+them — one latch state read by both sides — so dropping it does not perturb a
+restart, it **re-censors a channel the producing run had already brought into
+existence**, from the resumed run's first step until the booked ion current
+climbs back across `neutral_jet_arm_current_A`. The three census members carry
+alongside it so a resumed run reports one run's arming history rather than two.
+
+They ride the **`cathode` group** on their own keys rather than joining
+`_RESTART_CATHODE_ATTRS` (`solver.py`) and its strict loop, and they are
+**PRESENCE-GATED** on a criterion being declared, exactly like `_cathode_f_em`
+and the vessel node. At the shipped inert default (`arm = 0`) the latch is
+permanently armed and the counters permanently at their seed, so no rows are
+written and the payload is byte-unchanged — this member is absent there, not
+carried-but-inert.
+
+**The arming keys are deliberately NOT structural**, and the two asymmetric
+resumes are handled rather than refused:
+
+* resuming with NO criterion from a payload that has the rows ignores them.
+  With no criterion the jets are unconditionally live and nothing reads the
+  latch; restoring it would only mislabel a run summary.
+* resuming WITH a criterion from a payload that has no rows — which is exactly
+  what a payload written before this carriage looks like — **LOADS**. It does
+  not raise. `_apply_restart_payload` (`solver.py`) keeps the constructor's
+  disarmed seed and **warns** that it did, naming the consequence: until the
+  current re-crosses the arm threshold the jets launch nothing, the surface is
+  debited nothing, and the continuation is not bit-identical.
+
+The format string did not move: these are presence-gated additions to an
+existing group, the same shape `_cathode_f_em` and the anode ledger took, so
+every payload already on disk stays readable under `sim1d-restart-v1`.
+
+Its negative control does **not** live in `scripts/restart_bitidentity.py`:
+none of that harness's four scenarios declares an arming criterion, so all
+four would report the rows absent and skip. The control is `gate_ja8` in
+`scripts/verify_sim1d_k2_dvm.py`, which exports a handoff at which the latch
+is armed with a nonzero census, resumes it, and then resumes the SAME payload
+with the four rows deleted — the pre-carriage shape — and requires that leg to
+come up disarmed, warn, and diverge.
+
 ### Coverage closure (v2)
 
 | state | site | class |

@@ -243,10 +243,14 @@ Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
     python scripts/verify_sim1d_k2_dvm.py
 """
 import hashlib
+import shutil
 import sys
+import tempfile
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 
+import h5py
 import numpy as np
 
 from cablp.atomic.cross_sections import (
@@ -258,6 +262,7 @@ from cablp.solvers._sim1d import (
     KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
     LAPDSim1D,
     default_config,
+    save_restart_state,
 )
 from cablp.solvers._sim1d.core.geometry import (
     absorbing_live_cells_by_role,
@@ -4829,6 +4834,15 @@ JA_FLUID_STEPS = 12
 #: identity carry energy.
 JA_IDENTITY_MAX_STEPS = 900
 
+#: Steps the JA8 restart leg takes AFTER the handoff, on each of the three
+#: continuation legs. Chosen for what it has to resolve, not for a horizon: the
+#: negative control's re-arming has to be visible INSIDE the window, and on
+#: this arm the disarmed resume re-arms at the end of its own first step, so a
+#: window of a few steps already carries the divergence and the re-arm. Kept
+#: small because the fluid arm carries the full moment neutral package and the
+#: leg runs three times.
+JA_RESTART_STEPS = 6
+
 #: The DVM cathode-jet arm these gates ride, on the same coefficients the B5
 #: gates above use.
 JA_JET_KW = {
@@ -5357,6 +5371,252 @@ def gate_ja7():
         f"and BOTH differ from the {fmt(JA_ARM_A)}/{fmt(JA_DISARM_A)} A "
         f"build ({differs}), so the agreement above is a measurement and not "
         f"a comparison of one run with itself",
+    )
+
+
+#: The four latch attributes the restart record carries, in the solver's own
+#: register order. JA8 reads the register itself rather than restating the
+#: names, so a member added to the carriage without a gate cannot pass here by
+#: going unnoticed.
+JA_RESTART_LATCH_ATTRS = LAPDSim1D._RESTART_JET_ARMING_ATTRS
+
+
+def _ja8_sim(**overrides):
+    """A restart-eligible FLUID cathode-jet build at an arming criterion.
+
+    Two departures from :func:`_ja_fluid_sim`, both forced by the restart:
+    ``neutral_equilibration`` is cleared (a resume REFUSES it at construction,
+    because ``start_simulation`` would overwrite the restored state, and the
+    unbroken leg clears it too so all three legs carry one config), and the
+    criterion is named here so every leg arms on the same pair.
+
+    The arm is ``JA_IMMEDIATE_ARM_A``: the latch has to be ARMED at the handoff
+    for the carriage to be under test at all, and this arm's booked ion current
+    reaches the registered 50 A pair nowhere inside a window a gate can afford.
+    """
+    d, fl = default_config()
+    d = dict(d)
+    fl = dict(fl)
+    fl["neutral_equilibration"] = False
+    d["neutral_jet_arm_current_A"] = JA_IMMEDIATE_ARM_A
+    d["neutral_jet_disarm_current_A"] = 0.0
+    d.update(overrides)
+    return LAPDSim1D(input_dict=d, input_flags=fl)
+
+
+def _ja8_latch(sim):
+    """The latch's four carried members, comparable at raw bits.
+
+    The transition clock is compared through its uint64 view rather than as a
+    float so the not-yet-transitioned value (NaN) compares equal to itself: a
+    gate that used ``==`` there would read a correctly carried NaN as a
+    mismatch and a dropped one as a mismatch too, and could not tell them
+    apart.
+    """
+    armed, censored, transitions, last_s = (
+        getattr(sim, name) for name in JA_RESTART_LATCH_ATTRS
+    )
+    return (
+        bool(armed),
+        int(censored),
+        int(transitions),
+        int(_ja_bits(np.asarray([last_s], dtype=float))[0]),
+    )
+
+
+def _ja8_advance(sim, steps=JA_RESTART_STEPS):
+    """Step ``sim`` and fingerprint what the cathode jet did while stepping.
+
+    ``censored_entry`` is the LAUNCH observable: the number of continuation
+    steps ENTERED with the jet censored, sampled from
+    ``_cathode_jet_censored`` before each step rather than after it. Before is
+    the only correct side. The latch advances at the END of the accepted step,
+    so a probe taken afterwards reports the state the NEXT step will run under
+    and would read a censored first step as an uncensored one.
+
+    It is also the only launch probe that is uncontaminated here. Building the
+    jet spec would read ``_cathode_solve``, which the restart deliberately
+    DROPS and re-establishes on its first step, so a spec-based count would
+    measure that omission on the resumed leg instead of the latch.
+
+    The surface energy ledger with ``T_s`` is the DEBIT side. Both ride
+    alongside the state so the continuation claim is about the channel the
+    latch gates, not only about the packed vector agreeing.
+    """
+    censored_entry = 0
+    for _ in range(steps):
+        if sim._cathode_jet_censored():
+            censored_entry += 1
+        advance_one_step(sim)
+    return {
+        "y": np.asarray(sim._y, dtype=float).copy(),
+        "Ts_K": float(sim._cathode_Ts_K),
+        "ledger": dict(sim._cathode_energy_ledger_J),
+        "censored_entry": censored_entry,
+        "latch": _ja8_latch(sim),
+    }
+
+
+def _ja8_strip_latch(payload_path, destination):
+    """Copy a payload and DELETE its four latch rows -- the pre-change record.
+
+    This is how the negative control reaches a record written before the
+    carriage existed without keeping a stale binary fixture around: the fields
+    are removed from the ``cathode`` group, which is byte-for-byte the shape a
+    payload from the previous build has.
+    """
+    shutil.copyfile(payload_path, destination)
+    removed = []
+    with h5py.File(destination, "r+") as h5:
+        group = h5["cathode"]
+        for name in JA_RESTART_LATCH_ATTRS:
+            for suffix in ("", "__int", "__bool", "__none"):
+                if f"{name}{suffix}" in group.attrs:
+                    del group.attrs[f"{name}{suffix}"]
+                    removed.append(f"{name}{suffix}")
+    return removed
+
+
+def gate_ja8():
+    """JA8 the arming latch SURVIVES a restart, and matters when it does not.
+
+    QUANTITY: the four carried latch members across an export/resume, and the
+    continuation the resumed run then produces -- its packed state, its
+    cathode surface energy ledger, ``T_s``, and the number of steps on which
+    the jet spec was actually built.
+    SITE: ``LAPDSim1D._RESTART_JET_ARMING_ATTRS`` written by
+    ``restart_payload`` and read by ``_apply_restart_payload``, through
+    ``save_restart_state``.
+    FIXTURE: the shipped fluid package at ``JA_IMMEDIATE_ARM_A``, run
+    ``JA_FLUID_STEPS`` accepted steps to a handoff at which the latch is ARMED
+    and its census NONZERO, then ``JA_RESTART_STEPS`` further steps unbroken
+    and restarted.
+    PASS: (a) the resumed solver's four members are bit-identical to the
+    producing solver's at the handoff instant; (b) after the same further
+    steps the restarted run is bit-identical to the unbroken one on state,
+    ledger, ``T_s``, launch count AND census; (c) the NEGATIVE CONTROL -- the
+    same payload with the four rows deleted, which is what a record written
+    before the carriage looks like -- comes up DISARMED, warns that it did,
+    and DIVERGES from the unbroken run.
+
+    (c) is what makes (a) and (b) statements rather than tautologies. Without
+    it a carriage that restored nothing would still pass (b) on any window
+    where the latch happened not to gate anything. It also pins the
+    old-record behaviour the reader is promised: a payload missing these rows
+    LOADS -- it does not raise -- and the run says out loud that it resumed
+    disarmed.
+    """
+    unbroken = _ja8_sim()
+    for _ in range(JA_FLUID_STEPS):
+        advance_one_step(unbroken)
+    handoff_latch = _ja8_latch(unbroken)
+    # The census must be NONZERO at the handoff or the carriage is untested:
+    # a latch carried as (disarmed, 0, 0, NaN) is indistinguishable from one
+    # that was never carried at all.
+    census_live = (
+        handoff_latch[0] and handoff_latch[1] > 0 and handoff_latch[2] > 0
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        payload = Path(tmp) / "ja8_handoff.restart.h5"
+        save_restart_state(payload, unbroken)
+        stripped = Path(tmp) / "ja8_stripped.restart.h5"
+        removed = _ja8_strip_latch(payload, stripped)
+
+        resumed = _ja8_sim(restart_from=str(payload))
+        resumed_latch = _ja8_latch(resumed)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            control = _ja8_sim(restart_from=str(stripped))
+            warned = any(
+                "cathode-jet arming latch" in str(w.message) for w in caught
+            )
+        control_latch = _ja8_latch(control)
+        # Read AT LOAD, before any of the three legs steps: the control
+        # re-arms on its own first step, so a transition clock sampled after
+        # the continuation would report the re-arm and not the seed.
+        control_seed_s = float(control._jet_arming_last_transition_s)
+        handoff_transition_s = float(unbroken._jet_arming_last_transition_s)
+
+        after_unbroken = _ja8_advance(unbroken)
+        after_resumed = _ja8_advance(resumed)
+        after_control = _ja8_advance(control)
+
+    carried = resumed_latch == handoff_latch
+    continues = (
+        np.array_equal(
+            _ja_bits(after_unbroken["y"]), _ja_bits(after_resumed["y"])
+        )
+        and after_resumed["Ts_K"] == after_unbroken["Ts_K"]
+        and after_resumed["ledger"] == after_unbroken["ledger"]
+        and after_resumed["censored_entry"] == after_unbroken["censored_entry"]
+        and after_resumed["latch"] == after_unbroken["latch"]
+    )
+    # The control must come up DISARMED with an empty census -- the
+    # constructor's seed -- and its continuation must then leave the unbroken
+    # trajectory. Both halves are required: a control that diverged while
+    # still resuming armed would be measuring something else.
+    control_disarmed = control_latch[:3] == (False, 0, 0)
+    control_seed_nan = not np.isfinite(control_seed_s)
+    control_diverges = not np.array_equal(
+        _ja_bits(after_unbroken["y"]), _ja_bits(after_control["y"])
+    )
+    # Name the MECHANISM of the divergence rather than only its existence: the
+    # control has to actually enter a step censored, and the two carried legs
+    # have to enter none. Without this the equality above could be satisfied
+    # by both legs censoring everything.
+    control_censors = after_control["censored_entry"] > 0
+    carried_legs_launch = (
+        after_unbroken["censored_entry"] == 0
+        and after_resumed["censored_entry"] == 0
+    )
+    ok = (
+        census_live
+        and carried
+        and continues
+        and carried_legs_launch
+        and len(removed) == len(JA_RESTART_LATCH_ATTRS)
+        and warned
+        and control_disarmed
+        and control_seed_nan
+        and control_diverges
+        and control_censors
+    )
+    return (
+        "JA8 arming criterion: the latch and its census survive a restart, "
+        "and a record without them resumes disarmed and diverges",
+        ok,
+        f"handoff after {JA_FLUID_STEPS} accepted steps at "
+        f"arm={fmt(JA_IMMEDIATE_ARM_A)} A; latch ARMED with a nonzero census: "
+        f"{census_live} -- armed={handoff_latch[0]}, censored steps "
+        f"{handoff_latch[1]}, transitions {handoff_latch[2]}, last transition "
+        f"{fmt(handoff_transition_s)} s\n        "
+        f"CARRIED: all {len(JA_RESTART_LATCH_ATTRS)} members "
+        f"({', '.join(JA_RESTART_LATCH_ATTRS)}) bit-identical in the resumed "
+        f"solver: {carried}\n        "
+        f"CONTINUATION over {JA_RESTART_STEPS} further steps, unbroken vs "
+        f"restarted: state bit-identical, ledger, T_s "
+        f"{fmt(after_resumed['Ts_K'])} K vs {fmt(after_unbroken['Ts_K'])} K, "
+        f"steps entered CENSORED {after_resumed['censored_entry']} vs "
+        f"{after_unbroken['censored_entry']} (0 required on both -- both "
+        f"launch on every step: {carried_legs_launch}), census "
+        f"{after_resumed['latch'][:3]} vs {after_unbroken['latch'][:3]} -- "
+        f"all equal: {continues}\n        "
+        f"NEGATIVE CONTROL, the same payload with its {len(removed)} latch "
+        f"rows deleted ({', '.join(removed)}) -- the shape a record written "
+        f"before the carriage has: it LOADS rather than raising, warns "
+        f"({warned}), and comes up disarmed with an empty census "
+        f"({control_disarmed and control_seed_nan}: armed="
+        f"{control_latch[0]}, censored {control_latch[1]}, transitions "
+        f"{control_latch[2]}, last transition {fmt(control_seed_s)} s)\n        "
+        f"and its continuation DIVERGES from the unbroken run "
+        f"({control_diverges}) -- it re-censors the jet it should have "
+        f"resumed launching, entering {after_control['censored_entry']} of "
+        f"{JA_RESTART_STEPS} steps censored against the unbroken run's "
+        f"{after_unbroken['censored_entry']} ({control_censors}), and re-arms at "
+        f"{fmt(control._jet_arming_last_transition_s)} s instead of holding "
+        f"the handoff's {fmt(handoff_transition_s)} s. That divergence is the "
+        f"measure of what the carriage is worth",
     )
 
 
@@ -7162,6 +7422,7 @@ def main():
         gate_ja5,
         gate_ja6,
         gate_ja7,
+        gate_ja8,
         gate_aj1,
         gate_aj2,
         gate_aj3,

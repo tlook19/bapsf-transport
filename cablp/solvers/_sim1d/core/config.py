@@ -2483,6 +2483,16 @@ def cathode_defaults():
         atoms that were never born. The DVM launch representability guard is
         unaffected and still fires on every armed step.
 
+        The latch this key arms is RUN STATE on the solver instance, and it IS
+        part of the restart record: a resumed run comes up with the arming
+        state, the censored-step count, the transition count and the last
+        transition time the producing run ended on, so a mid-run handoff does
+        not re-censor jets the discharge had already brought into existence.
+        The rows are presence-gated on a criterion being declared, so a
+        payload from a run at the default carries none. One written before the
+        latch was carried has none either: it still LOADS, and the resumed run
+        starts disarmed and warns that it did.
+
         Must be >= 0. A positive value additionally requires
         ``0 <= neutral_jet_disarm_current_A < neutral_jet_arm_current_A``;
         anything else raises at construction.
@@ -2492,6 +2502,11 @@ def cathode_defaults():
         That is what makes the criterion a latched hysteresis rather than a
         per-step comparison, and it is why a current dwelling near the arming
         threshold cannot chatter the jets on and off.
+
+        The latch state this threshold advances is carried across a restart
+        together with the rest of the criterion's census, so a resumed run
+        holds an armed jet armed instead of re-crossing the band from scratch;
+        ``neutral_jet_arm_current_A`` states the carriage in full.
 
         Must be ``0.0`` when ``neutral_jet_arm_current_A`` is ``0.0`` (no
         criterion is declared, so there is no band to describe); otherwise
