@@ -26,7 +26,11 @@ radius, so the flux-tube AREA is ``pi r^2``) and ``machine_radius_profile_cm``
 (the vessel bore). This script emits both, for the two end-field cases the
 census re-solve resolved, plus the mesh comparison against the l2a7b
 reference and the construction validation that must pass before any arm
-launches.
+launches. The annulus figure that validation prints is the smallest PER-CELL
+share ``(V_m - V_p)/V_m`` over the cells that have an annulus, cap-bound cells
+included and ``V_ann == 0`` cells excluded -- the same per-cell quantity the
+solver's ``neutral_annulus_volume_fraction_min`` guard refuses on, NOT a
+column-integrated share.
 
 Inputs
 ------
@@ -524,7 +528,8 @@ def main():
         )
         worst = int(np.nanargmin(fraction))
         say(
-            f"  min V_ann/V_neutral over annulus cells = "
+            f"  smallest PER-CELL annulus share (V_m - V_p)/V_m over the "
+            f"cells that have an annulus, cap-bound cells included = "
             f"{fraction[worst]:.6f} at cell {worst} "
             f"(z = {geometry.z_cm[worst]:.3f} cm, role {geometry.cell_role[worst]}); "
             f"guard neutral_annulus_volume_fraction_min = "

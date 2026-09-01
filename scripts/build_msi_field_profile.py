@@ -122,7 +122,13 @@ kept. The report prints the census of where the tolerance would have fired.
 
 Beyond the departure the ratio is applied, capped at
 ``sqrt(AREA_CAP_FRACTION) * R_m(z)`` -- the declared annulus regularization,
-the same cap the census build uses. Outside the corrected sample span
+the same cap the census build uses. The annulus figure the report prints is
+the smallest PER-CELL share ``(V_m - V_p)/V_m`` taken over the cells that have
+an annulus, cap-bound cells included and ``V_ann == 0`` cells excluded -- the
+same per-cell quantity the solver's ``neutral_annulus_volume_fraction_min``
+guard refuses on, NOT a column-integrated share. Wherever the cap binds that
+minimum is pinned at ``1 - AREA_CAP_FRACTION`` by construction, so it reports
+the regularization rather than the measured field. Outside the corrected sample span
 ``B_hat`` is HELD at the nearer end sample: below ``z_model = -210.63`` cm,
 where the flat rule already fixes ``r = RP_CM`` so the hold cannot be
 observable, and beyond ``z_model = 2114.67`` cm. The report states how many
@@ -1207,10 +1213,11 @@ def main():
     fraction = np.where(has_annulus, annulus / geometry.neutral_volume_cm3, np.nan)
     worst = int(np.nanargmin(fraction))
     say(
-        f"  min V_ann/V_neutral over annulus cells = {fraction[worst]:.6f} at "
-        f"cell {worst} (z = {geometry.z_cm[worst]:.3f} cm, role "
-        f"{geometry.cell_role[worst]}); guard "
-        f"neutral_annulus_volume_fraction_min = "
+        f"  smallest PER-CELL annulus share (V_m - V_p)/V_m over the cells "
+        f"that have an annulus, cap-bound cells included = "
+        f"{fraction[worst]:.6f} at cell {worst} (z = "
+        f"{geometry.z_cm[worst]:.3f} cm, role {geometry.cell_role[worst]}); "
+        f"guard neutral_annulus_volume_fraction_min = "
         f"{params.get('neutral_annulus_volume_fraction_min', 1e-2)}"
     )
     say(f"  cells with no annulus (V_ann == 0): {int(np.sum(~has_annulus))}")
