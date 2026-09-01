@@ -8,9 +8,16 @@ the measured MSI machine-state field record instead of from the CAD census
 re-solve below. The two plasma profiles this script emits are retained as the
 INDEPENDENT CROSS-CHECK against that build -- the MSI builder reuses this
 script's mesh probe and vessel profile verbatim and compares its result against
-both cases here. The comparison is reported in ``mfp_field_profile.txt``; it is
-not a small one, and the disagreement it exposes in the end-pair coil location
-is disclosed in ``scripts/production_stance_provenance.md``.
+both cases here. The comparison is reported in ``mfp_field_profile.txt``.
+
+WHICH CASE IS THE MACHINE'S. The end-pair supply channel reads 0 A in every
+recorded ES1 shot, so ``off`` -- not ``droop_min`` -- is the case the machine
+was actually in, and under the corrected MSI registration (2026-09-01) the
+measured fall-off tracks this script's ``off`` axial field to a few cm all the
+way down. The ~156 cm "coil-location disagreement" reported against
+``droop_min`` earlier that day was an artifact of a mirror-imaged coordinate
+assumption in the MSI build and is retired; see
+``scripts/production_stance_provenance.md``.
 
 G1 adopts the measured CAD machine geometry at the l2a7b operating point.
 The solver takes the geometry as RADII, one entry per mesh cell, under the
