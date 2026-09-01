@@ -4918,6 +4918,12 @@ def _ja_fluid_run(steps=JA_FLUID_STEPS, **overrides):
     sim = _ja_fluid_sim(**overrides)
     spec_live = 0
     I_i_max = 0.0
+    # The INCIDENT ion current at the cathode face on the WORST step of the
+    # run. It is the flux the recycle -- and therefore the jet -- rides, so a
+    # positive minimum is what says every step of a censored comparison had a
+    # real stream to route, rather than the two builds agreeing because
+    # nothing was arriving at the surface on any of them.
+    I_i_min = float("inf")
     for _ in range(steps):
         advance_one_step(sim)
         solve = sim._cathode_solve
@@ -4925,6 +4931,7 @@ def _ja_fluid_run(steps=JA_FLUID_STEPS, **overrides):
             candidate = float(solve.beam_result.result.I_i)
             if np.isfinite(candidate):
                 I_i_max = max(I_i_max, candidate)
+                I_i_min = min(I_i_min, candidate)
         if sim._cathode_jet_spec(sim._cathode_solve) is not None:
             spec_live += 1
     return {
@@ -4934,57 +4941,227 @@ def _ja_fluid_run(steps=JA_FLUID_STEPS, **overrides):
         "censored": int(sim._jet_arming_censored_steps),
         "transitions": int(sim._jet_arming_transitions),
         "I_i_max": I_i_max,
+        "I_i_min": 0.0 if I_i_min == float("inf") else I_i_min,
+    }
+
+
+def _ja_run_to_tick(max_steps=JA_IDENTITY_MAX_STEPS, **overrides):
+    """Run a DVM arm until the neutral clock has TICKED, and report the tick.
+
+    The distinction from :func:`_ja_run` is the whole point of JA1: a run that
+    books recycled counts but never reaches a tick has not exercised the
+    launch path at all, and a gate written on it is vacuous on exactly the
+    code the tick runs.
+    """
+    sim = make_sim(**overrides)
+    steps = 0
+    while sim._dvm.updates < 1 and steps < max_steps:
+        advance_one_step(sim)
+        steps += 1
+    if sim._dvm.updates < 1:
+        raise RuntimeError(f"no neutral tick in {steps} steps")
+    led = sim._dvm.last_ledger
+    return {
+        "y": np.asarray(sim._y, dtype=float).copy(),
+        "steps": steps,
+        "ticks": int(sim._dvm.updates),
+        "recycled_count": float(led["birth_cathode_face"]),
+        "jet_count": float(led["birth_cathode_jet"]),
+        "jet_energy_erg": float(led["energy"]["birth_cathode_jet"]),
+        # Absent with the channel off -- the row is presence-gated on the jet
+        # -- so read it as 0.0 there rather than requiring it to exist.
+        "backscatter_J": float(
+            sim._cathode_energy_ledger_J.get("backscatter", 0.0)
+        ),
+        "pending_erg": float(np.sum(sim._dvm_cathode_jet_energy_booked)),
+        "censored": int(sim._jet_arming_censored_steps),
+        "transitions": int(sim._jet_arming_transitions),
+        "inventory_after": float(led["inventory_after"]),
     }
 
 
 def gate_ja1():
-    """JA1 sub-threshold: nothing is launched AND nothing is debited.
+    """JA1 a censored tick CARRYING recycled counts: absent, not censored.
 
-    QUANTITY: both sides of the conservation pair the criterion gates -- the
-    launch (the tick's ``birth_cathode_jet`` energy plus the not-yet-ticked
-    accumulator) and the debit (the surface energy ledger's ``backscatter``
-    row).
-    SITE: the DVM cathode-jet channel through ``LAPDSim1D``'s accepted-step
-    path, on the kinetic arm.
-    FIXTURE: ``arm_config`` + the B5 jet coefficients, at the REGISTERED
-    50 A / 25 A pair, run ``JA_STEPS`` accepted steps.
-    PASS: exactly zero on BOTH sides -- not small, zero -- with the latch
-    never arming, over a run whose ion current stayed below the disarm
-    threshold throughout.
+    QUANTITY: on a neutral tick whose ``cathode_face`` recycle count is
+    NON-ZERO while the latch is disarmed -- the tick's ``birth_cathode_jet``
+    count and energy, the thermal remainder row ``birth_cathode_face``, and
+    the surface ``backscatter`` row.
+    SITE: ``TransientDVM.update``'s cathode-jet launch, reached through
+    ``LAPDSim1D``'s accepted-step path and its neutral clock.
+    FIXTURE: ``arm_config`` + the B5 jet coefficients at the REGISTERED
+    50 A / 25 A pair, run until the clock ticks.
+    PASS: the tick COMPLETES (no raise), the jet count and energy are exactly
+    zero, the surface debit is exactly zero, and the whole recycled stream is
+    routed exactly as an engine with ``neutral_kinetic_dvm_cathode_jet=false``
+    routes it -- proven by bit-identity of the accepted state and equality of
+    the thermal remainder row against that build.
 
-    Showing both sides is the whole point. A censoring that suppressed the
-    launch but left the debit standing would book the surface for atoms that
-    were never born, and the totals would still close.
+    WHY THIS SHAPE. The gate this replaces asserted "0 erg over 0 TICKS": it
+    ran 40 steps, never reached a neutral tick, and so never executed the
+    launch path at all. It was vacuous on precisely the code that then failed
+    in the M1 arms, where the first tick raised
+    ``needs a positive finite launch energy per atom`` because the recycled
+    COUNT reached the launch while the censored energy booking was zero. A
+    guard instrument has to exercise every component the guard covers; this
+    one now names the tick, the non-zero count that reaches it, and the
+    routing the count must take instead.
     """
-    r = _ja_run(
+    censored = _ja_run_to_tick(
+        **JA_JET_KW,
         neutral_jet_arm_current_A=JA_ARM_A,
         neutral_jet_disarm_current_A=JA_DISARM_A,
     )
-    sub_threshold = r["I_i_max"] < JA_DISARM_A
+    absent = _ja_run_to_tick(
+        neutral_kinetic_dvm_cathode_jet=False,
+    )
+    non_vacuous = censored["recycled_count"] > 0.0
+    routed = (
+        censored["recycled_count"] == absent["recycled_count"]
+        and np.array_equal(_ja_bits(censored["y"]), _ja_bits(absent["y"]))
+    )
     ok = (
-        r["arming_active"]
-        and sub_threshold
-        and r["pending_erg"] == 0.0
-        and r["tick_energy_erg"] == 0.0
-        and r["backscatter_J"] == 0.0
-        and r["transitions"] == 0
-        and r["censored"] == JA_STEPS
+        non_vacuous
+        and censored["ticks"] >= 1
+        and censored["jet_count"] == 0.0
+        and censored["jet_energy_erg"] == 0.0
+        and censored["backscatter_J"] == 0.0
+        and censored["pending_erg"] == 0.0
+        and censored["transitions"] == 0
+        and routed
     )
     return (
-        "JA1 arming criterion, sub-threshold: the cathode jet launches "
-        "NOTHING and the surface is debited NOTHING",
+        "JA1 arming criterion: a censored tick CARRYING recycled counts "
+        "completes, and routes the whole stream as jet-absent",
         ok,
-        f"{JA_STEPS} accepted steps at arm={fmt(JA_ARM_A)} A / "
-        f"disarm={fmt(JA_DISARM_A)} A; worst booked I_i over the run "
-        f"{fmt(r['I_i_max'])} A, below the disarm threshold throughout: "
-        f"{sub_threshold}\n        "
-        f"LAUNCH side: tick birth_cathode_jet energy "
-        f"{fmt(r['tick_energy_erg'])} erg over {r['ticks']} ticks, "
-        f"not-yet-ticked accumulator {fmt(r['pending_erg'])} erg "
-        f"(exactly 0 required)\n        "
-        f"DEBIT side: surface backscatter row {fmt(r['backscatter_J'])} J "
-        f"(exactly 0 required); latch transitions {r['transitions']}, "
-        f"censored steps {r['censored']} of {JA_STEPS}",
+        f"{censored['steps']} accepted steps to the first neutral tick, all "
+        f"{censored['censored']} censored, {censored['transitions']} latch "
+        f"transitions\n        "
+        f"NON-VACUOUS: the tick carried a cathode_face recycle of "
+        f"{fmt(censored['recycled_count'])} particles "
+        f"({non_vacuous}) -- this is the count that reached the launch and "
+        f"raised before the fix\n        "
+        f"LAUNCH side: birth_cathode_jet count "
+        f"{fmt(censored['jet_count'])}, energy "
+        f"{fmt(censored['jet_energy_erg'])} erg, not-yet-ticked accumulator "
+        f"{fmt(censored['pending_erg'])} erg (exactly 0 required, and the "
+        f"tick did not raise)\n        "
+        f"DEBIT side: surface backscatter row "
+        f"{fmt(censored['backscatter_J'])} J (exactly 0 required)\n        "
+        f"ROUTED AS ABSENT: thermal remainder birth_cathode_face "
+        f"{fmt(censored['recycled_count'])} against the "
+        f"cathode_jet=false build's {fmt(absent['recycled_count'])}, and the "
+        f"accepted state bit-identical to that build: {routed}",
+    )
+
+
+def gate_ja9():
+    """JA9 NEGATIVE CONTROL: the pre-fix expression raises on the arm-2 state.
+
+    QUANTITY: what ``TransientDVM.update`` does when a tick carries a NON-ZERO
+    ``cathode_face`` recycle count and a ZERO cathode-jet incident energy --
+    the state the M1 arms reached at their first tick (t = 3.69e-6 s,
+    I_tot = 4.80 A, latch disarmed after 9 censored steps).
+    SITE: ``_split_cathode_recycle`` and the launch it feeds.
+    FIXTURE: the engine driven DIRECTLY at that pairing, so the control is
+    the pre-fix ARITHMETIC rather than a whole run: ``cathode_jet_counts=None``
+    IS the expression this branch replaces (``R_N`` of the FULL count), and
+    passing the armed-step counts is the fix.
+    PASS: the pre-fix pairing RAISES, naming the launch energy; the fixed
+    pairing completes with the jet rows exactly zero.
+
+    This is the leg that shows the fix is load-bearing. JA1 proves the tick
+    now completes; without this one, nothing shows it would not have
+    completed anyway.
+    """
+    nz = 12
+    dvm = TransientDVM(
+        geometry=uniform_tube(nz),
+        nvz=CJ_NVZ,
+        nvp=CJ_NVP,
+        s_L=0.3,
+        s_R=0.3,
+        accommodation=0.4,
+        exchange_model=EXCHANGE_MODEL,
+        annulus_flights="rates",
+        mesh_face=nz // 2,
+        transparency=0.642,
+        cathode_jet=cj_spec(),
+    )
+    dvm.seed_from_density(np.full(nz, 1.0e13), np.full(nz, 1.0e13))
+    plasma = geometry_plasma(nz)
+    # A censored tick: recycled particles arrive, no incident energy is booked.
+    # ``puff`` stays a RATE (it is the one configured drive with no counted
+    # partner); every other channel is counted, which is the same division
+    # the solver hands the engine.
+    rows = {
+        "recombination": np.zeros(nz),
+        "anode": np.zeros(nz),
+        "collector_face": np.zeros(nz),
+        "cathode_face": np.zeros(nz),
+    }
+    rows["cathode_face"][dvm.cath_cell] = CJ_COUNT
+    incident = np.zeros(nz)
+
+    raised = ""
+    try:
+        dvm.update(
+            CADENCE_S,
+            sources={"puff": np.zeros(nz)},
+            source_counts={k: v.copy() for k, v in rows.items()},
+            cathode_jet_incident_erg=incident.copy(),
+            cathode_jet_counts=None,
+            **plasma,
+        )
+    except ValueError as exc:
+        raised = str(exc)
+
+    fixed = TransientDVM(
+        geometry=uniform_tube(nz),
+        nvz=CJ_NVZ,
+        nvp=CJ_NVP,
+        s_L=0.3,
+        s_R=0.3,
+        accommodation=0.4,
+        exchange_model=EXCHANGE_MODEL,
+        annulus_flights="rates",
+        mesh_face=nz // 2,
+        transparency=0.642,
+        cathode_jet=cj_spec(),
+    )
+    fixed.seed_from_density(np.full(nz, 1.0e13), np.full(nz, 1.0e13))
+    led = fixed.update(
+        CADENCE_S,
+        sources={"puff": np.zeros(nz)},
+        source_counts={k: v.copy() for k, v in rows.items()},
+        cathode_jet_incident_erg=incident.copy(),
+        cathode_jet_counts=np.zeros(nz),
+        **plasma,
+    )
+    jet_n = float(led["birth_cathode_jet"])
+    jet_e = float(led["energy"]["birth_cathode_jet"])
+    thermal_n = float(led["birth_cathode_face"])
+    names = "launch energy per atom" in raised
+    ok = (
+        bool(raised)
+        and names
+        and jet_n == 0.0
+        and jet_e == 0.0
+        and thermal_n == CJ_COUNT
+    )
+    return (
+        "JA9 arming criterion NEGATIVE CONTROL: the pre-fix pairing raises "
+        "on a censored tick that carries recycled counts",
+        ok,
+        f"one tick, {fmt(CJ_COUNT)} recycled particles at the cathode cell "
+        f"and zero booked incident energy -- the M1 arm-2 first-tick state\n"
+        f"        PRE-FIX (cathode_jet_counts=None: R_N of the FULL count, "
+        f"the expression this branch replaces) RAISES naming the launch "
+        f"energy: {names}\n        {raised[:150]!r}\n        "
+        f"FIXED (directed share drawn from the armed-step counts, here zero) "
+        f"completes: birth_cathode_jet count {fmt(jet_n)}, energy "
+        f"{fmt(jet_e)} erg, and the thermal remainder receives the FULL "
+        f"{fmt(thermal_n)} particles",
     )
 
 
@@ -5295,9 +5472,16 @@ def gate_ja6():
         and np.array_equal(_ja_bits(supra["y"]), _ja_bits(inert["y"]))
         and supra["Ts_K"] == inert["Ts_K"]
     )
-    non_vacuous = not np.array_equal(
-        _ja_bits(sub["y"]), _ja_bits(_ja_fluid_run()["y"])
+    live = _ja_fluid_run()
+    differs_from_live = not np.array_equal(
+        _ja_bits(sub["y"]), _ja_bits(live["y"])
     )
+    # Non-vacuity has TWO halves, and the second one is the lesson of the M1
+    # arm-2 failure: it is not enough that the two builds differ, the CENSORED
+    # build must have had a real incident stream on every step it censored.
+    # Otherwise "routes as absent" could be true because nothing was arriving.
+    incident_throughout = sub["I_i_min"] > 0.0
+    non_vacuous = differs_from_live and incident_throughout
     ok = sub_ok and supra_ok and non_vacuous
     return (
         "JA6 arming criterion, FLUID parity: sub-threshold books zero source "
@@ -7423,6 +7607,7 @@ def main():
         gate_ja6,
         gate_ja7,
         gate_ja8,
+        gate_ja9,
         gate_aj1,
         gate_aj2,
         gate_aj3,

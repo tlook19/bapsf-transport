@@ -208,6 +208,16 @@ def save_result_hdf5(path, result, params=None, flags=None):
             h5.create_dataset(
                 "dvm_tick_count", data=np.int64(result.dvm_tick_count)
             )
+        # Cathode-jet arming census. Presence-gated on the same discipline as
+        # the DVM census above -- only a run that DECLARED an arming criterion
+        # carries the attribute -- so a file from a run at the inert default
+        # is byte-unchanged by this group's existence, and absent means "no
+        # criterion was declared", never "the latch never fired". Scalars, via
+        # the shared census writer, so no field-array schema is touched and
+        # the format version does not move.
+        jet_arming = getattr(result, "jet_arming", None)
+        if jet_arming:
+            _write_census(h5.create_group("jet_arming"), jet_arming)
         if hasattr(result, "atomic_rate_domain"):
             _write_field_arrays(
                 h5.create_group("atomic_rate_domain"),
@@ -380,6 +390,8 @@ def load_result_hdf5(path):
             result.dvm_transfer_ledger = _read_census(h5["dvm_transfer_ledger"])
         if "dvm_tick_count" in h5:
             result.dvm_tick_count = int(h5["dvm_tick_count"][()])
+        if "jet_arming" in h5:
+            result.jet_arming = _read_census(h5["jet_arming"])
         if "ignition_abort" in h5:
             result.ignition_abort = {
                 key: (

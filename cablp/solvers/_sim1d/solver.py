@@ -1206,6 +1206,17 @@ class LAPDSim1D:
         self._dvm_cathode_jet_energy_booked = np.zeros(
             self._geometry.cells, dtype=float
         )
+        # The COUNT partner of the accumulator above, carried on exactly the
+        # steps that contributed to it. The two are booked over different
+        # step sets whenever the arming criterion censors part of a tick --
+        # the recycle count accrues on every step, the incident energy only
+        # on armed ones -- and the directed share has to be drawn from the
+        # armed counts for the per-atom launch energy to be the (R_E/R_N)
+        # (phi_c + Ti) the channel asserts. Zero here is what makes a fully
+        # censored tick route its whole stream thermally.
+        self._dvm_cathode_jet_count_booked = np.zeros(
+            self._geometry.cells, dtype=float
+        )
         self._dvm_cathode_jet_energy_stage_accum = None
         self._dvm_cathode_jet_incident_row = None
         # B4 anode jet: the same five, anode-side. ``_anode_energy_ledger_J``
@@ -6241,6 +6252,18 @@ class LAPDSim1D:
                 self._dvm_cathode_jet_energy_booked = (
                     self._dvm_cathode_jet_energy_booked + jet_energy_booking
                 )
+                # The COUNT this step contributed, on the SAME condition and
+                # from the SAME committed booking the energy came from. The
+                # tick draws its directed share from this rather than from
+                # the full recycle count, so numerator and denominator of the
+                # per-atom launch energy cover the same steps: a censored
+                # step adds to neither, and a tick that was censored
+                # throughout draws a directed share of exactly zero.
+                if source_booking is not None:
+                    self._dvm_cathode_jet_count_booked = (
+                        self._dvm_cathode_jet_count_booked
+                        + source_booking["cathode_face"]
+                    )
                 step_backscatter_erg = float(
                     self._dvm_cathode_jet["R_E"]
                     * np.sum(jet_energy_booking)
@@ -11221,6 +11244,24 @@ class LAPDSim1D:
         if self._dvm is not None:
             result.dvm_transfer_ledger = self._dvm_ledger_census(saved)
             result.dvm_tick_count = int(self._dvm_tick_count)
+        # Cathode-jet arming census, presence-gated on the CRITERION rather
+        # than on either jet channel: a run that declared no criterion carries
+        # no such attribute and its saved file no such group, so an
+        # arm = 0 file is byte-unchanged by this existing. What it records
+        # cannot be recovered from the trajectory -- the runner of the first
+        # armed arms had to INFER the transitions from the En row -- because
+        # the latch is solver state that no saved field is a function of.
+        if self._jet_arming_active:
+            result.jet_arming = {
+                "arm_current_A": float(self._jet_arm_current_A),
+                "disarm_current_A": float(self._jet_disarm_current_A),
+                "censored_steps": int(self._jet_arming_censored_steps),
+                "transitions": int(self._jet_arming_transitions),
+                "last_transition_s": float(
+                    self._jet_arming_last_transition_s
+                ),
+                "armed_at_end": bool(self._jet_armed),
+            }
         result.atomic_rate_domain = _atomic_rate_domain(result)
         return result
 
@@ -13076,6 +13117,9 @@ class LAPDSim1D:
         self._dvm_cathode_jet_energy_booked = np.zeros(
             self._geometry.cells, dtype=float
         )
+        self._dvm_cathode_jet_count_booked = np.zeros(
+            self._geometry.cells, dtype=float
+        )
         self._dvm_anode_jet_energy_booked = np.zeros(
             self._geometry.cells, dtype=float
         )
@@ -13143,9 +13187,17 @@ class LAPDSim1D:
         # handed; reset on the same line as its partner so a raise inside the
         # update can neither double-birth nor double-debit.
         jet_incident = None
+        jet_counts = None
         if self._dvm_cathode_jet is not None:
             jet_incident = self._dvm_cathode_jet_energy_booked
             self._dvm_cathode_jet_energy_booked = np.zeros(
+                self._geometry.cells, dtype=float
+            )
+            # Handed and reset on the same lines as its energy partner, for
+            # the same reason: a raise inside the update must not leave one
+            # of the pair counted twice while the other is spent.
+            jet_counts = self._dvm_cathode_jet_count_booked
+            self._dvm_cathode_jet_count_booked = np.zeros(
                 self._geometry.cells, dtype=float
             )
         anode_jet_incident = None
@@ -13166,6 +13218,7 @@ class LAPDSim1D:
             sources=sources,
             source_counts=source_counts,
             cathode_jet_incident_erg=jet_incident,
+            cathode_jet_counts=jet_counts,
             anode_jet_incident_erg=anode_jet_incident,
             T_s_K=(
                 float(self._cathode_Ts_K)
