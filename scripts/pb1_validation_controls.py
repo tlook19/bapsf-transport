@@ -1,6 +1,7 @@
-"""[perf-batch-1] item 3 -- negative controls for the validation happy-path skips.
+"""Negative controls for the validation happy-path skips.
 
-Item 3 stops re-scanning the unpacked state fields for non-finiteness once the
+The change under test stops re-scanning the unpacked state fields for
+non-finiteness once the
 PACKED candidate has already been proved finite (``unpack_state`` returns
 ``.copy()`` of rows of ``y``, so a finite ``y`` cannot yield a non-finite
 field). The saving is only legitimate if every raise and every rejection

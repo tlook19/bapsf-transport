@@ -299,8 +299,8 @@ class SolverResult:
     # predictably without renaming. All divergences are identically zero until
     # the two declared-but-unpopulated circuit terms defined below land: a
     # hidden series impedance between the bank terminals and the plasma load
-    # (``V_series``, item 25) and a stray branch carrying current around the
-    # load (``I_parallel``, item 24). Both are pinned at 0.0 today, so this is
+    # (``V_series``) and a stray branch carrying current around the
+    # load (``I_parallel``). Both are pinned at 0.0 today, so this is
     # scaffolding for those terms, not dead code:
     #   V_dis = V_b + V_series     (measured terminal/discharge voltage)
     #   I_bank = I_plasma + I_parallel   (measured bank/terminal current, I_dis)
@@ -308,8 +308,8 @@ class SolverResult:
     # so today V_dis == V_b, I_bank == I_plasma == I_tot, and every V*I product
     # coincides: P_load = V_b*I_tot = V_dis*I_bank. The closure is referenced to
     # P_load (power across the load), NOT the terminal product.
-    V_series: float = 0.0      # hidden series-impedance drop [V] (item 25); 0 now
-    I_parallel: float = 0.0    # stray/parallel branch current [A] (item 24); 0 now
+    V_series: float = 0.0      # hidden series-impedance drop [V]; 0 today
+    I_parallel: float = 0.0    # stray/parallel branch current [A]; 0 today
     V_dis: float = 0.0         # measured terminal voltage [V] = V_b + V_series
     I_plasma: float = 0.0      # plasma-conducted current [A] = I_tot now
     I_bank: float = 0.0        # measured bank current [A] = I_plasma + I_parallel

@@ -1,4 +1,4 @@
-"""Floor-activation audit REPLICA for the G1 arms (bins item 8).
+"""Floor-activation audit REPLICA for the G1 arms (the floor-activation bin).
 
 ``audit_sim1d_floor_activation.py`` runs only its own production config, and
 the G1 registration requires the audit ON the arm configs -- runtime

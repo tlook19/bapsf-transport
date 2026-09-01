@@ -1,4 +1,4 @@
-"""[perf-batch-1] item 2 -- equivalence and guard checks for the beam-smoothing key memo.
+"""Equivalence and guard checks for the beam-smoothing key memo.
 
 ``_beam_smoothing_key`` fingerprints four geometry arrays on every call so that
 ``_BEAM_SMOOTH_CACHE`` is keyed by CONTENT and not by a recyclable address.

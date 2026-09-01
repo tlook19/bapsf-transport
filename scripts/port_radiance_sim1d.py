@@ -65,7 +65,7 @@ wide-open-band radiometer would read on the axial chord; dP/dz is the
 column's radiated power per unit length and integrates over z to the total
 radiated power without any radial assumption entering.
 
-WHAT THIS IS NOT (thesis item 56).  The e-i channel is >= 99.9 % EUV -- the
+WHAT THIS IS NOT.  The e-i channel is >= 99.9 % EUV -- the
 30.4 nm class 1s-2p resonance line dominates PLT2 -- so this instrument
 reports RADIATED POWER, not the signal a glass-windowed visible spectrometer
 or a filtered photodiode would see.  The band split of record is

@@ -39,8 +39,9 @@ against the SAME block and compared to the same flat form, so a divergence
 between the file routes and the Python API cannot hide.
 
 Last, the FIVE run-time-first guards hoisted with this migration are asserted to
-refuse AT CONSTRUCTION -- the four 23an hazards (negative control at base commit
-aa65468) and ``beam_deposition_model`` (negative control at base commit
+refuse AT CONSTRUCTION -- the original four, ``dt_growth_factor``, the two
+scheme selectors and the drag model (negative control at base commit aa65468),
+and ``beam_deposition_model`` (negative control at base commit
 ca444dd, where 'cdsa' constructs and silently runs beer_lambert). Both
 reproduction recipes are in ``gate_hoisted_guards``.
 
@@ -670,7 +671,7 @@ def gate_hoisted_guards():
     The per-call checks of the first four are deliberately still in place; these
     are additional construction-time refusals, not replacements.
     """
-    print("\n=== HOISTED RUN-TIME-FIRST GUARDS (23an hazards + the fifth) ===")
+    print("\n=== HOISTED RUN-TIME-FIRST GUARDS (the four + the fifth) ===")
     from cablp.solvers._sim1d import LAPDSim1D
 
     params, flags = default_config()

@@ -1,4 +1,4 @@
-"""[perf-batch-1] item 8 -- guard and bit-exactness checks for the shared zero RHS bundle.
+"""Guard and bit-exactness checks for the shared zero RHS bundle.
 
 ``_zero_rhs_state`` now returns ONE read-only all-zero bundle per solver.
 Four checks:

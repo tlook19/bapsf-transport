@@ -8,14 +8,14 @@ No solver in the loop. Checks, per closure:
 2. Breakdown conditions (nn = 3e14, ne = 1e10, 150 eV): inelastic events per
    primary ~ the hand estimate (phi_c / <dE per event> ~ 4), and the
    ionizations-per-primary multiple over the Beer-Lambert single-event
-   booking (<= 1) — the ~3-5x undercount recorded as item 10.
+   booking (<= 1) — a ~3-5x undercount.
 3. Analytic Coulomb-only null (nn = 0, "fast_electron"): the numeric range
    matches the closed form R = (E0^2 - E_stop^2) / (4 pi e^4 ne lnL).
 4. Analytic inelastic-only null (ne = 0): ionizations per primary match the
    quadrature of dN/dE = sigma_i / [sigma_i (I + <W>) + sigma_x E_rad].
 5. Closure ordering at production conditions: l_QL << legacy l_bi << the
-   classical fast-electron e-fold (~0.1 m / ~1 m / ~35 m) — the three-decade
-   span recorded as item 12.
+   classical fast-electron e-fold (~0.1 m / ~1 m / ~35 m) — a three-decade
+   span.
 
 The historical Beer-Lambert profile comparison from the original B1
 acceptance is deliberately replaced by nulls 3-4: no continuous slowing-down
@@ -98,7 +98,7 @@ def main() -> None:
     print(f"  worst: {worst:.2e}  (bound 1e-10)  OK")
 
     # --- 2. breakdown ionizations per primary vs Beer-Lambert ---------------
-    print("\n=== 2. breakdown-phase event count (item 10) ===")
+    print("\n=== 2. breakdown-phase event count ===")
     col = uniform_column(cells=400, dz=10.0, nn=3.0e14, ne=1.0e10, Te=1.0)
     res = deposit_beam(E0, GAMMA0, **col)
     ion_per_primary = res.ionization_events.sum() / GAMMA0
@@ -161,7 +161,7 @@ def main() -> None:
     # honest current-driven plateau phi_c ~ 93 V (M4: the V-driven 405 V
     # median was a flapping artifact) — the ladder and
     # its ordering survive at both.
-    print("\n=== 5. stopping-length ordering (item 12) ===")
+    print("\n=== 5. stopping-length ordering ===")
     ladder_bounds = {
         # E_eV: (l_fast low/high, l_legacy low/high) [cm]
         150.0: ((2000.0, 10000.0), (50.0, 300.0)),  # ~30 m / ~1 m

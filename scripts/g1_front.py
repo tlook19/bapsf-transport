@@ -1,7 +1,7 @@
 """G1 front/e-fold reader, the registered variant of l6a1_front.py.
 
-Implements the "G1 BINS OF RECORD" spec (ION_FLOW_GEOMETRY_PLAN.md, session
-23; log 2026-08-18www):
+Implements the "G1 BINS OF RECORD" spec registered 2026-08-18. The bins, as
+this script computes them:
 
 - z_front: threshold nn* = 2e12 cm^-3 on column nn, LAST crossing restricted
   to cell centers z <= 1900 cm (the C1 cap -- the bare last-crossing rule

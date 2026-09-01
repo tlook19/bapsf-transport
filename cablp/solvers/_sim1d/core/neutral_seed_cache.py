@@ -34,14 +34,14 @@ import numpy as np
 
 from ..physics.neutrals import SCCM_TO_PARTICLES_PER_S
 
-# v2 (item 37 duty fix, 2026-07-29): EVERY v1 seed was equilibrated with the
-# defective puff duty -- the phase lookup and the phase-boundary schedule
-# disagreed about the puff-off instant, so the puff ran one extra step in some
-# cycles and the seed records an over-fuelled fill (measured +12.0% delivered
-# ON-time at the production 20 ms schedule). A v1 seed replayed under the fixed
-# solver would silently reproduce the OLD duty, so the format is bumped: v1
-# files are rejected (fixed-path mode raises, database mode re-equilibrates and
-# overwrites) rather than reused.
+# v2 (equilibration puff-duty fix, 2026-07-29): EVERY v1 seed was equilibrated
+# with the defective puff duty -- the phase lookup and the phase-boundary
+# schedule disagreed about the puff-off instant, so the puff ran one extra step
+# in some cycles and the seed records an over-fuelled fill (measured +12.0%
+# delivered ON-time at the production 20 ms schedule). A v1 seed replayed under
+# the fixed solver would silently reproduce the OLD duty, so the format is
+# bumped: v1 files are rejected (fixed-path mode raises, database mode
+# re-equilibrates and overwrites) rather than reused.
 CACHE_FORMAT = "sim1d-neutral-seed-v2"
 
 # Keys PROVABLY inert to a neutral-only equilibration (Plasma=False,
@@ -56,9 +56,10 @@ INERT_PARAM_KEYS = frozenset({
     "V_bank", "R_comp", "R_comp_partition", "R_mesh_ohm", "L_parasitic_H",
     "C_bank_F", "C_R", "eta", "I_prebreakdown", "I_breakdown",
     # --- plasma-phase timing (NOT the equilibration schedule) ---
-    # tau_discharge was on this list and should NOT have been (item 37,
-    # 2026-07-29): it IS the equilibration's per-cycle puff-ON window whenever
-    # equilibration_gas_puff_on_s is unset, so two tau_discharge families
+    # tau_discharge was on this list and should NOT have been (found with the
+    # puff-duty fix, 2026-07-29): it IS the equilibration's per-cycle puff-ON
+    # window whenever equilibration_gas_puff_on_s is unset, so two
+    # tau_discharge families
     # equilibrate to DIFFERENT fills while hashing to the same signature --
     # exactly the silent stale-seed reuse this signature exists to prevent.
     # It stays in the hash unconditionally (fail-closed: when in doubt, leave

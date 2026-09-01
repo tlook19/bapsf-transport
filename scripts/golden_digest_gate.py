@@ -45,8 +45,10 @@ the deliverable.
 Compiled kernels: ``CABLP_COMPILED_KERNELS`` is accepted rather than refused.
 The kernel provenance is RECORDED in the digest record and printed, but it is
 deliberately NOT part of the config identity and not compared, because pure and
-compiled are bit-exact by construction of the source (CLAUDE.md, certified
-2026-08-17) -- so a compiled run must reproduce the pure reference, and a
+compiled are bit-exact by construction of the source (both paths fuse their
+scalar lerp explicitly via ``math.fma`` in ``cablp/numerics/interp.py``;
+certified on linux-64 2026-08-17) -- so a compiled run must reproduce the
+pure reference, and a
 divergence between them is a real finding this gate should report rather than
 excuse.
 """

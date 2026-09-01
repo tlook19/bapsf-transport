@@ -815,7 +815,9 @@ kills and is WRONG — see the correction above; the pure full golden measures
 and the decision to capture compiled stands on them; only the number attached to
 them was invented.)
 The licence for using the compiled path is that pure and compiled are bit-exact
-BY CONSTRUCTION of the source on linux-64 (CLAUDE.md, certified 2026-08-17), and
+BY CONSTRUCTION of the source on linux-64 (both paths fuse their scalar lerp
+explicitly via `math.fma` in `cablp/numerics/interp.py`; certified
+2026-08-17), and
 that this was **proven again at THIS stance** before any fixture was captured:
 capturing the digest reference on both paths gave the identical final digest, all
 five identical checkpoints, identical `config_identity`, `steps` and
@@ -1362,7 +1364,8 @@ configuration change, not a repair, and no bit-level comparison between them is
 meaningful.
 
 **2026-08-21 — the pre-Tuesday PHYSICS BATCH (AUTHORIZED recapture; the
-authorization is the batch brief itself, member 3 by Tom's 21as ruling).** All
+authorization is the batch brief itself, member 3 by Tom's ruling of
+2026-08-21).** All
 FIVE members landed in one recapture event, which is why the movement below is
 JOINT and no single member may be credited with any of it. Unlike the
 2026-08-20 wave, this one moves CODE as well as defaults: the parallel Spitzer
@@ -1432,7 +1435,7 @@ than as an absence.
 *Localization, verified on all three fixtures rather than taken on report:*
 pre-batch save 13 / cell 65; batch-before-`m_He` save 15 / cell 59; final
 save 15 / cell 58 — all three in the `breakdown` phase and all three in the
-far column. (The advisor's 21at reading of "cell 59" was taken on the
+far column. (The advisor's 2026-08-21 reading of "cell 59" was taken on the
 before-`m_He` capture and is exact for it; the final fixture sits one cell
 further in. "One save later" measures as TWO saves, 13 → 15, on both.)
 

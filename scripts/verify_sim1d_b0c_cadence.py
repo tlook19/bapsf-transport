@@ -167,8 +167,8 @@ T_STAR_MS_ALLOWED = (T_STAR_MS_DEFAULT, T_STAR_MS_DOUBLED)
 #: supply them would be published as ``n/a``, which puts a missing
 #: measurement and a benign one under the same mark.
 #:
-#:   1  the 24bd common-t capture: per-tick nn, nn_a, nn_midport, the booked
-#:      CUMULATIVE Ei/M, Tn, Ti, Te.
+#:   1  the original common-t capture: per-tick nn, nn_a, nn_midport, the
+#:      booked CUMULATIVE Ei/M, Tn, Ti, Te.
 #:   2  adds the rows nu_E cannot be reconstructed without -- per-tick plasma
 #:      ``n`` and ``Ei``, the tick's FROZEN booked Ei RATE per cell (the
 #:      cumulative rows cannot give it: they are integrals over unequal
@@ -180,7 +180,7 @@ CAPTURE_SCHEMA = 2
 SAMPLING_REGISTERED = "common-t"
 SAMPLING_SUPERSEDED = "tick-count"
 SAMPLING_MODES = (SAMPLING_REGISTERED, SAMPLING_SUPERSEDED)
-AMENDMENT_LABEL = "per the 24bd amendment"
+AMENDMENT_LABEL = "per the common-t sampling amendment"
 
 # [R2] Per-arm step cap. Hitting it is a loud FAIL, not a truncated arm.
 MAX_STEPS_PER_ARM = 200_000
@@ -195,7 +195,7 @@ ORDER_BAND_COARSE = (0.7, 1.3)
 ORDER_BAND_FINE = (0.8, 1.25)
 SAMPLING_FLOOR_FACTOR = 10.0
 
-# [R8, AMENDED 24cr] The R8 ESTIMATOR is selectable, and the amended one is
+# [R8, AMENDED] The R8 ESTIMATOR is selectable, and the amended one is
 # the default. Two defects were identified in the pre-amendment fit and the
 # amendment addresses exactly them:
 #
@@ -216,7 +216,7 @@ SAMPLING_FLOOR_FACTOR = 10.0
 R8_FIT_AMENDED = "amended"
 R8_FIT_PRE_AMENDMENT = "pre-amendment"
 R8_FIT_MODES = (R8_FIT_AMENDED, R8_FIT_PRE_AMENDMENT)
-R8_AMENDMENT_LABEL = "per the 24cr amendment"
+R8_AMENDMENT_LABEL = "per the reference-corrected R8 amendment"
 
 #: [R8, amended] Fit domain: a rung enters the fit iff its NOMINAL cadence is
 #: at or below this. Nominal, not effective: the amendment names the RUNGS,
@@ -230,7 +230,7 @@ R8_FIT_MAX_H = 1.25e-5
 R8_REFERENCE_ARM = "cad_1.5625e-06"
 
 #: [R8, amended] Verdict label carried by every rung the amendment excludes.
-R8_EXCLUDED_LABEL = "excluded: shortfall regime (24cr)"
+R8_EXCLUDED_LABEL = "excluded: shortfall regime"
 
 # [R9] Cadence-of-record bar on the first-order-corrected proxy true error.
 EHAT_TOL = 0.01
@@ -394,7 +394,7 @@ for _spec in (
     ArmSpec(_CAD_COND_NAME, 3.125e-6, 16, 6, ("cadence",), conditional=True,
             note="CONDITIONAL: R8-underdetermined or R4 stability escape"),
     ArmSpec(_CAD_REF_NAME, 1.5625e-6, 16, 6, ("cadence",),
-            note="R8-amendment converged reference rung (24cr)"),
+            note="R8-amendment converged reference rung"),
     ArmSpec("grid_32x12", 2.5e-5, 32, 12, ("grid",), note=""),
     ArmSpec("grid_64x24", 2.5e-5, 64, 24, ("grid",), note=""),
     ArmSpec(_GRID_COND_NAME, 2.5e-5, 128, 48, ("grid",), conditional=True,
@@ -970,7 +970,7 @@ def load_arm(path):
     arrays = {k: data[k] for k in data.files if k != "meta"}
     meta["_path"] = str(path)
     # A npz written before the marker existed is schema 1 by definition: it
-    # carries the 24bd per-tick capture and nothing added since.
+    # carries the original per-tick capture and nothing added since.
     meta.setdefault("capture_schema", 1)
     return meta, arrays
 
@@ -1437,7 +1437,7 @@ def _r8_pre_amendment(lines, verdicts, arms, ladder, dead, registered):
 
 
 def _r8_amended(lines, verdicts, arms, ladder, sampling):
-    """[R8, AMENDED 24cr] Reference-corrected log-e/log-h order fit.
+    """[R8, AMENDED] Reference-corrected log-e/log-h order fit.
 
     Errors are formed against the converged reference rung
     ``R8_REFERENCE_ARM``, and the order is the least-squares slope of

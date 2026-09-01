@@ -12,7 +12,7 @@ Sources (all already on disk in scripts/):
         DENSITY, AXIAL MOMENTUM DENSITY and KINETIC ENERGY DENSITY per
         region, per 0.5 ms bin, per source phase. The second moment is what
         makes the pressure read possible.
-        REPOINTED 2026-08-24 (Tom's ruling, log 24ab). This read was
+        REPOINTED 2026-08-24 (Tom's ruling). This read was
         originally computed on the flat neutral_arch_e2_compare_nx240.txt,
         which ran SOURCE-STARVED: its menu totalled 4.507e21 atoms/s against
         the corrected 1.28923e22 (2.86x, e2_regen_true_sources/

@@ -1,9 +1,10 @@
 """Leg-C discriminator: who owns the model's FALLING far-end ion drift?
 
-THE QUESTION (THESIS_NOTES item 51, challenged 2026-08-17b). Leg C measured a
+THE QUESTION (the non-entraining-closure claim, challenged 2026-08-17). Leg C
+measured a
 shape null: no neutral channel makes the neutral flow rise, because every one
 of them inherits the model's ion drift, and that drift FALLS toward the end
-(~7.9 -> 6.6 km/s) where the machine's flow rises. The item then named the
+(~7.9 -> 6.6 km/s) where the machine's flow rises. That claim named the
 measured column widening as the candidate riser the 1D model "structurally
 lacks" -- but that mechanism does not work (u = Gamma/(n A) = Gamma/N, so
 geometric spreading cancels out of the flow arithmetic; a rising u needs a
@@ -153,7 +154,7 @@ def main():
         print(f"  {tag:4s} " + "".join(f"{v:9.2f}" for v in vals)
               + f"   {vals[-1]/vals[1]:9.3f}")
     print("\n  (falling toward the end is the model behaviour under test;\n"
-          "   the machine RISES over this span — item 38.)\n")
+          "   the machine RISES over this span.)\n")
 
     # ---- 2. the term-by-term budget -------------------------------------
     print("=" * 78)

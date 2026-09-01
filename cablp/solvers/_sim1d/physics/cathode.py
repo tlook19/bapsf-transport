@@ -1664,7 +1664,7 @@ def _csda_beam_deposition(
     unit flux, which made the quasilinear closure invisible to the circuit:
     transmission read 1, ``sigma_eff`` wrote 0, and the circuit kept booking
     ``eta * f_bypass`` of the emitted beam power as never-coupling while the
-    real ray stopped inside the gap (item 35).
+    real ray stopped inside the gap.
 
     ``coverage`` (clumpy-plasma closure) is the optional
     :class:`CoverageView1D`. Left ``None`` -- the default and every historical
@@ -2157,7 +2157,7 @@ def _csda_beam_deposition(
         # density n_b ~ Gamma0/(A v_b), so a unit-flux probe feels no
         # anomalous drag, reads transmission 1, writes sigma_eff = 0, and
         # leaves the circuit booking a bypass the real ray never enjoys
-        # (item 35, root-caused 2026-07-27). Under flux-INDEPENDENT stopping
+        # (root-caused 2026-07-27). Under flux-INDEPENDENT stopping
         # (Coulomb CSDA, anomalous_model="none") the ray is flux-linear, so
         # the ratio below is bit-for-bit the historical unit-flux value.
         #
@@ -2212,7 +2212,7 @@ def _csda_beam_deposition(
         #                nothing in this function enforces that.
         #
         # The ``Gamma0 == 0`` unit-flux probe is a DIFFERENT measurement (the
-        # flux-independent limit; item 35) with no deposition ray behind it to
+        # flux-independent limit) with no deposition ray behind it to
         # read, so it sits outside this branch and keeps running verbatim.
         probe_transmits_exact_zero = (
             not clumping
@@ -2325,7 +2325,7 @@ def _csda_beam_deposition(
                 (-math.log(transmission) / L_cath - 1.0 / l_bi) / nn_launch,
             )
         beam_result.beam_atten_cross[launch] = sigma_eff
-        # --- Ledger tripwire (item 35) ---------------------------------
+        # --- Beam gap ledger tripwire ----------------------------------
         # Three views of ONE number -- the fraction of the emitted beam that
         # crosses the cathode-anode gap -- which must agree, and which nothing
         # else in the model compares:
