@@ -188,6 +188,74 @@ closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
 
+**2026-09-01 — NON-RECAPTURE STANCE EVENT: `g1atrim.toml`'s
+`plasma_radius_profile_cm` rebuilt from the measured field. NOTHING WAS
+RECAPTURED, AND THE GOLDEN DID NOT MOVE.** This entry exists for the same
+reason the 2026-08-30 block-form entry below does: the stance file is a golden
+INPUT, this record is where a reader looks when it changes, and a future
+`git log` on `scripts/stances/g1atrim.toml` showing a 60-line diff on this date
+must not read as an unrecorded stance change. Merge `a248ae0`
+([msi-field-profile], ruled 2026-09-01 by Tom); the stance-side provenance,
+including the honest bar and the unresolved coil-location disagreement, is in
+`scripts/production_stance_provenance.md` and is not restated here.
+
+**Exactly one key moved**, by an independent TOML-level walk at review: 65 keys
+before and after, 0 added, 0 removed, `input_dict.plasma_radius_profile_cm` the
+only change, 58 of its 280 entries differing (indices 222 onward — the profile
+is held exactly flat at 18.415 cm below that). `machine_radius_profile_cm` is
+byte-equal across the event.
+
+**The golden is INERT BY CONSTRUCTION, and was measured so rather than
+assumed.** `baseline_sim1d.py` pops the mesh-sized profile keys from the stance
+before building the baseline config, and the golden runs
+`prescribed_area_geometry = False` at `nx = 60`, so the changed array is never
+read on that route. Verified three independent ways at the merge tip:
+
+| check | result |
+|---|---|
+| config identity, digest-gate expression | `ed352561a09c442c0e9ee5a592f3ce55744cb25d0110af9774a60eee10217d37` — UNMOVED, matches the committed reference |
+| COMPILED golden | `baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s` (`KERNEL_ID` `cython/_cathode_kernels_cy/tierA+csda`, asserted in-process before the run) |
+| PURE 4k digest leg | `digest gate OK: steps=4000, digest=cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2, exact=True` |
+
+`scripts/baselines/` is untouched — no `--capture`, no rotation. Both golden
+references and the NPZ are byte-unchanged.
+
+**ROUTE IDENTITY MOVED, and NO ROTATION IS OWED.** A stance change is supposed
+to move the routes that carry the stance, and it did — but
+`scripts/declm_route_identity.py` builds both sides on the fly and compares
+them, pinning no committed reference file and no hash constant. Its exit 1 is
+the tool REPORTING a stance diff, which is what it exists to do, not a gate
+failing against a pin. There is therefore nothing to rotate, and this event
+follows the 2026-08-30 block-form precedent, which likewise filed a record here
+and rotated nothing. The new values of record, verified at the merge tip:
+
+| route | before | after |
+|---|---|---|
+| `golden` | `3ac1dc1be6201c8bb48e1e2fe6c488427b52f434d0f44d0a5f1a8976bd3cfb8a` | UNCHANGED |
+| `default`, `b0c`, `k2_dvm` | — | UNCHANGED |
+| `ka1c` | `235d1c52ccaba6a28af8415eea9fb024fa3648f6db6e3a490af466fd9eba6780` | `0ed7d4c412f28cd11a5eba1f616213753c2975fcbe95ed13d871458e428bcb49` |
+| `m6_es1` | `d51fc59f8f09719dd3ee9a33fd3e22a4376bfcc957a3bdcc32d0b9ab7de9625a` | `fd7d119023fe12e74f5a00823a428b0343551b7527c4ec25b9e22ab02ff22df6` |
+| `stance_g1atrim` | `266c9d7621ea8a3fb40fa8ef938d8458356fe002b2133ee53777e4da1ad93fd5` | `a78a26fdf16c341c0aeb68bb7eaca420c71aeec8bde16b2d1e9a51d5f1cd3bdd` |
+
+Each of the three moved routes moves by exactly `params:plasma_radius_profile_cm`
+and no other key, checked per-key at review.
+
+**The flat rule is a z-threshold, not a per-cell tolerance, and that is
+load-bearing.** The profile is held exactly at `Rp` upstream of the first
+sustained departure rather than wherever `B_hat` happens to sit within a
+tolerance. A per-cell rule would have flared the source and plenum cells
+(`B_hat` ~ 0.91 at z = 0) and desynced them from the SCALAR `Rp` the cathode,
+puff and anode-flanking sites read. Verified at review that the cathode (cell
+1), plenum (0), gap (2–5), puff (9) and anode-flanking (5, 6) cells all read
+18.415 EXACTLY, so the scalar and vector cannot disagree.
+
+Gates at the merge tip, each with an in-process import-provenance assertion:
+smoke exit 0 at 119 cases with all five compiled-kernel equivalence blocks
+LIVE; `verify_sim1d_k2_dvm.py` 121/121; `verify_sim1d_edt.py` 31/31;
+`verify_sim1d_r3_boundary.py` exit 0; `declm_block_gate.py` 35 checks, 0
+failed; `sgfs_census.py --assert-clean` PASS; `batch11_restart_citations.py`
+58 cites PASS; `m1_verdict_invariance.py --self-test` 10 cases, 0 failures.
+
 **2026-08-31 — IDENTITY-ONLY ROTATION (the [m1-a1-arming] cathode-jet arming
 keys). NOTHING WAS RECAPTURED.** Merge `03389f7` added TWO `input_dict` keys —
 `neutral_jet_arm_current_A = 0.0` and `neutral_jet_disarm_current_A = 0.0` —
