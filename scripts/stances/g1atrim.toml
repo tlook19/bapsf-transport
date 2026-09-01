@@ -76,10 +76,20 @@
 # over the retained files, and the flux tube is column-anchored:
 # r(z) = 18.415 * sqrt(1 / B_hat(z)), held exactly flat at 18.415 through the
 # last port before the field leaves its plateau, and capped at sqrt(0.95)*R_m.
-# It ASSUMES z_MSI == z_model (both cathode-referenced) -- an assumption, not a
-# measurement, and one that leaves a coil-location disagreement with the CAD
-# census open. Both the assumption and the disagreement are stated in that
-# script's docstring and in production_stance_provenance.md.
+#
+# THE MSI RECORD IS PORT-53-REFERENCED, NOT CATHODE-REFERENCED, and its +z
+# points SOUTH toward the cathode, so the registration onto the model grid is a
+# REFLECTION: z_model = 1814.67 - z_MSI, where 1814.67 cm is the port-53
+# station on the CAD port ladder (port 2 at 182.67 cm, 32.00 cm pitch, 53
+# regular stations; the 31.95 cm nominal map would give 1811.95 cm, which is
+# sub-cell here). The profile was REBUILT under that registration on
+# 2026-09-01; the first build of that day assumed z_MSI == z_model and was
+# therefore mirror-imaged end-for-end. The end coils were OFF in this data set
+# -- the end-pair supply channel reads 0 A in every recorded shot -- so the far
+# end simply falls off with no mirror, and the source-coil structure the
+# mirrored build painted onto the far column belongs on the cathode side,
+# inside the flat hold. See that script's docstring and
+# production_stance_provenance.md.
 #
 # machine_radius_profile_cm is UNCHANGED: still the measured CAD bore
 # staircase built by scripts/g1_build_profiles.py, which also remains the
@@ -143,17 +153,17 @@ plasma_radius_profile_cm = [
   18.415, 18.415, 18.415, 18.415,
   18.415, 18.415, 18.415, 18.415,
   18.415, 18.415, 18.415, 18.415,
-  18.415, 18.415, 18.67594976129434, 18.87105933212067,
-  19.077435843580737, 19.252035771032368, 19.34467552916215, 19.324139835881198,
-  19.187984631949643, 18.963951863502906, 18.700385667302516, 18.441870054927076,
-  18.21849321810667, 18.04540032307703, 17.92495584414317, 17.854842645054283,
-  17.83242955298836, 17.853999208651743, 17.91891602048894, 18.030217336151903,
-  18.194120025164228, 18.420345692105027, 18.724682196702915, 19.131466639805737,
-  19.66885393538891, 20.374783457353647, 21.296293736780495, 22.479348705076056,
-  23.965469215922766, 25.783870805710173, 27.94010094112392, 30.424224597721413,
-  33.210563654204115, 36.24957481471854, 39.51133533616261, 42.96186578952785,
-  46.55914373518502, 48.733971724044814, 48.733971724044814, 48.733971724044814,
-  61.951416580466564, 65.96503064149049, 70.0267507430843, 74.11596212894328,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.63398009487891,
+  18.66948415202739, 18.709794406384464, 18.756637842798767, 18.812079281430186,
+  18.88008729275596, 18.96825345791644, 19.087499535646337, 19.253660709751394,
+  19.490293078857245, 19.829012676417634, 20.304804232913167, 20.95514236251157,
+  21.81703578251034, 22.911843071390418, 24.254440265722813, 25.84772346041785,
+  27.683636581720137, 29.749907511241606, 32.027788970204476, 34.490573812368574,
+  37.124948312307254, 39.91242393277031, 42.82459558829402, 45.852960435127926,
+  48.733971724044814, 48.733971724044814, 48.733971724044814, 48.733971724044814,
+  62.30224123848677, 65.77958331005898, 69.30963127926263, 72.88733824745582,
   74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,
   74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,
   74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,

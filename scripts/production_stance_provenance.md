@@ -523,61 +523,123 @@ and lie inside the local vessel radius, and it does at both: the column is at
 `Rp = 18.415` cm there and the bore is 50.0 cm.
 
 **`plasma_radius_profile_cm` — MEASURED (machine-state field record), adopted
-2026-09-01 (Tom).** The per-cell flux-tube radius under
-`prescribed_area_geometry`, one entry per cell of the stance's 280-cell mesh.
-It is built by `scripts/build_msi_field_profile.py` from the `MSI/Magnetic
-field` group the ES1 raw shot files carry: 1024 axial field samples spanning
-−300 … 2025.3 cm, recorded at the first and last shot of every run. Each
-recorded profile is divided by its OWN plateau level (the median over
-300–1500 cm), and the build uses the MEAN normalized shape `B_hat(z)` over the
-retained runs. Column-anchored flux conservation then gives
+2026-09-01 (Tom) and RE-REGISTERED the same day.** The per-cell flux-tube
+radius under `prescribed_area_geometry`, one entry per cell of the stance's
+280-cell mesh. It is built by `scripts/build_msi_field_profile.py` from the
+`MSI/Magnetic field` group the ES1 raw shot files carry: 1024 axial field
+samples at a 2.273 cm pitch, recorded at the first and last shot of every run.
+Each recorded profile is divided by its OWN plateau level (the median over
+z = 300–1500 cm), and the build uses the MEAN normalized shape `B_hat(z)` over
+the retained runs. Column-anchored flux conservation then gives
 `r(z) = Rp * sqrt(1 / B_hat(z))`, held EXACTLY flat at `Rp` upstream of the
-first sustained departure of `B_hat` from 1 (measured at z = 1684.35 cm,
-tolerance 0.02 over a ≥20 cm run searched beyond 1500 cm), the ratio applied
-beyond it, capped at `sqrt(0.95) * R_m(z)` — the declared annulus
-regularization, unchanged from the census build. Beyond the last MSI sample
-`B_hat` is held at its last value; the cap binds over that whole span, so the
-choice is not observable in the shipped array.
+first sustained departure of `B_hat` from 1 (measured at z = 1748.714 cm,
+`B_hat` = 0.9792; tolerance 0.02 over a ≥20 cm run searched beyond 1500 cm),
+the ratio applied beyond it, capped at `sqrt(0.95) * R_m(z)` — the declared
+annulus regularization, unchanged from the census build. 231 of the 280 cells
+are at exactly `Rp = 18.415` cm; the cap binds in the terminal 20 cells and the
+collector sits on it at 74.2706 cm.
+
+**THE REGISTRATION — MEASURED (instrument convention) + MEASURED (machine
+CAD).** `z_MSI` is NOT the model's axial coordinate. The MSI record is written
+in the machine's port-referenced frame (`bapsflib.lapd`): `z = 0` at PORT 53,
+the most northern regular port, with `+z` pointing SOUTH toward the main
+cathode — `portnum_to_z = 31.95*(53 − port)`. The model's `z` runs the other
+way, from the cathode face outward. The two frames are REVERSED, so the
+registration is a reflection:
+
+    z_model = C − z_MSI,   C = 1814.67 cm
+
+`C` is the port-53 station in model coordinates, read off the CAD port ladder:
+port 2 at 182.67 cm from the cathode face and exactly 53 regular stations at a
+32.00 cm pitch. Corroborated at two independent stations — the stance's neutral
+baffle at 342.65 cm lands on port 7.00 (7.01 on the nominal map), an OCTAGONAL
+RING station (the octa rings sit at ports 7, 13, 19, 24, 30, 35, 41 and 47,
+Tom-confirmed), and the anode plane sits at CAD 53.2–53.4 cm against the
+model's 53.25 cm.
+
+**The port pitch is the CAD's 32.00 cm, not the 31.95 cm nominal — RULED (Tom,
+2026-09-01).** The nominal map `182.5 + 31.95*(port − 2)` puts port 53 at
+1811.95 cm; the CAD ladder puts it at 1814.67 cm. Both values are on the
+record; the difference is 2.72 cm, well inside one 7.488 cm mesh cell, and the
+builder checks that both ladders put every reported port on the same side of
+the departure. Nothing in the emitted array turns on the choice.
+
+**END COILS OFF — MEASURED (machine hardware record).** The end-pair magnet
+supply is set by hand and its channel is auto-recorded in every shot file, and
+it reads 0 A (−0.12 … −0.10 A, the recorder's offset) in all 64 recorded shots.
+There was no end mirror in this data set: the far end simply falls off. This is
+a machine fact from the record, not an inference from the profile shape.
 
 **The measured level is not used, only the shape.** The plateau level varied
 ~3 % across the 32 files with the main-supply setting, which is exactly what
-the ratio divides out. Two runs (32, 34) ran the lowest main-supply currents;
-they are excluded from the mean because their normalized SHAPE departs beyond
-every other run's on the end region the ratio is read on (leave-one-out
-0.0311 / 0.0225 against the others' 0.0143), while on the full mesh they sit
-INSIDE the others' spread. The exclusion moves the mean shape by at most
-0.0017. The adjudication is measured and printed by the builder, not assumed.
+the ratio divides out. Two runs (32, 34) ran the lowest main-supply currents
+and are candidates for exclusion; the adjudication is a leave-one-out
+comparison of normalized SHAPE on the FAR END (`z_model ≥ 1500` cm — the span
+the flux ratio is actually read on) against the largest deviation any other
+file shows there. RE-ADJUDICATED under the corrected registration: run 32
+deviates 0.0251 against the others' 0.0205 and is EXCLUDED; run 34 deviates
+0.0122, inside the others' spread, and is RETAINED. The mean shape is built
+from 62 shots over 31 files, and the exclusion moves it by at most 0.00095. The
+adjudication is measured and printed by the builder, not assumed.
 
-**Honest bar: the coordinate assumption, and one unresolved disagreement.**
-The build ASSUMES `z_MSI == z_model` — both cathode-referenced — supported on
-the measurement side by the port-to-axis map (`182.5 + 31.95*(port−2)`,
-documented as a nominal distance from the cathode) and on the model side by
-the solver's own z = 0 at the cathode face. It is an assumption, not a
-measurement, and under it the machine's end-pair mirror does not sit where the
-CAD census puts it: the MSI end-pair peak is at z ≈ 1791 cm, the census coil
-table's end-pair centroid at z ≈ 1947 cm — a ~156 cm coil-location
-disagreement between the drawn machine and the machine's programmed magnet
-positions. Neither record carries a fiducial that fixes the other, so this is
-DISCLOSED and NOT RESOLVED; every claim that leans on the end geometry carries
-it. The same disagreement reads on the upstream side as the flat column ending
-171 cm earlier than the census trace put it.
+**Honest bar: what is pinned, and the one residual.** The registration is no
+longer an assumption — it is the instrument's documented convention closed onto
+the CAD ladder, corroborated at the two independent stations above — so the
+coordinate question this entry used to carry is CLOSED. Two independent checks agree with it: the measured fall-off
+tracks the census `off` case (end pair unpowered, which is the state the 0 A
+channel records) to a few cm all the way down — same-rule departure +5.91 cm,
+and the `B_hat` = 0.90 / 0.50 / 0.10 crossings at −2.12 / +0.37 / +4.45 cm —
+with the two profiles differing by at most 4.05 cm over the whole mesh; and the
+flux-tube ratio the emitted array implies between p50 and p41 is 1.0000 against
+the measured 0.9905 ± 0.0114, a 0.83σ agreement, which the builder gates on.
 
-**What this changes, in one line.** Port p50 (z = 1716.1 cm) now sits inside a
-~10 % measured field droop, so the modelled flux tube there is 1.050× the
-design column radius (+10.3 % in area) where the census profile held it flat;
-the end-pair mirror puts a THROAT at 17.832 cm (0.968× `Rp`, 0.938× in area)
-at z = 1791.8 cm, which the census profile did not have at all; and the
-terminal collector cell sits on the cap at 74.271 cm rather than the census
-70.225 cm. Ports p11–p41 are untouched — they are inside the flat column, so
-the scalar `Rp` read sites stay in sync with the vector by construction.
+The residual that remains is the SOFT DEPARTURE. The flat hold ends on a 2 %
+tolerance, at z = 1748.71 cm, which is 30.0 cm downstream of p50 (CAD 1718.67
+cm). The mean shape crosses 1 % below plateau at z = 1719.04 cm — within 0.4 cm
+of p50 — so p50 sits at the very edge of the flat column on a softer rule than
+the adopted one, and the +30.0 cm of hold beyond it is a rule choice rather
+than a measurement. What it is worth: applying the ratio at p50 instead of
+holding it flat would give `r` = 1.0050 × `Rp` there and an implied p50/p41
+area ratio of 1.0085, which is 1.58σ from the measured 0.9905 ± 0.0114 against
+the flat hold's 0.83σ — so the residual runs in the direction that favours the
+hold, and no claim here turns on it. It is disclosed because the next station
+out, p51 at 1750.67 cm, falls on the other side of the departure.
 
-*(SUPERSEDED 2026-09-01: the CAD-census droop_min profile.* Until this
+**The source-side structure is REPORTED, NOT APPLIED.** In the corrected frame
+the cathode side carries the source-coil structure: a peak `B_hat` = 1.0667 at
+z = 23.49 cm and a dip `B_hat` = 0.9052 at z = 96.23 cm. The flat hold covers
+all of it, so none of it reaches the emitted profile — the same z-threshold
+rule that keeps the cathode, plenum, gap, puff and anode-flanking cells at
+exactly the scalar `Rp` the cathode and anode-transparency sites read. Whether
+the source region should carry per-cell structure is a SEPARATE question and is
+not decided here.
+
+**What this changes against the mis-oriented build of the same day.** 39 of the
+280 entries move, indices 222–263; every cell at or below 221 was already at
+`Rp` and is byte-equal. `machine_radius_profile_cm` is untouched. The earlier
+build assumed `z_MSI == z_model` and was therefore mirror-imaged end-for-end,
+which put each end of the machine onto the other. Its readings, recorded here
+as SUPERSEDED: a 1.050× `Rp` flare at p50 (+10.3 % in area) — that was the
+cathode-side dip reflected onto the far column, and p50 is in fact flat at
+18.415 cm like p11–p41; a THROAT at 17.832 cm at z = 1791.8 cm — that was the
+cathode source-coil peak reflected onto the far column, and the corrected
+profile never goes below `Rp` anywhere, as an end-coils-off machine cannot
+compress the tube; and a "~156 cm coil-location disagreement" between the MSI
+end-pair peak and the CAD census end-pair centroid — that was an artifact of
+the reflected frame and is RETIRED, not carried forward. Its shot exclusion
+(both 32 and 34) was measured on `z_MSI ≥ 1500` cm, which is the CATHODE region
+in model coordinates, and is superseded by the re-adjudication above.
+
+*(SUPERSEDED 2026-09-01: the CAD-census droop_min profile.* Until the MSI
 adoption the shipped array was the `droop_min` case of
 `scripts/g1_build_profiles.py` — a traced flux surface through a
 finite-element re-solve of the drawn coil set, flat to 1855 cm and flared on
 the traced ratio beyond it. That build is RETAINED, unchanged, and is now the
 independent CROSS-CHECK; it also still owns `machine_radius_profile_cm`, which
-this adoption does not touch.)*
+neither the adoption nor the re-registration touches. Note that `droop_min` is
+NOT the case the machine was in — the end pair read 0 A — so the meaningful
+cross-check is its `off` case, which is the one the corrected registration
+agrees with.)*
 
 **`machine_radius_profile_cm` — MEASURED (machine CAD), unchanged.** The
 vessel bore staircase, still built by `scripts/g1_build_profiles.py`

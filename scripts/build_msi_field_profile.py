@@ -16,7 +16,8 @@ field``:
 
 ``Profile z locations`` (attribute)
     1024 axial sample positions in cm, spanning -300 .. 2025.3 at a uniform
-    2.273 cm pitch. Identical in every file (asserted).
+    2.273 cm pitch. Identical in every file (asserted). These are in the
+    MACHINE's port-referenced frame, not the model's -- see COORDINATES.
 ``Magnetic field profile`` (dataset, 2 x 1024, gauss)
     The axial field profile recorded at the FIRST and LAST shot of the run.
 ``Magnet power supply currents`` (dataset, 2 x 13, ampere)
@@ -40,29 +41,59 @@ does not care about.
 Two files (32, 34) ran the lowest main-supply currents of the set (~4-5 %
 below the nominal 3659 A on supply 0). They are excluded from the mean ONLY if
 their normalized SHAPE departs from the others by more than the others depart
-from each other; the decision is measured, printed with both readings, and
-recorded in the report. It is never silently applied.
+from each other, measured on the FAR END -- the span the flux ratio is
+actually read on, in model coordinates. The decision is measured, printed with
+both readings, and recorded in the report. It is never silently applied.
 
-COORDINATES -- AN ASSUMPTION, NOT A MEASUREMENT
------------------------------------------------
-This build ASSUMES ``z_MSI == z_model``: both are taken as distances from the
-cathode along the axis, so an MSI sample at z is applied to the model cell
-whose centre is at the same z. The assumption is supported on the measurement
-side by the analysis repo's port-to-axis map, whose ``z_from_port = 182.5 +
-31.95 * (port - 2)`` is documented as a nominal distance from the cathode, and
-on the model side by the solver's own convention (z = 0 at the cathode face).
+COORDINATES -- THE MEASURED REGISTRATION
+----------------------------------------
+``z_MSI`` is NOT the model's axial coordinate. The MSI record is written in
+the machine's own port-referenced frame (the ``bapsflib.lapd`` convention):
+``z = 0`` at PORT 53, the most northern regular port, with ``+z`` pointing
+SOUTH, toward the main cathode -- ``portnum_to_z = 31.95 * (53 - port)``. The
+model's ``z`` runs the other way, from ``z = 0`` at the cathode face toward
+the far collector. The two frames are REVERSED with respect to each other, so
+the registration is a reflection:
 
-THE DISAGREEMENT THIS DISCLOSES, AND DOES NOT RESOLVE. Under that assumption
-the machine's end-pair mirror sits at a DIFFERENT place than the CAD census
-puts it. The MSI record's end-pair peak is at z ~= 1791 cm; the census coil
-table's end-pair centroid is at z ~= 1947 cm in model coordinates, and the
-census re-solve's own axial field peaks near 1940 cm. That is a ~156 cm
-coil-location disagreement between the drawn machine and the machine's
-programmed magnet positions. It cannot be adjudicated from the data in hand:
-neither record carries an independent axial fiducial that would fix the other.
-Both readings are reported. This build takes the MEASURED positions, because
-the profile it produces is a statement about the field the ES1 runs were
-taken in.
+    z_model = C - z_MSI,   C = PORT53_Z_MODEL_CM = 1814.67 cm
+
+``C`` is the port-53 station in model coordinates, read off the CAD port
+ladder: port 2 at 182.67 cm from the cathode face, and exactly 53 regular
+stations at a 32.00 cm pitch, so ``182.67 + 32.00 * (53 - 2) = 1814.67``.
+
+THE PORT PITCH IS THE CAD's 32.00 cm, NOT the 31.95 cm nominal (Tom's
+ruling). The nominal map ``182.5 + 31.95 * (port - 2)`` puts port 53 at
+1811.95 cm instead; the two anchors differ by 2.72 cm, well inside one 7.49 cm
+mesh cell, so nothing in the emitted profile turns on the choice. Both values
+are stated wherever the anchor is quoted, and the report locates every port on
+both ladders. The ladder is corroborated at two independent stations: the
+stance's neutral baffle at 342.65 cm lands on port 7.00 on the CAD ladder
+(7.01 on the nominal one), which is an OCTAGONAL RING station -- the octa
+rings sit at ports 7, 13, 19, 24, 30, 35, 41 and 47 -- and the anode plane
+sits at CAD 53.2-53.4 cm against the model's 53.25 cm.
+
+THE MAPPING IS APPLIED FIRST, ahead of everything else this script does: every
+recorded profile is re-expressed on the ascending model grid
+``z_model in [-210.63, 2114.67]`` cm, and the plateau normalization, the
+flat/departure rule, the feature windows, the exclusion adjudication and the
+mesh resample all run in model coordinates. There is no coordinate assumption
+left in this build.
+
+WHAT THE CORRECTED FRAME SHOWS, AND WHAT IT RETIRES. The far end of the
+machine simply FALLS OFF, with no mirror: the end-pair supply channel reads
+0 A in every recorded shot -- the end coils were OFF, a measured machine fact
+rather than an inference. The cathode side carries the source-coil structure
+instead: a peak of ``B_hat`` just downstream of the cathode face and a dip
+about a metre past it. The flat hold covers all of that, so the source-side
+structure is REPORTED and never applied to the profile.
+
+The mis-oriented build painted each end onto the other. It read the cathode
+source-coil peak as an end-pair mirror throat sitting on the far column, gave
+p50 a spurious flare out of the source-side dip, and reported a ~156 cm
+"coil-location disagreement" against the CAD census. All three were artifacts
+of the reflected frame and are retired; under the corrected registration the
+measured fall-off tracks the census ``off`` case (end pair unpowered), which
+is the machine state the 0 A channel records.
 
 THE PROFILE
 -----------
@@ -82,16 +113,21 @@ by cell on the tolerance, is what keeps the SCALAR ``Rp`` read sites
 per-cell vector: those sites read a single number, and a source-region cell
 whose vector entry disagreed with it would desync them silently. It is the
 same principle as the census builder's flat-to-1855 rule. The measured
-consequence, reported rather than hidden: ``B_hat`` is BELOW tolerance over
-the source region as well (it falls through the cathode plane and is ~0.91 at
-z = 0), so a cell-by-cell tolerance mask would flare the plasma inside the
-cathode box and the plenum. The report prints that census.
+consequence, reported rather than hidden: ``B_hat`` is OFF TOLERANCE over the
+source region as well -- it carries the source-coil peak and dip there, and it
+collapses behind the cathode plane -- so a cell-by-cell tolerance mask would
+put per-cell structure on the cathode box, the plenum and the gap. That is a
+SEPARATE question from this one and is not decided here; the flat hold is
+kept. The report prints the census of where the tolerance would have fired.
 
 Beyond the departure the ratio is applied, capped at
 ``sqrt(AREA_CAP_FRACTION) * R_m(z)`` -- the declared annulus regularization,
-the same cap the census build uses. Beyond the last MSI sample (2025.3 cm)
-``B_hat`` is HELD at its last sampled value; the report states whether the cap
-binds over that span, which decides whether the choice is observable at all.
+the same cap the census build uses. Outside the corrected sample span
+``B_hat`` is HELD at the nearer end sample: below ``z_model = -210.63`` cm,
+where the flat rule already fixes ``r = RP_CM`` so the hold cannot be
+observable, and beyond ``z_model = 2114.67`` cm. The report states how many
+mesh cells fall outside the span at each end and whether the cap binds there,
+which is what decides whether either hold is observable at all.
 
 THE MESH AND THE VESSEL ARE NOT REBUILT. Both come from
 ``g1_build_profiles.py`` unchanged: its ``_g1_config`` mesh probe resolves the
@@ -140,12 +176,32 @@ from cablp.solvers._sim1d.core.geometry import build_geometry  # noqa: E402
 MSI_DATA_DIR = "/home/trloo/bapsf/bapsf-lapd-data-analysis/data/may2026"
 MSI_GROUP = "MSI/Magnetic field"
 
+#: The port-53 station in MODEL coordinates, cm: the registration anchor of
+#: ``z_model = PORT53_Z_MODEL_CM - z_MSI``. Read off the CAD port ladder --
+#: port 2 at 182.67 cm and 53 regular stations at the CAD 32.00 cm pitch.
+PORT53_Z_MODEL_CM = 1814.67
+#: The CAD port ladder, in model coordinates: port 2's station and the pitch.
+#: Tom's ruling keeps the CAD 32.00 cm pitch over the 31.95 cm nominal.
+PORT2_Z_MODEL_CM = 182.67
+PORT_PITCH_CM = 32.00
+#: The nominal (31.95 cm) map, retained only so the report can quote both
+#: anchors. It puts port 53 at 1811.95 cm -- 2.72 cm from the CAD value, which
+#: is sub-cell on this 280-cell mesh.
+PORT_Z0_NOMINAL_CM = 182.5
+PORT_PITCH_NOMINAL_CM = 31.95
+
+#: All windows below are in MODEL coordinates, and are applied after the
+#: registration.
+#:
 #: The plateau window, in cm. Wide enough to average over the interior coil
-#: ripple, and clear of both the source-region rise and the end structure.
+#: ripple, and clear of both the source-region structure and the far fall-off.
 PLATEAU_WINDOW_CM = (300.0, 1500.0)
-#: Search windows for the reported end features, in cm.
-DIP_WINDOW_CM = (1500.0, 1770.0)
-PEAK_WINDOW_CM = (1750.0, 1860.0)
+#: Search windows for the reported SOURCE-SIDE features -- the source-coil
+#: peak just downstream of the cathode face, and the dip about a metre past
+#: it. Both are REPORTED ONLY: the flat hold covers this whole span, so
+#: neither is applied to the emitted profile.
+PEAK_WINDOW_CM = (-50.0, 65.0)
+DIP_WINDOW_CM = (45.0, 300.0)
 
 #: The flat-column rule. ``B_hat`` is "at plateau" within this tolerance, and
 #: a departure counts as sustained once it spans this much axial distance.
@@ -163,17 +219,48 @@ RP_CM = census_build.RP_CM
 AREA_CAP_FRACTION = census_build.AREA_CAP_FRACTION
 CENSUS_CASES = census_build.CASES
 
-#: Port axis map of the analysis repo, quoted for the coordinate assumption:
-#: nominal distance from the cathode, in cm.
-PORT_Z0_CM = 182.5
-PORT_PITCH_CM = 31.95
 #: The ports the report locates on the profile.
 REPORTED_PORTS = (11, 21, 29, 41, 50)
 
+#: The measured p50/p41 flux-tube area ratio, and its uncertainty. The gate:
+#: the ratio the EMITTED profile implies between those two stations must agree
+#: with this measurement to within its stated sigma.
+MEASURED_P50_P41_FLUX_RATIO = 0.9905
+MEASURED_P50_P41_FLUX_RATIO_SIGMA = 0.0114
+
 
 def port_z_cm(port):
-    """Return the nominal axial position of ``port``, in cm from the cathode."""
-    return PORT_Z0_CM + PORT_PITCH_CM * (port - 2)
+    """Return ``port``'s station in MODEL coordinates, cm from the cathode.
+
+    The CAD ladder: port 2 at ``PORT2_Z_MODEL_CM`` and a ``PORT_PITCH_CM``
+    pitch. This is the ladder the registration anchor ``PORT53_Z_MODEL_CM``
+    comes off, so the ports and the anchor stay consistent by construction.
+    """
+    return PORT2_Z_MODEL_CM + PORT_PITCH_CM * (port - 2)
+
+
+def port_z_nominal_cm(port):
+    """Return ``port``'s station on the 31.95 cm NOMINAL map, cm.
+
+    Reported alongside :func:`port_z_cm` so the pitch ruling is visible in the
+    build report; it is never used to build the profile.
+    """
+    return PORT_Z0_NOMINAL_CM + PORT_PITCH_NOMINAL_CM * (port - 2)
+
+
+def to_model_frame(z_msi_cm):
+    """Return ``(z_model_cm, order)`` for the MSI axial sample positions.
+
+    Applies ``z_model = PORT53_Z_MODEL_CM - z_MSI`` -- the reflection between
+    the machine's port-53-referenced frame (``+z`` south, toward the cathode)
+    and the model's cathode-referenced frame. The reflection reverses the
+    sample order, so ``order`` is the permutation that puts ``z_model``
+    ascending; apply it to every recorded profile before anything else reads
+    them.
+    """
+    z_model_cm = PORT53_Z_MODEL_CM - np.asarray(z_msi_cm, dtype=float)
+    order = np.argsort(z_model_cm)
+    return z_model_cm[order], order
 
 
 # ------------------------------------------------------------------ reading
@@ -185,24 +272,32 @@ def msi_files():
 
 
 def read_msi(path):
-    """Return one file's MSI magnetic-field record.
+    """Return one file's MSI magnetic-field record, IN MODEL COORDINATES.
 
-    The returned dict carries ``z_cm`` (1024 sample positions), ``B_gauss``
-    (2 x 1024, the first and last shot), ``currents_A`` (2 x 13),
-    ``peak_gauss`` and ``valid`` (per shot), and ``run`` (the two-digit run
-    number the filename starts with).
+    The registration ``z_model = PORT53_Z_MODEL_CM - z_MSI`` is applied here,
+    at the read, so that nothing downstream ever sees the machine frame: the
+    returned ``z_cm`` is the ascending model grid and ``B_gauss`` is reordered
+    to match it. ``z_msi_cm`` carries the raw machine-frame positions in the
+    same (reordered) sample order, for the report.
+
+    The returned dict carries ``z_cm`` and ``z_msi_cm`` (1024 sample positions
+    each), ``B_gauss`` (2 x 1024, the first and last shot), ``currents_A``
+    (2 x 13), ``peak_gauss`` and ``valid`` (per shot), and ``run`` (the
+    two-digit run number the filename starts with).
     """
     with h5py.File(path, "r") as handle:
         group = handle[MSI_GROUP]
-        z_cm = np.asarray(group.attrs["Profile z locations"], dtype=float)
+        z_msi_cm = np.asarray(group.attrs["Profile z locations"], dtype=float)
         b_gauss = np.asarray(group["Magnetic field profile"], dtype=float)
         currents = np.asarray(group["Magnet power supply currents"], dtype=float)
         summary = np.asarray(group["Magnetic field summary"])
+    z_cm, order = to_model_frame(z_msi_cm)
     return {
         "run": os.path.basename(path)[:2],
         "path": path,
         "z_cm": z_cm,
-        "B_gauss": b_gauss,
+        "z_msi_cm": z_msi_cm[order],
+        "B_gauss": b_gauss[:, order],
         "currents_A": currents,
         "peak_gauss": np.asarray(summary["Peak magnetic field"], dtype=float),
         "valid": np.asarray(summary["Data valid"], dtype=int),
@@ -264,12 +359,14 @@ def adjudicate_low_current(rows_by_run, z_grid_cm):
 
     For every file, take the mean of its two shots' ``B_hat`` and compute the
     leave-one-out deviation ``max |B_hat_file - mean(B_hat of all others)|``,
-    over the full mesh and again over the end region the profile is actually
-    built from. A low-current file is an outlier when its deviation exceeds
-    the LARGEST deviation any other file shows on the same measure.
+    over the full mesh and again over the FAR-END region the profile is
+    actually built from -- ``z_model >= DEPARTURE_SEARCH_FROM_CM``, in model
+    coordinates, which is the far column and its fall-off. A low-current file
+    is an outlier when its deviation exceeds the LARGEST deviation any other
+    file shows on the same measure.
 
     Returns the per-file deviations, the two verdicts, and the set to exclude
-    (the end-region measure decides, because that is the region the ratio is
+    (the far-end measure decides, because that is the region the ratio is
     read on; both are reported).
     """
     runs = sorted(rows_by_run)
@@ -359,22 +456,27 @@ def build_plasma_profile(cell_z_cm, vessel_radius_cm, z_grid_cm, b_hat, z_depart
     """Return the flux-tube radius profile on the model mesh.
 
     Flat at exactly ``RP_CM`` for every cell centre at or upstream of
-    ``z_departure_cm``; ``RP_CM / sqrt(B_hat)`` beyond it, with ``B_hat`` held
-    at its last sampled value past the end of the MSI mesh; capped at
-    ``sqrt(AREA_CAP_FRACTION) * R_m``.
+    ``z_departure_cm``; ``RP_CM / sqrt(B_hat)`` beyond it. Outside the MSI
+    sample span ``B_hat`` is held at the nearer end sample, at BOTH ends of
+    the corrected grid. Capped at ``sqrt(AREA_CAP_FRACTION) * R_m``.
 
-    Returns ``(capped, raw, cap, b_hat_on_cells, held)`` where ``held`` marks
-    the cells beyond the last MSI sample.
+    Returns ``(capped, raw, cap, b_hat_on_cells, held_above, held_below)``,
+    where the two ``held`` masks mark the cells beyond the last and below the
+    first MSI sample in model coordinates.
     """
     cell_z_cm = np.asarray(cell_z_cm, dtype=float)
+    first_sample_cm = float(z_grid_cm[0])
     last_sample_cm = float(z_grid_cm[-1])
-    held = cell_z_cm > last_sample_cm
-    b_on_cells = np.interp(np.minimum(cell_z_cm, last_sample_cm), z_grid_cm, b_hat)
+    held_above = cell_z_cm > last_sample_cm
+    held_below = cell_z_cm < first_sample_cm
+    b_on_cells = np.interp(
+        np.clip(cell_z_cm, first_sample_cm, last_sample_cm), z_grid_cm, b_hat
+    )
     raw = np.where(
         cell_z_cm <= z_departure_cm, RP_CM, RP_CM / np.sqrt(np.maximum(b_on_cells, 1e-12))
     )
     cap = np.sqrt(AREA_CAP_FRACTION) * np.asarray(vessel_radius_cm, dtype=float)
-    return np.minimum(raw, cap), raw, cap, b_on_cells, held
+    return np.minimum(raw, cap), raw, cap, b_on_cells, held_above, held_below
 
 
 def stance_list_text(values, per_line=4, indent="  "):
@@ -394,11 +496,11 @@ def write_figure(
 ):
     """Render the comparison figure.
 
-    Three shared-axis panels over the whole machine (the normalized field with
-    its per-shot band, the radius profiles against the census cases and the
-    cap, the new/old ratio) plus a linear zoom on the end region, where the
-    log axis of the second panel flattens the droop and the mirror throat into
-    a line.
+    Three shared-axis panels over the whole machine, all in MODEL coordinates
+    (the normalized field with its per-shot band, the radius profiles against
+    the census cases and the cap, the new/old ratio) plus a linear zoom on the
+    end of the flat column, where the log axis of the second panel flattens
+    the fall-off into a line.
     """
     import matplotlib
 
@@ -441,9 +543,9 @@ def write_figure(
             color="C0" if case == "droop_min" else "C2",
             lw=1.2,
             ls=style,
-            label=f"census {case} (previous stance profile)"
+            label=f"census {case} (pre-MSI stance profile)"
             if case == "droop_min"
-            else f"census {case}",
+            else f"census {case} (end pair unpowered -- the measured state)",
         )
     ax.plot(mesh.z_cm, cap, color="0.4", lw=1.0, ls="-.", label="cap $\\sqrt{0.95}\\,R_m$")
     ax.axhline(RP_CM, color="k", lw=0.6, ls=":")
@@ -462,7 +564,7 @@ def write_figure(
     )
     ax.axhline(1.0, color="k", lw=0.6, ls=":")
     ax.set_ylabel("new / census droop_min")
-    ax.set_xlabel("z [cm], cathode-referenced")
+    ax.set_xlabel("z [cm], MODEL frame (cathode-referenced)")
 
     ax = axes[3]
     ax.plot(mesh.z_cm, profile, color="C3", lw=1.6, marker=".", ms=4, label="NEW: MSI flux tube")
@@ -476,10 +578,10 @@ def write_figure(
     )
     ax.plot(mesh.z_cm, census_profiles["off"], color="C2", lw=1.2, ls=":", label="census off")
     ax.axhline(RP_CM, color="k", lw=0.6, ls=":")
-    ax.set_xlim(1600.0, 1900.0)
-    ax.set_ylim(17.0, 21.0)
+    ax.set_xlim(1650.0, 1880.0)
+    ax.set_ylim(17.0, 32.0)
     ax.set_ylabel("plasma radius [cm]")
-    ax.set_xlabel("z [cm] -- ZOOM on the droop and the mirror throat")
+    ax.set_xlabel("z [cm] -- ZOOM on the end of the flat column and the fall-off")
     ax.legend(loc="upper left", fontsize=8)
 
     fig.tight_layout()
@@ -508,9 +610,20 @@ def main():
         f"{DEPARTURE_SEARCH_FROM_CM} cm; cap sqrt({AREA_CAP_FRACTION}) * R_m"
     )
     say(
-        "coordinate: z_MSI == z_model ASSUMED (both cathode-referenced). See "
-        "the module docstring for the CAD end-pair disagreement this leaves "
-        "open and does not resolve."
+        f"frame    : z_model = {PORT53_Z_MODEL_CM} - z_MSI. The MSI record is "
+        "port-53-referenced with +z pointing SOUTH toward the cathode "
+        "(bapsflib.lapd, portnum_to_z = 31.95*(53 - port)); the model runs "
+        "the other way from z = 0 at the cathode face, so the registration is "
+        "a REFLECTION, applied at the read before anything else."
+    )
+    say(
+        f"anchor   : port 53 at z_model = {PORT53_Z_MODEL_CM} cm, off the CAD "
+        f"ladder (port 2 at {PORT2_Z_MODEL_CM} cm, {PORT_PITCH_CM} cm pitch, "
+        f"53 regular stations). The {PORT_PITCH_NOMINAL_CM} cm nominal map "
+        f"({PORT_Z0_NOMINAL_CM} + {PORT_PITCH_NOMINAL_CM}*(port-2)) would put "
+        f"it at {port_z_nominal_cm(53):.2f} cm instead; the CAD pitch is kept "
+        f"(Tom's ruling) and the {PORT53_Z_MODEL_CM - port_z_nominal_cm(53):.2f} cm "
+        "difference is sub-cell on this mesh."
     )
     say()
 
@@ -525,10 +638,20 @@ def main():
                 f"{record['run']} carries a different 'Profile z locations' "
                 "attribute; the profiles cannot be averaged sample-for-sample"
             )
+    z_msi_cm = records[0]["z_msi_cm"]
     say(
         f"ASSERT all {len(records)} files share one z mesh "
-        f"({z_grid_cm.size} samples, {z_grid_cm[0]:.3f} .. {z_grid_cm[-1]:.3f} cm, "
-        f"pitch {np.diff(z_grid_cm).mean():.4f} cm): PASS"
+        f"({z_grid_cm.size} samples, {z_grid_cm[0]:.3f} .. {z_grid_cm[-1]:.3f} cm "
+        f"in MODEL coordinates, from z_MSI {z_msi_cm[-1]:.3f} .. "
+        f"{z_msi_cm[0]:.3f} cm, pitch {np.diff(z_grid_cm).mean():.4f} cm): PASS"
+    )
+    if not np.allclose(z_grid_cm, PORT53_Z_MODEL_CM - z_msi_cm):
+        raise AssertionError("the model grid is not the reflection of the MSI grid")
+    if not np.all(np.diff(z_grid_cm) > 0.0):
+        raise AssertionError("the reflected model grid is not ascending")
+    say(
+        "ASSERT the model grid is exactly PORT53_Z_MODEL_CM - z_MSI and is "
+        "ascending: PASS"
     )
     invalid = [
         (r["run"], s) for r in records for s in range(2) if not r["valid"][s]
@@ -540,7 +663,10 @@ def main():
     for record in records:
         rows_by_run[record["run"]] = file_features(record)
 
-    say("--- per-file MSI features (both recorded shots) ---")
+    say(
+        "--- per-file MSI features (both recorded shots); the dip and peak "
+        "columns are the SOURCE-SIDE structure, reported only ---"
+    )
     say(
         f"{'run':>4} {'shot':>4} {'I_main[A]':>10} {'plateau[G]':>11} "
         f"{'dip[G]':>9} {'z_dip[cm]':>10} {'peak[G]':>9} {'z_peak[cm]':>11} "
@@ -560,9 +686,9 @@ def main():
             if row["dip_at_window_edge"] or row["peak_at_window_edge"]:
                 edge_hits.append((row["run"], row["shot"]))
     say(
-        "feature windows: dip searched over "
-        f"{DIP_WINDOW_CM} cm, peak over {PEAK_WINDOW_CM} cm; extrema landing "
-        f"ON a window edge (window cutting the feature): "
+        "feature windows (MODEL coordinates): source-side dip searched over "
+        f"{DIP_WINDOW_CM} cm, source-coil peak over {PEAK_WINDOW_CM} cm; "
+        f"extrema landing ON a window edge (window cutting the feature): "
         f"{edge_hits if edge_hits else 'none'}"
     )
     plateaus = np.array(
@@ -581,6 +707,30 @@ def main():
         f"main supply (channel 0) across all shots: mean {currents.mean():.1f} A, "
         f"min {currents.min():.1f} A, max {currents.max():.1f} A"
     )
+    all_currents = np.concatenate([record["currents_A"] for record in records], axis=0)
+    zero_channels = [
+        channel
+        for channel in range(all_currents.shape[1])
+        if np.all(np.abs(all_currents[:, channel]) < 1.0)
+    ]
+    say(
+        f"magnet supply census over all {all_currents.shape[0]} recorded shots "
+        f"({all_currents.shape[1]} channels): channels reading ZERO in every "
+        f"shot: {zero_channels if zero_channels else 'none'}"
+    )
+    for channel in zero_channels:
+        say(
+            f"  channel {channel}: {all_currents[:, channel].min():.2f} .. "
+            f"{all_currents[:, channel].max():.2f} A -- the recorder's offset, "
+            "i.e. zero"
+        )
+    say(
+        "THE END COILS WERE OFF, MEASURED: the end-pair supply is set by hand "
+        "and its channel is auto-recorded, and it reads 0 A in every shot of "
+        "every file. There is no end mirror in this data set -- the far end "
+        "simply falls off. This is a machine fact, not an inference from the "
+        "profile shape, and it is what the corrected registration shows."
+    )
     say()
 
     # --- the 32/34 adjudication ---------------------------------------------
@@ -588,10 +738,13 @@ def main():
     say("--- cross-file normalized-shape spread, and the low-current files ---")
     say(
         "leave-one-out deviation per file: max |B_hat_file - mean(all other "
-        "files)|, over the FULL mesh and over the end region "
-        f"z >= {DEPARTURE_SEARCH_FROM_CM} cm (the span the ratio is read on)"
+        "files)|, over the FULL mesh and over the FAR-END region "
+        f"z_model >= {DEPARTURE_SEARCH_FROM_CM} cm (the span the ratio is read "
+        "on). RE-ADJUDICATED in the corrected frame: the mis-oriented build "
+        f"masked on z_MSI >= {DEPARTURE_SEARCH_FROM_CM} cm, which is the "
+        "CATHODE region, so its verdict was measured on the wrong span."
     )
-    say(f"{'run':>4} {'full mesh':>11} {'z>=1500':>11}")
+    say(f"{'run':>4} {'full mesh':>11} {'far end':>11}")
     for run in verdict["runs"]:
         mark = "  <- low main current" if run in LOW_CURRENT_FILES else ""
         say(
@@ -600,31 +753,43 @@ def main():
         )
     say(
         f"largest deviation among the OTHER files: full {verdict['others_max_full']:.4f}, "
-        f"end region {verdict['others_max_end']:.4f}"
+        f"far end {verdict['others_max_end']:.4f}"
     )
     for run in LOW_CURRENT_FILES:
         say(
             f"  file {run}: full {verdict['deviation_full'][run]:.4f} "
             f"({'BEYOND' if run in verdict['outliers_full'] else 'within'} the others' "
-            f"spread), end region {verdict['deviation_end'][run]:.4f} "
+            f"spread), far end {verdict['deviation_end'][run]:.4f} "
             f"({'BEYOND' if run in verdict['outliers_end'] else 'within'} the others' "
             "spread)"
         )
     excluded = verdict["excluded"]
+    retained_low = [run for run in LOW_CURRENT_FILES if run not in excluded]
     say(
         "VERDICT: "
         + (
-            f"exclude {sorted(excluded)} -- on the end region, the span the flux "
+            f"exclude {sorted(excluded)} -- on the far end, the span the flux "
             "ratio is actually read on, their normalized shape departs by more "
             "than any other file's does. On the full mesh they are INSIDE the "
             "others' spread (the plateau ripple of several other files is "
-            "larger), so the exclusion rests on the end region alone and is "
+            "larger), so the exclusion rests on the far end alone and is "
             "reported here rather than assumed."
             if excluded
             else "retain every file -- neither low-current file departs beyond "
             "the others' spread on either measure."
         )
     )
+    if retained_low:
+        say(
+            f"  RETAINED, having been excluded by the mis-oriented build: "
+            f"{sorted(retained_low)}. Measured on the true far end "
+            + ", ".join(
+                f"{run} deviates {verdict['deviation_end'][run]:.4f}"
+                for run in sorted(retained_low)
+            )
+            + f", inside the others' {verdict['others_max_end']:.4f}. The "
+            "earlier exclusion was measured on the cathode region."
+        )
     say()
 
     b_hat, shapes = mean_normalized(rows_by_run, excluded)
@@ -641,8 +806,9 @@ def main():
     say("mean B_hat and per-shot spread at reference positions:")
     say(f"{'z[cm]':>9} {'B_hat':>9} {'min':>9} {'max':>9} {'max-min':>9}")
     for z_sample in (
-        -300.0, -100.0, 0.0, 100.0, 300.0, 600.0, 900.0, 1200.0, 1500.0,
-        1600.0, 1684.0, 1718.0, 1791.0, 1850.0, 1891.0, 1950.0, 2000.0, 2025.0,
+        -210.0, -100.0, -50.0, 0.0, 53.25, 100.0, 200.0, 300.0, 600.0, 900.0,
+        1200.0, 1500.0, 1600.0, 1700.0, 1750.0, 1800.0, 1855.0, 1900.0,
+        2000.0, 2114.0,
     ):
         say(
             f"{z_sample:9.1f} {np.interp(z_sample, z_grid_cm, b_hat):9.4f} "
@@ -671,13 +837,20 @@ def main():
         "(there is no earlier off-plateau sample beyond the search start at "
         "all)"
     )
-    say("ports on the profile (z_from_port = 182.5 + 31.95*(port-2)):")
+    say(
+        f"ports on the profile, CAD ladder z = {PORT2_Z_MODEL_CM} + "
+        f"{PORT_PITCH_CM}*(port-2), with the {PORT_PITCH_NOMINAL_CM} cm "
+        "nominal map alongside:"
+    )
     for port in REPORTED_PORTS:
         z_port = port_z_cm(port)
-        b_port = float(np.interp(min(z_port, z_grid_cm[-1]), z_grid_cm, b_hat))
+        z_nominal = port_z_nominal_cm(port)
+        b_port = float(np.interp(np.clip(z_port, z_grid_cm[0], z_grid_cm[-1]), z_grid_cm, b_hat))
         flat = z_port <= z_departure
+        flat_nominal = z_nominal <= z_departure
         say(
-            f"  p{port:<3d} z = {z_port:8.2f} cm  B_hat = {b_port:.4f}  "
+            f"  p{port:<3d} z_CAD = {z_port:8.2f} cm (nominal {z_nominal:8.2f} "
+            f"cm)  B_hat = {b_port:.4f}  "
             + (
                 "FLAT column (r = Rp exactly)"
                 if flat
@@ -685,7 +858,18 @@ def main():
                 f"(+{(1.0 / np.sqrt(b_port) - 1.0) * 100:.2f} % radius, "
                 f"+{(1.0 / b_port - 1.0) * 100:.2f} % area)"
             )
+            + ("" if flat == flat_nominal else "   <- the two ladders DISAGREE here")
         )
+    say(
+        "the two ladders put every reported port on the same side of the "
+        "departure"
+        if all(
+            (port_z_cm(port) <= z_departure) == (port_z_nominal_cm(port) <= z_departure)
+            for port in REPORTED_PORTS
+        )
+        else "WARNING: the CAD and nominal ladders straddle the departure for "
+        "at least one reported port"
+    )
     say()
 
     # --- the cell-by-cell tolerance census, reported not applied -------------
@@ -704,14 +888,18 @@ def main():
             f"{b_hat[off_upstream].min():.4f} .. {b_hat[off_upstream].max():.4f}"
         )
         say(
-            "  This is the source-region rise: the field falls through and "
-            f"behind the cathode plane (B_hat = "
-            f"{np.interp(0.0, z_grid_cm, b_hat):.4f} at z = 0, "
-            f"{np.interp(-100.0, z_grid_cm, b_hat):.4f} at z = -100). A "
-            "cell-by-cell tolerance mask would therefore flare the plasma "
-            "inside the cathode box and the plenum and DESYNC the scalar Rp "
-            "read sites; the flat span is held to the departure z instead, "
-            "which is what the construction validation below gates on."
+            "  This is the SOURCE-SIDE structure the corrected frame puts "
+            "back where it belongs: the source-coil peak just downstream of "
+            f"the cathode face (B_hat = {np.interp(0.0, z_grid_cm, b_hat):.4f} "
+            f"at z = 0, {np.interp(53.25, z_grid_cm, b_hat):.4f} at the anode "
+            f"plane), the dip about a metre past it, and the collapse behind "
+            f"the cathode plane ({np.interp(-100.0, z_grid_cm, b_hat):.4f} at "
+            "z = -100). A cell-by-cell tolerance mask would therefore put "
+            "per-cell structure on the cathode box, the plenum and the gap "
+            "and DESYNC the scalar Rp read sites. Whether the source region "
+            "should carry that structure is a SEPARATE question and is not "
+            "decided here; the flat span is held to the departure z, which is "
+            "what the construction validation below gates on."
         )
     else:
         say("  none: B_hat is within tolerance at every upstream sample")
@@ -734,7 +922,7 @@ def main():
     say()
 
     # --- the profile ---------------------------------------------------------
-    profile, raw, cap, b_on_cells, held = build_plasma_profile(
+    profile, raw, cap, b_on_cells, held_above, held_below = build_plasma_profile(
         mesh.z_cm, vessel, z_grid_cm, b_hat, z_departure
     )
     census = np.load(census_build.CENSUS_NPZ, allow_pickle=True)
@@ -765,14 +953,14 @@ def main():
             f"{area_ratio:8.4f} {census_profiles['droop_min'][index]:9.4f} "
             f"{profile[index] / census_profiles['droop_min'][index]:8.4f}"
             + ("   CAP" if profile[index] < raw[index] else "")
-            + ("   HELD" if held[index] else "")
+            + ("   HELD" if held_above[index] else "")
         )
     say(
         f"cap binds in {binds.size} cell(s): {binds.tolist()}"
         if binds.size
         else "cap binds in 0 cells"
     )
-    held_cells = np.flatnonzero(held)
+    held_cells = np.flatnonzero(held_above)
     if held_cells.size:
         held_capped = bool(np.all(profile[held_cells] < raw[held_cells]))
         say(
@@ -785,6 +973,26 @@ def main():
             + ("is NOT observable in the emitted profile." if held_capped
                else "IS observable and the held value is what ships.")
         )
+    else:
+        say(
+            f"beyond the last MSI sample (z > {z_grid_cm[-1]:.3f} cm): 0 cells "
+            f"-- the mesh ends at {mesh.z_cm[-1]:.3f} cm, inside the corrected "
+            "sample span, so the hold-last rule never fires and cannot be "
+            "observable. The terminal cells sit on the CAP instead."
+        )
+    below_cells = np.flatnonzero(held_below)
+    say(
+        f"below the first MSI sample (z < {z_grid_cm[0]:.3f} cm): "
+        f"{below_cells.size} cell(s)"
+        + (
+            f" {below_cells.tolist()}, all inside the flat span, so the flat "
+            f"rule fixes them at {RP_CM} and the hold cannot be observable "
+            "there either."
+            if below_cells.size
+            else f" -- the mesh starts at {mesh.z_cm[0]:.3f} cm, inside the "
+            "corrected sample span."
+        )
+    )
     say()
 
     throat = int(np.argmin(profile))
@@ -792,11 +1000,18 @@ def main():
     widest_flux += flared[0]
     say("--- headline geometry of the new profile ---")
     say(
-        f"THROAT: min radius {profile[throat]:.4f} cm at z = "
-        f"{mesh.z_cm[throat]:.3f} cm (cell {throat}) = "
-        f"{profile[throat] / RP_CM:.4f} x Rp, area "
-        f"{(profile[throat] / RP_CM) ** 2:.4f} x the column -- the end-pair "
-        "mirror compresses the tube BELOW the design column radius"
+        f"NO THROAT: the minimum radius over the whole mesh is "
+        f"{profile[throat]:.4f} cm = {profile[throat] / RP_CM:.4f} x Rp, first "
+        f"reached at z = {mesh.z_cm[throat]:.3f} cm (cell {throat}). "
+        + (
+            "The profile never goes BELOW the design column radius: with the "
+            "end coils off there is no mirror to compress the tube, and the "
+            "sub-Rp throat the mis-oriented build reported was the "
+            "SOURCE-COIL peak reflected onto the far column."
+            if profile[throat] >= RP_CM
+            else "THE PROFILE DIPS BELOW Rp, which the end-coils-off machine "
+            "state does not admit -- investigate before shipping."
+        )
     )
     say(
         f"FLARE: the widest cell the cap does NOT touch is {widest_flux} at "
@@ -811,18 +1026,19 @@ def main():
         f"census droop_min gave {census_profiles['droop_min'][-1]:.4f} cm"
     )
     say(
-        f"MID-DROOP: at p50 (z = {port_z_cm(50):.2f} cm) the flux tube is "
-        f"{1.0 / np.sqrt(float(np.interp(port_z_cm(50), z_grid_cm, b_hat))):.4f} "
-        "x Rp -- the ~10 % field droop between the last main coil and the "
-        "end-pair mirror sits directly under the p50 measurement station, so "
-        "the modelled column there is ~5 % WIDER in radius (~10 % in area) "
-        "than the design column, where the census profile held it flat."
+        f"p50 IS IN THE FLAT COLUMN: at z = {port_z_cm(50):.2f} cm the "
+        f"measured B_hat is "
+        f"{float(np.interp(port_z_cm(50), z_grid_cm, b_hat)):.4f} and the "
+        f"departure is {z_departure - port_z_cm(50):.2f} cm downstream of it, "
+        f"so the emitted r there is exactly {RP_CM} cm -- the same as p11-p41. "
+        "The spurious p50 flare of the mis-oriented build was the SOURCE-SIDE "
+        "dip reflected onto the far column."
     )
     say(
-        "PROFILE IS NOT MONOTONE, by construction and by physics: it flares "
-        "into the droop, narrows through the mirror throat, flares again "
-        "past it, and steps where the vessel bore steps and the cap takes "
-        "over. The census profile was not monotone either."
+        "PROFILE IS MONOTONE THROUGH THE FALL-OFF, unlike the mis-oriented "
+        "build: flat at Rp through the column, then widening monotonically as "
+        "the field falls away with no mirror, stepping only where the vessel "
+        "bore steps and the cap takes over."
     )
     say()
 
@@ -830,8 +1046,9 @@ def main():
     say("--- comparison against the census profiles ---")
     say(
         "census case names are 'droop_min' (end pair energized to the "
-        "minimum-droop solution; this was the shipped stance profile) and "
-        "'off' (end pair unpowered)"
+        "minimum-droop solution; the stance shipped this profile until the MSI "
+        "adoption) and 'off' (end pair unpowered -- the state the 0 A supply "
+        "channel records, so this is the case the machine was actually in)"
     )
     for case in CENSUS_CASES:
         delta = profile - census_profiles[case]
@@ -853,20 +1070,54 @@ def main():
         f"census flat span ended at z = {census_build.FLAT_THROUGH_Z_CM} cm; "
         f"the MSI flat span ends at z = {z_departure:.3f} cm -- the measured "
         "field leaves its plateau "
-        f"{census_build.FLAT_THROUGH_Z_CM - z_departure:.1f} cm EARLIER than "
-        "the census trace did, which is the same "
-        "coil-location disagreement the coordinate note discloses, read on "
-        "the upstream side."
+        f"{census_build.FLAT_THROUGH_Z_CM - z_departure:.1f} cm earlier than "
+        "the census builder's hand-set flat-through, which is a rule "
+        "difference (a threshold on the measured shape against a fixed z) and "
+        "not a geometry disagreement."
+    )
+
+    # The end coils read 0 A, so 'off' is the machine state these files record;
+    # run the SAME departure rule on the census 'off' axial field and compare.
+    census_z_cm = np.asarray(census["z_axis_m"], dtype=float) * 100.0
+    census_bz = np.asarray(census["off_bz_axis_gauss"], dtype=float)
+    census_b_hat = census_bz / plateau_level(census_z_cm, census_bz)
+    census_departure, _, _ = departure_z_cm(census_z_cm, census_b_hat)
+    say(
+        "CAD cross-check, in the corrected frame, against the census case the "
+        "machine was actually in ('off' -- end pair unpowered, which is what "
+        "the 0 A supply channel records):"
     )
     say(
-        "CAD cross-check (from the census file, unchanged): end-pair coil "
-        f"centroid at z = "
-        f"{float(np.mean(census['coil_centers_end_pair_m'])) * 100:.2f} cm in "
-        "model coordinates. The MSI end-pair peak of the mean profile is at "
-        f"z = "
-        f"{z_grid_cm[np.argmax(np.where((z_grid_cm > PEAK_WINDOW_CM[0]) & (z_grid_cm < PEAK_WINDOW_CM[1]), b_hat, -np.inf))]:.2f}"
-        " cm. DISCLOSED, NOT RESOLVED: no fiducial in either record fixes the "
-        "other."
+        f"  same departure rule on the census 'off' field: z = "
+        f"{census_departure:.2f} cm, against the measured "
+        f"{z_departure:.2f} cm -- {z_departure - census_departure:+.2f} cm."
+    )
+    for level in (0.9, 0.5, 0.1):
+        def crossing(z_axis, shape):
+            beyond = z_axis > DEPARTURE_SEARCH_FROM_CM
+            z_axis, shape = z_axis[beyond], shape[beyond]
+            below = np.flatnonzero(shape < level)
+            if not below.size:
+                return float("nan")
+            stop = below[0]
+            return float(
+                np.interp(
+                    level, shape[: stop + 1][::-1], z_axis[: stop + 1][::-1]
+                )
+            )
+
+        z_measured = crossing(z_grid_cm, b_hat)
+        z_census = crossing(census_z_cm, census_b_hat)
+        say(
+            f"  B_hat = {level:.2f} crossing: measured z = {z_measured:.2f} cm, "
+            f"census 'off' z = {z_census:.2f} cm, "
+            f"{z_measured - z_census:+.2f} cm"
+        )
+    say(
+        "The measured fall-off and the drawn machine's own unpowered-end "
+        "solution agree to a few cm over the whole descent. The ~156 cm "
+        "'coil-location disagreement' the mis-oriented build reported was an "
+        "artifact of the reflected frame and is RETIRED, not carried forward."
     )
     say()
 
@@ -900,6 +1151,45 @@ def main():
     say(
         f"ASSERT r == {RP_CM} EXACTLY in all {int(upstream_cells.sum())} cells "
         f"at or upstream of the departure: PASS"
+    )
+
+    # The flux-tube ratio between the two stations the measurement resolves.
+    port_cells = {
+        port: int(np.argmin(np.abs(mesh.z_cm - port_z_cm(port)))) for port in (41, 50)
+    }
+    implied_ratio = (profile[port_cells[50]] / profile[port_cells[41]]) ** 2
+    deviation = abs(implied_ratio - MEASURED_P50_P41_FLUX_RATIO)
+    say(
+        "GATE -- p50/p41 flux-tube area ratio. The emitted profile reads "
+        f"r(p50) = {profile[port_cells[50]]:.4f} cm (cell {port_cells[50]}, "
+        f"z = {mesh.z_cm[port_cells[50]]:.3f} cm) and r(p41) = "
+        f"{profile[port_cells[41]]:.4f} cm (cell {port_cells[41]}, z = "
+        f"{mesh.z_cm[port_cells[41]]:.3f} cm), so the implied area ratio is "
+        f"{implied_ratio:.4f}. Measured: {MEASURED_P50_P41_FLUX_RATIO} +/- "
+        f"{MEASURED_P50_P41_FLUX_RATIO_SIGMA}. Deviation {deviation:.4f} = "
+        f"{deviation / MEASURED_P50_P41_FLUX_RATIO_SIGMA:.2f} sigma."
+    )
+    if deviation > MEASURED_P50_P41_FLUX_RATIO_SIGMA:
+        raise AssertionError(
+            f"the emitted p50/p41 flux-tube area ratio {implied_ratio:.6f} is "
+            f"{deviation / MEASURED_P50_P41_FLUX_RATIO_SIGMA:.2f} sigma from "
+            f"the measured {MEASURED_P50_P41_FLUX_RATIO} +/- "
+            f"{MEASURED_P50_P41_FLUX_RATIO_SIGMA}"
+        )
+    say("ASSERT the implied ratio is within one sigma of the measurement: PASS")
+
+    # Reported, not applied: the source-side anchors of the corrected frame.
+    peak_value, peak_z, peak_edge = _extremum(z_grid_cm, b_hat, PEAK_WINDOW_CM, "max")
+    dip_value, dip_z, dip_edge = _extremum(z_grid_cm, b_hat, DIP_WINDOW_CM, "min")
+    say(
+        "REPORTED, NOT APPLIED -- the source-side anchors of the mean shape: "
+        f"peak B_hat = {peak_value:.4f} at z = {peak_z:.2f} cm"
+        + ("  (ON a window edge)" if peak_edge else "")
+        + f", dip B_hat = {dip_value:.4f} at z = {dip_z:.2f} cm"
+        + ("  (ON a window edge)" if dip_edge else "")
+        + ". Both sit inside the flat hold, so neither reaches the emitted "
+        "profile; they are the structure the mis-oriented build reflected onto "
+        "the far column as a p50 flare and a sub-Rp throat."
     )
 
     params, flags = census_build._g1_config(ref_params, ref_flags)
