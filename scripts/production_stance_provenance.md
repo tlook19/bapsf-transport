@@ -110,6 +110,31 @@ across the change.
 
 ## Cathode emission
 
+**`C_R = 9.30` under the `kinetic_dvm` neutral closure — FITTED (the DVM
+arm's one-time ES1 drive calibration, 2026-09-01; an ARM OVERRIDE, not a
+stance change — `g1atrim.toml` keeps `C_R = 8.76` for the fluid closure and
+the golden is untouched).** The DVM closure at α_E = 0.40 carries its own
+drive calibration because the kinetic neutral inventory loads the discharge
+differently (plateau 0.945 at the fluid's 8.76). Protocol (pre-registered
+2026-09-01, advisor §(b), Tom-ratified): one knob (`cathode_Ts_base_K`
+untouched at 1910.0), two-point secant in ln(plateau) vs ln(C_R) measured ON
+the DVM, drive-band target 2963 ± 23 A only, frozen after; ES2/ES3 transfer
+is the test. Points: 8.76 → 2800.1 A (0.9449); 9.30 → 2963.4 A
+(**1.000006**) — the second point IS the landed point; secant
+`C_R* = 9.2999` (power-law and linear identical), measured DVM slope
+`d ln(plateau)/d ln C_R = 0.948` (fluid 1.069). Port scores reported
+unconditionally, never entering the selection: Te 1.02, n 1.03, Isat 1.03
+(mean |dev|/σ 1.32 on Isat). Five of six pre-registered predictions held;
+the mid-port density statistic moved +0.009 (below the predicted +0.02…+0.06,
+same sign — the density is drag-limited, not drive-limited). Artifacts:
+`scripts/m1r_retrim_cr9.3_*`; the arm command of record
+`scripts/m1r_retrim_cr9.3_es1.cmd`. RIDER (2026-09-01, Tom): the stance
+plasma-radius profile was found mis-oriented the same day (see the profile
+entry below) and its correction is registered; if the corrected profile moves
+the DVM drive out of the 2963 ± 23 A band, this value is re-trimmed ONCE more
+under the SAME one-knob protocol and this entry is superseded — the freeze
+binds per profile of record.
+
 **`C_R = 8.76` — FITTED (the one drive-side fit knob; re-trimmed
 2026-08-25 under the `plateau_multigroup` closure).** Adopting the
 multigroup plateau moves the drive, so the knob was re-trimmed ONCE, at ES1,
