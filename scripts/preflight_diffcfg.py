@@ -17,8 +17,9 @@ THE STUB'S BLIND SPOT, and the CONSTRUCTOR PROBE that closes it: stubbing the
 constructor means the CONSTRUCTION GUARDS never run, so a config the real
 solver refuses outright -- an unknown key, a member key a model family cannot
 carry, a closure combination that raises -- sails through the diff and dies
-at run time instead. That has happened twice (ab_ewp at 28f61fe; the 23ag
-re-brief). After the diff verdict this tool therefore constructs the REAL
+at run time instead. That has happened twice (ab_ewp at 28f61fe; a beam-tail
+closure arm re-briefed 2026-08-23). After the diff verdict this tool
+therefore constructs the REAL
 ``LAPDSim1D`` from the captured config, replaying the driver's own call
 argument for argument, and reports ``CONSTRUCTOR: OK`` or the constructor's
 full refusal under a ``CONSTRUCTOR: RAISED`` banner. It is still NO-SOLVE:

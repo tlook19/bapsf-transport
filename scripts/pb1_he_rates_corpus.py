@@ -1,4 +1,4 @@
-"""[perf-batch-1] item 1 -- bit-exactness proof for the ``he_rates`` coordinate share.
+"""Bit-exactness proof for the ``he_rates`` coordinate share.
 
 Two independent proofs that sharing one bilinear coordinate solve across the
 ``he_rates`` CALL SITES changes no floating-point operation:

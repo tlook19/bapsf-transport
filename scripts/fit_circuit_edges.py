@@ -44,8 +44,8 @@ treated as a CONSTANT RESISTOR (0.43 ms x 50.6 mOhm = 21.7 uH). The assumption
 is measurably false: the measured V_dis collapses 16x within 0.2 ms of the
 fall (88.8 -> 15.5 -> 9.3 -> 5.3 V at t = 20.0/20.2/20.5/21.0 ms) while the
 current is still near I0. This script was WRITTEN to test that estimate and
-REFUTED it on the day it was written (2026-07-21), and the campaign log
-retracted it the same day -- the text nonetheless survived here and propagated
+REFUTED it on the day it was written (2026-07-21), and the estimate was
+retracted the same day -- the text nonetheless survived here and propagated
 into the config docstring and PARAM_OVERRIDES, where it was later cited as the
 reason to keep L at the superseded 6.6 uH. The edge instrument EXCLUDES
 15-25 uH at 4.6-7.1x its minimum residual (and puts 6.6 uH at 2.0x).

@@ -4573,7 +4573,8 @@ def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, exc_params):
     # clear: the ray fully transmits, which the Beer-Lambert solve cannot
     # represent above its Coulomb-only ceiling, so the clamp saturates and
     # leaves a little unbooked. It must stay a small fraction of emitted beam
-    # power -- item 35 was 35% -- or the warning becomes noise.
+    # power -- the unit-flux probe defect reached 35% -- or the warning
+    # becomes noise.
     assert 0.0 < csda_eta * (csda_ray - csda_booked) < 0.02
     # ... and the ceiling column says WHY it is unbooked rather than leaving
     # it to be re-derived: with the ray transmitting whole, the sigma_eff >= 0
@@ -4609,8 +4610,8 @@ def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, exc_params):
     assert beam_gap_ledger_mismatch(
         csda_breakout_hole, csda_eta, separate_representability=True
     )[1] == "ray_vs_circuit"
-    # A ray that did NOT break out is outside the case entirely -- item 35's
-    # own signature keeps its own label with the case armed.
+    # A ray that did NOT break out is outside the case entirely -- the
+    # ray_vs_circuit signature keeps its own label with the case armed.
     assert beam_gap_ledger_mismatch(
         {0: (1.0, 0.0, 0.96529, 0.99)}, csda_eta,
         separate_representability=True,
@@ -10977,7 +10978,7 @@ def _case_non_ignition_guards(
 def _case_equilibration_puff_duty(
     neutral_phase_run_flags, neutral_phase_run_params
 ):
-    # --- item 37: the equilibration delivers its CONFIGURED puff duty --------
+    # --- the equilibration delivers its CONFIGURED puff duty -----------------
     # tau_cycle / tau_discharge / dt chosen so a step lands a hair BELOW the
     # puff-off instant (t=6e-10 is 1 ulp short of cycle_start + tau_discharge).
     # The phase-boundary schedule used to DROP that boundary inside the run
@@ -14197,7 +14198,7 @@ def _case_csda_module_standalone():
     )
     assert abs(b1_total - b1_budget) / b1_budget < 1e-10
     # Breakdown conditions: several inelastic events per primary (the
-    # single-event Beer-Lambert booking caps at 1 — recorded as item 10).
+    # single-event Beer-Lambert booking caps at 1).
     b1_events = (
         b1_res.ionization_events.sum() + b1_res.excitation_events.sum()
     ) / 1.0e22
@@ -14209,7 +14210,7 @@ def _case_csda_module_standalone():
     assert np.allclose(
         b1_res_rev.ionization_events, b1_res.ionization_events[::-1]
     )
-    # Closure ordering at production conditions (item 12): quasilinear <<
+    # Closure ordering at production conditions: quasilinear <<
     # legacy tau_ei "Coulomb" << classical fast-electron stopping.
     b1_nb = 1.0e22 / (700.0 * beam_speed_cm_s(150.0))
     b1_lql = quasilinear_relaxation_length_cm(150.0, 5.0e12, b1_nb)

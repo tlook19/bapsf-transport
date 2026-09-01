@@ -107,9 +107,9 @@ import numpy as np
 
 # ---------------------------------------------------------------- CAD pins
 #
-# All from the engineer-supplied SolidWorks export archived at
-# ~/bapsf/cad/machine-cad-2026-08-18/ (assembly LAPD_TomLook-Magnets.STEP,
-# per-part global bounding boxes in tree_bbox_mag.txt, analytic cylindrical
+# All from the engineer-supplied SolidWorks export of 2026-08-18 (assembly
+# LAPD_TomLook-Magnets.STEP, per-part global bounding boxes in
+# tree_bbox_mag.txt, analytic cylindrical
 # faces in part_measurements.txt).  Model z = (-4560 mm - CAD z) / 1000, i.e.
 # distance from the LaB6 emitting face.
 

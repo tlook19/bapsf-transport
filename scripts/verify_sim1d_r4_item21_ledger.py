@@ -131,9 +131,9 @@ def analyze(f):
     print(f"    -> R4.2 repaired: electron birth -> 0 (dilution); the "
           f"{P_birth_e/1e3:.0f} kW spurious electron heating is removed.\n")
 
-    # --- Item-21 summary: the two spurious electron sources, now un-concealed
+    # --- Summary: the two spurious electron sources, now un-concealed
     total_spurious = anode_intercepted + P_birth_e
-    print("(item 21) spurious electron-heating sources removed by R4 [kW]:")
+    print("spurious electron-heating sources removed by R4 [kW]:")
     print(f"    A15 bypass beam (plasma-removed) {anode_intercepted/1e3:+8.2f}")
     print(f"    A14 electron birth     {P_birth_e/1e3:+8.2f}")
     print(f"    TOTAL R4 correction    {-total_spurious/1e3:+8.2f}"

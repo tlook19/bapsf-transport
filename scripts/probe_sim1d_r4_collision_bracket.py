@@ -6,7 +6,7 @@ ion-neutral cooling (Q_cx + Q_therm, frictional heating) from the saved
 ``ion_energy_terms_W_cm3`` rows, then re-evaluates the R4.3 moment-closed operator
 (Phelps He+/He rates, T_eff=(Ti+Tn)/2, Tn=300 K) on the saved fluid state over the
 same settled window, and prints both against the IAEA-based pre-registration
-bracket [-30.40, -22.67] kW (R4.3; item 8).
+bracket [-30.40, -22.67] kW (R4.3).
 
 The IAEA bracket is a CROSS-CHECK: Phelps supersedes the IAEA rate set, so the
 Phelps thermal cooling is the primary reported value, not a target. No rate is

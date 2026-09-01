@@ -145,7 +145,7 @@ KINETIC_DVM_INCOMPATIBLE_DEFAULTS = (
 
 
 # The same measurement for ``neutral_momentum_radial = "kinetic_two_moment"``
-# (2026-08-23ag; the later entries measured 2026-08-23 with the DVM set
+# (measured 2026-08-23; the later entries measured 2026-08-23 with the DVM set
 # above). The reduction gives the annulus its own momentum row while nothing
 # gives it an energy row, so the whole neutral-ENERGY package is what this
 # closure refuses -- ``neutral_energy`` itself and every control standing on
@@ -314,9 +314,10 @@ NEUTRAL_RADIAL_CLOSURE_MEMBERS = (
 #: (beam_anode_interception -> beam_tail_anode_interception -> the riders ->
 #: tail_ionization -> the walked-tail selector -> beam_anomalous_model ->
 #: beam_deposition_model); the census's "depth 4" is the middle spine read
-#: upward. This is the family the 23ag detonation class came from -- change one
-#: key and the guards refuse one at a time, which is exactly what declaring the
-#: whole membership at once removes.
+#: upward. This is the family whose one-key-at-a-time refusal cascade motivated
+#: the declaration block (measured 2026-08-23): change one key and the guards
+#: refuse one at a time, which is exactly what declaring the whole membership
+#: at once removes.
 BEAM_TAIL_CLOSURE_MEMBERS = (
     (PARAMS, "beam_deposition_model"),
     (PARAMS, "beam_coulomb_model"),

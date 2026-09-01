@@ -80,12 +80,13 @@ from ewp_demo_run import (  # noqa: E402
     zone_volumes,
 )
 
-#: The item-51 plateau window [ms], from legc_momentum_budget.py --plateau.
+#: The far-end drift plateau window [ms], from
+#: legc_momentum_budget.py --plateau.
 DEFAULT_WINDOW_MS = (15.0, 19.5)
 
 #: Far-band edges [cm]: the scored ports p41 and p50 of
-#: legc_momentum_budget.py PORTS, which is where item 51's falling far-end ion
-#: drift is read.
+#: legc_momentum_budget.py PORTS, which is where the model's falling far-end
+#: ion drift is read.
 PORT_P41_CM = 1428.55
 PORT_P50_CM = 1716.1
 

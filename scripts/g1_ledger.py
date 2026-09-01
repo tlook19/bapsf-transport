@@ -1,7 +1,7 @@
 """G1 end-region source-attributed ledger, the registered variant of
 l6a1_ledger.py.
 
-Differences, per the "G1 BINS OF RECORD" spec (session 23; log 2026-08-18www):
+Differences, per the "G1 BINS OF RECORD" spec registered 2026-08-18:
 
 - The end-region selection is Z-KEYED (cell centers z >= 1900 cm), never
   role-keyed: on the arm mesh the role-keyed end region collapses to the

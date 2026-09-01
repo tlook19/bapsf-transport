@@ -411,7 +411,7 @@ def advance_one_step(sim, operator_split=None):
     retries are exhausted or the dt would fall below ``dt_min``. A gate that
     stepped the raising API was therefore asserting something stricter than the
     solver ships -- that no candidate is ever rejected -- and a single rejected
-    candidate aborted the suite (campaign log 2026-08-23o).
+    candidate aborted the suite (measured 2026-08-23).
 
     This is the same three calls ``run()`` makes around one step, without
     run()'s dt-growth ramp and output-cadence caps: those shape the step
@@ -520,7 +520,7 @@ def zero_plasma(dvm):
 # ``collector_length_cm`` is pinned at the R5 value. The config default dropped
 # 100 -> 7.8 at R2a, and inheriting it subdivided the ten-cell end block into
 # 0.78 cm cells -- a mesh R5 never had, and the one on which the explicit
-# neutral-diffusion checkerboard reported in campaign log 2026-08-23o appeared.
+# neutral-diffusion checkerboard measured 2026-08-23 appeared.
 R5_STANDIN_PARAMS = {
     "Rp": 15.0,
     "R_cath": 15.0,
@@ -892,7 +892,7 @@ def _production_geometry_keys():
 #: rebuilt it on a config whose ``collector_length_cm`` default had since
 #: dropped 100 -> 7.8 -- producing ten 0.78 cm end cells no stance ever ran.
 #: The gates that step a solver on it were rejecting candidate steps on that
-#: mesh alone (campaign log 2026-08-23o).
+#: mesh alone (measured 2026-08-23).
 PRODUCTION_GEOMETRY_KEYS = _production_geometry_keys()
 
 
@@ -6592,8 +6592,9 @@ def gate_aj5():
 # B6 intercepts that flux at every baffle face and re-emits it on the side it
 # was intercepted from, particle-conserving, exactly as the anode-mesh channel
 # does -- the same full accommodation at ``T_wall`` on the wall spectrum, which
-# is the campaign log 28hx correction (the scalar alpha covers the cylinder and
-# the ends; mesh and closed faces run alpha = 1) extended to baffles.
+# is the accommodation-scope correction ruled 2026-08-28 (the scalar alpha
+# covers the cylinder and the ends; mesh and closed faces run alpha = 1)
+# extended to baffles.
 
 #: Relative tolerance of the B6 FLUX statements. The transparency enters the
 #: march as a per-bin scaling inside a sum, so a statement formed as

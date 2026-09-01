@@ -1616,8 +1616,8 @@ class LAPDSim1D:
                     "the base factor could never accelerate anything"
                 )
         self._dt_growth_recovery_factor = _growth_recovery_value
-        # THE FOUR RUN-TIME-FIRST GUARDS, HOISTED (23an hazards; hoisted with
-        # the declaration-block migration, 2026-08-30). Each of these four
+        # THE FOUR RUN-TIME-FIRST GUARDS, HOISTED (with the
+        # declaration-block migration, 2026-08-30). Each of these four
         # domains was checked for the first time only once a run was already
         # moving -- dt_growth_factor at the top of run(), the two scheme
         # selectors on every split step and every heat substep, the drag model
@@ -8498,8 +8498,8 @@ class LAPDSim1D:
             # helper and compare boundaries against that snapped position. The
             # run loop's t_end-scaled ``time_tol`` governs only the t_end
             # window here -- it must NOT decide the puff-off instant, because
-            # ``_phase_info`` cannot see it (item 37, see
-            # ``_equilibration_cycle_position``).
+            # ``_phase_info`` cannot see it (the puff-duty defect fixed
+            # 2026-07-29; see ``_equilibration_cycle_position``).
             def in_end_window(boundary):
                 return t_end is None or boundary <= t_end + time_tol
 
@@ -9573,8 +9573,8 @@ class LAPDSim1D:
         beam it believes crosses the cathode-anode gap without coupling; the
         fluid deposits whatever the CSDA ray actually delivers. Those views of
         the same gap must agree, and they disagree silently -- no conservation
-        check sees it, because each side is internally consistent. This is the
-        state item 35 sat in.
+        check sees it, because each side is internally consistent. That is the
+        state the unit-flux probe defect (root-caused 2026-07-27) sat in.
 
         The third comparison ``ray_vs_ceiling`` is ARMED here: this table
         carries its explanation, which is the condition
@@ -11242,7 +11242,7 @@ class LAPDSim1D:
 
         append_event(run_start, self.phase_at_time(run_start), "initial")
         if not self._flags.get("Plasma"):
-            # Same window the run loop actually delivers (item 37).
+            # Same window the run loop actually delivers (the puff-duty fix).
             puff_on = self._equilibration_puff_on_duration()
             puff_reason = self._equilibration_puff_on_reason()
             tau_cycle = max(float(self._input_dict.get("tau_cycle")), 0.0)

@@ -247,7 +247,7 @@ def carrier_escape_length_cm(geometry):
     (Both corrections are on the record: the first cut of this kernel used
     Cauchy's chord and divided by ``<tan>``, and the two errors compounded to
     ``lambda_esc = Rp`` -- a third short, which showed up directly as a
-    below-band ``f_dep``. Advisor ratification 2026-08-21, campaign log 21av.)
+    below-band ``f_dep``. Both corrections ratified 2026-08-21.)
 
     Cells with no column (``Rp <= 0``) are plasma-dead and are never marched
     over; they are returned as ``inf`` so an accidental read is a zero rate
