@@ -537,7 +537,12 @@ first sustained departure of `B_hat` from 1 (measured at z = 1748.714 cm,
 the ratio applied beyond it, capped at `sqrt(0.95) * R_m(z)` — the declared
 annulus regularization, unchanged from the census build. 231 of the 280 cells
 are at exactly `Rp = 18.415` cm; the cap binds in the terminal 20 cells and the
-collector sits on it at 74.2706 cm.
+collector sits on it at 74.2706 cm. **Disclosed:** where the bore steps 50.0 →
+76.2 cm the cap RELEASES, and the plasma area takes a +63.4 % step in one cell
+— cell 259 clamped at `sqrt(0.95) * 50.0` = 48.7340 cm (7461.28 cm²), cell 260
+free at 62.3022 cm (12194.31 cm²), below that cell's own 74.2706 cm cap — so
+the step is the cap letting go at the bore staircase, not a feature of the
+measured field; the validators accept it.
 
 **THE REGISTRATION — MEASURED (instrument convention) + MEASURED (machine
 CAD).** `z_MSI` is NOT the model's axial coordinate. The MSI record is written
