@@ -593,6 +593,16 @@ with the two profiles differing by at most 4.05 cm over the whole mesh; and the
 flux-tube ratio the emitted array implies between p50 and p41 is 1.0000 against
 the measured 0.9905 ± 0.0114, a 0.83σ agreement, which the builder gates on.
 
+**The p50/p41 width ratio 0.9905 ± 0.0114 — MEASURED.** Its instrument is the
+geometric-mean face-reconciled effective-radius estimator on the ES1 radial
+scans: the effective radius is reconciled across the two faces and the pair is
+combined as a geometric mean, so the ratio is a width comparison between the
+two stations rather than an absolute width at either. The two faces bracket it
+at 0.987–1.022, which is what the ± 0.0114 is drawn from; the bracket is the
+claim, and no result here turns on a point value inside it. The constants live
+in `scripts/build_msi_field_profile.py` as `MEASURED_P50_P41_FLUX_RATIO` and
+`MEASURED_P50_P41_FLUX_RATIO_SIGMA`.
+
 The residual that remains is the SOFT DEPARTURE. The flat hold ends on a 2 %
 tolerance, at z = 1748.71 cm, which is 30.0 cm downstream of p50 (CAD 1718.67
 cm). The mean shape crosses 1 % below plateau at z = 1719.04 cm — within 0.4 cm

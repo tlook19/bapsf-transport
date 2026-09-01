@@ -224,7 +224,8 @@ REPORTED_PORTS = (11, 21, 29, 41, 50)
 
 #: The measured p50/p41 flux-tube area ratio, and its uncertainty. The gate:
 #: the ratio the EMITTED profile implies between those two stations must agree
-#: with this measurement to within its stated sigma.
+#: with this measurement to within its stated sigma. Class MEASURED; instrument
+#: and face bracket in the MSI block of ``scripts/production_stance_provenance.md``.
 MEASURED_P50_P41_FLUX_RATIO = 0.9905
 MEASURED_P50_P41_FLUX_RATIO_SIGMA = 0.0114
 
