@@ -2000,6 +2000,7 @@ class TransientDVM:
         sources=None,
         source_counts=None,
         cathode_jet_incident_erg=None,
+        cathode_jet_counts=None,
         anode_jet_incident_erg=None,
         T_s_K=None,
     ):
@@ -2045,6 +2046,17 @@ class TransientDVM:
         formed from, so the energy the jet hands the gas and the energy the
         surface gave up are one committed quantity rather than two
         agreeing formulas.
+
+        ``cathode_jet_counts`` names which of the ``cathode_face`` particles
+        the directed ``R_N`` share is drawn from, for a caller whose
+        incident-energy booking covers only SOME of the steps the count
+        does -- which is what the cathode-jet arming criterion produces.
+        ``None`` means all of them and is the pre-existing arithmetic
+        exactly. All zero means the channel is ABSENT for this tick: the
+        whole counted stream leaves thermally, no launch spectrum is built,
+        and the ledger's jet rows are zero. See
+        :meth:`_split_cathode_recycle` for why pairing the two bookings over
+        the same steps is what the per-atom launch energy asserts.
 
         ``anode_jet_incident_erg`` is that same quantity for the ``anode``
         channel -- ``sum over the tick of N (phi_a + Ti)`` per column cell
@@ -2138,7 +2150,7 @@ class TransientDVM:
         # and the remainder keeps the thermal face inflow. Absent the jet
         # spec the whole stream is thermal and nothing here runs.
         cath_thermal, cath_jet, jet_energy = self._split_cathode_recycle(
-            cath, cathode_jet_incident_erg
+            cath, cathode_jet_incident_erg, cathode_jet_counts
         )
         # The anode-side energetic recycle splits the counted mesh collection
         # the same way: ``R_N`` backscatters as a directed volume birth away
@@ -2633,7 +2645,7 @@ class TransientDVM:
             raise ValueError(f"source_counts[{name!r}] must be finite")
         return counted
 
-    def _split_cathode_recycle(self, cath, incident_erg):
+    def _split_cathode_recycle(self, cath, incident_erg, jet_counts=None):
         """Split the counted cathode recycle into its thermal and jet shares.
 
         Returns ``(thermal, jet, jet_energy)``. Without a ``cathode_jet``
@@ -2648,6 +2660,30 @@ class TransientDVM:
         share is the REMAINDER rather than ``(1 - R_N)`` of the count, so
         the two shares sum to the counted stream to the bit and the particle
         ledger's external total is untouched by the split.
+
+        ``jet_counts`` names WHICH of the counted particles the directed
+        share is taken from, and exists because the two halves of that
+        per-atom identity can be booked over DIFFERENT step sets. The
+        arming criterion suppresses the incident-energy booking on censored
+        steps while the recycle COUNT keeps accruing on every step, so
+        ``R_N`` of the full count paired with energy from the armed steps
+        alone is not ``(R_E/R_N)(phi_c + Ti)`` -- it is that number diluted
+        by however much of the tick was censored, and where the whole tick
+        was censored it is 0/0. Passing the armed-step counts here keeps
+        numerator and denominator over the same steps, which is what the
+        identity above actually asserts.
+
+        ``None`` (the default) means "all of them", the reading that applies
+        when nothing is censoring the channel, and it is bit-identical to
+        the arithmetic this method ran before the parameter existed.
+
+        A fully censored tick therefore arrives with ``jet_counts`` all
+        zero, and the directed share is then exactly zero: no atom is placed
+        on the launch spectrum, the spectrum is never built, and the whole
+        counted stream leaves on the thermal remainder -- which is the same
+        routing an engine with no ``cathode_jet`` spec at all would give it.
+        That is the ratified reading: below the arming current the jet is
+        ABSENT, not launched-then-censored.
         """
         if self.cathode_jet is None:
             if incident_erg is not None:
@@ -2689,7 +2725,33 @@ class TransientDVM:
             scalar = float(counts)
             counts = np.zeros(self.nz)
             counts[self.cath_cell] = scalar
-        jet = float(self.cathode_jet["R_N"]) * counts
+        if jet_counts is None:
+            directed_from = counts
+        else:
+            directed_from = np.asarray(jet_counts, dtype=float)
+            if directed_from.shape != (self.nz,):
+                raise ValueError(
+                    "cathode_jet_counts must carry one count per column "
+                    f"cell (got shape {directed_from.shape}, expected "
+                    f"{(self.nz,)})"
+                )
+            if not np.all(np.isfinite(directed_from)) or np.any(
+                directed_from < 0.0
+            ):
+                raise ValueError(
+                    "cathode_jet_counts must be finite and non-negative "
+                    f"(got min {float(np.min(directed_from))!r}, max "
+                    f"{float(np.max(directed_from))!r})"
+                )
+            if np.any(directed_from > counts * (1.0 + 1.0e-12) + 1.0e-30):
+                raise ValueError(
+                    "cathode_jet_counts is the ARMED-STEP share of the "
+                    "counted cathode recycle and cannot exceed the counted "
+                    "stream itself -- a directed share drawn from more "
+                    "particles than arrived would create them "
+                    f"(worst excess {float(np.max(directed_from - counts))!r})"
+                )
+        jet = float(self.cathode_jet["R_N"]) * directed_from
         thermal = counts - jet
         jet_energy = float(self.cathode_jet["R_E"]) * incident
         return thermal, jet, jet_energy

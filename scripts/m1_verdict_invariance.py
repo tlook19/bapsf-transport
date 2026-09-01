@@ -30,26 +30,43 @@ carries no usable uncertainty, so the threshold cannot be formed. It is
 reported UNGATED and counted separately -- never silently passed, and never
 counted as a failure either.
 
-Verdict quantity: the mean mid-port density ratio model/measured, over ports
-11, 21 and 29. PORT -> ROW MAPPING: the overlay carries ``port`` = [11, 21, 29,
-41, 50] paired positionally with ``z_cm`` = [470.05, 789.55, 1045.15, 1428.55,
-1716.10] cm, and ``compare`` emits one row per (field, port) carrying that port
-number as a string; the three mid-ports are therefore the ``field == "n"`` rows
-whose ``port`` is "11", "21" or "29", at z = 470.05, 789.55 and 1045.15 cm. The
-ratio itself is the row's ``ratio``, the window mean of model/measured.
+WHICH ROWS THE GATE BINDS ON. The verdict rests on the mid-port ``n`` rows and
+the ``Isat`` rows, so a cadence difference can only move a verdict through one
+of those. They are the VERDICT-BEARING rows and the gate FAILS on them. Every
+other scored row is still computed and reported -- a cadence excursion there
+prints as ``FAIL-UNGATED`` and does not fail the run, because it cannot change
+the answer. ``--all-rows`` prints the informational rows alongside.
 
-Bins, evaluated per cadence against the fluid comparator:
+PORT -> ROW MAPPING: the overlay carries ``port`` = [11, 21, 29, 41, 50] paired
+positionally with ``z_cm`` = [470.05, 789.55, 1045.15, 1428.55, 1716.10] cm,
+and ``compare`` emits one row per (field, port) carrying that port number as a
+string; the three mid-ports are therefore the ``field == "n"`` rows whose
+``port`` is "11", "21" or "29", at z = 470.05, 789.55 and 1045.15 cm.
 
-- RESOLVED -- mid-port ratio >= 0.85;
-- IMPROVED -- otherwise, mid-port ratio at least +0.10 above the fluid's AND
-  the Isat rows not degrading;
+Bins, evaluated per cadence against the fluid comparator (REGISTERED
+2026-08-31 (Tom); these REPLACE the ``RESOLVED_RATIO = 0.85`` /
+mean-Isat form this module shipped with, which was stale against the
+registration):
+
+- RESOLVED -- the model is within 1 ``sigma_tot`` of the measurement at ALL
+  THREE mid ports, PER PORT (the p11/p21/p29 ``n`` rows);
+- IMPROVED -- otherwise, G at least +0.10 above the comparator's G AND the
+  Isat rows not degrading;
 - NULL -- otherwise.
 
-DEGRADE is defined from the scorer's Isat rows: the mean over the five
-``field == "Isat"`` rows of ``sigma`` (the row's mean ``|dev|/sigma_tot``) must
-not INCREASE relative to the fluid comparator. The comparison is exact -- any
-increase, however small, degrades -- because the quantity is already a mean
-over five rows and a tolerance here would be an unregistered free parameter.
+G is the mean mid-port density ratio model/measured, the row's own ``ratio``
+averaged over the three mid ports. It survives the re-registration as the
+IMPROVED bin's quantity, but it is NO LONGER what decides RESOLVED: a mean over
+three ports can be satisfied by compensating over- and under-shoots while no
+individual port agrees with the measurement, which is exactly what a
+per-port test excludes.
+
+NON-DEGRADATION, stated precisely: the Isat rows degrade if ANY SINGLE
+``field == "Isat"`` row's ``sigma`` (its window-mean ``|dev|/sigma_tot``)
+INCREASES relative to the fluid comparator. Per row, not the mean, and exact --
+any increase, however small, degrades. The mean form this replaces let an arm
+buy a large improvement at one port by giving some back at another and still
+read as undegraded; a mean is the statistic that hides precisely that.
 
 The overall verdict is one of::
 
@@ -106,8 +123,26 @@ SCORING_FIELDS = ("time", "n", "Te", "phase")
 
 MID_PORTS = ("11", "21", "29")
 CADENCE_DIVISOR = 3.0
-RESOLVED_RATIO = 0.85
+
+#: RESOLVED: the model sits within this many ``sigma_tot`` of the measurement
+#: at EVERY mid port. The bins were re-registered 2026-08-31 (Tom) and this is
+#: the registered form; the ``RESOLVED_RATIO = 0.85`` mean-ratio test this
+#: replaces was a DIFFERENT statement -- a mean over the three ports, which a
+#: pair of compensating over- and under-shoots can satisfy while no individual
+#: port agrees with the measurement at all.
+RESOLVED_SIGMA = 1.0
+
+#: IMPROVED: how far the mid-port density figure of merit G must exceed the
+#: comparator's before an arm counts as improved on it. Unchanged in value by
+#: the re-registration; what changed is the companion non-degradation test.
 IMPROVED_DELTA = 0.10
+
+#: The fields whose rows the invariance gate is BINDING on: the verdict rests
+#: on the mid-port ``n`` rows and the ``Isat`` rows, so those are the rows a
+#: cadence difference could move a verdict through. Every other scored row is
+#: still computed and REPORTED (``--all-rows``), but a cadence excursion there
+#: cannot change the verdict and is not a gate failure.
+VERDICT_BEARING_FIELDS = ("n", "Isat")
 
 
 def load_scoring_fields(path):
@@ -179,6 +214,16 @@ def gate_table(rows_fluid, rows_h, rows_h2):
         else:
             threshold = np.nan
             status = "UNGATED"
+        # VERDICT-BEARING (2026-08-31 (Tom)): the gate BINDS only on the rows
+        # a verdict rests on -- the mid-port n rows and the Isat rows. A
+        # cadence excursion anywhere else is still measured and printed, but
+        # it cannot move a verdict, so failing the gate on it would stop an
+        # arm for a reason the verdict does not depend on.
+        verdict_bearing = key[0] in VERDICT_BEARING_FIELDS and (
+            key[0] != "n" or key[1] in MID_PORTS
+        )
+        if status == "FAIL" and not verdict_bearing:
+            status = "FAIL-UNGATED"
         records.append(
             {
                 "field": key[0],
@@ -191,6 +236,7 @@ def gate_table(rows_fluid, rows_h, rows_h2):
                 "delta_cad": delta_cad,
                 "threshold": threshold,
                 "exact_zero": bool(delta_ab == 0.0),
+                "verdict_bearing": verdict_bearing,
                 "status": status,
             }
         )
@@ -210,7 +256,11 @@ def mid_port_n_ratio(rows):
 
 
 def isat_deviation(rows):
-    """Return the mean ``|dev|/sigma_tot`` over the scored Isat rows."""
+    """Return the mean ``|dev|/sigma_tot`` over the scored Isat rows.
+
+    REPORTED, and no longer the non-degradation test: see
+    :func:`isat_degrades`, which is the registered per-row form.
+    """
     sub = [r for r in rows if r["field"] == "Isat"]
     if not sub:
         raise ValueError(
@@ -220,11 +270,91 @@ def isat_deviation(rows):
     return float(np.mean([r["sigma"] for r in sub]))
 
 
-def verdict_bin(ratio, ratio_fluid, isat, isat_fluid):
-    """Return the verdict bin for one cadence against the fluid comparator."""
-    if ratio >= RESOLVED_RATIO:
+def isat_rows_by_port(rows):
+    """Return ``{port: |dev|/sigma_tot}`` for the scored Isat rows."""
+    sub = {r["port"]: float(r["sigma"]) for r in rows if r["field"] == "Isat"}
+    if not sub:
+        raise ValueError(
+            "no 'Isat' rows were scored, so the degrade criterion that the "
+            "IMPROVED bin depends on cannot be evaluated"
+        )
+    return sub
+
+
+def isat_degrades(rows, rows_comparator):
+    """Return ``(degrades, worst_port, worst_increase)`` for the Isat rows.
+
+    THE REGISTERED NON-DEGRADATION TEST (2026-08-31 (Tom)), stated precisely:
+    the Isat rows degrade if ANY single row's ``|dev|/sigma_tot`` INCREASES
+    against the comparator. Not the mean, and not a tolerance -- a strict
+    per-row increase on one port is a degradation even where the mean falls.
+
+    That is a deliberately stricter reading than the mean comparison it
+    replaces, and it is the one the bins were registered on: an arm that
+    buys a large improvement at one port by giving some back at another has
+    not left the Isat rows undegraded, and a mean is exactly the statistic
+    that hides it.
+
+    Raises ``ValueError`` when the two row sets do not cover the same ports:
+    a port scored on one side only cannot be compared, and silently skipping
+    it would answer a different question than the one the bin asks.
+    """
+    here = isat_rows_by_port(rows)
+    there = isat_rows_by_port(rows_comparator)
+    if set(here) != set(there):
+        raise ValueError(
+            "the arm and its comparator scored different Isat ports "
+            f"({sorted(here)} vs {sorted(there)}); the per-row "
+            "non-degradation test is undefined across a differing port set"
+        )
+    worst_port, worst_increase = None, 0.0
+    for port, value in here.items():
+        increase = value - there[port]
+        if increase > worst_increase:
+            worst_port, worst_increase = port, increase
+    return bool(worst_port is not None), worst_port, float(worst_increase)
+
+
+def mid_port_within_sigma(rows):
+    """Return ``(all_within, {port: |dev|/sigma_tot})`` for the mid-port n rows.
+
+    The registered RESOLVED test: the model is within ``RESOLVED_SIGMA``
+    ``sigma_tot`` of the measurement at ALL THREE mid ports, per port.
+    """
+    sub = {
+        r["port"]: float(r["sigma"])
+        for r in rows
+        if r["field"] == "n" and r["port"] in MID_PORTS
+    }
+    if set(sub) != set(MID_PORTS):
+        raise ValueError(
+            f"expected one 'n' row per mid-port {MID_PORTS}, found "
+            f"{sorted(sub)}; the RESOLVED bin is undefined without all three"
+        )
+    return bool(all(v <= RESOLVED_SIGMA for v in sub.values())), sub
+
+
+def verdict_bin(rows, rows_comparator):
+    """Return the verdict bin for one cadence against the fluid comparator.
+
+    THE REGISTERED BINS (2026-08-31 (Tom)):
+
+    * RESOLVED -- the model is within ``RESOLVED_SIGMA`` sigma_tot at ALL
+      THREE mid ports (the p11/p21/p29 ``n`` rows), per port;
+    * IMPROVED -- G is at least ``IMPROVED_DELTA`` above the comparator's G,
+      AND no Isat row's ``|dev|/sigma_tot`` increases against the comparator;
+    * NULL -- otherwise.
+
+    Both halves of IMPROVED must hold. An arm that lifts G while pushing a
+    single Isat row further from the measurement is NULL, not IMPROVED.
+    """
+    resolved, _ = mid_port_within_sigma(rows)
+    if resolved:
         return "RESOLVED"
-    if (ratio - ratio_fluid) >= IMPROVED_DELTA and isat <= isat_fluid:
+    g = mid_port_n_ratio(rows)
+    g_comparator = mid_port_n_ratio(rows_comparator)
+    degrades, _, _ = isat_degrades(rows, rows_comparator)
+    if (g - g_comparator) >= IMPROVED_DELTA and not degrades:
         return "IMPROVED"
     return "NULL"
 
@@ -237,6 +367,11 @@ def verdict_block(rows_fluid, rows_h, rows_h2):
     ratio_h2 = mid_port_n_ratio(rows_h2)
     isat_h = isat_deviation(rows_h)
     isat_h2 = isat_deviation(rows_h2)
+    resolved_h, sigma_h = mid_port_within_sigma(rows_h)
+    resolved_h2, sigma_h2 = mid_port_within_sigma(rows_h2)
+    resolved_fluid, sigma_fluid = mid_port_within_sigma(rows_fluid)
+    degr_h, degr_h_port, degr_h_amount = isat_degrades(rows_h, rows_fluid)
+    degr_h2, degr_h2_port, degr_h2_amount = isat_degrades(rows_h2, rows_fluid)
     return {
         "ratio_fluid": ratio_fluid,
         "ratio_h": ratio_h,
@@ -244,10 +379,23 @@ def verdict_block(rows_fluid, rows_h, rows_h2):
         "isat_fluid": isat_fluid,
         "isat_h": isat_h,
         "isat_h2": isat_h2,
-        "isat_degrades_h": bool(isat_h > isat_fluid),
-        "isat_degrades_h2": bool(isat_h2 > isat_fluid),
-        "bin_h": verdict_bin(ratio_h, ratio_fluid, isat_h, isat_fluid),
-        "bin_h2": verdict_bin(ratio_h2, ratio_fluid, isat_h2, isat_fluid),
+        # Per-port mid-port deviations, the RESOLVED bin's own quantity.
+        "mid_sigma_fluid": sigma_fluid,
+        "mid_sigma_h": sigma_h,
+        "mid_sigma_h2": sigma_h2,
+        "resolved_fluid": resolved_fluid,
+        "resolved_h": resolved_h,
+        "resolved_h2": resolved_h2,
+        # Per-ROW Isat degradation, the IMPROVED bin's own quantity, with the
+        # port and size of the worst increase so a NULL can be read.
+        "isat_degrades_h": degr_h,
+        "isat_degrades_h2": degr_h2,
+        "isat_worst_degrade_port_h": degr_h_port,
+        "isat_worst_degrade_port_h2": degr_h2_port,
+        "isat_worst_degrade_h": degr_h_amount,
+        "isat_worst_degrade_h2": degr_h2_amount,
+        "bin_h": verdict_bin(rows_h, rows_fluid),
+        "bin_h2": verdict_bin(rows_h2, rows_fluid),
     }
 
 
@@ -264,8 +412,18 @@ def overall_verdict(records, block):
     return f"M1 VERDICT: {bin_h} (cadence-invariant)"
 
 
-def _report_gate(records):
+def _report_gate(records, all_rows=False):
+    shown = records if all_rows else [
+        r for r in records if r["verdict_bearing"]
+    ]
+    hidden = len(records) - len(shown)
     print("\n--- cadence gate: per scored row ---")
+    if hidden:
+        print(
+            f"  showing the {len(shown)} VERDICT-BEARING row(s); {hidden} "
+            f"further scored row(s) are gated as informational -- pass "
+            f"--all-rows to print them"
+        )
     print(
         "  (O is the row's window-mean model value; sigma_tot is the row's "
         "window-mean"
@@ -280,7 +438,7 @@ def _report_gate(records):
     )
     print(header)
     print("-" * len(header))
-    for r in records:
+    for r in shown:
         mark = "[0]" if r["exact_zero"] else ""
         print(
             f"{r['field']:>5} {r['port']:>5} {r['o_fluid']:12.5g} "
@@ -291,9 +449,17 @@ def _report_gate(records):
     n_pass = sum(1 for r in records if r["status"] == "PASS")
     n_fail = sum(1 for r in records if r["status"] == "FAIL")
     n_ungated = sum(1 for r in records if r["status"] == "UNGATED")
+    n_soft = sum(1 for r in records if r["status"] == "FAIL-UNGATED")
+    n_bearing = sum(1 for r in records if r["verdict_bearing"])
     print(
-        f"  {n_pass} PASS, {n_fail} FAIL, {n_ungated} UNGATED, "
-        f"over {len(records)} scored row(s)"
+        f"  {n_pass} PASS, {n_fail} FAIL, {n_soft} FAIL-UNGATED, "
+        f"{n_ungated} UNGATED, over {len(records)} scored row(s)"
+    )
+    print(
+        f"  the gate BINDS on the {n_bearing} verdict-bearing row(s) "
+        f"(n at ports {'/'.join(MID_PORTS)} + every Isat row); the rest are "
+        f"reported and not gated, and a cadence excursion there prints as "
+        f"FAIL-UNGATED"
     )
 
 
@@ -311,15 +477,44 @@ def _report_verdict(block):
         f"h {block['isat_h']:.4f} | h/2 {block['isat_h2']:.4f}"
     )
     print(
-        f"  Isat degrades vs fluid: h {block['isat_degrades_h']} | "
+        f"  Isat degrades vs fluid (PER ROW -- any row's |dev|/sigma_tot "
+        f"increasing): h {block['isat_degrades_h']} | "
         f"h/2 {block['isat_degrades_h2']}"
     )
-    print(f"  bin at h:   {block['bin_h']}")
+    for arm in ("h", "h2"):
+        port = block[f"isat_worst_degrade_port_{arm}"]
+        if port is not None:
+            print(
+                f"    worst Isat degradation at {arm}: port {port}, "
+                f"+{block[f'isat_worst_degrade_{arm}']:.4f} sigma_tot"
+            )
+    print(
+        f"\n  RESOLVED test -- model within {RESOLVED_SIGMA:.1f} sigma_tot at "
+        f"EVERY mid port (|dev|/sigma_tot per port):"
+    )
+    for label, key in (("fluid", "mid_sigma_fluid"), ("h", "mid_sigma_h"),
+                       ("h/2", "mid_sigma_h2")):
+        per_port = block[key]
+        cells = "  ".join(
+            f"p{p} {per_port[p]:.3f}" for p in MID_PORTS
+        )
+        flag = block[
+            "resolved_fluid" if label == "fluid"
+            else ("resolved_h" if label == "h" else "resolved_h2")
+        ]
+        print(f"    {label:>5}: {cells}   -> within at all three: {flag}")
+    print(f"\n  bin at h:   {block['bin_h']}")
     print(f"  bin at h/2: {block['bin_h2']}")
     print(f"  bins agree: {block['bin_h'] == block['bin_h2']}")
+    print(
+        f"  BINS (registered 2026-08-31): RESOLVED = within "
+        f"{RESOLVED_SIGMA:.1f} sigma_tot at all three mid ports; IMPROVED = "
+        f"G >= comparator G + {IMPROVED_DELTA:.2f} AND no Isat row's "
+        f"|dev|/sigma_tot increasing; NULL otherwise."
+    )
 
 
-def run_gate(fluid, dvm_h, dvm_h2, es, json_path=None):
+def run_gate(fluid, dvm_h, dvm_h2, es, json_path=None, all_rows=False):
     """Score three runs, print the gate table and verdict block, return records."""
     overlay_path = (
         OVERLAY if es == 1 else OVERLAY.parent / f"es{es}_sim1d_overlay.npz"
@@ -341,7 +536,7 @@ def run_gate(fluid, dvm_h, dvm_h2, es, json_path=None):
 
     records = gate_table(rows_fluid, rows_h, rows_h2)
     block = verdict_block(rows_fluid, rows_h, rows_h2)
-    _report_gate(records)
+    _report_gate(records, all_rows=all_rows)
     _report_verdict(block)
     verdict = overall_verdict(records, block)
     print(f"\n{verdict}")
@@ -382,13 +577,21 @@ def _row(field, port, model, ratio=1.0, sigma=1.0, sigma_tot=1.0):
     return row
 
 
-def _table(n_models, n_ratios, isat_sigmas, sigma_tot=1.0):
-    """Build a five-port row table: three mid-ports plus ports 41 and 50."""
+def _table(n_models, n_ratios, isat_sigmas, sigma_tot=1.0, n_sigmas=None):
+    """Build a five-port row table: three mid-ports plus ports 41 and 50.
+
+    ``n_sigmas`` is the per-port ``|dev|/sigma_tot`` of the ``n`` rows, which
+    is the RESOLVED bin's own quantity. It defaults to 0.5 -- comfortably
+    inside the bin -- so a case that is not about RESOLVED does not have to
+    say anything about it.
+    """
     ports = ("11", "21", "29", "41", "50")
+    if n_sigmas is None:
+        n_sigmas = [0.5] * len(ports)
     rows = []
-    for port, model, ratio in zip(ports, n_models, n_ratios):
+    for port, model, ratio, nsig in zip(ports, n_models, n_ratios, n_sigmas):
         rows.append(
-            _row("n", port, model, ratio=ratio, sigma=1.0, sigma_tot=sigma_tot)
+            _row("n", port, model, ratio=ratio, sigma=nsig, sigma_tot=sigma_tot)
         )
     for port, sig in zip(ports, isat_sigmas):
         rows.append(
@@ -415,14 +618,17 @@ def _case_threshold_fail():
 
 
 def _case_bin_flip():
-    """Rows pass the cadence gate, but the mid-port ratio crosses 0.85."""
-    fluid = _table([1.0] * 5, [0.60] * 5, [2.0] * 5)
-    # Mid-port ratios average 0.8501 at h and 0.8499 at h/2 -- astride the
-    # RESOLVED boundary -- while the model values move by 0.001, far inside
-    # the 0.3333 threshold. At h/2 the ratio is +0.2499 over the fluid with
-    # Isat unchanged, so that cadence lands IMPROVED, not NULL.
-    h = _table([2.0] * 5, [0.8501] * 5, [2.0] * 5)
-    h2 = _table([2.001] * 5, [0.8499] * 5, [2.0] * 5)
+    """Rows pass the cadence gate, but the two cadences land in DIFFERENT bins.
+
+    RESOLVED at h (every mid port inside 1 sigma_tot) and IMPROVED at h/2
+    (one mid port outside, but G is +0.25 over the fluid with no Isat row
+    degrading).
+    """
+    fluid = _table([1.0] * 5, [0.60] * 5, [2.0] * 5, n_sigmas=[2.0] * 5)
+    h = _table([2.0] * 5, [0.85] * 5, [2.0] * 5, n_sigmas=[0.5] * 5)
+    h2 = _table(
+        [2.001] * 5, [0.85] * 5, [2.0] * 5, n_sigmas=[0.5, 0.5, 1.5, 0.5, 0.5]
+    )
     return (
         fluid,
         h,
@@ -432,13 +638,60 @@ def _case_bin_flip():
 
 
 def _case_isat_degrade():
-    """Ratio clears +0.10 but stays under 0.85, and Isat degrades -> NULL."""
-    fluid = _table([1.0] * 5, [0.60] * 5, [2.0] * 5)
-    # Isat mean |dev|/sigma_tot rises 2.0 -> 2.5 at both cadences, so the
-    # IMPROVED branch is refused despite the +0.20 ratio gain.
-    h = _table([2.0] * 5, [0.80] * 5, [2.5] * 5)
-    h2 = _table([2.001] * 5, [0.80] * 5, [2.5] * 5)
+    """G clears +0.10, no port RESOLVED, and every Isat row degrades -> NULL."""
+    fluid = _table([1.0] * 5, [0.60] * 5, [2.0] * 5, n_sigmas=[2.0] * 5)
+    h = _table([2.0] * 5, [0.80] * 5, [2.5] * 5, n_sigmas=[2.0] * 5)
+    h2 = _table([2.001] * 5, [0.80] * 5, [2.5] * 5, n_sigmas=[2.0] * 5)
     return fluid, h, h2, "M1 VERDICT: NULL (cadence-invariant)"
+
+
+def _case_resolved_needs_all_three():
+    """RESOLVED refused when ONE mid port sits outside 1 sigma_tot.
+
+    THE RE-REGISTRATION'S POINT, as a case, and it is built to FLIP: G is 0.90
+    here, so the retired ``ratio >= 0.85`` test would have called this
+    RESOLVED, while port 29 sits 1.8 sigma_tot from the measurement and the
+    registered per-port test refuses it. G is only +0.05 over the comparator,
+    so IMPROVED is refused too and the bin is NULL. ``_retired_bin`` below
+    asserts that flip rather than leaving it as a claim in this docstring.
+    """
+    fluid = _table([1.0] * 5, [0.85] * 5, [2.0] * 5, n_sigmas=[2.0] * 5)
+    h = _table(
+        [2.0] * 5, [0.90] * 5, [2.0] * 5, n_sigmas=[0.2, 0.2, 1.8, 0.2, 0.2]
+    )
+    h2 = _table(
+        [2.001] * 5, [0.90] * 5, [2.0] * 5, n_sigmas=[0.2, 0.2, 1.8, 0.2, 0.2]
+    )
+    return fluid, h, h2, "M1 VERDICT: NULL (cadence-invariant)"
+
+
+def _case_isat_one_row_degrades():
+    """IMPROVED refused when ONE Isat row degrades although the MEAN improves.
+
+    The other half of the re-registration. Isat goes 2.0 -> [1.0, 1.0, 1.0,
+    1.0, 2.5]: the mean falls 2.0 -> 1.30, so the mean comparison this
+    replaces would have allowed IMPROVED, while port 50 has moved 0.5
+    sigma_tot FURTHER from the measurement. G clears +0.10 and no mid port is
+    inside 1 sigma, so the bin turns entirely on the non-degradation test.
+    """
+    fluid = _table([1.0] * 5, [0.60] * 5, [2.0] * 5, n_sigmas=[2.0] * 5)
+    isat = [1.0, 1.0, 1.0, 1.0, 2.5]
+    h = _table([2.0] * 5, [0.80] * 5, isat, n_sigmas=[2.0] * 5)
+    h2 = _table([2.001] * 5, [0.80] * 5, isat, n_sigmas=[2.0] * 5)
+    return fluid, h, h2, "M1 VERDICT: NULL (cadence-invariant)"
+
+
+def _case_non_verdict_row_excursion():
+    """A cadence excursion on a NON-verdict-bearing row does not fail the gate.
+
+    Port 41's ``n`` row is scored but is not one of the three mid ports, so it
+    cannot move a verdict. It moves far past its threshold here and must print
+    FAIL-UNGATED while the run's verdict still stands.
+    """
+    fluid = _table([1.0] * 5, [0.60] * 5, [2.0] * 5)
+    h = _table([2.0] * 5, [0.90] * 5, [2.0] * 5)
+    h2 = _table([2.0, 2.0, 2.0, 2.9, 2.0], [0.90] * 5, [2.0] * 5)
+    return fluid, h, h2, "M1 VERDICT: RESOLVED (cadence-invariant)"
 
 
 def _case_exact_zero_pass():
@@ -469,14 +722,66 @@ def _case_ungated():
     return fluid, h, h2, "M1 VERDICT: RESOLVED (cadence-invariant)"
 
 
+#: The RETIRED bins (``RESOLVED_RATIO = 0.85`` and the MEAN-Isat
+#: non-degradation test), kept only so the two cases below can PROVE they
+#: decide differently. Nothing else calls this, and it is not a fallback.
+_RETIRED_RESOLVED_RATIO = 0.85
+
+
+def _retired_bin(rows, rows_comparator):
+    """Return the bin the RETIRED (pre-2026-08-31) rules would have given."""
+    g = mid_port_n_ratio(rows)
+    if g >= _RETIRED_RESOLVED_RATIO:
+        return "RESOLVED"
+    g_comp = mid_port_n_ratio(rows_comparator)
+    isat = isat_deviation(rows)
+    isat_comp = isat_deviation(rows_comparator)
+    if (g - g_comp) >= IMPROVED_DELTA and isat <= isat_comp:
+        return "IMPROVED"
+    return "NULL"
+
+
+#: Cases that must be decided DIFFERENTLY by the registered bins than by the
+#: retired ones, as ``{case name: (retired bin, registered bin)}``. This is the
+#: negative control on the re-registration itself: without it, "the old rule
+#: would have got this wrong" is an assertion in a docstring rather than a
+#: measurement, and a re-registration that quietly changed nothing would pass
+#: the suite unnoticed.
+BIN_FLIP_CASES = {
+    "RESOLVED refused: one mid port outside 1 sigma_tot": (
+        "RESOLVED",
+        "NULL",
+    ),
+    "IMPROVED refused: one Isat row degrades though the mean improves": (
+        "IMPROVED",
+        "NULL",
+    ),
+}
+
+
 SELF_TEST_CASES = (
     ("PASS: all rows inside threshold", _case_pass),
     ("FAIL: one row exceeds the threshold", _case_threshold_fail),
     ("bin flip -> CADENCE-LIMITED NULL", _case_bin_flip),
-    ("Isat degrades -> IMPROVED refused", _case_isat_degrade),
+    ("Isat degrades on every row -> IMPROVED refused", _case_isat_degrade),
     ("Delta_AB = 0, Delta_cad = 0 -> PASS", _case_exact_zero_pass),
     ("Delta_AB = 0, Delta_cad > 0 -> FAIL", _case_exact_zero_fail),
     ("sigma_tot missing/non-finite/zero -> UNGATED", _case_ungated),
+    # The three cases the 2026-08-31 re-registration adds. The first two are
+    # the ones the RETIRED bins would have decided differently, which is what
+    # makes them worth their place.
+    (
+        "RESOLVED refused: one mid port outside 1 sigma_tot",
+        _case_resolved_needs_all_three,
+    ),
+    (
+        "IMPROVED refused: one Isat row degrades though the mean improves",
+        _case_isat_one_row_degrades,
+    ),
+    (
+        "non-verdict-bearing row excursion -> FAIL-UNGATED, verdict stands",
+        _case_non_verdict_row_excursion,
+    ),
 )
 
 
@@ -496,17 +801,33 @@ def self_test():
         print(f"    got:      {got}")
         counts = {
             status: sum(1 for r in records if r["status"] == status)
-            for status in ("PASS", "FAIL", "UNGATED")
+            for status in ("PASS", "FAIL", "FAIL-UNGATED", "UNGATED")
         }
         print(
             f"    rows: {counts['PASS']} PASS, {counts['FAIL']} FAIL, "
+            f"{counts['FAIL-UNGATED']} FAIL-UNGATED, "
             f"{counts['UNGATED']} UNGATED | bins h={block['bin_h']} "
             f"h/2={block['bin_h2']}"
         )
+        # NEGATIVE CONTROL on the re-registration: where a case is registered
+        # as a bin FLIP, the retired rules must actually give the other answer.
+        if name in BIN_FLIP_CASES:
+            want_retired, want_now = BIN_FLIP_CASES[name]
+            got_retired = _retired_bin(h, fluid)
+            got_now = block["bin_h"]
+            flip_ok = got_retired == want_retired and got_now == want_now
+            failures += 0 if flip_ok else 1
+            print(
+                f"    BIN FLIP: retired rules give {got_retired} "
+                f"(expected {want_retired}), registered rules give "
+                f"{got_now} (expected {want_now}) -- "
+                f"{'ok' if flip_ok else 'MISMATCH'}"
+            )
         print(f"    {'ok' if ok else 'MISMATCH'}")
     print(
-        f"\nself-test: {len(SELF_TEST_CASES) - failures} of "
-        f"{len(SELF_TEST_CASES)} cases passed"
+        f"\nself-test: {len(SELF_TEST_CASES)} cases, "
+        f"{len(BIN_FLIP_CASES)} of them additionally asserting a bin FLIP "
+        f"against the retired rules; {failures} failure(s)"
     )
     return 1 if failures else 0
 
@@ -523,6 +844,14 @@ def main(argv=None):
     parser.add_argument("--es", type=int, choices=(1, 2, 3, 4), default=1)
     parser.add_argument(
         "--json", type=Path, default=None, help="write the gate result to PATH"
+    )
+    parser.add_argument(
+        "--all-rows",
+        action="store_true",
+        help=(
+            "print every scored row, not only the verdict-bearing ones. "
+            "INFORMATIONAL: it changes what is shown, never what is gated"
+        ),
     )
     parser.add_argument(
         "--self-test",
@@ -548,7 +877,14 @@ def main(argv=None):
             f"the gate needs all three runs; missing {', '.join(missing)} "
             "(or pass --self-test)"
         )
-    run_gate(args.fluid, args.dvm_h, args.dvm_h2, args.es, json_path=args.json)
+    run_gate(
+        args.fluid,
+        args.dvm_h,
+        args.dvm_h2,
+        args.es,
+        json_path=args.json,
+        all_rows=args.all_rows,
+    )
     return 0
 
 
