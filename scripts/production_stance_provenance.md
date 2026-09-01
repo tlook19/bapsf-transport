@@ -497,6 +497,71 @@ The ring's inner radius. It must leave the local plasma channel fully open
 and lie inside the local vessel radius, and it does at both: the column is at
 `Rp = 18.415` cm there and the bore is 50.0 cm.
 
+**`plasma_radius_profile_cm` — MEASURED (machine-state field record), adopted
+2026-09-01 (Tom).** The per-cell flux-tube radius under
+`prescribed_area_geometry`, one entry per cell of the stance's 280-cell mesh.
+It is built by `scripts/build_msi_field_profile.py` from the `MSI/Magnetic
+field` group the ES1 raw shot files carry: 1024 axial field samples spanning
+−300 … 2025.3 cm, recorded at the first and last shot of every run. Each
+recorded profile is divided by its OWN plateau level (the median over
+300–1500 cm), and the build uses the MEAN normalized shape `B_hat(z)` over the
+retained runs. Column-anchored flux conservation then gives
+`r(z) = Rp * sqrt(1 / B_hat(z))`, held EXACTLY flat at `Rp` upstream of the
+first sustained departure of `B_hat` from 1 (measured at z = 1684.35 cm,
+tolerance 0.02 over a ≥20 cm run searched beyond 1500 cm), the ratio applied
+beyond it, capped at `sqrt(0.95) * R_m(z)` — the declared annulus
+regularization, unchanged from the census build. Beyond the last MSI sample
+`B_hat` is held at its last value; the cap binds over that whole span, so the
+choice is not observable in the shipped array.
+
+**The measured level is not used, only the shape.** The plateau level varied
+~3 % across the 32 files with the main-supply setting, which is exactly what
+the ratio divides out. Two runs (32, 34) ran the lowest main-supply currents;
+they are excluded from the mean because their normalized SHAPE departs beyond
+every other run's on the end region the ratio is read on (leave-one-out
+0.0311 / 0.0225 against the others' 0.0143), while on the full mesh they sit
+INSIDE the others' spread. The exclusion moves the mean shape by at most
+0.0017. The adjudication is measured and printed by the builder, not assumed.
+
+**Honest bar: the coordinate assumption, and one unresolved disagreement.**
+The build ASSUMES `z_MSI == z_model` — both cathode-referenced — supported on
+the measurement side by the port-to-axis map (`182.5 + 31.95*(port−2)`,
+documented as a nominal distance from the cathode) and on the model side by
+the solver's own z = 0 at the cathode face. It is an assumption, not a
+measurement, and under it the machine's end-pair mirror does not sit where the
+CAD census puts it: the MSI end-pair peak is at z ≈ 1791 cm, the census coil
+table's end-pair centroid at z ≈ 1947 cm — a ~156 cm coil-location
+disagreement between the drawn machine and the machine's programmed magnet
+positions. Neither record carries a fiducial that fixes the other, so this is
+DISCLOSED and NOT RESOLVED; every claim that leans on the end geometry carries
+it. The same disagreement reads on the upstream side as the flat column ending
+171 cm earlier than the census trace put it.
+
+**What this changes, in one line.** Port p50 (z = 1716.1 cm) now sits inside a
+~10 % measured field droop, so the modelled flux tube there is 1.050× the
+design column radius (+10.3 % in area) where the census profile held it flat;
+the end-pair mirror puts a THROAT at 17.832 cm (0.968× `Rp`, 0.938× in area)
+at z = 1791.8 cm, which the census profile did not have at all; and the
+terminal collector cell sits on the cap at 74.271 cm rather than the census
+70.225 cm. Ports p11–p41 are untouched — they are inside the flat column, so
+the scalar `Rp` read sites stay in sync with the vector by construction.
+
+*(SUPERSEDED 2026-09-01: the CAD-census droop_min profile.* Until this
+adoption the shipped array was the `droop_min` case of
+`scripts/g1_build_profiles.py` — a traced flux surface through a
+finite-element re-solve of the drawn coil set, flat to 1855 cm and flared on
+the traced ratio beyond it. That build is RETAINED, unchanged, and is now the
+independent CROSS-CHECK; it also still owns `machine_radius_profile_cm`, which
+this adoption does not touch.)*
+
+**`machine_radius_profile_cm` — MEASURED (machine CAD), unchanged.** The
+vessel bore staircase, still built by `scripts/g1_build_profiles.py`
+(40.0 cm source chamber, 50.0 cm main shell to the 19.65 m step, 76.2 cm far
+source chamber, with the cathode-box cells carrying the annulus-area-equivalent
+radius that reproduces the measured clear areas 1350.1 / 1847.6 cm²). The
+2026-09-01 adoption changed the plasma profile only; this array is byte-equal
+across it.
+
 **`end_expansion_*`, `Rcs`, `Lcs`, `Rsup` — RETIRED FROM THE STANCE (R1,
 2026-08-20).** The G1 measured-geometry adoption replaced the parametric flare
 with the prescribed-area profiles, and the R1 de-staling deleted these keys

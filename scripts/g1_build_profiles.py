@@ -1,5 +1,17 @@
 """Build the G1a/G1b prescribed per-cell geometry profiles for LAPDSim1D.
 
+WHAT THIS SCRIPT STILL OWNS, SINCE 2026-09-01. The vessel profile
+``machine_radius_profile_cm`` is this script's, and the stance ships it
+unchanged. The SHIPPED ``plasma_radius_profile_cm`` is no longer: it now comes
+from ``scripts/build_msi_field_profile.py``, which builds the flux tube from
+the measured MSI machine-state field record instead of from the CAD census
+re-solve below. The two plasma profiles this script emits are retained as the
+INDEPENDENT CROSS-CHECK against that build -- the MSI builder reuses this
+script's mesh probe and vessel profile verbatim and compares its result against
+both cases here. The comparison is reported in ``mfp_field_profile.txt``; it is
+not a small one, and the disagreement it exposes in the end-pair coil location
+is disclosed in ``scripts/production_stance_provenance.md``.
+
 G1 adopts the measured CAD machine geometry at the l2a7b operating point.
 The solver takes the geometry as RADII, one entry per mesh cell, under the
 ``prescribed_area_geometry`` flag: ``plasma_radius_profile_cm`` (the flux-tube
