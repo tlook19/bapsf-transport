@@ -600,13 +600,15 @@ the measured 0.9905 ± 0.0114, a 0.83σ agreement, which the builder gates on.
 
 **The p50/p41 width ratio 0.9905 ± 0.0114 — MEASURED.** Its instrument is the
 geometric-mean face-reconciled effective-radius estimator on the ES1 radial
-scans: the effective radius is reconciled across the two faces and the pair is
-combined as a geometric mean, so the ratio is a width comparison between the
-two stations rather than an absolute width at either. The two faces bracket it
-at 0.987–1.022, which is what the ± 0.0114 is drawn from; the bracket is the
-claim, and no result here turns on a point value inside it. The constants live
-in `scripts/build_msi_field_profile.py` as `MEASURED_P50_P41_FLUX_RATIO` and
-`MEASURED_P50_P41_FLUX_RATIO_SIGMA`.
+scans, and the ± 0.0114 is that estimator's sample ⊕ shot uncertainty. Carried
+SEPARATELY is the face systematic: the two faces bracket the ratio at
+0.987–1.022, which is not folded into the sigma above and which takes the
+originating measurement from 5σ statistical to roughly 3σ. The builder's
+acceptance gate is a ±1σ POINT test on the constant —
+`scripts/build_msi_field_profile.py` refuses an emitted profile whose implied
+p50/p41 area ratio differs from `MEASURED_P50_P41_FLUX_RATIO` by more than
+`MEASURED_P50_P41_FLUX_RATIO_SIGMA` — so the σ figures quoted around it are
+distances on that pair, and the gate does turn on the point value.
 
 The residual that remains is the SOFT DEPARTURE. The flat hold ends on a 2 %
 tolerance, at z = 1748.71 cm, which is 30.0 cm downstream of p50 (CAD 1718.67
