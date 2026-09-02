@@ -303,7 +303,7 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "gas_puff_local_ionization": "local",
     # --- surface sources: recycled plasma leaves the surface at T_wall ---
     # ``boundary_absorption`` is a permanently-zero row kept for saved-ledger
-    # schema stability (retired 2026-08-31 (Tom)); its entry stays so the table
+    # schema stability (retired; Tom, 2026-08-31); its entry stays so the table
     # still covers every row the ledger emits.
     "boundary_absorption": "wall",
     "characteristic_boundary": "wall",
@@ -6259,11 +6259,24 @@ class LAPDSim1D:
                 # per-atom launch energy cover the same steps: a censored
                 # step adds to neither, and a tick that was censored
                 # throughout draws a directed share of exactly zero.
-                if source_booking is not None:
-                    self._dvm_cathode_jet_count_booked = (
-                        self._dvm_cathode_jet_count_booked
-                        + source_booking["cathode_face"]
+                #
+                # The count partner cannot be absent here: both tallies are
+                # armed under the one ``_dvm_rows_superseded`` guard for the
+                # same attempt, and the source tally is armed
+                # unconditionally there while this energy tally is the
+                # narrower of the two. Booking the energy without its count
+                # would split the pair silently, so the impossible case is
+                # refused rather than skipped.
+                if source_booking is None:
+                    raise ValueError(
+                        "the cathode jet booked incident energy for this "
+                        "step with no source booking to draw its count "
+                        "partner from"
                     )
+                self._dvm_cathode_jet_count_booked = (
+                    self._dvm_cathode_jet_count_booked
+                    + source_booking["cathode_face"]
+                )
                 step_backscatter_erg = float(
                     self._dvm_cathode_jet["R_E"]
                     * np.sum(jet_energy_booking)

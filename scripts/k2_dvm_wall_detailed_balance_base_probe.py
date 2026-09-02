@@ -36,7 +36,7 @@ ALPHAS = (0.0, 0.35, 0.40, 0.46, 0.7307, 1.0)
 
 #: Velocity grids, coarse to fine. The offset must fall under refinement --
 #: that is what makes it a resolution property rather than a defect.
-GRIDS = ((16, 6), (32, 10), (48, 12), (96, 32))
+GRIDS = ((16, 6), (32, 10), (48, 12), (64, 24), (96, 32))
 
 
 def uniform_tube(nz, length_cm=1600.0, Rp=15.0, Rm=50.0):

@@ -1907,7 +1907,7 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
     lines.append(
         f"| Tn feedback | none ({sorted(tn_fb)}) -- O6 (column Tn) is "
         "DIAGNOSTIC-ONLY: the `neutral_kinetic_dvm_tn_feedback` switch and "
-        "its consumer were retired 2026-08-31 (Tom), so Tn is never fed back |"
+        "its consumer were retired (Tom, 2026-08-31), so Tn is never fed back |"
     )
     lines.append("")
 

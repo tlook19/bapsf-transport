@@ -23,7 +23,7 @@ intercepted energy -> anode; verify_sim1d_r4_ionization_birth.py: electron birth
 
 Needs the gitignored settled M6 artifact; pass --h5 to override the default.
 
-Usage:  python scripts/verify_sim1d_r4_item21_ledger.py [--h5 PATH]
+Usage:  python scripts/verify_sim1d_r4_beam_and_birth_ledger.py [--h5 PATH]
 """
 import argparse
 import sys

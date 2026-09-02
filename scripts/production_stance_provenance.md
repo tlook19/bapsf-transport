@@ -537,7 +537,12 @@ first sustained departure of `B_hat` from 1 (measured at z = 1748.714 cm,
 the ratio applied beyond it, capped at `sqrt(0.95) * R_m(z)` — the declared
 annulus regularization, unchanged from the census build. 231 of the 280 cells
 are at exactly `Rp = 18.415` cm; the cap binds in the terminal 20 cells and the
-collector sits on it at 74.2706 cm.
+collector sits on it at 74.2706 cm. **Disclosed:** where the bore steps 50.0 →
+76.2 cm the cap RELEASES, and the plasma area takes a +63.4 % step in one cell
+— cell 259 clamped at `sqrt(0.95) * 50.0` = 48.7340 cm (7461.28 cm²), cell 260
+free at 62.3022 cm (12194.31 cm²), below that cell's own 74.2706 cm cap — so
+the step is the cap letting go at the bore staircase, not a feature of the
+measured field; the validators accept it.
 
 **THE REGISTRATION — MEASURED (instrument convention) + MEASURED (machine
 CAD).** `z_MSI` is NOT the model's axial coordinate. The MSI record is written
@@ -592,6 +597,18 @@ and the `B_hat` = 0.90 / 0.50 / 0.10 crossings at −2.12 / +0.37 / +4.45 cm —
 with the two profiles differing by at most 4.05 cm over the whole mesh; and the
 flux-tube ratio the emitted array implies between p50 and p41 is 1.0000 against
 the measured 0.9905 ± 0.0114, a 0.83σ agreement, which the builder gates on.
+
+**The p50/p41 width ratio 0.9905 ± 0.0114 — MEASURED.** Its instrument is the
+geometric-mean face-reconciled effective-radius estimator on the ES1 radial
+scans, and the ± 0.0114 is that estimator's sample ⊕ shot uncertainty. Carried
+SEPARATELY is the face systematic: the two faces bracket the ratio at
+0.987–1.022, which is not folded into the sigma above and which takes the
+originating measurement from 5σ statistical to roughly 3σ. The builder's
+acceptance gate is a ±1σ POINT test on the constant —
+`scripts/build_msi_field_profile.py` refuses an emitted profile whose implied
+p50/p41 area ratio differs from `MEASURED_P50_P41_FLUX_RATIO` by more than
+`MEASURED_P50_P41_FLUX_RATIO_SIGMA` — so the σ figures quoted around it are
+distances on that pair, and the gate does turn on the point value.
 
 The residual that remains is the SOFT DEPARTURE. The flat hold ends on a 2 %
 tolerance, at z = 1748.71 cm, which is 30.0 cm downstream of p50 (CAD 1718.67

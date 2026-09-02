@@ -26,7 +26,11 @@ radius, so the flux-tube AREA is ``pi r^2``) and ``machine_radius_profile_cm``
 (the vessel bore). This script emits both, for the two end-field cases the
 census re-solve resolved, plus the mesh comparison against the l2a7b
 reference and the construction validation that must pass before any arm
-launches.
+launches. The annulus figure that validation prints is the smallest PER-CELL
+share ``(V_m - V_p)/V_m`` over the cells that have an annulus, cap-bound cells
+included and ``V_ann == 0`` cells excluded -- the same per-cell quantity the
+solver's ``neutral_annulus_volume_fraction_min`` guard refuses on, NOT a
+column-integrated share.
 
 Inputs
 ------
@@ -522,11 +526,42 @@ def main():
         fraction = np.where(
             has_annulus, annulus / geometry.neutral_volume_cm3, np.nan
         )
-        worst = int(np.nanargmin(fraction))
+        # Value plus the CAP SET, never one index. In a cap-bound cell the
+        # share is 1 - AREA_CAP_FRACTION only up to the per-cell rounding of
+        # the dz-dependent volumes this ratio is built from, and dz varies
+        # across the mesh, so those cells do NOT all carry one double: the
+        # minimum is whichever rounded lowest and locates nothing. The cap set
+        # comes from the geometry's own radii against the cap rule, not from
+        # comparing shares to each other.
+        smallest = float(np.nanmin(fraction))
+        cap_bound = np.flatnonzero(
+            geometry.Rp_cm
+            >= np.sqrt(AREA_CAP_FRACTION) * geometry.Rm_cm - 1e-9
+        )
+        if cap_bound.size:
+            runs = np.split(
+                cap_bound, np.flatnonzero(np.diff(cap_bound) != 1) + 1
+            )
+            cap_ulp = int(np.abs(
+                fraction[cap_bound].view(np.int64)
+                - np.float64(smallest).view(np.int64)
+            ).max())
+            cap_note = (
+                f"the area cap binds in {cap_bound.size} cells ("
+                + ", ".join(
+                    f"{int(r[0])}-{int(r[-1])}" if r.size > 1
+                    else f"{int(r[0])}"
+                    for r in runs
+                )
+                + f"), whose shares all agree with this value to within "
+                f"{cap_ulp} ULP"
+            )
+        else:
+            cap_note = "the area cap binds in no cell"
         say(
-            f"  min V_ann/V_neutral over annulus cells = "
-            f"{fraction[worst]:.6f} at cell {worst} "
-            f"(z = {geometry.z_cm[worst]:.3f} cm, role {geometry.cell_role[worst]}); "
+            f"  smallest PER-CELL annulus share (V_m - V_p)/V_m over the "
+            f"cells that have an annulus, cap-bound cells included = "
+            f"{smallest:.6f}; {cap_note}; "
             f"guard neutral_annulus_volume_fraction_min = "
             f"{params.get('neutral_annulus_volume_fraction_min', 1e-2)}"
         )

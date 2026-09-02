@@ -122,7 +122,13 @@ kept. The report prints the census of where the tolerance would have fired.
 
 Beyond the departure the ratio is applied, capped at
 ``sqrt(AREA_CAP_FRACTION) * R_m(z)`` -- the declared annulus regularization,
-the same cap the census build uses. Outside the corrected sample span
+the same cap the census build uses. The annulus figure the report prints is
+the smallest PER-CELL share ``(V_m - V_p)/V_m`` taken over the cells that have
+an annulus, cap-bound cells included and ``V_ann == 0`` cells excluded -- the
+same per-cell quantity the solver's ``neutral_annulus_volume_fraction_min``
+guard refuses on, NOT a column-integrated share. Wherever the cap binds that
+minimum is pinned at ``1 - AREA_CAP_FRACTION`` by construction, so it reports
+the regularization rather than the measured field. Outside the corrected sample span
 ``B_hat`` is HELD at the nearer end sample: below ``z_model = -210.63`` cm,
 where the flat rule already fixes ``r = RP_CM`` so the hold cannot be
 observable, and beyond ``z_model = 2114.67`` cm. The report states how many
@@ -224,7 +230,8 @@ REPORTED_PORTS = (11, 21, 29, 41, 50)
 
 #: The measured p50/p41 flux-tube area ratio, and its uncertainty. The gate:
 #: the ratio the EMITTED profile implies between those two stations must agree
-#: with this measurement to within its stated sigma.
+#: with this measurement to within its stated sigma. Class MEASURED; instrument
+#: and face bracket in the MSI block of ``scripts/production_stance_provenance.md``.
 MEASURED_P50_P41_FLUX_RATIO = 0.9905
 MEASURED_P50_P41_FLUX_RATIO_SIGMA = 0.0114
 
@@ -1204,12 +1211,38 @@ def main():
     annulus = geometry.neutral_volume_cm3 - geometry.plasma_volume_cm3
     has_annulus = annulus > 0.0
     fraction = np.where(has_annulus, annulus / geometry.neutral_volume_cm3, np.nan)
-    worst = int(np.nanargmin(fraction))
+    # Reported as the value plus the CAP SET, never as one index. In a
+    # cap-bound cell the share is 1 - AREA_CAP_FRACTION only up to the
+    # per-cell rounding of the dz-dependent volumes this ratio is built from,
+    # and the mesh's dz varies, so those cells do NOT all carry one double:
+    # the minimum is whichever of them happened to round lowest, which locates
+    # nothing. The cap set is taken from the geometry's own radii against the
+    # cap rule, not by comparing shares to each other.
+    smallest = float(np.nanmin(fraction))
+    cap_bound = np.flatnonzero(
+        geometry.Rp_cm >= np.sqrt(AREA_CAP_FRACTION) * geometry.Rm_cm - 1e-9
+    )
+    if cap_bound.size:
+        runs = np.split(cap_bound, np.flatnonzero(np.diff(cap_bound) != 1) + 1)
+        cap_ulp = int(np.abs(
+            fraction[cap_bound].view(np.int64)
+            - np.float64(smallest).view(np.int64)
+        ).max())
+        cap_note = (
+            f"the area cap binds in {cap_bound.size} cells ("
+            + ", ".join(
+                f"{int(r[0])}-{int(r[-1])}" if r.size > 1 else f"{int(r[0])}"
+                for r in runs
+            )
+            + f"), whose shares all agree with this value to within "
+            f"{cap_ulp} ULP"
+        )
+    else:
+        cap_note = "the area cap binds in no cell"
     say(
-        f"  min V_ann/V_neutral over annulus cells = {fraction[worst]:.6f} at "
-        f"cell {worst} (z = {geometry.z_cm[worst]:.3f} cm, role "
-        f"{geometry.cell_role[worst]}); guard "
-        f"neutral_annulus_volume_fraction_min = "
+        f"  smallest PER-CELL annulus share (V_m - V_p)/V_m over the cells "
+        f"that have an annulus, cap-bound cells included = {smallest:.6f}; "
+        f"{cap_note}; guard neutral_annulus_volume_fraction_min = "
         f"{params.get('neutral_annulus_volume_fraction_min', 1e-2)}"
     )
     say(f"  cells with no annulus (V_ann == 0): {int(np.sum(~has_annulus))}")
