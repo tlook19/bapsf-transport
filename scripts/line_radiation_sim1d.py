@@ -306,6 +306,9 @@ from cablp.atomic.adas import (  # noqa: E402
     he_rates,
 )
 from cablp.constants import qe_SI  # noqa: E402
+from cablp.solvers._sim1d.physics.kinetic_neutrals import (  # noqa: E402
+    T_WALL_K,
+)
 
 #: Default subject: the kinetic-neutral arm on the corrected field profile.
 DEFAULT_H5 = SCRIPT_DIR / "m1_arm2_es1.h5"
@@ -334,6 +337,7 @@ STAGE = {
         "partner_label": "n_e",
         "plt_key": "plt2",
         "ledger_row": "electron_ion_cooling",
+        "emitter_temp": "Ti",
     },
     "he0": {
         "spec_key": "he0",
@@ -343,6 +347,7 @@ STAGE = {
         "partner_label": "nn (in-column)",
         "plt_key": "plt1",
         "ledger_row": "electron_neutral_cooling",
+        "emitter_temp": "wall",
     },
 }
 
@@ -519,6 +524,29 @@ ASSUMPTIONS = (
         ),
     },
 )
+
+#: Doppler-width coefficient: FWHM = DOPPLER_COEFF * lambda * sqrt(T/M),
+#: T in eV, M in amu, FWHM in the units of lambda.
+DOPPLER_COEFF = 7.716e-5
+
+#: Helium mass [amu], the emitter of every line in both adf15 files.
+HE_MASS_AMU = 4.0026
+
+#: Boltzmann constant [eV/K], for the cold-neutral wall temperature.
+K_B_EV_PER_K = 8.617333262e-5
+
+#: Gaussian sigma per unit FWHM.
+FWHM_TO_SIGMA = 1.0 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+
+#: Spectrum drawing window [nm].
+SPECTRUM_RANGE_NM = (20.0, 750.0)
+
+#: Inset half-width [nm] and the line each panel zooms on.
+INSET_HALF_WIDTH_NM = 0.15
+INSET_LINE_NM = {"he1": 468.65, "he0": 587.75}
+
+#: Multiplier on Ti for the dashed comparison trace in the He II inset.
+INSET_HOT_FACTOR = 4.0
 
 #: Core diameters reported as columns alongside the default [um].
 FIBER_CORE_COLUMNS_UM = (200.0, 400.0, 600.0)
@@ -700,6 +728,7 @@ def read_window(h5_path, window_ms):
             "n": f["n"][sl, :][:, active],
             "nn": f["nn"][sl, :][:, active],
             "Te": f["Te"][sl, :][:, active],
+            "Ti": f["Ti"][sl, :][:, active],
         }
         del take
         geom = {
@@ -993,6 +1022,26 @@ def fiber_at_port(stage, data, port, law, fibers, material, length_m):
     brightness = eps * chord  # W cm^-2, the chord integral of emissivity
     radiance = brightness / (4.0 * np.pi)  # W cm^-2 sr^-1
 
+    # Emitter temperature for the thermal line shape.  He II radiates from
+    # the ION population, so its width is set by the run's own saved Ti at
+    # this cell; He I radiates from the COLD neutral population the engine
+    # books at the wall temperature.
+    cfg = STAGE[stage["stage"]]
+    if cfg["emitter_temp"] == "Ti":
+        emitter_T_eV = float(data["state"]["Ti"][:, j].mean())
+        emitter_T_source = (
+            "plateau-mean saved Ti at this cell (the run's own ion "
+            "temperature)"
+        )
+    else:
+        emitter_T_eV = T_WALL_K * K_B_EV_PER_K
+        emitter_T_source = (
+            f"cold neutral population at the engine's T_WALL_K = "
+            f"{T_WALL_K:g} K"
+        )
+    fwhm_nm = doppler_fwhm_nm(stage["lambda_nm"], emitter_T_eV)
+    sigma_nm = fwhm_nm * FWHM_TO_SIGMA
+
     t_window = window_transmission(material, stage["lambda_nm"])
     t_fiber = fiber_transmission(stage["lambda_nm"], length_m)
     t_total = t_window * t_fiber
@@ -1033,6 +1082,10 @@ def fiber_at_port(stage, data, port, law, fibers, material, length_m):
         "chord_length_cm": chord,
         "brightness_W_cm2": brightness,
         "radiance_W_cm2_sr": radiance,
+        "emitter_T_eV": emitter_T_eV,
+        "emitter_T_source": emitter_T_source,
+        "doppler_fwhm_nm": fwhm_nm,
+        "doppler_sigma_nm": sigma_nm,
         "T_window": t_window,
         "T_fiber": t_fiber,
         "T_total": t_total,
@@ -1112,6 +1165,67 @@ def cutoff_table(length_m):
 def transmits(cutoff, lam_nm):
     """Boolean mask: which lines sit red-ward of a cutoff."""
     return np.asarray(lam_nm) >= cutoff["cutoff_nm"]
+
+
+# --- thermal line shape ----------------------------------------------------
+
+
+def doppler_fwhm_nm(lam_nm, temp_eV):
+    """Doppler FWHM [nm] of a helium line at emitter temperature ``temp_eV``.
+
+    ``FWHM = 7.716e-5 * lambda * sqrt(T[eV] / M[amu])`` with M = 4.0026, the
+    standard thermal-broadening width.  This is the ONLY broadening applied:
+    it is the thermal envelope of the adf15 line as that file lists it, and
+    the instrumental, Stark, fine-structure and Zeeman contributions are all
+    absent by construction.
+    """
+    return (
+        DOPPLER_COEFF
+        * np.asarray(lam_nm, dtype=float)
+        * np.sqrt(float(temp_eV) / HE_MASS_AMU)
+    )
+
+
+def spectrum_grid(lam_nm, sigma_nm, lo, hi, n_base=3000, half=8.0, per_sigma=14):
+    """Wavelength grid that resolves every line it carries.
+
+    A uniform grid over 20-750 nm cannot represent a 0.004 nm line: the peak
+    would fall between samples and the drawn height would be an artifact of
+    the sampling.  The grid is therefore a coarse base plus a dense local
+    patch around each line, so the plotted peak IS the analytic peak.
+    """
+    parts = [np.linspace(lo, hi, n_base)]
+    for centre, sigma in zip(np.atleast_1d(lam_nm), np.atleast_1d(sigma_nm)):
+        if sigma <= 0.0:
+            continue
+        parts.append(
+            np.linspace(
+                centre - half * sigma,
+                centre + half * sigma,
+                int(2 * half * per_sigma) + 1,
+            )
+        )
+    grid = np.unique(np.concatenate(parts))
+    return grid[(grid >= lo) & (grid <= hi)]
+
+
+def spectral_density(grid_nm, lam_nm, area, sigma_nm):
+    """Sum of Gaussians whose AREAS are ``area``, evaluated on ``grid_nm``.
+
+    Each line contributes ``area / (sigma sqrt(2 pi)) * exp(-...)``, so the
+    integral of the returned curve over wavelength reproduces the summed
+    per-line quantity exactly and the units gain a ``nm^-1``.
+    """
+    out = np.zeros_like(np.asarray(grid_nm, dtype=float))
+    for centre, a, sigma in zip(
+        np.atleast_1d(lam_nm), np.atleast_1d(area), np.atleast_1d(sigma_nm)
+    ):
+        if sigma <= 0.0 or a == 0.0:
+            continue
+        out += (a / (sigma * np.sqrt(2.0 * np.pi))) * np.exp(
+            -0.5 * ((out * 0.0 + grid_nm - centre) / sigma) ** 2
+        )
+    return out
 
 
 # --- datasheet transmission ------------------------------------------------
@@ -1495,6 +1609,77 @@ def markdown_report(rep):
                 )
             )
             L.append("")
+
+    # --- line shape
+    L.append("## Synthetic line shape (Figure A)")
+    L.append("")
+    L.append(
+        "Figure A draws each adf15 line as a Gaussian whose AREA is that "
+        "line's chord radiance and whose width is the Doppler width at the "
+        "EMITTING population's temperature, "
+        "`FWHM = 7.716e-5 * lambda * sqrt(T[eV] / M[amu])` with "
+        f"M = {HE_MASS_AMU:g}. The curve therefore integrates back to the "
+        "per-line numbers tabulated above, and its HEIGHT encodes the line "
+        "width: `peak = area / (sigma sqrt(2 pi))`."
+    )
+    L.append("")
+    L.append(
+        "**He II is broadened at the run's own ION temperature**, the "
+        "plateau-mean saved `Ti` at that port's cell. **He I is broadened at "
+        "the COLD neutral temperature** -- the engine's "
+        f"`T_WALL_K = {T_WALL_K:g} K` = "
+        f"{T_WALL_K * K_B_EV_PER_K:.4f} eV, imported from "
+        "`physics/kinetic_neutrals.py` so it cannot drift from the engine. "
+        "**The hot neutral channel is NOT represented**: a run that carries "
+        "a hot population would emit a broader He I line than this figure "
+        "draws, and nothing here brackets that."
+    )
+    L.append("")
+    rows = []
+    for pk, key in rep["fiber_panels"]:
+        fp = rep["fiber_ports"][pk]
+        s_ = rep["stages"][key]
+        got = fp["stages"][key]
+        target = INSET_LINE_NM[key]
+        m = int(np.argmin(np.abs(np.asarray(s_["lambda_nm"]) - target)))
+        rows.append(
+            [
+                str(fp["port"]),
+                s_["short"],
+                f"{got['emitter_T_eV']:.4f}",
+                got["emitter_T_source"],
+                f"{s_['lambda_nm'][m]:.2f}",
+                f"{got['doppler_fwhm_nm'][m]:.5f}",
+            ]
+        )
+    L.extend(
+        _table(
+            [
+                "port",
+                "stage",
+                "emitter T [eV]",
+                "source of that T",
+                "inset line [nm]",
+                "Doppler FWHM [nm]",
+            ],
+            rows,
+        )
+    )
+    L.append("")
+    L.append(
+        "**What the line shape omits.** Doppler broadening is the ONLY "
+        "mechanism applied, to the adf15 line AS THAT FILE LISTS IT. The "
+        "He II 468.65 nm feature is in reality a FINE-STRUCTURE MULTIPLET "
+        "spread over about 0.07 nm, and at the LAPD's 1.4 kG it is "
+        "additionally ZEEMAN-SPLIT by about 0.01 nm; NEITHER is represented "
+        "here. Since the 0.07 nm multiplet spread is comparable to the "
+        f"{rows[0][5]} nm thermal FWHM this instrument draws for it, the "
+        "single Gaussian in the He II inset is the THERMAL ENVELOPE of a "
+        "blended feature, not a resolved line profile -- do not read a "
+        "temperature off its width without unfolding the multiplet first. "
+        "Stark and instrumental widths are likewise absent."
+    )
+    L.append("")
 
     # --- transmission curves
     L.append("## Window and fiber transmission curves applied")
@@ -1924,64 +2109,52 @@ CUTOFF_STYLE = ("tab:purple", "tab:olive", "tab:brown")
 
 
 def figure_chord_power(rep, path_stem, dpi=180):
-    """Figure A: per-line chord radiance at each port, EUV lines included.
+    """Figure A: synthetic thermally-broadened spectrum at each port.
 
-    One bar per adf15 line, sorted by wavelength, at the port that panel
-    serves.  The cutoffs are drawn as vertical separators, so the bars a
-    windowed instrument could ever see sit to the RIGHT of them and the
-    bars it cannot see sit to the LEFT.  Nothing is dropped: this figure
-    exists to show how much of the emission is out of optical reach.
+    Every adf15 line is drawn as a Gaussian whose AREA is that line's chord
+    radiance and whose FWHM is the Doppler width at the emitting population's
+    temperature, so the curve integrates back to the tabulated per-line
+    numbers and its HEIGHT encodes the line width.  On a 20-750 nm axis the
+    lines are spikes; that is the intended reading, and the insets resolve
+    one line each.  No transmission is applied -- this is the emission at the
+    chord, and the cutoff separators show what is out of optical reach.
     """
     cuts = rep["cutoffs"]
-    fig, axes = plt.subplots(2, 1, figsize=(11.5, 8.8), layout="constrained")
+    lo, hi = SPECTRUM_RANGE_NM
+    fig = plt.figure(figsize=(13.6, 8.8), layout="constrained")
+    gs = fig.add_gridspec(2, 2, width_ratios=(3.0, 1.18))
+    axes = [fig.add_subplot(gs[r, 0]) for r in range(2)]
+    zooms = [fig.add_subplot(gs[r, 1]) for r in range(2)]
 
-    for ax, (pkey, key) in zip(axes, rep["fiber_panels"]):
+    for ax, axin, (pkey, key) in zip(axes, zooms, rep["fiber_panels"]):
         fp = rep["fiber_ports"][pkey]
         s = rep["stages"][key]
         got = fp["stages"][key]
-        lam = s["lambda_nm"]
-        val = np.asarray(got["radiance_W_cm2_sr"])
-        order = np.argsort(lam)
-        top = max(float(val.max()), 1.0e-30)
-        floor = top * 1.0e-7
+        lam = np.asarray(s["lambda_nm"])
+        area = np.asarray(got["radiance_W_cm2_sr"])
+        sigma = np.asarray(got["doppler_sigma_nm"])
+        fwhm = np.asarray(got["doppler_fwhm_nm"])
+        inside = (lam >= lo) & (lam <= hi)
 
-        for i in order:
-            passes = lam[i] >= cuts[0]["cutoff_nm"]
-            ax.bar(
-                lam[i],
-                max(val[i], floor),
-                width=lam[i] * 0.055,
-                color="tab:blue" if passes else "0.62",
-                edgecolor="black",
-                linewidth=0.7,
-                zorder=3,
-            )
-        placed = [np.log10(c["cutoff_nm"]) for c in cuts]
-        for i in np.argsort(-val)[:LABELLED_LINES]:
-            x = float(np.log10(lam[i]))
-            if any(abs(x - q) < 0.022 for q in placed):
-                continue
-            placed.append(x)
-            ax.annotate(
-                f"{lam[i]:.1f} nm",
-                xy=(lam[i], max(val[i], floor)),
-                xytext=(0, 3),
-                textcoords="offset points",
-                fontsize=6.4,
-                rotation=90,
-                ha="center",
-                va="bottom",
-                color="0.2",
-                zorder=6,
-            )
+        grid = spectrum_grid(lam[inside], sigma[inside], lo, hi)
+        dens = spectral_density(grid, lam[inside], area[inside], sigma[inside])
+        peak = max(float(dens.max()), 1.0e-30)
+        floor = peak * 1.0e-8
+        ax.plot(grid, np.maximum(dens, floor), color="tab:blue", lw=0.9,
+                zorder=3)
+        ax.set_yscale("log")
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(floor, peak * 30.0)
+        ax.grid(True, alpha=0.22, zorder=0)
+        ax.set_ylabel(
+            "spectral radiance\n[W cm$^{-2}$ sr$^{-1}$ nm$^{-1}$]", fontsize=9
+        )
+
         for k, cut in enumerate(cuts):
-            ax.axvline(
-                cut["cutoff_nm"],
-                color=CUTOFF_STYLE[k],
-                ls="--",
-                lw=1.6,
-                zorder=5,
-            )
+            if not (lo <= cut["cutoff_nm"] <= hi):
+                continue
+            ax.axvline(cut["cutoff_nm"], color=CUTOFF_STYLE[k], ls="--",
+                       lw=1.5, zorder=5)
             ax.annotate(
                 f"{cut['short']} {cut['cutoff_nm']:.0f} nm",
                 xy=(cut["cutoff_nm"], 0.985),
@@ -1995,45 +2168,111 @@ def figure_chord_power(rep, path_stem, dpi=180):
                 rotation=90,
                 zorder=7,
             )
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.set_xlim(15.0, 2000.0)
-        ax.set_ylim(floor, top * 60.0)
-        ax.grid(True, alpha=0.22, zorder=0)
-        ax.set_ylabel(
-            "chord radiance  $L=\\int\\epsilon\\,dl/4\\pi$"
-            "  [W cm$^{-2}$ sr$^{-1}$]"
-        )
+        placed = []
+        for idx in np.argsort(-np.where(inside, area, 0.0))[:LABELLED_LINES]:
+            if not inside[idx]:
+                continue
+            if any(abs(lam[idx] - q) < 0.022 * (hi - lo) for q in placed):
+                continue
+            placed.append(lam[idx])
+            k = int(np.argmin(np.abs(grid - lam[idx])))
+            ax.annotate(
+                f"{lam[idx]:.1f} nm",
+                xy=(lam[idx], max(dens[k], floor)),
+                xytext=(0, 4),
+                textcoords="offset points",
+                fontsize=6.4,
+                rotation=90,
+                ha="center",
+                va="bottom",
+                color="0.2",
+                zorder=6,
+            )
         ax.set_title(
             f"Port {fp['port']} ({s['label']})  --  z {fp['z_cell_cm']:.1f} "
-            f"cm, chord {fp['chord_length_cm']:.1f} cm; all "
-            f"{lam.size} adf15 EXCIT lines, machine total "
-            f"{s['machine_W_total']:.3e} W",
+            f"cm, chord {fp['chord_length_cm']:.1f} cm;  emitter T = "
+            f"{got['emitter_T_eV']:.4g} eV ({got['emitter_T_source']})",
             fontsize=9.5,
         )
+
+        # --- inset: one line resolved at the same temperature
+        target = INSET_LINE_NM[key]
+        m = int(np.argmin(np.abs(lam - target)))
+        half = INSET_HALF_WIDTH_NM
+        gi = np.linspace(lam[m] - half, lam[m] + half, 1600)
+        di = spectral_density(gi, [lam[m]], [area[m]], [sigma[m]])
+        axin.plot(gi, di, color="tab:red", lw=1.4,
+                  label=f"T = {got['emitter_T_eV']:.3g} eV")
+        note = (
+            f"FWHM {fwhm[m]:.4f} nm\n@ {got['emitter_T_eV']:.3g} eV"
+        )
+        if key == "he1":
+            t_hot = got["emitter_T_eV"] * INSET_HOT_FACTOR
+            s_hot = doppler_fwhm_nm(lam[m], t_hot) * FWHM_TO_SIGMA
+            d_hot = spectral_density(gi, [lam[m]], [area[m]], [s_hot])
+            axin.plot(gi, d_hot, color="0.35", ls="--", lw=1.2,
+                      label=f"T x {INSET_HOT_FACTOR:g} = {t_hot:.3g} eV")
+            note += (
+                f"\nx{INSET_HOT_FACTOR:g} T: "
+                f"{doppler_fwhm_nm(lam[m], t_hot):.4f} nm"
+            )
+            axin.legend(fontsize=6.4, loc="upper right", framealpha=0.9)
+        axin.set_title(
+            f"resolved: {lam[m]:.2f} nm, $\\pm${half:g} nm", fontsize=8.0
+        )
+        axin.tick_params(labelsize=6.6)
+        axin.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
+        axin.yaxis.get_offset_text().set_fontsize(6.2)
+        axin.set_xlabel(r"$\lambda$ [nm]", fontsize=7.2, labelpad=1.0)
+        axin.set_ylabel(
+            "spectral radiance\n[W cm$^{-2}$ sr$^{-1}$ nm$^{-1}$]",
+            fontsize=7.0,
+        )
+        axin.grid(True, alpha=0.2)
+        axin.annotate(
+            note,
+            xy=(0.03, 0.97),
+            xycoords="axes fraction",
+            fontsize=6.4,
+            va="top",
+            color="0.25",
+        )
+
     axes[1].set_xlabel(r"$\lambda_{vac}$ [nm]")
     fig.suptitle(
-        f"Chord line power per port -- {Path(rep['h5']).name}\n"
-        f"plateau {rep['data']['window_ms'][0]:g}-"
-        f"{rep['data']['window_ms'][1]:g} ms, main-discharge clock; "
-        "radiance assumes emissivity RADIALLY UNIFORM across the plasma disc "
-        "(the 1D model has no radial profile)",
-        fontsize=10.5,
+        f"Synthetic thermal spectrum at the chord -- {Path(rep['h5']).name}\n"
+        f"each adf15 line is a Gaussian of AREA = its chord radiance and "
+        f"Doppler FWHM = 7.716e-5 $\\lambda\\sqrt{{T/M}}$ (M = "
+        f"{HE_MASS_AMU:g}); plateau "
+        f"{rep['data']['window_ms'][0]:g}-"
+        f"{rep['data']['window_ms'][1]:g} ms, main-discharge clock",
+        fontsize=10.2,
     )
-    fig.get_layout_engine().set(rect=(0.0, 0.048, 1.0, 0.945))
+    fig.get_layout_engine().set(rect=(0.0, 0.058, 1.0, 0.938))
     fig.text(
         0.5,
-        0.022,
-        "Bars LEFT of the separators cannot reach a detector through any "
-        "window shown; bars RIGHT of them can. No transmission is applied "
-        "here -- this is the emission at the chord.",
+        0.030,
+        "Doppler broadening ONLY, on the adf15 line as listed: the 468.65 nm "
+        "fine-structure multiplet (~0.07 nm) and its Zeeman splitting at "
+        "1.4 kG (~0.01 nm) are NOT represented, nor is any instrumental "
+        "width.",
         fontsize=7.0,
         color="0.35",
         ha="center",
     )
     fig.text(
         0.5,
-        0.007,
+        0.017,
+        "Radiance assumes emissivity RADIALLY UNIFORM across the plasma disc "
+        "-- the 1D model has no radial profile. No transmission is applied "
+        "here; this is the emission at the chord.",
+        fontsize=7.0,
+        color="0.35",
+        ha="center",
+    )
+    fig.text(
+        0.5,
+        0.004,
         "Cutoffs are ASSUMED representative commercial parts read off "
         "manufacturer curves, NOT LAPD hardware; see the markdown product "
         "for each source, thickness/length and caveat.",
@@ -2044,6 +2283,7 @@ def figure_chord_power(rep, path_stem, dpi=180):
     for ext in ("pdf", "png"):
         fig.savefig(f"{path_stem}.{ext}", dpi=dpi)
     plt.close(fig)
+
 
 
 #: Bar colours for the three reported core diameters, bluest = smallest.
@@ -2319,6 +2559,13 @@ def print_console(rep):
             f"  port {fp['port']} / {s['short']} -- z {fp['z_cell_cm']:.2f} "
             f"cm, chord {fp['chord_length_cm']:.2f} cm  "
             f"(collected -> transmitted)"
+        )
+        target = INSET_LINE_NM[key]
+        m = int(np.argmin(np.abs(np.asarray(s["lambda_nm"]) - target)))
+        print(
+            f"    emitter T {got['emitter_T_eV']:.4f} eV "
+            f"({got['emitter_T_source']}) ; Doppler FWHM at "
+            f"{s['lambda_nm'][m]:.2f} nm = {got['doppler_fwhm_nm'][m]:.5f} nm"
         )
         order = np.argsort(-np.asarray(v["photons_per_s_transmitted"]))[:5]
         for i in order:
