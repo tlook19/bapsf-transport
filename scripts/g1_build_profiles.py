@@ -526,12 +526,19 @@ def main():
         fraction = np.where(
             has_annulus, annulus / geometry.neutral_volume_cm3, np.nan
         )
-        worst = int(np.nanargmin(fraction))
+        # Value plus the SPAN of the cells attaining it, never one index: the
+        # cap pins the share at 1 - AREA_CAP_FRACTION wherever it binds, so the
+        # minimum is a wide tie and a single "worst cell" is arbitrary. Counted
+        # on EXACT equality, which is narrower than the cap band -- each bore
+        # level rounds to its own double, so cells pinned at the cap on a
+        # different R_m print alike while comparing unequal.
+        smallest = float(np.nanmin(fraction))
+        tied = np.flatnonzero(fraction == smallest)
         say(
             f"  smallest PER-CELL annulus share (V_m - V_p)/V_m over the "
             f"cells that have an annulus, cap-bound cells included = "
-            f"{fraction[worst]:.6f} at cell {worst} "
-            f"(z = {geometry.z_cm[worst]:.3f} cm, role {geometry.cell_role[worst]}); "
+            f"{smallest:.6f}, attained exactly in {tied.size} tied cell(s) "
+            f"spanning {int(tied[0])}...{int(tied[-1])}; "
             f"guard neutral_annulus_volume_fraction_min = "
             f"{params.get('neutral_annulus_volume_fraction_min', 1e-2)}"
         )

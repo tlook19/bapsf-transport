@@ -1211,13 +1211,22 @@ def main():
     annulus = geometry.neutral_volume_cm3 - geometry.plasma_volume_cm3
     has_annulus = annulus > 0.0
     fraction = np.where(has_annulus, annulus / geometry.neutral_volume_cm3, np.nan)
-    worst = int(np.nanargmin(fraction))
+    # Reported as a value plus the SPAN of the cells attaining it, never as one
+    # index: wherever the area cap binds the share is 1 - AREA_CAP_FRACTION, so
+    # the minimum is a wide tie and any single "worst cell" is whichever member
+    # the argmin happened to reach. The tie is counted on EXACT equality, which
+    # is narrower than the cap band: each bore level rounds to its own double,
+    # so cells pinned at the cap on a different R_m print the same value while
+    # comparing unequal. Read the span as "where the cap binds", not as a
+    # boundary.
+    smallest = float(np.nanmin(fraction))
+    tied = np.flatnonzero(fraction == smallest)
     say(
         f"  smallest PER-CELL annulus share (V_m - V_p)/V_m over the cells "
-        f"that have an annulus, cap-bound cells included = "
-        f"{fraction[worst]:.6f} at cell {worst} (z = "
-        f"{geometry.z_cm[worst]:.3f} cm, role {geometry.cell_role[worst]}); "
-        f"guard neutral_annulus_volume_fraction_min = "
+        f"that have an annulus, cap-bound cells included = {smallest:.6f}, "
+        f"attained exactly in {tied.size} tied cell(s) spanning "
+        f"{int(tied[0])}...{int(tied[-1])}; guard "
+        f"neutral_annulus_volume_fraction_min = "
         f"{params.get('neutral_annulus_volume_fraction_min', 1e-2)}"
     )
     say(f"  cells with no annulus (V_ann == 0): {int(np.sum(~has_annulus))}")
