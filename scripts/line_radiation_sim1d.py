@@ -564,6 +564,47 @@ INSET_RETIRED_LINES_NM = {
     ),
 }
 
+# --- synthetic monochromator sweep ----------------------------------------
+
+#: Wavelength range the sweep is scanned over [nm].
+SWEEP_RANGE_NM = (300.0, 750.0)
+
+#: Minimum lambda0 samples per bandpass, and per Gaussian sigma, on the
+#: sweep grid.  The narrow-line bound matters: the cold He I lines are
+#: ~0.0036 nm FWHM, far narrower than any bandpass here, and a grid that
+#: resolves only the bandpass would misrepresent their area.
+SWEEP_POINTS_PER_BANDPASS = 25
+SWEEP_POINTS_PER_SIGMA = 4
+
+#: Entrance/exit slit width [um].  ENGINEER-SUPPLIED default.
+DEFAULT_SLIT_UM = 30.0
+
+#: Reciprocal linear dispersion [nm/mm].  UNKNOWN for the real instrument --
+#: the default is a placeholder and results are always reported across the
+#: bracket, never at the default alone.
+DEFAULT_DISPERSION_NM_PER_MM = 2.5
+DISPERSION_BRACKET_NM_PER_MM = (1.5, 2.5, 4.0)
+
+#: Spectrometer optical throughput: NA-into-f/# x grating x mirrors.
+#: ASSUMED single figure, not a measurement of any instrument.
+DEFAULT_SPECTROMETER_THROUGHPUT = 0.12
+
+#: PMT quantum efficiency.  ENGINEER-SUPPLIED figure.
+DEFAULT_PMT_QE = 0.3
+
+#: Flat fiber transmission the engineer quotes (2-3x the datasheet chain),
+#: printed alongside the datasheet result rather than replacing it.
+ENGINEER_FIBER_TRANSMISSION = 0.4
+
+#: Core diameters the sweep tabulates.
+SWEEP_CORE_COLUMNS_UM = (200.0, 400.0, 600.0)
+
+#: Line the sweep figure's zoom panel resolves.
+SWEEP_ZOOM_LINE_NM = 320.37
+
+#: Half-width of that zoom, in bandpasses.
+SWEEP_ZOOM_BANDPASSES = 6.0
+
 #: Core diameters reported as columns alongside the default [um].
 FIBER_CORE_COLUMNS_UM = (200.0, 400.0, 600.0)
 
@@ -1018,7 +1059,9 @@ def etendue_cm2_sr(core_um, na):
     }
 
 
-def fiber_at_port(stage, data, port, law, fibers, material, length_m):
+def fiber_at_port(
+    stage, data, port, law, fibers, material, length_m, flat_fiber_T=None
+):
     """Per-line chord radiance, collected power and TRANSMITTED signal.
 
     Two distinct quantities are carried per line and never conflated.
@@ -1059,7 +1102,23 @@ def fiber_at_port(stage, data, port, law, fibers, material, length_m):
     sigma_nm = fwhm_nm * FWHM_TO_SIGMA
 
     t_window = window_transmission(material, stage["lambda_nm"])
-    t_fiber = fiber_transmission(stage["lambda_nm"], length_m)
+    if flat_fiber_T is None:
+        t_fiber = fiber_transmission(stage["lambda_nm"], length_m)
+        t_fiber_source = f"datasheet chain at {length_m:g} m"
+    else:
+        # A flat override still respects the fiber's own transmission edge:
+        # a single number quoted for the visible says nothing about a line
+        # the fiber does not carry at all.
+        t_fiber = np.where(
+            np.asarray(stage["lambda_nm"])
+            < FIBER_ATTENUATION["opaque_below_nm"],
+            0.0,
+            float(flat_fiber_T),
+        )
+        t_fiber_source = (
+            f"FLAT override {float(flat_fiber_T):g} (datasheet chain "
+            "bypassed)"
+        )
     t_total = t_window * t_fiber
 
     per_fiber = {}
@@ -1104,6 +1163,7 @@ def fiber_at_port(stage, data, port, law, fibers, material, length_m):
         "doppler_sigma_nm": sigma_nm,
         "T_window": t_window,
         "T_fiber": t_fiber,
+        "T_fiber_source": t_fiber_source,
         "T_total": t_total,
         "fibers": per_fiber,
     }
@@ -1239,8 +1299,156 @@ def spectral_density(grid_nm, lam_nm, area, sigma_nm):
         if sigma <= 0.0 or a == 0.0:
             continue
         out += (a / (sigma * np.sqrt(2.0 * np.pi))) * np.exp(
-            -0.5 * ((out * 0.0 + grid_nm - centre) / sigma) ** 2
+            -0.5 * ((np.asarray(grid_nm, dtype=float) - centre) / sigma) ** 2
         )
+    return out
+
+
+# --- monochromator sweep ---------------------------------------------------
+
+
+def bandpass_nm(slit_um, dispersion_nm_per_mm):
+    """Spectral bandpass [nm] of equal entrance/exit slits.
+
+    ``slit_um * 1e-3`` converts the slit width to mm, which the reciprocal
+    linear dispersion then turns into nm.
+    """
+    return float(slit_um) * 1.0e-3 * float(dispersion_nm_per_mm)
+
+
+def slit_fraction(slit_um, core_um):
+    """Fraction of a butt-coupled fiber core the entrance slit admits.
+
+    1:1 imaging, so the core image is the core width and the slit crops it
+    in one dimension; a slit wider than the core admits all of it.
+    """
+    return min(1.0, float(slit_um) / float(core_um))
+
+
+def instrument_triangle(offsets_nm, bandpass):
+    """Equal-slit instrument function, PEAK-NORMALIZED to 1.
+
+    Two slits of equal width give a triangular slit function of base
+    ``2 * bandpass``.  It is peak-normalized, NOT area-normalized, and that
+    is the convention that makes the sweep come out in counts/s: a line much
+    narrower than the bandpass then passes ENTIRELY when the monochromator
+    sits on it, which is what a real instrument does.  (An area-normalized
+    triangle would carry units of 1/nm and leave the sweep in counts/s/nm --
+    a spectral density, not a count rate.)
+    """
+    x = np.abs(np.asarray(offsets_nm, dtype=float)) / float(bandpass)
+    return np.maximum(0.0, 1.0 - x)
+
+
+def sweep_curve(lam_nm, area_per_s, sigma_nm, bandpass, span=SWEEP_RANGE_NM):
+    """Scan a monochromator across the line set and return ``(lambda0, S)``.
+
+    ``S(lambda0)`` is the photon rate reaching the exit slit, in s^-1: the
+    line spectrum ``E(lambda) = sum_i G_i(lambda)`` (each Gaussian carrying
+    its own line's rate as its AREA) convolved with the peak-normalized slit
+    triangle.  No instrument efficiency is folded in here -- the caller
+    applies the slit, spectrometer and detector factors, so the same curve
+    serves both the fiber-exit and the PMT scale.
+
+    The grid resolves BOTH the bandpass and the narrowest line; the cold
+    He I lines are an order of magnitude narrower than any bandpass here, so
+    a bandpass-only criterion would under-sample them and lose their area.
+    """
+    lam_nm = np.asarray(lam_nm, dtype=float)
+    sigma_nm = np.asarray(sigma_nm, dtype=float)
+    lo, hi = span
+    step = min(
+        bandpass / SWEEP_POINTS_PER_BANDPASS,
+        float(sigma_nm.min()) / SWEEP_POINTS_PER_SIGMA,
+    )
+    grid = np.arange(lo, hi + step, step)
+    emission = spectral_density(grid, lam_nm, area_per_s, sigma_nm)
+
+    half = int(np.ceil(bandpass / step))
+    kernel = instrument_triangle(np.arange(-half, half + 1) * step, bandpass)
+    swept = np.convolve(emission, kernel, mode="same") * step
+    return grid, swept, step
+
+
+def merge_features(lam_nm, bandpass):
+    """Group lines the slit cannot separate: gaps of one bandpass or less."""
+    order = np.argsort(np.asarray(lam_nm, dtype=float))
+    groups, current = [], [int(order[0])]
+    for a, b in zip(order[:-1], order[1:]):
+        if lam_nm[b] - lam_nm[a] <= bandpass:
+            current.append(int(b))
+        else:
+            groups.append(current)
+            current = [int(b)]
+    groups.append(current)
+    return groups
+
+
+def sweep_at_port(stage, port_record, fibers, knobs):
+    """Peak count rates per resolvable feature, per dispersion and core.
+
+    Only lines the window and fiber actually transmit enter the sweep -- a
+    monochromator cannot scan onto a line the port window absorbed.
+    """
+    lam_all = np.asarray(stage["lambda_nm"])
+    sigma_all = np.asarray(port_record["doppler_sigma_nm"])
+    lo, hi = SWEEP_RANGE_NM
+    out = {"dispersions": {}, "knobs": dict(knobs)}
+
+    for disp in DISPERSION_BRACKET_NM_PER_MM:
+        bp = bandpass_nm(knobs["slit_um"], disp)
+        per_core = {}
+        curve_for_figure = None
+        for fib in fibers:
+            if fib["na"] != fibers[0]["na"]:
+                continue
+            tag = fiber_tag(fib)
+            rates = np.asarray(
+                port_record["fibers"][tag]["photons_per_s_transmitted"]
+            )
+            keep = np.flatnonzero(
+                (rates > 0.0) & (lam_all >= lo) & (lam_all <= hi)
+            )
+            if not keep.size:
+                per_core[tag] = {"fiber": fib, "features": [], "empty": True}
+                continue
+            grid, swept, step = sweep_curve(
+                lam_all[keep], rates[keep], sigma_all[keep], bp
+            )
+            f_slit = slit_fraction(knobs["slit_um"], fib["core_um"])
+            gain = f_slit * knobs["throughput"] * knobs["qe"]
+            feats = []
+            for grp in merge_features(lam_all[keep], bp):
+                idx = keep[grp]
+                centre = float(np.mean(lam_all[idx]))
+                halfwin = bp + 6.0 * float(sigma_all[idx].max())
+                sel = np.flatnonzero(np.abs(grid - centre) <= halfwin)
+                k = sel[int(np.argmax(swept[sel]))]
+                feats.append(
+                    {
+                        "lines_nm": [float(v) for v in lam_all[idx]],
+                        "centre_nm": centre,
+                        "peak_lambda0_nm": float(grid[k]),
+                        "exit_counts_per_s": float(swept[k]),
+                        "pmt_counts_per_s": float(swept[k] * gain),
+                        "merged": len(grp) > 1,
+                    }
+                )
+            per_core[tag] = {
+                "fiber": fib,
+                "f_slit": f_slit,
+                "gain": gain,
+                "features": feats,
+                "empty": False,
+            }
+            if fib is fibers[0]:
+                curve_for_figure = (grid, swept, gain, step)
+        out["dispersions"][f"{disp:g}"] = {
+            "dispersion_nm_per_mm": float(disp),
+            "bandpass_nm": bp,
+            "cores": per_core,
+            "curve": curve_for_figure,
+        }
     return out
 
 
@@ -2136,6 +2344,10 @@ def markdown_report(rep):
     )
     L.append("")
 
+    # --- monochromator sweep
+    if rep["sweeps"] is not None:
+        L.extend(markdown_sweep(rep))
+
     # --- window cutoff provenance
     L.append("## Window cutoffs and their sources")
     L.append("")
@@ -2183,6 +2395,176 @@ def markdown_report(rep):
 
 
 # --- figures --------------------------------------------------------------
+
+SWEEP_KNOB_CLASS = (
+    (
+        "slit width",
+        "slit_um",
+        "um",
+        "ENGINEER-SUPPLIED",
+        "equal entrance and exit slits, butt-coupled fiber, 1:1 imaging",
+    ),
+    (
+        "reciprocal linear dispersion",
+        "dispersion_nm_per_mm",
+        "nm/mm",
+        "UNKNOWN -- BRACKETED",
+        "not known for the real instrument; every result below is reported "
+        "across the full bracket and the default carries no privilege",
+    ),
+    (
+        "spectrometer throughput",
+        "throughput",
+        "-",
+        "ASSUMED",
+        "NA-into-f/# x grating efficiency x mirror reflectivities, collapsed "
+        "into one number; not a measurement of any instrument",
+    ),
+    (
+        "PMT quantum efficiency",
+        "qe",
+        "-",
+        "ENGINEER-SUPPLIED",
+        "single figure across the band; real QE is wavelength-dependent and "
+        "would reduce the red lines relative to the blue",
+    ),
+)
+
+
+def markdown_sweep(rep):
+    """The synthetic-monochromator section of the markdown product."""
+    knobs = rep["sweep_knobs"]
+    L = ["## Synthetic monochromator sweep (Figure C)", ""]
+    L.append(
+        "What a slit-and-PMT monochromator would record as it is scanned "
+        "through lambda0, built ONLY from lines the port window and the "
+        "fiber actually transmit -- a monochromator cannot scan onto a line "
+        "the window absorbed, so the EUV that carries most of the radiated "
+        "power is absent by construction."
+    )
+    L.append("")
+    L.append(
+        "`S(lambda0) = f_slit * eta_spec * QE * sum_i integral "
+        "G_i(lambda) I(lambda - lambda0) dlambda`, with `G_i` the thermal "
+        "Gaussian of Figure A carrying that line's TRANSMITTED photon rate "
+        "as its AREA, and `I` the equal-slit triangle of base "
+        "`2 * bandpass`."
+    )
+    L.append("")
+    L.append(
+        "**Slit-function normalization.** `I` is PEAK-normalized to 1, not "
+        "area-normalized. That is the convention that leaves `S` in "
+        "counts/s: a line much narrower than the bandpass then passes "
+        "ENTIRELY when the monochromator sits on it, which is what a real "
+        "instrument does. Dividing by `integral I dlambda` as well would "
+        "carry a spare factor of the bandpass and leave a spectral DENSITY "
+        "in counts/s/nm rather than a count rate."
+    )
+    L.append("")
+    L.append(
+        "**`f_slit = min(1, slit / core)`** is the SPATIAL crop only: the "
+        "butt-coupled core is imaged 1:1 onto the slit and the slit is "
+        "narrower than the core at every combination tabulated here, so most "
+        "of the collected light never enters the spectrometer. Note the "
+        "consequence in the tables: collected flux grows as core^2 while "
+        "`f_slit` falls as 1/core, so the PMT rate grows only LINEARLY with "
+        "core diameter once the core exceeds the slit."
+    )
+    L.append("")
+    L.append("### Knobs")
+    L.append("")
+    rows = []
+    for label, key, unit, cls, note in SWEEP_KNOB_CLASS:
+        rows.append([label, f"{knobs[key]:g}", unit, cls, note])
+    L.extend(_table(["knob", "value", "unit", "class", "note"], rows))
+    L.append("")
+    L.append(
+        f"Fiber transmission applied: **{rep['fiber_ports'][rep['fiber_panels'][0][0]]['stages'][rep['fiber_panels'][0][1]]['T_fiber_source']}**. "
+        f"The engineer's flat figure is {ENGINEER_FIBER_TRANSMISSION:g} "
+        "(about 2-3x the datasheet chain); pass `--fiber-transmission "
+        f"{ENGINEER_FIBER_TRANSMISSION:g}` to substitute it, which scales "
+        "every count rate below by the ratio of the two."
+    )
+    L.append("")
+    L.append("### Bandpass per dispersion")
+    L.append("")
+    rows = []
+    for disp in DISPERSION_BRACKET_NM_PER_MM:
+        rows.append(
+            [
+                f"{disp:g}",
+                f"{knobs['slit_um']:g}",
+                f"{bandpass_nm(knobs['slit_um'], disp):.4f}",
+                f"{2.0 * bandpass_nm(knobs['slit_um'], disp):.4f}",
+            ]
+        )
+    L.extend(
+        _table(
+            [
+                "dispersion [nm/mm]",
+                "slit [um]",
+                "bandpass Dlambda_bp [nm]",
+                "slit-function base [nm]",
+            ],
+            rows,
+        )
+    )
+    L.append("")
+    L.append("### Peak count rate per resolvable feature")
+    L.append("")
+    L.append(
+        "Peak of the sweep at each feature, in counts/ms. `fiber exit` sets "
+        "`f_slit = eta = QE = 1` and is what arrives at the spectrometer "
+        "entrance; `PMT` applies all three."
+    )
+    L.append("")
+    for pkey, key in rep["fiber_panels"]:
+        st = rep["stages"][key]
+        fp = rep["fiber_ports"][pkey]
+        sw = rep["sweeps"][pkey]
+        L.append(f"**Port {fp['port']} -- {st['label']}**")
+        L.append("")
+        rows = []
+        for disp in DISPERSION_BRACKET_NM_PER_MM:
+            block = sw["dispersions"][f"{disp:g}"]
+            for core in SWEEP_CORE_COLUMNS_UM:
+                tag = f"{core:.0f}um_NA{rep['fibers'][0]['na']:g}"
+                rec = block["cores"].get(tag)
+                if rec is None or rec.get("empty"):
+                    continue
+                for feat in sorted(
+                    rec["features"], key=lambda f: -f["pmt_counts_per_s"]
+                ):
+                    rows.append(
+                        [
+                            f"{disp:g}",
+                            f"{block['bandpass_nm']:.4f}",
+                            f"{core:.0f}",
+                            f"{rec['f_slit']:.4f}",
+                            ", ".join(f"{v:.2f}" for v in feat["lines_nm"]),
+                            "yes" if feat["merged"] else "no",
+                            _fmt(feat["exit_counts_per_s"] * 1.0e-3),
+                            _fmt(feat["pmt_counts_per_s"] * 1.0e-3),
+                        ]
+                    )
+        L.extend(
+            _table(
+                [
+                    "dispersion [nm/mm]",
+                    "bandpass [nm]",
+                    "core [um]",
+                    "f_slit",
+                    "line(s) [nm]",
+                    "merged?",
+                    "fiber exit [counts/ms]",
+                    "PMT [counts/ms]",
+                ],
+                rows,
+            )
+        )
+        L.append("")
+    return L
+
 
 CUTOFF_STYLE = ("tab:purple", "tab:olive", "tab:brown")
 
@@ -2493,10 +2875,174 @@ def figure_photon_counter(rep, path_stem, dpi=180):
     plt.close(fig)
 
 
+def figure_sweep(rep, path_stem, dpi=180):
+    """Figure C: the monochromator sweep as a slit + PMT would record it.
+
+    Count rate at the PMT against the wavelength the monochromator is set to,
+    at the default knobs.  A companion column resolves one feature so the
+    instrument-limited shape is visible: at these slit widths the bandpass is
+    comparable to the thermal width, so the recorded feature is neither the
+    line nor the slit function but their convolution.
+    """
+    cuts = rep["cutoffs"]
+    knobs = rep["sweep_knobs"]
+    disp_key = f"{knobs['dispersion_nm_per_mm']:g}"
+    lo, hi = SWEEP_RANGE_NM
+
+    fig = plt.figure(figsize=(13.6, 8.8), layout="constrained")
+    gs = fig.add_gridspec(2, 2, width_ratios=(3.0, 1.18))
+    axes = [fig.add_subplot(gs[r, 0]) for r in range(2)]
+    zooms = [fig.add_subplot(gs[r, 1]) for r in range(2)]
+
+    for ax, axz, (pkey, key) in zip(axes, zooms, rep["fiber_panels"]):
+        st = rep["stages"][key]
+        fp = rep["fiber_ports"][pkey]
+        sw = rep["sweeps"][pkey]["dispersions"][disp_key]
+        bp = sw["bandpass_nm"]
+        curve = sw["curve"]
+        if curve is None:
+            for a_ in (ax, axz):
+                a_.text(
+                    0.5, 0.5,
+                    "no transmitted line in the sweep range",
+                    transform=a_.transAxes, ha="center", va="center",
+                    fontsize=10, color="0.3",
+                )
+            continue
+        grid, swept, gain, _step = curve
+        counts_ms = swept * gain * 1.0e-3
+        top = max(float(counts_ms.max()), 1.0e-30)
+        floor = top * 1.0e-7
+        ax.plot(grid, np.maximum(counts_ms, floor), color="tab:blue", lw=0.9,
+                zorder=3)
+        ax.set_yscale("log")
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(floor, top * 30.0)
+        ax.grid(True, alpha=0.22, zorder=0)
+        ax.set_ylabel("PMT rate [counts ms$^{-1}$]", fontsize=9)
+
+        for k, cut in enumerate(cuts):
+            if not (lo <= cut["cutoff_nm"] <= hi):
+                continue
+            ax.axvline(cut["cutoff_nm"], color=CUTOFF_STYLE[k], ls="--",
+                       lw=1.5, zorder=5)
+            ax.annotate(
+                f"{cut['short']} {cut['cutoff_nm']:.0f} nm",
+                xy=(cut["cutoff_nm"], 0.985),
+                xycoords=("data", "axes fraction"),
+                xytext=(-3, 0), textcoords="offset points",
+                fontsize=6.8, color=CUTOFF_STYLE[k], ha="right", va="top",
+                rotation=90, zorder=7,
+            )
+        tagd = fiber_tag(rep["fibers"][0])
+        feats = sw["cores"][tagd]["features"]
+        placed = []
+        for feat in sorted(feats, key=lambda f: -f["pmt_counts_per_s"])[:8]:
+            c = feat["centre_nm"]
+            if any(abs(c - q) < 0.022 * (hi - lo) for q in placed):
+                continue
+            placed.append(c)
+            ax.annotate(
+                f"{c:.1f} nm",
+                xy=(feat["peak_lambda0_nm"],
+                    max(feat["pmt_counts_per_s"] * 1.0e-3, floor)),
+                xytext=(0, 4), textcoords="offset points",
+                fontsize=6.4, rotation=90, ha="center", va="bottom",
+                color="0.2", zorder=6,
+            )
+        ax.set_title(
+            f"Port {fp['port']} ({st['label']})  --  slit "
+            f"{knobs['slit_um']:g} um, {knobs['dispersion_nm_per_mm']:g} "
+            f"nm/mm, bandpass {bp:.4f} nm;  f_slit "
+            f"{sw['cores'][tagd]['f_slit']:.3f} x eta "
+            f"{knobs['throughput']:g} x QE {knobs['qe']:g}",
+            fontsize=9.0,
+        )
+
+        # companion: one feature resolved
+        target = SWEEP_ZOOM_LINE_NM if key == "he1" else INSET_LINE_NM[key]
+        feat = min(feats, key=lambda f: abs(f["centre_nm"] - target))
+        half = SWEEP_ZOOM_BANDPASSES * bp
+        sel = np.flatnonzero(np.abs(grid - feat["peak_lambda0_nm"]) <= half)
+        axz.plot(grid[sel] - feat["peak_lambda0_nm"],
+                 counts_ms[sel], color="tab:red", lw=1.5)
+        axz.axvspan(-bp, bp, color="0.85", zorder=0,
+                    label=f"bandpass $\\pm${bp:.3f} nm")
+        axz.set_xlim(-half, half)
+        axz.set_ylim(0.0, max(float(counts_ms[sel].max()) * 1.15, 1.0e-30))
+        lines_txt = ", ".join(f"{v:.2f}" for v in feat["lines_nm"])
+        axz.set_title(
+            f"resolved: {feat['centre_nm']:.2f} nm"
+            + (f"\n({len(feat['lines_nm'])} lines merged)"
+               if feat["merged"] else ""),
+            fontsize=8.5,
+        )
+        axz.set_xlabel(r"$\Delta\lambda_0$ from peak [nm]", fontsize=7.2,
+                       labelpad=1.0)
+        axz.set_ylabel("PMT rate [counts ms$^{-1}$]", fontsize=7.2)
+        axz.tick_params(labelsize=6.6)
+        axz.grid(True, alpha=0.2)
+        axz.legend(fontsize=6.4, loc="upper right", framealpha=0.9)
+        axz.annotate(
+            f"lines: {lines_txt} nm\npeak "
+            f"{feat['pmt_counts_per_s'] * 1.0e-3:.3e} counts/ms",
+            xy=(0.03, 0.97), xycoords="axes fraction", fontsize=6.2,
+            va="top", color="0.25",
+        )
+
+    axes[1].set_xlabel(r"$\lambda_0$, monochromator setting [nm]")
+    fig.suptitle(
+        f"Synthetic monochromator sweep -- {Path(rep['h5']).name}\n"
+        f"slit {knobs['slit_um']:g} $\\mu$m, dispersion "
+        f"{knobs['dispersion_nm_per_mm']:g} nm/mm (UNKNOWN for the real "
+        f"instrument -- see the markdown for the "
+        f"{DISPERSION_BRACKET_NM_PER_MM[0]:g}/"
+        f"{DISPERSION_BRACKET_NM_PER_MM[-1]:g} nm/mm bracket), core "
+        f"{rep['fibers'][0]['core_um']:.0f} $\\mu$m, "
+        f"eta {knobs['throughput']:g}, QE {knobs['qe']:g}",
+        fontsize=10.2,
+    )
+    fig.get_layout_engine().set(rect=(0.0, 0.048, 1.0, 0.938))
+    fig.text(
+        0.5, 0.030,
+        "Only lines the port window and the fiber transmit can be scanned "
+        "onto; the EUV lines that carry most of the radiated power are "
+        "absent by construction.",
+        fontsize=7.0, color="0.35", ha="center",
+    )
+    fig.text(
+        0.5, 0.017,
+        "Slit function is a peak-normalized triangle of base 2 x bandpass "
+        "(equal slits); the recorded feature is its convolution with the "
+        "thermal line, not either one alone.",
+        fontsize=7.0, color="0.35", ha="center",
+    )
+    fig.text(
+        0.5, 0.004,
+        "Throughput and QE are ASSUMED/engineer-supplied single figures, NOT "
+        "a calibration of any instrument; the count rates scale linearly "
+        "with both.",
+        fontsize=7.0, color="0.35", ha="center",
+    )
+    for ext in ("pdf", "png"):
+        fig.savefig(f"{path_stem}.{ext}", dpi=dpi)
+    plt.close(fig)
+
+
 # --- driver ---------------------------------------------------------------
 
 
-def build(h5_path, ports, window_ms, fiber_core_um, fiber_na, material, length_m):
+def build(
+    h5_path,
+    ports,
+    window_ms,
+    fiber_core_um,
+    fiber_na,
+    material,
+    length_m,
+    flat_fiber_T=None,
+    sweep_knobs=None,
+):
     """Assemble every number and every product input from the artifact."""
     data = read_window(h5_path, window_ms)
     stages = {}
@@ -2524,7 +3070,8 @@ def build(h5_path, ports, window_ms, fiber_core_um, fiber_na, material, length_m
             "port": int(port),
             "stages": {
                 key: fiber_at_port(
-                    stages[key], data, port, law, fibers, material, length_m
+                    stages[key], data, port, law, fibers, material, length_m,
+                    flat_fiber_T,
                 )
                 for key in STAGE_ORDER
             },
@@ -2543,6 +3090,16 @@ def build(h5_path, ports, window_ms, fiber_core_um, fiber_na, material, length_m
     # the ion stage, the second the neutral stage.
     panels = [(str(ports[0]), "he1"), (str(ports[-1]), "he0")]
 
+    sweeps = None
+    if sweep_knobs is not None:
+        sweeps = {
+            pk: sweep_at_port(
+                stages[key], fiber_ports[pk]["stages"][key], fibers,
+                sweep_knobs,
+            )
+            for pk, key in panels
+        }
+
     return {
         "h5": str(h5_path),
         "data": data,
@@ -2553,7 +3110,10 @@ def build(h5_path, ports, window_ms, fiber_core_um, fiber_na, material, length_m
         "port_law": {"z0_cm": law[0], "pitch_cm": law[1]},
         "window_material": material,
         "fiber_length_m": float(length_m),
+        "flat_fiber_T": flat_fiber_T,
         "cutoffs": cutoff_table(length_m),
+        "sweep_knobs": sweep_knobs,
+        "sweeps": sweeps,
         "port_radiance_crosscheck": port_radiance_crosscheck(h5_path, ports[-1]),
     }
 
@@ -2702,6 +3262,49 @@ def print_console(rep):
                 f"{b['photons_per_s_transmitted_total']:.4e} ph/s"
             )
 
+    if rep["sweeps"] is not None:
+        knobs = rep["sweep_knobs"]
+        print("")
+        print(
+            "[synthetic monochromator sweep -- slit "
+            f"{knobs['slit_um']:g} um, eta {knobs['throughput']:g}, QE "
+            f"{knobs['qe']:g}; dispersion UNKNOWN, bracketed]"
+        )
+        for disp in DISPERSION_BRACKET_NM_PER_MM:
+            print(
+                f"  dispersion {disp:g} nm/mm -> bandpass "
+                f"{bandpass_nm(knobs['slit_um'], disp):.4f} nm "
+                f"(slit-function base {2.0 * bandpass_nm(knobs['slit_um'], disp):.4f} nm)"
+            )
+        for pkey, key in rep["fiber_panels"]:
+            st = rep["stages"][key]
+            fp = rep["fiber_ports"][pkey]
+            sw = rep["sweeps"][pkey]
+            print("")
+            print(f"  port {fp['port']} / {st['short']} -- peak counts/ms")
+            for disp in DISPERSION_BRACKET_NM_PER_MM:
+                block = sw["dispersions"][f"{disp:g}"]
+                for core in SWEEP_CORE_COLUMNS_UM:
+                    tag = f"{core:.0f}um_NA{rep['fibers'][0]['na']:g}"
+                    rec = block["cores"].get(tag)
+                    if rec is None or rec.get("empty"):
+                        continue
+                    for feat in sorted(
+                        rec["features"], key=lambda f: -f["pmt_counts_per_s"]
+                    ):
+                        lines_txt = ",".join(
+                            f"{v:.2f}" for v in feat["lines_nm"]
+                        )
+                        print(
+                            f"    disp {disp:>4g} bp "
+                            f"{block['bandpass_nm']:.4f} nm  core "
+                            f"{core:>4.0f} um  f_slit {rec['f_slit']:.4f}  "
+                            f"[{lines_txt}]"
+                            f"{' MERGED' if feat['merged'] else ''}  "
+                            f"exit {feat['exit_counts_per_s'] * 1e-3:.4e}  "
+                            f"PMT {feat['pmt_counts_per_s'] * 1e-3:.4e}"
+                        )
+
     print("")
     print("[window cutoffs -- ASSUMED representative parts, not LAPD hardware]")
     for cut in rep["cutoffs"]:
@@ -2763,6 +3366,45 @@ def _parser():
         default=2.0,
         help="fiber run length [m]; sets the bulk attenuation",
     )
+    parser.add_argument(
+        "--fiber-transmission",
+        type=float,
+        default=None,
+        help="flat fiber transmission replacing the datasheet chain "
+        f"(the engineer's figure is {ENGINEER_FIBER_TRANSMISSION:g}); the "
+        "datasheet result is printed either way",
+    )
+    parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="also run the synthetic monochromator sweep and write Figure C",
+    )
+    parser.add_argument(
+        "--slit-um",
+        type=float,
+        default=DEFAULT_SLIT_UM,
+        help="entrance/exit slit width [um] (equal slits)",
+    )
+    parser.add_argument(
+        "--dispersion-nm-per-mm",
+        type=float,
+        default=DEFAULT_DISPERSION_NM_PER_MM,
+        help="reciprocal linear dispersion [nm/mm]; UNKNOWN for the real "
+        "instrument, so results are always reported across the bracket "
+        "as well",
+    )
+    parser.add_argument(
+        "--spectrometer-throughput",
+        type=float,
+        default=DEFAULT_SPECTROMETER_THROUGHPUT,
+        help="NA-into-f/# x grating x mirrors (an ASSUMED single figure)",
+    )
+    parser.add_argument(
+        "--pmt-qe",
+        type=float,
+        default=DEFAULT_PMT_QE,
+        help="PMT quantum efficiency",
+    )
     parser.add_argument("--dpi", type=int, default=180)
     return parser
 
@@ -2785,6 +3427,35 @@ def main(argv=None):
         raise ArtifactRefused(
             f"--fiber-length-m must be positive; got {args.fiber_length_m}"
         )
+    if args.fiber_transmission is not None and not (
+        0.0 < args.fiber_transmission <= 1.0
+    ):
+        raise ArtifactRefused(
+            "--fiber-transmission must lie in (0, 1]; got "
+            f"{args.fiber_transmission}"
+        )
+    for name, value in (
+        ("--slit-um", args.slit_um),
+        ("--dispersion-nm-per-mm", args.dispersion_nm_per_mm),
+    ):
+        if value <= 0.0:
+            raise ArtifactRefused(f"{name} must be positive; got {value}")
+    for name, value in (
+        ("--spectrometer-throughput", args.spectrometer_throughput),
+        ("--pmt-qe", args.pmt_qe),
+    ):
+        if not (0.0 < value <= 1.0):
+            raise ArtifactRefused(f"{name} must lie in (0, 1]; got {value}")
+
+    sweep_knobs = None
+    if args.sweep:
+        sweep_knobs = {
+            "slit_um": args.slit_um,
+            "dispersion_nm_per_mm": args.dispersion_nm_per_mm,
+            "throughput": args.spectrometer_throughput,
+            "qe": args.pmt_qe,
+        }
+
     rep = build(
         args.h5,
         [int(p) for p in args.ports],
@@ -2793,6 +3464,8 @@ def main(argv=None):
         args.fiber_na,
         args.window,
         args.fiber_length_m,
+        args.fiber_transmission,
+        sweep_knobs,
     )
 
     stem = args.output_stem
@@ -2804,6 +3477,8 @@ def main(argv=None):
     tag = f"p{args.ports[0]}_p{args.ports[1]}"
     figure_chord_power(rep, f"{stem}_chord_power_{tag}", dpi=args.dpi)
     figure_photon_counter(rep, f"{stem}_photon_counter_{tag}", dpi=args.dpi)
+    if rep["sweeps"] is not None:
+        figure_sweep(rep, f"{stem}_synthetic_sweep_{tag}", dpi=args.dpi)
     md = Path(f"{stem}_line_radiation.md")
     md.write_text(markdown_report(rep))
 
@@ -2813,6 +3488,9 @@ def main(argv=None):
     print(f"wrote {stem}_chord_power_{tag}.png")
     print(f"wrote {stem}_photon_counter_{tag}.pdf")
     print(f"wrote {stem}_photon_counter_{tag}.png")
+    if rep["sweeps"] is not None:
+        print(f"wrote {stem}_synthetic_sweep_{tag}.pdf")
+        print(f"wrote {stem}_synthetic_sweep_{tag}.png")
     print(f"wrote {md}")
     return 0
 
