@@ -541,12 +541,28 @@ FWHM_TO_SIGMA = 1.0 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
 #: Spectrum drawing window [nm].
 SPECTRUM_RANGE_NM = (20.0, 750.0)
 
-#: Inset half-width [nm] and the line each panel zooms on.
-INSET_HALF_WIDTH_NM = 0.15
-INSET_LINE_NM = {"he1": 468.65, "he0": 587.75}
+#: Line each zoom panel resolves.  He II 320.37 nm is the n = 5 -> 3
+#: transition; He I 587.75 nm is the visible workhorse.
+INSET_LINE_NM = {"he1": 320.37, "he0": 587.75}
 
-#: Multiplier on Ti for the dashed comparison trace in the He II inset.
-INSET_HOT_FACTOR = 4.0
+#: Half-width of the SHARED zoom axis [nm], as an offset from line centre.
+#: Both panels use it so the two widths are read against one ruler; it holds
+#: the widest Gaussian drawn (He II 320.37 nm at ~7.4 eV, FWHM ~0.034 nm) to
+#: well beyond +/-3 sigma.
+INSET_HALF_WIDTH_NM = 0.1
+
+#: Fixed temperature of the dashed comparison trace in the He II zoom [eV].
+INSET_COMPARISON_T_EV = 1.0
+
+#: adf15 lines kept in the line-shape record but no longer drawn, with the
+#: reason.  Retained so a reader of the table is not left wondering.
+INSET_RETIRED_LINES_NM = {
+    "he1": (
+        468.65,
+        "superseded as the He II zoom subject by 320.37 nm; its FWHM is "
+        "still tabulated for the record",
+    ),
+}
 
 #: Core diameters reported as columns alongside the default [um].
 FIBER_CORE_COLUMNS_UM = (200.0, 400.0, 600.0)
@@ -1635,49 +1651,112 @@ def markdown_report(rep):
         "draws, and nothing here brackets that."
     )
     L.append("")
+    L.append(
+        f"Both zoom panels share ONE offset axis (+/-"
+        f"{INSET_HALF_WIDTH_NM:g} nm about the line centre) and ONE "
+        "normalization, so the two thermal widths are read against a single "
+        "ruler. The peaks differ by more than two orders of magnitude "
+        "between the stages, which on a shared linear axis would leave the "
+        "narrower line invisible, so both traces are PEAK-NORMALIZED and the "
+        "axis label says so. The dashed He II trace carries the SAME AREA as "
+        "the solid one and is divided by the SAME factor, so a colder ion "
+        "population reads correctly as a taller, narrower line."
+    )
+    L.append("")
     rows = []
+    drawn = {}
     for pk, key in rep["fiber_panels"]:
         fp = rep["fiber_ports"][pk]
         s_ = rep["stages"][key]
         got = fp["stages"][key]
+        lam_all = np.asarray(s_["lambda_nm"])
         target = INSET_LINE_NM[key]
-        m = int(np.argmin(np.abs(np.asarray(s_["lambda_nm"]) - target)))
+        m = int(np.argmin(np.abs(lam_all - target)))
+        drawn[key] = (fp, s_, got, m)
         rows.append(
             [
                 str(fp["port"]),
                 s_["short"],
+                f"{lam_all[m]:.2f}",
                 f"{got['emitter_T_eV']:.4f}",
                 got["emitter_T_source"],
-                f"{s_['lambda_nm'][m]:.2f}",
                 f"{got['doppler_fwhm_nm'][m]:.5f}",
+                "yes (solid)",
             ]
         )
+        if key == "he1":
+            t_cmp = INSET_COMPARISON_T_EV
+            rows.append(
+                [
+                    str(fp["port"]),
+                    s_["short"],
+                    f"{lam_all[m]:.2f}",
+                    f"{t_cmp:.4f}",
+                    "fixed comparison temperature, not from the run",
+                    f"{float(doppler_fwhm_nm(lam_all[m], t_cmp)):.5f}",
+                    "yes (dashed)",
+                ]
+            )
+        retired = INSET_RETIRED_LINES_NM.get(key)
+        if retired is not None:
+            r_nm, r_why = retired
+            k = int(np.argmin(np.abs(lam_all - r_nm)))
+            rows.append(
+                [
+                    str(fp["port"]),
+                    s_["short"],
+                    f"{lam_all[k]:.2f}",
+                    f"{got['emitter_T_eV']:.4f}",
+                    got["emitter_T_source"],
+                    f"{got['doppler_fwhm_nm'][k]:.5f}",
+                    f"NOT DRAWN -- {r_why}",
+                ]
+            )
     L.extend(
         _table(
             [
                 "port",
                 "stage",
-                "emitter T [eV]",
+                "line [nm]",
+                "T [eV]",
                 "source of that T",
-                "inset line [nm]",
                 "Doppler FWHM [nm]",
+                "drawn in the zoom panel?",
             ],
             rows,
         )
     )
     L.append("")
+    fp1, s1, got1, m1 = drawn["he1"]
+    zoom_nm = float(np.asarray(s1["lambda_nm"])[m1])
+    zoom_fwhm = float(got1["doppler_fwhm_nm"][m1])
+    k468 = int(np.argmin(np.abs(np.asarray(s1["lambda_nm"]) - 468.65)))
+    fwhm468 = float(got1["doppler_fwhm_nm"][k468])
     L.append(
         "**What the line shape omits.** Doppler broadening is the ONLY "
-        "mechanism applied, to the adf15 line AS THAT FILE LISTS IT. The "
-        "He II 468.65 nm feature is in reality a FINE-STRUCTURE MULTIPLET "
-        "spread over about 0.07 nm, and at the LAPD's 1.4 kG it is "
-        "additionally ZEEMAN-SPLIT by about 0.01 nm; NEITHER is represented "
-        "here. Since the 0.07 nm multiplet spread is comparable to the "
-        f"{rows[0][5]} nm thermal FWHM this instrument draws for it, the "
-        "single Gaussian in the He II inset is the THERMAL ENVELOPE of a "
-        "blended feature, not a resolved line profile -- do not read a "
-        "temperature off its width without unfolding the multiplet first. "
-        "Stark and instrumental widths are likewise absent."
+        "mechanism applied, to the adf15 line AS THAT FILE LISTS IT; Stark "
+        "and instrumental widths are absent, and so is any fine or magnetic "
+        "structure. Two consequences worth stating separately:"
+    )
+    L.append("")
+    L.append(
+        f"* The He II **468.65 nm** line (tabulated above, NOT drawn) is in "
+        "reality a FINE-STRUCTURE MULTIPLET spread over about 0.07 nm, and "
+        "at the LAPD's 1.4 kG it is additionally ZEEMAN-SPLIT by about "
+        f"0.01 nm. That 0.07 nm spread EXCEEDS the {fwhm468:.5f} nm thermal "
+        "FWHM tabulated for it, so a single Gaussian there would be the "
+        "thermal envelope of a blended feature rather than a line profile -- "
+        "no temperature could be read off its width without unfolding the "
+        "multiplet first."
+    )
+    L.append(
+        f"* The He II **{zoom_nm:.2f} nm** line now drawn in the zoom panel "
+        "is the n = 5 -> 3 transition. It carries its own fine structure and "
+        f"the same ~0.01 nm Zeeman splitting at 1.4 kG, and neither is "
+        f"represented here either; against its {zoom_fwhm:.5f} nm thermal "
+        "FWHM the Zeeman term is the smaller correction, but this remains a "
+        "thermal envelope of the adf15 line as listed, not a synthetic "
+        "profile to fit."
     )
     L.append("")
 
@@ -2126,6 +2205,7 @@ def figure_chord_power(rep, path_stem, dpi=180):
     axes = [fig.add_subplot(gs[r, 0]) for r in range(2)]
     zooms = [fig.add_subplot(gs[r, 1]) for r in range(2)]
 
+    zoom_ymax = 1.0
     for ax, axin, (pkey, key) in zip(axes, zooms, rep["fiber_panels"]):
         fp = rep["fiber_ports"][pkey]
         s = rep["stages"][key]
@@ -2195,38 +2275,46 @@ def figure_chord_power(rep, path_stem, dpi=180):
             fontsize=9.5,
         )
 
-        # --- inset: one line resolved at the same temperature
+        # --- zoom: one line resolved, on the SHARED offset axis.
+        # Both panels use one Delta-lambda span and one normalization, so the
+        # two thermal widths are read against a single ruler.  The peaks
+        # themselves differ by more than two orders of magnitude between the
+        # stages, which would leave the narrower line invisible on a shared
+        # linear axis -- hence peak-normalized, stated in the axis label.
         target = INSET_LINE_NM[key]
         m = int(np.argmin(np.abs(lam - target)))
         half = INSET_HALF_WIDTH_NM
-        gi = np.linspace(lam[m] - half, lam[m] + half, 1600)
-        di = spectral_density(gi, [lam[m]], [area[m]], [sigma[m]])
-        axin.plot(gi, di, color="tab:red", lw=1.4,
+        dl = np.linspace(-half, half, 2400)
+        di = spectral_density(dl + lam[m], [lam[m]], [area[m]], [sigma[m]])
+        norm = max(float(di.max()), 1.0e-300)
+        axin.plot(dl, di / norm, color="tab:red", lw=1.5,
                   label=f"T = {got['emitter_T_eV']:.3g} eV")
         note = (
-            f"FWHM {fwhm[m]:.4f} nm\n@ {got['emitter_T_eV']:.3g} eV"
+            f"FWHM {fwhm[m]:.4f} nm @ {got['emitter_T_eV']:.3g} eV"
         )
         if key == "he1":
-            t_hot = got["emitter_T_eV"] * INSET_HOT_FACTOR
-            s_hot = doppler_fwhm_nm(lam[m], t_hot) * FWHM_TO_SIGMA
-            d_hot = spectral_density(gi, [lam[m]], [area[m]], [s_hot])
-            axin.plot(gi, d_hot, color="0.35", ls="--", lw=1.2,
-                      label=f"T x {INSET_HOT_FACTOR:g} = {t_hot:.3g} eV")
-            note += (
-                f"\nx{INSET_HOT_FACTOR:g} T: "
-                f"{doppler_fwhm_nm(lam[m], t_hot):.4f} nm"
-            )
+            t_cmp = INSET_COMPARISON_T_EV
+            f_cmp = float(doppler_fwhm_nm(lam[m], t_cmp))
+            s_cmp = f_cmp * FWHM_TO_SIGMA
+            d_cmp = spectral_density(dl + lam[m], [lam[m]], [area[m]], [s_cmp])
+            # Same AREA, normalized by the SAME factor as the solid trace, so
+            # the colder line reads correctly as taller and narrower.
+            axin.plot(dl, d_cmp / norm, color="0.35", ls="--", lw=1.3,
+                      label=f"T = {t_cmp:g} eV")
+            zoom_ymax = max(zoom_ymax, float((d_cmp / norm).max()))
+            note += f"\nFWHM {f_cmp:.4f} nm @ {t_cmp:g} eV"
             axin.legend(fontsize=6.4, loc="upper right", framealpha=0.9)
+        axin.set_xlim(-half, half)
         axin.set_title(
-            f"resolved: {lam[m]:.2f} nm, $\\pm${half:g} nm", fontsize=8.0
+            f"resolved: {lam[m]:.2f} nm", fontsize=8.5
         )
         axin.tick_params(labelsize=6.6)
-        axin.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
-        axin.yaxis.get_offset_text().set_fontsize(6.2)
-        axin.set_xlabel(r"$\lambda$ [nm]", fontsize=7.2, labelpad=1.0)
+        axin.set_xlabel(
+            r"$\Delta\lambda$ from line centre [nm]", fontsize=7.2,
+            labelpad=1.0,
+        )
         axin.set_ylabel(
-            "spectral radiance\n[W cm$^{-2}$ sr$^{-1}$ nm$^{-1}$]",
-            fontsize=7.0,
+            "spectral radiance,\npeak-normalized", fontsize=7.2
         )
         axin.grid(True, alpha=0.2)
         axin.annotate(
@@ -2237,6 +2325,9 @@ def figure_chord_power(rep, path_stem, dpi=180):
             va="top",
             color="0.25",
         )
+
+    for axin in zooms:
+        axin.set_ylim(0.0, zoom_ymax * 1.12)
 
     axes[1].set_xlabel(r"$\lambda_{vac}$ [nm]")
     fig.suptitle(
@@ -2252,10 +2343,11 @@ def figure_chord_power(rep, path_stem, dpi=180):
     fig.text(
         0.5,
         0.030,
-        "Doppler broadening ONLY, on the adf15 line as listed: the 468.65 nm "
-        "fine-structure multiplet (~0.07 nm) and its Zeeman splitting at "
-        "1.4 kG (~0.01 nm) are NOT represented, nor is any instrumental "
-        "width.",
+        "Doppler broadening ONLY, on the adf15 line as listed: fine "
+        "structure and the ~0.01 nm Zeeman splitting at 1.4 kG are NOT "
+        "represented, nor is any instrumental width. The He II 468.65 nm "
+        "multiplet (~0.07 nm spread, wider than its own thermal width) is "
+        "tabulated in the markdown but deliberately not drawn.",
         fontsize=7.0,
         color="0.35",
         ha="center",
@@ -2561,12 +2653,28 @@ def print_console(rep):
             f"(collected -> transmitted)"
         )
         target = INSET_LINE_NM[key]
-        m = int(np.argmin(np.abs(np.asarray(s["lambda_nm"]) - target)))
+        lam_all = np.asarray(s["lambda_nm"])
+        m = int(np.argmin(np.abs(lam_all - target)))
         print(
             f"    emitter T {got['emitter_T_eV']:.4f} eV "
             f"({got['emitter_T_source']}) ; Doppler FWHM at "
-            f"{s['lambda_nm'][m]:.2f} nm = {got['doppler_fwhm_nm'][m]:.5f} nm"
+            f"{lam_all[m]:.2f} nm = {got['doppler_fwhm_nm'][m]:.5f} nm"
         )
+        if key == "he1":
+            t_cmp = INSET_COMPARISON_T_EV
+            print(
+                f"      zoom comparison: FWHM at {lam_all[m]:.2f} nm, "
+                f"T = {t_cmp:g} eV = "
+                f"{float(doppler_fwhm_nm(lam_all[m], t_cmp)):.5f} nm"
+            )
+            retired = INSET_RETIRED_LINES_NM.get(key)
+            if retired is not None:
+                k = int(np.argmin(np.abs(lam_all - retired[0])))
+                print(
+                    f"      not drawn (record only): FWHM at "
+                    f"{lam_all[k]:.2f} nm = "
+                    f"{got['doppler_fwhm_nm'][k]:.5f} nm"
+                )
         order = np.argsort(-np.asarray(v["photons_per_s_transmitted"]))[:5]
         for i in order:
             print(
