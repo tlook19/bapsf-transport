@@ -58,17 +58,29 @@ L_chord = 2 Rp(z) and radiance L_i = eps_i * L_chord / (4 pi).  This is a
 stated construction, not a measurement, and it is repeated in every product
 this script writes.
 
-SYNTHETIC FIBER -- AN UPPER BOUND.  The collection model is a BARE fiber
-looking at the plasma with NO collection optics, and the imaged spot at the
-plasma is taken to be approximately the fiber core width.  Collected power is
-then P_i = L_i * G with G = A * Omega the fiber etendue, A = pi*(d/2)^2 the
-core area and Omega = pi * NA^2 the acceptance solid angle; photon rate is
-N_i = P_i * lambda_i / (hc).  This is an UPPER BOUND on collection: a real
-train loses light at every surface, and adding a collimating lens cannot
-raise it, because a lens CONSERVES etendue -- it trades angular acceptance
-for collection area, changing the field of view rather than G.  The fiber
-geometry is ASSUMED hardware, not measured -- see ``ASSUMPTIONS``, which is
-emitted verbatim into the markdown product.
+SYNTHETIC FIBER -- AN UPPER BOUND, AND IT SITS OUTSIDE THE WINDOW.  The
+collection model is a BARE fiber looking into the machine THROUGH a port
+window, with NO collection optics, and the imaged spot at the plasma is taken
+to be approximately the fiber core width.  Two quantities follow and are
+never conflated:
+
+    collected     P_i = L_i * G                     [W, at the fiber face]
+    transmitted   P_i * T_window(lambda) * T_fiber(lambda, L)   [W]
+
+with G = A * Omega the fiber etendue, A = pi*(d/2)^2 the core area and
+Omega = pi * NA^2 the acceptance solid angle; photon rate is
+N_i = P_i * lambda_i / (hc).  The TRANSMITTED column is the photon-counter
+number: the fiber cannot see a line its window absorbs, and the He resonance
+lines that carry almost all the radiated power are exactly those lines.
+T_window and T_fiber are datasheet curve readings tabulated in
+``WINDOW_TRANSMISSION`` and ``FIBER_ATTENUATION``; the fiber's two silica/air
+end faces are applied separately because the attenuation curve is bulk fiber
+only.  This remains an UPPER BOUND: a real train loses light at every further
+surface, and adding a collimating lens cannot raise it, because a lens
+CONSERVES etendue -- it trades angular acceptance for collection area,
+changing the field of view rather than G.  The fiber geometry, the window
+material and the fiber length are ASSUMED hardware, not measured -- see
+``ASSUMPTIONS``, which is emitted verbatim into the markdown product.
 
 WINDOW CUTOFFS.  The three 50 % transmission cutoffs drawn on the figures are
 ASSUMED representative values for generic commercial parts, each carrying its
@@ -95,6 +107,192 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+
+#: Silica/air end-face transmission, one face.  DERIVED from R = ((n-1)/(n+1))^2
+#: at n = 1.46 (Heraeus Suprasil n(lambda) table, 546-633 nm): R = 0.0350.
+FIBER_END_FACE_TRANSMISSION = 0.965
+
+FIBER_END_FACE_SOURCE = (
+    "DERIVED from R = ((n-1)/(n+1))^2 with n from the Suprasil refractive-"
+    "index table in the Heraeus datasheet below (n = 1.46008 at 546.07 nm, "
+    "1.45702 at 632.8 nm; Fiberguide's own core index 1.457 at 633 nm agrees "
+    "to 2e-5). Held FLAT: across 200-700 nm the true per-face value runs "
+    "0.9534 to 0.9656 (two faces 0.9090 to 0.9324), so a flat two-face 0.931 "
+    "is within about +/-1.3 %, far inside the fiber attenuation's own "
+    "uncertainty. Wavelength-dependent Fresnel would be false precision "
+    "here. Multiple-reflection form (1-R)/(1+R) differs from (1-R)^2 by "
+    "0.1 % and is ignored; NA 0.22 launch angles change R by < 0.05 % "
+    "absolute, so normal incidence is used."
+)
+
+#: Port-window EXTERNAL transmission curves, read off manufacturer figures.
+#: ASSUMED representative parts -- the LAPD viewport material is NOT known
+#: here.  Neither datasheet tabulates transmission against wavelength, so
+#: every point is a curve reading or a value derived from numbers the same
+#: document does tabulate; the ``tag`` on each point says which.
+WINDOW_TRANSMISSION = {
+    "fused_silica": {
+        "material": "UV-grade fused silica (Heraeus Suprasil 1/2 Grade A)",
+        "short": "UV fused silica",
+        "thickness": "10 mm",
+        "basis": (
+            "EXTERNAL transmission, Fresnel included -- the panel header "
+            "reads 'Measured transmission including Fresnel reflection "
+            "losses (1-R)^2' and its legend 'Sample thickness: 10 mm'"
+        ),
+        "figure": (
+            "Heraeus, 'Quartz Glass for Optics -- Data and Properties', "
+            "HQS-SO, footer '05.2011/W1-A_E', p.7 of 8, MIDDLE panel of "
+            "three; blue 'Suprasil 1 / 2 Grade A' curve; axes 'Transmission "
+            "(%)' 0-100 and 'Wavelength (nm)' 150-300 linear"
+        ),
+        "source": (
+            "https://sites.astro.caltech.edu/sedm/_downloads/"
+            "2562e19ff76ec4ab03f0598d537f8428/Heraeus_SiO2-May-2011.pdf"
+        ),
+        "caveat": (
+            "There is NO flat plateau: above about 210 nm the curve lies on "
+            "the document's own (1-R)^2 Fresnel line, which RISES with "
+            "dispersion from 0.909 at 200 nm to 0.934 at 1000 nm. Points at "
+            "and above 193.4 nm are therefore DERIVED as (Fresnel ceiling "
+            "from the tabulated n) x (tabulated internal transmission: "
+            "98.50 % at 193.4 nm, 99.50 % at 248.4 nm, 99.90 % at 266 nm, "
+            "10 mm) rather than read off the plot -- they are better than a "
+            "curve read. The 150-190 nm points ARE curve reads, off a page "
+            "raster at about 1.3 px/nm, and the VUV edge is steep: the 50 % "
+            "point is 168 +/- 4 nm and the 165 nm reading alone spans "
+            "0.05-0.45. A THINNER window cuts bluer; 10 mm is the "
+            "datasheet's sample, not an LAPD viewport thickness."
+        ),
+        "opaque_below_nm": 150.0,
+        "points_nm_T": (
+            (150.0, 0.000),
+            (160.0, 0.020),
+            (165.0, 0.250),
+            (170.0, 0.650),
+            (175.0, 0.840),
+            (180.0, 0.870),
+            (190.0, 0.890),
+            (193.4, 0.893),
+            (200.0, 0.900),
+            (248.4, 0.915),
+            (266.0, 0.921),
+            (350.0, 0.927),
+            (500.0, 0.931),
+            (700.0, 0.932),
+            (1000.0, 0.934),
+        ),
+    },
+    "borosilicate": {
+        "material": "borosilicate glass (SCHOTT BOROFLOAT 33)",
+        "short": "borosilicate",
+        "thickness": "3.30 mm",
+        "basis": (
+            "external transmission, Fresnel included (INFERRED, not stated: "
+            "the axis reads only 'Transmission [%]', but its 0.91-0.92 "
+            "plateau sits just under the (1-R)^2 = 0.9286 ceiling computed "
+            "from the sheet's own n_d = 1.47140, whereas an internal axis "
+            "would plateau near 0.99)"
+        ),
+        "figure": (
+            "SCHOTT Technical Glass Solutions, 'BOROFLOAT 33 -- Optical "
+            "Properties' (2014, PDF internal title "
+            "'140827_schott_b33_opt_en.indd'), p.1 lower-right panel "
+            "'Transmission in UV range', 3.30 mm curve of the five-thickness "
+            "legend; axes 'Transmission [%]' 0-100 and 'Wavelength lambda "
+            "[nm]' 250-400. The 500 and 700 nm points come off the same "
+            "sheet's coarse 0-6000 nm 'Transmission' panel."
+        ),
+        "source": (
+            "https://www.schott.com/en-gb/products/borofloat/-/media/project/"
+            "onex/products/b/borofloat/downloads/borofloat33_opt_eng_web.pdf"
+        ),
+        "caveat": (
+            "The sheet's own tables are marked 'Reference values, not "
+            "guaranteed values.' Its FIVE-THICKNESS panel is used here and "
+            "is self-consistent across all five curves within reading error. "
+            "Its SEPARATE 6.5 mm panel is NOT: that curve reaches 50 % at "
+            "about 300 nm, bluer than both the 5.00 mm (316-320 nm) and the "
+            "3.30 mm (306-312 nm) curves, which is impossible for one glass "
+            "-- Beer-Lambert from the 3.30/5.00 pair predicts T(6.5 mm, "
+            "310 nm) = 0.27 against the 0.68 plotted. The 6.5 mm panel is "
+            "DISCARDED, in both the 2014 sheet and the older brochure that "
+            "reproduces it; neither edition comments on the discrepancy. "
+            "3.30 mm is the datasheet's thickness, not an LAPD viewport's."
+        ),
+        "opaque_below_nm": 265.0,
+        "points_nm_T": (
+            (265.0, 0.000),
+            (270.0, 0.020),
+            (280.0, 0.070),
+            (290.0, 0.170),
+            (300.0, 0.320),
+            (303.0, 0.380),
+            (310.0, 0.500),
+            (320.0, 0.680),
+            (350.0, 0.880),
+            (400.0, 0.915),
+            (500.0, 0.920),
+            (700.0, 0.920),
+        ),
+    },
+}
+
+#: Fiber bulk attenuation, read off the manufacturer figure and converted
+#: from its plotted dB/km to dB/m.  ASSUMED representative part.
+FIBER_ATTENUATION = {
+    "material": "solarization-resistant high-OH UV fiber (Fiberguide "
+    "Solarguide, silica core / F-doped clad, hydrogen infused)",
+    "basis": (
+        "BULK fiber attenuation, end faces EXCLUDED -- an INFERENCE, not a "
+        "datasheet statement: the sheet never says what the curve measures, "
+        "but dB/km is by definition a per-length loss and spectral "
+        "attenuation is conventionally measured by cut-back, which cancels "
+        "end-face reflection. The two silica/air faces are therefore applied "
+        "separately here."
+    ),
+    "figure": (
+        "Fiberguide Industries, 'Solarguide Solarization Resistant UV "
+        "Fiber', p.2 UPPER plot; y-axis labelled verbatim 'Attenuation "
+        "(dB/km)' on a log scale, x-axis 'Wavelength (nm)' 0-1800 linear; "
+        "values below divided by 1000 to reach dB/m. The plot carries NO "
+        "title, NO fiber length, NO core size and NO typ/max designation."
+    ),
+    "source": (
+        "https://shop.amstechnologies.com/media/27/3f/d4/1720716082/"
+        "SolarguideTM-Solarization-Resistant-MM-Fibers-Fiberguide-"
+        "Datasheetkn5dgcLgOXSSu.pdf"
+    ),
+    "caveat": (
+        "Read off a log page raster at about 0.29 px/nm and 46 px/decade, so "
+        "the readings carry +/-0.15 decade (x/ 1.4) over 250-600 nm and "
+        "+/-0.25 decade on the steep 200-220 nm flank. 190 nm is "
+        "UNAVAILABLE: the plotted curve begins near 195-200 nm even though "
+        "the spec table claims '190nm ~ 1250nm', so this instrument sets the "
+        "transmission to ZERO below 195 nm rather than extrapolate into a "
+        "region the figure does not cover. The sheet's own bottom log "
+        "gridline is mislabelled '0' where it must be 0.1. The 700 and "
+        "1000 nm points sit on OH-absorption flanks and are the least "
+        "certain (+/-0.25 and +/-0.4 decade). Separately, an un-stabilised "
+        "high-OH fiber SOLARIZES and its effective UV cutoff drifts red with "
+        "dose; this hydrogen-infused product is sold to resist that, but no "
+        "aged curve is given."
+    ),
+    "opaque_below_nm": 195.0,
+    "points_nm_db_per_m": (
+        (200.0, 2.9),
+        (210.0, 1.8),
+        (220.0, 1.3),
+        (250.0, 0.65),
+        (300.0, 0.23),
+        (350.0, 0.13),
+        (400.0, 0.08),
+        (500.0, 0.033),
+        (600.0, 0.015),
+        (700.0, 0.02),
+        (1000.0, 0.03),
+    ),
+}
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -213,6 +411,37 @@ ASSUMPTIONS = (
         "source": "G = pi*(d/2)^2 * pi*NA^2, under the collection model above.",
     },
     {
+        "quantity": "port window material",
+        "value": "fused_silica default; borosilicate selectable (--window)",
+        "class": "ASSUMED",
+        "source": (
+            "The fiber looks THROUGH a port window, so its datasheet "
+            "external-transmission curve multiplies every line. The material "
+            "actually installed on the LAPD viewports is NOT known to this "
+            "script. Curve readings and sources are tabulated in the Window "
+            "and fiber transmission section."
+        ),
+    },
+    {
+        "quantity": "fiber run length",
+        "value": "2.0 m (default; --fiber-length-m)",
+        "class": "ASSUMED",
+        "source": (
+            "Sets the bulk attenuation 10^(-alpha L / 10). A plausible "
+            "port-to-spectrometer run; NOT a measured length. Attenuation "
+            "readings and their source are tabulated in the Window and fiber "
+            "transmission section."
+        ),
+    },
+    {
+        "quantity": "fiber end-face Fresnel loss",
+        "value": (
+            "T = 0.96 per silica/air face, applied twice (0.92 total)"
+        ),
+        "class": "DERIVED",
+        "source": FIBER_END_FACE_SOURCE,
+    },
+    {
         "quantity": "radial emissivity profile",
         "value": "uniform across the disc of radius Rp(z), zero outside",
         "class": "ASSUMED",
@@ -258,20 +487,35 @@ ASSUMPTIONS = (
         ),
     },
     {
-        "quantity": "window / fiber 50 % transmission cutoffs",
+        "quantity": "window / fiber transmission curves",
         "value": (
-            "UV fused silica 170 +/- 5 nm; borosilicate 303 +/- 8 nm; "
-            "UV fiber 200 +/- 10 nm"
+            "per-line T_window(lambda) and T_fiber(lambda, L), from "
+            "datasheet curve readings"
         ),
         "class": "ASSUMED (datasheet-sourced, representative parts)",
         "source": (
-            "Each carries its own datasheet, thickness/length, "
-            "external-vs-internal basis and caveat in `WINDOW_CUTOFFS`, "
-            "reproduced in full in the Window cutoffs section below. No "
-            "manufacturer tabulates a 50 % point for any of the three, so "
-            "every one is a curve reading or an interpolation. The material "
-            "on the LAPD viewports and the identity of the collection fiber "
-            "are NOT known to this script."
+            "Tabulated point by point, with the figure, thickness or length, "
+            "external-vs-internal basis and caveat, in `WINDOW_TRANSMISSION` "
+            "and `FIBER_ATTENUATION` -- reproduced in full in the Window and "
+            "fiber transmission section below. NEITHER datasheet tabulates "
+            "transmission against wavelength, so every point is a reading "
+            "off a plotted curve or a value derived from numbers the same "
+            "document does tabulate. The material on the LAPD viewports and "
+            "the identity of the collection fiber are NOT known to this "
+            "script."
+        ),
+    },
+    {
+        "quantity": "50 % transmission cutoffs",
+        "value": "DERIVED by inverting the curves above at the applied length",
+        "class": "DERIVED",
+        "source": (
+            "Computed from `WINDOW_TRANSMISSION` / `FIBER_ATTENUATION` "
+            "rather than asserted separately, so a cutoff drawn on a figure "
+            "cannot disagree with the transmission its own numbers went "
+            "through. The fiber's cutoff MOVES WITH THE RUN LENGTH. "
+            "Uncertainties are the reading bars of the curves the point is "
+            "computed from."
         ),
     },
 )
@@ -281,95 +525,6 @@ FIBER_CORE_COLUMNS_UM = (200.0, 400.0, 600.0)
 
 #: NA values reported as a bracket around the default.
 FIBER_NA_BRACKET = (0.12, 0.39)
-
-#: 50 % transmission cutoffs drawn on both figures.  Every one of these is an
-#: ASSUMED representative commercial part -- NOT the material on the LAPD
-#: viewports, and NOT the fiber on the bench, neither of which is known here.
-#: No manufacturer tabulates a 50 % point for any of the three, so each number
-#: below is a curve reading or an interpolation and carries its own bar.
-WINDOW_CUTOFFS = (
-    {
-        "material": "UV-grade fused silica window (synthetic, high-OH)",
-        "short": "UV fused silica",
-        "cutoff_nm": 170.0,
-        "uncertainty_nm": 5.0,
-        "basis": "10 mm, EXTERNAL transmission (Fresnel included)",
-        "source": (
-            "Heraeus, 'Quartz Glass for Optics -- Data and Properties' "
-            "(HQS-SO, May 2011), Suprasil 1/2 Grade A transmission panel, "
-            "'Sample thickness: 10 mm', figure header 'Measured transmission "
-            "including Fresnel reflection losses (1-R)^2'. Read off the "
-            "plotted curve at 50 %; the +/-5 nm is the plotted-line width on "
-            "a steep edge (0 to ~88 % over ~163-180 nm). "
-            "https://sites.astro.caltech.edu/sedm/_downloads/"
-            "2562e19ff76ec4ab03f0598d537f8428/Heraeus_SiO2-May-2011.pdf"
-        ),
-        "caveat": (
-            "Cross-check, Corning HPFS 7980 Standard Grade: 'certified to "
-            "meet T external >= 80%/cm@185nm' -- a floor, not a 50 % point, "
-            "and consistent with 170 nm at 10 mm. Thinner windows cut bluer: "
-            "scaling tau_i(d) = tau_i(10 mm)^(d/10) puts a 3 mm window's "
-            "50 % point near 165 nm (DERIVED, not from any datasheet)."
-        ),
-    },
-    {
-        "material": "borosilicate glass window (SCHOTT BOROFLOAT 33)",
-        "short": "borosilicate",
-        "cutoff_nm": 303.0,
-        "uncertainty_nm": 8.0,
-        "basis": "3.30 mm, external transmission (inferred)",
-        "source": (
-            "SCHOTT, 'BOROFLOAT 33 -- Optical Properties', panel "
-            "'Transmission in UV range', 3.30 mm curve, read at 50 %. The "
-            "axis is labelled only 'Transmission [%]', but its ~91-92 % "
-            "plateau matches (1-R)^2 = 92.9 % for n_d = 1.471, so Fresnel "
-            "appears to be included. The sheet's own tables are marked "
-            "'Reference values, not guaranteed values.' "
-            "https://www.schott.com/en-gb/products/borofloat/-/media/project/"
-            "onex/products/b/borofloat/downloads/borofloat33_opt_eng_web.pdf"
-        ),
-        "caveat": (
-            "This number has an unresolved internal inconsistency in its own "
-            "source: the same sheet's 6.5 mm comparison panel reads "
-            "~288-290 nm, which cannot be bluer than its 5.00 mm curve "
-            "(~312 nm). Honest bracket across 3.3-6.5 mm: 288-312 nm. "
-            "N-BK7 is a DIFFERENT glass and lands nearby -- its tabulated "
-            "internal transmittance (tau_i = 0.574 at 310 nm, 0.292 at "
-            "300 nm, 10 mm) interpolates to a 50 % internal point at "
-            "307-308 nm."
-        ),
-    },
-    {
-        "material": "solarization-resistant high-OH UV fiber",
-        "short": "UV fiber (1 m)",
-        "cutoff_nm": 200.0,
-        "uncertainty_nm": 10.0,
-        "basis": "1 m of fiber, bulk attenuation only (no end-face Fresnel)",
-        "source": (
-            "Fiberguide Solarguide (silica core / F-doped clad, "
-            "hydrogen-infused), spec 'Wavelength UV-VIS (High OH) 190nm ~ "
-            "1250nm'; attenuation curve read at ~3000 dB/km = 3 dB/m at "
-            "200 nm, which is exactly the 50 % point for 1 m. The "
-            "datasheet's transmission panel states NO length; 1 m is "
-            "INFERRED from that consistency. "
-            "https://shop.amstechnologies.com/media/27/3f/d4/1720716082/"
-            "SolarguideTM-Solarization-Resistant-MM-Fibers-Fiberguide-"
-            "Datasheetkn5dgcLgOXSSu.pdf"
-        ),
-        "caveat": (
-            "LENGTH-DEPENDENT and manufacturer-dependent. At 200 nm the "
-            "attenuation read off three makers' curves spans 0.7 dB/m "
-            "(CeramOptec Optran UV/UVNS) to 1.2 dB/m (Ocean Optics UV/SR-VIS) "
-            "to 3 dB/m (Fiberguide), a factor ~4; at 1 m all three put the "
-            "50 % point at or below 200 nm, at 2 m it moves to ~200-220 nm. "
-            "Separately, an un-stabilised high-OH fiber SOLARIZES: Molex "
-            "Polymicro's 214 nm exposure data has standard FVP falling to "
-            "~15 % of its initial transmission after 8 h of deuterium-lamp "
-            "dose, so an installed fiber's effective cutoff drifts red with "
-            "use."
-        ),
-    },
-)
 
 
 class ArtifactRefused(SystemExit):
@@ -818,33 +973,53 @@ def etendue_cm2_sr(core_um, na):
     }
 
 
-def fiber_at_port(stage, data, port, law, fibers):
-    """Per-line radiance, collected power and photon rate at one port."""
+def fiber_at_port(stage, data, port, law, fibers, material, length_m):
+    """Per-line chord radiance, collected power and TRANSMITTED signal.
+
+    Two distinct quantities are carried per line and never conflated.
+    COLLECTED is the flux inside the fiber's acceptance at its face,
+    ``L * G``; TRANSMITTED is what survives the port window and the fiber
+    run to reach a detector, ``collected * T_window * T_fiber``.  The fiber
+    sits OUTSIDE the window looking in, so the transmitted column is the one
+    a photon counter would register, and the collected column is shown
+    beside it only to make the loss visible.
+    """
     z_want = PRS.port_to_z_cm(port, law)
     z_cells = data["geometry"]["z_cm"]
     j = int(np.argmin(np.abs(z_cells - z_want)))
     Rp = float(data["geometry"]["Rp_cm"][j])
     chord = 2.0 * Rp
     eps = stage["eps_W_mean"][:, j]  # W cm^-3
-    radiance = eps * chord / (4.0 * np.pi)  # W cm^-2 sr^-1
+    brightness = eps * chord  # W cm^-2, the chord integral of emissivity
+    radiance = brightness / (4.0 * np.pi)  # W cm^-2 sr^-1
+
+    t_window = window_transmission(material, stage["lambda_nm"])
+    t_fiber = fiber_transmission(stage["lambda_nm"], length_m)
+    t_total = t_window * t_fiber
 
     per_fiber = {}
     for fib in fibers:
-        power = radiance * fib["etendue_cm2_sr"]  # W
-        photons = power / stage["photon_J"]  # s^-1
+        power = radiance * fib["etendue_cm2_sr"]  # W, at the fiber face
+        photons = power / stage["photon_J"]  # s^-1, at the fiber face
+        power_t = power * t_total  # W, past window + fiber
+        photons_t = photons * t_total  # s^-1, past window + fiber
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = np.where(
-                stage["machine_W"] > 0.0, power / stage["machine_W"], np.nan
+                stage["machine_W"] > 0.0, power_t / stage["machine_W"], np.nan
             )
         per_fiber[fiber_tag(fib)] = {
             "fiber": fib,
             "power_W": power,
             "photons_per_s": photons,
+            "power_W_transmitted": power_t,
+            "photons_per_s_transmitted": photons_t,
             "ratio_to_machine": ratio,
             "power_W_total": float(power.sum()),
             "photons_per_s_total": float(photons.sum()),
+            "power_W_transmitted_total": float(power_t.sum()),
+            "photons_per_s_transmitted_total": float(photons_t.sum()),
             "ratio_to_machine_total": (
-                float(power.sum() / stage["machine_W_total"])
+                float(power_t.sum() / stage["machine_W_total"])
                 if stage["machine_W_total"] > 0.0
                 else None
             ),
@@ -856,7 +1031,11 @@ def fiber_at_port(stage, data, port, law, fibers):
         "z_cell_cm": float(z_cells[j]),
         "Rp_cm": Rp,
         "chord_length_cm": chord,
+        "brightness_W_cm2": brightness,
         "radiance_W_cm2_sr": radiance,
+        "T_window": t_window,
+        "T_fiber": t_fiber,
+        "T_total": t_total,
         "fibers": per_fiber,
     }
 
@@ -869,16 +1048,124 @@ def fiber_tag(fib):
 # --- window cutoffs -------------------------------------------------------
 
 
-def cutoff_table():
-    """Return the three sourced 50 % transmission cutoffs, ordered blue-ward."""
-    return tuple(
-        sorted(WINDOW_CUTOFFS, key=lambda c: c["cutoff_nm"])
+#: Reading uncertainty on each derived 50 % point [nm], from the curve
+#: readings the point is computed from -- see each spec's own ``caveat``.
+CUTOFF_UNCERTAINTY_NM = {
+    "fused_silica": 4.0,
+    "borosilicate": 4.0,
+    "fiber": 10.0,
+}
+
+
+def _half_transmission_nm(fn, lo=140.0, hi=1200.0, n=212001):
+    """Bluest wavelength at which ``fn`` first reaches 50 % transmission."""
+    grid = np.linspace(lo, hi, n)
+    hits = np.flatnonzero(np.asarray(fn(grid)) >= 0.5)
+    return float(grid[hits[0]]) if hits.size else None
+
+
+def cutoff_table(length_m):
+    """50 % transmission points, DERIVED from the curves actually applied.
+
+    Computed by inverting ``window_transmission`` and ``fiber_transmission``
+    rather than asserted separately, so a cutoff drawn on a figure cannot
+    disagree with the transmission the same figure's numbers went through.
+    The fiber's point moves with the run length, because its bulk
+    attenuation does.
+    """
+    out = []
+    for key, spec in WINDOW_TRANSMISSION.items():
+        out.append(
+            {
+                "material": spec["material"],
+                "short": spec["short"],
+                "cutoff_nm": _half_transmission_nm(
+                    lambda g, k=key: window_transmission(k, g)
+                ),
+                "uncertainty_nm": CUTOFF_UNCERTAINTY_NM[key],
+                "basis": spec["thickness"] + "; " + spec["basis"],
+                "figure": spec["figure"],
+                "source": spec["source"],
+                "caveat": spec["caveat"],
+            }
+        )
+    out.append(
+        {
+            "material": FIBER_ATTENUATION["material"],
+            "short": f"UV fiber ({length_m:g} m)",
+            "cutoff_nm": _half_transmission_nm(
+                lambda g: fiber_transmission(g, length_m)
+            ),
+            "uncertainty_nm": CUTOFF_UNCERTAINTY_NM["fiber"],
+            "basis": (
+                f"{length_m:g} m of fiber, bulk attenuation AND the two "
+                "end faces"
+            ),
+            "figure": FIBER_ATTENUATION["figure"],
+            "source": FIBER_ATTENUATION["source"],
+            "caveat": FIBER_ATTENUATION["caveat"],
+        }
     )
+    return tuple(sorted(out, key=lambda c: c["cutoff_nm"]))
 
 
 def transmits(cutoff, lam_nm):
     """Boolean mask: which lines sit red-ward of a cutoff."""
     return np.asarray(lam_nm) >= cutoff["cutoff_nm"]
+
+
+# --- datasheet transmission ------------------------------------------------
+
+
+def window_transmission(material, lam_nm):
+    """External transmission of the port window at each wavelength.
+
+    Linear interpolation in wavelength on the datasheet curve reading in
+    ``WINDOW_TRANSMISSION`` -- linear because the tabulated quantity is a
+    transmission fraction on a smooth S-shaped edge, so a linear interpolant
+    between adjacent readings is bounded by them.  Below the material's
+    opaque edge the transmission is ZERO, not the edge value: a clamp there
+    would invent light the window does not pass.  Above the reddest reading
+    the plateau is held, which is what the datasheet curve does.
+    """
+    spec = WINDOW_TRANSMISSION[material]
+    grid = np.array([w for w, _ in spec["points_nm_T"]], dtype=float)
+    vals = np.array([t for _, t in spec["points_nm_T"]], dtype=float)
+    lam = np.asarray(lam_nm, dtype=float)
+    out = np.interp(lam, grid, vals, left=0.0, right=vals[-1])
+    return np.where(lam < spec["opaque_below_nm"], 0.0, out)
+
+
+def fiber_transmission(lam_nm, length_m):
+    """Transmission of ``length_m`` of fiber, end-face Fresnel included.
+
+    Bulk attenuation is ``10 ** (-alpha(lambda) * L / 10)`` with alpha in
+    dB/m interpolated LOG-LINEARLY (linear in log10 alpha) on the datasheet
+    reading in ``FIBER_ATTENUATION`` -- log-linear because alpha spans
+    orders of magnitude across this range, where a linear interpolant
+    between two readings would sit far above the curve it is standing in for.
+    The datasheet's attenuation curve is BULK fiber only, so the two
+    silica/air end faces are applied separately as a flat Fresnel factor.
+    Below the fiber's stated transmission edge the result is ZERO.
+    """
+    spec = FIBER_ATTENUATION
+    grid = np.array([w for w, _ in spec["points_nm_db_per_m"]], dtype=float)
+    alpha_db = np.array(
+        [a for _, a in spec["points_nm_db_per_m"]], dtype=float
+    )
+    lam = np.asarray(lam_nm, dtype=float)
+    log_alpha = np.interp(
+        lam,
+        grid,
+        np.log10(alpha_db),
+        left=np.log10(alpha_db[0]),
+        right=np.log10(alpha_db[-1]),
+    )
+    alpha = 10.0 ** log_alpha
+    bulk = 10.0 ** (-alpha * float(length_m) / 10.0)
+    ends = FIBER_END_FACE_TRANSMISSION ** 2
+    out = bulk * ends
+    return np.where(lam < spec["opaque_below_nm"], 0.0, out)
 
 
 # --- products -------------------------------------------------------------
@@ -1021,7 +1308,7 @@ def markdown_report(rep):
     rows = []
     for key in STAGE_ORDER:
         s = rep["stages"][key]
-        for cut in cutoff_table():
+        for cut in rep["cutoffs"]:
             mask = transmits(cut, s["lambda_nm"])
             passed = float(s["machine_W"][mask].sum())
             rows.append(
@@ -1054,7 +1341,7 @@ def markdown_report(rep):
         s = rep["stages"][key]
         sets = {
             tuple(transmits(cut, s["lambda_nm"]).tolist())
-            for cut in cutoff_table()
+            for cut in rep["cutoffs"]
         }
         if len(sets) == 1:
             L.append(
@@ -1076,6 +1363,205 @@ def markdown_report(rep):
     L.append("")
 
     # --- fiber
+    L.append("## Synthetic fiber signal: collected, then transmitted")
+    L.append("")
+    win = WINDOW_TRANSMISSION[rep["window_material"]]
+    L.append(
+        "**The fiber sits OUTSIDE the port window looking in**, so two "
+        "different quantities are reported per line and never conflated:"
+    )
+    L.append("")
+    L.append(
+        "* **collected** -- the flux inside the fiber's acceptance AT ITS "
+        "FACE, `P_i = L_i * G`. This is what arrives; it is not what a "
+        "detector sees."
+    )
+    L.append(
+        "* **transmitted** -- what survives the window and the fiber run, "
+        "`P_i * T_window(lambda) * T_fiber(lambda, L)`. **This is the "
+        "photon-counter number.**"
+    )
+    L.append("")
+    L.append(
+        "**Upper bound: spot ~ core width, bare fiber, no collection "
+        "optics.** Light enters a BARE fiber and the imaged spot at the "
+        "plasma is taken to be approximately the fiber core width, so the "
+        "collection area is the core area A = pi (d/2)^2 and the acceptance "
+        "solid angle is Omega = pi NA^2. Radiance "
+        "L_i = eps_i * L_chord / (4 pi) under the RADIALLY UNIFORM "
+        "emissivity construction (see Assumptions); photon rate "
+        "N_i = P_i * lambda_i / (hc). A real optical train loses light "
+        "against this bound at every surface, and a collimating lens cannot "
+        "beat it: a lens CONSERVES etendue, trading acceptance angle for "
+        "collection area, so it changes the field of view, not G and not "
+        "P_i."
+    )
+    L.append("")
+    L.append(
+        f"Window applied: **{win['material']}** ({win['thickness']}). Fiber "
+        f"run: **{rep['fiber_length_m']:g} m**. Both are ASSUMED "
+        "representative parts; the curves and their sources are tabulated "
+        "in the next section."
+    )
+    L.append("")
+    for k, fib in enumerate(rep["fibers"]):
+        tag = "DEFAULT" if k == 0 else "reported alongside"
+        L.append(
+            f"* {tag}: core {fib['core_um']:.0f} um, NA {fib['na']:g}, "
+            f"A = {fib['core_area_cm2']:.4e} cm^2, "
+            f"Omega = {fib['omega_sr']:.4f} sr, "
+            f"G = {fib['etendue_cm2_sr']:.4e} cm^2 sr"
+        )
+    L.append("")
+    for pk in rep["fiber_ports"]:
+        fp = rep["fiber_ports"][pk]
+        L.append(
+            f"### Port {fp['port']} -- z {fp['z_cell_cm']:.2f} cm "
+            f"(law target {fp['z_want_cm']:.2f} cm), Rp "
+            f"{fp['Rp_cm']:.2f} cm, chord {fp['chord_length_cm']:.2f} cm"
+        )
+        L.append("")
+        for key in STAGE_ORDER:
+            s = rep["stages"][key]
+            got = fp["stages"][key]
+            dflt = got["fibers"][fiber_tag(rep["fibers"][0])]
+            L.append(
+                f"**{s['label']}** -- collected vs transmitted at "
+                f"{rep['fibers'][0]['core_um']:.0f} um / NA "
+                f"{rep['fibers'][0]['na']:g}, sorted by transmitted rate."
+            )
+            L.append("")
+            order = np.argsort(-np.asarray(dflt["photons_per_s_transmitted"]))
+            rows = []
+            for i in order:
+                rows.append(
+                    [
+                        f"{s['lambda_nm'][i]:.2f}",
+                        s["band"][i],
+                        _fmt(float(got["radiance_W_cm2_sr"][i])),
+                        _fmt(float(dflt["power_W"][i])),
+                        _fmt(float(dflt["photons_per_s"][i])),
+                        _fmt(float(got["T_window"][i])),
+                        _fmt(float(got["T_fiber"][i])),
+                        _fmt(float(got["T_total"][i])),
+                        _fmt(float(dflt["power_W_transmitted"][i])),
+                        _fmt(float(dflt["photons_per_s_transmitted"][i])),
+                    ]
+                )
+            L.extend(
+                _table(
+                    [
+                        "lambda_vac [nm]",
+                        "band",
+                        "radiance [W cm^-2 sr^-1]",
+                        "collected [W]",
+                        "collected [ph/s]",
+                        "T_window",
+                        "T_fiber",
+                        "T_total",
+                        "transmitted [W]",
+                        "transmitted [ph/s]",
+                    ],
+                    rows,
+                )
+            )
+            L.append("")
+            brk = []
+            for fib in rep["fibers"]:
+                v = got["fibers"][fiber_tag(fib)]
+                brk.append(
+                    [
+                        f"{fib['core_um']:.0f} um / NA {fib['na']:g}",
+                        _fmt(fib["etendue_cm2_sr"]),
+                        _fmt(v["power_W_total"]),
+                        _fmt(v["photons_per_s_total"]),
+                        _fmt(v["power_W_transmitted_total"]),
+                        _fmt(v["photons_per_s_transmitted_total"]),
+                        _fmt(v["ratio_to_machine_total"]),
+                    ]
+                )
+            L.extend(
+                _table(
+                    [
+                        "fiber (bare; spot ~ core width)",
+                        "G [cm^2 sr]",
+                        "collected [W]",
+                        "collected [ph/s]",
+                        "transmitted [W]",
+                        "transmitted [ph/s]",
+                        "P_transmitted / P_machine",
+                    ],
+                    brk,
+                )
+            )
+            L.append("")
+
+    # --- transmission curves
+    L.append("## Window and fiber transmission curves applied")
+    L.append("")
+    L.append(
+        "Every point below is a reading off a named manufacturer figure. "
+        "The window curve is interpolated LINEARLY in wavelength (the "
+        "tabulated quantity is a transmission fraction on a smooth edge, so "
+        "a linear interpolant is bounded by its neighbours); the fiber "
+        "attenuation is interpolated LOG-LINEARLY in alpha (it spans orders "
+        "of magnitude, where a linear interpolant would sit far above the "
+        "curve). Below a material's opaque edge the transmission is set to "
+        "ZERO rather than clamped, because clamping there would invent "
+        "light the window does not pass."
+    )
+    L.append("")
+    L.append(f"### Window: {win['material']}")
+    L.append("")
+    L.append(f"* thickness: {win['thickness']}")
+    L.append(f"* basis: {win['basis']}")
+    L.append(f"* figure: {win['figure']}")
+    L.append(f"* source: {win['source']}")
+    L.append(f"* opaque below {win['opaque_below_nm']:g} nm (T set to 0)")
+    L.append(f"* caveat: {win['caveat']}")
+    L.append("")
+    L.extend(
+        _table(
+            ["lambda_vac [nm]", "T_window (external)"],
+            [[f"{w:g}", f"{t:.3f}"] for w, t in win["points_nm_T"]],
+        )
+    )
+    L.append("")
+    fa = FIBER_ATTENUATION
+    L.append(f"### Fiber: {fa['material']}")
+    L.append("")
+    L.append(f"* run length applied: {rep['fiber_length_m']:g} m")
+    L.append(f"* basis: {fa['basis']}")
+    L.append(f"* figure: {fa['figure']}")
+    L.append(f"* source: {fa['source']}")
+    L.append(f"* opaque below {fa['opaque_below_nm']:g} nm (T set to 0)")
+    L.append(f"* caveat: {fa['caveat']}")
+    L.append(
+        f"* end faces: T = {FIBER_END_FACE_TRANSMISSION:.3f} per silica/air "
+        f"face, applied TWICE "
+        f"({FIBER_END_FACE_TRANSMISSION ** 2:.3f} total). "
+        f"{FIBER_END_FACE_SOURCE}"
+    )
+    L.append("")
+    L.extend(
+        _table(
+            [
+                "lambda_vac [nm]",
+                "alpha [dB/m]",
+                f"T_bulk at {rep['fiber_length_m']:g} m",
+            ],
+            [
+                [
+                    f"{w:g}",
+                    f"{a:.4g}",
+                    f"{10.0 ** (-a * rep['fiber_length_m'] / 10.0):.4f}",
+                ]
+                for w, a in fa["points_nm_db_per_m"]
+            ],
+        )
+    )
+    L.append("")
+
     L.append("## Synthetic collimated-fiber diagnostic")
     L.append("")
     L.append(
@@ -1398,7 +1884,7 @@ def markdown_report(rep):
         "interpolation and carries its own bar."
     )
     L.append("")
-    for cut in cutoff_table():
+    for cut in rep["cutoffs"]:
         L.append(
             f"### {cut['material']} -- 50 % at "
             f"{cut['cutoff_nm']:.0f} +/- {cut['uncertainty_nm']:.0f} nm"
@@ -1437,195 +1923,48 @@ def markdown_report(rep):
 CUTOFF_STYLE = ("tab:purple", "tab:olive", "tab:brown")
 
 
-def _line_colors(n):
-    return plt.get_cmap("turbo")(np.linspace(0.08, 0.95, max(n, 1)))
+def figure_chord_power(rep, path_stem, dpi=180):
+    """Figure A: per-line chord radiance at each port, EUV lines included.
 
-
-def figure_machine(rep, path_stem, dpi=180):
-    """Figure A: per-line axial power profile plus its wavelength spectrum."""
-    fig = plt.figure(figsize=(13.0, 8.8), layout="constrained")
-    gs = fig.add_gridspec(2, 2, width_ratios=(2.7, 1.35))
-    cuts = cutoff_table()
-    z = rep["data"]["geometry"]["z_cm"]
-    length = rep["data"]["geometry"]["length_cm"]
-
-    for row, key in enumerate(STAGE_ORDER):
-        s = rep["stages"][key]
-        ax = fig.add_subplot(gs[row, 0])
-        axs = fig.add_subplot(gs[row, 1])
-        order = np.argsort(-s["machine_W"])
-        colors = {}
-        rank = np.argsort(np.argsort(-s["machine_W"]))
-        cmap = _line_colors(len(s["lines"]))
-        for i in range(len(s["lines"])):
-            colors[i] = cmap[rank[i]]
-
-        # dP/dz is the grid-independent axial density of radiated power: the
-        # mesh is non-uniform, so a per-cell W profile would show mesh
-        # structure rather than physics.  Integrating it over z reproduces
-        # the machine totals tabulated in the markdown product.
-        dpdz = s["cell_W"] / length
-        peak = float(np.max(dpdz)) if dpdz.size else 1.0
-        floor = peak * 10.0**-PRS.PLOT_DECADES
-        for i in range(len(s["lines"])):
-            ax.plot(
-                z,
-                np.maximum(dpdz[i], floor),
-                color=colors[i],
-                lw=1.2,
-                alpha=0.9 if i in order[:LABELLED_LINES] else 0.35,
-            )
-        handles = [
-            plt.Line2D(
-                [],
-                [],
-                color=colors[i],
-                lw=2.0,
-                label=(
-                    f"{s['lambda_nm'][i]:.1f} nm  "
-                    f"({s['machine_W'][i]:.2e} W)"
-                ),
-            )
-            for i in order[:LABELLED_LINES]
-        ]
-        ax.legend(
-            handles=handles,
-            fontsize=6.6,
-            ncol=2,
-            loc="lower left",
-            framealpha=0.92,
-            title=f"strongest {len(handles)} lines",
-            title_fontsize=6.6,
-        )
-        ax.set_yscale("log")
-        ax.set_ylim(floor, peak * 8.0)
-        ax.grid(True, alpha=0.22)
-        ax.set_ylabel("dP/dz  [W cm$^{-1}$]")
-        ax.set_title(
-            f"{s['label']}  --  {len(s['lines'])} adf15 EXCIT lines, "
-            f"machine total {s['machine_W_total']:.3e} W "
-            f"(C = {_fmt(s['completeness_machine'])} of adf11 "
-            f"{s['plt_key']})",
-            fontsize=9.5,
-        )
-        if row == 1:
-            ax.set_xlabel("z [cm]")
-
-        # Right panel: per-line machine total against wavelength, with the
-        # sourced 50 % window cutoffs as shaded bands.
-        lam = s["lambda_nm"]
-        mw = np.maximum(s["machine_W"], s["machine_W"].max() * 1.0e-12)
-        edges = [1.0] + [c["cutoff_nm"] for c in cuts] + [3000.0]
-        shades = ("0.55", "0.72", "0.85", "0.96")
-        for k in range(len(edges) - 1):
-            axs.axvspan(edges[k], edges[k + 1], color=shades[k], lw=0, zorder=0)
-        for k, cut in enumerate(cuts):
-            axs.axvline(
-                cut["cutoff_nm"],
-                color=CUTOFF_STYLE[k],
-                ls="--",
-                lw=1.4,
-                zorder=3,
-                label=f"{cut['short']} {cut['cutoff_nm']:.0f} nm",
-            )
-        for i in range(len(lam)):
-            axs.plot(
-                [lam[i], lam[i]],
-                [mw.max() * 1.0e-12, mw[i]],
-                color=colors[i],
-                lw=1.6,
-                zorder=4,
-            )
-            axs.plot(lam[i], mw[i], "o", ms=3.4, color=colors[i], zorder=5)
-        axs.set_xscale("log")
-        axs.set_yscale("log")
-        axs.set_xlim(15.0, 2000.0)
-        axs.set_ylim(mw.max() * 1.0e-10, mw.max() * 8.0)
-        axs.set_ylabel("machine total [W]")
-        axs.grid(True, alpha=0.22, zorder=1)
-        axs.legend(fontsize=6.2, loc="lower left", framealpha=0.92)
-        if row == 1:
-            axs.set_xlabel(r"$\lambda_{vac}$ [nm]")
-        axs.set_title(
-            "per-line machine total vs wavelength;\n"
-            "shaded = window transmission bands (50 % cutoffs)",
-            fontsize=8,
-        )
-
-    fig.suptitle(
-        f"Line-resolved radiated power -- {Path(rep['h5']).name}   "
-        f"(plateau {rep['data']['window_ms'][0]:g}-"
-        f"{rep['data']['window_ms'][1]:g} ms, main-discharge clock; "
-        f"{rep['data']['frames']} saves)",
-        fontsize=11,
-    )
-    fig.get_layout_engine().set(rect=(0.0, 0.045, 1.0, 0.952))
-    fig.text(
-        0.5,
-        0.020,
-        "dP/dz plotted rather than W-per-cell because the axial mesh is "
-        "non-uniform; its z-integral is the tabulated machine total. Traces "
-        f"clipped {PRS.PLOT_DECADES:.0f} decades below the panel peak "
-        "(drawing only).",
-        fontsize=7.0,
-        color="0.35",
-        ha="center",
-    )
-    fig.text(
-        0.5,
-        0.006,
-        "Window cutoffs are ASSUMED representative commercial parts read off "
-        "manufacturer curves, NOT LAPD hardware; see the markdown product "
-        "for each source, thickness/length and caveat.",
-        fontsize=7.0,
-        color="0.35",
-        ha="center",
-    )
-    for ext in ("pdf", "png"):
-        fig.savefig(f"{path_stem}.{ext}", dpi=dpi)
-    plt.close(fig)
-
-
-def figure_fiber(rep, path_stem, dpi=180):
-    """Figure B: per-line photon rate at the fiber, against the cutoffs."""
-    cuts = cutoff_table()
-    default_tag = fiber_tag(rep["fibers"][0])
-    fig, axes = plt.subplots(2, 1, figsize=(11.0, 9.0), layout="constrained")
+    One bar per adf15 line, sorted by wavelength, at the port that panel
+    serves.  The cutoffs are drawn as vertical separators, so the bars a
+    windowed instrument could ever see sit to the RIGHT of them and the
+    bars it cannot see sit to the LEFT.  Nothing is dropped: this figure
+    exists to show how much of the emission is out of optical reach.
+    """
+    cuts = rep["cutoffs"]
+    fig, axes = plt.subplots(2, 1, figsize=(11.5, 8.8), layout="constrained")
 
     for ax, (pkey, key) in zip(axes, rep["fiber_panels"]):
         fp = rep["fiber_ports"][pkey]
         s = rep["stages"][key]
-        v = fp["stages"][key]["fibers"][default_tag]
+        got = fp["stages"][key]
         lam = s["lambda_nm"]
-        rate = np.asarray(v["photons_per_s"])
-        top = max(float(rate.max()), 1.0e-30)
-        floor = top * 1.0e-12
+        val = np.asarray(got["radiance_W_cm2_sr"])
+        order = np.argsort(lam)
+        top = max(float(val.max()), 1.0e-30)
+        floor = top * 1.0e-7
 
-        best = cuts[0]
-        passes = transmits(best, lam)
-        for i in range(lam.size):
+        for i in order:
+            passes = lam[i] >= cuts[0]["cutoff_nm"]
             ax.bar(
                 lam[i],
-                max(rate[i], floor),
+                max(val[i], floor),
                 width=lam[i] * 0.055,
-                color="tab:blue" if passes[i] else "0.78",
-                edgecolor="black" if passes[i] else "0.55",
+                color="tab:blue" if passes else "0.62",
+                edgecolor="black",
                 linewidth=0.7,
-                hatch=None if passes[i] else "///",
                 zorder=3,
             )
-        # Labelling every bar collides wherever the line list crowds (the
-        # He I 471/492/505 nm group); the strongest few carry the reading and
-        # the markdown table carries all of them.
         placed = [np.log10(c["cutoff_nm"]) for c in cuts]
-        for i in np.argsort(-rate)[:LABELLED_LINES]:
+        for i in np.argsort(-val)[:LABELLED_LINES]:
             x = float(np.log10(lam[i]))
             if any(abs(x - q) < 0.022 for q in placed):
-                continue  # would collide with a neighbour or a cutoff label
+                continue
             placed.append(x)
             ax.annotate(
                 f"{lam[i]:.1f} nm",
-                xy=(lam[i], max(rate[i], floor)),
+                xy=(lam[i], max(val[i], floor)),
                 xytext=(0, 3),
                 textcoords="offset points",
                 fontsize=6.4,
@@ -1637,7 +1976,11 @@ def figure_fiber(rep, path_stem, dpi=180):
             )
         for k, cut in enumerate(cuts):
             ax.axvline(
-                cut["cutoff_nm"], color=CUTOFF_STYLE[k], ls="--", lw=1.5, zorder=5
+                cut["cutoff_nm"],
+                color=CUTOFF_STYLE[k],
+                ls="--",
+                lw=1.6,
+                zorder=5,
             )
             ax.annotate(
                 f"{cut['short']} {cut['cutoff_nm']:.0f} nm",
@@ -1657,40 +2000,158 @@ def figure_fiber(rep, path_stem, dpi=180):
         ax.set_xlim(15.0, 2000.0)
         ax.set_ylim(floor, top * 60.0)
         ax.grid(True, alpha=0.22, zorder=0)
-        ax.set_ylabel("photons s$^{-1}$ at the fiber")
+        ax.set_ylabel(
+            "chord radiance  $L=\\int\\epsilon\\,dl/4\\pi$"
+            "  [W cm$^{-2}$ sr$^{-1}$]"
+        )
         ax.set_title(
-            f"Port {fp['port']} ({s['label']})  --  z {fp['z_cell_cm']:.1f} cm, "
-            f"chord {fp['chord_length_cm']:.1f} cm; "
-            f"stage total {v['photons_per_s_total']:.3e} ph/s, "
-            f"{v['power_W_total']:.3e} W, "
-            f"P_fiber/P_machine = {_fmt(v['ratio_to_machine_total'])}",
+            f"Port {fp['port']} ({s['label']})  --  z {fp['z_cell_cm']:.1f} "
+            f"cm, chord {fp['chord_length_cm']:.1f} cm; all "
+            f"{lam.size} adf15 EXCIT lines, machine total "
+            f"{s['machine_W_total']:.3e} W",
             fontsize=9.5,
         )
     axes[1].set_xlabel(r"$\lambda_{vac}$ [nm]")
-    solid = (
-        f"Solid blue = red-ward of the bluest cutoff shown "
-        f"({cuts[0]['short']}, {cuts[0]['cutoff_nm']:.0f} nm), i.e. "
-        "potentially collectable; hatched grey = blocked by every material "
-        "shown."
-    )
-    fib = rep["fibers"][0]
     fig.suptitle(
-        f"Synthetic fiber signal -- {Path(rep['h5']).name}\n"
-        f"UPPER BOUND: spot $\\approx$ core width, no collection optics "
-        f"assumed  |  core {fib['core_um']:.0f} $\\mu$m, NA {fib['na']:g}, "
-        f"G = {fib['etendue_cm2_sr']:.3e} cm$^2$ sr (ASSUMED hardware)\n"
+        f"Chord line power per port -- {Path(rep['h5']).name}\n"
         f"plateau {rep['data']['window_ms'][0]:g}-"
-        f"{rep['data']['window_ms'][1]:g} ms, main-discharge clock",
-        fontsize=10.0,
+        f"{rep['data']['window_ms'][1]:g} ms, main-discharge clock; "
+        "radiance assumes emissivity RADIALLY UNIFORM across the plasma disc "
+        "(the 1D model has no radial profile)",
+        fontsize=10.5,
     )
     fig.get_layout_engine().set(rect=(0.0, 0.048, 1.0, 0.945))
-    fig.text(0.5, 0.022, solid, fontsize=7.0, color="0.35", ha="center")
+    fig.text(
+        0.5,
+        0.022,
+        "Bars LEFT of the separators cannot reach a detector through any "
+        "window shown; bars RIGHT of them can. No transmission is applied "
+        "here -- this is the emission at the chord.",
+        fontsize=7.0,
+        color="0.35",
+        ha="center",
+    )
     fig.text(
         0.5,
         0.007,
-        "Radiance assumes emissivity RADIALLY UNIFORM across the plasma disc "
-        "-- the 1D model has no radial profile. Cutoffs are ASSUMED "
-        "representative commercial parts, NOT LAPD hardware.",
+        "Cutoffs are ASSUMED representative commercial parts read off "
+        "manufacturer curves, NOT LAPD hardware; see the markdown product "
+        "for each source, thickness/length and caveat.",
+        fontsize=7.0,
+        color="0.35",
+        ha="center",
+    )
+    for ext in ("pdf", "png"):
+        fig.savefig(f"{path_stem}.{ext}", dpi=dpi)
+    plt.close(fig)
+
+
+#: Bar colours for the three reported core diameters, bluest = smallest.
+CORE_COLORS = ("#9ecae1", "#4292c6", "#08519c")
+
+
+def figure_photon_counter(rep, path_stem, dpi=180):
+    """Figure B: transmitted photon rate per line, transmissible lines only.
+
+    Bars are what a counter at the far end of the fiber would register:
+    collected flux times the datasheet window and fiber transmissions.
+    Lines the window blocks are absent by construction -- they contribute
+    nothing to a photon counter and their place is Figure A.
+    """
+    cuts = rep["cutoffs"]
+    cores = [f for f in rep["fibers"] if f["na"] == rep["fibers"][0]["na"]]
+    cores = sorted(cores, key=lambda f: f["core_um"])
+    fig, axes = plt.subplots(2, 1, figsize=(11.5, 8.8), layout="constrained")
+
+    for ax, (pkey, key) in zip(axes, rep["fiber_panels"]):
+        fp = rep["fiber_ports"][pkey]
+        s = rep["stages"][key]
+        got = fp["stages"][key]
+        keep = np.flatnonzero(np.asarray(got["T_total"]) > 0.0)
+        if not keep.size:
+            ax.text(
+                0.5,
+                0.5,
+                "no line of this stage is transmitted by "
+                f"{WINDOW_TRANSMISSION[rep['window_material']]['short']} "
+                f"+ {rep['fiber_length_m']:g} m of fiber",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=10,
+                color="0.3",
+            )
+            ax.set_yscale("log")
+            continue
+        lam = s["lambda_nm"][keep]
+        order = np.argsort(lam)
+        x = np.arange(keep.size, dtype=float)
+        width = 0.8 / len(cores)
+        top, bottom = 0.0, np.inf
+        for c, fib in enumerate(cores):
+            v = np.asarray(
+                got["fibers"][fiber_tag(fib)]["photons_per_s_transmitted"]
+            )[keep][order]
+            top = max(top, float(v.max()))
+            pos = v[v > 0.0]
+            if pos.size:
+                bottom = min(bottom, float(pos.min()))
+            ax.bar(
+                x + (c - (len(cores) - 1) / 2.0) * width,
+                v,
+                width=width,
+                color=CORE_COLORS[c % len(CORE_COLORS)],
+                edgecolor="black",
+                linewidth=0.6,
+                label=f"{fib['core_um']:.0f} $\\mu$m core",
+                zorder=3,
+            )
+        if not np.isfinite(bottom):
+            bottom = top * 1.0e-6
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [f"{v:.1f}" for v in lam[order]], fontsize=7.5, rotation=45
+        )
+        ax.set_yscale("log")
+        ax.set_ylim(max(bottom / 6.0, top * 1.0e-9), top * 30.0)
+        # A stage with only a line or two would otherwise draw bars a third
+        # of the axis wide; hold a minimum number of slots so the bar width
+        # reads the same on every panel.
+        ax.set_xlim(-0.75, max(float(keep.size), 5.0) - 0.25)
+        ax.grid(True, axis="y", alpha=0.22, zorder=0)
+        ax.set_ylabel("transmitted photons s$^{-1}$")
+        ax.legend(fontsize=7.0, ncol=len(cores), loc="upper left",
+                  framealpha=0.92)
+        dflt = got["fibers"][fiber_tag(rep["fibers"][0])]
+        ax.set_title(
+            f"Port {fp['port']} ({s['label']})  --  z {fp['z_cell_cm']:.1f} "
+            f"cm; {keep.size} of {s['lambda_nm'].size} lines transmitted; "
+            f"stage total at {rep['fibers'][0]['core_um']:.0f} "
+            f"$\\mu$m / NA {rep['fibers'][0]['na']:g}: "
+            f"{dflt['photons_per_s_transmitted_total']:.3e} ph/s, "
+            f"{dflt['power_W_transmitted_total']:.3e} W",
+            fontsize=9.5,
+        )
+    axes[1].set_xlabel(r"$\lambda_{vac}$ [nm]")
+    win = WINDOW_TRANSMISSION[rep["window_material"]]
+    fig.suptitle(
+        f"Synthetic photon counter -- {Path(rep['h5']).name}\n"
+        f"upper bound: spot $\\approx$ core width, bare fiber outside the "
+        f"window, no collection optics\n"
+        f"datasheet {win['short']} window ({win['thickness']}) + "
+        f"{rep['fiber_length_m']:g} m fiber transmission applied; "
+        f"NA {rep['fibers'][0]['na']:g}; plateau "
+        f"{rep['data']['window_ms'][0]:g}-"
+        f"{rep['data']['window_ms'][1]:g} ms, main-discharge clock",
+        fontsize=9.8,
+    )
+    fig.get_layout_engine().set(rect=(0.0, 0.038, 1.0, 0.912))
+    fig.text(
+        0.5,
+        0.012,
+        "Only lines the window and fiber actually pass are shown; the "
+        "blocked lines (EUV) are in Figure A. Window and fiber curves are "
+        "ASSUMED representative commercial parts, NOT LAPD hardware.",
         fontsize=7.0,
         color="0.35",
         ha="center",
@@ -1703,7 +2164,7 @@ def figure_fiber(rep, path_stem, dpi=180):
 # --- driver ---------------------------------------------------------------
 
 
-def build(h5_path, ports, window_ms, fiber_core_um, fiber_na):
+def build(h5_path, ports, window_ms, fiber_core_um, fiber_na, material, length_m):
     """Assemble every number and every product input from the artifact."""
     data = read_window(h5_path, window_ms)
     stages = {}
@@ -1730,7 +2191,9 @@ def build(h5_path, ports, window_ms, fiber_core_um, fiber_na):
         fiber_ports[str(port)] = {
             "port": int(port),
             "stages": {
-                key: fiber_at_port(stages[key], data, port, law, fibers)
+                key: fiber_at_port(
+                    stages[key], data, port, law, fibers, material, length_m
+                )
                 for key in STAGE_ORDER
             },
         }
@@ -1756,6 +2219,9 @@ def build(h5_path, ports, window_ms, fiber_core_um, fiber_na):
         "fiber_ports": fiber_ports,
         "fiber_panels": panels,
         "port_law": {"z0_cm": law[0], "pitch_cm": law[1]},
+        "window_material": material,
+        "fiber_length_m": float(length_m),
+        "cutoffs": cutoff_table(length_m),
         "port_radiance_crosscheck": port_radiance_crosscheck(h5_path, ports[-1]),
     }
 
@@ -1825,9 +2291,16 @@ def print_console(rep):
         )
 
     print("")
+    win = WINDOW_TRANSMISSION[rep["window_material"]]
     print(
-        "[synthetic fiber -- UPPER BOUND: spot ~ core width, no collection "
-        "optics assumed]"
+        "[synthetic fiber -- UPPER BOUND: spot ~ core width, bare fiber "
+        "OUTSIDE the window, no collection optics]"
+    )
+    print(
+        f"  window {win['material']} ({win['thickness']}); fiber run "
+        f"{rep['fiber_length_m']:g} m; end faces "
+        f"{FIBER_END_FACE_TRANSMISSION:.3f}^2 = "
+        f"{FIBER_END_FACE_TRANSMISSION ** 2:.3f}"
     )
     for fib in rep["fibers"]:
         print(
@@ -1839,35 +2312,44 @@ def print_console(rep):
     for pkey, key in rep["fiber_panels"]:
         fp = rep["fiber_ports"][pkey]
         s = rep["stages"][key]
-        v = fp["stages"][key]["fibers"][default_tag]
+        got = fp["stages"][key]
+        v = got["fibers"][default_tag]
         print("")
         print(
             f"  port {fp['port']} / {s['short']} -- z {fp['z_cell_cm']:.2f} "
-            f"cm, chord {fp['chord_length_cm']:.2f} cm"
+            f"cm, chord {fp['chord_length_cm']:.2f} cm  "
+            f"(collected -> transmitted)"
         )
-        order = np.argsort(-np.asarray(v["power_W"]))[:5]
+        order = np.argsort(-np.asarray(v["photons_per_s_transmitted"]))[:5]
         for i in order:
             print(
-                f"    {s['lambda_nm'][i]:8.2f} nm  {v['power_W'][i]:.4e} W  "
-                f"{v['photons_per_s'][i]:.4e} ph/s  "
-                f"P_fib/P_mach {v['ratio_to_machine'][i]:.4e}"
+                f"    {s['lambda_nm'][i]:8.2f} nm  "
+                f"coll {v['power_W'][i]:.4e} W {v['photons_per_s'][i]:.4e} "
+                f"ph/s  |  T_win {got['T_window'][i]:.4f} T_fib "
+                f"{got['T_fiber'][i]:.4f} T_tot {got['T_total'][i]:.4e}  |  "
+                f"trans {v['power_W_transmitted'][i]:.4e} W "
+                f"{v['photons_per_s_transmitted'][i]:.4e} ph/s"
             )
+        n_pass = int(np.count_nonzero(np.asarray(got["T_total"]) > 0.0))
         print(
-            f"    stage total {v['power_W_total']:.4e} W, "
-            f"{v['photons_per_s_total']:.4e} ph/s, "
-            f"P_fib/P_mach {_fmt(v['ratio_to_machine_total'])}"
+            f"    stage total: collected {v['power_W_total']:.4e} W / "
+            f"{v['photons_per_s_total']:.4e} ph/s -> transmitted "
+            f"{v['power_W_transmitted_total']:.4e} W / "
+            f"{v['photons_per_s_transmitted_total']:.4e} ph/s "
+            f"({n_pass}/{s['lambda_nm'].size} lines pass) ; "
+            f"P_trans/P_mach {_fmt(v['ratio_to_machine_total'])}"
         )
         for fib in rep["fibers"][1:]:
             b = fp["stages"][key]["fibers"][fiber_tag(fib)]
             print(
                 f"    {fib['core_um']:.0f} um / NA {fib['na']:g}: "
-                f"{b['power_W_total']:.4e} W, "
-                f"{b['photons_per_s_total']:.4e} ph/s"
+                f"transmitted {b['power_W_transmitted_total']:.4e} W, "
+                f"{b['photons_per_s_transmitted_total']:.4e} ph/s"
             )
 
     print("")
     print("[window cutoffs -- ASSUMED representative parts, not LAPD hardware]")
-    for cut in cutoff_table():
+    for cut in rep["cutoffs"]:
         print(
             f"  {cut['material']}: 50 % at {cut['cutoff_nm']:.0f} +/- "
             f"{cut['uncertainty_nm']:.0f} nm ({cut['basis']})"
@@ -1876,7 +2358,7 @@ def print_console(rep):
         print(f"    caveat: {cut['caveat']}")
     for key in STAGE_ORDER:
         s = rep["stages"][key]
-        for cut in cutoff_table():
+        for cut in rep["cutoffs"]:
             mask = transmits(cut, s["lambda_nm"])
             print(
                 f"  {s['short']} through {cut['short']}: "
@@ -1913,6 +2395,19 @@ def _parser():
     parser.add_argument("--output-stem", type=Path, default=None)
     parser.add_argument("--fiber-core-um", type=float, default=400.0)
     parser.add_argument("--fiber-na", type=float, default=0.22)
+    parser.add_argument(
+        "--window",
+        choices=sorted(WINDOW_TRANSMISSION),
+        default="fused_silica",
+        help="port window material whose datasheet transmission curve is "
+        "applied to every line",
+    )
+    parser.add_argument(
+        "--fiber-length-m",
+        type=float,
+        default=2.0,
+        help="fiber run length [m]; sets the bulk attenuation",
+    )
     parser.add_argument("--dpi", type=int, default=180)
     return parser
 
@@ -1931,12 +2426,18 @@ def main(argv=None):
             f"{args.fiber_core_um} um, NA {args.fiber_na}"
         )
 
+    if args.fiber_length_m <= 0.0:
+        raise ArtifactRefused(
+            f"--fiber-length-m must be positive; got {args.fiber_length_m}"
+        )
     rep = build(
         args.h5,
         [int(p) for p in args.ports],
         tuple(float(w) for w in args.window_ms),
         args.fiber_core_um,
         args.fiber_na,
+        args.window,
+        args.fiber_length_m,
     )
 
     stem = args.output_stem
@@ -1945,17 +2446,18 @@ def main(argv=None):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
 
-    figure_machine(rep, f"{stem}_line_power_machine", dpi=args.dpi)
-    figure_fiber(rep, f"{stem}_synthetic_fiber_p{args.ports[0]}_p{args.ports[1]}", dpi=args.dpi)
+    tag = f"p{args.ports[0]}_p{args.ports[1]}"
+    figure_chord_power(rep, f"{stem}_chord_power_{tag}", dpi=args.dpi)
+    figure_photon_counter(rep, f"{stem}_photon_counter_{tag}", dpi=args.dpi)
     md = Path(f"{stem}_line_radiation.md")
     md.write_text(markdown_report(rep))
 
     print_console(rep)
     print("")
-    print(f"wrote {stem}_line_power_machine.pdf")
-    print(f"wrote {stem}_line_power_machine.png")
-    print(f"wrote {stem}_synthetic_fiber_p{args.ports[0]}_p{args.ports[1]}.pdf")
-    print(f"wrote {stem}_synthetic_fiber_p{args.ports[0]}_p{args.ports[1]}.png")
+    print(f"wrote {stem}_chord_power_{tag}.pdf")
+    print(f"wrote {stem}_chord_power_{tag}.png")
+    print(f"wrote {stem}_photon_counter_{tag}.pdf")
+    print(f"wrote {stem}_photon_counter_{tag}.png")
     print(f"wrote {md}")
     return 0
 
