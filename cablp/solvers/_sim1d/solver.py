@@ -7876,6 +7876,22 @@ class LAPDSim1D:
         # control flags are inert to the seed signature, so clearing this here
         # cannot change the stored entry's key or content.
         flags["use_cached_neutral_seed"] = False
+        # The two DVM directed-recycle jets, cleared for the SAME reason as
+        # cathode_coupling above: this pre-solve has no plasma and no cathode
+        # solve, so there is no collected ion flux for either jet to split and
+        # no phi_c / phi_a for it to launch against. They are additionally
+        # latched to the arm current (neutral_jet_arm_current_A), which a
+        # Plasma=False run never reaches, so the channels are inert here twice
+        # over. Without this the construction guards that require a cathode
+        # solve behind each jet refuse the INNER sim -- a guard firing on a
+        # state where the thing it protects cannot happen. Clearing them
+        # changes no configuration that constructed before: every config this
+        # touches is one that raised, so the equilibrated seed, its cache
+        # signature and every existing trajectory are bit-identical. The OUTER
+        # run is untouched: both are input_dict keys, and `params` is the COPY
+        # `get_config()` returned, so these two lines reach the inner sim only.
+        params["neutral_kinetic_dvm_cathode_jet"] = False
+        params["neutral_kinetic_dvm_anode_jet"] = False
         # The equilibration OWNS its neutral start; it must not inherit the
         # outer run's nn0. nn0 is the direct-run fill (a realistic pre-shot
         # background), whereas this inner sim accumulates the fill from

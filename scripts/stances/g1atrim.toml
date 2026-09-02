@@ -2,6 +2,7 @@
 #
 # Stance   : g1atrim
 # Adopted  : 2026-08-19
+# Closure  : kinetic DVM (neutral_model = "kinetic_dvm"), since 2026-09-02
 # Form     : declaration blocks, since 2026-08-30
 #
 # This file is the ONE artifact that constructs the stance, and it carries two
@@ -17,15 +18,27 @@
 # ``[models.<family>]`` blocks are INVENTORIES, not deltas: each states one
 # model family's COMPLETE membership, every member written regardless of value,
 # so the block reads as the whole decision and cannot go stale against a default
-# that moves underneath it. Four families are declared here -- beam_tail_closure,
-# cathode_surface_recycle, anode_surface_recycle and initial_neutral_state.
-# The two neutral-closure families (neutral_closure, neutral_radial_closure)
-# are UNDECLARABLE at this stance: a family with a selector may only be declared
-# when that selector is at its engaging value, and this stance runs
-# neutral_model = "moment" and neutral_momentum_radial = "uniform". It therefore
-# runs the moment closure IMPLICITLY, by config default, and says so here rather
-# than in a block. See cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md for the form,
-# its resolver and its refusals.
+# that moves underneath it. Three families are declared here --
+# neutral_closure, beam_tail_closure and initial_neutral_state.
+#
+# neutral_closure became DECLARABLE at the kinetic stance event (2026-09-02).
+# A family with a selector may only be declared when that selector is at its
+# engaging value, and this stance now runs neutral_model = "kinetic_dvm".
+# Its fourteen members INCLUDE the four cathode-jet keys and the three
+# anode-jet keys that the cathode_surface_recycle and anode_surface_recycle
+# blocks used to declare, and two blocks may not claim one key -- so those two
+# blocks are GONE from this file and the neutral_closure block below states
+# each of those keys at the value the kinetic closure requires. The four keys
+# they carried that neutral_closure does not own -- cathode_jet_R_N/R_E and
+# anode_jet_R_N/R_E -- are the FLUID jets' surface pairs, inert while those
+# jets are off, and they sit undeclared at their config defaults; the armed
+# DVM jets read their own neutral_kinetic_dvm_{cathode,anode}_jet_R_N/_R_E
+# pairs, which are the same numbers and are also config defaults.
+#
+# neutral_radial_closure stays UNDECLARABLE: its selector
+# neutral_momentum_radial is "uniform", not the engaging "kinetic_two_moment".
+# See cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md for the form, its resolver
+# and its refusals.
 #
 # Applying the two flat tables and the projected blocks on top of
 # ``default_config()`` reproduces, key for key, the config the g1atrim arm of
@@ -250,16 +263,20 @@ machine_radius_profile_cm = [
 nx = 268
 
 # CATHODE AND CIRCUIT.
-# C_R re-trimmed 2026-08-25 (7.36 -> 8.76), the ONE knob turned to restore the
-# drive under the plateau_multigroup anomalous-heating closure adopted below.
-# The trim was a three-point scan at ES1 (C_R 8.4 / 8.9 / 9.4), a log-log fit of
-# plateau current against C_R solved for a stage-(i) plateau ratio of 1.000, and
-# a confirm arm at the fitted C_R* that measured a drive ratio of 1.000. It is
-# still the ONE drive-side fit knob: cathode_Ts_base_K is NOT co-trimmed and
-# stays at the measured config default 1910.0, because the two are the same flat
-# direction and only one member of a flat pair may carry a calibration. See
-# production_stance_provenance.md.
-C_R = 8.76
+# C_R re-trimmed 2026-09-01 (8.76 -> 9.30), the ONE knob turned to restore the
+# drive under the KINETIC neutral closure adopted below, and PROMOTED from an
+# arm override to the stance value at the kinetic stance event (2026-09-02).
+# The kinetic neutral inventory loads the discharge differently, so the fluid
+# closure's 8.76 came in 5.5% under the drive band on the DVM; the trim was a
+# two-point secant in ln(plateau) against ln(C_R) measured on the DVM itself,
+# solved for a plateau ratio of 1.000 against the measured band. The preceding
+# value 8.76 was the same one-knob trim done for the plateau_multigroup
+# anomalous-heating closure (2026-08-25, a three-point scan and a log-log fit).
+# It is still the ONE drive-side fit knob: cathode_Ts_base_K is NOT co-trimmed
+# and stays at the measured config default 1910.0, because the two are the same
+# flat direction and only one member of a flat pair may carry a calibration.
+# See production_stance_provenance.md.
+C_R = 9.3
 # V_bank is DELETED from this stance (2026-08-25; the 23b R4 deletion, executed
 # for this half only). It was never a stance decision: V_bank is a PER-RUNG
 # measurement owned by run_mechanism_ladder.ES_OPERATING (ES1 = 177.843, exactly
@@ -282,15 +299,19 @@ cathode_emission_profile = "uniform"
 # 1998.15 -> 1910.0 on every campaign arm -- measured as a real second delta in
 # the pre-flight against scripts/mgcr1_confirm.h5, and reproduced as absent the
 # moment this row is restored.
-#   Whether that move is physically inert is NOT settled here. Under
-#   cathode_warming_model = "power_balance" the evolving surface temperature is
-#   seeded from cathode_Ts_base_K, not from T_s (solver.py:1917), and every live
-#   read of T_s is guarded by that evolving value -- so T_s is inert on THIS
-#   stance. Two reads are unguarded: cathode.py:339/410 (covered on the live
-#   emission path by the T_s_override_K route) and solver.py:10925, which feeds
-#   the kinetic background and is dead only because this stance runs
-#   neutral_model = "moment". It goes LIVE under "kinetic_dvm", so the
-#   adjudication is assigned to the DVM program rather than to a stance edit.
+#   Whether that move is physically inert was left open here, ON A READING THE
+#   KINETIC STANCE EVENT DISPROVED, so the reading is corrected rather than
+#   carried forward. Under cathode_warming_model = "power_balance" the evolving
+#   surface temperature is seeded from cathode_Ts_base_K, not from T_s, and
+#   every read of T_s on the cathode path is guarded by that evolving value or
+#   by the T_s_override_K route -- so T_s is inert on THIS stance. The earlier
+#   text predicted that the one unguarded read, the kinetic background's, would
+#   go LIVE under "kinetic_dvm"; it does not. That read belongs to
+#   neutral_model = "kinetic" (the TPMC path, whose _kinetic namespace is built
+#   only for that selection), and the DVM's own surface-temperature input is
+#   taken from the same evolving cathode value with T_s as its fallback. So the
+#   row stays inert under this stance's closure too, and it is kept because the
+#   arm of record ran it and deleting it would move T_s on every campaign arm.
 T_s = 1998.15
 
 # FUELING. The puff window that arms with the equilibrate route is a member of
@@ -306,6 +327,60 @@ S_gp = 9010.0
 gas_puff_profile = "orifice"
 gas_puff_orifice_id_cm = 3.95
 gas_puff_orifice_length_cm = 22.0
+
+# KINETIC NEUTRAL CLOSURE -- the DVM engine's own controls. The closure
+# SELECTION and the thirteen keys it forces are [models.neutral_closure]
+# below; the keys here belong to no family and are therefore stated flat.
+#
+# VELOCITY MESH AND NEUTRAL CLOCK. Numerical choices, not physics. The kinetic
+# state advances on its own clock rather than on the plasma step, and between
+# ticks the plasma consumes a zero-order hold of it -- a Lie-type splitting
+# whose error is first order in the cadence by construction. 64 x 24 velocity
+# nodes at a 3.125 us tick is the resolution the production program ran and
+# gated; the package defaults (48 x 12 at 25 us) are the cheap development
+# setting and their own docstring calls the cadence provisional. nvz must be
+# EVEN -- an odd count places a node at exactly v_z = 0, which neither
+# transports nor mirrors.
+neutral_kinetic_dvm_nvz = 64
+neutral_kinetic_dvm_nvp = 24
+neutral_kinetic_dvm_cadence_s = 3.125e-6
+
+# WALL INTERACTION. Both keys equal their config default and are stated anyway,
+# as class-1 declarations: the closure IS this pair of choices, and a stance
+# that ran them by silence would not read as having made them.
+# neutral_kinetic_dvm_accommodation is the thermal accommodation coefficient
+# alpha_E of the room-temperature technical-metal surfaces, read at the
+# cylinder and the end plates only (the anode mesh and the interior closed
+# faces are fully accommodating by construction and do not read it). Under the
+# Maxwell specular-diffuse kernel the diffuse fraction IS alpha_E exactly.
+# neutral_kinetic_dvm_wall_reflection chooses the spectrum the remaining
+# (1 - alpha_E) share leaves the CYLINDER on: "diffuse_elastic" returns the
+# same count on a cosine spectrum whose temperature is solved so the discrete
+# mean energy equals the retained share's own incident mean, so the surface
+# randomizes direction while exchanging no energy and returning no net axial
+# momentum. See production_stance_provenance.md for the bracket alpha_E sits in.
+neutral_kinetic_dvm_accommodation = 0.40
+neutral_kinetic_dvm_wall_reflection = "diffuse_elastic"
+
+# THE DVM'S OWN DIRECTED-RECYCLE JETS, armed at both electrode faces. They are
+# the kinetic closure's form of the channels the FLUID cathode_neutral_jet and
+# anode_neutral_jet carried: that pair is evolved-M_n momentum physics, which
+# the neutral_closure block below turns off because the DVM owns the neutral
+# first moment, while these split the counted recycle into an energetic
+# backscatter share born directly into f and a thermal remainder. Their R_N/R_E
+# pairs are config defaults, the same surface numbers the fluid pair used, and
+# are not restated here.
+neutral_kinetic_dvm_cathode_jet = true
+neutral_kinetic_dvm_anode_jet = true
+# The CATHODE jets -- both the fluid and the DVM channel, from one latch -- are
+# current-ARMED with hysteresis: the latch arms on the first accepted step
+# whose cathode solve books an ion current at or above the arming threshold and
+# releases only when a step falls below the disarming one, so the jets act over
+# the conducting phase and cannot chatter at the crossing. While disarmed
+# nothing is launched AND the cathode surface is not debited for it. The ANODE
+# jet is not covered: it is driven by the anode-collected current.
+neutral_jet_arm_current_A = 50.0
+neutral_jet_disarm_current_A = 25.0
 
 # IONIZATION BIRTH TEMPERATURES. Neither key belongs to a declared family.
 Te_birth_ionization = "local"
@@ -345,11 +420,25 @@ anode_sheath_full_debit = true
 # let the deposition cell run hot across the substep boundary.
 beam_deposition_in_heat_substep = true
 
-# NEUTRAL CLOSURE. Two-zone particles, neutral momentum and energy and the hot
-# internal wall are config defaults since the R2a fold-in and are no longer
-# named here. They are members of the neutral_closure family, which this stance
-# cannot declare: that family is engaged at neutral_model = "kinetic_dvm" and
-# this stance runs "moment". The moment closure is therefore implicit here.
+# NEUTRAL CLOSURE. The three closure flags this stance turns -- neutral
+# momentum, neutral energy and the hot internal wall, all config defaults ON
+# since the R2a fold-in -- are members of the neutral_closure family and are
+# stated in [models.neutral_closure] below, not here.
+#
+# neutral_two_zone is NOT a member: it is a PREREQUISITE of the kinetic
+# closure, which the solver requires rather than resolves, so it is stated
+# flat. It equals the config default and is written anyway, as a class-1
+# declaration: the DVM carries column AND annulus, and the campaign driver's
+# --two-zone flag sets nothing this row does not already say.
+neutral_two_zone = true
+
+# The baffles act on the DVM annulus as well as on the fluid neutral field:
+# the annulus flux crossing each baffle face is intercepted in the blocked
+# fraction of the face area and re-emitted at the wall temperature in the cell
+# it came from, particle-conserving. It adds no coefficient -- the clear radius
+# is the measured CAD value already named in [input_dict] -- and it requires
+# the neutral_baffles flag and its two arrays, which follow.
+neutral_kinetic_dvm_baffles = true
 
 # GEOMETRY: the per-cell prescribed areas and the baffles that go with the
 # measured machine. Both stay stance-side because the arrays they require are
@@ -417,36 +506,59 @@ beam_tail_anode_interception = false
 none_valued = ["heating_anomalous_tail_phi_c_fraction"]
 
 
-[models.cathode_surface_recycle]
+[models.neutral_closure]
 
-# The cathode surface's directed-recycle channel, at the config defaults in
-# full. The stance turns none of these keys: the whole family is declared so
-# that the arm of record reads as the complete decision rather than as silence
-# over whatever the package default happens to be.
-cathode_neutral_jet = true
-cathode_jet_R_N = 0.34
-cathode_jet_R_E = 0.18
-cathode_jet_energy_convention = "total_reflected"
-cathode_jet_surface_debit = true
+# THE CLOSURE OF RECORD, adopted 2026-09-02. The neutral field is carried by
+# the transient discrete-velocity model: a distribution f(z, v_z, v_perp) on
+# the column and the annulus, advanced on its own clock, rather than by the
+# two-moment fluid this stance ran until now. The selection is the first row;
+# the other thirteen keys are what it FORCES, and they are written here at
+# those required values rather than left to be resolved one refusal at a time.
+#
+# Everything below the selection says the same thing twice over: the DVM state
+# OWNS the neutral first moment, so nothing else may carry a second copy of it
+# or stand on one.
+#
+#   * neutral_momentum would evolve an M_n field that is already the first
+#     moment of f;
+#   * neutral_energy books the frictional half of the collisional exchange
+#     against u - u_n, which has no meaning without that fluid wind, and the
+#     hot internal wall and the hot birth drift are presence gates standing on
+#     the hot channel neutral_energy creates;
+#   * neutral_momentum_radial closes the RADIAL profile of the evolved wind,
+#     so "uniform" is the only reading left;
+#   * the four cathode-jet keys and the two anode-jet keys are M_n momentum
+#     physics for the same reason. The recycle channels themselves are NOT
+#     given up: the DVM's own cathode and anode jets carry them, armed in
+#     [input_dict] above, and cathode_jet_energy_convention drops to "legacy"
+#     because "total_reflected" rescales the FLUID jet's launch energy and
+#     requires that fluid jet to exist;
+#   * neutral_knudsen_temperature = "local" would scale the Knudsen
+#     conductances by an evolved per-cell Tn, which only exists under
+#     neutral_energy.
+#
+# The block therefore SUPERSEDES this file's former cathode_surface_recycle and
+# anode_surface_recycle blocks: it claims seven of their eleven keys, and two
+# blocks may not claim one key. The four it does not claim -- cathode_jet_R_N,
+# cathode_jet_R_E, anode_jet_R_N, anode_jet_R_E -- are the fluid jets' surface
+# pairs, inert with those jets off, and are left at their config defaults.
+neutral_model = "kinetic_dvm"
+neutral_momentum = false
+neutral_energy = false
+neutral_hot_internal_wall = false
+neutral_hot_birth_drift = false
+neutral_momentum_radial = "uniform"
+neutral_knudsen_temperature = "frozen"
+cathode_neutral_jet = false
+cathode_jet_surface_debit = false
+cathode_jet_energy_convention = "legacy"
 cathode_jet_hot_carrier = false
+anode_neutral_jet = false
+neutral_mesh_accommodation = false
 
-
-[models.anode_surface_recycle]
-
-# The anode mesh's directed-recycle channel, armed at the stance. The R_N/R_E
-# pair is a surface property whose values are the config defaults, restated here
-# because a block is the whole decision. The convention key is read against that
-# pair: the 0.41 is a TOTAL reflected-energy fraction, and reading it per
-# backscattered particle would launch the atoms ~21% slow.
-anode_neutral_jet = true
-anode_jet_R_N = 0.63
-anode_jet_R_E = 0.41
-anode_jet_energy_convention = "total_reflected"
-
-# The wire-intercepted wind momentum lands on the anode structure. It is armed
-# WITH the jet: the sink was built for exactly the opposing-jet recirculation
-# the jet creates, and both act per anode face on both flanking cells.
-neutral_mesh_accommodation = true
+# The anode jet's energy convention is read against an anode jet that is off,
+# and undeclared is the only value that stands without it.
+none_valued = ["anode_jet_energy_convention"]
 
 
 [models.initial_neutral_state]
