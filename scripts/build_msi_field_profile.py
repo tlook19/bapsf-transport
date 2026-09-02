@@ -1211,22 +1211,38 @@ def main():
     annulus = geometry.neutral_volume_cm3 - geometry.plasma_volume_cm3
     has_annulus = annulus > 0.0
     fraction = np.where(has_annulus, annulus / geometry.neutral_volume_cm3, np.nan)
-    # Reported as a value plus the SPAN of the cells attaining it, never as one
-    # index: wherever the area cap binds the share is 1 - AREA_CAP_FRACTION, so
-    # the minimum is a wide tie and any single "worst cell" is whichever member
-    # the argmin happened to reach. The tie is counted on EXACT equality, which
-    # is narrower than the cap band: each bore level rounds to its own double,
-    # so cells pinned at the cap on a different R_m print the same value while
-    # comparing unequal. Read the span as "where the cap binds", not as a
-    # boundary.
+    # Reported as the value plus the CAP SET, never as one index. In a
+    # cap-bound cell the share is 1 - AREA_CAP_FRACTION only up to the
+    # per-cell rounding of the dz-dependent volumes this ratio is built from,
+    # and the mesh's dz varies, so those cells do NOT all carry one double:
+    # the minimum is whichever of them happened to round lowest, which locates
+    # nothing. The cap set is taken from the geometry's own radii against the
+    # cap rule, not by comparing shares to each other.
     smallest = float(np.nanmin(fraction))
-    tied = np.flatnonzero(fraction == smallest)
+    cap_bound = np.flatnonzero(
+        geometry.Rp_cm >= np.sqrt(AREA_CAP_FRACTION) * geometry.Rm_cm - 1e-9
+    )
+    if cap_bound.size:
+        runs = np.split(cap_bound, np.flatnonzero(np.diff(cap_bound) != 1) + 1)
+        cap_ulp = int(np.abs(
+            fraction[cap_bound].view(np.int64)
+            - np.float64(smallest).view(np.int64)
+        ).max())
+        cap_note = (
+            f"the area cap binds in {cap_bound.size} cells ("
+            + ", ".join(
+                f"{int(r[0])}-{int(r[-1])}" if r.size > 1 else f"{int(r[0])}"
+                for r in runs
+            )
+            + f"), whose shares all agree with this value to within "
+            f"{cap_ulp} ULP"
+        )
+    else:
+        cap_note = "the area cap binds in no cell"
     say(
         f"  smallest PER-CELL annulus share (V_m - V_p)/V_m over the cells "
-        f"that have an annulus, cap-bound cells included = {smallest:.6f}, "
-        f"attained exactly in {tied.size} tied cell(s) spanning "
-        f"{int(tied[0])}...{int(tied[-1])}; guard "
-        f"neutral_annulus_volume_fraction_min = "
+        f"that have an annulus, cap-bound cells included = {smallest:.6f}; "
+        f"{cap_note}; guard neutral_annulus_volume_fraction_min = "
         f"{params.get('neutral_annulus_volume_fraction_min', 1e-2)}"
     )
     say(f"  cells with no annulus (V_ann == 0): {int(np.sum(~has_annulus))}")
