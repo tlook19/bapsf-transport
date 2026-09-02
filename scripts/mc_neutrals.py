@@ -589,10 +589,13 @@ def load_background(path, window_ms, puff_orifice=None):
         # would silently restore the Vm over-count there.
         two_zone = "nn_a" in f
         Va_full = np.maximum(Vm_full - Vp_full, 0.0)
-        # The boundary row is stance-dependent (see boundary_recycle_row).
+        # Always characteristic_boundary; ``stance`` is the artifact's recorded
+        # provenance label, not a selector (see boundary_recycle_row).
         row, stance = boundary_recycle_row(f)
-        # Plasma removal as booked by EITHER row: the guard's reference, so a
-        # channel read from the wrong row cannot pass as a genuinely empty one.
+        # Plasma removal summed over BOTH historical rows: the guard's
+        # reference, nonzero on a pre-retirement artifact as well as on a
+        # current run, so an empty recycle channel reads as a defect rather
+        # than as an empty machine.
         removal_any = sum(
             -np.mean(f[f"rhs_terms/{name}/n"][:][m], axis=0) * Vp_full
             for name in BOUNDARY_ROWS
