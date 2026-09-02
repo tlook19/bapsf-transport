@@ -82,12 +82,22 @@ reader meets it once. The Python API passes `None` directly and never needs it.
 The campaign driver reaches blocks through `--stance`; it grew no new flag.
 
 **The stance of record, `scripts/stances/g1atrim.toml`, is written in block form
-since 2026-08-30**: four families declared — `beam_tail_closure`,
-`cathode_surface_recycle`, `anode_surface_recycle` and `initial_neutral_state` —
-with the rest of the stance staying flat. The two neutral-closure families are
-UNDECLARABLE there because their selectors are not engaged (that stance runs
-`neutral_model = "moment"` and `neutral_momentum_radial = "uniform"`), so it
-runs the moment closure implicitly and its header says so.
+since 2026-08-30**: three families declared — `neutral_closure`,
+`beam_tail_closure` and `initial_neutral_state` — with the rest of the stance
+staying flat.
+
+`neutral_closure` became declarable there at the kinetic stance event
+(2026-09-02), when that stance adopted `neutral_model = "kinetic_dvm"`. Its
+membership CLAIMS seven of the eleven keys the stance's former
+`cathode_surface_recycle` and `anode_surface_recycle` blocks declared, and two
+blocks may not claim one key, so those two blocks were removed there in the
+same event; the four keys they carried that `neutral_closure` does not own
+(`cathode_jet_R_N`/`_R_E`, `anode_jet_R_N`/`_R_E`) are the fluid jets' surface
+pairs, inert with those jets off, and are left at their config defaults. That
+subsumption is the overlap rule doing what it is for, not a loss of coverage:
+the selection that owns those keys is the one that states them.
+`neutral_radial_closure` stays UNDECLARABLE there — its selector
+`neutral_momentum_radial` is `"uniform"`, not `"kinetic_two_moment"`.
 
 ## How it resolves
 
