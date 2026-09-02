@@ -1,5 +1,16 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
+**Recaptured 2026-09-02 (THE KINETIC STANCE EVENT — `g1atrim.toml` adopted the
+transient discrete-velocity neutral closure at wall accommodation 0.40, with
+the `C_R = 9.30` drive calibration promoted from arm override to stance value,
+after the ES1 program on the measured field profile; the neutral-equilibration
+pre-solve was fixed in the same event. A stance change and a golden re-anchor
+are one event, so this is the recapture that pays for it.** It moves the
+TRAJECTORY, the config identity, and the packed state's SHAPE: the fixture
+carries 6 fields per cell instead of 8, because the closure retires the evolved
+neutral momentum and energy rows. The recapture record's newest entry carries
+the moved numbers; the preceding recaptures are summarized next.
+
 **Recaptured 2026-08-28 (THE R3-TIP RECAPTURE — the one anchor event that
 rotates every golden reference together, closing the six-member R3
 reimplementation window; the stance file `g1atrim.toml` and
@@ -116,8 +127,8 @@ to be.
 |---|---|---|
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
-| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2.4× the measured 62,612 steps (the R3-tip recapture moved the count by ONE step, so the margin the 2026-08-26 adoption restored is unchanged), the margin restored by that adoption rather than by moving the cap (it was ~1.6× over the 94,044 steps of the capture before it). It exists so a change that quietly destroys the timestep fails fast instead of running for hours. If it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2× deliberately, against the 76,631 steps the fixture ran at the R2b re-anchor (2026-08-20), which is the capture the cap was chosen against and not the one immediately before the stance event: a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. Two recaptures then trimmed the fixture to 70,408 steps, and it is THAT count the 2026-08-25 stance event's +23,636 steps are measured from — 70,408 + 23,636 = the 94,044 above. The margin shrank to 1.6× without the cap moving, and the 2026-08-26 adoption restored it to ~2.4× — again without moving the cap; re-sizing it remains a golden-touching change rather than a maintenance edit. |
-| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **7 min 57 s** on the pure path against the full gate's 16 min 27 s compiled / 38 min 41 s pure (2026-08-28 R3-tip recapture, clean lane; the 11 min 33 s / 16 min 16 s / 45 min 55 s triple this row carried before was the 2026-08-26 adoption capture), and over the steps it covers it is the STRONGER check, because the golden certifies only what reaches a save. (Those are post-`mg-pure-vectorize` figures, the digest one measured on a clean lane 2026-08-26. The `~2.5 min` against a `~17` min gate this row carried before was true at the PREVIOUS stance; the adaptive-`dt` change recorded in the 2026-08-25 stance event is what moved it.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
+| `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2.65x the 56,605 steps measured at the 2026-09-02 kinetic stance. It exists so a change that quietly destroys the timestep fails fast instead of running for hours; if it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2x deliberately, against the 76,631 steps the fixture ran at the R2b re-anchor (2026-08-20) — a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. The margin has moved with the fixture ever since WITHOUT the cap moving: ~1.6x at the 94,044 steps of the 2026-08-25 stance event, ~2.4x at the 62,612 of the 2026-08-26 adoption and the 2026-08-28 R3-tip recapture (which moved the count by ONE step), ~2.65x now. Re-sizing it remains a golden-touching change rather than a maintenance edit. |
+| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **8 min 06 s** on the pure path (2026-09-02 kinetic recapture, clean lane) against the full gate's 26 min 56 s capture / 26 min 50 s verify COMPILED — the pure full-gate figure is not measured at this stance. Over the steps it covers the digest is the STRONGER check, because the golden certifies only what reaches a save. (Earlier figures, each true at its own stance: 7 min 57 s pure against 16 min 27 s compiled / 38 min 41 s pure at the 2026-08-28 R3-tip recapture; 11 min 33 s / 16 min 16 s / 45 min 55 s at the 2026-08-26 adoption; ~2.5 min against a ~17 min gate before the 2026-08-25 adaptive-`dt` change.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -131,19 +142,39 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 62,612 |
-| wall, single lane | **16 min 27 s** VERIFY compiled, **38 min 41 s** VERIFY pure, **37 min 56 s** / **38 min 36 s** CAPTURE pure (the two clean-process captures). All measured 2026-08-27/28 on a CLEAN lane, strictly serially, nothing else running. |
+| steps | 56,605 |
+| wall, single lane | **26 min 56 s** CAPTURE compiled, **26 min 50 s** VERIFY compiled. Measured 2026-09-02 on a CLEAN lane, strictly serially, nothing else running. **No PURE full-gate figure is measured at this stance, and none is carried forward from the last one** — the pure path is bit-exact against compiled by construction, so what is missing is a wall time and nothing about the fixture; anyone who needs it must measure it. |
 | saves | 2,620 |
-| `final_time` | 2.618681e-02 s (the dynamic `t_end`, reached) |
-| trajectory | `y[2620, 576]` = 8 fields × 72 cells |
+| `final_time` | 2.618754e-02 s (the dynamic `t_end`, reached) |
+| trajectory | `y[2620, 432]` = **6** fields × 72 cells |
 | phase census (saves) | 8 `pre_breakdown`, 11 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
 | save cadence | 10 us — the finest timing shift this fixture can resolve |
-| 4,000-step digest horizon | **7 min 57 s** pure (gate), 8 min 06 s / 7 min 59 s pure (the two reference captures) |
+| 4,000-step digest horizon | **8 min 06 s** pure (the reference capture) |
 
-*(Figures above are the 2026-08-28 R3-tip recapture; `steps`, `saves` and
+**Six fields per cell, not eight.** The kinetic closure retires the evolved
+neutral momentum and energy rows from the packed state, so the trajectory
+narrows from 576 to 432 columns. That is a SHAPE change, and `--verify` reports
+a shape mismatch before it reports a trajectory mismatch, so a stale fixture
+against this configuration fails loudly rather than subtly.
+
+**The step count fell 62,612 -> 56,605 (-9.6 %) and the wall time ROSE.** The
+compiled capture and verify are ~27 min each against the previous stance's
+16 min 27 s compiled verify: the per-accepted-step cost is higher under the
+kinetic closure, which is unsurprising — the DVM advances a distribution on a
+64 x 24 velocity mesh every 3.125 us tick, work the fluid closure did not do.
+The size of that per-step cost is NOT measured here and is not claimed; the two
+figures are single measurements on one lane, and a controlled comparison would
+have to run both closures at one stance.
+
+*(The paragraphs below this table are the record of EARLIER events and their
+figures are those events'. The 2026-08-28 R3-tip figures were: 62,612 steps;
+16 min 27 s VERIFY compiled, 38 min 41 s VERIFY pure, 37 min 56 s / 38 min 36 s
+CAPTURE pure; `final_time` 2.618681e-02 s; `y[2620, 576]`; 7 min 57 s pure at
+the digest horizon. `steps`, `saves` and
 `final_time` are read from the committed sidecar
 `scripts/baselines/production_discharge.json`, which is regenerated at every
-recapture and is the authority for them. The pure CAPTURE fell 45 min 55 s →
+recapture and is the authority for them, and the table above now carries the
+2026-09-02 values. The pure CAPTURE fell 45 min 55 s →
 37 min 56 s and the pure 4,000-step digest 11 min 33 s → 7 min 57 s across
 this event, on comparably clean lanes; the R3 lane march is the obvious
 candidate and the step count barely moved, but neither figure is a controlled
@@ -187,6 +218,98 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**2026-09-02 — THE KINETIC STANCE EVENT. RECAPTURED, on the compiled path.**
+`scripts/stances/g1atrim.toml` adopted `neutral_model = "kinetic_dvm"` — the
+transient discrete-velocity neutral closure — at wall accommodation 0.40 on a
+64 x 24 velocity mesh with a 3.125 us neutral clock, both DVM directed-recycle
+jets armed under the current latch, the baffles acting on the kinetic annulus,
+and `C_R = 9.30` promoted from arm override to the stance value. The decision
+followed the ES1 program on the measured field profile; the stance-side
+provenance — every key, its class and its honest bar, and what may be claimed
+from the closure family — is in `scripts/production_stance_provenance.md` and
+is not restated here. A stance change and a golden re-anchor are one event,
+which is what this recapture pays for.
+
+**The fixture's SHAPE moved, which is new for this record.** The closure
+retires the evolved neutral momentum and energy rows, so the packed state
+carries 6 fields per cell instead of 8 and the trajectory narrows
+`y[2620, 576]` -> `y[2620, 432]`. A stale fixture against this configuration
+therefore fails on the shape check before the trajectory comparison is even
+reached.
+
+| reference | before | after |
+|---|---|---|
+| `production_discharge.npz` `sha256` | `2c02ccd882261a0b01e0a1e8f0e313113b8431fadd526fa9d4859694e5704306` | `cdd706d3301e85871ae6e0406bd31cf373ac46f1f38cc00d2c704961513704fc` |
+| `production_discharge.json` `sha256` | `93a41a1c4fc4010fc3c0d57c6527f1de7e5b8c21d145a9b791eeca445068c9f0` | `3e1cd3514a9425cd4fc6d24f74cb86da1644c8f3d83afbf0ea18250157d792e9` |
+| `golden_digest_4k.json` `sha256` | `71150c0483357f1adace777b8250fad02883c5a048190b889c2211e6c38bf46c` | `7f5bd37630feec56ef3e5b366ce0aed429f29eab359ee27cae9e733658b7699c` |
+| `golden_digest_4k.json` `config_identity` | `ed352561a09c442c0e9ee5a592f3ce55744cb25d0110af9774a60eee10217d37` | `ea042038a5e01230c11a66f1cf429099fc914633febd2fd6e9721b6b2626c965` |
+| `golden_digest_4k.json` `digest` | `cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2` | `b883916aae9b6aca6b2f501f6418a943363abed29ce9f19394d2dfc7275fc086` |
+| `golden_digest_4k.json` `final_time` | `0.0004714055010197914` | `0.0004563240693165767` |
+| `golden_digest_4k.json` `fields_per_cell` | `8` | `6` |
+| sidecar `steps` | `62,612` | `56,605` |
+| sidecar `final_time` | `2.618681e-02` s | `2.618754e-02` s |
+| sidecar `saves` / `cells` | `2620` / `72` | UNCHANGED |
+| sidecar `params` / `flags` key counts | `256` / `53` | UNCHANGED — 0 added, 0 removed |
+
+**Exactly nineteen configuration values moved, and every one is a stance key.**
+Read off the committed sidecar's own `params`/`flags` before and after:
+
+- `params` (15): `neutral_model`, `C_R`, `cathode_neutral_jet`,
+  `cathode_jet_surface_debit`, `cathode_jet_energy_convention`,
+  `anode_neutral_jet`, `anode_jet_energy_convention`,
+  `neutral_mesh_accommodation`, `neutral_kinetic_dvm_cathode_jet`,
+  `neutral_kinetic_dvm_anode_jet`, `neutral_kinetic_dvm_cadence_s`,
+  `neutral_kinetic_dvm_nvz`, `neutral_kinetic_dvm_nvp`,
+  `neutral_jet_arm_current_A`, `neutral_jet_disarm_current_A`;
+- `flags` (4): `neutral_momentum`, `neutral_energy`,
+  `neutral_hot_internal_wall`, `neutral_kinetic_dvm_baffles`.
+
+The stance also NAMES `neutral_kinetic_dvm_accommodation = 0.40`,
+`neutral_kinetic_dvm_wall_reflection = "diffuse_elastic"` and
+`neutral_two_zone = true`, and they are absent from the list above BECAUSE THEY
+ALREADY EQUALLED THEIR CONFIG DEFAULTS. They are written into the stance as
+class-1 declarations — the closure is exactly those choices — and they move no
+resolved value, which is why the recapture cannot see them. The same is true of
+the seven `[models.neutral_closure]` members that were already at the value the
+selection requires.
+
+**A SOLVER FIX RODE IN THE SAME EVENT, and it is bit-exact for every
+configuration that constructed before it.** `run_neutral_equilibration` builds
+an inner neutrals-only `LAPDSim1D` and already cleared `Plasma`,
+`cathode_coupling` and the seed-cache controls on its own copy of the config;
+it did not clear the two DVM jets, so the golden's own re-cut — which arms
+`neutral_equilibration` because the shaped foot cannot travel to `nx = 60` —
+was REFUSED at the inner construction the moment the stance selected
+`kinetic_dvm`. The pre-solve has no plasma and no cathode solve, so neither jet
+has a collected ion flux to split or a sheath potential to launch against, and
+both are additionally latched to an arm current a `Plasma = False` run never
+reaches: the guard was firing on a state where the thing it protects cannot
+happen. The only configurations the fix touches are ones that RAISED, so no
+equilibrated seed, cache signature or trajectory that existed before it can
+move. It is covered from now on by the smoke case
+`golden-baseline-config-constructs`, which builds this fixture's config through
+`baseline_sim1d.build_baseline_config()` — so it tracks the stance of record
+with no pin of its own — and runs the pre-solve to `t_end = 0.0`, exercising the
+inner construction at zero steps. Constructing the outer sim alone would not
+have caught it, and did not: the outer sim constructed fine throughout.
+
+Gates at this tip, single lane, strictly serial, nothing else running:
+
+| gate | result |
+|---|---|
+| CAPTURE, compiled | `baseline captured: ... saves=2620, cells=72, fields=6, steps=56605, final_time=2.618754e-02 s`, **26 min 56 s** (`kernels=cython/_cathode_kernels_cy/tierA+csda`, probed in-process) |
+| COMPILED golden | `baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s`, **26 min 50 s** |
+| 4k digest reference, pure | captured in the same event, **8 min 06 s** (`kernels=pure`) |
+| PURE 4k digest leg | `digest gate OK: steps=4000, digest=b883916aae9b6aca6b2f501f6418a943363abed29ce9f19394d2dfc7275fc086, exact=True` |
+| smoke | exit 0 at 120 cases, all five compiled-kernel equivalence blocks LIVE |
+| `config_snapshots.json` | rotated with the stance (four case digests; `manifest_sha256`, `parameter_count` 256 and `flag_count` 53 all UNCHANGED). Re-derived after the solver fix and byte-identical, so the fix moved no config digest — it is runtime behaviour on a copy, not config resolution. |
+
+**Not measured at this stance, and not carried forward from the last one: every
+PURE figure for the full gate.** The capture and verify above are compiled. The
+pure path is bit-exact against compiled by construction, so the fixture is not
+in doubt; what is missing is only a wall-time number, and anyone who needs one
+must measure it rather than read the previous stance's row.
 
 **2026-09-01 — NON-RECAPTURE STANCE EVENT: `g1atrim.toml`'s
 `plasma_radius_profile_cm` rebuilt from the measured field. NOTHING WAS
