@@ -81,12 +81,13 @@ CONSERVES etendue -- it trades angular acceptance for collection area,
 changing the field of view rather than G.  The fiber core, its NA and the
 run length are MEASURED -- the FT1000UMT spec sheet and the operator's own
 reading of the run -- while the window material and the attenuation curve
-applied to the fiber remain ASSUMED; see ``ASSUMPTIONS``, which is emitted
-verbatim into the markdown product.
+applied to the fiber remain ASSUMED; see ``assumptions()``, which resolves
+the provenance block against the run's OWN knobs and is emitted into the
+markdown product.
 
 WINDOW CUTOFFS.  The three 50 % transmission cutoffs drawn on the figures are
 ASSUMED representative values for generic commercial parts, each carrying its
-datasheet source in ``ASSUMPTIONS``.  The material actually installed on the
+datasheet source in ``assumptions()``.  The material actually installed on the
 LAPD viewports is NOT known to this script and is not claimed.  The fiber on
 the bench IS identified, but its manufacturer publishes no attenuation figure
 at the 320.37 nm He II line -- the typical family curve begins near 400 nm --
@@ -406,273 +407,457 @@ STAGE_ORDER = ("he1", "he0")
 
 
 # --- provenance -----------------------------------------------------------
-#
-# PROVENANCE BLOCK.  Every number here that is not read from the artifact or
-# from an OPEN-ADAS file.  ``class`` follows the repo's provenance vocabulary:
-# MEASURED / DERIVED / FITTED / ASSUMED.  This structure is emitted verbatim
-# into the markdown product, so the assumptions travel with the numbers.
 
-ASSUMPTIONS = (
-    {
-        "quantity": "fiber core diameter",
-        "value": (
-            "1000 +/- 15 um (default); 400 and 600 um reported as comparison "
-            "columns"
-        ),
-        "class": "MEASURED",
-        "source": (
-            "Thorlabs FT1000UMT, spec sheet TTN004598-S01 Rev A: core "
-            "1000 +/- 15 um, pure silica core / TECS hard clad, Tefzel coat. "
-            "The 400 and 600 um columns are NOT hardware -- they are kept so "
-            "the core-scaling argument (collected flux ~ core^2 against "
-            "f_slit ~ 1/core) stays readable. Substitutable with "
-            "--fiber-core-um."
-        ),
-    },
-    {
-        "quantity": "fiber numerical aperture",
-        "value": "NA = 0.39 (default); NA 0.12 reported as a comparison row",
-        "class": "MEASURED",
-        "source": (
-            "Thorlabs FT1000UMT, spec sheet TTN004598-S01 Rev A: NA 0.39, "
-            "with NO tolerance stated on the sheet. The NA 0.12 row is a "
-            "comparison, not hardware. Substitutable with --fiber-na."
-        ),
-    },
-    {
-        "quantity": "acceptance solid angle Omega",
-        "value": "pi * NA^2 (0.1520 sr at NA = 0.22)",
-        "class": "DERIVED",
-        "source": (
-            "Small-angle form of the step-index acceptance cone, Omega = "
-            "pi * sin^2(theta_max) with sin(theta_max) = NA in vacuum. At "
-            "NA = 0.39 the exact cone 2*pi*(1 - cos(theta_max)) is 3.2 % "
-            "below pi*NA^2, so the widest bracket member is the least "
-            "accurate; the default and the narrow member are within 0.5 %."
-        ),
-    },
-    {
-        "quantity": "collection model",
-        "value": (
-            "UPPER BOUND: spot at the plasma ~ core width; no collection "
-            "optics assumed"
-        ),
-        "class": "ASSUMED",
-        "source": (
-            "Stated bench assumption: light enters a bare fiber and the "
-            "imaged spot at the plasma is approximately the core width, so "
-            "the collection area IS the core area. Every real train loses "
-            "light against this, and a collimating lens cannot beat it: a "
-            "lens CONSERVES etendue, trading acceptance angle for area."
-        ),
-    },
-    {
-        "quantity": "etendue G",
-        "value": "A_core * Omega (1.911e-04 cm^2 sr at 400 um / NA 0.22)",
-        "class": "DERIVED",
-        "source": "G = pi*(d/2)^2 * pi*NA^2, under the collection model above.",
-    },
-    {
-        "quantity": "port window material",
-        "value": "fused_silica default; borosilicate selectable (--window)",
-        "class": "ASSUMED",
-        "source": (
-            "The fiber looks THROUGH a port window, so its datasheet "
-            "external-transmission curve multiplies every line. The material "
-            "actually installed on the LAPD viewports is NOT known to this "
-            "script. Curve readings and sources are tabulated in the Window "
-            "and fiber transmission section."
-        ),
-    },
-    {
-        "quantity": "fiber run length",
-        "value": "43 m (default; --fiber-length-m)",
-        "class": "MEASURED",
-        "source": (
-            "Operator's own reading of the installed run, quoted as the "
-            "lower bound '> 140 ft'. Sets the bulk attenuation "
-            "10^(-alpha L / 10), so it is one of the largest levers in the "
-            "chain: attenuation readings and their source are tabulated in "
-            "the Window and fiber transmission section."
-        ),
-    },
-    {
-        "quantity": "fiber end-face Fresnel loss",
-        "value": (
-            "T = 0.96 per silica/air face, applied twice (0.92 total)"
-        ),
-        "class": "DERIVED",
-        "source": FIBER_END_FACE_SOURCE,
-    },
-    {
-        "quantity": "radial emissivity profile",
-        "value": "uniform across the disc of radius Rp(z), zero outside",
-        "class": "ASSUMED",
-        "source": (
-            "Forced construction: the 1D model carries no radial structure "
-            "at all, so a chord integral has no measured profile to use. "
-            "This is the flattest and most honest choice, and it is a "
-            "construction, not a claim about the LAPD radial profile."
-        ),
-    },
-    {
-        "quantity": "chord length",
-        "value": "2 * Rp(z) from the artifact's own geometry",
-        "class": "DERIVED",
-        "source": (
-            "Radial line of sight through the column axis under the uniform "
-            "disc assumption above. Rp(z) is the run's geometry, which on "
-            "the current stance comes from the measured axial field profile."
-        ),
-    },
-    {
-        "quantity": "port -> z map",
-        "value": "the linear law port_radiance_sim1d.py verifies and uses",
-        "class": "DERIVED",
-        "source": (
-            "Anchored on the committed overlay `scripts/data/"
-            "es1_sim1d_overlay.npz` -- the same port/z table "
-            "`compare_sim1d_es1.py` scores against -- and checked exactly "
-            "collinear before the port pitch places a port the overlay does "
-            "not carry. A CAD-ladder alternative exists in this repo; it is "
-            "deliberately NOT used here, so a number from this instrument "
-            "sits on the scorer's frame."
-        ),
-    },
-    {
-        "quantity": "hc",
-        "value": "1239.842 eV nm",
-        "class": "ASSUMED",
-        "source": (
-            "Inherited unchanged from `scripts/pec_band_fractions.py` so the "
-            "photon/power conversion is identical on both sides of every "
-            "completeness ratio below."
-        ),
-    },
-    {
-        "quantity": "window / fiber transmission curves",
-        "value": (
-            "per-line T_window(lambda) and T_fiber(lambda, L), from "
-            "datasheet curve readings"
-        ),
-        "class": "ASSUMED",
-        "source": (
-            "Tabulated point by point, with the figure, thickness or length, "
-            "external-vs-internal basis and caveat, in `WINDOW_TRANSMISSION` "
-            "and `FIBER_ATTENUATION` -- reproduced in full in the Window and "
-            "fiber transmission section below. NEITHER datasheet tabulates "
-            "transmission against wavelength, so every point is a reading "
-            "off a plotted curve or a value derived from numbers the same "
-            "document does tabulate. Datasheet-sourced but for REPRESENTATIVE "
-            "parts: the material on the LAPD viewports is not known to this "
-            "script, and while the collection fiber IS identified (Thorlabs "
-            "FT1000UMT), its sheet publishes no attenuation at 320.37 nm and "
-            "its typical curve begins near 400 nm, so a stand-in curve is "
-            "applied and the applied attenuation stays ASSUMED."
-        ),
-    },
-    {
-        "quantity": "50 % transmission cutoffs",
-        "value": "DERIVED by inverting the curves above at the applied length",
-        "class": "DERIVED",
-        "source": (
-            "Computed from `WINDOW_TRANSMISSION` / `FIBER_ATTENUATION` "
-            "rather than asserted separately, so a cutoff drawn on a figure "
-            "cannot disagree with the transmission its own numbers went "
-            "through. The fiber's cutoff MOVES WITH THE RUN LENGTH. "
-            "Uncertainties are the reading bars of the curves the point is "
-            "computed from."
-        ),
-    },
-    {
-        "quantity": "reciprocal linear dispersion",
-        "value": "0.31 nm/mm at 2400 g/mm (0.62 nm/mm at 1200 g/mm)",
-        "class": "MEASURED",
-        "source": (
-            "McPherson Model 209 (1.33 m Czerny-Turner) specification sheet, "
-            "p.1 grating table. The same sheet gives resolution 0.005 nm at "
-            "2400 g/mm, 'typically measured at 313.1 nm'. The 1.5 / 2.5 / "
-            "4.0 nm/mm columns this script carried before the instrument was "
-            "identified are placeholders, and are reachable only through "
-            "--dispersion-bracket."
-        ),
-    },
-    {
-        "quantity": "entrance / exit slit width",
-        "value": "30 um, equal slits",
-        "class": "MEASURED",
-        "source": (
-            "Instrument setting as read by the operator; the micrometer "
-            "readout is in 10-micron thimble divisions (datasheet), and the "
-            "slits are 'continuously adjustable by precision micrometer from "
-            "5 to 4000 um' with a 2-20 mm height."
-        ),
-    },
-    {
-        "quantity": "instrument f-number",
-        "value": "f/9.4 (value of record); bracket [f/7, f/9.4]",
-        "class": "MEASURED",
-        "source": (
-            "McPherson Model 209 specification sheet. Its p.1 states f/9.4 "
-            "('11.6 with smaller grating') while its p.3 drawing title block "
-            "states f/7. THE SHEET CONTRADICTS ITSELF and this script does "
-            "not resolve it: f/9.4 is used and both members are carried "
-            "through the acceptance factor below."
-        ),
-    },
-    {
-        "quantity": "fiber-to-slit acceptance",
-        "value": (
-            "(NA_instr / NA_fiber)^2 = 1.9 % at f/9.4 and NA 0.39 (3.3 % at "
-            "f/7)"
-        ),
-        "class": "DERIVED",
-        "source": (
-            "The fiber butts against the slit with NO coupling optics, so "
-            "the instrument accepts only the part of the fiber's output cone "
-            "that falls inside its own NA_instr = 1 / (2 f/#). Computed from "
-            "two MEASURED datasheet values -- the fiber NA and the "
-            "instrument f-number -- in the same small-angle Omega ~ NA^2 "
-            "form used for the etendue above, and capped at 1. Replaces the "
-            "NA-into-f/# half of the single ASSUMED spectrometer throughput "
-            "this script used to carry."
-        ),
-    },
-    {
-        "quantity": "grating x mirror efficiency",
-        "value": "0.4",
-        "class": "ASSUMED",
-        "source": (
-            "What is left of the spectrometer's optical throughput once the "
-            "acceptance above is computed separately. The Model 209's optics "
-            "are Al + MgF2 and McPherson states NO efficiency, so this is a "
-            "placed number, not a datasheet reading. Every count rate scales "
-            "linearly with it."
-        ),
-    },
-    {
-        "quantity": "detector counting efficiency",
-        "value": (
-            "0.136 at 320.37 nm, 0.0286 at 587.75 nm; ZERO outside "
-            "185-680 nm"
-        ),
-        "class": "DERIVED",
-        "source": (
-            "Hamamatsu H8259 (plain variant) datasheet count sensitivity S "
-            "[s^-1 pW^-1] -- 2.1e5 at 300 nm, 2.6e5 at 400, 1.9e5 at 500, "
-            "7.5e4 at 600, 1.5e3 at 700 -- divided by the photon rate one "
-            "picowatt carries at that wavelength, 1 pW / (hc/lambda), with S "
-            "interpolated LOG-LINEARLY between cells. The datasheet gives "
-            "these only as 'Typ.' with NO min/max, so the result carries no "
-            "tolerance. It folds cathode efficiency, collection and counting "
-            "into one number exactly as the datasheet cell does, which is "
-            "why it is called a counting efficiency and NOT a QE. Outside "
-            "the head's rated 185-680 nm spectral response it is ZERO: the "
-            "tube is not specified there, and at 706 nm the plain head is "
-            "out of range (order 3e-4 if extrapolated)."
-        ),
-    },
-)
+
+def _resolved_value(text, is_override, default_text):
+    """Value cell naming the run's own number, and the default it replaced.
+
+    A provenance table that quotes a shipped default while the run used
+    something else is worse than no table: it reads as a statement about the
+    numbers beside it.  So the run's value is always what appears, and the
+    datasheet default is named beside it only when the run overrode it.
+    """
+    if is_override:
+        return f"{text} (run override; datasheet default {default_text})"
+    return f"{text} (default)"
+
+
+def _resolved_class(is_override, default_class):
+    """Provenance class of a datasheet default the run may have overridden.
+
+    A datasheet cell is MEASURED only while the run actually uses it: once a
+    run substitutes its own number, the row is no longer a reading off any
+    sheet and drops to ASSUMED for that run.  DERIVED and ASSUMED rows are
+    returned unchanged, because what they are does not depend on which value
+    was fed into them.
+    """
+    if is_override and default_class == "MEASURED":
+        return "ASSUMED"
+    return default_class
+
+
+def assumptions(rep):
+    """The provenance block for THIS run, resolved against its own knobs.
+
+    ``class`` follows the repo's provenance vocabulary -- MEASURED / DERIVED /
+    FITTED / ASSUMED -- and every row that quotes a number quotes the number
+    the run actually used, so the table cannot drift from the configuration it
+    sits beside.  The solid angle, the etendue and the fiber-to-slit
+    acceptance are COMPUTED from the resolved core, NA and f-number by the
+    same functions the run itself called, so a row cannot disagree with the
+    quantity it describes.  Rows that are pure construction carry no run
+    dependence and are stated once.
+
+    Returns a tuple of ``{quantity, value, class, source}`` dicts in the order
+    the markdown emits them.
+    """
+    fib = rep["fibers"][0]
+    core = float(fib["core_um"])
+    na = float(fib["na"])
+    length_m = float(rep["fiber_length_m"])
+    material = rep["window_material"]
+    ins = rep["instrument"]
+    disp = float(ins["dispersion_nm_per_mm"])
+    slit = float(ins["slit_um"])
+    f_number = float(ins["f_number"])
+    eta_gm = float(ins["grating_mirror_efficiency"])
+
+    core_override = core != FIBER_DATASHEET["core_um"]
+    na_override = na != FIBER_DATASHEET["na"]
+    length_override = length_m != DEFAULT_FIBER_LENGTH_M
+    disp_override = disp != DEFAULT_DISPERSION_NM_PER_MM
+    slit_override = slit != DEFAULT_SLIT_UM
+    fnum_override = f_number != DEFAULT_F_NUMBER
+    gm_override = eta_gm != DEFAULT_GRATING_MIRROR_EFFICIENCY
+
+    # Comparison rows are whatever the run actually carries beside the
+    # default fiber, not a remembered list.
+    other_cores = sorted(
+        {f["core_um"] for f in rep["fibers"] if f["na"] == na} - {core}
+    )
+    other_nas = sorted(
+        {f["na"] for f in rep["fibers"] if f["core_um"] == core} - {na}
+    )
+    core_columns = (
+        "; " + ", ".join(f"{c:g}" for c in other_cores)
+        + " um reported as comparison columns"
+        if other_cores
+        else ""
+    )
+    na_columns = (
+        "; NA " + ", ".join(f"{v:g}" for v in other_nas)
+        + " reported as comparison rows"
+        if other_nas
+        else ""
+    )
+
+    # The small-angle acceptance cone this script uses everywhere, measured
+    # against the exact cone AT THE NA IN FORCE rather than at a remembered
+    # one -- the error grows fast with NA and a fixed remark misstates it.
+    theta_max = float(np.arcsin(min(na, 1.0)))
+    exact_sr = 2.0 * np.pi * (1.0 - np.cos(theta_max))
+    small_sr = np.pi * na * na
+    cone_err_pct = 100.0 * (1.0 - small_sr / exact_sr)
+
+    a_slit = slit_acceptance_fraction(na, f_number)
+    a_bracket = ", ".join(
+        f"{100.0 * slit_acceptance_fraction(na, b):.2f} % at f/{b:g}"
+        for b in F_NUMBER_BRACKET
+    )
+    eta_at_lines = ", ".join(
+        f"{pmt_counting_efficiency(v):.4f} at {v:g} nm"
+        for v in sorted(set(INSET_LINE_NM.values()))
+    )
+
+    flat_T = rep.get("flat_fiber_T")
+    flat_note = (
+        ""
+        if flat_T is None
+        else (
+            f" THIS RUN BYPASSES the fiber attenuation chain with the flat "
+            f"override T_fiber = {float(flat_T):g}, so the datasheet fiber "
+            f"curve below describes the readings, not what was applied."
+        )
+    )
+
+    return (
+        {
+            "quantity": "fiber core diameter",
+            "value": _resolved_value(
+                f"{core:g} um{core_columns}",
+                core_override,
+                f"{FIBER_DATASHEET['core_um']:g} +/- "
+                f"{FIBER_DATASHEET['core_tolerance_um']:g} um",
+            ),
+            "class": _resolved_class(core_override, "MEASURED"),
+            "source": (
+                f"{FIBER_DATASHEET['model']}, {FIBER_DATASHEET['datasheet']}: "
+                f"core {FIBER_DATASHEET['core_um']:g} +/- "
+                f"{FIBER_DATASHEET['core_tolerance_um']:g} um, "
+                f"{FIBER_DATASHEET['construction']}. The comparison columns "
+                "are NOT hardware -- they are kept so the core-scaling "
+                "argument (collected flux ~ core^2 against f_slit ~ 1/core) "
+                "stays readable. Substitutable with --fiber-core-um."
+            ),
+        },
+        {
+            "quantity": "fiber numerical aperture",
+            "value": _resolved_value(
+                f"NA = {na:g}{na_columns}",
+                na_override,
+                f"NA = {FIBER_DATASHEET['na']:g}",
+            ),
+            "class": _resolved_class(na_override, "MEASURED"),
+            "source": (
+                f"{FIBER_DATASHEET['model']}, {FIBER_DATASHEET['datasheet']}: "
+                f"NA {FIBER_DATASHEET['na']:g}, with NO tolerance stated on "
+                "the sheet. Comparison rows are not hardware. Substitutable "
+                "with --fiber-na."
+            ),
+        },
+        {
+            "quantity": "acceptance solid angle Omega",
+            "value": (
+                f"pi * NA^2 = {fib['omega_sr']:.4f} sr at NA = {na:g}"
+            ),
+            "class": "DERIVED",
+            "source": (
+                "Small-angle form of the step-index acceptance cone, Omega = "
+                "pi * sin^2(theta_max) with sin(theta_max) = NA in vacuum. It "
+                "UNDERSTATES the exact cone 2*pi*(1 - cos(theta_max)), and by "
+                f"more as NA grows: at the NA in force here, {na:g}, "
+                f"pi*NA^2 = {small_sr:.6f} sr against an exact "
+                f"{exact_sr:.6f} sr, low by {cone_err_pct:.2f} %. Every "
+                "collected power and photon rate in this product carries that "
+                "same bias, in the direction of under-reporting."
+            ),
+        },
+        {
+            "quantity": "collection model",
+            "value": (
+                "UPPER BOUND: spot at the plasma ~ core width; no collection "
+                "optics assumed"
+            ),
+            "class": "ASSUMED",
+            "source": (
+                "Stated bench assumption: light enters a bare fiber and the "
+                "imaged spot at the plasma is approximately the core width, "
+                "so the collection area IS the core area. Every real train "
+                "loses light against this, and a collimating lens cannot beat "
+                "it: a lens CONSERVES etendue, trading acceptance angle for "
+                "area."
+            ),
+        },
+        {
+            "quantity": "etendue G",
+            "value": (
+                f"A_core * Omega = {fib['etendue_cm2_sr']:.4e} cm^2 sr at "
+                f"{core:g} um / NA {na:g}"
+            ),
+            "class": "DERIVED",
+            "source": (
+                "G = pi*(d/2)^2 * pi*NA^2, under the collection model above, "
+                "computed by the same call the run's own collected powers "
+                f"went through (A_core = {fib['core_area_cm2']:.4e} cm^2, "
+                f"Omega = {fib['omega_sr']:.4f} sr)."
+            ),
+        },
+        {
+            "quantity": "port window material",
+            "value": (
+                f"{material} (selectable with --window: "
+                + ", ".join(sorted(WINDOW_TRANSMISSION))
+                + ")"
+            ),
+            "class": "ASSUMED",
+            "source": (
+                "The fiber looks THROUGH a port window, so its datasheet "
+                "external-transmission curve multiplies every line. The "
+                "material actually installed on the LAPD viewports is NOT "
+                "known to this script, so every choice offered here is a "
+                "representative part and the class does not improve with the "
+                "choice. Curve readings and sources are tabulated in the "
+                "Window and fiber transmission section."
+            ),
+        },
+        {
+            "quantity": "fiber run length",
+            "value": _resolved_value(
+                f"{length_m:g} m",
+                length_override,
+                f"{DEFAULT_FIBER_LENGTH_M:g} m",
+            ),
+            "class": _resolved_class(length_override, "MEASURED"),
+            "source": (
+                "Operator's own reading of the installed run, quoted as the "
+                "lower bound '> 140 ft'. Sets the bulk attenuation "
+                "10^(-alpha L / 10), so it is one of the largest levers in "
+                "the chain: attenuation readings and their source are "
+                "tabulated in the Window and fiber transmission section."
+            ),
+        },
+        {
+            "quantity": "fiber end-face Fresnel loss",
+            "value": (
+                f"T = {FIBER_END_FACE_TRANSMISSION:.2f} per silica/air face, "
+                f"applied twice ({FIBER_END_FACE_TRANSMISSION ** 2:.2f} "
+                "total)"
+            ),
+            "class": "DERIVED",
+            "source": FIBER_END_FACE_SOURCE,
+        },
+        {
+            "quantity": "radial emissivity profile",
+            "value": "uniform across the disc of radius Rp(z), zero outside",
+            "class": "ASSUMED",
+            "source": (
+                "Forced construction: the 1D model carries no radial "
+                "structure at all, so a chord integral has no measured "
+                "profile to use. This is the flattest and most honest choice, "
+                "and it is a construction, not a claim about the LAPD radial "
+                "profile."
+            ),
+        },
+        {
+            "quantity": "chord length",
+            "value": "2 * Rp(z) from the artifact's own geometry",
+            "class": "DERIVED",
+            "source": (
+                "Radial line of sight through the column axis under the "
+                "uniform disc assumption above. Rp(z) is the run's geometry, "
+                "which on the current stance comes from the measured axial "
+                "field profile."
+            ),
+        },
+        {
+            "quantity": "port -> z map",
+            "value": "the linear law port_radiance_sim1d.py verifies and uses",
+            "class": "DERIVED",
+            "source": (
+                "Anchored on the committed overlay `scripts/data/"
+                "es1_sim1d_overlay.npz` -- the same port/z table "
+                "`compare_sim1d_es1.py` scores against -- and checked exactly "
+                "collinear before the port pitch places a port the overlay "
+                "does not carry. A CAD-ladder alternative exists in this "
+                "repo; it is deliberately NOT used here, so a number from "
+                "this instrument sits on the scorer's frame."
+            ),
+        },
+        {
+            "quantity": "hc",
+            "value": f"{PBF.HC_EV_NM:g} eV nm",
+            "class": "ASSUMED",
+            "source": (
+                "Inherited unchanged from `scripts/pec_band_fractions.py` so "
+                "the photon/power conversion is identical on both sides of "
+                "every completeness ratio below."
+            ),
+        },
+        {
+            "quantity": "window / fiber transmission curves",
+            "value": (
+                "per-line T_window(lambda) and T_fiber(lambda, "
+                f"{length_m:g} m), from datasheet curve readings"
+            ),
+            "class": "ASSUMED",
+            "source": (
+                "Tabulated point by point, with the figure, thickness or "
+                "length, external-vs-internal basis and caveat, in "
+                "`WINDOW_TRANSMISSION` and `FIBER_ATTENUATION` -- reproduced "
+                "in full in the Window and fiber transmission section below. "
+                "NEITHER datasheet tabulates transmission against wavelength, "
+                "so every point is a reading off a plotted curve or a value "
+                "derived from numbers the same document does tabulate. "
+                "Datasheet-sourced but for REPRESENTATIVE parts: the material "
+                "on the LAPD viewports is not known to this script, and while "
+                "the collection fiber IS identified "
+                f"({FIBER_DATASHEET['model']}), its sheet publishes no "
+                "attenuation at 320.37 nm and its typical curve begins near "
+                f"{FIBER_DATASHEET['plot_start_nm']:g} nm, so a stand-in "
+                "curve is applied and the applied attenuation stays ASSUMED."
+                + flat_note
+            ),
+        },
+        {
+            "quantity": "50 % transmission cutoffs",
+            "value": (
+                "DERIVED by inverting the curves above at the applied "
+                f"{length_m:g} m"
+            ),
+            "class": "DERIVED",
+            "source": (
+                "Computed from `WINDOW_TRANSMISSION` / `FIBER_ATTENUATION` "
+                "rather than asserted separately, so a cutoff drawn on a "
+                "figure cannot disagree with the transmission its own numbers "
+                "went through. The fiber's cutoff MOVES WITH THE RUN LENGTH. "
+                "Uncertainties are the reading bars of the curves the point "
+                "is computed from."
+            ),
+        },
+        {
+            "quantity": "reciprocal linear dispersion",
+            "value": _resolved_value(
+                f"{disp:g} nm/mm",
+                disp_override,
+                f"{DEFAULT_DISPERSION_NM_PER_MM:g} nm/mm at 2400 g/mm",
+            ),
+            "class": _resolved_class(disp_override, "MEASURED"),
+            "source": (
+                "McPherson Model 209 (1.33 m Czerny-Turner) specification "
+                "sheet, p.1 grating table: "
+                f"{MONOCHROMATOR['dispersion']}. The same sheet gives "
+                f"resolution {MONOCHROMATOR['resolution']}. The "
+                + " / ".join(
+                    f"{d:g}" for d in DISPERSION_BRACKET_NM_PER_MM
+                )
+                + " nm/mm columns this script carried before the instrument "
+                "was identified are placeholders, and are reachable only "
+                "through --dispersion-bracket."
+            ),
+        },
+        {
+            "quantity": "entrance / exit slit width",
+            "value": _resolved_value(
+                f"{slit:g} um, equal slits",
+                slit_override,
+                f"{DEFAULT_SLIT_UM:g} um",
+            ),
+            "class": _resolved_class(slit_override, "MEASURED"),
+            "source": (
+                "Instrument setting as read by the operator; the micrometer "
+                "readout is in 10-micron thimble divisions (datasheet), and "
+                f"the slits are {MONOCHROMATOR['slits']}."
+            ),
+        },
+        {
+            "quantity": "instrument f-number",
+            "value": _resolved_value(
+                f"f/{f_number:g}",
+                fnum_override,
+                f"f/{DEFAULT_F_NUMBER:g} (value of record), bracket "
+                + "[f/"
+                + ", f/".join(f"{b:g}" for b in F_NUMBER_BRACKET)
+                + "]",
+            ),
+            "class": _resolved_class(fnum_override, "MEASURED"),
+            "source": (
+                "McPherson Model 209 specification sheet: "
+                f"{MONOCHROMATOR['f_number']}. Both members are carried "
+                "through the acceptance factor below."
+            ),
+        },
+        {
+            "quantity": "fiber-to-slit acceptance",
+            "value": (
+                f"(NA_instr / NA_fiber)^2 = {100.0 * a_slit:.2f} % at "
+                f"f/{f_number:g} and NA {na:g}"
+            ),
+            "class": "DERIVED",
+            "source": (
+                "The fiber butts against the slit with NO coupling optics, so "
+                "the instrument accepts only the part of the fiber's output "
+                "cone that falls inside its own NA_instr = 1 / (2 f/#). "
+                "Computed from the fiber NA and the instrument f-number in "
+                "the same small-angle Omega ~ NA^2 form used for the etendue "
+                "above, and capped at 1. Its class is the class of those two "
+                "inputs: DERIVED from datasheet cells while both are the "
+                "defaults, and no better than the weaker of them once a run "
+                "substitutes one. Across the datasheet's own f-number bracket "
+                f"at this NA: {a_bracket}. Replaces the NA-into-f/# half of "
+                "the single ASSUMED spectrometer throughput this script used "
+                "to carry."
+            ),
+        },
+        {
+            "quantity": "grating x mirror efficiency",
+            "value": _resolved_value(
+                f"{eta_gm:g}",
+                gm_override,
+                f"{DEFAULT_GRATING_MIRROR_EFFICIENCY:g}",
+            ),
+            "class": "ASSUMED",
+            "source": (
+                "What is left of the spectrometer's optical throughput once "
+                "the acceptance above is computed separately. The Model 209's "
+                "optics are Al + MgF2 and McPherson states NO efficiency, so "
+                "this is a placed number, not a datasheet reading -- which is "
+                "why overriding it cannot make the row worse than ASSUMED. "
+                "Every count rate scales linearly with it."
+            ),
+        },
+        {
+            "quantity": "detector counting efficiency",
+            "value": (
+                f"{eta_at_lines}; ZERO outside "
+                f"{PMT['spectral_response_nm'][0]:g}-"
+                f"{PMT['spectral_response_nm'][1]:g} nm"
+            ),
+            "class": "DERIVED",
+            "source": (
+                f"{PMT['model']} datasheet count sensitivity S [s^-1 pW^-1] "
+                "-- "
+                + ", ".join(
+                    f"{c:.3g} at {w:g} nm"
+                    for w, c in PMT_COUNT_SENSITIVITY_PER_PW
+                )
+                + " -- divided by the photon rate one picowatt carries at "
+                "that wavelength, 1 pW / (hc/lambda), with S interpolated "
+                "LOG-LINEARLY between cells. The datasheet gives these only "
+                "as 'Typ.' with NO min/max, so the result carries no "
+                "tolerance. It folds cathode efficiency, collection and "
+                "counting into one number exactly as the datasheet cell does, "
+                "which is why it is called a counting efficiency and NOT a "
+                "QE. Outside the head's rated "
+                f"{PMT['spectral_response_nm'][0]:g}-"
+                f"{PMT['spectral_response_nm'][1]:g} nm spectral response it "
+                "is ZERO: the tube is not specified there, and at 706 nm the "
+                "plain head is out of range (order 3e-4 if extrapolated). "
+                "This row is not run-substitutable: there is no flag that "
+                "replaces the curve."
+            ),
+        },
+    )
+
 
 #: Doppler-width coefficient: FWHM = DOPPLER_COEFF * lambda * sqrt(T/M),
 #: T in eV, M in amu, FWHM in the units of lambda.
@@ -2749,12 +2934,23 @@ def markdown_report(rep):
     # --- assumptions
     L.append("## Assumptions")
     L.append("")
+    L.append(
+        "Resolved against THIS run's knobs: every row that quotes a number "
+        "quotes the number the run actually used, and a row whose datasheet "
+        "default the run overrode says so and names the default it replaced. "
+        "**The class follows the value.** A datasheet cell is MEASURED only "
+        "while the run actually uses it, so an overridden default drops to "
+        "ASSUMED for that run -- a substituted number is no longer a reading "
+        "off any sheet. DERIVED and ASSUMED rows do not move, because what "
+        "they are does not depend on which value was fed in."
+    )
+    L.append("")
     L.extend(
         _table(
             ["quantity", "value", "class", "source / basis"],
             [
                 [a["quantity"], a["value"], a["class"], a["source"]]
-                for a in ASSUMPTIONS
+                for a in assumptions(rep)
             ],
         )
     )
@@ -3539,10 +3735,17 @@ def build(
     fiber_na,
     material,
     length_m,
+    instrument,
     flat_fiber_T=None,
     sweep_knobs=None,
 ):
-    """Assemble every number and every product input from the artifact."""
+    """Assemble every number and every product input from the artifact.
+
+    ``instrument`` carries the resolved spectrometer knobs -- dispersion,
+    slit, f-number, grating x mirror efficiency -- whether or not the sweep
+    runs, because the provenance block reports the configuration the run was
+    given, not only the part of it a particular product consumed.
+    """
     data = read_window(h5_path, window_ms)
     stages = {}
     for key in STAGE_ORDER:
@@ -3608,6 +3811,7 @@ def build(
         "fiber_panels": panels,
         "port_law": {"z0_cm": law[0], "pitch_cm": law[1]},
         "window_material": material,
+        "instrument": dict(instrument),
         "fiber_length_m": float(length_m),
         "flat_fiber_T": flat_fiber_T,
         "cutoffs": cutoff_table(length_m),
@@ -3979,6 +4183,15 @@ def main(argv=None):
             f"{args.grating_mirror_efficiency}"
         )
 
+    # Resolved once and shared: the provenance block reports the whole
+    # instrument configuration whether or not the sweep consumed it.
+    instrument = {
+        "slit_um": args.slit_um,
+        "dispersion_nm_per_mm": args.dispersion_nm_per_mm,
+        "f_number": args.f_number,
+        "grating_mirror_efficiency": args.grating_mirror_efficiency,
+    }
+
     sweep_knobs = None
     if args.sweep:
         # The measured dispersion is always present, so the figure can key
@@ -3988,13 +4201,8 @@ def main(argv=None):
             for d in DISPERSION_BRACKET_NM_PER_MM:
                 if f"{d:g}" not in {f"{x:g}" for x in dispersions}:
                     dispersions.append(float(d))
-        sweep_knobs = {
-            "slit_um": args.slit_um,
-            "dispersion_nm_per_mm": args.dispersion_nm_per_mm,
-            "dispersions": tuple(sorted(dispersions)),
-            "f_number": args.f_number,
-            "grating_mirror_efficiency": args.grating_mirror_efficiency,
-        }
+        sweep_knobs = dict(instrument)
+        sweep_knobs["dispersions"] = tuple(sorted(dispersions))
 
     rep = build(
         args.h5,
@@ -4004,6 +4212,7 @@ def main(argv=None):
         args.fiber_na,
         args.window,
         args.fiber_length_m,
+        instrument,
         args.fiber_transmission,
         sweep_knobs,
     )
