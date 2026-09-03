@@ -8,6 +8,7 @@ from time import perf_counter
 from types import SimpleNamespace
 
 import numpy as np
+from scipy.linalg import solve_banded
 
 from .core.config import (
     coverage_closure_defaults,
@@ -334,7 +335,7 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     # The drift operator writes the ELECTRON row alone; it moves no particles
     # of any species, so it has no neutrals to carry a birth temperature for.
     "electron_drift_transport": "none",
-    "hyperbolic_energy_correction": "none",
+    "hyperbolic_dissipation_heating": "none",
     "flux_tube_geometry": "none",
     "ei_exchange": "none",
     "ionization_energy_cost": "none",
@@ -4862,7 +4863,7 @@ class LAPDSim1D:
                 # AND across the flag. There is no drive in this branch, so an
                 # armed run books zero here too.
                 "electron_drift_transport": self._zero_rhs_state(),
-                "hyperbolic_energy_correction": self._zero_rhs_state(),
+                "hyperbolic_dissipation_heating": self._zero_rhs_state(),
                 "ei_exchange": self._zero_rhs_state(),
                 "ionization_energy_cost": self._zero_rhs_state(),
                 "electron_ion_cooling": self._zero_rhs_state(),
@@ -4985,6 +4986,21 @@ class LAPDSim1D:
             cathode_solve=cathode_solve,
             time=time,
         )
+        # The KEP correction is booked in TWO places, so it is resolved here
+        # rather than inline: its pressure half folds into "pressure_work",
+        # which then IS the energy-consistent pressure work, and its Rusanov
+        # dissipation half is the "hyperbolic_dissipation_heating" row. Both
+        # rows are always present -- unarmed, the pressure row is the
+        # uncorrected one and the dissipation row is the zero state, so the
+        # saved term structure does not move with the flag.
+        pressure_work = self.pressure_work_rhs(state=state)
+        if self._hyperbolic_energy_consistent:
+            kep_pressure, hyperbolic_dissipation = (
+                self.hyperbolic_energy_correction_rhs(state=state)
+            )
+            pressure_work = add_state_rhs(pressure_work, kep_pressure)
+        else:
+            hyperbolic_dissipation = self._zero_rhs_state()
         terms = {
             **zone_terms,
             **probe_terms,
@@ -5005,7 +5021,7 @@ class LAPDSim1D:
                 time=time,
                 carrier_out=carrier_out,
             ),
-            "pressure_work": self.pressure_work_rhs(state=state),
+            "pressure_work": pressure_work,
             # The electron-velocity correction to the row above: pressure_work
             # books with the ION velocity, which is exact only where J = 0.
             # Presence-gated -- unarmed, the zero state is recorded and
@@ -5018,11 +5034,11 @@ class LAPDSim1D:
                 if self._electron_drift is not None
                 else self._zero_rhs_state()
             ),
-            "hyperbolic_energy_correction": (
-                self.hyperbolic_energy_correction_rhs(state=state)
-                if self._hyperbolic_energy_consistent
-                else self._zero_rhs_state()
-            ),
+            # The Rusanov (n, M) numerical kinetic-energy dissipation, deposited
+            # into the ion internal energy. It sits in the slot the combined
+            # correction row occupied, so the dissipation booking keeps its
+            # place in the fold that advances the state.
+            "hyperbolic_dissipation_heating": hyperbolic_dissipation,
             "ei_exchange": self.energy_exchange_rhs(state=state),
             "ionization_energy_cost": electron_cooling_terms[
                 "ionization_energy_cost"
@@ -5718,7 +5734,14 @@ class LAPDSim1D:
             )
         geometry = self._geometry
         source_kwargs = self._neutral_source_kwargs(time=time)
-        matrix = np.eye(geometry.cells, dtype=float)
+        # The system is TRIDIAGONAL: an axial face writes (i, i), (i, i+1),
+        # (i+1, i+1) and (i+1, i) and nothing else, and the pump writes the
+        # diagonal, so the only entries that ever exist lie on three bands.
+        # Held in LAPACK banded storage ``ab[u + i - j, j] == a[i, j]`` with
+        # (l, u) = (1, 1): assembly and solve are O(N), and the identity is
+        # the middle band rather than an N x N array of zeros.
+        ab = np.zeros((3, geometry.cells), dtype=float)
+        ab[1, :] = 1.0
         rhs = np.asarray(state.nn, dtype=float).copy()
 
         coeff = np.asarray(self.neutral_exchange_coefficients(), dtype=float)
@@ -5729,10 +5752,10 @@ class LAPDSim1D:
             right_rate = float(conductance) / float(
                 geometry.neutral_volume_cm3[right]
             )
-            matrix[left, left] += dt * left_rate
-            matrix[left, right] -= dt * left_rate
-            matrix[right, right] += dt * right_rate
-            matrix[right, left] -= dt * right_rate
+            ab[1, left] += dt * left_rate
+            ab[0, right] -= dt * left_rate
+            ab[1, right] += dt * right_rate
+            ab[2, left] -= dt * right_rate
 
         # Anchored by role, matching neutrals.neutral_source_sink_rhs: these two
         # paths must stay consistent or the neutral-equilibration path desyncs
@@ -5742,14 +5765,14 @@ class LAPDSim1D:
 
         if source_kwargs["pump_enabled"]:
             elbow = source_kwargs["pump_elbow_conductance_lps"]
-            matrix[pump_left_index, pump_left_index] += dt * pump_rate(
+            ab[1, pump_left_index] += dt * pump_rate(
                 _effective_pump_speed(
                     source_kwargs["S_pump_L"],
                     elbow if is_plenum_cell(geometry, pump_left_index) else None,
                 ),
                 geometry.neutral_volume_cm3[pump_left_index],
             )
-            matrix[pump_right_index, pump_right_index] += dt * pump_rate(
+            ab[1, pump_right_index] += dt * pump_rate(
                 _effective_pump_speed(
                     source_kwargs["S_pump_R"],
                     elbow if is_plenum_cell(geometry, pump_right_index) else None,
@@ -5786,7 +5809,7 @@ class LAPDSim1D:
                     delivery_fraction=source_kwargs["gas_puff_delivery_fraction"],
                 )
 
-        nn_next = np.linalg.solve(matrix, rhs)
+        nn_next = solve_banded((1, 1), ab, rhs)
         # M_n and En pass through untouched: this step runs pre-plasma, where
         # there is no drag to drive a wind and no plasma to heat the gas.
         return ConservativeState1D(
@@ -5806,7 +5829,17 @@ class LAPDSim1D:
         )
 
     def _two_zone_implicit_matrix(self, dt, source_kwargs):
-        """Return the assembled 2N x 2N backward-Euler matrix for one dt.
+        """Return the assembled backward-Euler matrix for one dt, BANDED.
+
+        The 2N x 2N block system is banded once the unknowns are INTERLEAVED --
+        column cell ``c`` at ``2c``, annulus cell ``c`` at ``2c + 1``. Each
+        zone's axial exchange couples a cell to its axial neighbours, two
+        interleaved places away; the radial zone exchange couples the two zones
+        of the SAME cell, one place away; the pump is diagonal. Nothing reaches
+        further, so the matrix has (l, u) = (2, 2) and is held in LAPACK banded
+        storage ``ab[u + i - j, j] == a[i, j]``, shape ``(5, 2N)``. The
+        block-ordered form is the same system under a permutation and is never
+        assembled: it is 2N x 2N of which all but five bands are zero.
 
         Everything this assembly reads other than ``dt`` and the pump state is
         a RUN CONSTANT resolved once at construction -- the geometry, the zone
@@ -5815,14 +5848,18 @@ class LAPDSim1D:
         the pump state alone, and the equilibration it serves re-derives the
         same handful of them tens of thousands of times.
 
-        The cache is keyed on the EXACT BITS of ``dt`` and of the three pump
+        BOUND AND EVICTION, unchanged by the storage: at most
+        ``TWO_ZONE_MATRIX_CACHE_ENTRIES`` entries, the oldest inserted evicted
+        first, each entry now ``(5, 2N)`` floats rather than ``(2N, 2N)``. The
+        cache is keyed on the EXACT BITS of ``dt`` and of the three pump
         scalars, so two dt values that differ in the last ulp key apart and
         signed zeros do not collide; the pump scalars are in the key whether or
         not the pump is enabled, which over-keys (more misses) rather than
         risking a stale entry. The assembled array is returned READ-ONLY: it is
-        handed straight to ``np.linalg.solve``, which does not write to its
-        coefficient argument, and freezing it makes a future in-place edit
-        raise instead of poisoning every later step that shares the entry.
+        handed straight to ``scipy.linalg.solve_banded``, which copies rather
+        than writing to its coefficient argument, and freezing it makes a
+        future in-place edit raise instead of poisoning every later step that
+        shares the entry.
         """
         geometry = self._geometry
         cells = geometry.cells
@@ -5842,23 +5879,25 @@ class LAPDSim1D:
         if cached is not None:
             return cached
 
-        matrix = np.eye(2 * cells, dtype=float)
+        # ``a[i, j]`` lands at ``ab[2 + i - j, j]``; the identity is band 2.
+        ab = np.zeros((5, 2 * cells), dtype=float)
+        ab[2, :] = 1.0
         column_coeff, annulus_coeff = self._zone_axial_coeffs
         for offset, coeff, volumes in (
             (0, np.asarray(column_coeff, dtype=float), V_col),
-            (cells, np.asarray(annulus_coeff, dtype=float), V_ann),
+            (1, np.asarray(annulus_coeff, dtype=float), V_ann),
         ):
             for face, conductance in enumerate(coeff):
                 if conductance <= 0.0:
                     continue
-                left = offset + face
-                right = offset + face + 1
+                left = 2 * face + offset
+                right = 2 * (face + 1) + offset
                 left_rate = float(conductance) / float(volumes[face])
                 right_rate = float(conductance) / float(volumes[face + 1])
-                matrix[left, left] += dt * left_rate
-                matrix[left, right] -= dt * left_rate
-                matrix[right, right] += dt * right_rate
-                matrix[right, left] -= dt * right_rate
+                ab[2, left] += dt * left_rate
+                ab[0, right] -= dt * left_rate
+                ab[2, right] += dt * right_rate
+                ab[4, left] -= dt * right_rate
 
         for cell, conductance in enumerate(
             np.asarray(self._zone_exchange_cm3_s, dtype=float)
@@ -5867,10 +5906,10 @@ class LAPDSim1D:
                 continue
             col_rate = float(conductance) / float(V_col[cell])
             ann_rate = float(conductance) / float(V_ann[cell])
-            matrix[cell, cell] += dt * col_rate
-            matrix[cell, cells + cell] -= dt * col_rate
-            matrix[cells + cell, cells + cell] += dt * ann_rate
-            matrix[cells + cell, cell] -= dt * ann_rate
+            ab[2, 2 * cell] += dt * col_rate
+            ab[1, 2 * cell + 1] -= dt * col_rate
+            ab[2, 2 * cell + 1] += dt * ann_rate
+            ab[3, 2 * cell] -= dt * ann_rate
 
         pump_left_index, pump_right_index = pump_cell_indices(geometry)
         if source_kwargs["pump_enabled"]:
@@ -5890,9 +5929,10 @@ class LAPDSim1D:
                     ),
                     geometry.neutral_volume_cm3[index],
                 )
-                matrix[index, index] += dt * rate
-                matrix[cells + index, cells + index] += dt * rate
+                ab[2, 2 * index] += dt * rate
+                ab[2, 2 * index + 1] += dt * rate
 
+        matrix = ab
         matrix.flags.writeable = False
         while len(self._two_zone_matrix_cache) >= TWO_ZONE_MATRIX_CACHE_ENTRIES:
             del self._two_zone_matrix_cache[
@@ -5912,18 +5952,21 @@ class LAPDSim1D:
         routing here -- the M3 source-routing milestone moves them -- and
         must stay consistent with ``neutral_source_sink_rhs`` exactly as
         the single-zone path's comment demands.
+
+        The unknowns are INTERLEAVED here -- column cell ``c`` at ``2c``,
+        annulus cell ``c`` at ``2c + 1`` -- because that is the ordering in
+        which the system is banded; see :meth:`_two_zone_implicit_matrix`. The
+        state and the returned profiles are unaffected: the interleaving lives
+        entirely between this right-hand side and the solved vector.
         """
         geometry = self._geometry
         cells = geometry.cells
         source_kwargs = self._neutral_source_kwargs(time=time)
         V_col, V_ann = self._zone_volumes
         matrix = self._two_zone_implicit_matrix(dt, source_kwargs)
-        rhs = np.concatenate(
-            (
-                np.asarray(state.nn, dtype=float),
-                np.asarray(state.nn_a, dtype=float),
-            )
-        )
+        rhs = np.empty(2 * cells, dtype=float)
+        rhs[0::2] = np.asarray(state.nn, dtype=float)
+        rhs[1::2] = np.asarray(state.nn_a, dtype=float)
 
         puff_index, puff_twin_index = puff_cell_indices(geometry)
 
@@ -5956,20 +5999,22 @@ class LAPDSim1D:
                 geometry.neutral_volume_cm3, dtype=float
             )
             into_annulus = V_ann > 0.0
-            rhs[cells:] += dt * np.where(
+            rhs[1::2] += dt * np.where(
                 into_annulus, particles / np.maximum(V_ann, 1e-300), 0.0
             )
-            rhs[:cells] += dt * np.where(
+            rhs[0::2] += dt * np.where(
                 into_annulus, 0.0, particles / np.maximum(V_col, 1e-300)
             )
 
-        solution = np.linalg.solve(matrix, rhs)
+        solution = solve_banded((2, 2), matrix, rhs)
+        nn_next = np.ascontiguousarray(solution[0::2])
+        nn_a_next = np.ascontiguousarray(solution[1::2])
         return ConservativeState1D(
             n=state.n.copy(),
             nn=(
-                np.maximum(solution[:cells], self._floors["nn"])
+                np.maximum(nn_next, self._floors["nn"])
                 if apply_density_floor
-                else solution[:cells]
+                else nn_next
             ),
             M=state.M.copy(),
             Ee=state.Ee.copy(),
@@ -5977,9 +6022,9 @@ class LAPDSim1D:
             En=None if state.En is None else state.En.copy(),
             M_n=None if state.M_n is None else state.M_n.copy(),
             nn_a=(
-                np.maximum(solution[cells:], self._floors["nn"])
+                np.maximum(nn_a_next, self._floors["nn"])
                 if apply_density_floor
-                else solution[cells:]
+                else nn_a_next
             ),
             M_n_a=None if state.M_n_a is None else state.M_n_a.copy(),
         )
@@ -8807,7 +8852,12 @@ class LAPDSim1D:
         )
 
     def hyperbolic_energy_correction_rhs(self, y=None, state=None):
-        """Return the R2 KEP energy-consistency correction (Ee, Ei sources)."""
+        """Return the R2 KEP correction as ``(pressure, dissipation)``.
+
+        The first folds into the ``pressure_work`` ledger row and the second
+        IS the ``hyperbolic_dissipation_heating`` row; see
+        :func:`sources.hyperbolic_energy_correction_rhs`.
+        """
         if state is None:
             state = self.state if y is None else self._unpack(y)
         return hyperbolic_energy_correction_rhs(

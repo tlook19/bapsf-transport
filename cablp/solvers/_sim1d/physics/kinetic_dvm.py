@@ -183,6 +183,23 @@ WALL_ENERGY_SOLVE_MAX_ITERS = 200
 #: Relative agreement the solved spectrum's discrete mean energy must reach.
 WALL_ENERGY_SOLVE_REL_TOL = 1.0e-12
 
+# Controls of the SECANT tier of the same solve. It runs first and the
+# bisection above is its fallback, so these bound the fast path only: a
+# non-converged secant costs the bisection's own evaluations on top of its
+# own and returns exactly what the bisection returns.
+#: Residual bar, in ``|ln(<E> / e_bar)|`` and so in relative mean-energy miss,
+#: the secant must reach over EVERY cell of a call before its speeds are used.
+#: Two decades inside ``WALL_ENERGY_SOLVE_REL_TOL``, so a converged secant
+#: cannot be the reason the final agreement check fires.
+WALL_ENERGY_SECANT_REL_TOL = 1.0e-14
+#: Iteration cap on the secant. Reaching it hands the whole call to the
+#: bisection, which is how a saturated target reaches its refusal.
+WALL_ENERGY_SECANT_MAX_ITERS = 20
+#: Largest ``ln s`` step one secant iteration may take, so a flat or
+#: ill-conditioned residual cannot march the thermal speed out of range
+#: before the iteration cap notices it is not converging.
+WALL_ENERGY_SECANT_MAX_STEP = 1.0
+
 # How the PLASMA applies the tick-booked CX/elastic transfer between neutral
 # clock ticks. The pair is a linear relaxation of the fluid momentum and ion
 # energy rows towards the lost-population moments at the per-ion collision
@@ -1257,48 +1274,113 @@ class TransientDVM:
         At ``alpha == 1`` there is no share to place and both values return
         the same array of exact zeros, so the pair degenerates.
         """
-        retained = (1.0 - alpha) * L_wall
         if self.wall_reflection == "specular" or alpha >= 1.0:
-            return retained
+            return (1.0 - alpha) * L_wall
         live = np.flatnonzero(N_wall > 0.0)
         if live.size == 0:
-            return retained
+            return (1.0 - alpha) * L_wall
+        # The scaled incident array is the specular RETURN, and the diffuse
+        # branch below returns a spectrum instead; it is formed only on the
+        # paths that hand it back, so the diffuse branch no longer scales a
+        # whole landing array to use nothing of it but its shape.
         incident = (L_wall[live] * self.E_bin).sum(axis=(1, 2))
         e_bar = incident / N_wall[live]
         spectra = self._solve_wall_return_spectra(e_bar)
-        out = np.zeros_like(retained)
+        out = np.zeros_like(L_wall, dtype=float)
         out[live] = ((1.0 - alpha) * N_wall[live])[:, None, None] * spectra
         return out
 
-    def _solve_wall_return_spectra(self, e_bar):
-        """Return cosine-wall spectra at the requested DISCRETE mean energies.
+    def _wall_return_energy_miss(self, spectra, e_bar):
+        """Return the relative DISCRETE mean-energy miss of ``spectra``.
 
-        ``e_bar`` is one target kinetic energy per atom [erg] per cell. The
-        discrete mean energy of :func:`_cosine_wall_spectra` rises
-        monotonically with the thermal speed ``s``, so the inverse is a
-        one-parameter bracketed bisection: seeded at the continuum relation
-        ``<E> = 2 k T = 2 m s^2``, bracketed outward by halving and doubling,
-        then bisected to the floating-point resolution of the bracket.
-
-        The mean energy SATURATES once the spectrum outruns the grid's
-        outermost bins, so a target above the saturation value has no
-        solution. That is a misbooked launch spectrum, not a tolerance
-        question: the bracket search, the bisection and the final agreement
-        check each raise ``ValueError`` naming the offending cells rather
-        than returning a spectrum at an energy the caller did not ask for.
+        One value per cell: ``|<E> - e_bar| / e_bar`` with ``<E>`` contracted
+        over the assembled spectrum against :attr:`E_bin`. This is the
+        quantity :data:`WALL_ENERGY_SOLVE_REL_TOL` bounds, read off the
+        spectrum that is actually returned rather than off the separable
+        residual the solve iterates on.
         """
-        e_bar = np.asarray(e_bar, dtype=float)
-        if not np.all(np.isfinite(e_bar)) or np.any(e_bar <= 0.0):
-            raise ValueError(
-                "the energy-matched wall return needs a positive finite "
-                "incident mean energy per cell (got "
-                f"min {np.min(e_bar)!r}, max {np.max(e_bar)!r})"
+        got = (spectra * self.E_bin).sum(axis=(1, 2))
+        return np.abs(got - e_bar) / e_bar
+
+    def _secant_wall_return_speeds(self, e_bar):
+        """Return thermal speeds matching ``e_bar``, or ``None`` if unconverged.
+
+        A secant iteration in ``ln s`` on the residual
+        ``F(ln s) = ln <E>(s) - ln e_bar``, where ``<E>`` is the SEPARABLE
+        contraction of :func:`_cosine_wall_mean_energy`. Working in logs makes
+        the continuum relation ``<E> = 2 m s^2`` an exactly linear residual of
+        slope 2, so the seed ``s0 = sqrt(e_bar / 2 m)`` plus one Newton step at
+        that known slope already lands close and the secant closes the rest.
+
+        CONVERGENCE CRITERION: the iteration stops at the first sweep where
+        ``max|F| <= WALL_ENERGY_SECANT_REL_TOL`` over every cell in the call,
+        capped at ``WALL_ENERGY_SECANT_MAX_ITERS``. Every cell steps on every
+        sweep -- no row is frozen once it converges -- so the count is a single
+        whole-call reduction, the same shape of data dependence the bisection's
+        own bracket-width test has, and a cell's answer depends on the cells it
+        was solved with exactly as it did before.
+
+        Returns ``None`` rather than a spectrum whenever the iteration does not
+        reach that bar, whenever a residual or a step is not finite, and
+        whenever the secant denominator vanishes on a flat residual -- which is
+        what a target above the grid's saturation energy produces. The caller
+        then hands the WHOLE call to the bracketed bisection, which is what
+        raises on saturation.
+        """
+        ln_target = np.log(e_bar)
+
+        def residual(u):
+            with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+                mean = _cosine_wall_mean_energy(self.g, np.exp(u))
+                return np.log(mean) - ln_target
+
+        u_prev = np.log(np.sqrt(e_bar / (2.0 * M_HE)))
+        f_prev = residual(u_prev)
+        if not np.all(np.isfinite(f_prev)):
+            return None
+        # One Newton step at the continuum slope d(ln <E>)/d(ln s) = 2, which
+        # is the second point the secant needs and costs no extra evaluation.
+        u = u_prev - 0.5 * f_prev
+        for _ in range(WALL_ENERGY_SECANT_MAX_ITERS):
+            f = residual(u)
+            if not np.all(np.isfinite(f)):
+                return None
+            if np.all(np.abs(f) <= WALL_ENERGY_SECANT_REL_TOL):
+                return np.exp(u)
+            df = f - f_prev
+            with np.errstate(invalid="ignore", divide="ignore"):
+                step = np.where(df != 0.0, f * (u - u_prev) / df, np.nan)
+            if not np.all(np.isfinite(step)):
+                return None
+            np.clip(
+                step,
+                -WALL_ENERGY_SECANT_MAX_STEP,
+                WALL_ENERGY_SECANT_MAX_STEP,
+                out=step,
             )
+            u_prev, f_prev = u, f
+            u = u - step
+        return None
+
+    def _bisect_wall_return_speeds(self, e_bar):
+        """Return thermal speeds matching ``e_bar`` by bracketed bisection.
+
+        Seeded at the continuum relation ``<E> = 2 k T = 2 m s^2``, bracketed
+        outward by halving and doubling, then bisected to the floating-point
+        resolution of the bracket. The mean energy SATURATES once the spectrum
+        outruns the grid's outermost bins, so a target above the saturation
+        value has no solution: the bracket search raises ``ValueError`` naming
+        the offending cells rather than returning a speed at an energy the
+        caller did not ask for.
+        """
 
         def mean_energy(s):
-            return (_cosine_wall_spectra(self.g, s) * self.E_bin).sum(
-                axis=(1, 2)
-            )
+            # The spectra array is this call's own and is contracted away
+            # immediately, so the energy weighting is applied in place: the
+            # same multiply on the same operands, one temporary fewer.
+            spectra = _cosine_wall_spectra(self.g, s)
+            np.multiply(spectra, self.E_bin, out=spectra)
+            return spectra.sum(axis=(1, 2))
 
         s0 = np.sqrt(e_bar / (2.0 * M_HE))
         lo = 0.5 * s0
@@ -1338,9 +1420,58 @@ class TransientDVM:
             below = mean_energy(mid) < e_bar
             lo = np.where(below, mid, lo)
             hi = np.where(below, hi, mid)
-        spectra = _cosine_wall_spectra(self.g, 0.5 * (lo + hi))
-        got = (spectra * self.E_bin).sum(axis=(1, 2))
-        rel = np.abs(got - e_bar) / e_bar
+        return 0.5 * (lo + hi)
+
+    def _solve_wall_return_spectra(self, e_bar):
+        """Return cosine-wall spectra at the requested DISCRETE mean energies.
+
+        ``e_bar`` is one target kinetic energy per atom [erg] per cell. The
+        discrete mean energy of :func:`_cosine_wall_spectra` rises
+        monotonically with the thermal speed ``s``, so the inverse is a
+        one-parameter root solve, taken in two tiers:
+
+        * :meth:`_secant_wall_return_speeds`, a secant in ``ln s`` on the
+          SEPARABLE mean energy, which needs no ``(cells, nvz, nvp)`` array per
+          evaluation and closes in a handful of them;
+        * :meth:`_bisect_wall_return_speeds`, the bracketed bisection, which
+          the WHOLE call falls back to whenever the secant does not reach its
+          residual bar -- a saturated target being the case that cannot.
+
+        The spectrum returned is :func:`_cosine_wall_spectra` at the solved
+        speed either way; the separable contraction is used for the residual
+        evaluations and nowhere else.
+
+        The mean energy SATURATES once the spectrum outruns the grid's
+        outermost bins, so a target above the saturation value has no
+        solution. That is a misbooked launch spectrum, not a tolerance
+        question: the bracket search and the final agreement check each raise
+        ``ValueError`` naming the offending cells rather than returning a
+        spectrum at an energy the caller did not ask for.
+        """
+        e_bar = np.asarray(e_bar, dtype=float)
+        if not np.all(np.isfinite(e_bar)) or np.any(e_bar <= 0.0):
+            raise ValueError(
+                "the energy-matched wall return needs a positive finite "
+                "incident mean energy per cell (got "
+                f"min {np.min(e_bar)!r}, max {np.max(e_bar)!r})"
+            )
+
+        spectra = rel = None
+        s = self._secant_wall_return_speeds(e_bar)
+        if s is not None:
+            spectra = _cosine_wall_spectra(self.g, s)
+            rel = self._wall_return_energy_miss(spectra, e_bar)
+            if np.any(rel > WALL_ENERGY_SOLVE_REL_TOL):
+                # The secant met its bar on the separable residual and the
+                # assembled spectrum does not agree: the call goes to the
+                # bisection rather than being accepted at the wrong energy.
+                spectra = rel = None
+        if spectra is None:
+            spectra = _cosine_wall_spectra(
+                self.g, self._bisect_wall_return_speeds(e_bar)
+            )
+            rel = self._wall_return_energy_miss(spectra, e_bar)
+
         if np.any(rel > WALL_ENERGY_SOLVE_REL_TOL):
             bad = np.flatnonzero(rel > WALL_ENERGY_SOLVE_REL_TOL)
             raise ValueError(
@@ -3756,6 +3887,117 @@ def _end_return(outgoing, sticking, accommodation, mirror, spectrum):
     return reflected + accommodated
 
 
+# Where :func:`_cosine_quadrature` parks its one entry on a velocity grid.
+_COSINE_QUADRATURE_ATTR = "_cosine_wall_quadrature"
+
+# Quadrature nodes per perpendicular bin, matching
+# :meth:`VGrid.wall_emission_spectrum`'s own subsampling.
+_COSINE_QUADRATURE_NODES = 64
+
+
+def _cosine_quadrature(g):
+    """Return the GRID-ONLY factors of the cosine-wall quadrature.
+
+    ``(x, x_sq, dx)``: the 64 abscissae subsampling each perpendicular bin,
+    their squares, and the node spacings the trapezoid weights with. All three
+    are pure grid geometry -- none depends on the thermal speed -- while
+    :func:`_cosine_wall_spectra` is evaluated tens of times per wall-return
+    solve, so they are built once and reused.
+
+    BOUND AND EVICTION: exactly ONE entry, stored as an attribute on the
+    ``VGrid`` instance itself. There is no keyed table and nothing to grow: a
+    second grid gets its own entry on itself, and an entry is released with the
+    grid that owns it. The axes a ``VGrid`` is built with never change after
+    construction, so the entry cannot go stale while its grid is alive.
+    """
+    cached = getattr(g, _COSINE_QUADRATURE_ATTR, None)
+    if cached is None:
+        x = np.stack([
+            np.linspace(g.vp_edges[k], g.vp_edges[k + 1], _COSINE_QUADRATURE_NODES)
+            for k in range(g.nvp)
+        ])
+        cached = (x, x[None, :, :] ** 2, np.diff(x, axis=-1))
+        setattr(g, _COSINE_QUADRATURE_ATTR, cached)
+    return cached
+
+
+def _cosine_wall_factors(g, s):
+    """Return the SEPARABLE marginals of the cosine-wall spectrum.
+
+    ``(wz, wp)``: the unnormalized error-function ``v_z`` bin masses, shape
+    ``(s.size, nvz)``, and the 64-node trapezoid of
+    ``vp^2 exp(-vp^2 / 2 s^2)`` per perpendicular bin, shape
+    ``(s.size, nvp)``. The spectrum is their outer product, normalized -- see
+    :func:`_cosine_wall_spectra` -- so any moment of a separable weight can be
+    contracted from these two factors without ever forming the
+    ``(s.size, nvz, nvp)`` array.
+
+    Raises ``ValueError`` when any ``s`` is not positive and finite.
+    """
+    s = np.atleast_1d(np.asarray(s, dtype=float))
+    if not np.all(np.isfinite(s)) or np.any(s <= 0.0):
+        raise ValueError(
+            "the cosine-wall re-emission spectrum needs a positive finite "
+            f"thermal speed per cell (got min {np.min(s)!r}, "
+            f"max {np.max(s)!r})"
+        )
+    sc = s[:, None]
+    ez = g.vz_edges[None, :] / (sc * np.sqrt(2.0))
+    wz = 0.5 * np.diff(_erf(ez), axis=-1)
+    x, x_sq, dx = _cosine_quadrature(g)
+    # ``y = x_sq * exp(-0.5 * (x / s)**2)``, accumulated through ONE buffer.
+    # Each step is the same operation on the same operands as the expression it
+    # replaces -- ``np.square`` is what ``** 2`` dispatches to, and the two
+    # scalar multiplies are commutative -- so only the number of temporaries
+    # changes, never a value.
+    y = x[None, :, :] / s[:, None, None]
+    np.square(y, out=y)
+    np.multiply(y, -0.5, out=y)
+    np.exp(y, out=y)
+    np.multiply(x_sq, y, out=y)
+    # ``np.trapezoid(y, x=broadcast_to(x, y.shape), axis=-1)``, written out so
+    # the node spacings come from the cache instead of being re-differenced off
+    # a broadcast copy of ``x`` on every call. Same expression, same operand
+    # values, same reduction axis and shape: numpy's own body is
+    # ``(d * (y[..., 1:] + y[..., :-1]) / 2.0).sum(axis)`` with
+    # ``d = diff(x, axis=-1)``, and ``dx`` broadcasts to exactly that ``d``.
+    # The reduction runs on a fresh C-contiguous buffer, as it did before.
+    quad = y[..., 1:] + y[..., :-1]
+    np.multiply(dx, quad, out=quad)
+    np.divide(quad, 2.0, out=quad)
+    return wz, quad.sum(-1)
+
+
+def _cosine_wall_mean_energy(g, s):
+    """Return the DISCRETE mean energy per atom [erg] of the cosine spectrum.
+
+    ``0.5 m <v_z^2 + v_perp^2>`` over :func:`_cosine_wall_spectra` at ``s``,
+    contracted from the two marginals of :func:`_cosine_wall_factors` instead
+    of from the assembled spectrum: the bin energy is separable
+    (``E_bin = 0.5 m (v_z^2 + v_perp^2)``) and the spectrum is an outer
+    product, so the mean is
+    ``0.5 m [ (sum wz vz^2)(sum wp) + (sum wz)(sum wp vp^2) ] /
+    [ (sum wz)(sum wp) ]`` -- ``O(nvz + nvp)`` per cell rather than
+    ``O(nvz nvp)``, and no ``(cells, nvz, nvp)`` temporary at all.
+
+    It is the residual of the wall-return energy solve, NOT the quantity the
+    solve is finally checked against: that check contracts the assembled
+    spectrum against ``E_bin`` and is what
+    :data:`WALL_ENERGY_SOLVE_REL_TOL` bounds. The two agree to roundoff of
+    the reassociated sum, which is why this form may seed the other.
+
+    Returns non-finite values rather than raising when the marginals carry no
+    normalizable mass; the caller treats that as non-convergence.
+    """
+    wz, wp = _cosine_wall_factors(g, s)
+    sum_z = wz.sum(axis=-1)
+    sum_p = wp.sum(axis=-1)
+    e_z = (wz * (g.vz**2)[None, :]).sum(axis=-1)
+    e_p = (wp * (g.vp**2)[None, :]).sum(axis=-1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return 0.5 * M_HE * (e_z * sum_p + sum_z * e_p) / (sum_z * sum_p)
+
+
 def _cosine_wall_spectra(g, s):
     """Return cosine-wall re-emission spectra for an array of thermal speeds.
 
@@ -3775,24 +4017,7 @@ def _cosine_wall_spectra(g, s):
     silently normalized to nothing would re-emit the wall's whole return at
     the wrong energy.
     """
-    s = np.atleast_1d(np.asarray(s, dtype=float))
-    if not np.all(np.isfinite(s)) or np.any(s <= 0.0):
-        raise ValueError(
-            "the cosine-wall re-emission spectrum needs a positive finite "
-            f"thermal speed per cell (got min {np.min(s)!r}, "
-            f"max {np.max(s)!r})"
-        )
-    sc = s[:, None]
-    ez = g.vz_edges[None, :] / (sc * np.sqrt(2.0))
-    wz = 0.5 * np.diff(_erf(ez), axis=-1)
-    x = np.stack([
-        np.linspace(g.vp_edges[k], g.vp_edges[k + 1], 64)
-        for k in range(g.nvp)
-    ])
-    y = x[None, :, :] ** 2 * np.exp(
-        -0.5 * (x[None, :, :] / s[:, None, None]) ** 2
-    )
-    wp = np.trapezoid(y, x=np.broadcast_to(x, y.shape), axis=-1)
+    wz, wp = _cosine_wall_factors(g, s)
     f = wz[:, :, None] * wp[:, None, :]
     total = f.sum(axis=(1, 2))
     if not np.all(np.isfinite(total)) or np.any(total <= 0.0):
@@ -3802,7 +4027,10 @@ def _cosine_wall_spectra(g, s):
             "requested temperature lies outside what this velocity grid "
             "resolves"
         )
-    return f / total[:, None, None]
+    # ``f`` is this call's own array and is not handed out anywhere else, so the
+    # normalization is applied in place.
+    np.divide(f, total[:, None, None], out=f)
+    return f
 
 
 def _drift(f, g):
