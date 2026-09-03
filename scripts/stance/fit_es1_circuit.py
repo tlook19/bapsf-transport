@@ -71,7 +71,7 @@ from pathlib import Path
 
 import numpy as np
 
-OVERLAY = Path(__file__).resolve().parent / "data" / "es1_sim1d_overlay.npz"
+OVERLAY = Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz"
 
 
 def load_drive_phase(t_min_s=0.3e-3, t_max_s=19.8e-3):

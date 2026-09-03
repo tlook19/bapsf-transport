@@ -61,8 +61,15 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import puff_orifice as orifice
 

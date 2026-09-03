@@ -78,9 +78,15 @@ from cablp.solvers._sim1d import (
 )
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
-_SCRIPTS = Path(__file__).resolve().parent
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
+_SCRIPTS = Path(__file__).resolve().parents[1]
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
 
 from stance_config import load_stance  # noqa: E402
 
@@ -1867,7 +1873,7 @@ def _report_beta_collapse(runs, svr_by_rung=None):
 
 
 def beta_collapse_main(specs, plateau_ms, afterglow_ms):
-    script_dir = Path(__file__).resolve().parent
+    script_dir = Path(__file__).resolve().parents[1]
     if not specs:
         specs = []
         for family in BETA_CANONICAL_FAMILIES:

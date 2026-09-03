@@ -45,6 +45,15 @@ from cablp.solvers._sim1d.physics.flux import ion_sound_speed
 from cablp.solvers._sim1d.physics.sources import characteristic_boundary_rhs
 from cablp.cathode.circuit_idriven import solve_idriven
 from cablp.constants import ev_to_erg
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
+
 from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 
 

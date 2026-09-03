@@ -76,6 +76,15 @@ from pathlib import Path
 
 import numpy as np
 
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
+
 from regime_r2_overlap_gate import build_config
 
 from cablp.solvers._sim1d import LAPDSim1D

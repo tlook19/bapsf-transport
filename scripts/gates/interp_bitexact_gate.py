@@ -74,7 +74,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
 
 #: What ``_kernels.PROVENANCE`` must read as on each path.
 PURE_PROVENANCE = "pure"
@@ -124,6 +124,15 @@ def child(arm, steps, report_every, want):
             file=sys.stderr,
         )
         return 2
+
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
 
     import k7cbuild_frozen_bitexact as k7c
 

@@ -23,7 +23,7 @@ from cablp.solvers._sim1d.results.phase3_capture import (
 )
 
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = SCRIPT_DIR.parents[0]
 OUTPUT_DIRECTORY = SCRIPT_DIR / "baselines" / "phase3_rhs"
 PRODUCER_PATH = "scripts/capture_phase3_rhs.py"
@@ -57,7 +57,14 @@ def capture_phase3_rhs(run_id, capture_revision, invocation):
     # Import the recipe owners only after identity/output/source preflight.
     # Neither import constructs a solver; construction occurs below, after the
     # persistent allocation record has been installed.
-    sys.path.insert(0, str(SCRIPT_DIR))
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
     import baseline_sim1d
     import golden_digest_gate
 

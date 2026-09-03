@@ -138,7 +138,7 @@ def _parse_lxcat_blocks(path):
 
 def gate_d1():
     path = (
-        Path(__file__).resolve().parent.parent
+        Path(__file__).resolve().parents[2]
         / "cablp" / "vars" / "he_ion_neutral_phelps_lxcat.txt"
     )
     blocks = _parse_lxcat_blocks(path)

@@ -345,9 +345,15 @@ FIBER_DATASHEET = {
 #: installed run, quoted as the lower bound "> 140 ft".
 DEFAULT_FIBER_LENGTH_M = 43.0
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
 
 import pec_band_fractions as PBF  # noqa: E402
 import port_radiance_sim1d as PRS  # noqa: E402

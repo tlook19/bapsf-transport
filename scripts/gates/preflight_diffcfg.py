@@ -82,13 +82,20 @@ from pathlib import Path
 
 import h5py
 
-_SCRIPTS = Path(__file__).resolve().parent
+_SCRIPTS = Path(__file__).resolve().parents[1]
 # Resolve the package and the driver scripts from THIS file, never from a
 # hardcoded checkout: a worktree that reached into the main checkout would
 # pre-flight a different tree than the one it is about to run.
-for _entry in (str(_SCRIPTS.parent), str(_SCRIPTS)):
-    if _entry not in sys.path:
-        sys.path.insert(0, _entry)
+if str(_SCRIPTS.parent) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS.parent))
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
 
 import compare_sim1d_es1 as cmp_es1  # noqa: E402
 import run_m6_point  # noqa: E402

@@ -58,7 +58,7 @@ from pathlib import Path
 
 import numpy as np
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parents[1]
 V0 = 177.843
 R_COMP = 7.2244e-3
 C_BANK = 9.5

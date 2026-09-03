@@ -23,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cablp.solvers._sim1d import default_config  # noqa: E402
 from cablp.solvers._sim1d.core.geometry import build_geometry  # noqa: E402
@@ -31,7 +31,7 @@ from cablp.solvers._sim1d.physics import kinetic_dvm as kd  # noqa: E402
 from cablp.solvers._sim1d.physics.kinetic_neutrals import VGrid  # noqa: E402
 
 DEFAULT_REFERENCE = (
-    Path(__file__).resolve().parent / "data" / "wall_return_reference.npz"
+    Path(__file__).resolve().parents[1] / "data" / "wall_return_reference.npz"
 )
 
 

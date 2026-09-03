@@ -14,6 +14,15 @@ import h5py
 
 from cablp.solvers._sim1d import config_manifest, default_config, resolve_config
 
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
+
 from baseline_sim1d import build_baseline_config
 from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 from compare_sim1d_es1 import PRODUCTION_NX
@@ -25,7 +34,7 @@ from run_mechanism_ladder import (
 
 
 SNAPSHOT_PATH = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "cablp"
     / "solvers"
     / "_sim1d"

@@ -206,9 +206,15 @@ from cablp.solvers._sim1d.physics.sources import (
     electron_drift_transport_rhs as _operator,
 )
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
 
 from b5cj_bitinert_ab import step_once  # noqa: E402
 from baseline_sim1d import build_baseline_config  # noqa: E402
@@ -224,7 +230,7 @@ from edt_consult_pins import (  # noqa: E402
 #: Resolved against this script's own directory rather than the working
 #: directory, because run artifacts live beside the scripts and a worktree's
 #: copy of ``scripts/`` does not carry them -- pass ``--h5`` there.
-DEFAULT_H5 = str(Path(__file__).resolve().parent / "mgcr1_confirm.h5")
+DEFAULT_H5 = str(Path(__file__).resolve().parents[1] / "mgcr1_confirm.h5")
 
 #: The consult's window, in seconds.
 WINDOW = (1.0e-4, 2.01e-2)

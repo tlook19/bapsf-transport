@@ -68,7 +68,7 @@ from pathlib import Path
 
 import numpy as np
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE = SCRIPT_DIR / "data" / "deposit_beam_reference.npz"
 FIXTURE_FORMAT = "deposit-beam-reference-v1"
 
@@ -169,7 +169,14 @@ def _copy_kwargs(kwargs):
 
 def capture(output, t_end, targets=DEFAULT_TARGETS):
     """Run the golden configuration and record real ``deposit_beam`` calls."""
-    sys.path.insert(0, str(SCRIPT_DIR))
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
     import baseline_sim1d as baseline
     import cablp.solvers._sim1d.physics.cathode as cathode_mod
 

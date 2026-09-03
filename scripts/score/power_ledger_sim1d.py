@@ -621,7 +621,7 @@ def main():
 
     if args.selftest:
         path = args.run or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), SELFTEST_ARTIFACT)
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), SELFTEST_ARTIFACT)
         selftest(path)
         return
     if args.run is None:

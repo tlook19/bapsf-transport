@@ -15,7 +15,7 @@ from cablp.atomic.coefficients import a_11s
 from cablp.constants import E_ion
 
 
-OUT_PATH = Path(__file__).parent.parent / "cablp" / "atomic" / "data" / "he_ion_rate.csv"
+OUT_PATH = Path(__file__).parents[2] / "cablp" / "atomic" / "data" / "he_ion_rate.csv"
 TEMPERATURES_EV = np.logspace(-1, 2, 1000)
 
 

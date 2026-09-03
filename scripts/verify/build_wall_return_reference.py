@@ -40,7 +40,14 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config  # noqa: E402
 from cablp.solvers._sim1d.core.geometry import build_geometry  # noqa: E402
@@ -49,7 +56,7 @@ from cablp.solvers._sim1d.physics.kinetic_neutrals import VGrid  # noqa: E402
 
 from baseline_sim1d import build_baseline_config  # noqa: E402
 
-DEFAULT_OUT = Path(__file__).resolve().parent / "data" / "wall_return_reference.npz"
+DEFAULT_OUT = Path(__file__).resolve().parents[1] / "data" / "wall_return_reference.npz"
 
 # Rows per call, and calls per arm. Sized so the whole corpus stays a few
 # megabytes at raw float64 while carrying more than 200 cell rows.

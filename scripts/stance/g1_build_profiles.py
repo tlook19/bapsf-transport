@@ -93,7 +93,7 @@ import sys
 
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(HERE))
 
 from cablp.solvers._sim1d.core.geometry import build_geometry  # noqa: E402

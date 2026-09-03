@@ -64,8 +64,15 @@ import numpy as np
 from cablp.cathode.kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.solvers._sim1d import LAPDSim1D
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPT_DIR))
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
 # The golden's own config-construction path, reused rather than re-implemented:
 # a second copy of the layering would be free to drift away from the fixture it
 # is supposed to be pinning. ``_json_safe`` is the same coercion the golden

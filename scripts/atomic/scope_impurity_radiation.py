@@ -40,7 +40,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from cablp.atomic.adas import ADAS_DIR, _interp_blend, _interp_coords, read_adf11
 
@@ -127,7 +127,7 @@ def main():
     run = sys.argv[1] if len(sys.argv) > 1 else "es1_nx120_m5ap_es1.h5"
     te_excess = float(sys.argv[2]) if len(sys.argv) > 2 else 2.02
     elements = tuple(sys.argv[3].split(",")) if len(sys.argv) > 3 else ("o", "c")
-    path = Path(__file__).resolve().parent / run
+    path = Path(__file__).resolve().parents[1] / run
 
     with h5py.File(path, "r") as fh:
         t = fh["time"][:]

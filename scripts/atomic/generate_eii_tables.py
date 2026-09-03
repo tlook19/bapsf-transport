@@ -19,13 +19,13 @@ from pathlib import Path
 import numpy as np
 
 # Make the package importable from this directory
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from cablp.atomic.cross_sections import H_EII_cross, He_EII_cross
 from cablp.atomic.coefficients import a_11s
 from cablp.constants import I_Ry as IE_Hydrogen, I_ion as IE_Helium
 
-OUT_DIR = Path(__file__).parent.parent / "cablp" / "atomic" / "data"
+OUT_DIR = Path(__file__).parents[2] / "cablp" / "atomic" / "data"
 N = 1000
 
 # ── He: eps = E/IE_He from 1.001 to 1000/IE_He ─────────────────────────────

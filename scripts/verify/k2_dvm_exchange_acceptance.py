@@ -39,8 +39,15 @@ from types import SimpleNamespace
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import neutral_arch_e2_compare as e2  # noqa: E402
 from mc_neutrals import KB, M_HE, T_WALL_K, load_background  # noqa: E402
@@ -146,7 +153,7 @@ def main(argv=None):
     )
     ap.add_argument(
         "--run",
-        default=str(Path(__file__).resolve().parent
+        default=str(Path(__file__).resolve().parents[1]
                     / "es1_kn2z_promoted_nx240.h5"),
     )
     ap.add_argument("--window", nargs=2, type=float, default=(5.0, 19.5))

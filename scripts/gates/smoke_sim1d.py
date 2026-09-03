@@ -10751,7 +10751,14 @@ def _case_non_ignition_guards(
 
     # Scorer hard-fail (scripts): a non-ignited run must raise, an ignited one
     # must score its origin from the first main_discharge sample.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
     import compare_sim1d_es1 as _cmp_es1
     import fingerprints_sim1d as _fingerprints
 
@@ -13539,7 +13546,14 @@ def _case_gas_puff_orifice_profile():
     # total inflow exactly, and every misconfiguration raises at CONSTRUCTION.
     from cablp.solvers._sim1d.core.geometry import build_geometry
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
     import puff_orifice as _porf
 
     orf_params, orf_flags = default_config()
@@ -22393,7 +22407,14 @@ def _case_golden_digest_gate_deterministic():
     # process would report every merge as a divergence. A deliberately tiny
     # config (nx=12, no neutral equilibration, 25 steps) makes that a
     # sub-second check.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
     import golden_digest_gate as _gdg
 
     assert _gdg.DIGEST_STEPS == 4000

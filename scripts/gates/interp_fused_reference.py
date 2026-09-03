@@ -58,7 +58,7 @@ from pathlib import Path
 
 import numpy as np
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE = SCRIPT_DIR / "data" / "interp_fused_reference.npz"
 
 # Distinct sentinels, so the left/right branches are OBSERVABLE in the output

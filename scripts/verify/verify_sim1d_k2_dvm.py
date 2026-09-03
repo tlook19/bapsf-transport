@@ -311,9 +311,15 @@ from cablp.constants import kb_cgs, m_He_cgs
 # PRODUCTION must come from the artifact production is run from, not from a
 # dict restated here that can go stale against it (it did -- see
 # PRODUCTION_GEOMETRY_KEYS).
-_SCRIPTS = Path(__file__).resolve().parent
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
+_SCRIPTS = Path(__file__).resolve().parents[1]
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
 
 from stance_config import load_stance  # noqa: E402
 

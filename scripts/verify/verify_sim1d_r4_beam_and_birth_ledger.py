@@ -47,7 +47,7 @@ WINDOW = (18.81e-3, 23.80e-3)  # audit settled window [s]
 def _open(path):
     p = Path(path)
     if not p.is_absolute():
-        p = Path(__file__).resolve().parent / p
+        p = Path(__file__).resolve().parents[1] / p
     if not p.exists():
         print(f"settled M6 artifact not found: {p}")
         print("This diagnostic reads a gitignored campaign artifact; regenerate "

@@ -70,8 +70,15 @@ from cablp.solvers._sim1d.core.model_families import (
     KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
 )
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPT_DIR))
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
 from baseline_sim1d import build_baseline_config  # noqa: E402
 
 #: Steps each arm walks. A cost knob, not physics: the digest is running.

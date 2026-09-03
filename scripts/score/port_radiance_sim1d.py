@@ -118,7 +118,7 @@ from cablp.atomic.adas import (  # noqa: E402
 )
 from cablp.constants import qe_SI  # noqa: E402
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
 
 #: Default artifact: the mgcr1 confirmation run this instrument was built on.
 DEFAULT_H5 = SCRIPT_DIR / "mgcr1_confirm.h5"

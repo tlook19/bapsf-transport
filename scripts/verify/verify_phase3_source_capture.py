@@ -517,7 +517,7 @@ def check_constructor_order_and_cli_import(repo_root):
 
 
 def main():
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     with tempfile.TemporaryDirectory(prefix="phase3-capture-synthetic-") as temp:
         root = Path(temp)
         check_identity_and_reservation(root)

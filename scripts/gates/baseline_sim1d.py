@@ -64,14 +64,21 @@ from cablp.solvers._sim1d import (
 )
 
 # Default location of the committed golden fixture (NPZ) and its JSON sidecar.
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = SCRIPT_DIR / "baselines" / "production_discharge.npz"
 
 # The stance loader, for the committed stance FILE. This is the module's only
 # scripts/ import and it is deliberate: `stance_config` is a small loader for a
 # committed artifact, not a campaign driver whose dicts drift. The drivers
 # (`compare_sim1d_es1`, `run_mechanism_ladder`) stay unimported.
-sys.path.insert(0, str(SCRIPT_DIR))
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
 from stance_config import load_stance  # noqa: E402
 
 # --- Baseline config: the stance of record, re-cut to the gate mesh --------

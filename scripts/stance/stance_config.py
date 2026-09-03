@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
-_SCRIPTS = Path(__file__).resolve().parent
+_SCRIPTS = Path(__file__).resolve().parents[1]
 if str(_SCRIPTS.parent) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS.parent))
 
