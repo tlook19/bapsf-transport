@@ -54,9 +54,11 @@ The map's slope is ≈ 0.45 K/A with a **[0.43, 0.50] K/A bracket**, and the
 rungs recorded above sit at the 0.43 K/A edge of it, to rounding. The two
 slopes are the map's own — the ES1 anchor pair below 1800 A has local slope
 0.45 K/A ((1648 − 1603)/100), while the inter-rung differences above 1775 A
-read 0.43 K/A ((1676 − 1637)/90 = 0.433, (1699 − 1637)/145 = 0.428): the
-digitized curve flattens with current, and the bracket [0.43, 0.50] spans
-both. The map is read in °C: the three heater currents interpolate to
+read 0.433 and 0.428 K/A ((1676 − 1637)/90 and (1699 − 1637)/145): the
+digitized curve flattens with current; the inter-rung values sit at the
+bracket's 0.43 edge, the second marginally below it within the digitization's
+own resolution, and the bracket spans the anchor-pair slope as well.
+The map is read in °C: the three heater currents interpolate to
 1637 / 1676 / 1699 °C, i.e. 1910.15 / 1949.15 / 1972.15 K, and `ES_OPERATING`
 stores them rounded to 1910.0 / 1949.0 / 1972.0 — which is why a bracket
 quoted to a tenth of a kelvin can otherwise appear to exclude the shipped
@@ -69,7 +71,7 @@ the slope bracket the interpolation moves 1603 + 75 × [0.43, 0.50] =
 
 *Sensitivities.* Under the slope bracket alone, setting 1 moves within
 **[−1.6, +3.7] K** about 1910 K — a strict bound of 4 K — absorbed into `C_R`
-along the flat direction below as a factor **× [0.97, 1.03]**. Stated to the
+along the flat direction below as a factor **× [0.984, 1.037]**. Stated to the
 record's own precision, setting 2 spans **[1949, 1955] K** and setting 3
 **[1972, 1983] K**; each contains its shipped rung.
 The slope bracket is not the real uncertainty. The
