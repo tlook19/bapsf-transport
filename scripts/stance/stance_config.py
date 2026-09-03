@@ -109,6 +109,45 @@ TABLES = NAMESPACES + ("none_valued", "models")
 #: Top-level (non-table) keys a configuration file may carry.
 SCALARS = ("base", "allow_restated")
 
+#: THE MESH-SIZED PACKAGE. These four params are per-cell arrays sized to the
+#: configuration's OWN mesh, and the two flags below require them. They cannot
+#: travel to another resolution and they are not resampled: the vessel profile
+#: is a staircase whose steps interpolation would smear into a bore the
+#: machine does not have, and the two nn0 profiles are an equilibrated foot
+#: computed for that mesh, so resampling them is a new initial condition
+#: rather than the configuration's.
+#:
+#: A caller that must run a named configuration at ITS OWN resolution -- the
+#: golden gate on its coarse mesh, a corner sweep on twenty cells -- drops the
+#: package WHOLE, with its flags, rather than half-applying it: a prescribed
+#: geometry carrying a default fill is a hybrid corner of nobody's choosing.
+#: What still travels is every mesh-independent key, which is the whole
+#: operating point.
+MESH_SIZED_PARAMS = (
+    "plasma_radius_profile_cm",
+    "machine_radius_profile_cm",
+    "nn0_profile",
+    "nn0_annulus_profile",
+)
+MESH_SIZED_FLAGS = (
+    "prescribed_area_geometry",
+    "neutral_initial_profile",
+)
+
+
+def without_mesh_sized_package(params, flags):
+    """Return copies of a configuration's delta with the mesh package dropped.
+
+    The params are REMOVED (so the templates' own values stand) and the flags
+    are cleared, because each of those flags REQUIRES the array it reads. The
+    caller supplies the initial neutral fill the dropped profile was carrying.
+    """
+    return (
+        {k: v for k, v in params.items() if k not in MESH_SIZED_PARAMS},
+        {**flags, **{k: False for k in MESH_SIZED_FLAGS}},
+    )
+
+
 #: How many files one chain may hold, this file included. Three is a base, a
 #: derivation of it, and a derivation of that -- enough to say "the reference,
 #: the campaign's variant of it, this arm's variant of that" and shallow enough
@@ -192,6 +231,25 @@ def load_configuration(spec):
     that configuration's. A driver that then layers its own mesh package
     restates the identity with ``lineage.with_identity(params, flags)``.
     """
+    stance = load_named_configuration(spec)
+    params, flags = default_config()
+    params.update(stance.params)
+    flags.update(stance.flags)
+    return params, flags, stance.lineage
+
+
+def load_named_configuration(spec):
+    """Return the :class:`Stance` for a committed NAME or a file PATH.
+
+    The name-or-path half of :func:`load_configuration`, for a caller that
+    needs the file's cumulative DELTA rather than the resolved pair -- a driver
+    that layers a named configuration over its own rung reads
+    ``.params``/``.flags`` here and applies them where it applies a stance. A
+    value carrying a path separator or the ``.toml`` suffix is read as a path;
+    anything else is a committed configuration name. A derived file's ``base``
+    resolves in ``scripts/stances/`` either way, because a base is a COMMITTED
+    configuration by definition.
+    """
     text = str(spec)
     if "/" in text or "\\" in text or text.endswith(SUFFIX):
         path = Path(text)
@@ -202,13 +260,8 @@ def load_configuration(spec):
                 f"or the path of a configuration file; the LAPD reference "
                 f"configuration is {STANCE_DIR / ('g1atrim' + SUFFIX)}"
             )
-        stance = _load(path.stem, path.resolve(), ())
-    else:
-        stance = load_stance(text)
-    params, flags = default_config()
-    params.update(stance.params)
-    flags.update(stance.flags)
-    return params, flags, stance.lineage
+        return _load(path.stem, path, ())
+    return load_stance(text)
 
 
 def stance_config(name):
@@ -232,6 +285,11 @@ def stance_config(name):
 
 
 def _load(name, path, chain):
+    # RESOLVED on both sides. A chain reaches this function by name through
+    # STANCE_DIR and by path through load_named_configuration, and a cycle
+    # between the two spellings is still a cycle: comparing unresolved paths
+    # would let one spelling of a file stand in for another.
+    path = Path(path).resolve()
     document = _read_document(name, path)
     base_name = document.get("base")
     allow_restated = _read_allow_restated(name, path, document)
@@ -368,7 +426,10 @@ def _read_deltas(name, path, document):
             if key in template[namespace]:
                 continue
             other = next(
-                (n for n in NAMESPACES if n != namespace and key in template[n]),
+                (
+                    n for n in NAMESPACES
+                    if n != namespace and key in template[n]
+                ),
                 None,
             )
             owner = (

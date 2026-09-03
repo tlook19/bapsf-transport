@@ -7,7 +7,7 @@ import numpy as np
 
 from cablp.cathode.kernels import PURE_PROVENANCE as PURE_KERNEL_PROVENANCE
 
-from ..core.config import resolve_config
+from ..core.config import ConfigurationLineage, resolve_config
 from ..core.timestep import TimestepDiagnostics
 from ..physics.hot_neutrals import HOT_CHANNEL_DIAGNOSTIC_FIELDS
 from ..physics.sources import (
@@ -435,6 +435,27 @@ def load_result_hdf5(path):
                 setattr(result, _attr, _read_json_attr(h5, _attr))
             else:
                 setattr(result, _attr, _decode_string(h5.attrs[_attr]))
+        # The lineage RECONSTRUCTED, so a load -> save round trip carries the
+        # configuration through instead of dropping a named run to "<unnamed>"
+        # (a re-save of a scored artifact is a routine step, and losing the
+        # name there would be worse than never having written it). Built only
+        # from a file that carries the whole record: a name alone is what an
+        # unnamed run writes, and there is nothing to reconstruct from it.
+        result.configuration = (
+            None
+            if any(
+                getattr(result, _attr) is None
+                for _attr in _CONFIGURATION_ATTRS
+            )
+            or result.configuration_name == UNNAMED_CONFIGURATION
+            else ConfigurationLineage(
+                name=result.configuration_name,
+                base_chain=tuple(result.configuration_base_chain),
+                file_sha256=tuple(result.configuration_file_sha256),
+                delta_keys=tuple(result.configuration_delta_keys),
+                identity=result.configuration_identity,
+            )
+        )
         if "run_status" in h5.attrs:
             result.run_status = _decode_string(h5.attrs["run_status"])
         # Absent on artifacts written before the kernel selector existed;

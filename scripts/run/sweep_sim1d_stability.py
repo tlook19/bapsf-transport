@@ -1,12 +1,42 @@
-"""Small sim1d stability sweep for LAPD-ish operating points."""
+"""Small sim1d stability sweep over a NAMED configuration's corners.
+
+Five short fixed-corner cases -- seed density, temperatures, cathode on/off --
+each run for a fraction of a microsecond and checked for finiteness and drift.
+It answers "does the integrator stay well behaved near these corners", and the
+answer is only meaningful about a configuration someone can name: the same
+corner is stable under one closure and marginal under another.
+
+``--stance NAME`` (or a configuration file's path) is that configuration and is
+the BASE of the sweep; the per-case deltas below are applied over it, exactly
+where a campaign driver applies its rung. A sweep that genuinely names none
+says so with ``--no-stance``.
+
+    python scripts/run/sweep_sim1d_stability.py --stance g1atrim
+"""
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config, summarize_result
+
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
+
+from stance_config import (  # noqa: E402
+    available_stances,
+    load_named_configuration,
+    without_mesh_sized_package,
+)
 
 
 @dataclass(frozen=True)
@@ -71,10 +101,44 @@ CASES = (
 )
 
 
-def main():
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__)
+    stance_group = ap.add_mutually_exclusive_group()
+    stance_group.add_argument(
+        "--stance", metavar="NAME", default=None,
+        help="committed configuration file (scripts/stances/NAME.toml), or a "
+             "configuration file's path, this sweep is based on. Available: "
+             + (", ".join(available_stances()) or "(none committed)"))
+    stance_group.add_argument(
+        "--no-stance", action="store_true",
+        help="acknowledge that this sweep names no configuration and runs "
+             "this script's own corner definitions over the bare templates")
+    args = ap.parse_args(argv)
+    # A stability verdict is a statement ABOUT a configuration: the same corner
+    # is well behaved under one closure and marginal under another, so a sweep
+    # that names none reports a number nobody can place.
+    if args.stance is None and not args.no_stance:
+        raise SystemExit(
+            "sweep_sim1d_stability: name the configuration package. Pass "
+            "--stance <name> to sweep a committed stance file "
+            "(available: "
+            f"{', '.join(available_stances()) or '(none committed)'})"
+            ", or --no-stance to acknowledge that this sweep has none and "
+            "runs "
+            "this script's own corner definitions over the bare templates."
+        )
+
+    base = (
+        None if args.stance is None
+        else load_named_configuration(args.stance)
+    )
+    print(
+        "sim1d stability sweep configuration: "
+        + ("<unnamed>" if base is None else f"{base.name} ({base.path})")
+    )
     reports = []
     for case in CASES:
-        result, summary = run_case(case)
+        result, summary = run_case(case, base)
         check_case(case, result, summary)
         reports.append(format_report(case, summary))
 
@@ -83,8 +147,32 @@ def main():
     print(f"sim1d stability sweep ok: {len(reports)} cases")
 
 
-def run_case(case):
+def run_case(case, base=None):
     params, flags = default_config()
+    if base is not None:
+        # MINUS THE MESH-SIZED PACKAGE. These corners run twenty cells for a
+        # fraction of a microsecond, and a per-cell profile sized for the
+        # configuration's own mesh refuses any other one. What travels is the
+        # operating point, which is what the corners are being asked about;
+        # each case supplies its own seed fill below.
+        base_params, base_flags = without_mesh_sized_package(
+            base.params, base.flags
+        )
+        params.update(base_params)
+        flags.update(base_flags)
+        if not case.cathode:
+            # A CATHODE-OFF CORNER HAS NO CATHODE RECYCLE. The reference
+            # configuration arms the DVM's cathode jet, which launches the
+            # recycle at the sheath energy phi_c the cathode solve supplies;
+            # with cathode_coupling off there is no solve and the solver
+            # refuses the pair rather than launching thermal atoms as if they
+            # carried sheath energy. Turning the channel off is what "no
+            # cathode" MEANS here, not a physics choice this sweep is making.
+            # The ANODE jet goes with it: the cathode, anode and bank are one
+            # system and one solve, so phi_a is unavailable for the same
+            # reason phi_c is.
+            params["neutral_kinetic_dvm_cathode_jet"] = False
+            params["neutral_kinetic_dvm_anode_jet"] = False
     params.update(
         {
             "nx": 20,

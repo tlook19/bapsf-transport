@@ -70,9 +70,8 @@ def main(argv=None):
     # The lineage travels with the run, its identity restated over the config
     # this driver actually constructs -- the named configuration plus the run
     # controls above.
-    sim = LAPDSim1D(
-        params, flags, configuration=configuration.with_identity(params, flags)
-    )
+    configuration = configuration.with_identity(params, flags)
+    sim = LAPDSim1D(params, flags, configuration=configuration)
     progress_tracker = (
         ProgressPrinter1D(interval_fraction=args.progress_interval)
         if args.progress
@@ -105,7 +104,7 @@ def main(argv=None):
             if configuration.base_chain
             else ""
         )
-        + f", identity={sim._configuration.identity}"
+        + f", identity={configuration.identity}"
     )
     print(
         "sim1d run complete: "

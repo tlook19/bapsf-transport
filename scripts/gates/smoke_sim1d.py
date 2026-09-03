@@ -17877,7 +17877,11 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
     # silently retire it.
     from covbuild_run_conducting_phase import build_config as _cov_live_config
 
-    _cov_split_sim = LAPDSim1D(*_cov_live_config(24, coverage=(0.05, 0.0)))
+    # build_config returns (params, flags, lineage); the lineage is metadata
+    # and is deliberately not handed to the solver here -- this case measures
+    # the beam split, not the recording of a configuration name.
+    _cov_live_p, _cov_live_f, _ = _cov_live_config(24, coverage=(0.05, 0.0))
+    _cov_split_sim = LAPDSim1D(_cov_live_p, _cov_live_f)
     for _ in range(40):
         _cov_split_sim.advance_one_step(dt=2.0e-9)
     _cov_solve = _cov_split_sim.solve_cathode_boundary(state=_cov_split_sim.state)
@@ -22998,6 +23002,30 @@ def _case_configuration_hdf5_lineage_round_trip():
         for _cl_attr in _CONFIGURATION_ATTRS[1:]:
             assert getattr(_cl_unnamed_back, _cl_attr) is None, _cl_attr
 
+        # LOAD -> SAVE MUST NOT DROP THE NAME. Re-saving a loaded artifact is
+        # a routine step, and a named run that comes back "<unnamed>" is worse
+        # than one that never carried a name: the loader reconstructs the
+        # lineage and the writer carries it through unchanged.
+        assert _cl_back.configuration == _cl_lineage, _cl_back.configuration
+        _cl_resaved = _cl_room / "resaved.h5"
+        save_result_hdf5(_cl_resaved, _cl_back)
+        _cl_again = load_result_hdf5(_cl_resaved)
+        for _cl_attr in _CONFIGURATION_ATTRS:
+            assert getattr(_cl_again, _cl_attr) == getattr(_cl_back, _cl_attr), (
+                _cl_attr
+            )
+        assert _cl_again.configuration == _cl_lineage
+
+        # ... and an UNNAMED run stays unnamed rather than acquiring one.
+        _cl_unnamed_resaved = _cl_room / "unnamed_resaved.h5"
+        save_result_hdf5(_cl_unnamed_resaved, load_result_hdf5(_cl_unnamed_h5))
+        with h5py.File(_cl_unnamed_resaved, "r") as _cl_file:
+            assert (
+                _cl_file.attrs["configuration_name"] == UNNAMED_CONFIGURATION
+            )
+            for _cl_attr in _CONFIGURATION_ATTRS[1:]:
+                assert _cl_attr not in _cl_file.attrs, _cl_attr
+
         # NEGATIVE CONTROL (the pre-2026-09-03 file): strip every lineage attr
         # and the loader must report None for all five -- never "<unnamed>",
         # never an identity recomputed from params_json.
@@ -23068,6 +23096,23 @@ def _case_configuration_drivers_refuse_unnamed_runs():
         # name supplied there could only contradict it.
         (["scripts/score/compare_sim1d_es1.py", "--es", "1"],
          "compare_sim1d_es1: name the configuration package", "--stance"),
+        # A SEED is an initial condition later runs stand on, so an unnamed one
+        # feeding named runs is the unstanced divergence one layer down.
+        (["scripts/run/build_neutral_seed_cache.py", "--es1",
+          "--db-dir", "unused_seed_db"],
+         "build_neutral_seed_cache: name the configuration package",
+         "--stance"),
+        # A stability verdict is a statement ABOUT a configuration: the same
+        # corner is well behaved under one closure and marginal under another.
+        (["scripts/run/sweep_sim1d_stability.py"],
+         "sweep_sim1d_stability: name the configuration package", "--stance"),
+        # The window instrument: its delta table is a delta OVER something, and
+        # what that something is used to be whatever the shared driver dicts
+        # held.
+        (["scripts/run/covbuild_run_conducting_phase.py",
+          "--save-h5", "unused.h5"],
+         "covbuild_run_conducting_phase: name the configuration package",
+         "--stance"),
     )
 
     for _dr_bare, _dr_phrase, _dr_switch in _dr_drivers:

@@ -32,6 +32,10 @@ EXPECTED_CONFIGURATION_IDENTITY = (
     "91e19ac5a7eb11c21ce0c38ab36cb60f948c420edc8ae0a1642e80095cb0eec6"
 )
 RECIPE_IDENTITY = "golden-digest-first-4000-accepted-steps-v1"
+#: The committed configuration this recipe is built from. It is read from
+#: baseline_sim1d rather than restated, so the recipe and the golden gate
+#: cannot disagree about which configuration the capture names.
+PRODUCTION_STANCE = "g1atrim"
 PRODUCER_INPUT_PATHS = (
     "cablp/solvers/_sim1d/core/config.py",
     "cablp/solvers/_sim1d/core/state.py",
@@ -114,7 +118,20 @@ def capture_phase3_rhs(run_id, capture_revision, invocation):
 
     # This is the first solver construction in the entry point.  The explicit
     # identity already exists durably and is supplied in the constructor.
-    sim = baseline_sim1d.LAPDSim1D(params, flags, run_id=run_id)
+    #
+    # The CONFIGURATION LINEAGE rides with it, the way baseline_sim1d.capture()
+    # records it: this recipe IS the reference configuration re-cut to the
+    # digest horizon, so the capture names g1atrim rather than presenting
+    # itself as unnamed. It is metadata and nothing else -- no phase reads it,
+    # the resolved config above is untouched, and scientific_payload_digest
+    # hashes DATASETS, so neither the recipe's resolved identity nor the
+    # capture's payload digest can move because of it.
+    sim = baseline_sim1d.LAPDSim1D(
+        params,
+        flags,
+        run_id=run_id,
+        configuration=_recipe_lineage(params, flags),
+    )
     sim.start_simulation(**run_kwargs)
     result = sim.get_results()
     completed_at = _utc_now()
@@ -137,6 +154,47 @@ def capture_phase3_rhs(run_id, capture_revision, invocation):
         },
         repository_root=REPOSITORY_ROOT,
     )
+
+
+def _recipe_lineage(params, flags):
+    """Return the reference configuration's lineage for this recipe's config.
+
+    Same construction as ``baseline_sim1d.capture()``: the committed
+    configuration this recipe is built from, with the identity restated over
+    the config the recipe actually runs, because the digest horizon's
+    ``max_steps_action`` override is real and an identity claiming to be the
+    file's unmodified one would be false.
+    """
+    _scripts_on_path()
+    from stance_config import load_configuration
+
+    _, _, lineage = load_configuration(PRODUCTION_STANCE)
+    return lineage.with_identity(params, flags)
+
+
+def _resolved_recipe_config():
+    """Return the recipe's ``(params, flags)`` without constructing anything.
+
+    The no-solve half of :func:`capture_phase3_rhs`, for ``--print-identity``:
+    the recipe's resolved configuration is what its committed identity pins, so
+    a change to this file can be shown not to have moved it.
+    """
+    _scripts_on_path()
+    import baseline_sim1d
+    import golden_digest_gate
+
+    return baseline_sim1d.build_baseline_config(
+        golden_digest_gate.DIGEST_PARAM_OVERRIDES
+    )
+
+
+def _scripts_on_path():
+    """Put the seven scripts/ purpose subdirectories on sys.path."""
+    for sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                "verify"):
+        directory = str(SCRIPT_DIR / sub)
+        if directory not in sys.path:
+            sys.path.insert(0, directory)
 
 
 def _verify_source_boundary(capture_revision):
@@ -212,13 +270,39 @@ def _utc_now():
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-id", required=True)
-    parser.add_argument("--capture-revision", required=True)
+    parser.add_argument(
+        "--print-identity", action="store_true",
+        help="print the recipe's resolved configuration identity and the "
+             "committed constant it must equal, then exit; constructs nothing",
+    )
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--capture-revision", default=None)
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = _parse_args(argv)
+    if args.print_identity:
+        params, flags = _resolved_recipe_config()
+        actual = configuration_identity(params, flags)
+        print(f"resolved_configuration_identity {actual}")
+        print(
+            "expected_configuration_identity "
+            f"{EXPECTED_CONFIGURATION_IDENTITY}"
+        )
+        print(f"match {actual == EXPECTED_CONFIGURATION_IDENTITY}")
+        return 0
+    missing = [
+        name for name, value in (
+            ("--run-id", args.run_id),
+            ("--capture-revision", args.capture_revision),
+        ) if value is None
+    ]
+    if missing:
+        raise SystemExit(
+            f"capture_phase3_rhs: {' and '.join(missing)} required for a "
+            "capture (only --print-identity runs without them)"
+        )
     raw_argv = sys.argv[1:] if argv is None else list(argv)
     invocation = ["python", "scripts/run/capture_phase3_rhs.py", *raw_argv]
     h5_path, provenance_path = capture_phase3_rhs(

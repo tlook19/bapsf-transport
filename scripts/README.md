@@ -17,9 +17,15 @@ that move it, `stances/examples/g1atrim_fluid_comparator.toml` being the worked
 one. `stance/stance_config.py` resolves both forms and returns, with the
 `(params, flags)`, the lineage a run writes into its HDF5: the configuration's
 name, its base chain, each file's sha256, its delta keys and the resolved
-identity. No driver in `run/` has a bare mode — each takes `--config`/`--stance`
-or an explicit `--no-stance` — so an artifact can always say which
-configuration produced it. The form, its refusals and the lineage fields are
+identity. **No entry point that builds a solver has a bare mode.** Every driver in
+`run/`, the scorer's own run route in `score/compare_sim1d_es1.py`, and
+`gates/audit_sim1d_equilibration_duty.py` each take `--config`/`--stance` or an
+explicit `--no-stance`, so an artifact can always say which configuration
+produced it. One deliberate exception, which names a
+configuration without being asked: `run/capture_phase3_rhs.py` runs one locked
+recipe and takes the reference configuration's name from it. Scoring an
+existing artifact (`compare_sim1d_es1.py --from-h5`) names nothing on purpose:
+it reads the configuration out of the file it scores. The form, its refusals and the lineage fields are
 `cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md`.
 
 **`gates/`** — the checks that must pass before anything merges, and the

@@ -80,7 +80,12 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
     _dir = str(_Path(__file__).resolve().parents[1] / _sub)
     if _dir not in _sys.path:
         _sys.path.insert(0, _dir)
-from stance_config import load_configuration, load_stance  # noqa: E402
+from stance_config import (  # noqa: E402
+    MESH_SIZED_FLAGS,
+    MESH_SIZED_PARAMS,
+    load_configuration,
+    load_stance,
+)
 
 # --- Baseline config: the stance of record, re-cut to the gate mesh --------
 # GOLDEN-AT-STANCE (ratified 2026-08-20). The config is
@@ -115,16 +120,12 @@ PRODUCTION_STANCE = "g1atrim"
 # operating-point key plus the baffles (whose arrays are physical cm, not
 # per-cell). What the gate loses is the measured flare, the vessel staircase
 # and the shaped foot; what it keeps is the operating point.
-STANCE_MESH_SIZED_PARAMS = (
-    "plasma_radius_profile_cm",
-    "machine_radius_profile_cm",
-    "nn0_profile",
-    "nn0_annulus_profile",
-)
-STANCE_MESH_SIZED_FLAGS = (
-    "prescribed_area_geometry",
-    "neutral_initial_profile",
-)
+# The lists themselves live in stance_config, next to the loader that reads the
+# configurations they describe, so the golden gate and every other caller that
+# must run a named configuration at its own resolution drop the SAME package.
+# These names are kept because this file's callers and its record use them.
+STANCE_MESH_SIZED_PARAMS = MESH_SIZED_PARAMS
+STANCE_MESH_SIZED_FLAGS = MESH_SIZED_FLAGS
 
 BASELINE_PARAM_OVERRIDES = {
     # Axial resolution -- the one run-shape pin. The campaign runs 268 far-column

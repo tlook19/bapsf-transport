@@ -25,6 +25,27 @@
 # its base, both files' sha256, the delta keys below, and the resolved
 # configuration's identity -- so the arm is identifiable from its artifact
 # alone.
+#
+# WHAT THIS IS NOT: the arm that was actually run. Against the
+# corrected-profile fluid comparator arm m1_arm1t_es1 (2026-09-01) this
+# configuration differs in NINE params and no flags, and the differences are
+# worth reading before any score from that arm is set beside a score from this
+# one:
+#
+#   nx                             240 -> 268   the reference's mesh
+#   C_R                            8.76 -> 9.30 the reference's drive
+#   V_bank                         180 -> 177.843  calibration vintage moved
+#   anode_neutral_jet              on  -> off  ]  the fluid-era anode-recycle
+#   anode_jet_energy_convention    set -> unset]  declarations this file
+#   neutral_mesh_accommodation     on  -> off  ]  deliberately does not re-arm
+#   neutral_kinetic_dvm_cadence_s  ]
+#   neutral_kinetic_dvm_nvp        ]  INERT under neutral_model = "moment"
+#   neutral_kinetic_dvm_nvz        ]
+#
+# Three of the nine are the reference's own drive-calibration vintage having
+# moved since that arm ran, three are a recycle decision this file leaves to
+# the arm that wants it, and three are inert. None of them is this file
+# claiming to reproduce m1_arm1t_es1.
 base = "g1atrim"
 
 
@@ -83,7 +104,8 @@ neutral_kinetic_dvm_anode_jet = false
 neutral_momentum = true
 # The frictional half of the collisional energy exchange is booked against the
 # relative velocity u - u_n, which the wind now supplies, and the hot internal
-# wall walls the CX-born hot channel that the neutral energy equation creates.
+# wall confines the CX-born hot channel that the neutral energy equation
+# creates.
 neutral_energy = true
 neutral_hot_internal_wall = true
 # The kinetic baffle flag makes the geometry's thin annular baffles intercept
