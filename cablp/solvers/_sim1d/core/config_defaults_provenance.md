@@ -1588,12 +1588,14 @@ which is the real uncertainty and is invisible to every ES1 score because
 `C_R` is the fit target — are in `scripts/ladder_operating_provenance.md`;
 `run_mechanism_ladder.ES_OPERATING` carries the table.
 
-**`T_s = 1998.15` K — FITTED, historical.** Not a machine reading: it is the
-retired constant-surface-temperature TUNE of the pre-warming-model era. Under
-`cathode_warming_model = "power_balance"` it is inert — only the static-model
-fallback — and the live input is `cathode_Ts_base_K`. It is marked for
-retirement; the stance row that still names it, and why its deletion has been
-deferred, are in `scripts/production_stance_provenance.md`.
+**`T_s = 1998.15` K — ASSUMED.** Not a machine reading and never fitted: the
+constant surface temperature the pre-warming-model solver was developed with,
+entered as the literal 273.15 + 1725 K and never adjusted. Inert under
+`cathode_warming_model = "power_balance"` — every read is guarded by the
+evolving surface value or by `T_s_override_K` — and the live input is
+`cathode_Ts_base_K`. Marked for retirement; the stance row that still names it,
+and why its deletion has been deferred, are in
+`scripts/production_stance_provenance.md`.
 
 **`phi_wf = 2.869` eV — FITTED**, the contaminated shot-start work function.
 **`cathode_phiwf_clean_eV = 2.809` eV — FITTED**, the per-shot-accessible depth

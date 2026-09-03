@@ -51,12 +51,22 @@ its pyrometer channel reads 0.0 in every shot, and its heater-current data
 channel is invalid-flagged and uncalibrated.
 
 The map's slope is ≈ 0.45 K/A with a **[0.43, 0.50] K/A bracket**, and the
-rungs recorded above sit at the 0.43 K/A edge of it.
+rungs recorded above sit at the 0.43 K/A edge of it, to rounding. The map is
+read in °C: the three heater currents interpolate to 1637 / 1676 / 1699 °C,
+i.e. 1910.15 / 1949.15 / 1972.15 K, and `ES_OPERATING` stores them rounded to
+1910.0 / 1949.0 / 1972.0 — which is why a bracket quoted to a tenth of a kelvin
+can otherwise appear to exclude the shipped rung.
+
+*Anchor for the ± 3 K.* ES1 interpolates the Fig-10 map between its
+1700 A ≈ 1603 °C and 1800 A ≈ 1648 °C points: at 1775 A that is 1637 °C. Under
+the slope bracket the interpolation moves 1603 + 75 × [0.43, 0.50] =
+**[1635.3, 1640.5] °C**, i.e. within about ± 3 K of 1910 K.
 
 *Sensitivities.* Under the slope bracket alone, setting 1 moves by at most
 **± 3 K** — absorbed into `C_R` along the flat direction below as a factor
-**× [0.97, 1.03]**; setting 2 spans **[1948.7, 1955.0] K** and setting 3
-**[1972.4, 1982.5] K**. The slope bracket is not the real uncertainty. The
+**× [0.97, 1.03]**. Stated to the record's own precision, setting 2 spans
+**[1949, 1955] K** and setting 3 **[1972, 1983] K**; each contains its shipped
+rung. The slope bracket is not the real uncertainty. The
 **ABSOLUTE pyrometer bar of ± 50–100 K** is, and along the same flat direction
 it maps to `C_R` **× [0.61, 1.65]** and **× [0.37, 2.72]** respectively. That
 bar is invisible to every ES1 score, because `C_R` is the fit target — the
