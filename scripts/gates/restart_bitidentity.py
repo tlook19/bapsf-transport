@@ -106,7 +106,7 @@ def scenario_config(name):
             "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
             "cathode_warming_model": "none",
-            "cathode_Ts_base_K": None,
+            "cathode_Ts_base_K": 1998.15,
             "cathode_surface_model": "none",
             "cathode_phiwf_clean_eV": None,
             "cathode_cleaning_E_th_eV": None,

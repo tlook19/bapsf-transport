@@ -227,44 +227,42 @@ point in the code's own expression `J = C_R T^2 exp(-e phi/(kB T))`:
        keeps the point-emission match at 0.03%, inside the 0.1% the derivation
        was pre-registered to hit).
 
-**`T_s = 1998.15` IS named by the stance, and its deletion was DEFERRED a
-third time on 2026-08-25 — now with the reason on record.** It was scheduled for
-deletion alongside `V_bank` (23b R4) on the reading that both merely restate
-config defaults. That reading is correct against `default_config()`, which is
-why deleting `T_s` is invisible to the golden fixture (its `T_s` resolves to
-1998.15 either way). **It is NOT correct on the campaign route:**
-`run_m6_point.py:216` supplies `T_s` from the ES rung's `Ts_standby_K`
-(ES1 = 1910.0) and THIS ROW SUPERSEDES IT, so deleting it would move `T_s`
-1998.15 → 1910.0 on every campaign arm. That was MEASURED as a real second delta
-in the pre-flight against `scripts/mgcr1_confirm.h5` and disappeared the moment
-the row was restored. Whether the move is physically inert was left
-open here on a reading the kinetic stance event (2026-09-02) DISPROVED, so the
-reading is corrected rather than carried forward. Under
-`cathode_warming_model = "power_balance"` the evolving surface temperature is
-seeded from `cathode_Ts_base_K` rather than `T_s`, and every read of `T_s` on
-the cathode path is guarded by that evolving value or by the `T_s_override_K`
-route. The earlier text named ONE unguarded read — the kinetic background's —
-and predicted it would go LIVE under `neutral_model = "kinetic_dvm"`. **It does
-not.** That read belongs to `neutral_model = "kinetic"`, the TPMC path, whose
-`_kinetic` namespace the solver builds only for that selection; under
-`"kinetic_dvm"` it is `None` and the read is unreachable. The DVM's own
-surface-temperature input is taken from the same evolving cathode value, with
-`T_s` only as its fallback. So `T_s` is configuration-inert under the kinetic
-stance too, the row is kept because deleting it would move `T_s` on every
-campaign arm, and the deferred adjudication is now a bookkeeping question
-(which of 1998.15 and the rung's 1910.0 the stance should name) rather than a
-physics one.
+**`T_s` — RETIRED 2026-09-03. The stance no longer names it, because the key
+no longer exists.** Tom's ruling: it is a sim3-era development artifact. The
+row survived three deferrals (the last on 2026-08-25, alongside the `V_bank`
+deletion of 23b R4) on a bookkeeping question — whether the stance should name
+1998.15 or the rung's 1910.0 — that the retirement dissolves rather than
+answers.
 
-It remains
-one of the three RESOLVED-ACCRETION keys (`cathode_emission_profile`,
-`Te_birth_ionization`, `T_s`): keys that equal their config default but are
-stated explicitly in `g1atrim.toml` anyway, because `run_m6_point.py`'s own
-driver defaults do not. Under the stance's
-`cathode_warming_model = "power_balance"` it is ONLY the initial surface
-temperature — the surface then evolves from the power balance, so `T_s` sets no
-steady-state property and `cathode_Ts_base_K` is the live key below. *(Formerly
-listed under "Deliberately absent" on the mistaken reading that the stance does
-not name it; corrected 2026-08-23.)*
+What the key was: a constant surface temperature the pre-warming-model solver
+was developed with. Under `cathode_warming_model = "power_balance"` — this
+stance's model, and the config default — it was configuration-INERT: every
+solver call site passed `T_s_override_K` from the evolving surface value, so
+the raw read was always overridden. Two reads were live, both off this stance:
+the static warming model `"none"`, and the TPMC kinetic background under
+`neutral_model = "kinetic"`. **Both now read `cathode_Ts_base_K`** — the
+heater-maintained standby, which the static model holds the surface at and
+`power_balance` evolves from — so the cathode's surface temperature has one
+configured input on every path that still reads one. The internal
+`T_s_override_K` plumbing is unchanged and is still the seam the evolving
+surface value is substituted at.
+
+Naming `T_s` in a configuration now raises at construction with
+`cathode_Ts_base_K` named as its successor, so a stored pre-removal file
+reports where its value should go rather than going silently inert.
+
+**No value moved.** The removal rotates the resolved CONFIG IDENTITY by exactly
+one key and nothing else — proven case by case by restoring `T_s = 1998.15`
+into each rotated configuration and reproducing the pre-removal digest bit for
+bit. The golden's saved trajectory is unchanged (the 4,000-step digest holds at
+`4c0e105b…`); the identity table is in
+`scripts/gates/golden_baseline_provenance.md`. On the campaign route the move
+the earlier deferrals feared does not occur either: every driver already
+supplied `cathode_Ts_base_K` from the same rung field beside the retired key,
+so dropping `T_s` leaves the rung's standby exactly where it was.
+
+`T_s` was one of three RESOLVED-ACCRETION keys; the remaining two are
+`cathode_emission_profile` and `Te_birth_ionization`.
 
 **`cathode_Ts_base_K` is deliberately NOT pinned here.** It is inherited from
 the config default, which is the DERIVED standby temperature. An earlier

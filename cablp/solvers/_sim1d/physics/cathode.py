@@ -335,13 +335,19 @@ def cathode_emission_annuli(input_dict, n_annuli=10):
     ``T_s`` the peak. The center-to-edge drop this implies (~150-200 K) is
     what softens the emission knee from a razor wall into a stable ramp.
 
+    The peak is read from ``cathode_Ts_base_K``, which under
+    ``cathode_warming_model = "power_balance"`` the caller has already
+    substituted with the evolving surface temperature (see
+    ``solve_cathode_boundary``); under ``"none"`` it is the configured
+    standby the surface is held at.
+
     ``plasma_frac`` is each annulus's overlap with the plasma footprint
     (``r < Rp``): annuli beyond it collect no ion current and are
     space-charge choked, which the solver handles naturally.
     """
     R_cath = float(input_dict["R_cath"])
     Rp = float(input_dict.get("Rp", R_cath))
-    T_s = float(input_dict["T_s"])
+    T_s = float(input_dict["cathode_Ts_base_K"])
     phi_wf = float(input_dict["phi_wf"])
     fwhm = float(input_dict.get("cathode_Ts_fwhm_cm", 28.0))
     if fwhm <= 0.0:
@@ -412,7 +418,7 @@ def cathode_device_config(input_dict, input_flags, mu, f_em=None):
         A_c=math.pi * R_cath**2,
         mu=mu,
         V_bank=float(input_dict["V_bank"]),
-        T_s=float(input_dict["T_s"]),
+        T_s=float(input_dict["cathode_Ts_base_K"]),
         phi_wf=float(input_dict["phi_wf"]),
         C_R=float(input_dict["C_R"]),
         R_comp=float(input_dict["R_comp"]),
@@ -836,7 +842,7 @@ def idriven_result_evaluator(
         state, derived, geometry, mu, input_dict, end=0
     )
     if T_s_override_K is not None:
-        input_dict = {**input_dict, "T_s": float(T_s_override_K)}
+        input_dict = {**input_dict, "cathode_Ts_base_K": float(T_s_override_K)}
     if phi_wf_override_eV is not None:
         input_dict = {**input_dict, "phi_wf": float(phi_wf_override_eV)}
     device_config = cathode_device_config(
@@ -1284,8 +1290,16 @@ def solve_cathode_boundary(
     if T_s_override_K is not None:
         # cathode_warming_model: substitute the evolving surface temperature
         # at the single point every emission path (uniform Richardson and the
-        # annular profile, whose peak re-anchors) reads T_s from.
-        input_dict = {**input_dict, "T_s": float(T_s_override_K)}
+        # annular profile, whose peak re-anchors) reads the surface
+        # temperature from. That point is cathode_Ts_base_K, which is the
+        # configured surface temperature under the static model and the
+        # initial condition this evolving value started from under
+        # power_balance -- so the substitution reaches every emission
+        # consumer and no other. The conduction term's own read of
+        # cathode_Ts_base_K is the SUBSTRATE temperature and must NOT see
+        # this value; it is served from the solver's own input_dict
+        # (_surface_effective_input_dict), never from this local copy.
+        input_dict = {**input_dict, "cathode_Ts_base_K": float(T_s_override_K)}
     if phi_wf_override_eV is not None:
         # cathode_surface_model: substitute the evolving effective work
         # function at the single point every phi_wf consumer reads from --
@@ -3573,7 +3587,7 @@ def _cell_state(index, state, derived, geometry):
 def _circuit_placeholders(input_dict):
     keys = (
         "V_bank",
-        "T_s",
+        "cathode_Ts_base_K",
         "phi_wf",
         "C_R",
         "R_comp",

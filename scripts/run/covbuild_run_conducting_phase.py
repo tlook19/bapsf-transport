@@ -72,7 +72,6 @@ def build_config(nx, coverage=None, extra=None, configuration=None):
         "beam_anomalous_model": "quasilinear",
         "cathode_emission_profile": "gaussian",
         "cathode_warming_model": "power_balance",
-        "T_s": op["Ts_standby_K"],
         "cathode_Ts_base_K": op["Ts_standby_K"],
         "cathode_heat_capacity_J_per_K": 120.0,
         "cathode_emissivity": 0.7,

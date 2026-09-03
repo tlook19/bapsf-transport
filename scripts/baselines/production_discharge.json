@@ -80,7 +80,6 @@
     "S_gp_decay_target": 1610.23,
     "S_pump_L": 3000.0,
     "S_pump_R": 3000.0,
-    "T_s": 1998.15,
     "Te0": 0.21,
     "Te_birth_ionization": "local",
     "Te_floor": 0.1,

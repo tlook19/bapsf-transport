@@ -1556,8 +1556,6 @@ def cathode_defaults():
 
     V_bank:
         Cathode power-supply bank voltage [V].
-    T_s:
-        Cathode surface temperature [K].
     phi_wf:
         Cathode work function [eV].
     C_R:
@@ -1694,7 +1692,7 @@ def cathode_defaults():
         ``>= 1``; raises at construction otherwise.
     cathode_warming_model:
         Slow evolution of the emitter surface temperature within a shot.
-        ``"none"`` holds ``T_s`` constant, so the
+        ``"none"`` holds the surface at ``cathode_Ts_base_K``, so the
         emission ceiling -- and with it the discharge current -- saturates
         on the circuit timescale (~1-2 ms), where the measured current rises
         for ~15-20 ms. ``"power_balance"`` (default, M1b) uses
@@ -1713,20 +1711,26 @@ def cathode_defaults():
         equilibrium ``P_heater = eps*sigma*A*(T_base^4 - T_env^4)`` (open
         circuit => no net emission), so the heater is not a free parameter.
         The steady state -- and with it the plateau current -- becomes an
-        *output* of the balance, independent of ``C_th``; the configured
-        ``T_s`` is no longer an asymptote and only sets the static-model
-        fallback. During floating phases the emitted electrons return to
+        *output* of the balance, independent of ``C_th``, so no configured
+        surface temperature is an asymptote here: ``cathode_Ts_base_K`` is
+        the initial condition and the substrate the heater holds, nothing
+        more. During floating phases the emitted electrons return to
         the surface, so the emission-cooling term is dropped there. The
         update is semi-implicit in the linearized loss (unconditionally
         stable for any ``C_th``), floored at the 300 K chamber-wall
         temperature the surface radiates against, accepted steps only.
     cathode_Ts_base_K:
-        Heater-maintained standby surface temperature [K] for
-        ``cathode_warming_model = "power_balance"`` -- the temperature the
-        cathode sits at before the discharge. DERIVED, not measured: it is
-        the operator-set heater current read through the Fig-10
+        Heater-maintained standby surface temperature [K] -- the temperature
+        the cathode sits at before the discharge. DERIVED, not measured: it
+        is the operator-set heater current read through the Fig-10
         heater-current -> surface-temperature map.
-        Required when that model is on; also its initial condition.
+
+        It is the cathode's surface temperature under BOTH warming models,
+        and so the single configured input every emission path resolves
+        against: ``cathode_warming_model = "none"`` holds the surface at it
+        for the whole shot, and ``"power_balance"`` takes it as the initial
+        condition and as the substrate temperature of the conduction term.
+        Required when that model is on.
         Per-run operating points live in
         ``run_mechanism_ladder.ES_OPERATING[es]["Ts_standby_K"]``. Note the
         degeneracy with ``C_R`` documented above: the two describe one flat
@@ -2561,9 +2565,6 @@ def cathode_defaults():
         # live in ``scripts/run/run_mechanism_ladder.ES_OPERATING``; any run that
         # means the machine rather than the dial must set V_bank from there.
         "V_bank": 180.0,
-        # T_s is only the static-model fallback under power_balance (the input
-        # is cathode_Ts_base_K).
-        "T_s": 1998.15,
         # phi_wf is the contaminated SHOT-START work function read by ads_des.
         "phi_wf": 2.869,
         "C_R": 29.0,
@@ -4267,11 +4268,30 @@ def default_config():
     return dict(input_dict_template_1d), dict(input_flags_template_1d)
 
 
+#: Keys REMOVED from the templates, each mapped to the successor that took
+#: over its reads. A configuration naming one is refused like any other
+#: unknown key -- the entry only makes the refusal say what replaced it,
+#: because a stored file written before the removal is the case that hits
+#: this path and "unknown key" alone does not tell its author where to go.
+#: A name stays here once removed: the message is the only thing a retired
+#: key still owns.
+RETIRED_PARAM_KEYS = {
+    "T_s": (
+        "cathode_Ts_base_K, the heater-maintained standby surface "
+        "temperature -- the static warming model holds the surface at it "
+        "and 'power_balance' evolves from it"
+    ),
+}
+
+
 def resolve_config(params=None, flags=None, models=None):
     """Resolve caller overrides against the one authoritative default registry.
 
     Unknown keys fail at this boundary so misspelled or retired campaign
-    controls cannot survive as silent metadata-only settings.
+    controls cannot survive as silent metadata-only settings. A key listed in
+    :data:`RETIRED_PARAM_KEYS` is refused with its successor named, so a
+    configuration file written before the removal reports where its value
+    should go rather than only that the key is gone.
 
     ``models`` carries DECLARATION BLOCKS -- ``{family: {member: value}}`` --
     which are projected onto the two flat namespaces before the merge, so
@@ -4297,10 +4317,18 @@ def resolve_config(params=None, flags=None, models=None):
             details.append(f"params={unknown_params}")
         if unknown_flags:
             details.append(f"flags={unknown_flags}")
-        raise ValueError(
+        message = (
             "unknown LAPDSim1D configuration keys (silent/inert controls are "
             f"forbidden): {', '.join(details)}"
         )
+        retired = [
+            f"{key} is RETIRED; use {successor}"
+            for key, successor in sorted(RETIRED_PARAM_KEYS.items())
+            if key in unknown_params
+        ]
+        if retired:
+            message = f"{message}. {'. '.join(retired)}"
+        raise ValueError(message)
     resolved_params = dict(input_dict_template_1d)
     resolved_params.update(supplied_params)
     resolved_params.update(block_params)

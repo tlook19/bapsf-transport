@@ -10,7 +10,7 @@
 #
 # ``[input_dict]`` and ``[input_flags]`` are the DELTA from ``default_config()``:
 # every key in them differs from its config default, except cathode_emission_
-# profile, Te_birth_ionization and T_s (resolved accretion) and Ti_birth_
+# profile and Te_birth_ionization (resolved accretion) and Ti_birth_
 # ionization (a class-1 declaration), which equal the default and are stated
 # explicitly because run_m6_point.py's own driver defaults do not, or because
 # the selection is physics-bearing.
@@ -46,15 +46,15 @@
 #
 # PROVENANCE IS NOT HERE. What each value is, how it was measured, derived,
 # fitted or assumed, and what may be claimed from it live in
-# scripts/production_stance_provenance.md. This file carries values and the
-# functional notes needed to read them.
+# scripts/stance/production_stance_provenance.md. This file carries values
+# and the functional notes needed to read them.
 #
 # input_dict and input_flags are SEPARATE namespaces and each rejects a key it
 # does not own, so a key in the wrong table raises at construction rather than
-# going silently inert. The loader (scripts/stance_config.py) checks both tables
-# against the config templates before anything is constructed. A declaration
-# block is written WITHOUT namespaces -- the family membership carries them --
-# so a member cannot be misfiled at all.
+# going silently inert. The loader (scripts/stance/stance_config.py) checks
+# both tables against the config templates before anything is constructed.
+# A declaration block is written WITHOUT namespaces -- the family membership
+# carries them -- so a member cannot be misfiled at all.
 #
 # TOML has no null literal: a member whose declared value is None is named in
 # its own block's ``none_valued`` array instead of carrying a value.
@@ -82,11 +82,12 @@
 #
 # THE TWO PROFILES NOW COME FROM DIFFERENT SOURCES.
 #
-# plasma_radius_profile_cm is built by scripts/build_msi_field_profile.py from
-# the MEASURED machine-state field record -- the MSI/Magnetic field group every
-# ES1 shot file carries (adopted 2026-09-01). Each recorded profile is
-# normalized to its own plateau, the mean normalized shape B_hat(z) is taken
-# over the retained files, and the flux tube is column-anchored:
+# plasma_radius_profile_cm is built by
+# scripts/stance/build_msi_field_profile.py from the MEASURED machine-state
+# field record -- the MSI/Magnetic field group every ES1 shot file carries
+# (adopted 2026-09-01). Each recorded profile is normalized to its own
+# plateau, the mean normalized shape B_hat(z) is taken over the retained
+# files, and the flux tube is column-anchored:
 # r(z) = 18.415 * sqrt(1 / B_hat(z)), held exactly flat at 18.415 through the
 # last port before the field leaves its plateau, and capped at sqrt(0.95)*R_m.
 #
@@ -105,9 +106,9 @@
 # production_stance_provenance.md.
 #
 # machine_radius_profile_cm is UNCHANGED: still the measured CAD bore
-# staircase built by scripts/g1_build_profiles.py, which also remains the
-# independent cross-check for the plasma profile (its census flux traces are
-# what the MSI build is compared against).
+# staircase built by scripts/stance/g1_build_profiles.py, which also remains
+# the independent cross-check for the plasma profile (its census flux traces
+# are what the MSI build is compared against).
 neutral_baffle_positions_cm = [342.65]
 neutral_baffle_clear_radii_cm = [39.75]
 plasma_radius_profile_cm = [
@@ -289,30 +290,16 @@ C_R = 9.3
 cathode_conduction_W_per_K = 12058.0
 cathode_heat_capacity_J_per_K = 181.0
 cathode_emission_profile = "uniform"
-# T_s is the OTHER half of the 23b R4 deletion, and it is DEFERRED a third time
-# (2026-08-25) -- now with the reason on record rather than as an open action.
-# The row was believed to be a resolved-accretion duplicate of the config
-# default. It is that against ``default_config()`` (both 1998.15), which is why
-# deleting it is invisible to the golden. It is NOT that on the CAMPAIGN route:
-# run_m6_point.py:216 supplies ``T_s`` from the ES rung's ``Ts_standby_K``
-# (ES1 = 1910.0), and THIS ROW SUPERSEDES IT. Deleting it therefore moves T_s
-# 1998.15 -> 1910.0 on every campaign arm -- measured as a real second delta in
-# the pre-flight against scripts/mgcr1_confirm.h5, and reproduced as absent the
-# moment this row is restored.
-#   Whether that move is physically inert was left open here, ON A READING THE
-#   KINETIC STANCE EVENT DISPROVED, so the reading is corrected rather than
-#   carried forward. Under cathode_warming_model = "power_balance" the evolving
-#   surface temperature is seeded from cathode_Ts_base_K, not from T_s, and
-#   every read of T_s on the cathode path is guarded by that evolving value or
-#   by the T_s_override_K route -- so T_s is inert on THIS stance. The earlier
-#   text predicted that the one unguarded read, the kinetic background's, would
-#   go LIVE under "kinetic_dvm"; it does not. That read belongs to
-#   neutral_model = "kinetic" (the TPMC path, whose _kinetic namespace is built
-#   only for that selection), and the DVM's own surface-temperature input is
-#   taken from the same evolving cathode value with T_s as its fallback. So the
-#   row stays inert under this stance's closure too, and it is kept because the
-#   arm of record ran it and deleting it would move T_s on every campaign arm.
-T_s = 1998.15
+# T_s was the OTHER half of the 23b R4 deletion, deferred three times and now
+# RESOLVED BY RETIREMENT (2026-09-03): the key no longer exists, so this row
+# is gone with it and naming it again is refused at construction. The
+# cathode's surface temperature is cathode_Ts_base_K -- the standby the
+# static warming model holds the surface at and power_balance evolves from --
+# which this stance leaves at its config default 1910.0 for the reason given
+# under C_R above. This stance runs power_balance, under which the retired
+# row was already inert, so removing it rotates the resolved CONFIG IDENTITY
+# by exactly one key and moves no value. See
+# scripts/gates/golden_baseline_provenance.md.
 
 # FUELING. The puff window that arms with the equilibrate route is a member of
 # [models.initial_neutral_state] and is stated there.

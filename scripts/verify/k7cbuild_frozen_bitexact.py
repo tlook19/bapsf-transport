@@ -120,7 +120,6 @@ EXTRA = {
     # it did when the arm ran. Left AS A RECORD of what this dated script ran.
     "S_gp": 3000.0,
     "nx": 240,
-    "T_s": 1998.15,
     "Te_birth_ionization": "local",
     "tau_afterglow": 0.006,
     "neutral_model": "kinetic_dvm",

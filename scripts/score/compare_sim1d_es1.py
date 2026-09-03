@@ -176,11 +176,12 @@ PARAM_OVERRIDES = {
     "R_comp": 7.2244e-3,
     "L_parasitic_H": 8.1e-6,
     "C_bank_F": 9.5,
-    # NB the constant-T_s era ended here (f=0.1 stance promotion, 2026-07-27):
-    # the retired "T_s": 273.15 + 1725 pin is gone. T_s is now only the INITIAL
-    # surface temperature -- cathode_warming_model="power_balance" (a config
-    # default) evolves it from cathode_Ts_base_K -- and its config default is
-    # the identical 1998.15 K, so dropping the pin changes nothing numerically.
+    # NB the constant-surface-temperature era ended here (f=0.1 stance
+    # promotion, 2026-07-27): the pin that held the surface at 273.15 + 1725 K
+    # is gone, and so is the key it was written on (T_s, retired 2026-09-03).
+    # cathode_warming_model="power_balance" (a config default) evolves the
+    # surface from cathode_Ts_base_K, which this block leaves at its config
+    # default, so there is nothing to pin here.
     # Neutral-equilibration puff width, MEASURED (Tom, 2026-07-29, boxed).
     # The ES1-4 total gas-puff pulse width was ~25 ms: operator practice is to
     # fire the valve, wait out the machine breakdown delay (~4-6 ms), hold

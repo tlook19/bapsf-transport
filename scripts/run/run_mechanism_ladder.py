@@ -197,14 +197,13 @@ def main(argv=None):
     }
     if args.warming == "power_balance":
         extra.update({
-            "T_s": op["Ts_standby_K"],
             "cathode_Ts_base_K": op["Ts_standby_K"],
             "cathode_heat_capacity_J_per_K": args.c_th,
             "cathode_conduction_W_per_K": args.g_cond,
             "cathode_emissivity": args.emissivity,
         })
     else:
-        extra["T_s"] = op["Ts_standby_K"]
+        extra["cathode_Ts_base_K"] = op["Ts_standby_K"]
     if args.phi_wf is not None:
         extra["phi_wf"] = args.phi_wf
     if args.annuli is not None:

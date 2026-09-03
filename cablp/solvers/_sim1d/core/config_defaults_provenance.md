@@ -1588,14 +1588,18 @@ which is the real uncertainty and is invisible to every ES1 score because
 `C_R` is the fit target — are in `scripts/run/ladder_operating_provenance.md`;
 `run_mechanism_ladder.ES_OPERATING` carries the table.
 
-**`T_s = 1998.15` K — ASSUMED.** Not a machine reading and never fitted: the
-constant surface temperature the pre-warming-model solver was developed with,
-entered as the literal 273.15 + 1725 K and never adjusted. Inert under
-`cathode_warming_model = "power_balance"` — every read is guarded by the
-evolving surface value or by `T_s_override_K` — and the live input is
-`cathode_Ts_base_K`. Marked for retirement; the stance row that still names it,
-and why its deletion has been deferred, are in
-`scripts/stance/production_stance_provenance.md`.
+**`T_s = 1998.15` K — was ASSUMED; RETIRED 2026-09-03.** The history is kept
+because artifacts written before the removal record the key. It was never a
+machine reading and never fitted: the constant surface temperature the
+pre-warming-model solver was developed with, entered as the literal
+273.15 + 1725 K and never adjusted. It was inert under
+`cathode_warming_model = "power_balance"` — every read guarded by the evolving
+surface value or by `T_s_override_K` — and live only under the static warming
+model and in the TPMC kinetic background. Tom's ruling (2026-09-03): a
+sim3-era development artifact. **Its successor is `cathode_Ts_base_K` below**,
+which both of those paths now read and which naming `T_s` raises to point at.
+The removal moved no value; the identity rotation it caused is recorded in
+`scripts/gates/golden_baseline_provenance.md`.
 
 **`phi_wf = 2.869` eV — FITTED**, the contaminated shot-start work function.
 **`cathode_phiwf_clean_eV = 2.809` eV — FITTED**, the per-shot-accessible depth

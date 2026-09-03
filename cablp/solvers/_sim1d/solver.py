@@ -2414,7 +2414,8 @@ class LAPDSim1D:
         # every consumer is presence-gated on one object.
         self._configure_regime_vessel_node()
         # Cathode warming state: the evolving emitter surface temperature [K]
-        # (config cathode_warming_model). None = static T_s.
+        # (config cathode_warming_model). None = the surface held static at
+        # cathode_Ts_base_K.
         warming_model = str(
             self._input_dict.get("cathode_warming_model")
         )
@@ -9079,7 +9080,7 @@ class LAPDSim1D:
         T_s = float(
             self._cathode_Ts_K
             if self._cathode_Ts_K is not None
-            else float(self._input_dict.get("T_s"))
+            else float(self._input_dict.get("cathode_Ts_base_K"))
         )
         return {
             "R_N": self._cathode_jet_R_N,
@@ -11757,11 +11758,12 @@ class LAPDSim1D:
         diag = {
             "enabled": float(bool(self._flags.get("cathode_coupling"))),
             # Instantaneous emitter surface temperature [K]: the configured
-            # T_s, or the evolving value under cathode_warming_model.
+            # cathode_Ts_base_K, or the evolving value under
+            # cathode_warming_model.
             "T_s_surface": float(
                 self._cathode_Ts_K
                 if self._cathode_Ts_K is not None
-                else float(self._input_dict.get("T_s"))
+                else float(self._input_dict.get("cathode_Ts_base_K"))
             ),
             "configured": float(cathode_phase["configured"]),
             # Current-driven circuit state (0.0 under the voltage-driven
@@ -12424,7 +12426,14 @@ class LAPDSim1D:
         geometry = self._geometry
         kin = self._kinetic
         nu_ion, nu_cx = self._kinetic_absorption_fields(state, derived)
-        T_s = float(self._input_dict.get("T_s"))
+        # The cathode-end wall temperature the TPMC background launches its
+        # cosine half-flux at. This is the CONFIGURED standby, not the
+        # evolving power_balance surface: the frozen background is rebuilt
+        # per call from configuration alone, and that is unchanged here. The
+        # ``T_s`` key below is the background dictionary's own name for the
+        # quantity -- the physical symbol shared with kn2zone/mc_neutrals --
+        # and is not the retired configuration key.
+        T_s = float(self._input_dict.get("cathode_Ts_base_K"))
         anode_faces = np.asarray(
             getattr(geometry, "anode_face_indices", ()), dtype=int
         )
@@ -13438,7 +13447,7 @@ class LAPDSim1D:
             T_s_K=(
                 float(self._cathode_Ts_K)
                 if self._cathode_Ts_K is not None
-                else float(self._input_dict.get("T_s"))
+                else float(self._input_dict.get("cathode_Ts_base_K"))
             ),
         )
         if (
