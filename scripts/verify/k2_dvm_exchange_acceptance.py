@@ -26,7 +26,11 @@ driver and subclasses the engine; it does not modify either.
 Usage:
 
     PYTHONPATH=<checkout>/cablp python scripts/verify/k2_dvm_exchange_acceptance.py \
-        --out scripts/k2_dvm_exchange_acceptance.txt
+        --run <saved nx=240 run>.h5 \
+        --out ~/bapsf/artifacts/<event>/k2_dvm_exchange_acceptance.txt
+
+``--run`` and ``--out`` are required: run artifacts are read from and written
+under the artifacts root, never beside this script.
 """
 
 import argparse
@@ -153,8 +157,10 @@ def main(argv=None):
     )
     ap.add_argument(
         "--run",
-        default=str(Path(__file__).resolve().parents[1]
-                    / "es1_kn2z_promoted_nx240.h5"),
+        required=True,
+        help="saved nx=240 production background (read in place, geometry "
+             "only); a saved sim1d run under the artifacts root, e.g. "
+             "~/bapsf/artifacts/<event>/....h5",
     )
     ap.add_argument("--window", nargs=2, type=float, default=(5.0, 19.5))
     ap.add_argument("--nvz", type=int, default=48)
@@ -171,7 +177,12 @@ def main(argv=None):
     ap.add_argument("--accommodation", type=float, default=1.0)
     ap.add_argument("--elastic-model", default="phelps_iso")
     ap.add_argument("--progress", type=int, default=0)
-    ap.add_argument("--out", default="scripts/k2_dvm_exchange_acceptance.txt")
+    ap.add_argument(
+        "--out",
+        required=True,
+        help="acceptance transcript path; write under the artifacts root, "
+             "e.g. ~/bapsf/artifacts/<event>/k2_dvm_exchange_acceptance.txt",
+    )
     args = ap.parse_args(argv)
     args.seed_state = True
 
