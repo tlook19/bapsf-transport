@@ -76,7 +76,7 @@ reader meets it once. The Python API passes `None` directly and never needs it.
 | route | how |
 |---|---|
 | TOML config | `[models.<family>]` tables, read by `core/config.load_config` |
-| committed stance | `[models.<family>]` tables, read by `scripts/stance_config.py`; projected into the stance's own delta at load, so every existing consumer of `Stance.params`/`.flags` reads them unchanged, and `Stance.models` keeps the block as written |
+| committed stance | `[models.<family>]` tables, read by `scripts/stance/stance_config.py`; projected into the stance's own delta at load, so every existing consumer of `Stance.params`/`.flags` reads them unchanged, and `Stance.models` keeps the block as written |
 | Python | `LAPDSim1D(input_dict, input_flags, input_models)`, or `resolve_config(params, flags, models)` |
 
 The campaign driver reaches blocks through `--stance`; it grew no new flag.
@@ -118,9 +118,9 @@ reached, by both routes.
 
 **A block route and a flat route resolve to the identical surface, byte for
 byte.** That is the migration's whole claim, and it is measured per family by
-`scripts/declm_block_gate.py` — on NON-DEFAULT values, so a member the
+`scripts/gates/declm_block_gate.py` — on NON-DEFAULT values, so a member the
 projection dropped cannot hide behind both arms falling back to the same
-default — and per representative route by `scripts/declm_route_identity.py`.
+default — and per representative route by `scripts/gates/declm_route_identity.py`.
 
 That harness runs SEVEN routes over SIX distinct surfaces: default, golden,
 stance, campaign driver, the 13-member kinetic command line, and the k2_dvm
@@ -190,7 +190,7 @@ four-route reading into one selector would have made `cached_seed` and
 ## Refusals
 
 All are `ValueError` at construction, naming the offender and carrying the
-remedy. There are TEN, and `scripts/declm_block_gate.py` exercises every one.
+remedy. There are TEN, and `scripts/gates/declm_block_gate.py` exercises every one.
 The owning function is named so the table and the code can be checked against
 each other — this note is the KB schema source for the form, so a row missing
 here is a gap in the schema, not just in the prose.

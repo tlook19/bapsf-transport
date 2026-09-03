@@ -514,7 +514,7 @@ def _implicit_species_energy(
             **kwargs,
         )
     # The single point at which the floor is applied, for every scheme.
-    # scripts/audit_sim1d_floor_activation.py recovers the pre-clip temperature
+    # scripts/gates/audit_sim1d_floor_activation.py recovers the pre-clip temperature
     # by calling this function with temperature_floor=-inf, which only stays
     # valid while this remains the one place the floor is enforced.
     temperature = np.maximum(temperature, temperature_floor)

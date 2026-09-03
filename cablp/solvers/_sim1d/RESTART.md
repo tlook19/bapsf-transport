@@ -173,7 +173,7 @@ closure is structurally what it always was and payloads written before the
 closure existed stay readable. It is one scalar, but it multiplies every
 annulus's emission, so dropping it would relocate the discharge current rather
 than perturb it; the `emitting_area` scenario of
-`scripts/restart_bitidentity.py` exports it mid-climb and its negative control
+`scripts/gates/restart_bitidentity.py` exports it mid-climb and its negative control
 breaks identity. `cathode_emitting_area` is a **structural flag key**: resuming
 across a change of arming would either drop an evolved fraction or leave an
 armed closure sitting at its seed, so the compatibility check refuses instead.
@@ -221,10 +221,10 @@ The format string did not move: these are presence-gated additions to an
 existing group, the same shape `_cathode_f_em` and the anode ledger took, so
 every payload already on disk stays readable under `sim1d-restart-v1`.
 
-Its negative control does **not** live in `scripts/restart_bitidentity.py`:
+Its negative control does **not** live in `scripts/gates/restart_bitidentity.py`:
 none of that harness's four scenarios declares an arming criterion, so all
 four would report the rows absent and skip. The control is `gate_ja8` in
-`scripts/verify_sim1d_k2_dvm.py`, which exports a handoff at which the latch
+`scripts/verify/verify_sim1d_k2_dvm.py`, which exports a handoff at which the latch
 is armed with a nonzero census, resumes it, and then resumes the SAME payload
 with the four rows deleted — the pre-carriage shape — and requires that leg to
 come up disarmed, warn, and diverge.
@@ -466,7 +466,7 @@ looks like a continuation and is not one.
 
 ## How the inventory is checked
 
-`scripts/restart_bitidentity.py` runs a window unsplit and split and compares
+`scripts/gates/restart_bitidentity.py` runs a window unsplit and split and compares
 every saved frame after the handoff at **raw uint64** — the float bytes, with no
 tolerance anywhere — across the conserved rows, the derived primitives, and
 every per-frame cathode diagnostic the run publishes.
@@ -501,7 +501,7 @@ because the save lattice is **accumulated** (`next = t_last_save + dt_save`)
 and therefore carries float drift: at `dt_save = 1e-4` the third save lands on
 `3.0000000000000003e-04`, not `3e-04`. Stopping stage 1 at the nominal `3e-04`
 stops it one ulp before any instant the unsplit run visits, which re-phases
-every later save and compares different instants. `scripts/restart_bitidentity.py`
+every later save and compares different instants. `scripts/gates/restart_bitidentity.py`
 snaps its split point onto the exact float of an unsplit save for this reason,
 and says so when it does.
 

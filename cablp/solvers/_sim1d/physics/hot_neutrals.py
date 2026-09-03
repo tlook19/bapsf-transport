@@ -386,7 +386,7 @@ def directed_flight_kernels(
     flights it launched instead of by summing a per-flight overlap matrix; the
     reorganization is what makes a per-evaluation rebuild affordable at all,
     and the two orderings are compared directly by
-    ``scripts/verify_hbd_momentum.py``.
+    ``scripts/verify/verify_hbd_momentum.py``.
 
     Raises ``ValueError`` for fewer than three direction samples, or for a
     ``drift_ratio`` that is not one finite value per cell.

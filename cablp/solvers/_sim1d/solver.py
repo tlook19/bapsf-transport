@@ -4631,7 +4631,7 @@ class LAPDSim1D:
         differs between the two ends.
 
         The instruments named above carry the per-end form too, as of
-        2026-08-26 (``physics/kinetic_neutrals.py``, ``scripts/mc_neutrals.py``
+        2026-08-26 (``physics/kinetic_neutrals.py``, ``scripts/kinetic/mc_neutrals.py``
         and the two ``neutral_arch_*`` benches took ``pi Rm[-1]**2`` at BOTH
         ends until then). Their end-plane area is ``pi Rm**2`` outright, since
         they model neither the obstruction cross-section nor the support rods

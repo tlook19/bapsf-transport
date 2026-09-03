@@ -62,9 +62,9 @@ matter are reproduced here.
 
 Configuration-specific pins live with their configuration, not here:
 
-- `scripts/production_stance_provenance.md` — the stance file `scripts/stances/g1atrim.toml`
-- `scripts/golden_baseline_provenance.md` — `baseline_sim1d.BASELINE_PARAM_OVERRIDES`
-- `scripts/ladder_operating_provenance.md` — `run_mechanism_ladder.ES_OPERATING`
+- `scripts/stance/production_stance_provenance.md` — the stance file `scripts/stances/g1atrim.toml`
+- `scripts/gates/golden_baseline_provenance.md` — `baseline_sim1d.BASELINE_PARAM_OVERRIDES`
+- `scripts/run/ladder_operating_provenance.md` — `run_mechanism_ladder.ES_OPERATING`
 
 ## The R2a fold (2026-08-20): stance values that became shipped defaults
 
@@ -83,7 +83,7 @@ the afterglow length — stays in `scripts/stances/g1atrim.toml`, along with the
 per-mesh arrays. `default_config()` alone is not a configuration the campaign
 runs, and a fixture captured there gates an unrepresentative corner: that is
 exactly what happened to the first R2b golden draft, and why the golden now
-applies the committed stance explicitly (`scripts/golden_baseline_provenance.md`).
+applies the committed stance explicitly (`scripts/gates/golden_baseline_provenance.md`).
 
 | default (new value) | class | entry of record |
 |---|---|---|
@@ -165,7 +165,7 @@ is measured, derived, fitted or assumed — the capability is plumbing, and ever
 physical quantity that decides the array lives in the producing script, which is
 where the provenance for a given run's fill belongs.
 
-The value producer of record is **`scripts/sp3_build_nn0.py`** (the sp3 foot-shape
+The value producer of record is **`scripts/stance/sp3_build_nn0.py`** (the sp3 foot-shape
 IC arm): it composes the shipped-convention base fill with the accumulated
 first-flight gas-puff lobe over a foot duration, spread by one of two declared
 kernels, and writes the array plus a provenance header into an `.npz`. The
@@ -313,7 +313,7 @@ inconsistency is now GONE rather than documented AS A CODE PATH: `resolve_nn0`
 has no fallback branch any more and raises on the `nn0 = None` that used to
 reach one. It is not gone as a NUMBER — the one value any shipped
 configuration ever took from the table survives as an explicit literal in
-`scripts/baseline_sim1d.py` and still carries the 0 °C-sccm convention, which
+`scripts/gates/baseline_sim1d.py` and still carries the 0 °C-sccm convention, which
 the next paragraph states in full.
 
 **Correcting the record while retiring it:** the claim that production never
@@ -324,7 +324,7 @@ coarse-mesh re-cut drops the profile package without restoring a scalar, so
 `resolve_nn0` fell through and the gate's uniform neutral fill was the table's
 answer for `S_gp = 9010.0` — **2.725059978765871e12 cm^-3, on the 0 °C-sccm
 keys, against a meter-sccm `S_gp`**. That value is now an explicit literal in
-`scripts/baseline_sim1d.py`'s re-cut, pinned in the commit before the table
+`scripts/gates/baseline_sim1d.py`'s re-cut, pinned in the commit before the table
 was deleted and verified to leave the constructed initial state bit-identical.
 Whether the gate SHOULD start from a 0 °C-sccm-derived fill is a live stance
 question; pinning it changed no number and settled nothing.
@@ -379,7 +379,7 @@ so the delivered flow is flat with only piezo-opening and entry-transit edges.
 **`gas_puff_z_cm = 86.3` cm — MEASURED** (machine CAD, G1 geometry of record;
 see the geometry table at line 59). It is the measured position of the
 mid-plane puff ports at the anode stack, in machine coordinates so it does not
-move with `nx` (`scripts/g1_build_profiles.py:91`). It supersedes the former
+move with `nx` (`scripts/stance/g1_build_profiles.py:91`). It supersedes the former
 60.0, which was DERIVED rather than measured — a pipe placed ~10 cm in front of
 an anode assumed to sit at 50 cm. The ports are where they are; the number is
 not tunable.
@@ -396,7 +396,7 @@ the spreading itself; the width above is that end-state closure. The KINETIC
 instruments transport their own atoms and therefore need the INJECTION geometry
 instead — a separate DERIVED quantity, with its own bracket, derived in
 `cablp/solvers/_sim1d/physics/puff_orifice.py` (re-exported at
-`scripts/puff_orifice.py` for the instruments that import it by that name) from
+`scripts/stance/puff_orifice.py` for the instruments that import it by that name) from
 the CAD port station and the feed line's Clausing tube-beaming. The two rows
 disagree by roughly a factor of three in 5–95 % span, and that difference is a
 registered closure finding, not an error in either.
@@ -431,7 +431,7 @@ regime disclosure, and the collisionless-flight caveat.
 geometry of record the two endpoints move the derived fill by < 0.1 %
 (`scripts/foot_orifice_probe.txt`), so the midpoint diameter 3.95 cm at the
 length bound 22.0 cm is quoted as the value and [3.8, 4.1] cm remains the
-bracket; see `scripts/production_stance_provenance.md` for the stance rows.
+bracket; see `scripts/stance/production_stance_provenance.md` for the stance rows.
 
 **`S_pump_L = S_pump_R = 3000.0` L/s — DERIVED (elbow leg literature-BOXED),
 bracket [2750, 3300] L/s.**
@@ -544,7 +544,7 @@ row unchanged except peak current 3017 -> 3016 A.
 **`equilibration_gas_puff_on_s = None` — historical default.** `None` makes the
 equilibration inherit `tau_discharge` as its per-cycle puff window, a double
 duty with no physical basis. The machine's total gas-puff pulse width is an
-independent MEASURED quantity — see `scripts/production_stance_provenance.md`.
+independent MEASURED quantity — see `scripts/stance/production_stance_provenance.md`.
 
 ## `model_mode_defaults`
 
@@ -554,7 +554,7 @@ The shipped selectors — `hyperbolic_wave_speed = "adiabatic"`,
 accuracy choices, not calibrations: the signal speed matches the implemented
 gamma=5/3 energy system, births book no unphysical electron thermal energy, and
 the split step is second order. The regression fixture pins the historical
-first-order values instead; see `scripts/golden_baseline_provenance.md`.
+first-order values instead; see `scripts/gates/golden_baseline_provenance.md`.
 
 **`Ti_birth_ionization = "neutral"` — DERIVED (conservation), adopted
 2026-08-23.** The temperature the ion born by bulk ionization, by a beam
@@ -586,7 +586,7 @@ booking under `ionization_birth_energy_model = "conservative"` and already
 closes against the momentum row. Adoption moved the drive (the returned power
 raises the source-region ion temperature ~26 % and the plasma load with it) and
 required the single `C_R` re-trim recorded in
-`scripts/production_stance_provenance.md`; the golden was recaptured in the
+`scripts/stance/production_stance_provenance.md`; the golden was recaptured in the
 same change.
 
 ### Electron drift transport conventions (`electron_drift_*`)
@@ -682,7 +682,7 @@ Maxwellian at the 300 K wall, because the shared axis is stretched to hold the
 10 eV charge-exchange tail and a 300 K gas then occupies only the few bins
 inside `v_fine`. Refining to 96x32 takes the temperature offset to 8.4e-3 while
 the density split converges to ~2.1e-2. Recorded by
-`scripts/verify_sim1d_k2_dvm.py`, gate L4.
+`scripts/verify/verify_sim1d_k2_dvm.py`, gate L4.
 
 **`neutral_kinetic_dvm_accommodation = 0.40`, bracket `[0.35, 0.46]` —
 MEASURED (literature-boxed).** The thermal (energy) accommodation coefficient
@@ -913,7 +913,7 @@ adds is in `MODEL.md` § "Annular-baffle interception" and its discretization in
 **This key introduces NO coefficient of its own.** The clear radius it acts on
 is the geometry's, and its value entry is the MEASURED CAD row
 `neutral_baffle_clear_radii_cm` (with `neutral_baffle_positions_cm`) in
-`scripts/production_stance_provenance.md` — one authoritative home, cited here,
+`scripts/stance/production_stance_provenance.md` — one authoritative home, cited here,
 not restated. The only derived quantity is the per-face
 annulus transparency `t_f = min(pi(R_clear^2 - R_col^2) / A_ann_throat, 1)`,
 which is a function of that radius and the mesh, computed at construction and
@@ -988,7 +988,7 @@ beside cells carrying none.
 term then adds `direction * R_N * m * 0 * loss / V = 0` to the momentum row —
 i.e. the `R_N` share is launched at rest, which is indistinguishable from
 thermal desorption. The DVM books it as such rather than inventing energy the
-ion did not bring. Gated by AJ6 in `scripts/verify_sim1d_k2_dvm.py`, whose
+ion did not bring. Gated by AJ6 in `scripts/verify/verify_sim1d_k2_dvm.py`, whose
 negative control drops the one mask (the pre-ruling arithmetic) and raises.
 
 **`neutral_kinetic_dvm_anode_jet_T_launch_eV = None` (grid-tied) — DERIVED
@@ -1034,7 +1034,7 @@ elastic channel smuggled in with the discretization. Both channels use the
 same archived LXCat cross sections as the moment-closure operator, so nothing
 new is fitted. `"off"` is the declared A/B arm. Corrected 2026-08-05 (the K2a
 build shipped the unhalved rate); the correspondence is measured by
-`scripts/verify_sim1d_k2_dvm.py`, gate C5.
+`scripts/verify/verify_sim1d_k2_dvm.py`, gate C5.
 
 **`neutral_kinetic_dvm_exchange = "cauchy_chord"` — DERIVED (both arms), the
 default is a REPRODUCIBILITY stance.** Which closed form carries the
@@ -1058,7 +1058,7 @@ of them is the right one:
 
 Honest bar: `"geometric"` is the one that reproduces the geometry. It is
 measured against the reference geometry by the free-flight billiard probe in
-`scripts/k2_dvm_exchange_measure.py` — the committed E2 ray tracer with
+`scripts/verify/k2_dvm_exchange_measure.py` — the committed E2 ray tracer with
 collisions, sources, pumping and accommodation all switched off, so the
 measurement is a property of `(Rp, Rm)` and the velocity and of nothing else —
 and the record is `scripts/k2_dvm_exchange_measured.txt`. Independently,
@@ -1117,7 +1117,7 @@ and radial exchange are taken. Neither arm has a fitted number in it.
   narrower than the exponential the rate arm implies, which is the whole
   reason the arm exists. The classes are checked against the two-dimensional
   mean-chord theorem `pi (Rm - Rp) / 2`, which nothing in their derivation was
-  fitted to, by gate J1 of `scripts/verify_sim1d_k2_dvm.py`.
+  fitted to, by gate J1 of `scripts/verify/verify_sim1d_k2_dvm.py`.
 
 Honest bar: the transient-ification is NOT the steady K1b kernel. It keeps the
 axial displacement per flight deterministic and equal to `v_z c / v_perp`, and
@@ -1196,7 +1196,7 @@ zero-order increment the hold removed and is unstable again at the same
 `nu dt_tick ~ 2`; the damped form makes the per-tick `(gap, debt)` map's
 determinant exactly `1 - (1-e^-X)/X`, hence unconditionally contracting, with
 the debt driven to zero rather than merely bounded. See `NUMERICS.md`
-§ "The DVM transfer hold" for the map and `scripts/verify_sim1d_dvm_hold.py`
+§ "The DVM transfer hold" for the map and `scripts/verify/verify_sim1d_dvm_hold.py`
 for the battery that pins the shipped arithmetic to it.
 
 ## `fudge_factor_defaults`
@@ -1258,7 +1258,7 @@ outside what the kinetic literature supports in this convention. Raising `f`
 mainly during BREAKDOWN, where `lambda_ei` exceeds the machine length and
 Spitzer-Harm is invalid, and is largely inert in the collisional discharge
 phase. What may be claimed from the coefficient is in
-`scripts/production_stance_provenance.md`.
+`scripts/stance/production_stance_provenance.md`.
 
 ## `cathode_defaults`
 
@@ -1313,7 +1313,7 @@ windows and no shared fitted parameters agree at ~8 uH:
 - the flyback VOLT-SECOND BALANCE over the current fall, `L = int V dt / dI`,
   giving 7.2-8.4 uH. The switch hardware paper (Pribyl & Gekelman, RSI 75, 669
   (2004)) confirms the fall is a real freewheel, and this arm is INVARIANT to
-  the circuit constants: the fall branch of `scripts/fit_circuit_edges.py`
+  the circuit constants: the fall branch of `scripts/stance/fit_circuit_edges.py`
   drives the loop with `emf = -V_meas` and touches neither V0, R nor C. Its
   fall-only answer (~8.2 uH) was unchanged, to better than the scan resolution,
   across the circuit correction above — the strongest single number here.
@@ -1575,7 +1575,7 @@ sense described in the docstring, not the Richardson-Dushman universal 120.
 roughly 100 K of surface temperature per e-fold of emission, so only one of the
 two may carry a calibration. The campaign stance calibrates `C_R` and leaves
 `cathode_Ts_base_K` at its map-derived value; see
-`scripts/production_stance_provenance.md`.
+`scripts/stance/production_stance_provenance.md`.
 
 **`cathode_Ts_base_K = 1910.0` K — DERIVED**, and not to be tuned. What is set
 on the machine is the HEATER CURRENT (1775 A at setting 1); the temperature is
@@ -1585,7 +1585,7 @@ and its heater-current data channel is invalid-flagged, so the operator setting
 is the input of record. Per-setting values, the map's slope bracket and the
 resulting sensitivities — including the ± 50–100 K absolute pyrometer bar,
 which is the real uncertainty and is invisible to every ES1 score because
-`C_R` is the fit target — are in `scripts/ladder_operating_provenance.md`;
+`C_R` is the fit target — are in `scripts/run/ladder_operating_provenance.md`;
 `run_mechanism_ladder.ES_OPERATING` carries the table.
 
 **`T_s = 1998.15` K — ASSUMED.** Not a machine reading and never fitted: the
@@ -1595,7 +1595,7 @@ entered as the literal 273.15 + 1725 K and never adjusted. Inert under
 evolving surface value or by `T_s_override_K` — and the live input is
 `cathode_Ts_base_K`. Marked for retirement; the stance row that still names it,
 and why its deletion has been deferred, are in
-`scripts/production_stance_provenance.md`.
+`scripts/stance/production_stance_provenance.md`.
 
 **`phi_wf = 2.869` eV — FITTED**, the contaminated shot-start work function.
 **`cathode_phiwf_clean_eV = 2.809` eV — FITTED**, the per-shot-accessible depth
@@ -1686,7 +1686,7 @@ bombardment feedback gain d(P_ion)/dT_s, of order kW/K through the emission
 loop against a ~230 W/K radiation+emission stiffness at ~250 kW bombardment
 power, runs the discharge away to ~13 kA. Around 2000 W/K reproduces a ~110 K
 plateau rise at the measured bombardment power. The campaign stance uses a
-different value; see `scripts/production_stance_provenance.md`.
+different value; see `scripts/stance/production_stance_provenance.md`.
 
 **`cathode_cleaning_E_th_eV = 20.0` eV — DERIVED, bracket 18-26 eV** from
 He -> O kinematics for chemisorbed oxygen.
@@ -2102,7 +2102,7 @@ CLAMPED outside it.
 
 Both nodes are RE-CENTRED on three published He elastic momentum-transfer sets
 read at the node energy, from the LXCat TXT pull of record of 2026-08-13. The
-parse and interpolation are those of `scripts/kmpull_threeset_check.py`, which
+parse and interpolation are those of `scripts/atomic/kmpull_threeset_check.py`, which
 is the method of record (NB that script's own input path points at a scratch
 download that no longer exists, so it needs its path supplied to re-run). Each
 set is interpolated linearly, the convention those
@@ -2150,7 +2150,7 @@ stance sets a nonzero width, and that width is **load-bearing rather than
 cosmetic**: at the production operating point the raw CSDA stopping profile is
 only ~2 cells wide, so the kernel sets the applied axial deposition geometry
 outright. The value, its ASSUMED class and its honest bar live with the stance,
-in `scripts/production_stance_provenance.md`.
+in `scripts/stance/production_stance_provenance.md`.
 
 ## `physics_fit_defaults`
 
@@ -2780,6 +2780,6 @@ afterglow dt-cost pair; golden re-anchored in the same event). The
 authoritative provenance entries — value, class (DERIVED, A/B-selected
 under pre-registered gates), the corrected floor-honesty bar, and the
 near-floor resolution bracket — live in
-`scripts/production_stance_provenance.md`; this file deliberately
+`scripts/stance/production_stance_provenance.md`; this file deliberately
 carries only this pointer so the adoption evidence stays with the stance
 history.

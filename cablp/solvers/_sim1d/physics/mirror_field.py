@@ -45,11 +45,11 @@ retired 2026-09-03), which measures what
 the field does on the production mesh so that the identity above can be
 checked against numbers rather than asserted. Nothing in the solver imports
 it, and nothing in the solver should: the solver does no file I/O, and the
-field-to-area conversion happens outside it (``scripts/g1_build_profiles.py``).
+field-to-area conversion happens outside it (``scripts/stance/g1_build_profiles.py``).
 
 What the map is
 ---------------
-``scripts/solve_lapd_coil_field_census.py`` solves the axisymmetric vacuum
+``scripts/stance/solve_lapd_coil_field_census.py`` solves the axisymmetric vacuum
 field of the measured LAPD coil census (exact circular-filament Biot-Savart,
 complete elliptic integrals) and writes an ``.npz``. Two named end-coil cases
 are solved and both are carried in the same file, distinguished by an array-
@@ -107,7 +107,7 @@ validity mask, rather than extrapolated.
 
 ``flux_radius_cell_cm`` is returned raw, in the trace's own anchoring. The
 in-repo convention for turning it into a flux-tube radius is the RATIO form
-``Rp * r_flux(z) / r_flux(z_ref)`` used by ``scripts/g1_build_profiles.py``,
+``Rp * r_flux(z) / r_flux(z_ref)`` used by ``scripts/stance/g1_build_profiles.py``,
 which divides out the traced surface's anchored-sag offset; this module does
 not apply it, because which anchor a consumer wants is the consumer's choice.
 """

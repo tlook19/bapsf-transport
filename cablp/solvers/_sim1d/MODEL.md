@@ -314,7 +314,7 @@ The unlimited local law is the `electron_heat_flux_limit=False` arm. The
 shipped $f$ is **BOXED (literature), not fitted**, and carries a bracket of
 record; its value, its class and that bracket live in
 `core/config_defaults_provenance.md` and
-`scripts/production_stance_provenance.md`, which are the authority for them.
+`scripts/stance/production_stance_provenance.md`, which are the authority for them.
 The values $f=1$ and $f=0.1$ that appear in the A9 engagement probe are the
 declared **arms of that closure-family bracket**, never the stance.
 
@@ -467,7 +467,7 @@ I_plasma + I_parallel`, divergences zero now) set up the future effective-load
 work (items 24/25). Honest limits: the anode uses the net-current ladder
 (per-species anode is A15/R4), and the bracket-capped regime clamps `V_b` off the
 ladder (a reported residual). The identity asserted here is not taken on faith:
-`scripts/verify_sim1d_r3_routing.py` gate G6 evaluates the residual
+`scripts/verify/verify_sim1d_r3_routing.py` gate G6 evaluates the residual
 `P_load - (cathode + gap + anode field work)` directly against the solver's own
 terms and requires it below `1e-6 * P_load`, alongside the cathode Kirchhoff sum
 the derivation rests on.
@@ -1076,7 +1076,7 @@ that overstates the annulus throughput by
 $$\frac{A_{\rm ann}}{A_{\rm open}} = \frac{6788.63}{3898.56} = 1.7413 .$$
 
 The two areas are printed by `scripts/b6bf_base_pins.py` (at commit 48be9a4, retired 2026-09-03); their RATIO is what
-`scripts/verify_sim1d_k2_dvm.py` gate BF2 emits and gates on. Armed, the DVM's
+`scripts/verify/verify_sim1d_k2_dvm.py` gate BF2 emits and gates on. Armed, the DVM's
 net annulus current per unit density difference matches the fluid orifice to
 $9.7\times10^{-4}$ at $(n_{v_z}, n_{c_\perp}) = (48, 12)$ and
 $2.7\times10^{-4}$ at $(64, 24)$ on a velocity grid sized to the 300 K gas, and
@@ -2398,7 +2398,7 @@ Three further clauses attach to every afterglow reading of this operator
    semi-quantitative bar the measurement error model sets. **Only the
    window-mean SIGN is robust.** Instants at the tail are never quotable for
    sign, and the three Q2 export readings above disagree in sign with each
-   other depending on construction — see `scripts/edt_consult_pins.py`'s Q2
+   other depending on construction — see `scripts/score/edt_consult_pins.py`'s Q2
    section, which is the citable source and labels every one of them.
 
 The missing EMF work corresponds to an in-plasma EMF of $+3.7$ to $+5.9$ V

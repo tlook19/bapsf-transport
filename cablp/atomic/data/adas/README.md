@@ -42,7 +42,7 @@ every download with its own retrieval date, in a `C on DD-Mon-YYYY.` line
 inside the file's trailing comment block, so two downloads of the *same*
 ADAS revision on different days differ by that one line and therefore have
 different whole-file checksums. Both parsers here (`read_adf11` in
-`cablp.atomic.adas`, `read_adf15` in `scripts/pec_band_fractions.py`) stop
+`cablp.atomic.adas`, `read_adf15` in `scripts/score/pec_band_fractions.py`) stop
 at the first line beginning with `C`, so the comment block — the date stamp
 included — never reaches the numerics.
 
@@ -133,7 +133,7 @@ The carbon (`*96_c.dat`, z1 = 1-6), oxygen (`*96_o.dat`, z1 = 1-8), boron
 (`*89_b.dat`, z1 = 1-5), molybdenum (`*89_mo.dat`, z1 = 1-42), and
 tungsten (`*89_w.dat`, z1 = 1-74) files were
 added for the impurity-radiation scoping study
-(`scripts/scope_impurity_radiation.py`): equilibrium stage balance from
+(`scripts/atomic/scope_impurity_radiation.py`): equilibrium stage balance from
 SCD/ACD, total radiated power L_z from PLT+PRB. No model path consumes them
 as of 2026-07-21 — the scoping verdict (required n_z/n_e ~ 4-10 % at
 equilibrium for every species tested >> the ppm hypothesis) stopped the
@@ -180,7 +180,7 @@ differ from each other and from the shared adf11 grid** — `he0` spans
 of 1.00E-74 is the format's zero sentinel.
 
 No model path consumes these: they were added for the window-transmission
-band-fraction analysis (`scripts/pec_band_fractions.py`), which splits the
+band-fraction analysis (`scripts/score/pec_band_fractions.py`), which splits the
 adf11 PLT line power into optical bands to establish what fraction of the
 He radiated power is observable through the LAPD port windows.
 

@@ -239,7 +239,7 @@ def geometry_defaults():
         to here and must lie strictly between the anode face and the collector
         block (``Lm - collector_length_cm``). ``None`` when off. Requires the
         ``source_fixed_grid`` flag, and is required by it. For the value's
-        provenance see ``scripts/production_stance_provenance.md``.
+        provenance see ``scripts/stance/production_stance_provenance.md``.
     source_region_dz_cm:
         Cell size [cm] inside that source region, held fixed independently of
         ``nx``; the region length minus the anode gap must be an integer
@@ -616,7 +616,7 @@ def timing_defaults():
         That inheritance is a double duty with no physical basis: the
         equilibration's puff window is the machine's total gas-puff pulse
         width, an independent hardware quantity. Set it explicitly to decouple
-        the two (see ``scripts/production_stance_provenance.md`` for the value
+        the two (see ``scripts/stance/production_stance_provenance.md`` for the value
         the campaign stance uses).
 
         Read ONLY by the ``Plasma=False`` equilibration inner sim; the main
@@ -726,7 +726,7 @@ def output_defaults():
         entry ``neutral_seed_<signature>.npz``, auto-populated on first use and
         reused thereafter (a browsable fill-rate table). ``None`` (default) means
         no database is configured. See ``core/neutral_seed_cache.py`` and
-        ``scripts/build_neutral_seed_cache.py``.
+        ``scripts/run/build_neutral_seed_cache.py``.
     """
     return {
         "dt_save": 1e-5,
@@ -1569,7 +1569,7 @@ def cathode_defaults():
         temperature along one flat direction -- so a configuration must not
         move both to represent the same emission. Values and their provenance:
         ``config_defaults_provenance.md`` and, for the campaign stance,
-        ``scripts/production_stance_provenance.md``.
+        ``scripts/stance/production_stance_provenance.md``.
     R_comp:
         External/compliance resistance [Ohm]. The full loop series resistance.
         It does NOT set the discharge current -- the emission ceiling does;
@@ -1621,7 +1621,7 @@ def cathode_defaults():
 
         Default ``1.0`` (all external, internal part 0) is bit-exact with the
         historical behaviour. Must be in ``[0, 1]``. Adopted values:
-        ``scripts/production_stance_provenance.md``.
+        ``scripts/stance/production_stance_provenance.md``.
     R_mesh_ohm:
         Anode-mesh series resistance [Ohm], separate from ``R_comp`` and on the
         internal (plasma) side of the probe, so it is invisible to the V_dis
@@ -1752,7 +1752,7 @@ def cathode_defaults():
         lower. This term sets the plateau surface-temperature rise, and the
         plateau *current* then follows from the balance. Adopted values:
         ``config_defaults_provenance.md`` and
-        ``scripts/production_stance_provenance.md``.
+        ``scripts/stance/production_stance_provenance.md``.
     cathode_emission_profile:
         Radial structure of the thermionic emitter. ``"uniform"``
         (default) is a single-temperature disc, whose emission ceiling is a
@@ -2546,7 +2546,7 @@ def cathode_defaults():
     # surface state, and presheath sample smoothing. Rp_model stays "sample".
     #
     # The circuit values here are mirrored EXACTLY by the campaign stance in
-    # ``scripts/compare_sim1d_es1.PARAM_OVERRIDES``; the duplication is
+    # ``scripts/score/compare_sim1d_es1.PARAM_OVERRIDES``; the duplication is
     # deliberate (that dict is the campaign stance record, and removing the
     # pins would change resolution order for the other run drivers). Values,
     # provenance classes and bars: config_defaults_provenance.md.
@@ -2555,7 +2555,7 @@ def cathode_defaults():
         # V_bank here is the SUPPLY SETPOINT, which is a DIFFERENT QUANTITY
         # from the measured pre-shot open-circuit bank voltage and is
         # deliberately NOT replaced by it. The per-run open-circuit readings
-        # live in ``scripts/run_mechanism_ladder.ES_OPERATING``; any run that
+        # live in ``scripts/run/run_mechanism_ladder.ES_OPERATING``; any run that
         # means the machine rather than the dial must set V_bank from there.
         "V_bank": 180.0,
         # T_s is only the static-model fallback under power_balance (the input
@@ -3332,7 +3332,7 @@ def regime_tracer_defaults():
         descriptions are valid and must therefore agree: at or above
         ``tracer_activation_ne`` (fluid valid) and below the density at which
         passivity fails (tracer valid). Read by
-        ``scripts/regime_r2_overlap_gate.py``, which is the two-sided gate.
+        ``scripts/verify/regime_r2_overlap_gate.py``, which is the two-sided gate.
         Construction raises unless ``0 < low < high``.
     tracer_overlap_rtol:
         Relative agreement the two descriptions must reach inside that band for
@@ -3938,7 +3938,7 @@ input_flags_template_1d = {
     # When ON, requires neutral_equilibration + launch_plasma_after_equilibration
     # ON and a neutral_seed_cache_dir (the signature-keyed seed DATABASE):
     # a miss (new neutral-flow config) equilibrates once and stores it. See
-    # core/neutral_seed_cache.py and scripts/build_neutral_seed_cache.py.
+    # core/neutral_seed_cache.py and scripts/run/build_neutral_seed_cache.py.
     "use_cached_neutral_seed": False,
     # Floor-aware drain exemption on the "surface_loss" timestep bound
     # (the afterglow dt-collapse fix): cells pinned at the Te/Ti floor
@@ -4182,7 +4182,7 @@ input_flags_template_1d = {
     # A step explicitly asked for operator_split=False while armed raises for
     # the same reason. Must be a real bool. Bit-exact when off.
     #
-    # NOT CERTIFIABLE BY scripts/verify_sim1d_order.py: that harness measures
+    # NOT CERTIFIABLE BY scripts/gates/verify_sim1d_order.py: that harness measures
     # the split step in a deliberately cathode-free regime, where the beam
     # deposition row is identically zero and this flag therefore changes
     # nothing. It changes the A/B commutator, so the NUMERICS.md split-order

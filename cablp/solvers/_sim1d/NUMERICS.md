@@ -217,7 +217,7 @@ Local (cell-wise) RHS contributions, all in `physics/`:
   *cannot* undershoot the temperature floors. For θ<1 the amplification factor
   tends to `−(1−θ)/θ` as `Δt·λ → −∞`, so stiff modes ring — undamped at θ=1/2 —
   and can be clipped by the floor, which silently injects energy. See
-  `scripts/audit_sim1d_floor_activation.py` for measuring whether that actually
+  `scripts/gates/audit_sim1d_floor_activation.py` for measuring whether that actually
   happens for a given configuration.
 
   `tr_bdf2` (Bank et al. 1985) is second-order *and* L-stable: a trapezoidal
@@ -247,7 +247,7 @@ Local (cell-wise) RHS contributions, all in `physics/`:
 
 ## Measured order of the whole split step
 
-`scripts/verify_sim1d_order.py` measures the observed temporal order of the
+`scripts/gates/verify_sim1d_order.py` measures the observed temporal order of the
 split step by fixed-Δt Richardson refinement, in a deliberately clean regime
 (floors inert and watched, single phase, autonomous RHS, no cathode). At 62
 cells with `t_end = 1e-6 s`:
@@ -456,7 +456,7 @@ identity is
     applied_cum + debt + hold_debt == booked_cum
 
 per cell at every accepted step, and is checked to roundoff by
-`scripts/verify_sim1d_dvm_hold.py` (case `ledger-closure`) and reported in the
+`scripts/verify/verify_sim1d_dvm_hold.py` (case `ledger-closure`) and reported in the
 saved `dvm_transfer_ledger` group.
 
 **Repaying it is where the subtlety is.** Spreading the outstanding debt `D`
@@ -718,7 +718,7 @@ fails, and the probe reason is genuine exhaustion — at its first binding tick
 the plasma books 1.086× the cell's *entire* pre-tick inventory, which no
 ordering can satisfy (`max nu_ion*dt_n` = 2.8 against the R14 bar of 0.1).
 
-Registered as gate `D5` in `scripts/verify_sim1d_k2_dvm.py`, which pays every
+Registered as gate `D5` in `scripts/verify/verify_sim1d_k2_dvm.py`, which pays every
 booking up to a synthetic cell's whole inventory with zero shortfall and runs
 the pre-fix ordering beside it as a negative control — the control fires
 exactly above the closed-form threshold `1 − N_{cx,el}/I_0` and not below it.
@@ -863,7 +863,7 @@ Results are written to HDF5 (`results/io.py`, format `sim1d-hdf5-v1`) including
 time series, axial profiles, and per-step diagnostics. `results/health.py`
 reports finiteness and conservation drift (particle inventory, thermal
 energy). See
-`scripts/run_sim1d.py` (drive/save). Its companion renderer
+`scripts/run/run_sim1d.py` (drive/save). Its companion renderer
 `scripts/plot_sim1d_run.py` (contour and time-slice plots) was retired
 2026-09-03 (commit 48be9a4).
 
@@ -872,7 +872,7 @@ actual packed five-/six-/seven-/eight-row state while retaining absent-dataset
 compatibility for older H5 files. Every run result also carries the exact
 constructed `params` and `flags`. `save_result_hdf5` writes those resolved
 values to `params_json`/`flags_json` and rejects caller metadata that differs
-from the constructed solver. `scripts/audit_sim1d_configs.py` verifies
+from the constructed solver. `scripts/gates/audit_sim1d_configs.py` verifies
 reviewed SHA-256 snapshots for the production golden and every config-complete
 campaign driver without running a campaign point.
 
@@ -916,7 +916,7 @@ activity vanishes under mesh refinement (a density diffusion with `D ~ c_s·dz`
 layered on top of Rusanov's own). Rusanov/LLF is retained; a contact-restoring
 (HLLC) or higher-order (MUSCL) scheme is a deferred follow-up gated on the G7
 numerical-diffusion evidence. The pre-registered gate suite G1–G7 lives in
-`scripts/verify_sim1d_r2_hyperbolic.py`.
+`scripts/verify/verify_sim1d_r2_hyperbolic.py`.
 
 ## Characteristic material boundaries (introduced R3, 2026-07-24)
 
@@ -948,7 +948,7 @@ discretized exactly one way, described below.
   the `phi` part as the remainder, so the historical `P_*` expressions that feed
   the golden are byte-for-byte unchanged; the fluid electrode energy is booked
   once (cathode electron via the circuit thermal part, collector via a floating
-  `2 Te` sheath in the boundary term). Gate: `scripts/verify_sim1d_r3_routing.py`
+  `2 Te` sheath in the boundary term). Gate: `scripts/verify/verify_sim1d_r3_routing.py`
   (split exactness, boxed γ, load-power closure to machine zero + cathode
   Kirchhoff). Boundary gates: `..._boundary.py` (unit) and `..._boundary_startup.py`
   (run: `u → c_s`, net sink). A11 coupling gate: `..._a11.py` (fixed-`dt`
@@ -1000,7 +1000,7 @@ introduced at R5.2 and bit-exact there against the R5-era checkpoint golden;
 runs the limited form. The shipped `f` is **BOXED (literature), not fitted**,
 and carries a bracket of record; its value, class and bracket live in
 `core/config_defaults_provenance.md` and
-`scripts/production_stance_provenance.md`, which are the authority — this
+`scripts/stance/production_stance_provenance.md`, which are the authority — this
 document names the flag, not the number. The two `f` values that appear in the
 static A9 engagement probe are declared **arms of the closure-family bracket**,
 never the stance: `f=1` targets only the ~gap
@@ -1458,7 +1458,7 @@ therefore "viable over `c` ≳ 30", with the lower endpoint disclosed.
 
 ##### MEASURED: the overlap gate under MATCHED closures
 
-`scripts/regime_r2_overlap_gate.py --nx 20 --t-end 3e-5 --anomalous-model
+`scripts/verify/regime_r2_overlap_gate.py --nx 20 --t-end 3e-5 --anomalous-model
 ql_relaxation --ql-relaxation-coeff 30` — **BLOCKED**, which the gate defines as
 not a pass. The tracer arm refuses at cell 2 (deposited beam power
 `115237 erg cm⁻³ s⁻¹` against a bracket top of 118.456 eV). Registered reading:
@@ -2049,7 +2049,7 @@ consequences are load-bearing:
 Because both sides are then exact rearrangements of the same finite sums, the
 identity holds to floating-point roundoff. Measured worst case
 $7.9\times10^{-15}$ relative, over all six arm/reading combinations at both the
-golden config and the ES1 source region (`scripts/verify_sim1d_edt.py`, gate
+golden config and the ES1 source region (`scripts/verify/verify_sim1d_edt.py`, gate
 G2, whose bar is $10^{-10}$). Had $W_\text{EMF}$ been
 defined as the residual, the gate would have been a tautology; had it been
 taken as a cell-centred quadrature instead, the identity would close only to

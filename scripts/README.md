@@ -1,0 +1,82 @@
+# `scripts/` — the sim1d tooling, sorted by what each file is FOR
+
+Ten directories, no loose files. The seven code directories below are named
+for the question a reader arrives with — *is this a check, a driver, a scorer,
+a stance input, an instrument?* — and the three fixture directories are fixed
+by the golden protocol and do not move. Every script runs from the repository
+root as `python scripts/<dir>/<name>.py`; scripts import each other by bare
+module name, and each one that does carries a short block putting the seven
+code directories on `sys.path`, so the layout costs the caller nothing.
+
+**`gates/`** — the checks that must pass before anything merges, and the
+fixtures they read. `smoke_sim1d.py` is the assertion suite every solver
+change runs; `baseline_sim1d.py` is the production golden and
+`golden_digest_gate.py` its short-horizon complement; `interp_bitexact_gate.py`,
+`interp_fused_reference.py`, `deposit_beam_reference.py` and
+`restart_bitidentity.py` pin arithmetic and restart identity;
+`audit_sim1d_configs.py`, `declm_block_gate.py` and `declm_route_identity.py`
+pin the configuration surface; `preflight_diffcfg.py` is the no-solve config
+diff every campaign arm runs before spending compute. A file belongs here when
+a merge is blocked by its verdict. `golden_baseline_provenance.md` lives here
+with the golden it documents.
+
+**`run/`** — the drivers that build a `LAPDSim1D` and run it.
+`run_m6_point.py` is the config-complete campaign driver, `run_sim1d.py` the
+plain one, `run_mechanism_ladder.py` the ladder; the rest build the inputs a
+run needs (`build_neutral_seed_cache.py`, `eqmap_make.py`) or measure the run
+itself (`profile_sim1d.py`, `sweep_sim1d_stability.py`). A file belongs here
+when its job is to *produce a trajectory*.
+
+**`score/`** — measurement of a saved run against the experiment.
+`compare_sim1d_es1.py` is the scorer of record and `fingerprints_sim1d.py` the
+drive-side transfer check; the plotters render comparison-to-data figures, and
+the radiation and power-ledger tools read a trajectory and report physics from
+it. A file belongs here when it *consumes* an h5 and says how the model did.
+
+**`stance/`** — everything that decides what the operating point IS.
+`stance_config.py` loads the committed stance; `g1_build_profiles.py`,
+`build_msi_field_profile.py`, `sp3_build_nn0.py`, `puff_orifice.py` and the
+coil-field solvers build the per-cell profiles and rows the stance names; the
+circuit fits pin the drive constants. `production_stance_provenance.md` is
+here: the stance's values and their honest bars. A file belongs here when
+changing it would change what the production configuration means.
+
+**`atomic/`** — cross sections, rate tables and the ADAS comparisons. Table
+generators (`generate_eii_tables.py`, `generate_he_ion_rate_table.py`) write
+into `cablp/atomic/data/`; the rest check the packaged data against its
+sources. A file belongs here when its subject is atomic data rather than the
+solver.
+
+**`verify/`** — the per-build acceptance instruments. Every
+`verify_sim1d_*.py` is the registered gate of one build (its cases are cited
+by name in the campaign record), alongside the reference-corpus builders and
+the bit-inertness A/B harnesses. These differ from `gates/` in cadence, not in
+rigor: a `gates/` check runs on every merge, a `verify/` instrument runs for
+the build that owns it and stays runnable afterwards so its verdict can be
+re-derived.
+
+**`kinetic/`** — the neutral-closure instruments that stand outside the
+solver: `mc_neutrals.py` (frozen-field TPMC) and `kn2zone.py` (the
+deterministic two-zone model), with their comparison harnesses. They exist to
+be checked against each other and against the in-solver closure on the same
+background.
+
+## The three fixed directories
+
+`baselines/`, `data/` and `stances/` do **not** move and are not to be
+reorganized. The golden protocol names those paths — `baseline_sim1d.py`
+reads `baselines/production_discharge.npz`, `stance_config.py` reads
+`stances/g1atrim.toml`, the reference corpora live in `data/` — and a fixture
+whose path moves is a fixture whose provenance has to be re-established.
+`baselines/` in particular is never touched outside the reviewed-recapture
+protocol.
+
+## Run artifacts do not live here
+
+`scripts/` holds **code only**. Every run artifact — `.h5`, `.log`, `.cmd`,
+`.npz`, `.prof`, probe transcripts, figures — is written to or copied into
+`~/bapsf/artifacts/<campaign-or-event>/`. An untracked artifact found under
+`scripts/` is a defect to move, not a convention. Artifacts produced before
+2026-09-03 were collected into `~/bapsf/artifacts/scripts_loose_2026-09-03/`,
+which is where a log pointer of the form `scripts/<artifact>` from before that
+date resolves.
