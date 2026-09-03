@@ -8,6 +8,20 @@ root as `python scripts/<dir>/<name>.py`; scripts import each other by bare
 module name, and each one that does carries a short block putting the seven
 code directories on `sys.path`, so the layout costs the caller nothing.
 
+**Every run names a configuration** (the "no default plasma" ruling,
+2026-09-03). `default_config()` is the template of keys and their classes, not
+a plasma anyone runs; `stances/g1atrim.toml` is the LAPD reference
+configuration a run starts from; and an alternate the campaign runs against it
+is a DERIVED configuration — a committed file naming a `base` plus the deltas
+that move it, `stances/examples/g1atrim_fluid_comparator.toml` being the worked
+one. `stance/stance_config.py` resolves both forms and returns, with the
+`(params, flags)`, the lineage a run writes into its HDF5: the configuration's
+name, its base chain, each file's sha256, its delta keys and the resolved
+identity. No driver in `run/` has a bare mode — each takes `--config`/`--stance`
+or an explicit `--no-stance` — so an artifact can always say which
+configuration produced it. The form, its refusals and the lineage fields are
+`cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md`.
+
 **`gates/`** — the checks that must pass before anything merges, and the
 fixtures they read. `smoke_sim1d.py` is the assertion suite every solver
 change runs; `baseline_sim1d.py` is the production golden and
@@ -15,7 +29,9 @@ change runs; `baseline_sim1d.py` is the production golden and
 `interp_fused_reference.py`, `deposit_beam_reference.py` and
 `restart_bitidentity.py` pin arithmetic and restart identity;
 `audit_sim1d_configs.py`, `declm_block_gate.py` and `declm_route_identity.py`
-pin the configuration surface; `preflight_diffcfg.py` is the no-solve config
+pin the configuration surface, with `audit_sim1d_configs_delta.py` as the
+rotation record that says which snapshot case moved and in which resolved
+values; `preflight_diffcfg.py` is the no-solve config
 diff every campaign arm runs before spending compute. A file belongs here when
 a merge is blocked by its verdict. `golden_baseline_provenance.md` lives here
 with the golden it documents.
@@ -69,7 +85,11 @@ reads `baselines/production_discharge.npz`, `stance_config.py` reads
 `stances/g1atrim.toml`, the reference corpora live in `data/` — and a fixture
 whose path moves is a fixture whose provenance has to be re-established.
 `baselines/` in particular is never touched outside the reviewed-recapture
-protocol.
+protocol. `stances/examples/` holds derived configurations and is an ADDITION
+to that directory rather than a reorganization of it: the committed
+configuration set `stance_config.available_stances()` offers by name is
+`stances/*.toml` and nothing below it, so an example is reached by path and can
+never be mistaken for a base.
 
 ## Run artifacts do not live here
 

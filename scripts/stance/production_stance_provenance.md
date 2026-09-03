@@ -1130,3 +1130,25 @@ numbers above are the runner's BASE-vs-FIX2 transcripts as quoted there.
 - Run-cost settings (`tau_afterglow`, `max_steps_action`, `density_dt_fraction`)
   — they buy runtime, not physics, and belong on the command line of the run
   that wants them.
+
+## The reference configuration (2026-09-03)
+
+`scripts/stances/g1atrim.toml` is the LAPD **reference configuration** — the
+one a run starts from, and the one every alternate is compared against. That is
+a change of standing, not of values: nothing in this note moves with it.
+
+What it changes is what a run may leave unsaid. `default_config()` is the
+template of keys and their classes and is not a plasma anyone runs, so no
+driver has a bare mode any more: a run either names a configuration or says, in
+words, that it names none. An ALTERNATE — a reduced closure, a comparator arm,
+anything the thesis runs against the reference — is a DERIVED configuration: a
+committed file naming this one as its `base` plus the deltas that move it, with
+the form and its refusals in
+`cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md`. A derived file's own values
+belong in its own file, beside the deltas that state them, not here; this note
+stays the provenance of the reference.
+
+A run records which configuration it was — the name, the base chain, each
+file's sha256, the delta keys and the resolved identity — in its HDF5 root, so
+a saved trajectory can be matched to a committed file rather than only to a bag
+of values.
