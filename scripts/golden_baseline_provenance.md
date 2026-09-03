@@ -219,6 +219,153 @@ closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
 
+**2026-09-03 — THE SPEED-UP EVENT: four bit-moving performance members
+re-anchored in one recapture (AUTHORIZED; the Tier C continuity pair passed all
+seven of its pre-registered gates at the production operating point before this
+member was dispatched).** The members are a REIMPLEMENTATION programme at fixed
+physics intent — every one of them computes the same model by a cheaper route —
+and they were bundled so the golden re-anchors once. In merge order:
+
+| member | branch commit | what it changed |
+|---|---|---|
+| `[wr-diffuse-vectorize]` | `aa2cc81` | the diffuse cylindrical-wall return caches the grid-only factors of its 64-node cosine quadrature on the velocity grid. BIT-EXACT: the 4k digest is unmoved at this member. |
+| `[wr-secant-solve]` | `df560c8` | the same wall's re-emission temperature is solved by a secant in `ln s` on a SEPARABLY contracted mean energy instead of a bracketed bisection on assembled spectra — 54 residual evaluations per solve to 4–6. The bisection is retained as the deterministic fallback and is still the path that raises on a saturated target. |
+| `[equilibration-banded-solve]` | `9e61247` | both implicit neutral steppers assemble and solve in LAPACK banded storage instead of a dense `numpy.linalg.solve` — tridiagonal single-zone, pentadiagonal two-zone in the interleaved `(column cell, annulus cell)` ordering — and `NEUTRAL_STEPPER_ID` enters the neutral-seed signature. |
+| `[hyperbolic-correction-row-split]` | `b486373` | the KEP energy correction is booked in TWO ledger rows: its pressure re-discretization folds into `pressure_work`, and the Rusanov numerical dissipation becomes `hyperbolic_dissipation_heating`. This re-associates the RHS fold. |
+
+**Nothing in the CONFIGURATION moved.** `g1atrim.toml` is untouched;
+`default_config()` is untouched; no config key was added, removed or re-valued.
+This is the same shape of event as the 2026-08-28 R3-tip recapture and the
+opposite of the 2026-09-02 stance event: the trajectory digest rotates while the
+config identity does not.
+
+| quantity | before | after |
+|---|---|---|
+| `production_discharge.npz` `sha256` | `cdd706d3301e85871ae6e0406bd31cf373ac46f1f38cc00d2c704961513704fc` | `c286d2f415058c20966d85d6d15c4355887eefd6f548c49c371d9bd64f1578c4` |
+| `production_discharge.json` `sha256` | `3e1cd3514a9425cd4fc6d24f74cb86da1644c8f3d83afbf0ea18250157d792e9` | `dd10e5c763f777c62655780afc98d07d8a3e5422760f38170d9bcad6c83a0191` |
+| `golden_digest_4k.json` `sha256` | `7f5bd37630feec56ef3e5b366ce0aed429f29eab359ee27cae9e733658b7699c` | `a38d5a72459d2979fc95000e9fd183d72a3f5eaf94083d2ac91c6176cea6dac4` |
+| `golden_digest_4k.json` `digest` | `b883916aae9b6aca6b2f501f6418a943363abed29ce9f19394d2dfc7275fc086` | `4c0e105b922e67308595e2cbdd628d9f4dcde2e1686d00225cb69bacec8643ea` |
+| `golden_digest_4k.json` `config_identity` | `ea042038a5e01230c11a66f1cf429099fc914633febd2fd6e9721b6b2626c965` | **UNCHANGED** — `ea042038…` |
+| `golden_digest_4k.json` `final_time` | `0.0004563240693165767` | `0.00045632279608921294` |
+| `golden_digest_4k.json` `fields_per_cell` / `cells` / `steps` | `6` / `72` / `4000` | UNCHANGED |
+| sidecar `steps` | `56,605` | **`56,392`** (−213, −0.38 %) |
+| sidecar `final_time` | `2.618754254253e-02` s | `2.618754254937e-02` s — the dynamic `t_end`, still reached |
+| sidecar `saves` / `cells` / `fields_per_cell` | `2620` / `72` / `6` | UNCHANGED |
+| sidecar `params` / `flags` key counts | `256` / `53` | UNCHANGED — 0 added, 0 removed, **0 re-valued** |
+
+**The fixture's shape and cycle coverage are unchanged, and that was measured
+rather than assumed.** `y` is `[2620, 432]` before and after; the `phase` array
+is byte-identical; the phase census is the same `8 / 11 / 2000 / 600 / 1`
+(pre-breakdown / breakdown / main discharge / afterglow / post-afterglow). The
+`time` array differs in exactly **1 of 2620** samples — the last one (index 2619), where the
+dynamic `t_end` lands 6.8 ps later — so the save schedule the fixture pins is
+otherwise identical. `y` differs in 1,121,076 of 1,131,840 raw `uint64`, which
+is what a bit-moving member set over 56,392 steps produces.
+
+**What the trajectory movement is, stated honestly.** Over the whole fixture the
+relative move of `y` has median 1.4e-4, 99th percentile 3.6e-2, and a maximum of
+538 at one afterglow momentum entry that crosses zero (8.935e-12 → −4.802e-09
+against a field scale of 1.4e-6 at that save — a denominator artifact, not a
+physics move). This is why the golden is a REGRESSION SCAFFOLD and not a
+physical claim: bits move from the first step and 56,392 steps of a nonlinear
+run amplify them. **The physics verdict is the Tier C continuity pair
+(2026-09-03), not this fixture.**
+
+**Physics verdict — the Tier C continuity pair, 2026-09-03**, measured at the
+PRODUCTION ES1 operating point on the compiled path, parent `e67b24b` against
+tip `b486373`. Seven of seven pre-registered gates PASS, with two disclosures:
+
+| gate | result |
+|---|---|
+| 1 stage-(ii) `dev/sigma` | 98-line transcript identical except three `Te` means at the third decimal (8.726/4.862/3.270 → 8.725/4.861/3.269 eV); every ratio and `|dev|/sigma` identical to print; 0 printed entries moved |
+| 2 plateau current | 2955.726 → 2955.721 A, −1.7e-6 (bar 0.1 %) |
+| 3 stage-(iii) `tau` per port | identical to print, 5 of 5 |
+| 4 `t90` / peak time | 2.71 → 2.70 ms / +19.98 ms unchanged (bar ≤ 0.5 ms) |
+| 5 ledger closure + rows (DRIVE window, partition-mapped) | handshake closure `7.227e-19` IDENTICAL; the split maps exactly — parent `pressure_work` Ee −15.50773 + hyperbolic 8.95521 = −6.55252 against tip `pressure_work` Ee −6.55255, and Ei −8.86590 + 7.11878 = −1.74712 against tip −2.72277 + dissipation 0.97565 = −1.74712; mapped rows 4.6e-6 (bar ≤ 1e-3). Disclosed: worst other row `neutral_kinetic_dvm_coupling` −20.09078 → −20.10632, 7.7e-4 — the secant solve is the one numerics change on the DVM path |
+| 6 floor census | `floor_ledger` Ee 1.9787e7 → 1.9520e7 erg (−1.3 %), Ei 3.119e4 → 1.565e4 erg, particles 0 both; negligible energies, no regime change. Disclosed: the Ei floor injection halves, 3.1 → 1.6 mJ over the run |
+| 7 steps / saves / config | 49374 → 49464 steps (+0.18 %, bar ≤ 1 %); saves 2613 identical; params+flags diff EMPTY. Disclosed: the tip has `relax_limited_steps = 1`, `limited_cells = 5` against the parent's 0 — one event, at the cadence an earlier retrim arm also showed |
+
+Health at the production point (scaffold, ungated): `n_max` 1.794406e13 →
+1.794591e13, `nn_max` 9.6997e13 → 9.6929e13, `Te_max` 30.05799 → 30.05800 eV,
+`Ti_max` 7.4516 unchanged, plasma-inventory drift 2448.45 → 2448.47,
+thermal-energy drift 2878.1 → 2823.4.
+
+**Sidecar health, before and after this recapture.** `finite: true` both;
+`samples` 2620 both.
+
+| row | before | after |
+|---|---|---|
+| `Te_max` | `26.51924703839592` | `26.51924703839118` — identical to 12 significant digits |
+| `Te_min` / `Ti_min` | `0.1` / `0.02585` | UNCHANGED (the floors) |
+| `Ti_max` | `7.318796883522123` | `7.318876364837494` |
+| `n_max` | `33088144428064.066` | `33081315555355.5` (−2.1e-4 relative) |
+| `n_min` | `851849034.5862272` | `851849034.5862641` |
+| `nn_max` | `135809829921687.27` | `135755895284095.28` (−4.0e-4 relative) |
+| `nn_min` | `234627346500.57492` | `234548993631.36646` |
+| `plasma_inventory_relative_drift` | `4584.0697421545065` | `4584.836734431819` |
+| `neutral_inventory_relative_drift` | `1.1049204968281352` | `1.1049859150084276` |
+| `thermal_energy_relative_drift` | `4676.843333625317` | `4668.466395970876` |
+| `total_particle_inventory_relative_drift` | `1.1937872576987203` | `1.1938675471050408` |
+
+**The INITIAL CONDITION moved, and exactly one member moved it.** The digest
+gate's step-0 checkpoint — the state the stepping starts from, which is the
+equilibrated neutral seed — goes `2dcb7c3e…` → `5ecba233…`. Recorded per member
+from clean captures at each commit, the chain is:
+
+| member | step-0 checkpoint | 4k digest |
+|---|---|---|
+| parent `e67b24b` / `[wr-diffuse-vectorize]` | `2dcb7c3e…` | `b883916aae9b6aca…` |
+| `[wr-secant-solve]` | `2dcb7c3e…` | `99255f0bafd5bbdd…` |
+| `[equilibration-banded-solve]` | **`5ecba233…`** | `35616c8ea2af819a…` |
+| `[hyperbolic-correction-row-split]` | `5ecba233…` | `4c0e105b922e6730…` |
+
+The seed is produced by the implicit neutral stepper, so the banded solve is the
+only member that can move it, and it is the only member that does. This is the
+rotation `NEUTRAL_STEPPER_ID` was added to make visible from the seed cache's
+own side: every seed equilibrated by the dense stepper now keys apart from one
+this stepper would write, and stored seed databases must be rebuilt with
+`scripts/build_neutral_seed_cache.py`. The per-member digests above are recorded
+so a future regression in this window can be bisected without re-deriving them.
+
+**Capture evidence.** The NPZ fixture was captured TWICE from clean separate
+processes to temporary paths, strictly serially per the serial-golden rule, and
+compared BEFORE either was installed: `phase` identical at raw bytes, `time`
+**0 differing of 2,620** and `y` **0 differing of 1,131,840** at `uint64`, both
+NPZ `sha256` `c286d2f4…` and both JSON sidecars byte-identical
+(`sha256` `dd10e5c7…`). The digest reference was regenerated in the same event
+as the protocol requires, also twice from clean separate processes, byte-identical
+(`sha256` `a38d5a72…` both).
+
+Gates at this tip, single lane, strictly serial, nothing else running:
+
+| gate | result |
+|---|---|
+| CAPTURE, compiled | `baseline captured: ... saves=2620, cells=72, fields=6, steps=56392, final_time=2.618754e-02 s` (`kernels=cython/_cathode_kernels_cy/tierA+csda`, probed in-process), twice, byte-identical |
+| COMPILED golden | `baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00)`, **16 min 17 s** (`kernels=cython/_cathode_kernels_cy/tierA+csda`, probed in-process) |
+| 4k digest reference, pure | regenerated in this event, `kernel_provenance: "pure"` |
+| PURE 4k digest leg | `digest gate OK: steps=4000, digest=4c0e105b922e67308595e2cbdd628d9f4dcde2e1686d00225cb69bacec8643ea, exact=True` (`digest gate kernels=pure`) |
+| COMPILED 4k digest leg | `digest gate OK: steps=4000, digest=4c0e105b922e67308595e2cbdd628d9f4dcde2e1686d00225cb69bacec8643ea, exact=True` (`digest gate kernels=cython/_cathode_kernels_cy/tierA+csda`) |
+| smoke | exit 0, all five compiled-kernel equivalence blocks LIVE |
+| `config_snapshots.json` | **NOT regenerated, and that is a verified result rather than an omission.** `scripts/audit_sim1d_configs.py` verifies the committed artifact (`cablp/solvers/_sim1d/config_snapshots.json`, `sha256` `75aba027…`) CLEAN at this tip: `params=256, flags=53, cases=4`, all four case digests reproducing, `production_golden` still `0f284816…` and `manifest_sha256` still `fccc1248…`. No config key was added, removed or re-valued — the same fact the unchanged `config_identity` states from the other side, measured by a second independent instrument. |
+
+**KERNEL PATH — the NPZ was captured COMPILED, as at the 2026-09-02 stance
+event, and a PURE full-gate verify was NOT run here.** What that costs is a
+wall-time number and nothing else, because pure-vs-compiled bit-exactness is
+RE-EVIDENCED at this tip rather than assumed: the 4k digest gate passes on BOTH
+paths against the same PURE-captured reference, printing the identical digest
+with kernel provenance probed in-process each time. Anyone who needs a pure
+full-gate figure at this tip must measure it rather than read an earlier row.
+
+**Wall time, and the point of the event.** The production ES1 arm falls from
+**80 min to 31 min (2.6×)** across this window, measured in the same contention
+window on both sides. Uncontended figures were NOT measured and no per-member
+attribution of the run-level number was taken; the per-member microbenchmarks
+live with their own members. The registered component measurements were: the
+diffuse wall return 11.8768 → 0.9144 ms per call at the stance velocity grid
+(13.0×), and one implicit neutral step 6899.27 → 126.99 µs at `nx = 268`
+(54.3×), each min-wall over 9 repeats on a single lane.
+
+
 **2026-09-02 — THE KINETIC STANCE EVENT. RECAPTURED, on the compiled path.**
 `scripts/stances/g1atrim.toml` adopted `neutral_model = "kinetic_dvm"` — the
 transient discrete-velocity neutral closure — at wall accommodation 0.40 on a
