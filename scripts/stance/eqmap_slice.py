@@ -228,6 +228,10 @@ def selfcheck(out_path, header):
         )
 
     params, flags = stance_config(
+        # A header written before configurations were named carries no
+        # "stance" key: None replays exactly the configuration that map was
+        # built at, which is the whole point of replaying it.
+        header.get("stance") or None,
         header.get("es"),
         header.get("nx"),
         header.get("S_gp_sccm"),

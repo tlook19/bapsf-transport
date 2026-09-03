@@ -23021,6 +23021,65 @@ def _case_configuration_hdf5_lineage_round_trip():
         raise AssertionError("a non-lineage configuration was ACCEPTED")
 
 
+@_case("configuration-drivers-refuse-unnamed-runs")
+def _case_configuration_drivers_refuse_unnamed_runs():
+    # No driver runs an unnamed configuration. Each refusal is checked by
+    # actually INVOKING the driver in a subprocess with no configuration named
+    # -- not by reading its source -- because the failure this closes is a
+    # command line that reads as a full package while standing on whatever the
+    # shared driver dicts happened to hold, and only the real entry point can
+    # say whether it still does.
+    _dr_root = Path(__file__).resolve().parents[2]
+    _dr_env = dict(os.environ)
+    _dr_env["PYTHONPATH"] = str(_dr_root)
+
+    def _dr_run(argv):
+        return subprocess.run(
+            [sys.executable, *argv],
+            cwd=str(_dr_root), env=_dr_env,
+            capture_output=True, text=True,
+        )
+
+    # Each row: the driver's argv WITHOUT a configuration named, the phrase its
+    # refusal must carry, and the switch that names one. The negative control
+    # names a configuration that does not exist: that gets PAST the
+    # missing-name refusal and dies on the unknown NAME instead, which is what
+    # proves the first refusal is about the name being absent and not about
+    # anything else on the command line. Neither invocation reaches a solve.
+    _dr_missing = "no_such_configuration"
+    _dr_drivers = (
+        (["scripts/run/run_sim1d.py", "--output", "unused.h5"],
+         "run_sim1d: name the configuration to run", "--config"),
+        (["scripts/run/run_mechanism_ladder.py", "--es", "1",
+          "--save-h5", "unused.h5"],
+         "run_mechanism_ladder: name the configuration package", "--stance"),
+        (["scripts/run/run_m6_point.py", "--es", "1", "--sgp", "9010",
+          "--save-h5", "unused.h5"],
+         "run_m6_point: name the configuration package", "--stance"),
+        (["scripts/run/eqmap_make.py", "--out", "unused.npz"],
+         "eqmap_make: name the configuration package", "--stance"),
+        (["scripts/run/profile_sim1d.py", "--mode", "sample"],
+         "profile_sim1d: name the configuration package", "--stance"),
+        (["scripts/gates/audit_sim1d_equilibration_duty.py"],
+         "audit_sim1d_equilibration_duty: name the configuration package",
+         "--stance"),
+    )
+
+    for _dr_bare, _dr_phrase, _dr_switch in _dr_drivers:
+        _dr_out = _dr_run(_dr_bare)
+        _dr_text = _dr_out.stdout + _dr_out.stderr
+        assert _dr_out.returncode != 0, (_dr_bare, _dr_text[-400:])
+        assert _dr_phrase in _dr_text, (_dr_bare, _dr_text[-800:])
+
+        _dr_named = _dr_run([*_dr_bare, _dr_switch, _dr_missing])
+        _dr_named_text = _dr_named.stdout + _dr_named.stderr
+        assert _dr_named.returncode != 0, (_dr_bare, _dr_named_text[-400:])
+        assert _dr_phrase not in _dr_named_text, (
+            _dr_bare, _dr_named_text[-800:]
+        )
+        assert _dr_missing in _dr_named_text, (_dr_bare, _dr_named_text[-800:])
+
+
 # --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
@@ -23045,7 +23104,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 125, "historical_stance": 53}
+_CASE_CENSUS = {"total": 126, "historical_stance": 53}
 
 
 def _assert_case_census():

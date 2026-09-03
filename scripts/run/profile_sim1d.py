@@ -1,35 +1,26 @@
-"""Detailed profiling harness for ``LAPDSim1D`` at the PRODUCTION configuration.
+"""Detailed profiling harness for ``LAPDSim1D`` at a NAMED configuration.
 
-This is an *instrument*, not a gate: it runs the real production stance and
+This is an *instrument*, not a gate: it runs a real campaign configuration and
 records where the wall clock goes, so the cost structure of a campaign run can
 be analysed later without re-running it.
 
 Config authority
 ----------------
-The configuration is IMPORTED from ``compare_sim1d_es1.run_model`` (the same
-no-drift rule ``baseline_sim1d.py`` follows), never reimplemented here.  That
-function builds ``default_config()`` plus ``PARAM_OVERRIDES``/``FLAG_OVERRIDES``,
-and ``PARAM_OVERRIDES`` reads its values from the STANCE OF RECORD,
-``scripts/stances/g1atrim.toml``.  The default invocation is therefore::
+``--stance NAME`` names the configuration to profile, and its own mesh and
+afterglow budget are the defaults for ``--nx`` and ``--tau-afterglow`` --
+read from the file, never transcribed, so a profile cannot report a cost for a
+configuration it did not run.  The shared driver package underneath comes from
+``compare_sim1d_es1.run_model`` (the same no-drift rule ``baseline_sim1d.py``
+follows), never reimplemented here.  The reference configuration is
+``scripts/stances/g1atrim.toml``::
 
-    run_model(nx=PRODUCTION_NX, exchange_model="knudsen",
-              extra={"tau_afterglow": PRODUCTION_TAU_AFTERGLOW})
+    python scripts/run/profile_sim1d.py --stance g1atrim --mode sample
 
-which profiles the g1atrim stance's shared production package -- circuit, rate
-model, numerics -- at the stance's OWN mesh.  The two keyword values supply
-exactly the keys ``PARAM_OVERRIDES`` deliberately does NOT import from the
-stance, because they are grid-coupled or run-cost settings that every
-``run_model`` caller passes for itself; both are read from
-``scripts/stances/g1atrim.toml`` here rather than transcribed, so they cannot
-drift from it: ``nx = 268`` and ``tau_afterglow = 0.006`` (the latter against a
-config default of 5e-3).
-
-Note that this module's ``PRODUCTION_NX`` is the STANCE's nx, which is NOT
-``compare_sim1d_es1.PRODUCTION_NX`` -- that name is the no-stance FALLBACK mesh
-(240), which this instrument previously defaulted to, profiling the production
-package on a mesh the production stance does not run.  Costs that scale with
-cell count are therefore reported against 268.  Pass ``--nx 240`` to reproduce
-the older fallback-mesh profiles.
+Costs that scale with cell count are reported against that configuration's own
+nx.  ``--nx`` overrides it for a deliberate resolution study; note that a
+configuration carrying per-cell profiles refuses a mesh they are not sized for,
+which is the point -- a named configuration is not re-meshed by typing a
+number.
 
 Two profilers, because they answer different questions
 ------------------------------------------------------
@@ -106,28 +97,16 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 
 from cablp.solvers._sim1d import LAPDSim1D  # noqa: E402
 from cablp.solvers._sim1d.results.io import save_result_hdf5  # noqa: E402
-from compare_sim1d_es1 import (  # noqa: E402
-    PRODUCTION_STANCE,
-    load_stance,
-    run_model,
-)
+from compare_sim1d_es1 import run_model  # noqa: E402
+from stance_config import available_stances, load_stance  # noqa: E402
 
-# The two keys compare_sim1d_es1.PARAM_OVERRIDES deliberately does NOT import
-# from the stance -- its grid-coupled mesh and its run-cost budget, both left to
-# each run_model caller -- are READ FROM THE STANCE FILE here rather than
-# hand-copied, so this instrument cannot drift from
-# scripts/stances/g1atrim.toml the way a transcribed literal can.
-_STANCE_PARAMS = load_stance(PRODUCTION_STANCE).params
-
-#: The MESH OF RECORD: the stance's own nx (g1atrim: 268). NOT
-#: compare_sim1d_es1.PRODUCTION_NX, which is the no-stance FALLBACK mesh (240)
-#: and which this instrument used to take by default -- profiling the production
-#: package on a mesh the production stance does not use.
-PRODUCTION_NX = int(_STANCE_PARAMS["nx"])
-
-#: The stance of record's afterglow budget (g1atrim: 0.006, against a config
-#: default of 5e-3).
-PRODUCTION_TAU_AFTERGLOW = float(_STANCE_PARAMS["tau_afterglow"])
+# This instrument profiles a NAMED configuration -- ``--stance NAME`` -- and
+# takes its mesh and its afterglow budget FROM THAT FILE. Neither is
+# transcribed here, so the instrument cannot drift from the configuration it
+# says it profiled, and neither is
+# ``compare_sim1d_es1.PRODUCTION_NX``, which is the no-stance FALLBACK mesh and
+# which this instrument used to take by default -- profiling the production
+# package on a mesh the production configuration does not run.
 
 # Repo root, used only to shorten frame filenames in the folded stacks.
 _REPO_ROOT = SCRIPT_DIR.parent
@@ -442,8 +421,14 @@ def _git_commit():
         return None
 
 
-def _run_production(nx, tau_afterglow, exchange_model, t_end, extra_pairs):
+def _run_production(nx, tau_afterglow, exchange_model, t_end, extra_pairs,
+                    stance=None):
     extra = {"tau_afterglow": tau_afterglow}
+    configuration = None
+    if stance is not None:
+        named = load_stance(stance)
+        extra.update(named.params)
+        configuration = named.lineage
     for pair in extra_pairs or ():
         key, _, raw = pair.partition("=")
         try:
@@ -456,6 +441,7 @@ def _run_production(nx, tau_afterglow, exchange_model, t_end, extra_pairs):
         exchange_model=exchange_model,
         extra=extra,
         t_end=t_end,
+        configuration=configuration,
     )
 
 
@@ -495,10 +481,24 @@ def main(argv=None):
     )
     parser.add_argument("--label", default=None, help="artifact filename prefix")
     parser.add_argument("--out-dir", default=str(SCRIPT_DIR))
-    parser.add_argument("--nx", type=int, default=PRODUCTION_NX)
+    stance_group = parser.add_mutually_exclusive_group()
+    stance_group.add_argument(
+        "--stance", metavar="NAME", default=None,
+        help="committed configuration file (scripts/stances/NAME.toml) to "
+             "profile; its own nx and tau_afterglow are the defaults for the "
+             "two options below. Available: "
+             + (", ".join(available_stances()) or "(none committed)"))
+    stance_group.add_argument(
+        "--no-stance", action="store_true",
+        help="acknowledge that this profile names no configuration and "
+             "measures this script's defaults plus the overrides on this "
+             "command line")
     parser.add_argument(
-        "--tau-afterglow", type=float, default=PRODUCTION_TAU_AFTERGLOW
-    )
+        "--nx", type=int, default=None,
+        help="axial resolution; default the named configuration's own")
+    parser.add_argument(
+        "--tau-afterglow", type=float, default=None,
+        help="afterglow budget [s]; default the named configuration's own")
     parser.add_argument("--exchange-model", default="knudsen")
     parser.add_argument(
         "--t-end",
@@ -526,6 +526,31 @@ def main(argv=None):
     )
     parser.add_argument("--save-h5", default=None, help="also save the trajectory")
     args = parser.parse_args(argv)
+    # A profile names the configuration it measured. A wall-clock number about
+    # an unnamed configuration cannot be compared with another one.
+    if args.stance is None and not args.no_stance:
+        raise SystemExit(
+            "profile_sim1d: name the configuration package. Pass "
+            "--stance <name> to profile a committed stance file "
+            f"(available: {', '.join(available_stances()) or '(none committed)'})"
+            ", or --no-stance to acknowledge that this profile has none and "
+            "measures this script's defaults plus the overrides on this "
+            "command line."
+        )
+    # The mesh and the afterglow budget default to the NAMED configuration's
+    # own, so the profile reports the cost of the configuration it names.
+    if args.stance is not None:
+        _named_params = load_stance(args.stance).params
+        if args.nx is None:
+            args.nx = int(_named_params["nx"])
+        if args.tau_afterglow is None:
+            args.tau_afterglow = float(_named_params["tau_afterglow"])
+    if args.nx is None or args.tau_afterglow is None:
+        raise SystemExit(
+            "profile_sim1d --no-stance: pass --nx and --tau-afterglow "
+            "explicitly. With no configuration named there is nothing to read "
+            "them from, and this instrument does not invent a mesh."
+        )
 
     label = args.label or f"prod_{args.mode}_nx{args.nx}"
     out_dir = Path(args.out_dir).resolve()
@@ -570,6 +595,7 @@ def main(argv=None):
                 args.exchange_model,
                 args.t_end,
                 args.extra,
+                stance=args.stance,
             )
         finally:
             if profiler is not None:

@@ -478,6 +478,7 @@ def run_model(
     flags_extra=None,
     t_end=None,
     max_steps=None,
+    configuration=None,
 ):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
@@ -528,7 +529,14 @@ def run_model(
         params["cathode_Rp_model"] = Rp_model
     if extra:
         params.update(extra)
-    sim = LAPDSim1D(params, flags)
+    # WHICH configuration this run named, when its caller named one. The
+    # identity is restated over the config assembled above, because a driver's
+    # rung and its command line layer on top of the named file. Metadata only:
+    # the solver stores it, the result carries it, the HDF5 records it, and
+    # nothing reads it, so a run with and without one is bit-identical.
+    if configuration is not None:
+        configuration = configuration.with_identity(params, flags)
+    sim = LAPDSim1D(params, flags, configuration=configuration)
     # t_end=None (default) keeps the historical dynamic end time derived from
     # the tau_* budget; an explicit t_end caps run cost WITHOUT deforming the
     # hardware drive length (the loop terminates at t_end regardless of
