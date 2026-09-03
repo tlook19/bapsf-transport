@@ -22514,54 +22514,6 @@ def _case_ionization_birth_neutral_temperature():
 
 
 # --------------------------------------------------------------------
-# golden-baseline-config-constructs
-# --------------------------------------------------------------------
-@_case("golden-baseline-config-constructs")
-def _case_golden_baseline_config_constructs():
-    # THE GOLDEN'S OWN CONFIG MUST CONSTRUCT, and so must the neutral
-    # equilibration pre-solve it stands on. This case TRACKS THE STANCE OF
-    # RECORD by construction -- it builds no config of its own, it calls
-    # baseline_sim1d.build_baseline_config(), so it follows every stance event
-    # automatically and never needs re-pinning.
-    #
-    # Why the pre-solve half exists. The golden's re-cut drops the stance's
-    # mesh-sized package and arms neutral_equilibration instead, so
-    # start_simulation() builds an INNER neutrals-only LAPDSim1D whose flags
-    # are not the outer run's. Constructing the outer sim alone does not reach
-    # that inner construction, and the gap was not hypothetical: at the
-    # 2026-09-02 kinetic stance event the outer sim constructed fine while the
-    # inner one raised on two DVM jet guards, and the failure surfaced only
-    # after the capture had been started.
-    #
-    # NO SOLVE. t_end = 0.0 runs the pre-solve to zero steps, so this exercises
-    # the inner construction and nothing else; the whole case is a fraction of
-    # a second. It deliberately does NOT assert what the equilibrated seed
-    # contains -- that is the golden fixture's job.
-    from baseline_sim1d import build_baseline_config
-
-    _gb_params, _gb_flags = build_baseline_config()
-    _gb_sim = LAPDSim1D(_gb_params, _gb_flags)
-    _gb_result = _gb_sim.run_neutral_equilibration(t_end=0.0)
-    assert _gb_result.time[-1] == 0.0
-
-    # The pre-solve clears controls on ITS OWN copy of the config. Assert the
-    # outer run is unchanged, because the outer run is what the fixture is
-    # captured from: get_config() hands out copies, and a regression that made
-    # it hand out the live dicts would silently disarm the golden's jets.
-    for _gb_key in (
-        "neutral_kinetic_dvm_cathode_jet",
-        "neutral_kinetic_dvm_anode_jet",
-    ):
-        assert (
-            _gb_sim._input_dict[_gb_key] == _gb_params[_gb_key]
-        ), f"pre-solve mutated the outer run's {_gb_key}"
-    for _gb_flag in ("Plasma", "cathode_coupling"):
-        assert _gb_sim._flags[_gb_flag] == _gb_flags[_gb_flag], (
-            f"pre-solve mutated the outer run's {_gb_flag}"
-        )
-
-
-# --------------------------------------------------------------------
 # golden-digest-gate-deterministic
 # --------------------------------------------------------------------
 @_case("golden-digest-gate-deterministic")
@@ -22792,6 +22744,54 @@ def _case_phase3_artifact_locator_battery():
                 raise AssertionError(
                     f"locator negative {_p3_name!r} was ACCEPTED"
                 )
+
+
+# --------------------------------------------------------------------
+# golden-baseline-config-constructs
+# --------------------------------------------------------------------
+@_case("golden-baseline-config-constructs")
+def _case_golden_baseline_config_constructs():
+    # THE GOLDEN'S OWN CONFIG MUST CONSTRUCT, and so must the neutral
+    # equilibration pre-solve it stands on. This case TRACKS THE STANCE OF
+    # RECORD by construction -- it builds no config of its own, it calls
+    # baseline_sim1d.build_baseline_config(), so it follows every stance event
+    # automatically and never needs re-pinning.
+    #
+    # Why the pre-solve half exists. The golden's re-cut drops the stance's
+    # mesh-sized package and arms neutral_equilibration instead, so
+    # start_simulation() builds an INNER neutrals-only LAPDSim1D whose flags
+    # are not the outer run's. Constructing the outer sim alone does not reach
+    # that inner construction, and the gap was not hypothetical: at the
+    # 2026-09-02 kinetic stance event the outer sim constructed fine while the
+    # inner one raised on two DVM jet guards, and the failure surfaced only
+    # after the capture had been started.
+    #
+    # NO SOLVE. t_end = 0.0 runs the pre-solve to zero steps, so this exercises
+    # the inner construction and nothing else; the whole case is a fraction of
+    # a second. It deliberately does NOT assert what the equilibrated seed
+    # contains -- that is the golden fixture's job.
+    from baseline_sim1d import build_baseline_config
+
+    _gb_params, _gb_flags = build_baseline_config()
+    _gb_sim = LAPDSim1D(_gb_params, _gb_flags)
+    _gb_result = _gb_sim.run_neutral_equilibration(t_end=0.0)
+    assert _gb_result.time[-1] == 0.0
+
+    # The pre-solve clears controls on ITS OWN copy of the config. Assert the
+    # outer run is unchanged, because the outer run is what the fixture is
+    # captured from: get_config() hands out copies, and a regression that made
+    # it hand out the live dicts would silently disarm the golden's jets.
+    for _gb_key in (
+        "neutral_kinetic_dvm_cathode_jet",
+        "neutral_kinetic_dvm_anode_jet",
+    ):
+        assert (
+            _gb_sim._input_dict[_gb_key] == _gb_params[_gb_key]
+        ), f"pre-solve mutated the outer run's {_gb_key}"
+    for _gb_flag in ("Plasma", "cathode_coupling"):
+        assert _gb_sim._flags[_gb_flag] == _gb_flags[_gb_flag], (
+            f"pre-solve mutated the outer run's {_gb_flag}"
+        )
 
 
 # --------------------------------------------------------------------
