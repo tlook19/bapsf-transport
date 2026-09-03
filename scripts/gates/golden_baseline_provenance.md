@@ -1614,7 +1614,8 @@ two bookings only agreed at `Tn = 300 K`: the `En` side removes the local
 `(3/2) k Tn` per consumed atom while the `Ei` side added
 `(3/2) k T_birth` at the ion floor. Under the cathode neutral jet the
 source-region gas runs near 11.6 eV, so the pair was deleting **~9.7 kW at
-plateau** on the stance arm (9250 W bulk + 427 W beam, `ph_es1.h5`) — a live
+plateau** on the then-current stance arm (9250 W bulk + 427 W beam, `ph_es1`;
+artifact retired 2026-09-03) — a live
 non-conservation inside the previous fixture, named nowhere. `"neutral"`
 closes it; the residual is now carried explicitly by the
 `ionization_birth_thermal_deficit_*_W_cm3` diagnostic rows, which read zero to
@@ -1688,7 +1689,8 @@ throughout.
 adjudicated here.** `Ti_max` **+25.3 %** is the expected direction and the
 expected size: the birth change hands the ions the `(3/2) k Tn` the neutral gas
 gives up, and the ~26 % rise in source-region `Ti` measured on the campaign
-arms (5.32 -> 6.83 eV, cells 1–5, 10–20 ms mean, `ph_es1` -> `tbn2_es1`) is the
+arms (5.32 -> 6.83 eV, cells 1–5, 10–20 ms mean, `ph_es1` -> `tbn2_es1`; both
+artifacts retired 2026-09-03) is the
 same effect at the campaign mesh. `nn_min` falling 14.7 % and `nn_max` rising
 2.8 % is the neutral field keeping the energy it used to lose. Whether any of
 this is an improvement is not a question this fixture answers, and no such

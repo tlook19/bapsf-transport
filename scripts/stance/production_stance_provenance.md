@@ -64,7 +64,8 @@ systematic is unresolved between supply regulation and probe gain.
 the stance duplicated the rung and could only go stale against it. **Campaign
 scores are unaffected** — every campaign arm takes `V_bank` from its rung, which
 is why deleting the row produced NO delta in the pre-flight against
-`scripts/mgcr1_confirm.h5` and why the three campaign config-snapshot cases did
+`mgcr1_confirm` (the fluid-stance arm current at the time; artifact retired
+2026-09-03) and why the three campaign config-snapshot cases did
 not move on it. The GOLDEN takes no rung, so its `V_bank` falls back to the
 config default 180.0; the authorized recapture of 2026-08-25 absorbed that move
 (`golden_baseline_provenance.md`). The measurement above is unchanged — what
@@ -156,7 +157,9 @@ as the scorer prints, rounded to 0.01. The scan arms were `C_R` 8.4 → 2832 A
 `C_R* = 8.762467 → 8.76`, predicting 2962.11 A. The extension clause was NOT
 triggered — `C_R*` lies inside the pre-registered bracket [8.4, 9.4] and the
 target is bracketed from BOTH sides by scan artifacts. The confirm arm at
-`C_R = 8.76` (`scripts/mgcr1_confirm.h5`) measured peak 2982 A against a
+`C_R = 8.76` (`mgcr1_confirm`, on the fluid closure this entry records;
+artifact retired 2026-09-03, and this trim is itself superseded by the live
+`C_R` entry above) measured peak 2982 A against a
 measured 2989 ± 23 A (ratio 0.997) and plateau 2962 A against 2963 A
 (**ratio 1.000**). Artifact of record: `scripts/mgcr1_fit.md`. Port scores
 were reported unconditionally and never entered the selection: Te mean ratio
@@ -171,12 +174,15 @@ FITTED, re-trimmed under the conserving ionization birth.** The predecessor `7.0
 was trimmed on 2026-08-19 with the **ionization-birth thermal leak live** —
 the En sink gave up `(3/2) k Tn` per ionized atom while the ion was born at
 the 300 K floor, deleting **~9.7 kW at plateau** in the source region (9250 W
-bulk + 427 W beam, measured on `ph_es1.h5`, 2026-08-23). Adopting
+bulk + 427 W beam, measured on `ph_es1`, 2026-08-23; artifact retired
+2026-09-03). Adopting
 `Ti_birth_ionization = "neutral"` returns that power to the ions and drops the
 drive, so the knob was re-trimmed ONCE, drive-band target only, at ES1, and
 frozen: peak/plateau ratio 0.965/0.965 at `C_R = 7.09` under the conserving
-birth (`tbn_es1.h5`) -> **1.000/0.999 at `C_R = 7.36`** (`tbn2_es1.h5`, peak
+birth (`tbn_es1`) -> **1.000/0.999 at `C_R = 7.36`** (`tbn2_es1`, peak
 2989 A against a measured 2989 +/- 23 A, plateau 2962 A against 2963 A).
+Both artifacts were retired 2026-09-03; the numbers stand as the dated
+record of that trim.
 Measured pair response over the trim: plateau **2859 -> 2962 A** (peak
 2885 -> 2989 A) for `C_R` **7.09 -> 7.36**. The five pre-registered washout
 gates (pre-registered 2026-08-23) all passed at the trimmed value: drive peak

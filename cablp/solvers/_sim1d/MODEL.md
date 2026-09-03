@@ -2330,8 +2330,12 @@ the operator would have to pick between them silently).
 
 ### Magnitudes, and what may not be claimed
 
-Measured on `scripts/mgcr1_confirm.h5` over 0.1–20.1 ms at a mean loop current
-of 2772 A. Source-region sums, by charge-death arm and anode reading:
+Measured on `mgcr1_confirm` over 0.1–20.1 ms at a mean loop current
+of 2772 A. That arm ran the FLUID neutral closure and its artifact was
+retired 2026-09-03, so these are dated magnitudes and not a reading of the
+stance of record, whose arm of record is `m1r_retrim_cr9.3_es1` and whose
+fluid comparator of record is `m1_arm1t_es1`. Source-region sums, by
+charge-death arm and anode reading:
 
 | anode reading | `cell_1` | `cell_2` | status |
 |---|---|---|---|

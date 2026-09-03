@@ -573,8 +573,12 @@ NON-CONSERVING against an evolved `En` and are retained only as reproduction
 arms: they warn, value-scoped, in `core/deprecations.py`. The size of what they
 delete is not small — under the cathode neutral jet the source-region gas sits
 near 11.6 eV against a 300 K ion floor, and the deleted thermal power measured
-at the plateau of the stance arm `ph_es1.h5` is **9250 W** (bulk) **+ 427 W**
-(beam) = **~9.7 kW**, about a quarter of the ion energy supply there. Under
+at the plateau of the arm that was the stance arm when it was measured
+(`ph_es1`; artifact retired 2026-09-03) is **9250 W** (bulk)
+**+ 427 W** (beam) = **~9.7 kW**, about a quarter of the ion energy supply
+there. The stance has since moved to the kinetic closure: its arm of record
+is `m1r_retrim_cr9.3_es1` and its fluid comparator of record is
+`m1_arm1t_es1`, neither of which this dated magnitude was measured on. Under
 `"floor"` this was a LIVE non-conservation in the golden and was named nowhere;
 it is now disclosed per cell and per save by the
 `ionization_birth_thermal_deficit_*_W_cm3` diagnostic rows, which are recorded
@@ -610,7 +614,8 @@ is launch-cell-only and the saved `l_b_profile` disagrees with the ray survival
 by a factor of order 300, so the declared STEP is what stands in for it. That
 is a disclosed limitation of the bracket, not a modelling preference.
 
-Measured spread between the two arms on `scripts/mgcr1_confirm.h5`, under the
+Measured spread between the two arms on `mgcr1_confirm` (a fluid-closure arm;
+artifact retired 2026-09-03), under the
 registered anode closure: the source-region sum moves +18.95 → +14.50 kW, and
 the compression piece over the cells strictly downstream of the death cell
 +35.4 → +29.9 kW. (On the `export_counts` instrument arm the same compression
@@ -636,7 +641,8 @@ Every fluid channel therefore closes there.
 channel) are RETAINED as disclosed INSTRUMENT arms that bound the size of that
 double count. **They are not claim-bearing, and they are not bracket endpoints
 either** — quoting their source-region sums as a physical range would be
-reporting the double count as physics. Measured on `scripts/mgcr1_confirm.h5`
+reporting the double count as physics. Measured on `mgcr1_confirm` (a
+fluid-closure arm; artifact retired 2026-09-03)
 (cell_1 / cell_2): +18.95 / +14.50 kW under the closure, −2.82 / −7.27 kW
 closing 2.21 only, −53.03 / −57.48 kW closing neither.
 
