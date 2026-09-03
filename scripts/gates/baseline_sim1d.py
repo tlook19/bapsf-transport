@@ -50,6 +50,7 @@ loading the NPZ.
 """
 
 import argparse
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -79,7 +80,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
     _dir = str(_Path(__file__).resolve().parents[1] / _sub)
     if _dir not in _sys.path:
         _sys.path.insert(0, _dir)
-from stance_config import load_stance  # noqa: E402
+from stance_config import load_configuration, load_stance  # noqa: E402
 
 # --- Baseline config: the stance of record, re-cut to the gate mesh --------
 # GOLDEN-AT-STANCE (ratified 2026-08-20). The config is
@@ -294,6 +295,20 @@ def _summary_scalars(summary):
     return out
 
 
+def baseline_lineage(params, flags):
+    """Return the golden configuration's lineage, for the sidecar.
+
+    The golden IS the reference configuration, re-cut to the gate mesh: it is
+    built from ``scripts/stances/g1atrim.toml`` by construction, so the record
+    names that file and carries its sha256. The identity is restated over the
+    config the gate actually runs -- the re-cut and the run-shape pins are
+    real, and an identity that claimed to be the stance's unmodified one would
+    be the only false line in the sidecar.
+    """
+    _, _, lineage = load_configuration(PRODUCTION_STANCE)
+    return lineage.with_identity(params, flags)
+
+
 def capture(baseline_path):
     """Run the baseline config and write the golden NPZ + JSON sidecar."""
     params, flags = build_baseline_config()
@@ -317,6 +332,12 @@ def capture(baseline_path):
         "fields_per_cell": int(trajectory["y"].shape[1] // cells),
         "saves": int(trajectory["y"].shape[0]),
         "summary": _summary_scalars(summary),
+        # WHICH configuration this fixture is, in the same terms a saved
+        # trajectory records. Sidecar only: the NPZ carries the trajectory and
+        # nothing else, and --verify reads the NPZ, so this cannot move the
+        # gate. It lands in the committed sidecar at the next authorized
+        # recapture, like every other field here.
+        "configuration": dataclasses.asdict(baseline_lineage(params, flags)),
         "params": _json_safe(params),
         "flags": _json_safe(flags),
     }
