@@ -5,8 +5,11 @@ inputs that vary between discharge settings: the open-circuit bank voltage and
 the heater-maintained standby cathode surface temperature. Everything else in
 the model configuration is held fixed across the ladder.
 
-It is imported by `scripts/baseline_sim1d.py` as well, so a change here reaches
-the regression fixture. Parameter meanings are in the docstrings of
+It is imported by the campaign drivers — `scripts/run_m6_point.py` and
+`scripts/run_es1_r5_iter.py` among them — so a change here reaches every
+campaign arm. It does NOT reach the regression fixture: `baseline_sim1d.py`
+imports no campaign driver at all, deliberately, so these override dicts cannot
+touch the golden. Parameter meanings are in the docstrings of
 `cablp/solvers/_sim1d/core/config.py`; provenance classes are defined in
 `cablp/solvers/_sim1d/core/config_defaults_provenance.md`.
 
@@ -36,13 +39,35 @@ scripts) for the fit that superseded it.
 **Settings 3 and 4 previously shared the literal 99.0 and now differ by
 0.164 V.** Setting 4's reading is window-corrected. Do not re-collapse them.
 
-## `Ts_standby_K` — MEASURED
+## `Ts_standby_K` — DERIVED
 
-Digitized standby surface temperatures. They are operational machine setpoints
-and are **not to be tuned**: the cathode calibration is carried on the effective
-Richardson constant `C_R` instead, which is the same flat direction (~100 K of
-standby per e-fold of emission) parameterized on the constant the cathode
-literature already treats as effective. See
+**Not a temperature the machine reports.** The quantity that is set is the
+HEATER CURRENT — 1775 / 1865 / 1920 A for settings 1 / 2 / 3, operator-set on
+the console — and the temperatures in the table are those currents read through
+the source paper's Fig-10 heater-current → surface-temperature map (that
+paper's pyrometer, digitized 2026-07-20). The heater currents are the inputs of
+record because the machine's own instrumentation cannot supply the temperature:
+its pyrometer channel reads 0.0 in every shot, and its heater-current data
+channel is invalid-flagged and uncalibrated.
+
+The map's slope is ≈ 0.45 K/A with a **[0.43, 0.50] K/A bracket**, and the
+rungs recorded above sit at the 0.43 K/A edge of it.
+
+*Sensitivities.* Under the slope bracket alone, setting 1 moves by at most
+**± 3 K** — absorbed into `C_R` along the flat direction below as a factor
+**× [0.97, 1.03]**; setting 2 spans **[1948.7, 1955.0] K** and setting 3
+**[1972.4, 1982.5] K**. The slope bracket is not the real uncertainty. The
+**ABSOLUTE pyrometer bar of ± 50–100 K** is, and along the same flat direction
+it maps to `C_R` **× [0.61, 1.65]** and **× [0.37, 2.72]** respectively. That
+bar is invisible to every ES1 score, because `C_R` is the fit target — the
+calibration absorbs it by construction, which is why it must be carried as a
+stated bracket rather than read off the agreement.
+
+The heater settings behind them are operational machine settings, and the
+temperatures are **not to be tuned**: the cathode calibration is carried on
+the effective Richardson constant `C_R` instead, which is the same flat
+direction (~100 K of standby per e-fold of emission) parameterized on the
+constant the cathode literature already treats as effective. See
 `scripts/production_stance_provenance.md`.
 
 Setting 4 runs the same heater as setting 3 and the bank set to the same dial;
@@ -60,4 +85,4 @@ measurements:
   timescale, and the steady state is independent of it.
 - `--emissivity` — literature value for LaB6.
 - `--standby-offset-K` — a stability-derivative probe, deliberately NOT a tuning
-  knob; it offsets the measured standby to measure a sensitivity.
+  knob; it offsets the map-derived standby to measure a sensitivity.
