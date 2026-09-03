@@ -13,6 +13,7 @@ from ..physics.hot_neutrals import HOT_CHANNEL_DIAGNOSTIC_FIELDS
 from ..physics.sources import (
     IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS,
 )
+from .cathode_diagnostics import CathodeDiagnostics
 
 
 RESULT_VERSION = "sim1d-hdf5-v1"
@@ -323,7 +324,11 @@ def load_result_hdf5(path):
                 if "current_trigger_samples" in h5
                 else _empty_current_trigger_samples()
             ),
-            cathode_diagnostics=(
+            # Wrapped so a read of one of the six retired circuit scalars
+            # raises naming its successor instead of a bare KeyError or a
+            # ``.get`` default. A file saved before the retirement carries the
+            # datasets and reads normally; see results/cathode_diagnostics.py.
+            cathode_diagnostics=CathodeDiagnostics(
                 _read_field_arrays(h5["cathode_diagnostics"])
                 if "cathode_diagnostics" in h5
                 else {}

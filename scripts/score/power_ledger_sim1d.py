@@ -29,10 +29,14 @@ structurally blind to DRIVE-ONLY channels, so a discrepancy carried by those
 channels can never be adjudicated in the afterglow.
 
 TAU_E. Stored energy W = 3/2 (pe + pi) . V_p summed over cells, window mean;
-tau_E = W / P_coupled with P_coupled = beam power deposition (Ee + Ei,
-volume-integrated) + ohmic dissipation (`source_P_ohmic`). The definition is
-printed in the output header so a quoted tau_E can never be read against a
-different denominator.
+tau_E = W / P_coupled with P_coupled = the beam power deposition rows (Ee + Ei,
+volume-integrated) ALONE. That row already contains the gap-weighted ohmic
+dissipation -- both deposition paths add `ohmic_weights * P_ohmic` into the gap
+cells before returning -- so adding `source_P_ohmic` to it, as this script once
+did, counted the ohmic term twice. `source_P_ohmic` is still reported, in the
+circuit block, and printed beneath P_coupled as the share of it the beam row
+carries. The definition is printed in the output header so a quoted tau_E can
+never be read against a different denominator.
 
     power_ledger_sim1d.py RUN.h5 [--drive LO HI] [--afterglow LO HI]
     power_ledger_sim1d.py --selftest [RUN.h5]
@@ -446,20 +450,33 @@ def report_window(f, label, lo, hi, geom, port_top):
 
     print("\n--- STORED ENERGY AND tau_E ---")
     W_J = stored_energy_J(f, i0, i1, Vp)
-    beam = (table.get(("beam_power_deposition", "Ee"), 0.0)
-            + table.get(("beam_power_deposition", "Ei"), 0.0))
+    # P_coupled is the beam deposition row ALONE. That row already carries the
+    # gap-weighted ohmic dissipation: both deposition paths in
+    # cablp/solvers/_sim1d/physics/cathode.py add
+    # ohmic_weights * solver_result.P_ohmic into the gap cells of the same
+    # density they return. Adding source_P_ohmic on top booked the ohmic term
+    # twice and inflated the tau_E denominator. The circuit's own P_ohmic is
+    # still reported above, in the circuit block, where it belongs.
+    P_coupled = (table.get(("beam_power_deposition", "Ee"), 0.0)
+                 + table.get(("beam_power_deposition", "Ei"), 0.0))
     ohmic = diagnostic_mean(dg, "source_P_ohmic", mask) / 1e3
-    P_coupled = beam + ohmic
     print(f"{'W = 3/2 (pe + pi) . Vp, window mean':<44}{W_J:>16.5f}  J")
-    print(f"{'  beam_power_deposition (Ee + Ei)':<44}{beam:>16.5f}  kW")
-    print(f"{'  ohmic (source_P_ohmic)':<44}{ohmic:>16.5f}  kW")
-    print(f"{'P_coupled = beam + ohmic':<44}{P_coupled:>16.5f}  kW")
+    print(f"{'P_coupled = beam_power_deposition (Ee + Ei)':<44}"
+          f"{P_coupled:>16.5f}  kW")
+    print(f"{'  of which gap ohmic (source_P_ohmic)':<44}"
+          f"{ohmic:>16.5f}  kW")
     tau_ms = (W_J / P_coupled if P_coupled != 0.0 else float("nan"))
     print(f"{'tau_E = W / P_coupled':<44}{tau_ms:>16.6f}  ms")
-    if np.isfinite(tau_ms) and abs(beam) < 0.01 * abs(P_coupled):
-        print("  NOTE: the beam is off in this window, so P_coupled is the "
-              "residual ohmic line\n  alone; this tau_E is the bookkeeping "
-              "ratio W / P, NOT a confinement time.")
+    if P_coupled == 0.0:
+        # The window couples no power at all, so W / P_coupled has no value.
+        # Said out loud: a bare NaN in this row reads as a broken artifact,
+        # and the ohmic line above is a CIRCUIT quantity that this window's
+        # deposition row does not carry.
+        print("  NOTE: nothing is deposited in this window -- the beam row is "
+              "zero, so there is no\n  denominator and tau_E is undefined "
+              "here. The ohmic line above is the circuit's own\n  "
+              "dissipation, which the deposition row does not carry once the "
+              "cathode stops depositing.")
 
     print(f"\n--- PER-PORT Ee CHANNEL DENSITIES [W cm^-3], top {port_top} "
           "by |value|, window mean ---")
@@ -537,10 +554,12 @@ def print_header(f, path, geom, drive, afterglow):
           "POSITIVE = into that fluid")
     print("tau_E    : W = 3/2 (pe + pi) . V_p (window mean) divided by "
           "P_coupled := beam_power_deposition")
-    print("           (Ee + Ei, volume-integrated) + ohmic "
-          "(source_P_ohmic); both windows use this same definition.")
-    print("           tau_E is a bookkeeping ratio against that "
-          "denominator; where the beam is off it is NOT a confinement time")
+    print("           (Ee + Ei, volume-integrated) ALONE, which already "
+          "carries the gap ohmic; both windows")
+    print("           use this same definition. tau_E is a bookkeeping ratio "
+          "against that denominator;")
+    print("           where the beam is off there is no denominator and it is "
+          "not reported")
     print(f"windows  : DRIVE {drive[0]}-{drive[1]} ms, "
           f"AFTERGLOW {afterglow[0]}-{afterglow[1]} ms (run clock)")
     print("tags     : DRIVE-ONLY / BOTH / AFTERGLOW-ACTIVE, static and "

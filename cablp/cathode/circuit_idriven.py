@@ -1009,6 +1009,14 @@ def solve_idriven(
     P_anode_i_pl = _P_ion(phi_a, T_e_anode, I_i_a, pl=True)
     _P_beam_bypass = eta * beam_bypass_fraction * I_eth_star * V_b
     # DEPRECATED unclosed scalars (kept bit-exact for the R1-R4 golden only).
+    # NO LONGER EXPORTED to the HDF5; the successors are the closed audit built
+    # just below. P_cathode_i_pl -> P_cathode_i_thermal (it is the ANODE ion
+    # current under a cathode name), P_anode_i_pl -> P_anode_i_thermal,
+    # P_loss -> P_plasma_thermal_loss (P_loss mixes phi-inclusive electron
+    # powers with thermal-only ion powers), P_net -> P_into_plasma or
+    # P_load_residual (P_net books each sheath fall twice), P_net2 ->
+    # P_into_plasma, P_comp -> nothing (it is I_tot**2 * R_comp, never read).
+    # See the SolverResult field block in circuit.py for the full statement.
     P_net = (
         P_load - P_cathode_e - P_cathode_i - P_anode_e - P_anode_i
         - _P_beam_bypass

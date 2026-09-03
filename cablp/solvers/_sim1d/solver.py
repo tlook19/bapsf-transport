@@ -362,6 +362,19 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
 #: energy leak rather than an error.
 BEAM_POWER_DEPOSITION_TERM = "beam_power_deposition"
 
+#: The cathode-circuit scalars written to the HDF5, per solved end.
+#:
+#: SIX NAMES ARE GONE from this tuple and are not exported any more:
+#: ``P_cathode_i_pl``, ``P_anode_i_pl``, ``P_loss``, ``P_net``, ``P_net2`` and
+#: ``P_comp``. The first five were computed under a power book that does not
+#: close (the anode ion current under a cathode name; phi-inclusive electron
+#: powers summed against thermal-only ion powers; electrode powers subtracted
+#: from load field work, which books each sheath fall twice), and the last two
+#: were exported and never read. Their successors are in the closed audit set
+#: below, and ``results/cathode_diagnostics.py`` names each one when a caller
+#: reads a retired name off a file that no longer carries it. The dataclass
+#: fields stay computed for one release so an old file's numbers can still be
+#: reproduced at this tip.
 _CATHODE_RESULT_KEYS = (
     "phi_c_plus",
     "phi_c_minus",
@@ -377,18 +390,12 @@ _CATHODE_RESULT_KEYS = (
     "I_tot",
     "P_wall",
     "P_load",
-    "P_comp",
     "P_prim",
     "P_ohmic",
     "P_cathode_e",
     "P_cathode_i",
-    "P_cathode_i_pl",
     "P_anode_e",
     "P_anode_i",
-    "P_anode_i_pl",
-    "P_net",
-    "P_net2",
-    "P_loss",
     "beam_bypass_fraction",
     "l_b",
     # Ceiling census (R1). ``phi_c_ceiling_V`` is the ceiling the sheath root
@@ -401,6 +408,86 @@ _CATHODE_RESULT_KEYS = (
     "phi_c_ceiling_V",
     "circuit_V_avail_V",
     "bound_active",
+    # R3.2 CLOSED AUDIT SET. The circuit computes all of these on every
+    # current-driven solve; until this build none of them reached the HDF5, so
+    # a saved trajectory could be read only through the unclosed scalars above.
+    # Appended (never inserted) so the historical dataset order is stable.
+    #
+    # ``I_i_a`` is the ANODE ion current [A] -- the quantity the anode powers
+    # are built from, and the one the retired ``P_cathode_i_pl`` silently
+    # carried under a cathode name.
+    "I_i_a",
+    # The one-control-surface split (A16): each electrode power splits into the
+    # PLASMA-THERMAL part (2Te per electron, Te/2 per ion -- drawn from the
+    # plasma thermal store) and the SHEATH-FALL phi part (drawn from the
+    # circuit and deposited on the electrode). ``*_thermal + *_phi == P_*`` to
+    # machine zero, and the thermal members are what the fluid boundary
+    # actually removes.
+    "P_cathode_e_thermal",
+    "P_cathode_e_phi",
+    "P_cathode_i_thermal",
+    "P_cathode_i_phi",
+    "P_anode_e_thermal",
+    "P_anode_e_phi",
+    "P_anode_i_thermal",
+    "P_anode_i_phi",
+    # Surface-resolved audit [W]: the total plasma-thermal loss to electrodes,
+    # the net power heating the plasma (``P_prim + P_ohmic`` minus that loss),
+    # and the plasma power landing on each electrode surface.
+    "P_plasma_thermal_loss",
+    "P_into_plasma",
+    "P_cathode_surface",
+    "P_anode_surface",
+    # Measurement-plane bookkeeping: the hidden series drop, the stray parallel
+    # branch, and the three-plane aliases for the measured terminal voltage and
+    # currents.
+    "V_series",
+    "I_parallel",
+    "V_dis",
+    "I_plasma",
+    "I_bank",
+    # Load-power closure. ``I_e_ret`` is the returning plasma-electron current
+    # to the cathode, ``P_load_ledger`` the per-region net-current field work,
+    # and the two residuals are the closure checks: both are ~0 by
+    # construction, so a save where either is not small says the circuit
+    # ledger has stopped closing.
+    "I_e_ret",
+    "P_load_ledger",
+    "P_load_residual",
+    "I_cathode_kirchhoff_residual",
+)
+
+#: The members of :data:`_CATHODE_RESULT_KEYS` that only the CURRENT-DRIVEN
+#: circuit solve populates. The voltage-driven (floating) solve in
+#: ``cablp.cathode.circuit`` never assigns them, so they sit at their
+#: ``SolverResult`` dataclass defaults there -- which are zeros, and a zero in
+#: a power column is indistinguishable from a computed zero. They are exported
+#: as NaN on a floating save instead, so absence of a value is visible in the
+#: file rather than inferred. ``I_i_a`` is NOT here: both solves compute it.
+_CURRENT_DRIVEN_ONLY_CATHODE_KEYS = frozenset(
+    {
+        "P_cathode_e_thermal",
+        "P_cathode_e_phi",
+        "P_cathode_i_thermal",
+        "P_cathode_i_phi",
+        "P_anode_e_thermal",
+        "P_anode_e_phi",
+        "P_anode_i_thermal",
+        "P_anode_i_phi",
+        "P_plasma_thermal_loss",
+        "P_into_plasma",
+        "P_cathode_surface",
+        "P_anode_surface",
+        "V_series",
+        "I_parallel",
+        "V_dis",
+        "I_plasma",
+        "I_bank",
+        "I_e_ret",
+        "P_load_ledger",
+        "P_load_residual",
+        "I_cathode_kirchhoff_residual",
+    }
 )
 
 
@@ -12026,10 +12113,18 @@ class LAPDSim1D:
             "l_b_profile_twin",
         ):
             diag[name] = np.asarray(getattr(beam_result, name), dtype=float).copy()
+        # Which circuit solve produced these results. The dispatch in
+        # ``physics/cathode.py`` keys on exactly this flag: a floating phase
+        # takes the voltage-driven ``circuit.solve``, everything else the
+        # current-driven one, and the R3.2 audit set is populated only by the
+        # latter. Indexed, not ``.get``-defaulted: a snapshot that reaches
+        # here has run a solve, so a missing key is a bug to hear about.
+        current_driven = not bool(cathode_solve.metadata["floating"])
         self._copy_cathode_result_diagnostics(
             diag=diag,
             prefix="source",
             result=beam_result.result,
+            current_driven=current_driven,
         )
         if beam_result.result_twin is not None:
             diag["has_twin_solution"] = 1.0
@@ -12037,6 +12132,7 @@ class LAPDSim1D:
                 diag=diag,
                 prefix="end",
                 result=beam_result.result_twin,
+                current_driven=current_driven,
             )
         self._copy_beam_deposition_diagnostics(diag, cathode_solve)
         return diag
@@ -12143,11 +12239,25 @@ class LAPDSim1D:
                 / diag["beam_tail_power_W"]
             )
 
-    def _copy_cathode_result_diagnostics(self, diag, prefix, result):
+    def _copy_cathode_result_diagnostics(
+        self, diag, prefix, result, current_driven
+    ):
+        """Copy one ``SolverResult`` onto the cathode-diagnostics snapshot.
+
+        ``current_driven`` says which solve produced ``result``. On the
+        voltage-driven (floating) solve the members of
+        :data:`_CURRENT_DRIVEN_ONLY_CATHODE_KEYS` are never assigned, so they
+        are exported as NaN rather than as the dataclass default zero: a
+        reader must be able to tell "this path does not compute the quantity"
+        from "the quantity is zero here".
+        """
         if result is None:
             return
         diag[f"{prefix}_regime"] = str(result.regime)
         for key in _CATHODE_RESULT_KEYS:
+            if not current_driven and key in _CURRENT_DRIVEN_ONLY_CATHODE_KEYS:
+                diag[f"{prefix}_{key}"] = np.nan
+                continue
             diag[f"{prefix}_{key}"] = float(getattr(result, key))
         diag[f"{prefix}_long_mfp"] = float(bool(result.long_mfp))
         # See the default-seeding block in _cathode_diagnostic_snapshot.
