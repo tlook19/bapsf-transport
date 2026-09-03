@@ -534,9 +534,10 @@ def markdown_report(rep):
     )
     L.append("")
     L.append(
-        "**Item-56 context.** The e-i channel is >= 99.9 % EUV (the 30.4 nm "
-        "class resonance line dominates PLT2): this instrument reports "
-        "RADIATED POWER, not what a glass-windowed spectrometer would see. "
+        "**Radiated power, not visible light.** The e-i channel is >= 99.9 % "
+        "EUV (the 30.4 nm class resonance line dominates PLT2): this "
+        "instrument reports RADIATED POWER, not what a glass-windowed "
+        "spectrometer would see. "
         f"For the band split see `{BAND_SPLIT_NOTE}` (glass-transmissible "
         "> 350 nm share of the adf11 line power: 1.4e-05 to 8.5e-04 for "
         "He II, 0.052 to 0.120 for He I, at Te >= 2 eV)."
