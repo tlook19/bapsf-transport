@@ -71,7 +71,7 @@ the slope bracket the interpolation moves 1603 + 75 × [0.43, 0.50] =
 
 *Sensitivities.* Under the slope bracket alone, setting 1 moves within
 **[−1.6, +3.7] K** about 1910 K — a strict bound of 4 K — absorbed into `C_R`
-along the flat direction below as a factor **× [0.984, 1.037]**. Stated to the
+along the flat direction below as a factor **× [0.984, 1.038]**. Stated to the
 record's own precision, setting 2 spans **[1949, 1955] K** and setting 3
 **[1972, 1983] K**; each contains its shipped rung.
 The slope bracket is not the real uncertainty. The
