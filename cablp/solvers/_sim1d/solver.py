@@ -2457,6 +2457,24 @@ class LAPDSim1D:
                     f"{CATHODE_ENV_T_K:g} K chamber-wall temperature"
                 )
             self._cathode_Ts_K = float(Ts_base)
+        else:
+            # The STATIC model holds the surface at cathode_Ts_base_K for the
+            # whole shot, so the key is as required here as it is above --
+            # every emission path, the T_s_surface diagnostic and the TPMC
+            # kinetic background read it, and there is no evolving value to
+            # fall back on. Left unset it reached those reads as None and
+            # failed as a TypeError inside the cathode solve; refuse it here
+            # instead, where the configuration is still the thing being
+            # talked about.
+            if self._input_dict.get("cathode_Ts_base_K") is None:
+                raise ValueError(
+                    "cathode_warming_model='none' holds the cathode surface "
+                    "at cathode_Ts_base_K for the whole shot, so that key is "
+                    "required and must not be None. It is the surface "
+                    "temperature under BOTH warming models: set it to the "
+                    "heater-maintained standby temperature, or select "
+                    "cathode_warming_model='power_balance' to evolve from it."
+                )
         # Surface-state coverage (cathode_surface_model="ads_des",
         # M5a): theta in [0, 1] is the contaminant
         # coverage raising the effective work function,

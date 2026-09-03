@@ -61,13 +61,17 @@ are retained as disclosed INSTRUMENT arms bounding that double count.
 
 **Usage**::
 
-    python scripts/score/edt_consult_pins.py --h5 scripts/mgcr1_confirm.h5
+    python scripts/score/edt_consult_pins.py --h5 <saved sim1d run>.h5
 
     # every arm, both anode instrument arms, and the afterglow clause
-    python scripts/score/edt_consult_pins.py --h5 scripts/mgcr1_confirm.h5 --all-arms
+    python scripts/score/edt_consult_pins.py --h5 <saved sim1d run>.h5 --all-arms
 
 **Provenance of the pins.** The 2026-08-26 consult measured the first set on
-``scripts/mgcr1_confirm.h5`` over 0.1-20.1 ms at a mean loop current of 2772 A.
+``mgcr1_confirm`` over 0.1-20.1 ms at a mean loop current of 2772 A. That was a
+fluid-closure arm and its artifact was RETIRED 2026-09-03, so every pin below is
+a dated record of that measurement rather than a reading of the stance of record;
+run artifacts live outside the repo under the artifacts root (see
+``scripts/README.md``).
 Two of its readings did not survive measurement and were retired by the
 advisor adjudication of 2026-08-31: the ``+14.8 kW`` cathode-face handshake
 (it rode the circuit's ion current at a face whose electron channel carries
@@ -153,8 +157,9 @@ PINS = {
 }
 
 #: Q2 -- the cathode-face pins of the 2026-08-31 amendment, measured on
-#: ``scripts/mgcr1_confirm.h5`` and reported by the Q2 section of this
-#: evaluator. They exist because the amendment's clause (iii) rests on them:
+#: ``mgcr1_confirm`` (artifact retired 2026-09-03) and reported by the Q2
+#: section of this evaluator. They exist because the amendment's clause (iii)
+#: rests on them:
 #: the cathode-face enthalpy-ZERO premise is a drive-phase statement, and the
 #: afterglow window is far outside the regime it was taken in.
 #:

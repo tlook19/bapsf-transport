@@ -135,10 +135,12 @@ is the test. Points: 8.76 → 2800.1 A (0.9449); 9.30 → 2963.4 A
 unconditionally, never entering the selection: Te 1.02, n 1.03, Isat 1.03
 (mean |dev|/σ 1.32 on Isat). Five of six pre-registered predictions held;
 the mid-port density statistic moved +0.009 (below the predicted +0.02…+0.06,
-same sign — the density is drag-limited, not drive-limited). Artifacts:
-`scripts/m1r_retrim_cr9.3_*`; the arm command of record
-`scripts/m1r_retrim_cr9.3_es1.cmd`. RIDER (2026-09-01, Tom): the stance
-plasma-radius profile was found mis-oriented the same day (see the profile
+same sign — the density is drag-limited, not drive-limited). Arm of record:
+`m1r_retrim_cr9.3_es1`, with its own command recorded beside it. Run
+artifacts live OUTSIDE the repo under the artifacts root (see
+`scripts/README.md`); the run NAME is what is quotable here, not a path.
+RIDER (2026-09-01, Tom): the stance plasma-radius profile was found
+mis-oriented the same day (see the profile
 entry below) and its correction is registered; if the corrected profile moves
 the DVM drive out of the 2963 ± 23 A band, this value is re-trimmed ONCE more
 under the SAME one-knob protocol and this entry is superseded — the freeze

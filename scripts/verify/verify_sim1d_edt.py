@@ -19,6 +19,13 @@ Run from the checkout root::
 from the artifacts root rather than from beside this script. ``--registration``
 prints the registry below and exits without one.
 
+**The fixture named throughout the registry below, ``mgcr1_confirm``, was
+RETIRED 2026-09-03.** It was a fluid-closure arm, and the readings recorded
+against it are dated records of what it measured, not readings of the stance
+of record. The gates themselves are properties of whatever saved run ``--h5``
+names, so they stay runnable against a current artifact; only the recorded
+numbers belong to that retired one.
+
 Exit 0 = every gated statement passed. A failure is a DELIVERABLE: it is
 printed with its numbers and the suite exits 1. Never relax a tolerance here to
 make a gate pass.

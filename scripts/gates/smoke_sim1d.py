@@ -23644,6 +23644,74 @@ def _case_ts_retirement_successor_key(p2z_flags, p2z_params):
         _ts_solver_mod.KN2ZoneJump = _ts_orig_jump
     assert _ts_seen["bg"]["T_s"] == 1873.0, _ts_seen["bg"]["T_s"]
 
+    # (g) THE SUCCESSOR IS REQUIRED, AND REFUSED AT CONSTRUCTION WHEN UNSET.
+    # It carried no requirement under the static model while the retired key
+    # stood behind it; with that key gone there is nothing to fall back on, so
+    # None reached the emission solve and died as a TypeError deep inside it.
+    # It is refused here instead, where the configuration is still the subject.
+    _ts_bare_p, _ts_bare_f = default_config()
+    _ts_bare_p.update({"nx": 12, "cathode_warming_model": "none",
+                       "cathode_Ts_base_K": None})
+    try:
+        LAPDSim1D(_ts_bare_p, _ts_bare_f)
+    except ValueError as _ts_static_exc:
+        _ts_static_msg = str(_ts_static_exc)
+    else:
+        raise AssertionError(
+            "the static warming model ACCEPTED cathode_Ts_base_K=None"
+        )
+    assert "cathode_Ts_base_K" in _ts_static_msg, _ts_static_msg
+    assert "cathode_warming_model='none'" in _ts_static_msg, _ts_static_msg
+
+    # The TPMC kinetic background reads the same key, and is covered by the
+    # pair of model-side requirements rather than by a third check: under
+    # EITHER warming model an unset key is refused before a kinetic run can
+    # reach that read. Both directions are exercised so the coverage is
+    # measured and not argued.
+    for _ts_wm in ("none", "power_balance"):
+        _ts_kin_bad = dict(_ts_kin_params)
+        _ts_kin_bad.update({"cathode_warming_model": _ts_wm,
+                            "cathode_Ts_base_K": None})
+        try:
+            LAPDSim1D(_ts_kin_bad, _ts_kin_flags)
+        except ValueError as _ts_kb_exc:
+            assert "cathode_Ts_base_K" in str(_ts_kb_exc), str(_ts_kb_exc)
+        else:
+            raise AssertionError(
+                f"neutral_model='kinetic' with cathode_warming_model="
+                f"{_ts_wm!r} ACCEPTED cathode_Ts_base_K=None"
+            )
+
+    # NEGATIVE CONTROL, re-formed against what is actually true at base. The
+    # brief for this check proposed "power_balance with the key None still
+    # constructs"; it does NOT -- that model has refused None since before
+    # this member, with its own message. So the control that carries
+    # information is that the refusal above is SCOPED: power_balance still
+    # raises its OWN message and not the static one, so the new requirement
+    # neither swallowed nor rewrote the existing guard.
+    try:
+        LAPDSim1D(
+            dict(_ts_bare_p, cathode_warming_model="power_balance"),
+            _ts_bare_f,
+        )
+    except ValueError as _ts_pb_exc:
+        _ts_pb_msg = str(_ts_pb_exc)
+    else:
+        raise AssertionError(
+            "power_balance ACCEPTED cathode_Ts_base_K=None"
+        )
+    assert "cathode_warming_model='power_balance' requires" in _ts_pb_msg, _ts_pb_msg
+    assert "cathode_warming_model='none'" not in _ts_pb_msg, _ts_pb_msg
+
+    # Positive control: with the key SET, both models construct, so the
+    # requirement refuses only the unset case and moves no run.
+    for _ts_wm in ("none", "power_balance"):
+        LAPDSim1D(
+            dict(_ts_bare_p, cathode_warming_model=_ts_wm,
+                 cathode_Ts_base_K=1910.0),
+            _ts_bare_f,
+        )
+
 
 # --------------------------------------------------------------------
 # smoke-summary

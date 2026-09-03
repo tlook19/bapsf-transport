@@ -1730,7 +1730,9 @@ def cathode_defaults():
         against: ``cathode_warming_model = "none"`` holds the surface at it
         for the whole shot, and ``"power_balance"`` takes it as the initial
         condition and as the substrate temperature of the conduction term.
-        Required when that model is on.
+        Required, and refused as ``None``, under EITHER model -- there is no
+        other configured surface temperature to fall back on, and the TPMC
+        kinetic background reads it too. Raises at construction.
         Per-run operating points live in
         ``run_mechanism_ladder.ES_OPERATING[es]["Ts_standby_K"]``. Note the
         degeneracy with ``C_R`` documented above: the two describe one flat
