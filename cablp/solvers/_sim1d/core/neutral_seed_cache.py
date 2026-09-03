@@ -25,6 +25,12 @@ re-equilibration (safe), never a wrong seed.
 A miss (missing file) or a signature mismatch raises a loud ``ValueError`` naming
 the cause and the rebuild command (house rule: fail loud on misconfiguration, no
 silent fallback). Rebuild with ``scripts/build_neutral_seed_cache.py``.
+
+The signature also carries ``NEUTRAL_STEPPER_ID``, the identity of the implicit
+neutral stepper that produced a seed. The stepper is CODE, not configuration, so
+the fail-closed hash over (params, flags) cannot see it, and a seed equilibrated
+by a different linear solve is a different profile at the same configuration.
+Changing that string rotates every stored entry, which is the safe direction.
 """
 
 import hashlib
@@ -43,6 +49,13 @@ from ..physics.neutrals import SCCM_TO_PARTICLES_PER_S
 # bumped: v1 files are rejected (fixed-path mode raises, database mode
 # re-equilibrates and overwrites) rather than reused.
 CACHE_FORMAT = "sim1d-neutral-seed-v2"
+
+#: Identity of the implicit neutral stepper that equilibrates a seed, hashed
+#: into the signature. ``"banded-v1"`` is the LAPACK banded assembly and solve
+#: (tridiagonal single-zone, pentadiagonal interleaved two-zone) that replaced
+#: the dense ``numpy.linalg.solve``; the two do not agree bit for bit, so every
+#: seed the dense stepper equilibrated keys apart from a seed this one would.
+NEUTRAL_STEPPER_ID = "banded-v1"
 
 # Keys PROVABLY inert to a neutral-only equilibration (Plasma=False,
 # cathode_coupling=False): circuit, cathode/beam/emission/surface, atomic-rate
@@ -200,6 +213,12 @@ def _signature_payload(params, flags):
         # constant is hashed with the configuration. Salting is one-way -- it
         # rotates every existing entry, which is the safe direction.
         "sccm_to_particles_per_s": _canonical(SCCM_TO_PARTICLES_PER_S),
+        # STEPPER IDENTITY, for the same reason as the salt above: the implicit
+        # neutral stepper IS the equilibration, it is code rather than
+        # configuration, and two steppers that solve the same system by
+        # different linear algebra reach different last bits. See the module
+        # docstring and NEUTRAL_STEPPER_ID.
+        "neutral_stepper": NEUTRAL_STEPPER_ID,
     }
 
 
