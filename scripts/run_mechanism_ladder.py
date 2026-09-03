@@ -79,7 +79,7 @@ def main(argv=None):
     p.add_argument("--annuli", type=int, default=None,
                    help="cathode_emission_annuli override (10 -> 30 A/B)")
     p.add_argument("--standby-offset-K", type=float, default=0.0,
-                   help="offset added to the measured standby T_s [K] "
+                   help="offset added to the map-derived standby T_s [K] "
                         "(the +-8 K trim-quantum stability-derivative "
                         "probe; NOT a tuning knob)")
     p.add_argument("--surface", action="store_true",
