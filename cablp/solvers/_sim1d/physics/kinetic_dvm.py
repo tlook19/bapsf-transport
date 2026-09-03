@@ -1257,16 +1257,19 @@ class TransientDVM:
         At ``alpha == 1`` there is no share to place and both values return
         the same array of exact zeros, so the pair degenerates.
         """
-        retained = (1.0 - alpha) * L_wall
         if self.wall_reflection == "specular" or alpha >= 1.0:
-            return retained
+            return (1.0 - alpha) * L_wall
         live = np.flatnonzero(N_wall > 0.0)
         if live.size == 0:
-            return retained
+            return (1.0 - alpha) * L_wall
+        # The scaled incident array is the specular RETURN, and the diffuse
+        # branch below returns a spectrum instead; it is formed only on the
+        # paths that hand it back, so the diffuse branch no longer scales a
+        # whole landing array to use nothing of it but its shape.
         incident = (L_wall[live] * self.E_bin).sum(axis=(1, 2))
         e_bar = incident / N_wall[live]
         spectra = self._solve_wall_return_spectra(e_bar)
-        out = np.zeros_like(retained)
+        out = np.zeros_like(L_wall, dtype=float)
         out[live] = ((1.0 - alpha) * N_wall[live])[:, None, None] * spectra
         return out
 
@@ -1296,9 +1299,12 @@ class TransientDVM:
             )
 
         def mean_energy(s):
-            return (_cosine_wall_spectra(self.g, s) * self.E_bin).sum(
-                axis=(1, 2)
-            )
+            # The spectra array is this call's own and is contracted away
+            # immediately, so the energy weighting is applied in place: the
+            # same multiply on the same operands, one temporary fewer.
+            spectra = _cosine_wall_spectra(self.g, s)
+            np.multiply(spectra, self.E_bin, out=spectra)
+            return spectra.sum(axis=(1, 2))
 
         s0 = np.sqrt(e_bar / (2.0 * M_HE))
         lo = 0.5 * s0
@@ -3754,6 +3760,40 @@ def _end_return(outgoing, sticking, accommodation, mirror, spectrum):
     return reflected + accommodated
 
 
+# Where :func:`_cosine_quadrature` parks its one entry on a velocity grid.
+_COSINE_QUADRATURE_ATTR = "_cosine_wall_quadrature"
+
+# Quadrature nodes per perpendicular bin, matching
+# :meth:`VGrid.wall_emission_spectrum`'s own subsampling.
+_COSINE_QUADRATURE_NODES = 64
+
+
+def _cosine_quadrature(g):
+    """Return the GRID-ONLY factors of the cosine-wall quadrature.
+
+    ``(x, x_sq, dx)``: the 64 abscissae subsampling each perpendicular bin,
+    their squares, and the node spacings the trapezoid weights with. All three
+    are pure grid geometry -- none depends on the thermal speed -- while
+    :func:`_cosine_wall_spectra` is evaluated tens of times per wall-return
+    solve, so they are built once and reused.
+
+    BOUND AND EVICTION: exactly ONE entry, stored as an attribute on the
+    ``VGrid`` instance itself. There is no keyed table and nothing to grow: a
+    second grid gets its own entry on itself, and an entry is released with the
+    grid that owns it. The axes a ``VGrid`` is built with never change after
+    construction, so the entry cannot go stale while its grid is alive.
+    """
+    cached = getattr(g, _COSINE_QUADRATURE_ATTR, None)
+    if cached is None:
+        x = np.stack([
+            np.linspace(g.vp_edges[k], g.vp_edges[k + 1], _COSINE_QUADRATURE_NODES)
+            for k in range(g.nvp)
+        ])
+        cached = (x, x[None, :, :] ** 2, np.diff(x, axis=-1))
+        setattr(g, _COSINE_QUADRATURE_ATTR, cached)
+    return cached
+
+
 def _cosine_wall_spectra(g, s):
     """Return cosine-wall re-emission spectra for an array of thermal speeds.
 
@@ -3783,14 +3823,28 @@ def _cosine_wall_spectra(g, s):
     sc = s[:, None]
     ez = g.vz_edges[None, :] / (sc * np.sqrt(2.0))
     wz = 0.5 * np.diff(_erf(ez), axis=-1)
-    x = np.stack([
-        np.linspace(g.vp_edges[k], g.vp_edges[k + 1], 64)
-        for k in range(g.nvp)
-    ])
-    y = x[None, :, :] ** 2 * np.exp(
-        -0.5 * (x[None, :, :] / s[:, None, None]) ** 2
-    )
-    wp = np.trapezoid(y, x=np.broadcast_to(x, y.shape), axis=-1)
+    x, x_sq, dx = _cosine_quadrature(g)
+    # ``y = x_sq * exp(-0.5 * (x / s)**2)``, accumulated through ONE buffer.
+    # Each step is the same operation on the same operands as the expression it
+    # replaces -- ``np.square`` is what ``** 2`` dispatches to, and the two
+    # scalar multiplies are commutative -- so only the number of temporaries
+    # changes, never a value.
+    y = x[None, :, :] / s[:, None, None]
+    np.square(y, out=y)
+    np.multiply(y, -0.5, out=y)
+    np.exp(y, out=y)
+    np.multiply(x_sq, y, out=y)
+    # ``np.trapezoid(y, x=broadcast_to(x, y.shape), axis=-1)``, written out so
+    # the node spacings come from the cache instead of being re-differenced off
+    # a broadcast copy of ``x`` on every call. Same expression, same operand
+    # values, same reduction axis and shape: numpy's own body is
+    # ``(d * (y[..., 1:] + y[..., :-1]) / 2.0).sum(axis)`` with
+    # ``d = diff(x, axis=-1)``, and ``dx`` broadcasts to exactly that ``d``.
+    # The reduction runs on a fresh C-contiguous buffer, as it did before.
+    quad = y[..., 1:] + y[..., :-1]
+    np.multiply(dx, quad, out=quad)
+    np.divide(quad, 2.0, out=quad)
+    wp = quad.sum(-1)
     f = wz[:, :, None] * wp[:, None, :]
     total = f.sum(axis=(1, 2))
     if not np.all(np.isfinite(total)) or np.any(total <= 0.0):
@@ -3800,7 +3854,10 @@ def _cosine_wall_spectra(g, s):
             "requested temperature lies outside what this velocity grid "
             "resolves"
         )
-    return f / total[:, None, None]
+    # ``f`` is this call's own array and is not handed out anywhere else, so the
+    # normalization is applied in place.
+    np.divide(f, total[:, None, None], out=f)
+    return f
 
 
 def _drift(f, g):
