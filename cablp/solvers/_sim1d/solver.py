@@ -362,6 +362,19 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
 #: energy leak rather than an error.
 BEAM_POWER_DEPOSITION_TERM = "beam_power_deposition"
 
+#: The cathode-circuit scalars written to the HDF5, per solved end.
+#:
+#: SIX NAMES ARE GONE from this tuple and are not exported any more:
+#: ``P_cathode_i_pl``, ``P_anode_i_pl``, ``P_loss``, ``P_net``, ``P_net2`` and
+#: ``P_comp``. The first five were computed under a power book that does not
+#: close (the anode ion current under a cathode name; phi-inclusive electron
+#: powers summed against thermal-only ion powers; electrode powers subtracted
+#: from load field work, which books each sheath fall twice), and the last two
+#: were exported and never read. Their successors are in the closed audit set
+#: below, and ``results/cathode_diagnostics.py`` names each one when a caller
+#: reads a retired name off a file that no longer carries it. The dataclass
+#: fields stay computed for one release so an old file's numbers can still be
+#: reproduced at this tip.
 _CATHODE_RESULT_KEYS = (
     "phi_c_plus",
     "phi_c_minus",
@@ -377,18 +390,12 @@ _CATHODE_RESULT_KEYS = (
     "I_tot",
     "P_wall",
     "P_load",
-    "P_comp",
     "P_prim",
     "P_ohmic",
     "P_cathode_e",
     "P_cathode_i",
-    "P_cathode_i_pl",
     "P_anode_e",
     "P_anode_i",
-    "P_anode_i_pl",
-    "P_net",
-    "P_net2",
-    "P_loss",
     "beam_bypass_fraction",
     "l_b",
     # Ceiling census (R1). ``phi_c_ceiling_V`` is the ceiling the sheath root

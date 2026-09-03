@@ -8895,7 +8895,10 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.all(cathode_diag["source_I_tot"] >= 0.0)
     assert np.all(np.isfinite(cathode_diag["source_P_prim"]))
     assert np.all(np.isfinite(cathode_diag["source_P_ohmic"]))
-    assert np.all(np.isfinite(cathode_diag["source_P_loss"]))
+    # The pre-closure ``source_P_loss`` this once checked is retired from the
+    # export; its successors are the closed audit rows.
+    assert np.all(np.isfinite(cathode_diag["source_P_plasma_thermal_loss"]))
+    assert np.all(np.isfinite(cathode_diag["source_P_into_plasma"]))
     assert np.all(np.isnan(cathode_diag["end_phi_c"]))
     assert np.all(
         np.isin(

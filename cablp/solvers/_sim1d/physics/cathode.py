@@ -3813,6 +3813,17 @@ def _ohmic_gap_weights(geometry, gap, Te, n=None, lnL_model="nrl_ei"):
 
 
 def _solver_result_metadata(result):
+    """Return the per-solve scalars carried on the cathode solve's metadata.
+
+    POTENTIALS, CURRENTS AND BEAM GEOMETRY ONLY. The five power entries this
+    once carried -- ``P_prim``, ``P_ohmic``, ``P_loss``, ``P_cathode_e``,
+    ``P_anode_e`` -- are gone: nothing read them, one of them (``P_loss``) was
+    a pre-closure scalar that is no longer exported at all, and a metadata dict
+    is the wrong place to keep a second copy of numbers the cathode
+    diagnostics already write per save. Read the powers off
+    ``cathode_diagnostics`` instead, where the closed audit set sits beside
+    them.
+    """
     if result is None:
         return None
     keys = (
@@ -3822,11 +3833,6 @@ def _solver_result_metadata(result):
         "I_i",
         "I_eth_star",
         "I_tot",
-        "P_prim",
-        "P_ohmic",
-        "P_loss",
-        "P_cathode_e",
-        "P_anode_e",
         "beam_bypass_fraction",
         "l_b",
     )

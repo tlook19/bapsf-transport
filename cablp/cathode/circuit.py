@@ -277,8 +277,23 @@ class SolverResult:
     # from the sheath field / circuit, deposited on the electrode, never through
     # the plasma thermal store). ``*_thermal + *_phi == P_*_e/_i`` by construction.
     # These are the values the repaired fluid boundary reads so fluid == circuit.
-    # P_net/P_net2/P_loss above are the DEPRECATED unclosed scalars, kept only so
-    # the R1-R4 golden stays bit-exact; the useful closed audit is below.
+    #
+    # DEPRECATED UNCLOSED SCALARS, kept computed only so the R1-R4 golden stays
+    # bit-exact and an old file's numbers can still be reproduced here. They are
+    # NO LONGER EXPORTED to the HDF5. Each name and what to read instead:
+    #   P_cathode_i_pl -> P_cathode_i_thermal. P_cathode_i_pl is built from
+    #       I_i_a, the ANODE ion current, under a cathode name.
+    #   P_anode_i_pl   -> P_anode_i_thermal.
+    #   P_loss         -> P_plasma_thermal_loss. P_loss sums phi-INCLUSIVE
+    #       electron powers with thermal-only ion powers, and takes the
+    #       cathode ion term from the anode current.
+    #   P_net          -> P_into_plasma for the power heating the plasma, or
+    #       P_load_residual for the load-power closure check. P_net subtracts
+    #       full electrode powers from load field work, booking each sheath
+    #       fall twice.
+    #   P_net2         -> P_into_plasma, which is what it was reaching for.
+    #   P_comp         -> nothing; it is I_tot**2 * R_comp and was never read.
+    # The closed audit that replaces them is below.
     P_cathode_e_thermal: float = 0.0
     P_cathode_e_phi: float = 0.0
     P_cathode_i_thermal: float = 0.0
