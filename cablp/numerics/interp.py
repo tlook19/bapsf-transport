@@ -178,7 +178,8 @@ FMA_ARRAY_MAX_ABS = 1e150
 #:
 #: It is NON-BINDING on everything the CSDA lane march can reach. Over the
 #: committed ``deposit_beam`` corpus plus 2,000 randomized lane batteries
-#: (5,889,066 operand elements, ``scripts/r3fma_domain_probe.py``) the smallest
+#: (5,889,066 operand elements, ``scripts/r3fma_domain_probe.py`` (at commit
+#: 48be9a4, retired 2026-09-03)) the smallest
 #: nonzero operand magnitude was ``4.66e-23`` and the smallest nonzero
 #: ``|a*b|`` was ``9.45e-28`` -- 122 and 265 decades above this floor and the
 #: exactness threshold respectively.

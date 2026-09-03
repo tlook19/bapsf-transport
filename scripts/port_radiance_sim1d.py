@@ -82,7 +82,7 @@ centre exactly as at ``compare_sim1d_es1.py:669``.  The five overlay ports lie
 on a single exact linear law (pitch 31.95 cm, the LAPD port spacing), which is
 verified against every anchor at load and then used to place ports the overlay
 does not carry -- port 27 among them, at z = 981.25 cm, matching the in-repo
-value at ``scripts/fab_choke.py:47``.
+value at ``scripts/fab_choke.py:47`` (at commit 48be9a4, retired 2026-09-03).
 
 WINDOWS.  The two registered windows of ``power_ledger_sim1d.py`` (DRIVE
 plateau 15.25-19.75 ms, AFTERGLOW 20.5-24.5 ms, both RUN-CLOCK) are reused

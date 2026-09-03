@@ -40,7 +40,8 @@ vector does not carry, and its magnitude is bounded at a few percent of the
 isotropic term anyway. Registering it would be a new closure, not a flag.
 
 Consequently this module ships NO solver configuration key and NO flag. Its
-consumer is ``scripts/characterise_mirror_fieldmap.py``, which measures what
+consumer is ``scripts/characterise_mirror_fieldmap.py`` (at commit 48be9a4,
+retired 2026-09-03), which measures what
 the field does on the production mesh so that the identity above can be
 checked against numbers rather than asserted. Nothing in the solver imports
 it, and nothing in the solver should: the solver does no file I/O, and the

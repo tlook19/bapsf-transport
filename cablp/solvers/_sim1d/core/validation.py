@@ -764,7 +764,9 @@ def refuse_cathode_backscatter_double_book(input_dict):
     and the resolver requires ``False``, and the resolver reads "explicitly
     set" as "differs from the template", so neither of a bool's two values
     presents itself as a caller override -- both leave this looking at
-    ``False``. Measured, not reasoned: ``scripts/dacc_pairing_mechanism_probe.py``.
+    ``False``. Measured, not reasoned:
+    ``scripts/dacc_pairing_mechanism_probe.py`` (at commit 48be9a4, retired
+    2026-09-03).
 
     That is exactly why the guard is written as its own statement about the
     PAIR rather than left implicit in a prerequisite chain: relaxing any part

@@ -641,7 +641,7 @@ against the other.
 the channel safe across its whole launch band.** The `v_z` axis is
 geometrically stretched, so the bin containing the launch speed widens with the
 speed and the margin `ε / ((3/2) k T_launch)` does not run away at either end.
-Measured (`scripts/b4aj_smear_margin_probe.py`) on `(48, 12)` it lies between
+Measured (`scripts/b4aj_smear_margin_probe.py` (at commit 48be9a4, retired 2026-09-03)) on `(48, 12)` it lies between
 3.1 and 5.4 over `0.005–100 eV`, and on `(64, 24)` between 6.1 and 8.6 over the
 same band; on the coarse `(16, 6)` axis used by most of the K2 gate suite it is
 between 0.22 and 1.4 — the smear carries more energy than the beam and the
@@ -863,8 +863,9 @@ Results are written to HDF5 (`results/io.py`, format `sim1d-hdf5-v1`) including
 time series, axial profiles, and per-step diagnostics. `results/health.py`
 reports finiteness and conservation drift (particle inventory, thermal
 energy). See
-`scripts/run_sim1d.py` (drive/save) and `scripts/plot_sim1d_run.py` (contour and
-time-slice plots).
+`scripts/run_sim1d.py` (drive/save). Its companion renderer
+`scripts/plot_sim1d_run.py` (contour and time-slice plots) was retired
+2026-09-03 (commit 48be9a4).
 
 R1 makes `rhs_terms`, `total_rhs`, finiteness, and inventory output follow the
 actual packed five-/six-/seven-/eight-row state while retaining absent-dataset
@@ -996,7 +997,7 @@ document names the flag, not the number. The two `f` values that appear in the
 static A9 engagement probe are declared **arms of the closure-family bracket**,
 never the stance: `f=1` targets only the ~gap
 cells (flux → ~42%), `f=0.1` suppresses conduction globally. The static
-engagement bracket is `probe_sim1d_r5_heatflux_bracket.py`; the dynamic
+engagement bracket is `probe_sim1d_r5_heatflux_bracket.py` (at commit 48be9a4, retired 2026-09-03); the dynamic
 scored-observable bracket (runs at each `f`) is deferred.
 
 ## Regime-R2 pre-breakdown passive-tracer bridge (default off)
@@ -1306,7 +1307,7 @@ per cell, so restricting which cells are solved changes which cells can raise,
 not what any solved cell returns.
 
 **RE-MEASURED**, same stance, same instant (`nx = 20`, `t = 1.0423e-05 s`,
-fluid-arm background), by `scripts/regime_pb_balance_table.py`:
+fluid-arm background), by `scripts/regime_pb_balance_table.py` (at commit 48be9a4, retired 2026-09-03):
 
 | `Ee` row at cell 2 (cathode) | erg cm⁻³ s⁻¹ | at cell 7 (column) |
 |---|---|---|
@@ -1735,7 +1736,7 @@ refuses.
 
 #### MEASURED: what the residual power on the far cells is
 
-`scripts/regime_pb_pnet_decomposition.py`, at the refusal state
+`scripts/regime_pb_pnet_decomposition.py` (at commit 48be9a4, retired 2026-09-03), at the refusal state
 (`t = 7.476e-5 s`, `nx = 20`). Stated as measurement; no remedy is proposed
 here.
 
@@ -1817,7 +1818,7 @@ against a ~25 ms discharge — at least ~400× at the most pessimistic corner
 shot the node is hard-float in kind at both bracket edges, whichever type
 these turn out to be**: the leak drains a negligible fraction of the node's
 charge and the phase sequence is unchanged by it.
-`scripts/regime_vcm_r0b_check.py` sweeps the `R_leak` endpoints alongside the
+`scripts/regime_vcm_r0b_check.py` (at commit 48be9a4, retired 2026-09-03) sweeps the `R_leak` endpoints alongside the
 `C_total` endpoints and reports the in-window sensitivity as a NUMBER — the
 worst shift anywhere in the joint bracket is `1.25e-3` relative, exactly the
 closed form's `dt/(2·tau_leak)` at that corner, two decades below the

@@ -398,7 +398,8 @@ def install_progress_tracker(tracer):
 
     ``run_model`` calls ``start_simulation`` with a fixed argument list, so a
     shim is the only way to attach instrumentation without forking the
-    production driver.  Mirrors ``run_kn2z_promoted.py``.
+    production driver.  Mirrors ``run_kn2z_promoted.py`` (at commit 48be9a4,
+    retired 2026-09-03).
     """
     original = LAPDSim1D.start_simulation
 

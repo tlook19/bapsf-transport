@@ -4,7 +4,8 @@ The tube-beamed launch row moved INTO the package when the fluid solver gained
 ``gas_puff_profile = "orifice"``: the row is now derived in one place and read
 by the solver's own puff sites as well as by the kinetic instruments here, so
 the two cannot desync. This module is the scripts-side name those instruments
-already import (``mc_neutrals.py``, ``porf_footprint_proof.py``, and
+already import (``mc_neutrals.py``, ``porf_footprint_proof.py`` (at commit
+48be9a4, retired 2026-09-03), and
 ``kn2zone.py`` through ``mc_neutrals``); it adds nothing and re-exports the
 package module's public surface unchanged.
 

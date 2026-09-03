@@ -966,7 +966,7 @@ reaches zero.
 
 *The measured trigger.* Before breakdown the anode sheath is
 electron-attracting: measured over the arm's opening window
-(`scripts/b4aj_phi_a_probe.py`), `phi_a` runs −0.18 to −6.6 V across **accepted
+(`scripts/b4aj_phi_a_probe.py` (at commit 48be9a4, retired 2026-09-03)), `phi_a` runs −0.18 to −6.6 V across **accepted
 steps 2–9** while `Ti` rises from its 0.026 eV floor to ~0.9 eV, so the clamped
 incident energy is exactly zero throughout — `phi_a` outruns `Ti` negatively
 the whole way — while the mesh still collects at ~5e16 to ~4e18 s⁻¹. A
@@ -1007,7 +1007,7 @@ measured on the anode side is the consequence for representability: the margin
 on `(48, 12)` and 6.1–8.6 on `(64, 24)` over `0.005–100 eV`, so the grid-tied
 default is representable across the whole band the channel can reach on either
 grid, and 0.22–1.4 on the coarse `(16, 6)` axis, where it is not
-(`scripts/b4aj_smear_margin_probe.py`).
+(`scripts/b4aj_smear_margin_probe.py` (at commit 48be9a4, retired 2026-09-03)).
 
 Memo: **Eckstein, IPP 9/132**, *Calculated Sputtering, Reflection and Range
 Values* — the member's source of record, as above. No value is read from it
@@ -1133,7 +1133,7 @@ E2 read of both arms against the step-face ray-traced Monte Carlo on
 there are RATIFICATION-PENDING and nothing in the kernel was tuned to them.
 
 The DEFAULT stays `"rates"` because the frozen production arm ran on it and
-must stay bit-reproducible; `scripts/k5_frozen_bitexact.py` is the check.
+must stay bit-reproducible; `scripts/k5_frozen_bitexact.py` (at commit 48be9a4, retired 2026-09-03) is the check.
 
 **`neutral_kinetic_dvm_tn_feedback` — RETIRED 2026-08-31 (Tom).** The key is
 removed from the parameter template and is now rejected as an unknown key at
@@ -2006,7 +2006,7 @@ branching table `f_Landau = 0.8389 / 0.9427 / 0.9812 / 0.9940` at
 `QL_ONSET_MEMO_2026-08-12.md` (including its 2026-08-13 addendum, which records
 that the memo's §4 prose puts the 50% crossing higher than its own formula
 gives — the error is in the conservative direction) and the pd0 read
-`scripts/pd0_branching.py`, which is the instrument these anchors are taken
+`scripts/pd0_branching.py` (at commit 48be9a4, retired 2026-09-03), which is the instrument these anchors are taken
 from.
 
 **These four rows are K_m-DERIVED and rotate with the `K_m` nodes.** They were
@@ -2424,7 +2424,7 @@ number (`0.34/54 = 0.0063`, `0.47/54 = 0.0087`), so the bracket carries the
 measurement spread of the foot and nothing else.
 
 Two alternative normalizers were considered and are EXCLUDED, not assumed away
-(`scripts/ea0_emission_probe.{py,txt}`, 2026-08-13):
+(`scripts/ea0_emission_probe.{py,txt}` (at commit 48be9a4, retired 2026-09-03), 2026-08-13):
 
 * the static Richardson ceiling, 3151 A at the stance, gives `f_em0 ~ 1.3e-4`.
   It is the wrong object: the model never rides the Richardson ceiling — the
@@ -2674,7 +2674,7 @@ a factor of ten wide. The shipped value is the bracket's geometric midpoint
 default sits in the middle of the bracket rather than at an edge. **It is not
 a measurement and no result may quote it as one.** Any result that depends on
 `C_total` must report the bracket, and
-`scripts/regime_vcm_r0b_check.py` is the instrument that sweeps it.
+`scripts/regime_vcm_r0b_check.py` (at commit 48be9a4, retired 2026-09-03) is the instrument that sweeps it.
 
 *Honest bar: a factor of 10, one-sided in neither direction, and the part
 tolerance sits INSIDE it under either type reading.* Polypropylene film runs

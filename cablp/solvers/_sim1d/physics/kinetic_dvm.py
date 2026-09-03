@@ -1460,7 +1460,8 @@ class TransientDVM:
         # scale the sum, or sum the scaled -- and they agree to roundoff:
         # measured worst 2.7e-16 relative (~1.2 ulp) over the shipped
         # (48, 12) and neighbouring grids across the production launch band,
-        # scripts/dacc_v2_ebin_probe.py. Cosmetic, so it is left as written.
+        # scripts/dacc_v2_ebin_probe.py (at commit 48be9a4, retired
+        # 2026-09-03). Cosmetic, so it is left as written.
         got_e = 0.5 * M_HE * float((spec * self.g.V2).sum())
         e_rel = abs(got_e - e_launch) / e_launch
         u_rel = abs(got_u - u) / max(abs(u), np.sqrt(s2))
@@ -2782,7 +2783,8 @@ class TransientDVM:
         state is REACHED, not hypothetical: the anode sheath is
         electron-attracting before breakdown, so ``max(phi_a + Ti, 0)`` is
         exactly zero over the discharge's first accepted steps while the mesh
-        still collects (`scripts/b4aj_phi_a_probe.py`).
+        still collects (`scripts/b4aj_phi_a_probe.py` (at commit 48be9a4,
+        retired 2026-09-03)).
 
         **The split is PER CELL, not per tick**: cells that carry a positive
         incident energy in the same tick launch normally beside cells that

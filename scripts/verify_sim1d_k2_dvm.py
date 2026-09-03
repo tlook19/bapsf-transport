@@ -3520,7 +3520,8 @@ def gate_wr1():
         arms. The fixture is deterministic, so this is a per-alpha NUMBER and
         not a band. The offset is a property of the DISCRETIZATION: it is
         present unchanged at the base commit (reproduce with
-        ``k2_dvm_wall_detailed_balance_base_probe.py``), it scales with alpha
+        ``k2_dvm_wall_detailed_balance_base_probe.py`` (at commit 48be9a4,
+        retired 2026-09-03)), it scales with alpha
         exactly, it falls with refinement, and it moves with the exchange
         closure -- so the pins are keyed by ``EXCHANGE_MODEL`` as well as by
         alpha, covering the closure the suite re-runs this member under, and
@@ -5950,7 +5951,8 @@ AJ_R_E = 0.41
 #: thermal energy in its narrowest resolvable spectrum than the beam has, and
 #: the engine's guard says so and RAISES. Measured on the shipped ``(48, 12)``
 #: axis the grid-tied smear leaves the margin ``e / (3/2 k T_launch)`` between
-#: 3.1 and 5.4 over ``0.005-100 eV`` (``scripts/b4aj_smear_margin_probe.py``)
+#: 3.1 and 5.4 over ``0.005-100 eV`` (``scripts/b4aj_smear_margin_probe.py``
+#: (at commit 48be9a4, retired 2026-09-03))
 #: -- the stretched axis makes it scale-free -- so the projection lands at
 #: machine precision at every launch energy this channel can reach.
 AJ_NVZ = 48

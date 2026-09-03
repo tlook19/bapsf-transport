@@ -449,7 +449,8 @@ def _main_discharge_origin(result):
 # resolves nx = 268 whether or not --nx was typed (the driver prints the
 # supersession, "240 -> 268"). This value is therefore only the fallback for the
 # paths with no stance layer: compare_sim1d_es1's own CLI, run_m6_point
-# --no-stance, profile_sim1d, sp3_build_nn0, run_kn2z_promoted, and the "m6"
+# --no-stance, profile_sim1d, sp3_build_nn0, run_kn2z_promoted (at commit
+# 48be9a4, retired 2026-09-03), and the "m6"
 # snapshot case in audit_sim1d_configs (whose resolved-config hash pins it).
 #
 # It stays a DRIVER-level default and not a config.py default: the golden
@@ -525,7 +526,8 @@ def run_model(
     # t_end=None (default) keeps the historical dynamic end time derived from
     # the tau_* budget; an explicit t_end caps run cost WITHOUT deforming the
     # hardware drive length (the loop terminates at t_end regardless of
-    # tau_discharge), as run_floorfix_g3g4.py already relies on.
+    # tau_discharge), as run_floorfix_g3g4.py (at commit 48be9a4, retired
+    # 2026-09-03) already relies on.
     # max_steps=None (default) is the historical unbounded loop. An explicit
     # cap is a WALL, not a schedule: on its own the solver raises RuntimeError
     # at the cap and the in-progress trajectory is lost, which is the whole

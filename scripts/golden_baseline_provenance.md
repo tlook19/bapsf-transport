@@ -376,7 +376,7 @@ Gates at the merge tip, each with an in-process import-provenance assertion:
 smoke exit 0 at 119 cases with all five compiled-kernel equivalence blocks
 LIVE; `verify_sim1d_k2_dvm.py` 121/121; `verify_sim1d_edt.py` 31/31;
 `verify_sim1d_r3_boundary.py` exit 0; `declm_block_gate.py` 35 checks, 0
-failed; `sgfs_census.py --assert-clean` PASS; `batch11_restart_citations.py`
+failed; `sgfs_census.py --assert-clean` (at commit 48be9a4, retired 2026-09-03) PASS; `batch11_restart_citations.py` (at commit 48be9a4, retired 2026-09-03)
 58 cites PASS; `m1_verdict_invariance.py --self-test` 10 cases, 0 failures.
 
 **2026-08-31 — IDENTITY-ONLY ROTATION (the [m1-a1-arming] cathode-jet arming
@@ -710,7 +710,7 @@ provenance asserting the worktree and, where the compiled path is claimed,
 
 | gate | quantity | result |
 |---|---|---|
-| G0 `g1atrim_blockform_delta_check.py` | the stance DELTA before vs after | 35 base entries preserved, 0 violations; 32 keys added, 0 not at their config default |
+| G0 `g1atrim_blockform_delta_check.py` (at commit 48be9a4, retired 2026-09-03) | the stance DELTA before vs after | 35 base entries preserved, 0 violations; 32 keys added, 0 not at their config default |
 | G1 `declm_route_identity.py` | resolved surface of 7 representative routes | **ALL ROUTES IDENTICAL** — `golden` `413c8d0c…`, `stance_g1atrim` `261d5469…`, `m6_es1` `c084b91b…`, `default` `cbf51a31…`, `ka1c` `7d1d7287…`, `k2_dvm`/`b0c` `e8bd6263…` |
 | G3 `golden_digest_gate.py` (pure) | golden config identity + every accepted step to 4,000 | `config_identity=fcc61568a6b11673110cc22feaacf2e8b6f496e97a24fc0d302802d9378509de` UNCHANGED; `digest gate OK: steps=4000, digest=cb54b74a34cbee055612d404abb44ba4522bea11316044556fa43c83a75b2ae2, exact=True` |
 | G4 `baseline_sim1d.py --verify` (compiled) | the full saved trajectory | see the transcript line below |

@@ -6,7 +6,7 @@ the heater-maintained standby cathode surface temperature. Everything else in
 the model configuration is held fixed across the ladder.
 
 It is imported by the campaign drivers — `scripts/run_m6_point.py` and
-`scripts/run_es1_r5_iter.py` among them — so a change here reaches every
+`scripts/run_es1_r5_iter.py` (at commit 48be9a4, retired 2026-09-03) among them — so a change here reaches every
 campaign arm. It does NOT reach the regression fixture: `baseline_sim1d.py`
 imports no campaign driver at all, deliberately, so these override dicts cannot
 touch the golden. Parameter meanings are in the docstrings of

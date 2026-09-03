@@ -26,7 +26,8 @@ GATE REGISTRY
   QUANTITY: the accepted-step trajectory, the golden config identity, and the
   RHS term rows.
   SITE: ``scripts/golden_digest_gate.py`` (4,000-step chain digest, all five
-  checkpoints and the final digest) and ``scripts/edt_bitinert_ab.py``.
+  checkpoints and the final digest) and ``scripts/edt_bitinert_ab.py`` (at
+  commit 48be9a4, retired 2026-09-03).
   FIXTURE: the golden config at nx=60 for the digest; ``default_config()``
   for the moment and kinetic-DVM A/B routes.
   PASS: every checkpoint and the final digest unchanged from the committed
@@ -184,7 +185,8 @@ GATE REGISTRY
 Companion gates that are NOT this suite's to run, and where they live: smoke
 (``scripts/smoke_sim1d.py``), the DVM suite (``verify_sim1d_k2_dvm.py``), the
 digest gate (``scripts/golden_digest_gate.py``), the snapshot delta
-(``scripts/edt_snapshot_delta.py``) and the A/B bit-inertness reader
+(``scripts/edt_snapshot_delta.py`` (at commit 48be9a4, retired 2026-09-03)) and
+the A/B bit-inertness reader
 (``scripts/edt_bitinert_ab.py``).
 """
 
