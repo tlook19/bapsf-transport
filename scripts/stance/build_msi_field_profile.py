@@ -1,7 +1,7 @@
 """Build the production ``plasma_radius_profile_cm`` from the MEASURED MSI field.
 
 The stance's flux-tube radius profile was, until this build, a CAD-census
-product: ``scripts/g1_build_profiles.py`` traced a flux surface through a
+product: ``scripts/stance/g1_build_profiles.py`` traced a flux surface through a
 finite-element re-solve of the drawn coil set. This script replaces the SOURCE
 of that profile with the machine's own record of the field it actually ran --
 the ``MSI/Magnetic field`` group every ES1 shot file carries -- and leaves the
@@ -238,7 +238,7 @@ REPORTED_PORTS = (11, 21, 29, 41, 50)
 #: The measured p50/p41 flux-tube area ratio, and its uncertainty. The gate:
 #: the ratio the EMITTED profile implies between those two stations must agree
 #: with this measurement to within its stated sigma. Class MEASURED; instrument
-#: and face bracket in the MSI block of ``scripts/production_stance_provenance.md``.
+#: and face bracket in the MSI block of ``scripts/stance/production_stance_provenance.md``.
 MEASURED_P50_P41_FLUX_RATIO = 0.9905
 MEASURED_P50_P41_FLUX_RATIO_SIGMA = 0.0114
 

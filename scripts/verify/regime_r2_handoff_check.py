@@ -65,7 +65,7 @@ closure describes this leg. The printed output repeats this next to the
 refresh count so the caveat cannot be separated from the result.
 
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
-    python scripts/regime_r2_handoff_check.py --nx 20 --t-handoff 2e-5
+    python scripts/verify/regime_r2_handoff_check.py --nx 20 --t-handoff 2e-5
 """
 
 import argparse

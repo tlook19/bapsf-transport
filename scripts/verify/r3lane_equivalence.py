@@ -25,9 +25,9 @@ Two modes, both reporting at raw uint64:
 
 Usage::
 
-    python scripts/r3lane_equivalence.py --corpus
-    python scripts/r3lane_equivalence.py --random 400
-    python scripts/r3lane_equivalence.py --corpus --random 400
+    python scripts/verify/r3lane_equivalence.py --corpus
+    python scripts/verify/r3lane_equivalence.py --random 400
+    python scripts/verify/r3lane_equivalence.py --corpus --random 400
 
 **Run it on the PURE path: leave ``CABLP_COMPILED_KERNELS`` unset.** The
 instrument is pure-path-only by design, because the compiled tail path does not

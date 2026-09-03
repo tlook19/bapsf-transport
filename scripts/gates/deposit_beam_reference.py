@@ -44,15 +44,15 @@ kernel would pin the kernel instead.
 Usage::
 
     # 1. record real argument tuples from a full golden-config run
-    python scripts/deposit_beam_reference.py --capture \\
+    python scripts/gates/deposit_beam_reference.py --capture \\
         --output scripts/deposit_beam_corpus_raw.npz
 
     # 2. build the committed fixture (pure path only)
-    python scripts/deposit_beam_reference.py --build \\
+    python scripts/gates/deposit_beam_reference.py --build \\
         --captured scripts/deposit_beam_corpus_raw.npz
 
     # 3. anywhere, any time
-    python scripts/deposit_beam_reference.py --verify
+    python scripts/gates/deposit_beam_reference.py --verify
 
 ``--capture`` may be run with ``CABLP_COMPILED_KERNELS=1``: it records the
 solver's ARGUMENTS, and the compiled march is bit-exact against pure, so the

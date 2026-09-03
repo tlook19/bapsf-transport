@@ -1222,7 +1222,7 @@ def ql_relaxation_stopping_eV_per_cm(
 #: cross near 96 legs, so the value sits above the crossing with margin rather
 #: than on it -- a batch just past a mis-set threshold pays the dispatch and
 #: gets nothing back, and the corpus's main-discharge ray is exactly that case
-#: at 64 legs. Re-measure with scripts/r3lane_equivalence.py's timing companion
+#: at 64 legs. Re-measure with scripts/verify/r3lane_equivalence.py's timing companion
 #: after any change to the round's op count.
 LANE_MARCH_MIN_LEGS = 128
 

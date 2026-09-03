@@ -8,7 +8,7 @@
 #
 # This file is a DELTA, not a complete configuration: it is applied ON TOP of
 # compare_sim1d_es1.PARAM_OVERRIDES / FLAG_OVERRIDES (the campaign stance) by
-# scripts/covbuild_run_conducting_phase.py. Loading it through
+# scripts/run/covbuild_run_conducting_phase.py. Loading it through
 # `LAPDSim1D.load_config` instead would resolve it against the bare config
 # defaults and would NOT be the production machine.
 
@@ -20,7 +20,8 @@
 #
 # It sits just ABOVE ne_floor rather than ON it, and that is not a tuning
 # choice -- it is the edge of a documented singularity, located by
-# scripts/covbuild_window_probe.py (transcript covbuild_window_probe.txt):
+# scripts/covbuild_window_probe.py (at commit 48be9a4, retired 2026-09-03;
+# transcript covbuild_window_probe.txt):
 #
 #   ne0=1.000e+08  dt=1.000e-10 s  constraint=surface_loss  dt_raw=0.000e+00
 #   ne0=2.000e+08  dt=5.572e-07 s  constraint=surface_loss  dt_raw=5.572e-07

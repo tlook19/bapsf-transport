@@ -6,13 +6,13 @@ written down before anything is run or implemented). Each names its
 QUANTITY, its MEASUREMENT SITE, and its FIXTURE. Gates 2-4 and 6 are properties
 of a SAVED state and of the advisor consult's own algebra, so they were
 measurable before the solver-side code existed at all;
-``scripts/edt_consult_pins.py`` is the standalone evaluator that measured them
+``scripts/score/edt_consult_pins.py`` is the standalone evaluator that measured them
 at the unmodified base commit, and this suite checks the implementation against
 those same readings.
 
 Run from the checkout root::
 
-    PYTHONPATH=<checkout> python scripts/verify_sim1d_edt.py
+    PYTHONPATH=<checkout> python scripts/verify/verify_sim1d_edt.py
 
 Exit 0 = every gated statement passed. A failure is a DELIVERABLE: it is
 printed with its numbers and the suite exits 1. Never relax a tolerance here to
@@ -25,7 +25,7 @@ GATE REGISTRY
 **G1 -- bit-inertness with the flag off.**
   QUANTITY: the accepted-step trajectory, the golden config identity, and the
   RHS term rows.
-  SITE: ``scripts/golden_digest_gate.py`` (4,000-step chain digest, all five
+  SITE: ``scripts/gates/golden_digest_gate.py`` (4,000-step chain digest, all five
   checkpoints and the final digest) and ``scripts/edt_bitinert_ab.py`` (at
   commit 48be9a4, retired 2026-09-03).
   FIXTURE: the golden config at nx=60 for the digest; ``default_config()``
@@ -183,8 +183,8 @@ GATE REGISTRY
   let every one of those pins certify the twin instead of the code that ships.
 
 Companion gates that are NOT this suite's to run, and where they live: smoke
-(``scripts/smoke_sim1d.py``), the DVM suite (``verify_sim1d_k2_dvm.py``), the
-digest gate (``scripts/golden_digest_gate.py``), the snapshot delta
+(``scripts/gates/smoke_sim1d.py``), the DVM suite (``verify_sim1d_k2_dvm.py``), the
+digest gate (``scripts/gates/golden_digest_gate.py``), the snapshot delta
 (``scripts/edt_snapshot_delta.py`` (at commit 48be9a4, retired 2026-09-03)) and
 the A/B bit-inertness reader
 (``scripts/edt_bitinert_ab.py``).

@@ -26,12 +26,13 @@ refuses unknown keys, so they are added only when this checkout HAS them
 a checkout.
 
 Otherwise this mirrors ``k7bbuild_frozen_bitexact.py`` and
-``k6_frozen_bitexact.py``: the frozen K5a shot-1 calibration arm, a bounded
+``k6_frozen_bitexact.py`` (both at commit 48be9a4, retired 2026-09-03):
+the frozen K5a shot-1 calibration arm, a bounded
 number of steps, SHA-256 over the raw little-endian float64 bytes of every
 piece of state the arm carries.
 
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
-    python scripts/k7cbuild_frozen_bitexact.py --steps 400 --arm twion_phic
+    python scripts/verify/k7cbuild_frozen_bitexact.py --steps 400 --arm twion_phic
 """
 
 import argparse
@@ -66,7 +67,7 @@ from cablp.solvers._sim1d import LAPDSim1D, config_manifest, default_config
 #
 # The values are kept here verbatim, exactly the way EXTRA below already is.
 # The provenance commentary for each one lives with the live dicts in
-# scripts/compare_sim1d_es1.py and in scripts/production_stance_provenance.md;
+# scripts/score/compare_sim1d_es1.py and in scripts/stance/production_stance_provenance.md;
 # it is deliberately NOT duplicated here, because this block is a dated
 # snapshot and that commentary is not.
 PARAM_OVERRIDES = {

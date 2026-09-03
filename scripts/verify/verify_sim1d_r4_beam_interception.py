@@ -30,7 +30,7 @@ Gates:
       intercepted -- the consistency with the circuit's eta*bypass structure)
 
 Usage:
-    python scripts/verify_sim1d_r4_beam_interception.py
+    python scripts/verify/verify_sim1d_r4_beam_interception.py
 """
 import sys
 

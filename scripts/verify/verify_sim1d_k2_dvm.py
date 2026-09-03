@@ -242,7 +242,7 @@ Artifacts: this script writes nothing. The transcript is the artifact; the
 caller redirects it (``k2_dvm_verify.txt`` by campaign convention).
 
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
-    python scripts/verify_sim1d_k2_dvm.py
+    python scripts/verify/verify_sim1d_k2_dvm.py
 """
 import hashlib
 import shutil
@@ -854,7 +854,7 @@ PRODUCTION_STANCE = "g1atrim"
 #: The ``input_dict`` keys of the stance's MACHINE GEOMETRY package. All five
 #: are mesh-coupled and travel together: ``nx`` sizes the far column, the two
 #: radius profiles carry one entry per mesh cell (they are built offline by
-#: scripts/g1_build_profiles.py from the measured census, and the vessel
+#: scripts/stance/g1_build_profiles.py from the measured census, and the vessel
 #: profile is a staircase), and the baffle arrays are the apertures that go
 #: with that machine. Nothing else of the stance is taken -- the operating
 #: point, the closure family and the shaped initial fill are not geometry, and

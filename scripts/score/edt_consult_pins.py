@@ -61,10 +61,10 @@ are retained as disclosed INSTRUMENT arms bounding that double count.
 
 **Usage**::
 
-    python scripts/edt_consult_pins.py --h5 scripts/mgcr1_confirm.h5
+    python scripts/score/edt_consult_pins.py --h5 scripts/mgcr1_confirm.h5
 
     # every arm, both anode instrument arms, and the afterglow clause
-    python scripts/edt_consult_pins.py --h5 scripts/mgcr1_confirm.h5 --all-arms
+    python scripts/score/edt_consult_pins.py --h5 scripts/mgcr1_confirm.h5 --all-arms
 
 **Provenance of the pins.** The 2026-08-26 consult measured the first set on
 ``scripts/mgcr1_confirm.h5`` over 0.1-20.1 ms at a mean loop current of 2772 A.

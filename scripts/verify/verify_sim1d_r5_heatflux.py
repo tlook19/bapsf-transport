@@ -17,7 +17,7 @@ eq. (7). Analytic identities (closed domain, to roundoff):
   P1  presence: limiter off == no-limiter; limiter on perturbs a steep-gradient
       state. (The flag ships ON; this gate builds both arms explicitly.)
 
-Usage:  python scripts/verify_sim1d_r5_heatflux.py
+Usage:  python scripts/verify/verify_sim1d_r5_heatflux.py
 """
 import sys
 

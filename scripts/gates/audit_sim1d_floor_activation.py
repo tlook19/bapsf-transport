@@ -20,8 +20,8 @@ Two distinct clip sites are tracked:
     so it is the one that decides whether a non-backward-Euler theta is safe.
 
 Usage:
-    python scripts/audit_sim1d_floor_activation.py                 # stance-of-record config
-    python scripts/audit_sim1d_floor_activation.py --t-end 2e-3    # short shakedown
+    python scripts/gates/audit_sim1d_floor_activation.py                 # stance-of-record config
+    python scripts/gates/audit_sim1d_floor_activation.py --t-end 2e-3    # short shakedown
 """
 
 import argparse

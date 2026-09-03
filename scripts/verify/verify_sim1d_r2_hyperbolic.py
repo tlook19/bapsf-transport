@@ -21,7 +21,7 @@ Gates:
       activity and the Rusanov numerical diffusion vanish under refinement
 
 Usage:
-    python scripts/verify_sim1d_r2_hyperbolic.py
+    python scripts/verify/verify_sim1d_r2_hyperbolic.py
 """
 import sys
 

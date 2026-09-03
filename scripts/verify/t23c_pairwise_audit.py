@@ -38,7 +38,7 @@ what state they audited.
 
 USAGE
 
-    python scripts/t23c_pairwise_audit.py --t-end 5e-3 --nx 60
+    python scripts/verify/t23c_pairwise_audit.py --t-end 5e-3 --nx 60
 
 builds the golden's own operating point (``default_config()`` + the committed
 stance minus its mesh-sized package + ``nx``), arms the carrier, runs to

@@ -9,7 +9,7 @@ nn_a(z,t) trajectory of that extra cycle at a configurable cadence.
 
 The result is a MAP of starting distributions parameterised by pre-fill time:
 row ``k`` is the neutral fill a discharge would start from had it broken down
-``t_s[k]`` after the valve opened.  ``scripts/eqmap_slice.py`` cuts a row out of
+``t_s[k]`` after the valve opened.  ``scripts/stance/eqmap_slice.py`` cuts a row out of
 it and writes the shaped-initial-fill npz that ``run_m6_point.py
 --nn0-profile-npz`` consumes, so the map's slices reach a run through the
 EXISTING ``neutral_initial_profile`` capability and no other path.
@@ -42,7 +42,7 @@ Two consistency checks run on every build and are recorded in the header
 
 Usage (production ES1 stance, two-zone, a 10 ms foot axis at 0.25 ms cadence)::
 
-    python scripts/eqmap_make.py --es 1 --nx 240 --two-zone \
+    python scripts/run/eqmap_make.py --es 1 --nx 240 --two-zone \
         --foot-s 10e-3 --cadence-s 0.25e-3 \
         --out scripts/eqmap_demo_es1_nx240.npz
 
@@ -410,7 +410,7 @@ def main(argv=None):
     ledger = {
         "format": MAP_FORMAT,
         "kind": "equilibration map: nn(z,t) through a foot-fill 101st cycle",
-        "producer": "scripts/eqmap_make.py",
+        "producer": "scripts/run/eqmap_make.py",
         # --- the stance the map was built at ---
         "es": None if args.es == 0 else int(args.es),
         "nx": int(p_eff["nx"]),

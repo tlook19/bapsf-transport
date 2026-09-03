@@ -20,7 +20,7 @@ coupling error => the finding is it must be coupled (a logged deliverable).
 
 This is a short fixed-dt diagnostic, not an ES campaign point.
 
-Usage:  python scripts/verify_sim1d_r3_a11.py [--phase knee|fall] [--t0-ms X]
+Usage:  python scripts/verify/verify_sim1d_r3_a11.py [--phase knee|fall] [--t0-ms X]
                                               [--window-us W] [--n0 N]
 """
 import argparse

@@ -54,7 +54,7 @@ behind ~30 explicit pins and is reproducible only at the anchor tag
 `pre-refactor-2026-08-20`, with the environment lockfile recorded against that
 tag. Its pin table is in this file's git history; do not reconstruct it here.
 
-`scripts/baseline_sim1d.py` builds the configuration. It imports no campaign
+`scripts/gates/baseline_sim1d.py` builds the configuration. It imports no campaign
 driver — `compare_sim1d_es1` and `run_mechanism_ladder` stay unimported — and
 reads the stance through `stance_config`, the loader for that committed
 artifact. For parameter meanings see the docstrings in
@@ -87,7 +87,7 @@ configuration the campaign actually runs. It is not a licence to recapture
 casually; a recapture stays a reviewed, authorized, recorded event.
 **A recapture regenerates the short-horizon digest reference
 `scripts/baselines/golden_digest_4k.json` in the SAME event**, with
-`python scripts/golden_digest_gate.py --capture`: it pins this same
+`python scripts/gates/golden_digest_gate.py --capture`: it pins this same
 configuration and is invalidated by exactly the events that invalidate the NPZ,
 so the two rotate together or the digest gate starts failing for a reason that
 has nothing to do with the code under review.
@@ -100,7 +100,7 @@ cannot be applied at `nx = 60` (a 72-cell mesh), and they are **not resampled**:
 
 | dropped | why not interpolated |
 |---|---|
-| `plasma_radius_profile_cm`, `machine_radius_profile_cm` | Built offline by `scripts/g1_build_profiles.py` from a measured field census. The vessel profile is a **staircase** (40 / 50 / 76.2 cm bores plus annulus-equivalent radii over the cathode box); interpolating it would smear the steps into a bore the machine does not have, and the cathode-box annulus areas are exact measured quantities. |
+| `plasma_radius_profile_cm`, `machine_radius_profile_cm` | Built offline by `scripts/stance/g1_build_profiles.py` from a measured field census. The vessel profile is a **staircase** (40 / 50 / 76.2 cm bores plus annulus-equivalent radii over the cathode box); interpolating it would smear the steps into a bore the machine does not have, and the cathode-box annulus areas are exact measured quantities. |
 | `nn0_profile`, `nn0_annulus_profile` | An equilibrated 4.5 ms ballistic foot computed **for that mesh**. Resampling changes the neutral inventory and the near-source structure, so the result is a new initial condition, not the stance's. |
 
 The package is dropped **whole**, together with the two flags that require it
@@ -128,7 +128,7 @@ to be.
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
 | `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2.65x the 56,605 steps measured at the 2026-09-02 kinetic stance. It exists so a change that quietly destroys the timestep fails fast instead of running for hours; if it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2x deliberately, against the 76,631 steps the fixture ran at the R2b re-anchor (2026-08-20) — a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. The margin has moved with the fixture ever since WITHOUT the cap moving: ~1.6x at the 94,044 steps of the 2026-08-25 stance event, ~2.4x at the 62,612 of the 2026-08-26 adoption and the 2026-08-28 R3-tip recapture (which moved the count by ONE step), ~2.65x now. Re-sizing it remains a golden-touching change rather than a maintenance edit. |
-| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **8 min 06 s** on the pure path (2026-09-02 kinetic recapture, clean lane) against the full gate's 26 min 56 s capture / 26 min 50 s verify COMPILED — the pure full-gate figure is not measured at this stance. Over the steps it covers the digest is the STRONGER check, because the golden certifies only what reaches a save. (Earlier figures, each true at its own stance: 7 min 57 s pure against 16 min 27 s compiled / 38 min 41 s pure at the 2026-08-28 R3-tip recapture; 11 min 33 s / 16 min 16 s / 45 min 55 s at the 2026-08-26 adoption; ~2.5 min against a ~17 min gate before the 2026-08-25 adaptive-`dt` change.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
+| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/gates/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **8 min 06 s** on the pure path (2026-09-02 kinetic recapture, clean lane) against the full gate's 26 min 56 s capture / 26 min 50 s verify COMPILED — the pure full-gate figure is not measured at this stance. Over the steps it covers the digest is the STRONGER check, because the golden certifies only what reaches a save. (Earlier figures, each true at its own stance: 7 min 57 s pure against 16 min 27 s compiled / 38 min 41 s pure at the 2026-08-28 R3-tip recapture; 11 min 33 s / 16 min 16 s / 45 min 55 s at the 2026-08-26 adoption; ~2.5 min against a ~17 min gate before the 2026-08-25 adaptive-`dt` change.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -218,6 +218,20 @@ stance the cells carry plasma and the term is well behaved. Recorded as a known
 closure stress, deliberately not addressed by this pass.
 
 ## Recapture record
+
+**Paths since 2026-09-03:** the entries below record the commands as they
+were run, and `scripts/` was one flat directory until the `[scripts-subdirs]`
+member sorted it into seven subdirectories. Every `scripts/<name>` in this
+record resolves today at `scripts/gates/` for the gates and fixtures
+(`smoke_sim1d.py`, `baseline_sim1d.py`, `golden_digest_gate.py`,
+`interp_bitexact_gate.py`, `interp_fused_reference.py`,
+`deposit_beam_reference.py`, `audit_sim1d_configs.py`,
+`declm_route_identity.py`, this file), `scripts/run/` for the drivers,
+`scripts/score/` for the scorers, `scripts/stance/` for the stance
+builders, `scripts/verify/` for the per-build instruments,
+`scripts/atomic/` and `scripts/kinetic/` for those. `scripts/baselines/`,
+`scripts/data/` and `scripts/stances/` did not move. The transcripts are
+not rewritten: a record of what was run says what was run.
 
 **2026-09-03 — THE SPEED-UP EVENT: four bit-moving performance members
 re-anchored in one recapture (AUTHORIZED; the Tier C continuity pair passed all

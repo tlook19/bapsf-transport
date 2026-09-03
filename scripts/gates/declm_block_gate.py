@@ -47,7 +47,7 @@ reproduction recipes are in ``gate_hoisted_guards``.
 
 Usage::
 
-    PYTHONPATH=<checkout> python scripts/declm_block_gate.py
+    PYTHONPATH=<checkout> python scripts/gates/declm_block_gate.py
 """
 
 import json

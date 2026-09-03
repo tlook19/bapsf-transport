@@ -33,7 +33,7 @@ Gates:
       loudly at construction
 
 Usage:
-    python scripts/verify_sim1d_r4_collision.py
+    python scripts/verify/verify_sim1d_r4_collision.py
 """
 import sys
 from pathlib import Path

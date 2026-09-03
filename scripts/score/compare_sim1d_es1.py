@@ -53,14 +53,14 @@ beta and a_{p,r} are hypothesis-test outputs, never data corrections.
 
 Usage::
 
-    python scripts/compare_sim1d_es1.py                      # resolved + knudsen
-    python scripts/compare_sim1d_es1.py --nx 185
-    python scripts/compare_sim1d_es1.py --save-h5 run.h5     # keep the run
-    python scripts/compare_sim1d_es1.py --from-h5 run.h5     # re-score, no run
-    python scripts/compare_sim1d_es1.py --tau-afterglow 0.0275 \
+    python scripts/score/compare_sim1d_es1.py                      # resolved + knudsen
+    python scripts/score/compare_sim1d_es1.py --nx 185
+    python scripts/score/compare_sim1d_es1.py --save-h5 run.h5     # keep the run
+    python scripts/score/compare_sim1d_es1.py --from-h5 run.h5     # re-score, no run
+    python scripts/score/compare_sim1d_es1.py --tau-afterglow 0.0275 \
         --decay-window 20.5 40.0
-    python scripts/compare_sim1d_es1.py --beta-collapse      # canonical run set
-    python scripts/compare_sim1d_es1.py --beta-collapse run_es1.h5 run_es2.h5
+    python scripts/score/compare_sim1d_es1.py --beta-collapse      # canonical run set
+    python scripts/score/compare_sim1d_es1.py --beta-collapse run_es1.h5 run_es2.h5
 """
 
 import argparse
@@ -110,7 +110,7 @@ OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
 # standing warning runs the other way from the R1 era: editing
 # scripts/stances/g1atrim.toml changes the scorer's runs AND breaks the golden
 # until the fixture is recaptured. That is deliberate -- see
-# scripts/golden_baseline_provenance.md -- and a recapture is a reviewed event.
+# scripts/gates/golden_baseline_provenance.md -- and a recapture is a reviewed event.
 PRODUCTION_STANCE = "g1atrim"
 _STANCE = load_stance(PRODUCTION_STANCE).params
 
@@ -121,7 +121,7 @@ PARAM_OVERRIDES = {
     # dropping the pins would change resolution order for the other drivers.
     #
     # What this replaces: the previous values came from a FREE 4-parameter fit
-    # to the ES1 trace alone (scripts/fit_es1_circuit.py, "0.14 V rms"). That
+    # to the ES1 trace alone (scripts/stance/fit_es1_circuit.py, "0.14 V rms"). That
     # fit is NEAR-SINGULAR -- corr(V0, R) = 0.997, and R swings 1.9-5.7 mOhm
     # with the fit window, so the quoted +-0.079 mOhm was meaningless and the
     # 0.14 V rms was in-sample. The error was INVISIBLE AT ES1 and appeared
@@ -213,7 +213,7 @@ PARAM_OVERRIDES = {
     # disc behind a graphite front panel whose 14.5 in opening is the exposed
     # emitting/collecting/conducting face -> r = 18.415 cm. Field mapping from
     # the aperture to the plasma column is assumed 1:1. Provenance:
-    # scripts/production_stance_provenance.md.
+    # scripts/stance/production_stance_provenance.md.
     "Rp": 18.415,
     "R_cath": 18.415,
     "implicit_heat_scheme": "tr_bdf2",
@@ -249,7 +249,7 @@ PARAM_OVERRIDES = {
     # and transferred frozen; cathode_Ts_base_K carries none of it (only one
     # member of that flat direction may). Value from the stance; the value
     # chain, including the superseded 14.25 derivation, is in
-    # scripts/production_stance_provenance.md.
+    # scripts/stance/production_stance_provenance.md.
     "C_R": _STANCE["C_R"],
     # Beam deposition smoothing. The CSDA range profile is sharp on the mesh
     # scale; this spreads it over the physical straggling width so the
@@ -2429,7 +2429,7 @@ def main(argv=None):
             "does not feed them). Scoring a freshly run model against "
             f"ES{args.es} data here would compare an ES1-driven run to another "
             "rung's measurement. Build the run at its own operating point with "
-            "scripts/run_mechanism_ladder.py or scripts/run_m6_point.py, then "
+            "scripts/run/run_mechanism_ladder.py or scripts/run/run_m6_point.py, then "
             f"score the saved artifact: --from-h5 RUN.h5 --es {args.es}."
         )
     overlay_path = (

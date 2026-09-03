@@ -3,7 +3,7 @@
 The corpus pins the ``"diffuse_elastic"`` cylindrical-wall return chain --
 ``TransientDVM._wall_return_counts`` -> ``_solve_wall_return_spectra`` ->
 ``_cosine_wall_spectra`` -- at raw float64. It is the single source the verifier
-``scripts/verify_wall_return_reference.py`` checks an implementation against, so
+``scripts/verify/verify_wall_return_reference.py`` checks an implementation against, so
 a transcription of that chain never needs a second implementation of it to be
 believed.
 
@@ -30,8 +30,8 @@ would silently produce a different fixture.
 
 Usage (from the repo root, PYTHONPATH set to the repo root):
 
-    python scripts/build_wall_return_reference.py
-    python scripts/build_wall_return_reference.py --steps 600 --out <path>
+    python scripts/verify/build_wall_return_reference.py
+    python scripts/verify/build_wall_return_reference.py --steps 600 --out <path>
 """
 
 import argparse

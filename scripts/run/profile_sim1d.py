@@ -72,10 +72,10 @@ Outputs (all under ``--out-dir``, prefixed with ``--label``)
 Usage::
 
     # honest production timing (costs one production run)
-    python scripts/profile_sim1d.py --mode sample --label prod_sample_nx240
+    python scripts/run/profile_sim1d.py --mode sample --label prod_sample_nx240
 
     # exact call counts (slower; timings are distorted by design)
-    python scripts/profile_sim1d.py --mode cprofile --label prod_cprof_nx240
+    python scripts/run/profile_sim1d.py --mode cprofile --label prod_cprof_nx240
 
 Artifacts are run outputs: they live in ``scripts/`` and are never
 committed.

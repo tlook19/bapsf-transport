@@ -17,7 +17,7 @@ brightest single-stage PLT in the window (~1e-25 W cm^3) in place of the
 equilibrium mix, i.e. maximal non-equilibrium enhancement.
 
 Usage:
-    python scripts/scope_impurity_radiation.py [run.h5] [Te_excess_ratio] [elements]
+    python scripts/atomic/scope_impurity_radiation.py [run.h5] [Te_excess_ratio] [elements]
 
 ``elements`` is a comma list from {o, c, b, w} (default "o,c").  Boron and
 tungsten use the '89 Abels-van Maanen series (no '96 exists; older

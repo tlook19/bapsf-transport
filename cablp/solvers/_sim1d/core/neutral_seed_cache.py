@@ -24,7 +24,7 @@ re-equilibration (safe), never a wrong seed.
 
 A miss (missing file) or a signature mismatch raises a loud ``ValueError`` naming
 the cause and the rebuild command (house rule: fail loud on misconfiguration, no
-silent fallback). Rebuild with ``scripts/build_neutral_seed_cache.py``.
+silent fallback). Rebuild with ``scripts/run/build_neutral_seed_cache.py``.
 
 The signature also carries ``NEUTRAL_STEPPER_ID``, the identity of the implicit
 neutral stepper that produced a seed. The stepper is CODE, not configuration, so
@@ -256,7 +256,7 @@ def load_neutral_seed(path, params, flags, expected_cells=None):
 
     rebuild = (
         "Rebuild it for this neutral-flow configuration with:\n"
-        "  python scripts/build_neutral_seed_cache.py --out "
+        "  python scripts/run/build_neutral_seed_cache.py --out "
         f"{path}\n"
         "(re-equilibration is required whenever puffing, pumping, neutral-flow "
         "geometry, or the neutral-momentum/two-zone/kinetic mode changes)."

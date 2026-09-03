@@ -46,9 +46,9 @@ below 0.12 % absolute -- an order of magnitude inside the 1 % the read asks
 for -- at any ``f_dep``.
 
 Usage:
-    python scripts/mc_neutrals.py RUN.h5 [-n 200000] [--jet {none,cathode,both}]
+    python scripts/kinetic/mc_neutrals.py RUN.h5 [-n 200000] [--jet {none,cathode,both}]
         [--window 5 19.5] [--seed 1] [--out PREFIX]
-    python scripts/mc_neutrals.py RUN.h5 --fast-reflected [-n 200000]
+    python scripts/kinetic/mc_neutrals.py RUN.h5 --fast-reflected [-n 200000]
         [--r-e 0.2] [--r-n 0.5] [--window 5 19.5] [--seed 1] [--out PREFIX]
 """
 

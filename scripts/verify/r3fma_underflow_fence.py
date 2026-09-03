@@ -27,8 +27,8 @@ D. **In-domain sweep.** A large random sweep spanning the whole fenced domain
 
 Usage::
 
-    python scripts/r3fma_underflow_fence.py
-    python scripts/r3fma_underflow_fence.py --sweep 2000000
+    python scripts/verify/r3fma_underflow_fence.py
+    python scripts/verify/r3fma_underflow_fence.py --sweep 2000000
 """
 
 import argparse

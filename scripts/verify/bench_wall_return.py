@@ -12,8 +12,8 @@ stance arm is the registered number.
 
 Usage (from the repo root, PYTHONPATH set to the repo root):
 
-    python scripts/bench_wall_return.py
-    python scripts/bench_wall_return.py --repeats 9 --label post
+    python scripts/verify/bench_wall_return.py
+    python scripts/verify/bench_wall_return.py --repeats 9 --label post
 """
 
 import argparse
@@ -71,7 +71,7 @@ def main(argv=None):
     if not args.reference.exists():
         raise SystemExit(
             f"the wall-return fixture corpus is missing: {args.reference}. "
-            "Build it with scripts/build_wall_return_reference.py"
+            "Build it with scripts/verify/build_wall_return_reference.py"
         )
 
     data = np.load(args.reference, allow_pickle=True)

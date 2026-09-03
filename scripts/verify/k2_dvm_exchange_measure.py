@@ -57,7 +57,7 @@ is the same estimator on a larger sample rather than an average of ratios.
 
 Usage:
 
-    PYTHONPATH=<checkout>/cablp python scripts/k2_dvm_exchange_measure.py \
+    PYTHONPATH=<checkout>/cablp python scripts/verify/k2_dvm_exchange_measure.py \
         --run scripts/es1_kn2z_promoted_nx240.h5 \
         --out scripts/k2_dvm_exchange_measured.txt
 """

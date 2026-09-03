@@ -8,7 +8,7 @@ DERIVED standby T_s (the operator-set heater current read through the Fig-10
 map, not a machine temperature reading). Transfer across the ladder is the
 test, so everything else is frozen at the ES1 calibration.
 
-    python scripts/run_mechanism_ladder.py --es 1 --warming power_balance \
+    python scripts/run/run_mechanism_ladder.py --es 1 --warming power_balance \
         --phi-wf 2.87 --g-cond 1500 --c-th 120 --save-h5 out.h5
 """
 
@@ -33,7 +33,7 @@ from cablp.solvers._sim1d.results.io import save_result_hdf5
 # the operator's heater current, carried through the source paper's Fig-10
 # heater-current -> surface-temperature map (slope ~0.45 K/A, bracket
 # [0.43, 0.50] K/A; these rungs sit at the 0.43 K/A edge). Class, bars and the
-# C_R sensitivities: scripts/ladder_operating_provenance.md.
+# C_R sensitivities: scripts/run/ladder_operating_provenance.md.
 #
 # V_bank provenance, corrected 2026-08-03: all four are MEASURED pre-shot
 # open-circuit readings on the same probe channel as V_dis (+-0.03 V SEM, with

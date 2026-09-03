@@ -91,7 +91,7 @@ _HE_LOG_SIGMA = np.log(_he_data[:, 1])
 # probe -- and that dominates the CSDA march, which takes ~200k lookups per
 # solver step. Same float64 values, so the interpolated result is bit-identical.
 # The ndarrays above stay: the compiled kernel's table view needs buffers, and
-# ``scripts/interp_fused_reference.py`` reads them by name.
+# ``scripts/gates/interp_fused_reference.py`` reads them by name.
 _HE_LOG_EPS_SEQ = _HE_LOG_EPS.tolist()
 _HE_LOG_SIGMA_SEQ = _HE_LOG_SIGMA.tolist()
 
@@ -367,7 +367,7 @@ def He_beam_excitation_channel(E_eV, n_max=20):
     This is the measured replacement for the historical
     ``b_beam_excitation = 1.4`` estimate (WP-A):
     sigma_tot / sigma_2P = 1.65-1.75 and E_rad_mean = 21.95-21.98 eV over
-    the 60-180 eV beam range (``scripts/measure_beam_manifold.py``).
+    the 60-180 eV beam range (``scripts/atomic/measure_beam_manifold.py``).
     """
     from .coefficients import He_singlet_manifold
 
@@ -1037,7 +1037,7 @@ def phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"):
 # set stays inside the bracket the constant declares: rounding the 5 eV minimum
 # 6.209760e-16 to 6.210e-16 would have put Biagi 0.004 % outside it.
 # Both endpoints are published here as data so a reported result can quote them
-# instead of re-deriving them; `scripts/kmpull_threeset_check.py` re-runs the
+# instead of re-deriving them; `scripts/atomic/kmpull_threeset_check.py` re-runs the
 # derivation against the pull of record.
 HE_EN_MT_NODE_EV = (5.0, 25.0)
 HE_EN_MT_SIGMA_CM2 = (6.280e-16, 1.992e-16)

@@ -31,8 +31,8 @@ and must not take the other rows down with it.
 
 Usage::
 
-    python scripts/fingerprints_sim1d.py run.h5 [run2.h5 ...]
-    python scripts/fingerprints_sim1d.py --pair post.h5=pre.h5 post.h5 pre.h5
+    python scripts/score/fingerprints_sim1d.py run.h5 [run2.h5 ...]
+    python scripts/score/fingerprints_sim1d.py --pair post.h5=pre.h5 post.h5 pre.h5
 """
 
 import sys

@@ -44,7 +44,7 @@ before -- the presence gates, the domain checks, the family resolver in
 ``model_families``. A configuration written as blocks and the same
 configuration written flat resolve to the identical surface, byte for byte;
 that equivalence is the migration's whole claim, and
-``scripts/declm_route_identity.py`` is where it is measured.
+``scripts/gates/declm_route_identity.py`` is where it is measured.
 
 THE FLAT ROUTE KEEPS WORKING. Blocks are an ADDITIONAL input form. A config
 that names no block behaves exactly as it did -- the committed stances, the

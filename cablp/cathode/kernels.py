@@ -6,7 +6,7 @@ scalar kernels -- and of the sheath root find built on them -- reproduces the
 golden bit-exactly. It is therefore off by default and stays off unless a
 caller says otherwise, in as few words as possible:
 
-    CABLP_COMPILED_KERNELS=1 python scripts/baseline_sim1d.py --verify
+    CABLP_COMPILED_KERNELS=1 python scripts/gates/baseline_sim1d.py --verify
 
 Why an environment variable rather than a config key: the binding happens once,
 at module import, so that the hot path is a plain function object with no

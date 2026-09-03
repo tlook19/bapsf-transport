@@ -87,9 +87,9 @@ table comes from ``compare_sim1d_es1.compare``.
 
 Usage::
 
-    python scripts/m1_verdict_invariance.py --fluid F.h5 \\
+    python scripts/score/m1_verdict_invariance.py --fluid F.h5 \\
         --dvm-h H.h5 --dvm-h2 H2.h5 --es 1
-    python scripts/m1_verdict_invariance.py --self-test
+    python scripts/score/m1_verdict_invariance.py --self-test
 """
 
 import argparse

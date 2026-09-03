@@ -18,9 +18,9 @@ round-trips IEEE doubles bit-exactly, so the two routes deliver the same
 value.
 
 Usage:
-    python scripts/run_m6_point.py --es 1 --stance g1atrim --sgp 9010 \
+    python scripts/run/run_m6_point.py --es 1 --stance g1atrim --sgp 9010 \
         --save-h5 out.h5
-    python scripts/run_m6_point.py --es 1 --no-stance --sgp 9010 \
+    python scripts/run/run_m6_point.py --es 1 --no-stance --sgp 9010 \
         --close-lag 2e-3 --save-h5 out.h5 [--mn] [--L 8.1e-6] [--extra k=v ...]
 """
 
@@ -166,7 +166,7 @@ def main(argv=None):
     p.add_argument("--no-smooth", action="store_true")
     p.add_argument("--nn0-profile-npz", default=None,
                    help="path to a shaped initial neutral profile written by "
-                        "scripts/sp3_build_nn0.py. The DRIVER does the file "
+                        "scripts/stance/sp3_build_nn0.py. The DRIVER does the file "
                         "I/O -- the solver never opens a file -- and passes "
                         "the arrays in as input_dict values. It arms the "
                         "neutral_initial_profile flag, sets nn0=None (the "

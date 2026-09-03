@@ -14,7 +14,7 @@ electron_cooling_rhs_terms so prb1 honors it too.
   P1  scope/no-op: with icool_recomb off (prb1 not requested) the extension does
       not touch cooling; the flag defaults off.
 
-Usage:  python scripts/verify_sim1d_r5_lowte.py
+Usage:  python scripts/verify/verify_sim1d_r5_lowte.py
 """
 import sys
 

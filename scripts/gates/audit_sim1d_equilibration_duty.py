@@ -15,8 +15,8 @@ that step's RHS runs under.
 
 Usage (from <checkout>/cablp, PYTHONPATH set to the same cablp/):
 
-    python scripts/audit_sim1d_equilibration_duty.py
-    python scripts/audit_sim1d_equilibration_duty.py --family 0.0195 --nx 60
+    python scripts/gates/audit_sim1d_equilibration_duty.py
+    python scripts/gates/audit_sim1d_equilibration_duty.py --family 0.0195 --nx 60
 """
 
 import argparse

@@ -17,8 +17,8 @@ Correspondences (see cablp/atomic/data/adas/README.md for conventions):
 
 Usage::
 
-    python scripts/compare_rates_adas.py
-    python scripts/compare_rates_adas.py --ne 1e12 1e13
+    python scripts/atomic/compare_rates_adas.py
+    python scripts/atomic/compare_rates_adas.py --ne 1e12 1e13
 """
 
 import argparse

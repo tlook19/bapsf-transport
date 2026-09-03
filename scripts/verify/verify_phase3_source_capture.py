@@ -134,7 +134,7 @@ def _write(root, result, *, maximum_bytes=MAX_ARTIFACT_BYTES, invocation=None):
         result,
         run_id=result.run_id,
         capture_revision="a" * 40,
-        producer_path="scripts/capture_phase3_rhs.py",
+        producer_path="scripts/run/capture_phase3_rhs.py",
         started_at="2026-08-24T12:00:00Z",
         completed_at="2026-08-24T12:00:01Z",
         configuration_identity_sha256=configuration_identity(
@@ -143,7 +143,7 @@ def _write(root, result, *, maximum_bytes=MAX_ARTIFACT_BYTES, invocation=None):
         recipe_identity="synthetic-recipe",
         run_controls={"max_steps": 4000},
         invocation=(
-            ["python", "scripts/capture_phase3_rhs.py", "--synthetic"]
+            ["python", "scripts/run/capture_phase3_rhs.py", "--synthetic"]
             if invocation is None
             else invocation
         ),
@@ -223,7 +223,7 @@ def check_schema_round_trip_and_digests(root):
     first_inventory = inventory[0]
     assert first_inventory["capture_revision"] == "a" * 40
     assert first_inventory["producer_path"] == (
-        "scripts/capture_phase3_rhs.py"
+        "scripts/run/capture_phase3_rhs.py"
     )
     assert first_inventory["producer_anchor"] == (
         "cablp/solvers/_sim1d/solver.py:"
@@ -277,7 +277,7 @@ def check_refusals_and_atomicity(root):
         wrong_id,
         run_id=RUN_A,
         capture_revision="a" * 40,
-        producer_path="scripts/capture_phase3_rhs.py",
+        producer_path="scripts/run/capture_phase3_rhs.py",
         started_at="start",
         completed_at="complete",
         configuration_identity_sha256=configuration_identity(
@@ -285,7 +285,7 @@ def check_refusals_and_atomicity(root):
         ),
         recipe_identity="synthetic",
         run_controls={"max_steps": 4000},
-        invocation=["python", "scripts/capture_phase3_rhs.py"],
+        invocation=["python", "scripts/run/capture_phase3_rhs.py"],
         producer_blobs={},
         environment_lock={"path": "poetry.lock"},
         repository_root=root / "wrong-id",
@@ -341,7 +341,7 @@ def check_refusals_and_atomicity(root):
         _write,
         private_root,
         _fake_result(RUN_C),
-        invocation=["/home/example/python", "scripts/capture_phase3_rhs.py"],
+        invocation=["/home/example/python", "scripts/run/capture_phase3_rhs.py"],
     )
     private_target = (
         private_root
@@ -357,7 +357,7 @@ def _write_reserved(case_root, output, result):
         result,
         run_id=result.run_id,
         capture_revision="a" * 40,
-        producer_path="scripts/capture_phase3_rhs.py",
+        producer_path="scripts/run/capture_phase3_rhs.py",
         started_at="start",
         completed_at="complete",
         configuration_identity_sha256=configuration_identity(
@@ -365,7 +365,7 @@ def _write_reserved(case_root, output, result):
         ),
         recipe_identity="synthetic",
         run_controls={"max_steps": 4000},
-        invocation=["python", "scripts/capture_phase3_rhs.py"],
+        invocation=["python", "scripts/run/capture_phase3_rhs.py"],
         producer_blobs={},
         environment_lock={"path": "poetry.lock"},
         repository_root=case_root,
@@ -498,7 +498,7 @@ def check_constructor_order_and_cli_import(repo_root):
     )
     assert validation_index < construction_index
 
-    cli_source = (repo_root / "scripts/capture_phase3_rhs.py").read_text(
+    cli_source = (repo_root / "scripts/run/capture_phase3_rhs.py").read_text(
         encoding="utf-8"
     )
     cli_tree = ast.parse(cli_source)

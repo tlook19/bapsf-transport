@@ -30,7 +30,7 @@ pressure rather than against the other operator, is unaffected and still runs.
 The SETTLED-window net sink and u -> c_s establishment are the RUN gate
 (verify_sim1d_r3_boundary_startup.py), NOT this static probe.
 
-Usage:  python scripts/verify_sim1d_r3_boundary.py
+Usage:  python scripts/verify/verify_sim1d_r3_boundary.py
 """
 import sys
 

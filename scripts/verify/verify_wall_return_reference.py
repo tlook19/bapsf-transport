@@ -1,7 +1,7 @@
 """Verify the live wall-return chain against the committed fixture corpus.
 
 The corpus ``scripts/data/wall_return_reference.npz`` (built by
-``scripts/build_wall_return_reference.py``) holds raw float64 inputs and
+``scripts/verify/build_wall_return_reference.py``) holds raw float64 inputs and
 outputs of the ``"diffuse_elastic"`` cylindrical-wall return chain. This script
 replays every stored call through the LIVE code and reports the number of
 DIFFERING RAW UINT64 values -- the float64 bit patterns compared as integers,
@@ -25,8 +25,8 @@ the cells it was solved with; the calls are replayed exactly as stored.
 
 Usage (from the repo root, PYTHONPATH set to the repo root):
 
-    python scripts/verify_wall_return_reference.py --verify
-    python scripts/verify_wall_return_reference.py --verify --impl perturbed
+    python scripts/verify/verify_wall_return_reference.py --verify
+    python scripts/verify/verify_wall_return_reference.py --verify --impl perturbed
 
 ``--impl perturbed`` is the NEGATIVE CONTROL: it moves the last returned
 cosine-spectrum value by one ulp and nothing else. Every leg must then report a
@@ -304,7 +304,7 @@ def main(argv=None):
     if not args.reference.exists():
         raise SystemExit(
             f"the wall-return fixture corpus is missing: {args.reference}. "
-            "Build it with scripts/build_wall_return_reference.py"
+            "Build it with scripts/verify/build_wall_return_reference.py"
         )
     if args.tolerance:
         if args.impl != "live":

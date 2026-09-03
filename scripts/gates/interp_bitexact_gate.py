@@ -46,7 +46,7 @@ Two refusals, both earned:
 **Leg B -- the ARRAY path, over the committed ``deposit_beam`` corpus.** The
 sole array-fused-lerp consumer is ``cablp.cathode.beam_lane_march``, and the
 committed instrument that A/Bs it against the scalar-fused recursive route is
-``scripts/r3lane_equivalence.py --corpus``: it replays every corpus entry,
+``scripts/verify/r3lane_equivalence.py --corpus``: it replays every corpus entry,
 runs each tail-leg batch BOTH ways, and censuses FLIPPED WALKERS at raw
 uint64. This gate runs it as a subprocess and scores three things, refusing on
 any of them -- the same fail-closed discipline leg A applies to its digest
@@ -63,8 +63,8 @@ streams:
 Usage (from the checkout ROOT, with PYTHONPATH set to that same root, and the
 extension built with ``python build_ext.py --inplace``)::
 
-    python scripts/interp_bitexact_gate.py
-    python scripts/interp_bitexact_gate.py --steps 400 --report-every 25
+    python scripts/gates/interp_bitexact_gate.py
+    python scripts/gates/interp_bitexact_gate.py --steps 400 --report-every 25
 """
 
 import argparse

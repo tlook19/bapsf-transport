@@ -25,7 +25,7 @@ driver and subclasses the engine; it does not modify either.
 
 Usage:
 
-    PYTHONPATH=<checkout>/cablp python scripts/k2_dvm_exchange_acceptance.py \
+    PYTHONPATH=<checkout>/cablp python scripts/verify/k2_dvm_exchange_acceptance.py \
         --out scripts/k2_dvm_exchange_acceptance.txt
 """
 

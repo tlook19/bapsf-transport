@@ -64,7 +64,7 @@ Hardware caveats this fit was once said to adjudicate, as they now stand:
 
 Usage::
 
-    python scripts/fit_es1_circuit.py
+    python scripts/stance/fit_es1_circuit.py
 """
 
 from pathlib import Path

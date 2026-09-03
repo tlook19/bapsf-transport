@@ -1,15 +1,15 @@
 """Cut one pre-fill time out of an equilibration map into a shaped-nn0 npz.
 
-``scripts/eqmap_make.py`` records nn(z,t) and nn_a(z,t) through a foot-fill
+``scripts/run/eqmap_make.py`` records nn(z,t) and nn_a(z,t) through a foot-fill
 101st cycle -- a map of starting distributions parameterised by pre-fill time.
 This script takes that map and a pre-fill time and writes the
 shaped-initial-fill npz that the EXISTING ``neutral_initial_profile``
 capability consumes::
 
-    python scripts/eqmap_slice.py --map scripts/eqmap_demo_es1_nx240.npz \
+    python scripts/stance/eqmap_slice.py --map scripts/eqmap_demo_es1_nx240.npz \
         --prefill-s 4.5e-3 --out scripts/eqmap_nn0_es1_t4p5ms.npz
 
-    python scripts/run_m6_point.py --es 1 --nx 240 --two-zone \
+    python scripts/run/run_m6_point.py --es 1 --nx 240 --two-zone \
         --nn0-profile-npz scripts/eqmap_nn0_es1_t4p5ms.npz \
         --extra-flag neutral_equilibration=false \
         --sgp 9010 --save-h5 scripts/somerun.h5
@@ -80,7 +80,7 @@ def load_map(path):
             raise ValueError(
                 f"{path} is not a {MAP_FORMAT} map (format="
                 f"{str(data['format']) if 'format' in keys else 'absent'}); "
-                "produce one with scripts/eqmap_make.py"
+                "produce one with scripts/run/eqmap_make.py"
             )
         for required in ("t_s", "nn", "z_cm", "provenance"):
             if required not in keys:
@@ -317,7 +317,7 @@ def main(argv=None):
     cadence = float(header.get("cadence_s", np.min(np.diff(t_s))))
     ledger = {
         "kind": "shaped initial neutral fill, sliced from an equilibration map",
-        "producer": "scripts/eqmap_slice.py",
+        "producer": "scripts/stance/eqmap_slice.py",
         "map_file": str(Path(args.map).resolve()),
         "map_format": MAP_FORMAT,
         "map_config_sha256": header.get("config_sha256"),

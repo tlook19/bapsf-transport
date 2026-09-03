@@ -46,10 +46,10 @@ control. Neither can be second-order at any dt, so if either reaches 2.0, the
 harness or the scheme is wrong rather than good.
 
 Usage:
-    python scripts/verify_sim1d_order.py
-    python scripts/verify_sim1d_order.py --picard 4 --splitting strang
-    python scripts/verify_sim1d_order.py --schemes crank_nicolson tr_bdf2
-    python scripts/verify_sim1d_order.py --t-end 2e-6 --base-steps 8
+    python scripts/gates/verify_sim1d_order.py
+    python scripts/gates/verify_sim1d_order.py --picard 4 --splitting strang
+    python scripts/gates/verify_sim1d_order.py --schemes crank_nicolson tr_bdf2
+    python scripts/gates/verify_sim1d_order.py --t-end 2e-6 --base-steps 8
 """
 
 import argparse

@@ -272,7 +272,7 @@ def fma_array(a, b, c):
     products that CANCEL into a subnormal SUM (the closing add is a plain
     rounding), and zero factors (``0*x`` is exactly ``0``, which is why the
     floor exempts zeros). All three measure 0 differing from :func:`math.fma`;
-    ``scripts/r3fma_underflow_fence.py`` is the reproduction.
+    ``scripts/verify/r3fma_underflow_fence.py`` is the reproduction.
 
     The SIGNED ZERO of an exact-zero product is the one remaining departure,
     and it is a sign question only. **When ``a*b`` is an exact zero, the sign
@@ -321,7 +321,7 @@ def check_fma_domain(arr, name, *, factor=True):
         :func:`_two_sum`, which is error-free for any finite operands, so a
         tiny or even subnormal ``c`` is legal and is NOT fenced (measured: 0
         differing from :func:`math.fma` over 300,000 subnormal-addend triples,
-        ``scripts/r3fma_underflow_fence.py``). Fencing it as well would refuse
+        ``scripts/verify/r3fma_underflow_fence.py``). Fencing it as well would refuse
         a call the reconstruction handles exactly.
 
     Split out so a caller with a FIXED operand -- an interpolation table, say

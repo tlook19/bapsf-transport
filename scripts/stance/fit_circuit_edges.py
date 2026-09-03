@@ -51,7 +51,7 @@ reason to keep L at the superseded 6.6 uH. The edge instrument EXCLUDES
 15-25 uH at 4.6-7.1x its minimum residual (and puts 6.6 uH at 2.0x).
 
 Usage:
-    python scripts/fit_circuit_edges.py
+    python scripts/stance/fit_circuit_edges.py
 """
 
 from pathlib import Path

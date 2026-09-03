@@ -23,7 +23,7 @@ The figure is drawn from the overlay's own keys and skips loudly, without
 plotting, on an overlay vintage that carries no second face.
 
 Usage:
-  python scripts/plot_es1_afterglow_faces.py \
+  python scripts/score/plot_es1_afterglow_faces.py \
       --from-h5 scripts/m1_arm2_es1.h5 \
       --output scripts/m1_arm2_es1_afterglow_faces.png
 """

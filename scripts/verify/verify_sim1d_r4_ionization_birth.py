@@ -34,7 +34,7 @@ Gates:
       with a nonzero neutral wind (u_i != u_n) and at rest (u_n = 0)
 
 Usage:
-    python scripts/verify_sim1d_r4_ionization_birth.py
+    python scripts/verify/verify_sim1d_r4_ionization_birth.py
 """
 import sys
 

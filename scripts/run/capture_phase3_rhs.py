@@ -26,7 +26,7 @@ from cablp.solvers._sim1d.results.phase3_capture import (
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = SCRIPT_DIR.parents[0]
 OUTPUT_DIRECTORY = SCRIPT_DIR / "baselines" / "phase3_rhs"
-PRODUCER_PATH = "scripts/capture_phase3_rhs.py"
+PRODUCER_PATH = "scripts/run/capture_phase3_rhs.py"
 MINIMUM_CAPTURE_ANCESTOR = "5911bc18a3b1f065dfff351d00190aba0e2f4e26"
 EXPECTED_CONFIGURATION_IDENTITY = (
     "91e19ac5a7eb11c21ce0c38ab36cb60f948c420edc8ae0a1642e80095cb0eec6"
@@ -38,8 +38,8 @@ PRODUCER_INPUT_PATHS = (
     "cablp/solvers/_sim1d/results/io.py",
     "cablp/solvers/_sim1d/results/phase3_capture.py",
     "cablp/solvers/_sim1d/solver.py",
-    "scripts/baseline_sim1d.py",
-    "scripts/golden_digest_gate.py",
+    "scripts/gates/baseline_sim1d.py",
+    "scripts/gates/golden_digest_gate.py",
     "scripts/stances/g1atrim.toml",
     "scripts/baselines/golden_digest_4k.json",
     "scripts/baselines/production_discharge.json",
@@ -220,7 +220,7 @@ def _parse_args(argv=None):
 def main(argv=None):
     args = _parse_args(argv)
     raw_argv = sys.argv[1:] if argv is None else list(argv)
-    invocation = ["python", "scripts/capture_phase3_rhs.py", *raw_argv]
+    invocation = ["python", "scripts/run/capture_phase3_rhs.py", *raw_argv]
     h5_path, provenance_path = capture_phase3_rhs(
         args.run_id,
         args.capture_revision,

@@ -4,10 +4,10 @@ Run the whole suite (the gate) with no arguments; it exits 0 on success and
 dies at the first failing assert, exactly as the single linear script it
 replaces did.
 
-    python scripts/smoke_sim1d.py              # full suite, the gate
-    python scripts/smoke_sim1d.py --list       # case names, in order
-    python scripts/smoke_sim1d.py --only cathode-boundary-beer-lambert
-    python scripts/smoke_sim1d.py --trace      # log each case name as it starts
+    python scripts/gates/smoke_sim1d.py              # full suite, the gate
+    python scripts/gates/smoke_sim1d.py --list       # case names, in order
+    python scripts/gates/smoke_sim1d.py --only cathode-boundary-beer-lambert
+    python scripts/gates/smoke_sim1d.py --trace      # log each case name as it starts
 
 There is no pytest dependency and no discovery: ``_CASES`` is an ordered list
 built by the ``@_case`` decorator at import time, and the full suite runs it
@@ -13541,7 +13541,7 @@ def _case_gas_puff_orifice_profile():
     # --- Tube-beamed injection row (gas_puff_profile="orifice"): the SAME row
     # the kinetic instruments launch, read by the fluid solver as its
     # deposition profile. Three things are owned here: the row the shared
-    # implementation returns is bit-for-bit the row scripts/puff_orifice.py
+    # implementation returns is bit-for-bit the row scripts/stance/puff_orifice.py
     # derives on the same inputs (one derivation, not two), it conserves the
     # total inflow exactly, and every misconfiguration raises at CONSTRUCTION.
     from cablp.solvers._sim1d.core.geometry import build_geometry
@@ -14047,7 +14047,7 @@ def _case_he_singlet_manifold_registry(_b21p, _he_2p_excitation_cross_cm2):
 def _case_csda_module_standalone():
     # --- B1: the standalone CSDA beam-deposition module
     # (B1; full acceptance in
-    # scripts/verify_beam_deposition.py — this is the fast subset).
+    # scripts/verify/verify_beam_deposition.py — this is the fast subset).
     from cablp.cathode.beam_deposition import (
         _COULOMB_STOPPING_EXPONENT,
         _coulomb_stopping_coefficient,
@@ -15349,7 +15349,7 @@ def _case_cathode_jet_hot_carrier():
     # the construction refusals, the OFF path's bit-exactness, and the term's
     # own particle/energy/momentum closure with the three v1 withholdings
     # checked against the launch BY NAME. The stance-point magnitudes are
-    # scripts/t23c_pairwise_audit.py's job; this is the plumbing gate.
+    # scripts/verify/t23c_pairwise_audit.py's job; this is the plumbing gate.
     from cablp.solvers._sim1d.core.state import NEUTRAL_ENERGY_FLOOR_T_K
     from cablp.solvers._sim1d.physics.sources import (
         cathode_jet_backscatter_speed as _hc_vback,
@@ -22162,7 +22162,7 @@ def _case_kinetic_geff_thermal_floor():
     a coefficient pin alone passes the two-Maxwellian (reduced-mass) form
     unchanged. Pinning the drift-free mean relative speed separates them by
     ``sqrt(2)``. Which consumer actually calls the helper is C5(a)'s job in
-    ``scripts/verify_sim1d_k2_dvm.py``; this case pins the number.
+    ``scripts/verify/verify_sim1d_k2_dvm.py``; this case pins the number.
     """
     from cablp.solvers._sim1d.physics.kinetic_neutrals import (
         ion_thermal_g_eff_floor_cm2_s2 as _gf,
@@ -22399,7 +22399,7 @@ def _case_ionization_birth_neutral_temperature():
 # --------------------------------------------------------------------
 @_case("golden-digest-gate-deterministic")
 def _case_golden_digest_gate_deterministic():
-    # scripts/golden_digest_gate.py is the short-horizon complement to the
+    # scripts/gates/golden_digest_gate.py is the short-horizon complement to the
     # golden: it folds the packed state into a running SHA-256 after every
     # accepted step. Its own 4,000-step gate is a minutes-long run and is NOT
     # run here -- what this case owns is that the module imports and that the
@@ -22527,7 +22527,7 @@ def _case_phase3_artifact_locator_battery():
             _p3_result,
             run_id=_p3_run,
             capture_revision="a" * 40,
-            producer_path="scripts/capture_phase3_rhs.py",
+            producer_path="scripts/run/capture_phase3_rhs.py",
             started_at="2026-08-24T12:00:00Z",
             completed_at="2026-08-24T12:00:01Z",
             configuration_identity_sha256=_phase3_configuration_identity(
@@ -22535,7 +22535,7 @@ def _case_phase3_artifact_locator_battery():
             ),
             recipe_identity="synthetic-recipe",
             run_controls={"max_steps": 4000},
-            invocation=["python", "scripts/capture_phase3_rhs.py",
+            invocation=["python", "scripts/run/capture_phase3_rhs.py",
                         "--synthetic"],
             producer_blobs={"cablp/synthetic.py": "b" * 40},
             environment_lock={"path": "poetry.lock",

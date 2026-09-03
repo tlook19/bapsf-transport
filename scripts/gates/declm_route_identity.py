@@ -52,8 +52,8 @@ THE ROUTES, and why each one is here:
 
 Usage::
 
-    PYTHONPATH=<checkout> python scripts/declm_route_identity.py --out FILE.json
-    PYTHONPATH=<checkout> python scripts/declm_route_identity.py \
+    PYTHONPATH=<checkout> python scripts/gates/declm_route_identity.py --out FILE.json
+    PYTHONPATH=<checkout> python scripts/gates/declm_route_identity.py \
         --compare BASE.json --out TIP.json
 """
 

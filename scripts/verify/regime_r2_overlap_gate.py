@@ -44,8 +44,8 @@ evidence and neither is tuned for; a FAIL under matched closures is a statement
 about the two descriptions, not a defect to be fitted away.
 
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
-    python scripts/regime_r2_overlap_gate.py --nx 20 --t-end 3e-5
-    python scripts/regime_r2_overlap_gate.py --nx 20 --t-end 3e-5 \\
+    python scripts/verify/regime_r2_overlap_gate.py --nx 20 --t-end 3e-5
+    python scripts/verify/regime_r2_overlap_gate.py --nx 20 --t-end 3e-5 \\
         --anomalous-model ql_relaxation --ql-relaxation-coeff 30
 """
 

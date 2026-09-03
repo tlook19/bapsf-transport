@@ -37,10 +37,10 @@ pinned historical scaffold whose tag is retired.
 Usage::
 
     # write the golden fixture (run once, before any _sim1d/ change)
-    python scripts/baseline_sim1d.py --capture
+    python scripts/gates/baseline_sim1d.py --capture
 
     # re-run and assert equivalence (run at every milestone boundary)
-    python scripts/baseline_sim1d.py --verify
+    python scripts/gates/baseline_sim1d.py --verify
 
 The trajectory is stored as the packed conservative state ``y`` (the solver's
 source of truth); all primitive fields derive from it, so comparing ``y`` is the
@@ -100,7 +100,7 @@ PRODUCTION_STANCE = "g1atrim"
 # 280-cell mesh (1 plenum + 5 gap + 5 fixed source + 268 far column + 1
 # collector). They cannot travel to nx=60, and they are NOT resampled here:
 #
-#   * the two radius profiles are built offline by scripts/g1_build_profiles.py
+#   * the two radius profiles are built offline by scripts/stance/g1_build_profiles.py
 #     from a measured field census, and the vessel profile is a STAIRCASE whose
 #     steps interpolation would smear into a bore the machine does not have;
 #   * the two nn0 profiles are an equilibrated 4.5 ms foot computed for that
@@ -188,7 +188,7 @@ BASELINE_FLAG_OVERRIDES = {
 #
 # The capture's own measured cost -- step count, dynamic t_end, wall time,
 # saves, and the dt history behind them -- lives in
-# scripts/golden_baseline_provenance.md, which is rewritten at every recapture.
+# scripts/gates/golden_baseline_provenance.md, which is rewritten at every recapture.
 # It is deliberately NOT restated here: a runtime figure in a standing comment
 # has no way of announcing that it has drifted.
 #

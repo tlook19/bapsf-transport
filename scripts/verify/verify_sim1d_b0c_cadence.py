@@ -95,9 +95,9 @@ evidence); ``--table`` writes the registered markdown deliverable
 caller redirects them.
 
 Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
-    python scripts/verify_sim1d_b0c_cadence.py --plan
-    python scripts/verify_sim1d_b0c_cadence.py --arm base_2.5e-05_16x6
-    python scripts/verify_sim1d_b0c_cadence.py --table
+    python scripts/verify/verify_sim1d_b0c_cadence.py --plan
+    python scripts/verify/verify_sim1d_b0c_cadence.py --arm base_2.5e-05_16x6
+    python scripts/verify/verify_sim1d_b0c_cadence.py --table
 """
 import argparse
 import ast
@@ -1854,7 +1854,7 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
     lines.append("")
     lines.append(
         "Registration of record: the B0c registration, R1-R16, ratified "
-        "2026-08-24. Harness: `scripts/verify_sim1d_b0c_cadence.py`."
+        "2026-08-24. Harness: `scripts/verify/verify_sim1d_b0c_cadence.py`."
     )
     lines.append("")
     if registered:

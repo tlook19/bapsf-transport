@@ -24,7 +24,7 @@ plasma-live cells, blanking the plasma-dead roles behind the cathode face;
 nn is drawn over the full domain, where the plenum reservoir is physical.
 
 Usage:
-  python scripts/plot_es1_validation.py --from-h5 scripts/es1_r5_ts1840.h5 \
+  python scripts/score/plot_es1_validation.py --from-h5 scripts/es1_r5_ts1840.h5 \
       --es 1 --out scripts/es1_r5_validation_ts1840.png
 """
 

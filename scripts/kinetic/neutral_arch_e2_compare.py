@@ -81,7 +81,7 @@ Artifacts (written to ``--out-dir``)
 
 Usage (single command, reruns end to end):
 
-    PYTHONPATH=<checkout>/cablp python scripts/neutral_arch_e2_compare.py \
+    PYTHONPATH=<checkout>/cablp python scripts/kinetic/neutral_arch_e2_compare.py \
         --run scripts/es1_kn2z_promoted_nx240.h5 --out-dir scripts
 """
 

@@ -46,7 +46,7 @@ Gates:
       the state it constructs into (neutral_energy off, no En field)
 
 Usage:
-    PYTHONPATH=<checkout>/cablp python scripts/verify_sim1d_nbl1_neutral_energy.py
+    PYTHONPATH=<checkout>/cablp python scripts/verify/verify_sim1d_nbl1_neutral_energy.py
 """
 import sys
 

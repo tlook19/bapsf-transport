@@ -12,7 +12,7 @@ committed), like every other run artifact under scripts/.
 
 Usage (ES1 production config, nx=120)::
 
-    python scripts/build_neutral_seed_cache.py --es1 --nx 120 \
+    python scripts/run/build_neutral_seed_cache.py --es1 --nx 120 \
         --out scripts/neutral_seed_es1_nx120.npz
 
 The config is assembled by the SAME path the run uses (compare_sim1d_es1) so the

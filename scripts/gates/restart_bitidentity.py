@@ -19,7 +19,7 @@ Two scenarios, both cheap:
              continuation cache -- the cache the d1a null measured at ~1.0
              relative in l_b at beam turn-on
 
-Usage:  python scripts/restart_bitidentity.py [--scenario NAME] [--keep-dir DIR]
+Usage:  python scripts/gates/restart_bitidentity.py [--scenario NAME] [--keep-dir DIR]
 """
 
 import argparse

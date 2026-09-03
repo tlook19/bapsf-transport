@@ -16,7 +16,7 @@ is `verify_sim1d_r3_a11.py --picard`):
       state at the knee (the fix is active where |dI/dt| is large).
   G1  construction: default off; the K4a kinetic engine + picard raises loudly.
 
-Usage:  python scripts/verify_sim1d_r5_picard.py
+Usage:  python scripts/verify/verify_sim1d_r5_picard.py
 """
 import sys
 

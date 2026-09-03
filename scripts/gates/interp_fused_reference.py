@@ -24,13 +24,13 @@ available; from here on it is just data, checkable anywhere, forever.
 Usage::
 
     # on a CONTRACTED platform (macOS/arm64), once:
-    python scripts/interp_fused_reference.py --capture
+    python scripts/gates/interp_fused_reference.py --capture
 
     # anywhere, any time -- the package's own fused helper:
-    python scripts/interp_fused_reference.py --verify
+    python scripts/gates/interp_fused_reference.py --verify
 
     # the platform probe: is THIS numpy's arr_interp contracted?
-    python scripts/interp_fused_reference.py --verify --impl numpy
+    python scripts/gates/interp_fused_reference.py --verify --impl numpy
 
 ``--verify`` compares at raw uint64, never with a tolerance: a tolerance would
 defeat the entire point.

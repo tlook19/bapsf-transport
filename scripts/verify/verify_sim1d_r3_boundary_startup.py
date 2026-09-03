@@ -21,7 +21,7 @@ commit 967ff0c, was new -16.01 kW vs old +0.20 kW.
 A short startup run is a diagnostic, NOT an ES campaign point; longer runs need
 Tom's go-ahead. This is minutes-long (one partial production run).
 
-Usage:  python scripts/verify_sim1d_r3_boundary_startup.py [--t-end-ms 6]
+Usage:  python scripts/verify/verify_sim1d_r3_boundary_startup.py [--t-end-ms 6]
 """
 import argparse
 import sys

@@ -28,7 +28,7 @@ Gates:
      2026-08-31 (Tom); the routing it selected is now the only one, so G5
      asserts its two values directly.)
 
-Usage:  python scripts/verify_sim1d_r3_routing.py
+Usage:  python scripts/verify/verify_sim1d_r3_routing.py
 """
 import math
 import sys

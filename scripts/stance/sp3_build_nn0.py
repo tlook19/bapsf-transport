@@ -90,7 +90,7 @@ a file rather than a kilobyte of argv, via ``--extra-npz KEY=path.npz:array``.
 
 Usage:
 
-    python scripts/sp3_build_nn0.py --sgp 5200 --two-zone \
+    python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
         --dt-foot-s 4.5e-3 --kernel ballistic --out scripts/sp3_nn0_b45.npz
 """
 

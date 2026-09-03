@@ -21,7 +21,7 @@ booking (2^1P at 21.218 eV):
                                                   old 1.4 estimate)
 
 Usage:
-    python scripts/measure_beam_manifold.py [--energies 60 100 150 180]
+    python scripts/atomic/measure_beam_manifold.py [--energies 60 100 150 180]
 """
 
 from __future__ import annotations

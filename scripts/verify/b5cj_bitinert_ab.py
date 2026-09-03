@@ -24,7 +24,8 @@ Two arms, because the diff must be inert on two different paths:
 Neither arm names any B5 configuration key, so this same file runs unchanged
 at the base commit.
 
-**Reused by B4** (``b4aj_bitinert_ab.py``), which is a thin wrapper rather than
+**Reused by B4** (``b4aj_bitinert_ab.py`` (at commit 48be9a4, retired
+2026-09-03)), which is a thin wrapper rather than
 a fork: the logic here is channel-agnostic, so B4 supplies its own velocity
 grid, cadence and (for the armed-sanity run) its own channel key through
 ``--extra`` / ``--extra-flag``, and the two members share one implementation of
@@ -52,9 +53,9 @@ fingerprint, the row comparison as the gate.
 
 Usage (from the checkout root, PYTHONPATH set to it)::
 
-    python scripts/b5cj_bitinert_ab.py --arm kinetic_dvm \
+    python scripts/verify/b5cj_bitinert_ab.py --arm kinetic_dvm \
         --out scripts/b5cj_ab_kinetic_dvm_<label>.json
-    python scripts/b5cj_bitinert_ab.py --compare A.json B.json
+    python scripts/verify/b5cj_bitinert_ab.py --compare A.json B.json
 """
 
 import argparse

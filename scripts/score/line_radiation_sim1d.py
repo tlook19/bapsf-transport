@@ -6,12 +6,12 @@ the solver is never constructed.  Every plasma number is a re-evaluation of
 the run's OWN saved state through the run's own ADAS closure, so this
 instrument cannot report a physics the run did not carry.
 
-WHAT IS COMPUTED.  ``scripts/port_radiance_sim1d.py`` reports the two adf11
+WHAT IS COMPUTED.  ``scripts/score/port_radiance_sim1d.py`` reports the two adf11
 PLT channels, which carry NO spectral information -- one number per emitting
 stage.  This script resolves those channels into individual transitions using
 the OPEN-ADAS adf15 photon emissivity coefficients, reusing the reader,
 interpolator, line list and band convention of
-``scripts/pec_band_fractions.py`` unchanged:
+``scripts/score/pec_band_fractions.py`` unchanged:
 
     He I  (e-n)   eps_i = PEC_i(ne, Te) * n_e * nn      [photons cm^-3 s^-1]
     He II (e-i)   eps_i = PEC_i(ne, Te) * n_e * n_e     [photons cm^-3 s^-1]
@@ -377,7 +377,7 @@ DEFAULT_WINDOW_MS = (15.0, 19.5)
 DEFAULT_PORTS = (22, 27)
 
 #: In-repo band-split record whose rules this script inherits.
-BAND_SPLIT_NOTE = "scripts/pec_band_fractions.md"
+BAND_SPLIT_NOTE = "scripts/score/pec_band_fractions.md"
 
 #: Below this Te the adf15 line list is not quotable as physics.
 QUOTABLE_TE_MIN_EV = 2.0
@@ -694,7 +694,7 @@ def assumptions(rep):
             "value": f"{PBF.HC_EV_NM:g} eV nm",
             "class": "ASSUMED",
             "source": (
-                "Inherited unchanged from `scripts/pec_band_fractions.py` so "
+                "Inherited unchanged from `scripts/score/pec_band_fractions.py` so "
                 "the photon/power conversion is identical on both sides of "
                 "every completeness ratio below."
             ),
@@ -2046,11 +2046,11 @@ def markdown_report(rep):
     L.append(f"# Line-resolved synthetic spectroscopy -- {Path(rep['h5']).name}")
     L.append("")
     L.append(
-        "Produced by `scripts/line_radiation_sim1d.py`, READ-ONLY over the "
+        "Produced by `scripts/score/line_radiation_sim1d.py`, READ-ONLY over the "
         "saved artifact. The adf11 PLT channels of "
-        "`scripts/port_radiance_sim1d.py` are resolved into individual "
+        "`scripts/score/port_radiance_sim1d.py` are resolved into individual "
         "transitions with the OPEN-ADAS adf15 line list, reader and band "
-        f"convention of `scripts/pec_band_fractions.py` (record: "
+        f"convention of `scripts/score/pec_band_fractions.py` (record: "
         f"`{BAND_SPLIT_NOTE}`). Do not edit by hand."
     )
     L.append("")

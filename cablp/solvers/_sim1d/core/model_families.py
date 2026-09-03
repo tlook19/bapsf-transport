@@ -24,7 +24,7 @@ The member sets below ARE that cascade, flattened.
 reading what ``LAPDSim1D`` refuses, clearing the key that refusal names, and
 repeating until it constructs. They are not invariants: a flipped default or
 a new presence-gate changes them, and the way to re-measure is to run the
-instrument suite (``scripts/verify_sim1d_k2_dvm.py`` for the DVM arm) and
+instrument suite (``scripts/verify/verify_sim1d_k2_dvm.py`` for the DVM arm) and
 read what the solver refuses. Do not extend them by guessing.
 
 **The guards stay.** Every single-key guard these sets flatten is still in

@@ -63,7 +63,7 @@ Gates:
       is accepted; the happy paths construct
 
 Usage:
-    PYTHONPATH=<checkout>/cablp python scripts/verify_sim1d_nbl2_neutral_transport.py
+    PYTHONPATH=<checkout>/cablp python scripts/verify/verify_sim1d_nbl2_neutral_transport.py
 """
 import sys
 

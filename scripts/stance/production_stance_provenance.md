@@ -1,9 +1,9 @@
 # Provenance of the production stance (`scripts/stances/g1atrim.toml`)
 
 The production stance of record is the committed stance file
-`scripts/stances/g1atrim.toml`, loaded by `scripts/stance_config.py`
+`scripts/stances/g1atrim.toml`, loaded by `scripts/stance/stance_config.py`
 (R1, 2026-08-20). The `PARAM_OVERRIDES` / `FLAG_OVERRIDES` dicts in
-`scripts/compare_sim1d_es1.py` still exist, but they are no longer the home of
+`scripts/score/compare_sim1d_es1.py` still exist, but they are no longer the home of
 these values: every key the stance names is now POPULATED FROM the stance file
 (`_STANCE = load_stance(PRODUCTION_STANCE).params`, `compare_sim1d_es1.py:101`)
 rather than repeated in the dict, and what the dicts still carry on their own is
@@ -468,7 +468,7 @@ conserved exactly either way.
 
 **`nn0_profile`, `nn0_annulus_profile` — REGENERATED 2026-08-24 (DERIVED from a
 model run, not measured).** The shaped 4.5 ms ballistic foot, rebuilt by
-`scripts/sp3_build_nn0.py` on the equilibrated base
+`scripts/stance/sp3_build_nn0.py` on the equilibrated base
 `scripts/g1aporf_eqbase.h5` and written to `scripts/g1aporf_foot45.npz`
 (`scripts/g1aporf_foot45.cmd` is the verbatim command; `dt_foot = 4.5 ms` is
 the pedestal-floor end of the registered [2.0, 4.5] ms bracket, `ballistic` the
@@ -556,7 +556,7 @@ and lie inside the local vessel radius, and it does at both: the column is at
 **`plasma_radius_profile_cm` — MEASURED (machine-state field record), adopted
 2026-09-01 (Tom) and RE-REGISTERED the same day.** The per-cell flux-tube
 radius under `prescribed_area_geometry`, one entry per cell of the stance's
-280-cell mesh. It is built by `scripts/build_msi_field_profile.py` from the
+280-cell mesh. It is built by `scripts/stance/build_msi_field_profile.py` from the
 `MSI/Magnetic field` group the ES1 raw shot files carry: 1024 axial field
 samples at a 2.273 cm pitch, recorded at the first and last shot of every run.
 Each recorded profile is divided by its OWN plateau level (the median over
@@ -636,7 +636,7 @@ SEPARATELY is the face systematic: the two faces bracket the ratio at
 0.987–1.022, which is not folded into the sigma above and which takes the
 originating measurement from 5σ statistical to roughly 3σ. The builder's
 acceptance gate is a ±1σ POINT test on the constant —
-`scripts/build_msi_field_profile.py` refuses an emitted profile whose implied
+`scripts/stance/build_msi_field_profile.py` refuses an emitted profile whose implied
 p50/p41 area ratio differs from `MEASURED_P50_P41_FLUX_RATIO` by more than
 `MEASURED_P50_P41_FLUX_RATIO_SIGMA` — so the σ figures quoted around it are
 distances on that pair, and the gate does turn on the point value.
@@ -680,7 +680,7 @@ in model coordinates, and is superseded by the re-adjudication above.
 
 *(SUPERSEDED 2026-09-01: the CAD-census droop_min profile.* Until the MSI
 adoption the shipped array was the `droop_min` case of
-`scripts/g1_build_profiles.py` — a traced flux surface through a
+`scripts/stance/g1_build_profiles.py` — a traced flux surface through a
 finite-element re-solve of the drawn coil set, flat to 1855 cm and flared on
 the traced ratio beyond it. That build is RETAINED, unchanged, and is now the
 independent CROSS-CHECK; it also still owns `machine_radius_profile_cm`, which
@@ -690,7 +690,7 @@ cross-check is its `off` case, which is the one the corrected registration
 agrees with.)*
 
 **`machine_radius_profile_cm` — MEASURED (machine CAD), unchanged.** The
-vessel bore staircase, still built by `scripts/g1_build_profiles.py`
+vessel bore staircase, still built by `scripts/stance/g1_build_profiles.py`
 (40.0 cm source chamber, 50.0 cm main shell to the 19.65 m step, 76.2 cm far
 source chamber, with the cathode-box cells carrying the annulus-area-equivalent
 radius that reproduces the measured clear areas 1350.1 / 1847.6 cm²). The
@@ -818,7 +818,7 @@ away from the continuum Maxwellian — about `2.4e-2` in both the density split
 and the temperature at `48 x 12`, with `96 x 32` taking the temperature offset
 to `8.4e-3` while the density split converges to `~2.1e-2`. `64 x 24` lies
 between those two measured points and its own offsets are NOT separately
-recorded here; `scripts/verify_sim1d_k2_dvm.py` (gate L4) is the instrument
+recorded here; `scripts/verify/verify_sim1d_k2_dvm.py` (gate L4) is the instrument
 that measures them and is the pointer of record. `nvz` must be EVEN — an odd
 count places a node at exactly `v_z = 0`, which neither transports nor mirrors.
 
@@ -827,7 +827,7 @@ longer the shipped placeholder.** The neutral clock's tick. The package default
 `2.5e-5` s is explicitly PROVISIONAL and its own defaults entry says no result
 may present it as accuracy-chosen; this stance value comes instead from the DVM
 program's B0c cadence-and-grid convergence ladder, whose harness is
-`scripts/verify_sim1d_b0c_cadence.py` and whose registered structure that file
+`scripts/verify/verify_sim1d_b0c_cadence.py` and whose registered structure that file
 states in full. What the ladder can and cannot establish, stated honestly:
 between ticks the plasma consumes a ZERO-ORDER HOLD of the DVM, a Lie-type
 splitting whose global error is `O(dt_n)` — FIRST order BY DESIGN, so nothing
@@ -1006,7 +1006,7 @@ conduction operator. Nothing else about the beam moves: the ionization births,
 the ionization cost and the excitation radiation are reaction-channel terms and
 stay in A. **Honest bar:** it changes the A/B commutator, so `NUMERICS.md`'s
 split-order table is stale under it until re-measured, and
-`scripts/verify_sim1d_order.py` CANNOT certify it — that harness measures the
+`scripts/gates/verify_sim1d_order.py` CANNOT certify it — that harness measures the
 split step in a deliberately cathode-free regime where the beam deposition row
 is identically zero and this flag therefore changes nothing. Gate record:
 armed and gated 2026-08-25 (Tom).

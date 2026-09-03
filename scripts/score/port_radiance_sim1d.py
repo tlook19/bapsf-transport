@@ -69,7 +69,7 @@ WHAT THIS IS NOT.  The e-i channel is >= 99.9 % EUV -- the
 30.4 nm class 1s-2p resonance line dominates PLT2 -- so this instrument
 reports RADIATED POWER, not the signal a glass-windowed visible spectrometer
 or a filtered photodiode would see.  The band split of record is
-``scripts/pec_band_fractions.md``: the glass-transmissible (> 350 nm) share of
+``scripts/score/pec_band_fractions.md``: the glass-transmissible (> 350 nm) share of
 the adf11 line power is 1.4e-05 to 8.5e-04 for He II and 0.052 to 0.120 for
 He I over its report grid at Te >= 2 eV.  Never quote a number from here as a
 visible-light prediction without folding that band fraction in.
@@ -127,7 +127,7 @@ DEFAULT_H5 = SCRIPT_DIR / "mgcr1_confirm.h5"
 PORT_ANCHOR_OVERLAY = SCRIPT_DIR / "data" / "es1_sim1d_overlay.npz"
 
 #: In-repo band-split note cited by the item-56 context line.
-BAND_SPLIT_NOTE = "scripts/pec_band_fractions.md"
+BAND_SPLIT_NOTE = "scripts/score/pec_band_fractions.md"
 
 #: Registered windows, run-clock ms; identical to power_ledger_sim1d.py.
 DRIVE_WINDOW_MS = (15.25, 19.75)

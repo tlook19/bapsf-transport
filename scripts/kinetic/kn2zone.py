@@ -39,10 +39,10 @@ in scratch only) so the numerically evaluated drift and energy moments hit
 their targets to rounding.
 
 Usage:
-    python scripts/kn2zone.py RUN.h5 [--window 5 19.5] [--nvz 80 --nvp 24]
+    python scripts/kinetic/kn2zone.py RUN.h5 [--window 5 19.5] [--nvz 80 --nvp 24]
         [--truncate 1e-3] [--max-gen 400] [--out PREFIX]
         [--puff-orifice {wide,narrow}]
-    python scripts/kn2zone.py --selftest
+    python scripts/kinetic/kn2zone.py --selftest
 """
 
 import argparse

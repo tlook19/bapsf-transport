@@ -1,11 +1,11 @@
 # Provenance of the per-setting operating points (`run_mechanism_ladder.ES_OPERATING`)
 
-`ES_OPERATING` in `scripts/run_mechanism_ladder.py` carries the two machine
+`ES_OPERATING` in `scripts/run/run_mechanism_ladder.py` carries the two machine
 inputs that vary between discharge settings: the open-circuit bank voltage and
 the heater-maintained standby cathode surface temperature. Everything else in
 the model configuration is held fixed across the ladder.
 
-It is imported by the campaign drivers — `scripts/run_m6_point.py` and
+It is imported by the campaign drivers — `scripts/run/run_m6_point.py` and
 `scripts/run_es1_r5_iter.py` (at commit 48be9a4, retired 2026-09-03) among them — so a change here reaches every
 campaign arm. It does NOT reach the regression fixture: `baseline_sim1d.py`
 imports no campaign driver at all, deliberately, so these override dicts cannot
@@ -86,7 +86,7 @@ temperatures are **not to be tuned**: the cathode calibration is carried on
 the effective Richardson constant `C_R` instead, which is the same flat
 direction (~100 K of standby per e-fold of emission) parameterized on the
 constant the cathode literature already treats as effective. See
-`scripts/production_stance_provenance.md`.
+`scripts/stance/production_stance_provenance.md`.
 
 Setting 4 runs the same heater as setting 3 and the bank set to the same dial;
 only the puff drive differs (110 V versus 76.4 V).
