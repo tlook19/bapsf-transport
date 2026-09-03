@@ -464,8 +464,8 @@ precision via the cathode Kirchhoff `I_tot = I_eth* + I_i - I_e_ret` (returning
 electrons with a minus); the never-closing `P_net`/`P_net2` scalars are demoted to
 deprecated, and are no longer exported to the saved trajectory at all (nor are
 `P_loss`, `P_cathode_i_pl`, `P_anode_i_pl` or `P_comp`) -- the closed set above
-is what a run now carries. Measurement-plane aliases (`V_dis = V_b + V_series`, `I_bank =
-I_plasma + I_parallel`, divergences zero now) set up the future effective-load
+is what a run now carries. Measurement-plane aliases (`V_dis = V_b + V_series`,
+`I_bank = I_plasma + I_parallel`, divergences zero now) set up the future effective-load
 work (items 24/25). Honest limits: the anode uses the net-current ladder
 (per-species anode is A15/R4), and the bracket-capped regime clamps `V_b` off the
 ladder (a reported residual). The identity asserted here is not taken on faith:

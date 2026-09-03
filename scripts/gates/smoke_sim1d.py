@@ -22686,6 +22686,193 @@ def _case_golden_baseline_config_constructs():
 
 
 # --------------------------------------------------------------------
+# cathode-closed-audit-export
+# --------------------------------------------------------------------
+@_case("cathode-closed-audit-export", historical_stance=True)
+def _case_cathode_closed_audit_export():
+    # THE CLOSED AUDIT SET REACHES THE FILE, AND THE PRE-CLOSURE SCALARS DO
+    # NOT. The circuit has computed a closed, surface-resolved power and
+    # current audit on every current-driven solve since R3.2; until the
+    # export retirement none of it was saved, and what WAS saved beside it
+    # were six scalars from the sim3-era power book that does not close.
+    # This case runs a short current-driven march, saves it, reads it back,
+    # and asserts both halves of that trade on the FILE -- not on an
+    # in-memory result -- because the file is what every consumer reads.
+    from cablp.solvers._sim1d.results.io import save_result_hdf5 as _ce_save
+    from cablp.solvers._sim1d.results.cathode_diagnostics import (
+        RETIRED_CATHODE_DIAGNOSTICS,
+        RETIRED_CATHODE_DIAGNOSTIC_KEYS,
+        RetiredCathodeDiagnosticError,
+    )
+    from cablp.solvers._sim1d.solver import (
+        _CATHODE_RESULT_KEYS,
+        _CURRENT_DRIVEN_ONLY_CATHODE_KEYS,
+    )
+
+    ce_cu_params, ce_cu_flags = _cathode_unit_config()
+    ce_params = dict(ce_cu_params)
+    ce_params.update(
+        {
+            "V_bank": 173.6,
+            "R_comp": 5.72e-3,
+            "L_parasitic_H": 6.6e-6,
+            "cathode_solver_model": "current_driven",
+            "dt_save": 0.0,
+        }
+    )
+    ce_flags = dict(
+        ce_cu_flags, cathode_coupling=True, neutral_prebreakdown=False
+    )
+    ce_sim = LAPDSim1D(ce_params, ce_flags)
+    # Start the loop at a real discharge current. The residual gate below is
+    # ROW-RELATIVE, and a ratio against a row that is itself at roundoff --
+    # which is what a loop starting from 0 gives over four 0.1 ns steps --
+    # would gate on noise instead of on closure.
+    ce_sim._circuit_I_loop = 800.0
+    ce_result = ce_sim.run(t_end=3.0e-10, dt=1.0e-10)
+
+    # The 22 fields the retirement added to the export, written out rather
+    # than derived from the tuple under test: a gate that reads its
+    # expectation out of the thing it is checking checks nothing.
+    ce_closed = (
+        "I_i_a",
+        "P_cathode_e_thermal", "P_cathode_e_phi",
+        "P_cathode_i_thermal", "P_cathode_i_phi",
+        "P_anode_e_thermal", "P_anode_e_phi",
+        "P_anode_i_thermal", "P_anode_i_phi",
+        "P_plasma_thermal_loss", "P_into_plasma",
+        "P_cathode_surface", "P_anode_surface",
+        "V_series", "I_parallel", "V_dis", "I_plasma", "I_bank",
+        "I_e_ret", "P_load_ledger", "P_load_residual",
+        "I_cathode_kirchhoff_residual",
+    )
+    assert len(set(ce_closed)) == 22
+    assert set(ce_closed) <= set(_CATHODE_RESULT_KEYS)
+    # Every member of the current-driven-only set is one of them, and I_i_a
+    # is the one member both solves compute.
+    assert _CURRENT_DRIVEN_ONLY_CATHODE_KEYS == set(ce_closed) - {"I_i_a"}
+
+    with tempfile.TemporaryDirectory() as ce_dir:
+        ce_path = f"{ce_dir}/closed_audit.h5"
+        _ce_save(ce_path, ce_result)
+        ce_loaded = load_result_hdf5(ce_path)
+        ce_dg = ce_loaded.cathode_diagnostics
+
+        # (a) PRESENT AND FINITE. Both ends carry the datasets; the solved
+        # end carries numbers. The unsolved twin end is NaN by the same
+        # discipline every other cathode row uses, so only `source_` is
+        # asserted finite.
+        for ce_key in ce_closed:
+            for ce_prefix in ("source", "end"):
+                assert f"{ce_prefix}_{ce_key}" in ce_dg, ce_key
+            ce_vals = np.asarray(ce_dg[f"source_{ce_key}"], dtype=float)
+            assert ce_vals.shape == ce_loaded.time.shape, ce_key
+            assert np.all(np.isfinite(ce_vals)), ce_key
+            assert np.all(
+                np.isnan(np.asarray(ce_dg[f"end_{ce_key}"], dtype=float))
+            ), ce_key
+
+        # (b) THE RESIDUALS ARE THE CLOSURE NUMBERS. Row-relative against the
+        # row each one is a residual OF, and both rows are asserted physical
+        # first so the normalization is meaningful.
+        ce_solved = np.asarray(ce_dg["has_solution"], dtype=float) == 1.0
+        ce_floating = np.asarray(ce_dg["floating"], dtype=float) == 1.0
+        ce_cd = ce_solved & ~ce_floating
+        assert ce_cd.any()
+        ce_P = np.asarray(ce_dg["source_P_load"], dtype=float)[ce_cd]
+        ce_I = np.asarray(ce_dg["source_I_tot"], dtype=float)[ce_cd]
+        ce_rP = np.asarray(
+            ce_dg["source_P_load_residual"], dtype=float
+        )[ce_cd]
+        ce_rI = np.asarray(
+            ce_dg["source_I_cathode_kirchhoff_residual"], dtype=float
+        )[ce_cd]
+        assert np.all(np.abs(ce_I) > 1.0), ce_I
+        assert np.all(np.abs(ce_P) > 1.0), ce_P
+        assert np.all(np.abs(ce_rP) <= 1.0e-9 * np.abs(ce_P)), (ce_rP, ce_P)
+        assert np.all(np.abs(ce_rI) <= 1.0e-9 * np.abs(ce_I)), (ce_rI, ce_I)
+
+        # (c) THE SIX RETIRED NAMES ARE NOT ON A NEW FILE.
+        assert len(RETIRED_CATHODE_DIAGNOSTICS) == 6
+        assert len(RETIRED_CATHODE_DIAGNOSTIC_KEYS) == 12
+        for ce_name in RETIRED_CATHODE_DIAGNOSTIC_KEYS:
+            assert ce_name not in ce_dg, ce_name
+        for ce_bare in RETIRED_CATHODE_DIAGNOSTICS:
+            assert ce_bare not in _CATHODE_RESULT_KEYS, ce_bare
+
+        # (d) READING ONE RAISES, NAMING THE SUCCESSOR -- through `[]` and
+        # through `.get`, because a `.get` default would substitute an
+        # invented number for the withdrawn one.
+        for ce_bare, ce_advice in RETIRED_CATHODE_DIAGNOSTICS.items():
+            ce_successor = ce_advice.split()[0]
+            for ce_prefix in ("source", "end"):
+                ce_name = f"{ce_prefix}_{ce_bare}"
+                for ce_read in (
+                    lambda d, k: d[k],
+                    lambda d, k: d.get(k),
+                    lambda d, k: d.get(k, 0.0),
+                ):
+                    try:
+                        ce_read(ce_dg, ce_name)
+                    except RetiredCathodeDiagnosticError as ce_exc:
+                        ce_text = str(ce_exc)
+                        assert ce_name in ce_text, ce_text
+                        assert ce_successor in ce_text, (ce_name, ce_text)
+                    else:
+                        raise AssertionError(
+                            f"reading retired {ce_name!r} did not raise"
+                        )
+        # The refusal is targeted: an ordinary missing key is still an
+        # ordinary KeyError, not a retirement message.
+        try:
+            ce_dg["source_not_a_diagnostic"]
+        except RetiredCathodeDiagnosticError:
+            raise AssertionError(
+                "an unrelated missing key raised the retirement error"
+            )
+        except KeyError:
+            pass
+
+        # (e) NEGATIVE CONTROL: an OLD-FORMAT file, built here by writing the
+        # retired datasets back onto a copy, still reads them. The retirement
+        # withdraws a name from the export; it does not rewrite the record of
+        # what an earlier build computed. Without this leg the refusal above
+        # would be indistinguishable from "these names never read at all".
+        ce_old_path = f"{ce_dir}/closed_audit_old_format.h5"
+        shutil.copyfile(ce_path, ce_old_path)
+        ce_sentinel = 7.5
+        with h5py.File(ce_old_path, "r+") as ce_h5:
+            for ce_name in sorted(RETIRED_CATHODE_DIAGNOSTIC_KEYS):
+                ce_h5["cathode_diagnostics"].create_dataset(
+                    ce_name,
+                    data=np.full(ce_loaded.time.shape, ce_sentinel),
+                )
+        ce_old_dg = load_result_hdf5(ce_old_path).cathode_diagnostics
+        for ce_name in RETIRED_CATHODE_DIAGNOSTIC_KEYS:
+            assert ce_name in ce_old_dg, ce_name
+            assert np.allclose(ce_old_dg[ce_name], ce_sentinel), ce_name
+            assert np.allclose(ce_old_dg.get(ce_name), ce_sentinel), ce_name
+
+    # (f) THE FLOATING PATH EXPORTS NaN, NOT ZERO. The voltage-driven solve
+    # leaves the audit set at its dataclass defaults, and a zero in a power
+    # column is indistinguishable from a computed zero. Exercised on the
+    # solve already in hand rather than on a second run: the branch under
+    # test is the export's, not the circuit's.
+    ce_solve = ce_sim.solve_cathode_boundary(update_cache=False)
+    ce_diag_nan = {}
+    ce_sim._copy_cathode_result_diagnostics(
+        diag=ce_diag_nan,
+        prefix="source",
+        result=ce_solve.beam_result.result,
+        current_driven=False,
+    )
+    for ce_key in _CURRENT_DRIVEN_ONLY_CATHODE_KEYS:
+        assert np.isnan(ce_diag_nan[f"source_{ce_key}"]), ce_key
+    assert np.isfinite(ce_diag_nan["source_I_i_a"])
+    assert np.isfinite(ce_diag_nan["source_I_tot"])
+
+
+# --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
 @_case("smoke-summary")
@@ -22709,7 +22896,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 119, "historical_stance": 53}
+_CASE_CENSUS = {"total": 120, "historical_stance": 54}
 
 
 def _assert_case_census():
