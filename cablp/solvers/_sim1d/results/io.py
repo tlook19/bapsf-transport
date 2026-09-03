@@ -17,6 +17,32 @@ from ..physics.sources import (
 
 RESULT_VERSION = "sim1d-hdf5-v1"
 
+#: What ``configuration_name`` says for a run that named no configuration.
+#: It is a written-down absence, not a guess: an in-process configuration --
+#: the golden builder's, the smoke suite's, a unit instrument's -- has no
+#: committed file behind it and must not borrow one's name.
+UNNAMED_CONFIGURATION = "<unnamed>"
+
+#: The configuration-lineage root attributes, in the order they are written.
+#: PRESENCE-GATED on read: a file written before 2026-09-03 carries none of
+#: them and ``load_result_hdf5`` reports ``None`` for each, which means "this
+#: file does not say", never "unnamed" and never a reconstructed value. Nothing
+#: here is inferred from ``params_json``: a configuration's identity is a fact
+#: about which file a run named, and two different files can resolve alike.
+_CONFIGURATION_ATTRS = (
+    "configuration_name",
+    "configuration_base_chain",
+    "configuration_file_sha256",
+    "configuration_delta_keys",
+    "configuration_identity",
+)
+#: The three of those whose stored form is a JSON list.
+_CONFIGURATION_JSON_ATTRS = (
+    "configuration_base_chain",
+    "configuration_file_sha256",
+    "configuration_delta_keys",
+)
+
 # The optional per-sample arrays a run may or may not carry. ``_write_arrays``
 # skips the ones the result lacks and ``_read_arrays`` skips the ones the file
 # lacks, so this list is additive: adding a name here cannot change any file a
@@ -160,6 +186,34 @@ def save_result_hdf5(path, result, params=None, flags=None):
             from .phase3_capture import validate_run_id
 
             h5.attrs["run_id"] = validate_run_id(run_id)
+        # WHICH CONFIGURATION this run named. ``params_json`` records what the
+        # run resolved TO; this records what it WAS -- the configuration's own
+        # name, what it was derived from, the bytes of each file in that chain,
+        # the keys it moves, and the resolved configuration's identity. A file
+        # that carries both can be matched back to a committed configuration
+        # instead of only to a bag of values.
+        #
+        # ``configuration_name`` is always written, "<unnamed>" for a run that
+        # named none (the golden builder, the smoke suite, the unit
+        # instruments); the other four are PRESENCE-GATED on a lineage
+        # existing, because an unnamed run has no chain, no files and no
+        # declared deltas, and writing empty ones would read as facts.
+        configuration = getattr(result, "configuration", None)
+        h5.attrs["configuration_name"] = (
+            UNNAMED_CONFIGURATION if configuration is None
+            else str(configuration.name)
+        )
+        if configuration is not None:
+            h5.attrs["configuration_base_chain"] = _json_dumps(
+                list(configuration.base_chain)
+            )
+            h5.attrs["configuration_file_sha256"] = _json_dumps(
+                list(configuration.file_sha256)
+            )
+            h5.attrs["configuration_delta_keys"] = _json_dumps(
+                list(configuration.delta_keys)
+            )
+            h5.attrs["configuration_identity"] = str(configuration.identity)
         if params is not None:
             h5.attrs["params_json"] = _json_dumps(params)
         if flags is not None:
@@ -371,6 +425,16 @@ def load_result_hdf5(path):
             flags=flags,
             path=path,
         )
+        # Configuration lineage, presence-gated attribute by attribute. Absent
+        # reads as None -- "this file does not say" -- and nothing is inferred
+        # from the file's other attributes.
+        for _attr in _CONFIGURATION_ATTRS:
+            if _attr not in h5.attrs:
+                setattr(result, _attr, None)
+            elif _attr in _CONFIGURATION_JSON_ATTRS:
+                setattr(result, _attr, _read_json_attr(h5, _attr))
+            else:
+                setattr(result, _attr, _decode_string(h5.attrs[_attr]))
         if "run_status" in h5.attrs:
             result.run_status = _decode_string(h5.attrs["run_status"])
         # Absent on artifacts written before the kernel selector existed;

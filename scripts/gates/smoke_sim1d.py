@@ -22934,6 +22934,93 @@ def _case_configuration_load_config_refuses_configuration_form():
         assert _lc_p["nx"] == 42 and _lc_f["cathode_coupling"] is False
 
 
+@_case("configuration-hdf5-lineage-round-trip")
+def _case_configuration_hdf5_lineage_round_trip():
+    # A saved trajectory says WHICH configuration produced it. The lineage
+    # round-trips through the HDF5 root attrs; a run that named none records
+    # "<unnamed>"; and a file written before the attrs existed reads back None
+    # for every one of them rather than a reconstructed answer.
+    from cablp.solvers._sim1d import ConfigurationLineage, load_result_hdf5
+    from cablp.solvers._sim1d.results.io import (
+        UNNAMED_CONFIGURATION,
+        _CONFIGURATION_ATTRS,
+        save_result_hdf5,
+    )
+
+    _cl_lineage = ConfigurationLineage(
+        name="smoke_derived",
+        base_chain=("g1atrim",),
+        file_sha256=("a" * 64, "b" * 64),
+        delta_keys=("S_gp", "nx"),
+        identity="c" * 64,
+    )
+
+    # NO SOLVE: t_end = 0.0 writes the initial state and stops, which is all a
+    # metadata round-trip needs. The equilibration flag is cleared because
+    # run() does not equilibrate and says so loudly; nothing here reads nn.
+    def _cl_config():
+        _p, _f = default_config()
+        _f["neutral_equilibration"] = False
+        return _p, _f
+
+    _cl_named = LAPDSim1D(*_cl_config(), configuration=_cl_lineage)
+    assert _cl_named._configuration is _cl_lineage
+    _cl_named_result = _cl_named.run(t_end=0.0)
+    assert _cl_named_result.configuration is _cl_lineage
+
+    _cl_unnamed_result = LAPDSim1D(*_cl_config()).run(t_end=0.0)
+    assert _cl_unnamed_result.configuration is None
+
+    with tempfile.TemporaryDirectory() as _cl_tmp:
+        _cl_room = Path(_cl_tmp)
+
+        _cl_named_h5 = _cl_room / "named.h5"
+        save_result_hdf5(_cl_named_h5, _cl_named_result)
+        _cl_back = load_result_hdf5(_cl_named_h5)
+        assert _cl_back.configuration_name == "smoke_derived"
+        assert _cl_back.configuration_base_chain == ["g1atrim"]
+        assert _cl_back.configuration_file_sha256 == ["a" * 64, "b" * 64]
+        assert _cl_back.configuration_delta_keys == ["S_gp", "nx"]
+        assert _cl_back.configuration_identity == "c" * 64
+
+        # A run that named no configuration says so, and says nothing else:
+        # the four derived-form attrs are absent, not empty.
+        _cl_unnamed_h5 = _cl_room / "unnamed.h5"
+        save_result_hdf5(_cl_unnamed_h5, _cl_unnamed_result)
+        with h5py.File(_cl_unnamed_h5, "r") as _cl_file:
+            assert (
+                _cl_file.attrs["configuration_name"] == UNNAMED_CONFIGURATION
+            )
+            for _cl_attr in _CONFIGURATION_ATTRS[1:]:
+                assert _cl_attr not in _cl_file.attrs, _cl_attr
+        _cl_unnamed_back = load_result_hdf5(_cl_unnamed_h5)
+        assert _cl_unnamed_back.configuration_name == UNNAMED_CONFIGURATION
+        for _cl_attr in _CONFIGURATION_ATTRS[1:]:
+            assert getattr(_cl_unnamed_back, _cl_attr) is None, _cl_attr
+
+        # NEGATIVE CONTROL (the pre-2026-09-03 file): strip every lineage attr
+        # and the loader must report None for all five -- never "<unnamed>",
+        # never an identity recomputed from params_json.
+        _cl_old_h5 = _cl_room / "pre_lineage.h5"
+        shutil.copy2(_cl_named_h5, _cl_old_h5)
+        with h5py.File(_cl_old_h5, "a") as _cl_file:
+            for _cl_attr in _CONFIGURATION_ATTRS:
+                del _cl_file.attrs[_cl_attr]
+        _cl_old_back = load_result_hdf5(_cl_old_h5)
+        for _cl_attr in _CONFIGURATION_ATTRS:
+            assert getattr(_cl_old_back, _cl_attr) is None, _cl_attr
+
+    # A lineage is a record, not free text: the constructor refuses anything
+    # that is not one, rather than storing a string that would later be
+    # written into an artifact as if it named a committed file.
+    try:
+        LAPDSim1D(*_cl_config(), configuration="g1atrim")
+    except ValueError as _cl_exc:
+        assert "ConfigurationLineage" in str(_cl_exc), str(_cl_exc)
+    else:
+        raise AssertionError("a non-lineage configuration was ACCEPTED")
+
+
 # --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
@@ -22958,7 +23045,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 124, "historical_stance": 53}
+_CASE_CENSUS = {"total": 125, "historical_stance": 53}
 
 
 def _assert_case_census():

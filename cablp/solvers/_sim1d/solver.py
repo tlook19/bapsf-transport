@@ -11,6 +11,7 @@ import numpy as np
 from scipy.linalg import solve_banded
 
 from .core.config import (
+    ConfigurationLineage,
     coverage_closure_defaults,
     emitting_area_defaults,
     neutral_probe_source_defaults,
@@ -802,6 +803,7 @@ class LAPDSim1D:
         progress_tracker=None,
         progress_interval_s=1.0e-4,
         run_id=None,
+        configuration=None,
     ):
         """Build a solver: resolve the config, then arm each subsystem.
 
@@ -818,7 +820,27 @@ class LAPDSim1D:
         namespaces before anything else happens, so every phase below reads
         the same flat surface it always has, and omitting them leaves
         construction bit-identical to the flat-only form.
+
+        ``configuration`` is the :class:`ConfigurationLineage` of the named
+        configuration this run is, as the configuration loader returned it. It
+        is METADATA and nothing else: it is stored, carried onto the result and
+        written into the saved HDF5, and no phase below reads it, so a run with
+        and without one is bit-identical. Omitting it is legitimate -- the
+        golden builder, the smoke suite and the unit instruments construct
+        configurations in process and name none -- and such a run records
+        itself as ``"<unnamed>"`` rather than borrowing a name it does not have.
         """
+        if configuration is not None and not isinstance(
+            configuration, ConfigurationLineage
+        ):
+            raise ValueError(
+                "configuration must be a ConfigurationLineage (the record the "
+                "configuration loader returns) or None; got "
+                f"{type(configuration).__name__}. A run either names a "
+                "configuration or records itself as unnamed -- it does not "
+                "describe one in free text."
+            )
+        self._configuration = configuration
         if run_id is not None:
             from .results.phase3_capture import validate_run_id
 
@@ -11286,6 +11308,10 @@ class LAPDSim1D:
         )
         if getattr(self, "_run_id", None) is not None:
             result.run_id = self._run_id
+        # WHICH configuration this run was, when it named one. Always set (it
+        # is None on a run that named none), so a reader never has to guess
+        # whether the attribute is missing or the configuration was unnamed.
+        result.configuration = getattr(self, "_configuration", None)
         if self._t_ignition_abort is not None:
             # Present ONLY on a run that aborted, so normal results (and their
             # saved HDF5 files) are unchanged. This is the event context the
