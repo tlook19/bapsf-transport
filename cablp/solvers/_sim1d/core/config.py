@@ -1,3 +1,6 @@
+import dataclasses
+import hashlib
+import json
 import tomllib
 
 
@@ -4232,9 +4235,28 @@ def load_config(path):
     :mod:`~cablp.solvers._sim1d.core.model_declarations`. Blocks and the flat
     tables resolve onto the same surface, and a key may appear in only one of
     them.
+
+    Any other top-level table or key RAISES. This loader reads three tables and
+    nothing else, and a file carrying a fourth is a file written for a different
+    reader -- most often the CONFIGURATION form, whose ``base`` /
+    ``[input_dict]`` / ``[input_flags]`` this function cannot resolve, because a
+    ``base`` names a committed file in a directory the solver package does not
+    know about. Silently ignoring such a file would resolve it to bare defaults,
+    which is precisely the implied plasma the refusal exists to stop.
     """
     with open(path, "rb") as f:
         raw = tomllib.load(f)
+    unknown = sorted(set(raw) - {"params", "flags", "models"})
+    if unknown:
+        raise ValueError(
+            f"{path}: load_config reads [params], [flags] and "
+            f"[models.<family>] only; it does not own {', '.join(unknown)}. "
+            "A CONFIGURATION file (base = \"<name>\", [input_dict], "
+            "[input_flags]) is read by the configuration loader "
+            "scripts/stance/stance_config.py, which resolves its base chain "
+            "against the committed stance directory; this loader would resolve "
+            "it to bare defaults instead."
+        )
     return resolve_config(
         raw.get("params", {}), raw.get("flags", {}), raw.get("models", {})
     )
@@ -4286,6 +4308,83 @@ def resolve_config(params=None, flags=None, models=None):
     resolved_flags.update(supplied_flags)
     resolved_flags.update(block_flags)
     return resolved_params, resolved_flags
+
+
+def canonical_config_payload(params, flags):
+    """Return the canonical JSON text of one resolved ``(params, flags)`` pair.
+
+    Sorted keys, no whitespace, no NaN: the same text whatever order the two
+    mappings were built in, so two configurations that resolve to the same
+    values produce the same bytes. This is the payload
+    :func:`config_identity` hashes.
+    """
+    return json.dumps(
+        {"params": params, "flags": flags},
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def config_identity(params, flags):
+    """Return the sha256 of a resolved configuration.
+
+    The identity of a CONFIGURATION: two configurations share it exactly when
+    every resolved parameter and flag agrees, whatever route built them -- a
+    stance file, a derived file's deltas, or command-line overrides. It is the
+    digest ``scripts/gates/audit_sim1d_configs.py`` pins its reviewed snapshots
+    with, and it is what a run records so a saved trajectory can be matched to
+    the configuration that produced it.
+    """
+    return hashlib.sha256(
+        canonical_config_payload(params, flags).encode()
+    ).hexdigest()
+
+
+@dataclasses.dataclass(frozen=True)
+class ConfigurationLineage:
+    """WHICH configuration a run names, and what it was derived from.
+
+    Every field answers one question a reader of a saved artifact asks:
+
+    ``name``
+        The configuration's name -- the stem of the file that declares it.
+    ``base_chain``
+        The names it is derived FROM, nearest base first, empty for a base
+        configuration that derives from nothing.
+    ``file_sha256``
+        The sha256 of each file in the chain, this file first and then
+        ``base_chain`` in order, so the chain can be checked byte for byte
+        against the committed files.
+    ``delta_keys``
+        The names -- names only, never values -- of the keys this file moves
+        relative to its base. Values live in the recorded config itself.
+    ``identity``
+        The :func:`config_identity` of the RESOLVED configuration. Two runs
+        that agree here ran the same configuration.
+
+    Frozen, and carried by value: a run's lineage is a statement about what it
+    was, and nothing downstream may edit it. Use :meth:`with_identity` to state
+    the identity of a configuration a driver finished resolving.
+    """
+
+    name: str
+    base_chain: tuple
+    file_sha256: tuple
+    delta_keys: tuple
+    identity: str
+
+    def with_identity(self, params, flags):
+        """Return this lineage with ``identity`` taken from a resolved config.
+
+        For a driver that layers its own mesh package over the named
+        configuration: the name, chain and deltas are unchanged -- they are
+        facts about the FILE -- while the identity becomes that of the
+        configuration the driver actually constructs.
+        """
+        return dataclasses.replace(
+            self, identity=config_identity(params, flags)
+        )
 
 
 def config_manifest():

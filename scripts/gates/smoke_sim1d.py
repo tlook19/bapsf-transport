@@ -22683,6 +22683,258 @@ def _case_golden_baseline_config_constructs():
 
 
 # --------------------------------------------------------------------
+# DERIVED CONFIGURATIONS (the "no default plasma" ruling, 2026-09-03).
+#
+# Every run names a configuration; an alternate the campaign runs against the
+# reference is a FILE (base + declared deltas), not a command line. The four
+# cases below hold the loader's contract: a derived file resolves to exactly
+# what the equivalent hand-built configuration resolves to, and the three
+# refusals that keep a derived file honest fire.
+#
+# Each fixture chain is built in a TEMPORARY stance directory -- a base
+# resolves in ``stance_config.STANCE_DIR`` by definition, so the module global
+# is redirected for the duration and restored after; nothing is written into
+# the committed ``scripts/stances/``.
+# --------------------------------------------------------------------
+@contextlib.contextmanager
+def _derived_fixture_dir():
+    """Yield a temporary stance directory holding a copy of the reference."""
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    import stance_config as _sc
+
+    original = _sc.STANCE_DIR
+    with tempfile.TemporaryDirectory() as _tmp:
+        room = Path(_tmp)
+        shutil.copy2(original / "g1atrim.toml", room / "g1atrim.toml")
+        _sc.STANCE_DIR = room
+        try:
+            yield _sc, room
+        finally:
+            _sc.STANCE_DIR = original
+
+
+@_case("configuration-derived-resolution")
+def _case_configuration_derived_resolution():
+    # A DERIVED configuration resolves to the same configuration a caller would
+    # have built by hand from the base plus the same overrides -- same resolved
+    # values, same identity. That equivalence is the form's whole claim: the
+    # file is a way of NAMING a configuration, never a different one.
+    from cablp.solvers._sim1d import config_identity, default_config
+
+    with _derived_fixture_dir() as (_sc, _room):
+        (_room / "derived.toml").write_text(
+            'base = "g1atrim"\n'
+            "\n"
+            "[input_dict]\n"
+            "nx = 42\n"
+            "S_gp = 1234.0\n"
+            "\n"
+            "[input_flags]\n"
+            "neutral_baffles = false\n"
+        )
+        _dv_params, _dv_flags, _dv_lineage = _sc.load_configuration("derived")
+
+        # The hand-built equivalent: default_config(), the base's whole delta,
+        # then the same three overrides.
+        _hand_p, _hand_f = default_config()
+        _base = _sc.load_stance("g1atrim")
+        _hand_p.update(_base.params)
+        _hand_f.update(_base.flags)
+        _hand_p["nx"] = 42
+        _hand_p["S_gp"] = 1234.0
+        _hand_f["neutral_baffles"] = False
+
+        assert _dv_params == _hand_p, sorted(
+            k for k in set(_dv_params) | set(_hand_p)
+            if _dv_params.get(k) != _hand_p.get(k)
+        )
+        assert _dv_flags == _hand_f
+        assert _dv_lineage.identity == config_identity(_hand_p, _hand_f)
+
+        # The lineage says what the file is, and says it by name only.
+        assert _dv_lineage.name == "derived"
+        assert _dv_lineage.base_chain == ("g1atrim",)
+        assert len(_dv_lineage.file_sha256) == 2
+        assert _dv_lineage.delta_keys == (
+            "S_gp", "neutral_baffles", "nx",
+        ), _dv_lineage.delta_keys
+
+        # NEGATIVE CONTROL. The identity is not a rubber stamp: move one delta
+        # and it must move with it, or the check above proves nothing.
+        (_room / "derived_moved.toml").write_text(
+            'base = "g1atrim"\n'
+            "\n"
+            "[input_dict]\n"
+            "nx = 42\n"
+            "S_gp = 1235.0\n"
+            "\n"
+            "[input_flags]\n"
+            "neutral_baffles = false\n"
+        )
+        _, _, _moved = _sc.load_configuration("derived_moved")
+        assert _moved.identity != _dv_lineage.identity
+
+
+@_case("configuration-restated-delta-refusal")
+def _case_configuration_restated_delta_refusal():
+    # A delta must MOVE something. A line that restates the value it already
+    # inherits reads as a decision and is not one, and it stops agreeing with
+    # its base silently the first time the base moves.
+    with _derived_fixture_dir() as (_sc, _room):
+        _base_sgp = _sc.load_stance("g1atrim").params["S_gp"]
+        (_room / "restated.toml").write_text(
+            'base = "g1atrim"\n'
+            "\n"
+            "[input_dict]\n"
+            f"S_gp = {_base_sgp!r}\n"
+        )
+        try:
+            _sc.load_stance("restated")
+        except ValueError as _rs_exc:
+            assert "restates" in str(_rs_exc), str(_rs_exc)
+            assert "S_gp" in str(_rs_exc), str(_rs_exc)
+            assert "allow_restated" in str(_rs_exc), str(_rs_exc)
+        else:
+            raise AssertionError("a restated delta was ACCEPTED")
+
+        # NEGATIVE CONTROL (a): the declared waiver accepts the same file.
+        (_room / "restated_waived.toml").write_text(
+            'base = "g1atrim"\n'
+            "allow_restated = true\n"
+            "\n"
+            "[input_dict]\n"
+            f"S_gp = {_base_sgp!r}\n"
+        )
+        assert _sc.load_stance("restated_waived").params["S_gp"] == _base_sgp
+
+        # NEGATIVE CONTROL (b): a delta that MOVES the same key is accepted
+        # without any waiver, so the refusal is about restatement and not
+        # about the key.
+        (_room / "moved.toml").write_text(
+            'base = "g1atrim"\n'
+            "\n"
+            "[input_dict]\n"
+            f"S_gp = {_base_sgp + 1.0!r}\n"
+        )
+        assert _sc.load_stance("moved").params["S_gp"] == _base_sgp + 1.0
+
+
+@_case("configuration-chain-depth-refusal")
+def _case_configuration_chain_depth_refusal():
+    # Chains are allowed to MAX_CHAIN_FILES files and refused beyond: past that
+    # depth a value cannot be traced to the file that chose it by reading.
+    with _derived_fixture_dir() as (_sc, _room):
+        assert _sc.MAX_CHAIN_FILES == 3, _sc.MAX_CHAIN_FILES
+        (_room / "d2.toml").write_text(
+            'base = "g1atrim"\n\n[input_dict]\nnx = 41\n'
+        )
+        (_room / "d3.toml").write_text(
+            'base = "d2"\n\n[input_dict]\nnx = 42\n'
+        )
+        (_room / "d4.toml").write_text(
+            'base = "d3"\n\n[input_dict]\nnx = 43\n'
+        )
+
+        # NEGATIVE CONTROL: the depth-3 chain is ACCEPTED, and carries the
+        # whole chain in its lineage.
+        _d3 = _sc.load_stance("d3")
+        assert _d3.lineage.base_chain == ("d2", "g1atrim"), _d3.lineage.base_chain
+        assert len(_d3.lineage.file_sha256) == 3
+        assert _d3.params["nx"] == 42
+
+        try:
+            _sc.load_stance("d4")
+        except ValueError as _cd_exc:
+            assert "4 files deep" in str(_cd_exc), str(_cd_exc)
+        else:
+            raise AssertionError("a depth-4 chain was ACCEPTED")
+
+        # A file that names itself is the same refusal about the same
+        # structure, and must not be reachable by loading one more file.
+        (_room / "loop.toml").write_text('base = "loop"\n\n[input_dict]\nnx = 44\n')
+        try:
+            _sc.load_stance("loop")
+        except ValueError as _lp_exc:
+            assert "its own base" in str(_lp_exc), str(_lp_exc)
+        else:
+            raise AssertionError("a self-referencing base was ACCEPTED")
+
+
+@_case("configuration-unknown-key-delta-refusal")
+def _case_configuration_unknown_key_delta_refusal():
+    # A delta reaches the SAME refusals a base configuration's keys do: a key
+    # no template owns, and a key filed in the wrong namespace. Neither may
+    # survive as a silent inert control just because a base carried it.
+    with _derived_fixture_dir() as (_sc, _room):
+        (_room / "bogus.toml").write_text(
+            'base = "g1atrim"\n\n[input_dict]\nnot_a_real_config_key = 1.0\n'
+        )
+        try:
+            _sc.load_stance("bogus")
+        except ValueError as _uk_exc:
+            assert "not_a_real_config_key" in str(_uk_exc), str(_uk_exc)
+            assert "no LAPDSim1D configuration template owns it" in str(_uk_exc)
+        else:
+            raise AssertionError("an unknown delta key was ACCEPTED")
+
+        # Misfiled: an input_flags key stated in [input_dict]. The message
+        # must name the namespace that DOES own it.
+        (_room / "misfiled.toml").write_text(
+            'base = "g1atrim"\n\n[input_dict]\ncathode_coupling = false\n'
+        )
+        try:
+            _sc.load_stance("misfiled")
+        except ValueError as _mf_exc:
+            assert "input_flags" in str(_mf_exc), str(_mf_exc)
+        else:
+            raise AssertionError("a misfiled delta key was ACCEPTED")
+
+        # NEGATIVE CONTROL: the correctly filed key in the correct namespace
+        # loads, so the refusals above are about the key and not about the
+        # derived form.
+        (_room / "ok.toml").write_text(
+            'base = "g1atrim"\n\n[input_flags]\ncathode_coupling = false\n'
+        )
+        assert _sc.load_stance("ok").flags["cathode_coupling"] is False
+
+
+@_case("configuration-load-config-refuses-configuration-form")
+def _case_configuration_load_config_refuses_configuration_form():
+    # ``load_config`` reads [params]/[flags]/[models] and CANNOT resolve a
+    # base -- the base directory is a scripts/ fact the solver package does not
+    # know. Handed a configuration file it used to ignore every table it did
+    # not recognise and resolve to bare defaults, which is the implied plasma
+    # the ruling forbids. It refuses instead, naming the loader that can.
+    from cablp.solvers._sim1d import load_config
+
+    with tempfile.TemporaryDirectory() as _lc_tmp:
+        _lc_room = Path(_lc_tmp)
+        _lc_bad = _lc_room / "configuration_form.toml"
+        _lc_bad.write_text('base = "g1atrim"\n\n[input_dict]\nnx = 42\n')
+        try:
+            load_config(_lc_bad)
+        except ValueError as _lc_exc:
+            assert "base" in str(_lc_exc), str(_lc_exc)
+            assert "input_dict" in str(_lc_exc), str(_lc_exc)
+            assert "stance_config" in str(_lc_exc), str(_lc_exc)
+        else:
+            raise AssertionError("a configuration-form file was ACCEPTED")
+
+        # NEGATIVE CONTROL: the form load_config DOES own still loads.
+        _lc_good = _lc_room / "params_form.toml"
+        _lc_good.write_text("[params]\nnx = 42\n\n[flags]\ncathode_coupling = false\n")
+        _lc_p, _lc_f = load_config(_lc_good)
+        assert _lc_p["nx"] == 42 and _lc_f["cathode_coupling"] is False
+
+
+# --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
 @_case("smoke-summary")
@@ -22706,7 +22958,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 119, "historical_stance": 53}
+_CASE_CENSUS = {"total": 124, "historical_stance": 53}
 
 
 def _assert_case_census():
