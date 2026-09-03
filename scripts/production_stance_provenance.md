@@ -162,7 +162,7 @@ measured 2989 ± 23 A (ratio 0.997) and plateau 2962 A against 2963 A
 were reported unconditionally and never entered the selection: Te mean ratio
 1.11, n 0.84, Isat 0.88 (mean |dev|/sigma 1.6). A robustness cross-check
 re-fitted on the fingerprint plateau means gives the same rounded trim point.
-**`cathode_Ts_base_K` was NOT co-trimmed** and sat at its measured config
+**`cathode_Ts_base_K` was NOT co-trimmed** and sat at its map-derived config
 default 1910.0 on every arm — the flat-direction rule below stands, and only
 one member of that pair may carry a calibration.
 
@@ -183,7 +183,7 @@ gates (pre-registered 2026-08-23) all passed at the trimmed value: drive peak
 and plateau both within +/-0.8 % of 1.000, `n` mean ratio 0.89, `Isat` mean
 ratio 0.88 (>= 0.86), `Te` mean ratio 1.01 (>= 0.98). Port scores were reported
 unconditionally and never entered the selection: Te 1.01, n 0.89, Isat 0.88
-(1.7 sigma). `cathode_Ts_base_K` remains pinned at the measured standby (the
+(1.7 sigma). `cathode_Ts_base_K` remains pinned at the map-derived standby (the
 flat-direction rule below stands: only one member carries the calibration).
 
 *(The 2026-08-19 `7.09` event, retained as record.)* Value chain: the 14.25
@@ -267,10 +267,10 @@ listed under "Deliberately absent" on the mistaken reading that the stance does
 not name it; corrected 2026-08-23.)*
 
 **`cathode_Ts_base_K` is deliberately NOT pinned here.** It is inherited from
-the config default, which is the MEASURED standby temperature. An earlier
-stance pinned 1840 K — 70 K below the measurement — which mislabelled a measured
-quantity as a fit. `C_R` and `cathode_Ts_base_K` are the same flat direction
-(~100 K of standby per e-fold of emission), so only one may carry a
+the config default, which is the DERIVED standby temperature. An earlier
+stance pinned 1840 K — 70 K below the map-derived value — which mislabelled a
+map-derived quantity as a fit. `C_R` and `cathode_Ts_base_K` are the same flat
+direction (~100 K of standby per e-fold of emission), so only one may carry a
 calibration, and it is the constant the literature already treats as effective.
 
 Residual honesty: the match is exact only at the plateau point. The flat

@@ -1574,16 +1574,28 @@ sense described in the docstring, not the Richardson-Dushman universal 120.
 `C_R` and `cathode_Ts_base_K` are degenerate along one flat direction of
 roughly 100 K of surface temperature per e-fold of emission, so only one of the
 two may carry a calibration. The campaign stance calibrates `C_R` and leaves
-`cathode_Ts_base_K` at its measured value; see
+`cathode_Ts_base_K` at its map-derived value; see
 `scripts/production_stance_provenance.md`.
 
-**`cathode_Ts_base_K = 1910.0` K — MEASURED**, and not to be tuned. The standby
-surface temperature is an operational machine setpoint. Per-setting values are
-in `run_mechanism_ladder.ES_OPERATING`; see
-`scripts/ladder_operating_provenance.md`.
+**`cathode_Ts_base_K = 1910.0` K — DERIVED**, and not to be tuned. What is set
+on the machine is the HEATER CURRENT (1775 A at setting 1); the temperature is
+that current read through the source paper's Fig-10 heater-current →
+surface-temperature map. The machine's own pyrometer channel records nothing
+and its heater-current data channel is invalid-flagged, so the operator setting
+is the input of record. Per-setting values, the map's slope bracket and the
+resulting sensitivities — including the ± 50–100 K absolute pyrometer bar,
+which is the real uncertainty and is invisible to every ES1 score because
+`C_R` is the fit target — are in `scripts/ladder_operating_provenance.md`;
+`run_mechanism_ladder.ES_OPERATING` carries the table.
 
-**`T_s = 1998.15` K — MEASURED setpoint.** Under `power_balance` this is only
-the static-model fallback; the live input is `cathode_Ts_base_K`.
+**`T_s = 1998.15` K — ASSUMED.** Not a machine reading and never fitted: the
+constant surface temperature the pre-warming-model solver was developed with,
+entered as the literal 273.15 + 1725 K and never adjusted. Inert under
+`cathode_warming_model = "power_balance"` — every read is guarded by the
+evolving surface value or by `T_s_override_K` — and the live input is
+`cathode_Ts_base_K`. Marked for retirement; the stance row that still names it,
+and why its deletion has been deferred, are in
+`scripts/production_stance_provenance.md`.
 
 **`phi_wf = 2.869` eV — FITTED**, the contaminated shot-start work function.
 **`cathode_phiwf_clean_eV = 2.809` eV — FITTED**, the per-shot-accessible depth

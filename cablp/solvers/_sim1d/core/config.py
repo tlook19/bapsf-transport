@@ -1720,8 +1720,10 @@ def cathode_defaults():
     cathode_Ts_base_K:
         Heater-maintained standby surface temperature [K] for
         ``cathode_warming_model = "power_balance"`` -- the temperature the
-        cathode sits at before the discharge, i.e. an operational machine
-        setpoint. Required when that model is on; also its initial condition.
+        cathode sits at before the discharge. DERIVED, not measured: it is
+        the operator-set heater current read through the Fig-10
+        heater-current -> surface-temperature map.
+        Required when that model is on; also its initial condition.
         Per-run operating points live in
         ``run_mechanism_ladder.ES_OPERATING[es]["Ts_standby_K"]``. Note the
         degeneracy with ``C_R`` documented above: the two describe one flat

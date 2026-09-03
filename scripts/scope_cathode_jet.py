@@ -7,7 +7,7 @@ face books into) and computes, per ladder rung:
   (b) recycle flux vs puff; the jet velocity per channel -- fast backscatter
       v_back = sqrt(2 R_E (phi_c + Ti) / m) with (R_N, R_E) literature-BOXED
       (Eckstein/Thomas-class He reflection data; see the bracket below), the
-      effusive channel at the measured standby T_s (per-particle directed
+      effusive channel at the map-derived standby T_s (per-particle directed
       momentum of a cosine-law effusive flux, <p>/m = sqrt(pi k T_s / 2 m));
   (c) the jet momentum flux against the column-integrated drag momentum
       exchange read from the saved rhs_terms (ion-side sink of
