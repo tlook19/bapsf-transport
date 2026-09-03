@@ -55,6 +55,13 @@ def measure(params, flags, cycles, dt, nx):
     flags["neutral_equilibration"] = False
     flags["launch_plasma_after_equilibration"] = False
     flags["use_cached_neutral_seed"] = False
+    # The two DVM directed-recycle jets, cleared for the same reason as
+    # cathode_coupling above: with no plasma and no cathode solve there is no
+    # collected ion flux to split and no phi_c / phi_a to launch against, and
+    # the construction guard behind each jet refuses an inner sim that arms one
+    # without a cathode solve. Both are input_dict keys, so they go on ``params``.
+    params["neutral_kinetic_dvm_cathode_jet"] = False
+    params["neutral_kinetic_dvm_anode_jet"] = False
     params["nn0"] = 1e8
     params["cycles"] = int(cycles)
     tau_cycle = float(params.get("tau_cycle", 0.0))

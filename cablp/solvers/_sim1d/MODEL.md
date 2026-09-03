@@ -762,6 +762,72 @@ cell within the tick, that count is measured against the inventory the cell
 holds *after* those returns (`NUMERICS.md` § "The counted ionization debit").
 
 
+### The distribution the arm evolves, and why it carries two velocity coordinates
+
+**Definition.** Let $F(r,z,\mathbf v,t)$ be the neutral distribution in the
+column, $\mathbf v=(v_z,\mathbf v_\perp)$, and write
+$c_\perp\equiv|\mathbf v_\perp|=(v_x^2+v_y^2)^{1/2}$ for the perpendicular
+SPEED and $\varphi$ for its azimuth. The object this arm evolves is
+
+$$f(z,v_z,c_\perp,t)=\int_0^{2\pi}\langle F\rangle_A\,d\varphi ,$$
+
+where $\langle\cdot\rangle_A$ is the average over the column cross-section —
+the radial coordinate is removed — and the $\varphi$-integral removes the
+DIRECTION of $\mathbf v_\perp$. $c_\perp$ is a speed, not a component: it is
+conserved in free flight, whereas the radial component
+$v_\rho=c_\perp\cos\varphi$ is not. The moments therefore carry the polar
+measure,
+
+$$n_n(z)=\int dv_z\int_0^\infty c_\perp\,dc_\perp\,f,\qquad
+  E_n=\iint \tfrac12 m\,(v_z^2+c_\perp^2)\,f\,c_\perp\,dc_\perp\,dv_z ,$$
+
+and the annulus distribution $f_{\rm ann}$ is the same construction over the
+annular zone.
+
+**Transport operator.** The collisionless operator is
+$\partial_t F+v_z\,\partial_z F+\mathbf v_\perp\!\cdot\!\nabla_\perp F$; there
+is NO $\partial/\partial\mathbf v$ term, because nothing forces a neutral and
+$c_\perp$ is a constant of free flight. Averaging
+$\mathbf v_\perp\!\cdot\!\nabla_\perp F$ over the cross-section turns the
+perpendicular streaming into a BOUNDARY FLUX,
+
+$$\langle \mathbf v_\perp\!\cdot\!\nabla_\perp F\rangle
+  \;\longrightarrow\; \nu_x(c_\perp)\,f-\nu_x'(c_\perp)\,f_{\rm ann},$$
+
+so $v_z\,\partial_z f$ is the only surviving spatial derivative, and
+$\nu_x,\nu_x',\nu_w$ are azimuth-averaged boundary-crossing rates of an atom of
+perpendicular speed $c_\perp$ — each $\propto c_\perp$ per bin, with the
+coaxial-cylinder view factor and the cavity chord supplying the geometric
+factors.
+
+**The approximation, stated honestly.** After the cross-section average the
+distribution has no preferred perpendicular direction, so the
+$\varphi$-integral loses nothing. What it does cost is radial structure INSIDE
+the column: an atom entering from the annulus is spread over the whole
+cross-section at once. The two-zone split IS this arm's radial description.
+
+**Why both velocity coordinates are needed.** $\nu_x\propto c_\perp$ selects
+fast-perpendicular atoms out of the column; the charge-exchange and elastic
+rates use $|\mathbf v-\mathbf u_i|^2=(v_z-u_i)^2+c_\perp^2$ per bin; the wall
+return (accommodation $\alpha$), the recycle jets and the puff all enter with
+definite $(v_z,c_\perp)$ spectra; and the $T_{\rm eff}$ of the relaxation
+target above is the second moment of the lost population. Collapsing $c_\perp$
+returns one mean speed per cell — that is the fluid closure.
+
+**Code correspondence.** In `physics/kinetic_dvm.py` the grid is `(VZ, VP)`
+with `VP` a positive stretched axis and `V2 = VZ**2 + VP**2`
+(`physics/kinetic_neutrals.py`, `VGrid`); the source and volume-Maxwellian
+spectra are entered as $c_\perp\exp(-c_\perp^2/2s^2)$, the azimuthally
+integrated 2D Maxwellian, and the diffuse wall spectrum carries one further
+power of $c_\perp$ from the cosine flux law; and `collision_frequencies`
+evaluates $g_{\rm eff}^2=(v_z-u_i)^2+c_\perp^2+8kT_i/(\pi m)$ per bin. The code
+IS this definition.
+
+Throughout this section $v_\perp$ used as a grid coordinate means the
+perpendicular SPEED $c_\perp$; the symbol $c_\perp$ is used for it wherever it
+appears.
+
+
 ### Cathode-side energetic recycle (`neutral_kinetic_dvm_cathode_jet`, default off)
 
 The recycle the arm counts off the cathode is one stream of atoms leaving one
@@ -1012,7 +1078,7 @@ $$\frac{A_{\rm ann}}{A_{\rm open}} = \frac{6788.63}{3898.56} = 1.7413 .$$
 The two areas are printed by `scripts/b6bf_base_pins.py`; their RATIO is what
 `scripts/verify_sim1d_k2_dvm.py` gate BF2 emits and gates on. Armed, the DVM's
 net annulus current per unit density difference matches the fluid orifice to
-$9.7\times10^{-4}$ at $(n_{v_z}, n_{v_\perp}) = (48, 12)$ and
+$9.7\times10^{-4}$ at $(n_{v_z}, n_{c_\perp}) = (48, 12)$ and
 $2.7\times10^{-4}$ at $(64, 24)$ on a velocity grid sized to the 300 K gas, and
 to $1.8\times10^{-3}$ and $8.7\times10^{-4}$ on the shipped grid extent (which
 is sized for ion drift caps, so a cold gas occupies a small part of it). The
