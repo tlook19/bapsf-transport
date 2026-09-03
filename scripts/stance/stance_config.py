@@ -88,9 +88,18 @@ from cablp.solvers._sim1d import (  # noqa: E402
     default_config,
     resolve_declaration_blocks,
 )
+from cablp.solvers._sim1d.core.model_declarations import (  # noqa: E402
+    FAMILIES_BY_NAME,
+)
 from cablp.solvers._sim1d.core.model_families import (  # noqa: E402
+    FLAGS,
+    PARAMS,
     values_equal,
 )
+
+#: The two namespace tokens a declared family's membership carries, mapped onto
+#: this loader's table names.
+_SPACE_TABLE = {PARAMS: "input_dict", FLAGS: "input_flags"}
 
 #: Directory holding the committed stance files.
 STANCE_DIR = _SCRIPTS / "stances"
@@ -271,7 +280,7 @@ def _load(name, path, chain):
 
     if base is not None:
         _refuse_restated(
-            name, path, base, own_params, own_flags, allow_restated
+            name, path, base, own_params, own_flags, models, allow_restated
         )
         params = dict(base.params)
         flags = dict(base.flags)
@@ -395,8 +404,23 @@ def _read_deltas(name, path, document):
     )
 
 
-def _refuse_restated(name, path, base, own_params, own_flags, allow_restated):
-    """Refuse a FLAT delta that repeats the base's resolved value.
+def _family_members(family_name):
+    """Return this loader's ``(table, key)`` pairs for a declared family.
+
+    A block states its family's COMPLETE membership -- the declaration form
+    enforces that before this runs -- so the family's membership IS the set of
+    keys the block contributed, and it can be read from the family rather than
+    recovered from the projection.
+    """
+    family = FAMILIES_BY_NAME[family_name]
+    return tuple(
+        (_SPACE_TABLE[space], key) for space, key in family.members
+    )
+
+
+def _refuse_restated(name, path, base, own_params, own_flags, models,
+                     allow_restated):
+    """Refuse a delta that repeats the base's resolved value.
 
     A derived configuration exists to state what MOVES. A line that restates
     the value it inherits reads as a decision and is not one: it survives a
@@ -404,33 +428,63 @@ def _refuse_restated(name, path, base, own_params, own_flags, allow_restated):
     puts a second home under a value that has one. ``allow_restated`` waives
     this for a file that deliberately pins a value against its base drifting.
 
-    DECLARATION BLOCK members are exempt, and that is the form's own rule
-    rather than an exception carved here: a block is an INVENTORY of a
-    family's complete membership, written out regardless of value, so a member
-    that agrees with the base is the form working.
+    THE UNIT OF THE CHECK IS THE DELTA THE FILE WROTE, and a DECLARATION BLOCK
+    is one delta, not a handful. A block is an INVENTORY of a family's complete
+    membership, written out regardless of value, so an individual member that
+    agrees with the base is the form working and is not restatement. What the
+    block as a whole must do is still move something: a block whose every
+    member equals the base's resolved value re-declares a decision the base
+    already made, which is the same fault one flat line commits, and it is
+    refused by family name.
+
+    A flat key is checked on its own, as before. A key inside a block is
+    checked only through its block -- it cannot be both, because a member also
+    stated flat is already refused by the declaration form.
     """
     if allow_restated:
         return
     base_params, base_flags = default_config()
     base_params.update(base.params)
     base_flags.update(base.flags)
+    own = {"input_dict": own_params, "input_flags": own_flags}
+    resolved_base = {"input_dict": base_params, "input_flags": base_flags}
+
+    def _restates(table, key):
+        return key in resolved_base[table] and values_equal(
+            own[table][key], resolved_base[table][key]
+        )
+
     restated = []
-    for namespace, own, resolved_base in (
-        ("input_dict", own_params, base_params),
-        ("input_flags", own_flags, base_flags),
-    ):
-        for key in sorted(own):
-            if key in resolved_base and values_equal(own[key], resolved_base[key]):
-                restated.append(f"{namespace}:{key} = {own[key]!r}")
+    in_a_block = set()
+    for family_name in sorted(models):
+        members = [
+            (table, key) for table, key in _family_members(family_name)
+            if key in own[table]
+        ]
+        in_a_block.update(members)
+        if members and all(_restates(table, key) for table, key in members):
+            restated.append(
+                f"[models.{family_name}] (all {len(members)} member(s) equal "
+                "the base)"
+            )
+    for table in ("input_dict", "input_flags"):
+        for key in sorted(own[table]):
+            if (table, key) in in_a_block:
+                continue
+            if _restates(table, key):
+                restated.append(f"{table}:{key} = {own[table][key]!r}")
     if not restated:
         return
     raise ValueError(
-        f"configuration {name!r} ({path}) restates {len(restated)} value(s) "
-        f"its base {base.name!r} already resolves to, and a delta must move "
-        f"something: {'; '.join(restated)}. Delete the line(s) to inherit the "
-        "base's value, change them to state a different one, or set "
+        f"configuration {name!r} ({path}) restates {len(restated)} "
+        f"delta(s) its base {base.name!r} already resolves to, and a delta "
+        f"must move something: {'; '.join(restated)}. Delete them to inherit "
+        "the base's value, change them to state a different one, or set "
         "allow_restated = true at the top of the file to pin them "
-        "deliberately against the base changing."
+        "deliberately against the base changing. (A declaration block is ONE "
+        "delta: its members may agree with the base individually -- a block "
+        "states a family's complete membership regardless of value -- but the "
+        "block must move at least one of them.)"
     )
 
 

@@ -263,14 +263,24 @@ Two refusals belong to the derived form alone:
 
 | refusal | message names | why |
 |---|---|---|
-| a flat delta restating its base's resolved value | every restated key, both values, and the waiver | a delta must MOVE something: a line that repeats its base reads as a decision, changes nothing, and stops agreeing with the base silently the first time the base moves |
+| a delta restating its base's resolved value | every restated delta — a flat key with both values, a block by family name — and the waiver | a delta must MOVE something: a line that repeats its base reads as a decision, changes nothing, and stops agreeing with the base silently the first time the base moves |
 | a base chain deeper than three files, or a cycle | the whole chain, in order | past that depth a value cannot be traced to the file that chose it by reading, only by running the loader |
 
 `allow_restated = true` at the top of a file waives the first, for a file that
-pins a value deliberately against its base drifting. Declaration-block members
-are exempt from it by construction: a block is an INVENTORY of a family's
-complete membership, written out regardless of value, so a member that agrees
-with the base is the form working.
+pins a value deliberately against its base drifting.
+
+**The unit of that check is the delta the file WROTE, and a declaration block
+is one delta, not a handful.** A block is an INVENTORY of a family's complete
+membership, written out regardless of value, so an individual member agreeing
+with the base is the form working and is not restatement — a complete block
+with one member moved is a legitimate delta, whatever the other members say.
+What the block as a whole must still do is move something: a block whose EVERY
+member equals the base's resolved value re-declares a decision the base already
+made, which is the same fault one flat line commits, and it is refused by
+family name rather than by listing members that are individually blameless. A
+flat key is checked on its own, as before; a key inside a block is checked only
+through its block, because a member also stated flat is already refused by the
+declaration form.
 
 ### The lineage a run records
 
