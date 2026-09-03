@@ -335,7 +335,7 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     # The drift operator writes the ELECTRON row alone; it moves no particles
     # of any species, so it has no neutrals to carry a birth temperature for.
     "electron_drift_transport": "none",
-    "hyperbolic_energy_correction": "none",
+    "hyperbolic_dissipation_heating": "none",
     "flux_tube_geometry": "none",
     "ei_exchange": "none",
     "ionization_energy_cost": "none",
@@ -4863,7 +4863,7 @@ class LAPDSim1D:
                 # AND across the flag. There is no drive in this branch, so an
                 # armed run books zero here too.
                 "electron_drift_transport": self._zero_rhs_state(),
-                "hyperbolic_energy_correction": self._zero_rhs_state(),
+                "hyperbolic_dissipation_heating": self._zero_rhs_state(),
                 "ei_exchange": self._zero_rhs_state(),
                 "ionization_energy_cost": self._zero_rhs_state(),
                 "electron_ion_cooling": self._zero_rhs_state(),
@@ -4986,6 +4986,21 @@ class LAPDSim1D:
             cathode_solve=cathode_solve,
             time=time,
         )
+        # The KEP correction is booked in TWO places, so it is resolved here
+        # rather than inline: its pressure half folds into "pressure_work",
+        # which then IS the energy-consistent pressure work, and its Rusanov
+        # dissipation half is the "hyperbolic_dissipation_heating" row. Both
+        # rows are always present -- unarmed, the pressure row is the
+        # uncorrected one and the dissipation row is the zero state, so the
+        # saved term structure does not move with the flag.
+        pressure_work = self.pressure_work_rhs(state=state)
+        if self._hyperbolic_energy_consistent:
+            kep_pressure, hyperbolic_dissipation = (
+                self.hyperbolic_energy_correction_rhs(state=state)
+            )
+            pressure_work = add_state_rhs(pressure_work, kep_pressure)
+        else:
+            hyperbolic_dissipation = self._zero_rhs_state()
         terms = {
             **zone_terms,
             **probe_terms,
@@ -5006,7 +5021,7 @@ class LAPDSim1D:
                 time=time,
                 carrier_out=carrier_out,
             ),
-            "pressure_work": self.pressure_work_rhs(state=state),
+            "pressure_work": pressure_work,
             # The electron-velocity correction to the row above: pressure_work
             # books with the ION velocity, which is exact only where J = 0.
             # Presence-gated -- unarmed, the zero state is recorded and
@@ -5019,11 +5034,11 @@ class LAPDSim1D:
                 if self._electron_drift is not None
                 else self._zero_rhs_state()
             ),
-            "hyperbolic_energy_correction": (
-                self.hyperbolic_energy_correction_rhs(state=state)
-                if self._hyperbolic_energy_consistent
-                else self._zero_rhs_state()
-            ),
+            # The Rusanov (n, M) numerical kinetic-energy dissipation, deposited
+            # into the ion internal energy. It sits in the slot the combined
+            # correction row occupied, so the dissipation booking keeps its
+            # place in the fold that advances the state.
+            "hyperbolic_dissipation_heating": hyperbolic_dissipation,
             "ei_exchange": self.energy_exchange_rhs(state=state),
             "ionization_energy_cost": electron_cooling_terms[
                 "ionization_energy_cost"
@@ -8837,7 +8852,12 @@ class LAPDSim1D:
         )
 
     def hyperbolic_energy_correction_rhs(self, y=None, state=None):
-        """Return the R2 KEP energy-consistency correction (Ee, Ei sources)."""
+        """Return the R2 KEP correction as ``(pressure, dissipation)``.
+
+        The first folds into the ``pressure_work`` ledger row and the second
+        IS the ``hyperbolic_dissipation_heating`` row; see
+        :func:`sources.hyperbolic_energy_correction_rhs`.
+        """
         if state is None:
             state = self.state if y is None else self._unpack(y)
         return hyperbolic_energy_correction_rhs(

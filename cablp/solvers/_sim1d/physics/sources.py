@@ -459,15 +459,30 @@ def hyperbolic_energy_correction_rhs(
     electron_scale=1.0,
     ion_scale=1.0,
 ):
-    """Return the R2 kinetic-energy-preserving energy-consistency correction.
+    """Return the R2 KEP energy-consistency correction as its TWO bookings.
 
-    Added on top of the plasma advective flux and the ``-p div u`` pressure
-    work, this term (i) deposits the Rusanov ``(n, M)`` numerical kinetic-energy
-    dissipation into the ion internal energy and (ii) converts the electron and
-    ion pressure work from ``-p_s div u`` to the kinetic-energy-preserving
-    ``-u dM_press_s`` form. Combined with the KEP convective momentum flux
+    ``(pressure_correction, dissipation_heating)``. The correction does two
+    unrelated things, and they are returned separately because they belong to
+    two different ledger rows:
+
+    ``pressure_correction`` (Ee and Ei)
+        converts the electron and ion pressure work from ``-p_s div u`` to the
+        kinetic-energy-preserving ``-u dM_press_s`` form. It is the
+        re-discretization of a term the ledger already has, so it is booked
+        INTO ``pressure_work``, which then IS the energy-consistent pressure
+        work rather than a form that needs a correction elsewhere to be read.
+
+    ``dissipation_heating`` (Ei only)
+        deposits the Rusanov ``(n, M)`` numerical kinetic-energy dissipation
+        into the ion internal energy. That is a numerical-dissipation channel,
+        not pressure work, and it is booked as its own row. Per cell it is a
+        flux divergence contracted with the local velocity and is NOT
+        sign-definite; the dissipation is non-negative in the volume-weighted
+        total.
+
+    Combined with the KEP convective momentum flux
     (``flux._rusanov_raw_faces(energy_consistent=True)``) the flux plus
-    pressure-work operator then conserves the closed-domain total plasma energy
+    pressure-work operator conserves the closed-domain total plasma energy
     ``K + Ee + Ei`` to machine precision. Off-path callers never build it, so
     the operator is structurally inert when the selector is off.
     """
@@ -507,13 +522,22 @@ def hyperbolic_energy_correction_rhs(
 
     zeros = np.zeros(cells, dtype=float)
     d_Ee = float(electron_scale) * (derived.pe * div_u - dK_press_e)
-    d_Ei = float(ion_scale) * (derived.pi * div_u - dK_press_i) - dK_diss
-    return ConservativeState1D(
-        n=zeros.copy(),
-        nn=zeros.copy(),
-        M=zeros.copy(),
-        Ee=d_Ee,
-        Ei=d_Ei,
+    d_Ei = float(ion_scale) * (derived.pi * div_u - dK_press_i)
+    return (
+        ConservativeState1D(
+            n=zeros.copy(),
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=d_Ee,
+            Ei=d_Ei,
+        ),
+        ConservativeState1D(
+            n=zeros.copy(),
+            nn=zeros.copy(),
+            M=zeros.copy(),
+            Ee=zeros.copy(),
+            Ei=-dK_diss,
+        ),
     )
 
 

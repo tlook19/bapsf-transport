@@ -894,13 +894,21 @@ so since the R2b re-anchor captured it at the stance of record.
   the dissipation strength and stability bound, not the physical wave speed,
   which the pressure flux already sets.
 - `hyperbolic_energy_consistent`: replaces the convective momentum flux with
-  the kinetic-energy-preserving `{u}{M}` form (Jameson 2008), and adds the
-  `hyperbolic_energy_correction` RHS term that deposits the Rusanov `(n,M)`
-  numerical kinetic-energy dissipation into `Ei` and applies a KEP pressure-work
-  discretization. With it on, `Σ V (K+Ee+Ei)` is conserved by the semi-discrete
+  the kinetic-energy-preserving `{u}{M}` form (Jameson 2008), and corrects the
+  energy rows in two bookings. The KEP pressure-work discretization folds into
+  the `pressure_work` RHS term, which with the flag on IS the energy-consistent
+  pressure work; the Rusanov `(n,M)` numerical kinetic-energy dissipation is
+  deposited into `Ei` as its own RHS term
+  `hyperbolic_dissipation_heating`. That deposit is a flux divergence
+  contracted with the local velocity, so it is not sign-definite cell by cell;
+  it is non-negative in the volume-weighted total. With the flag on,
+  `Σ V (K+Ee+Ei)` is conserved by the semi-discrete
   flux + pressure-work operator to machine precision; explicit SSPRK2 leaves an
   `O(Δt²)` time-integration drift of the nonlinear kinetic energy (verified by
   Δt refinement).
+  Artifacts written before the split carry the two bookings summed into one
+  `hyperbolic_energy_correction` row, with `pressure_work` uncorrected;
+  readers of the saved ledger accept either partition.
 
 The sonic `front_flux` is retired from the repaired stance: its L1 transport
 activity vanishes under mesh refinement (a density diffusion with `D ~ c_s·dz`

@@ -147,10 +147,16 @@ CHANNEL_PHASE = {
          "parallel heat conduction on the local temperature gradients; the "
          "explicit row only, the implicit substep books its transport "
          "outside rhs_terms"),
+    "hyperbolic_dissipation_heating":
+        ("BOTH",
+         "Rusanov numerical kinetic-energy dissipation deposited into the "
+         "ion internal energy; the pressure half of the old combined "
+         "correction now rides pressure_work"),
     "hyperbolic_energy_correction":
         ("BOTH",
-         "correction restoring discrete energy consistency of the "
-         "hyperbolic operator"),
+         "the COMBINED correction row, in artifacts written before it was "
+         "split: the dissipation deposit above plus the energy-consistent "
+         "re-discretization of pressure work"),
     "ion_charge_exchange":
         ("BOTH",
          "ion energy exchanged with neutrals through charge exchange; zero "

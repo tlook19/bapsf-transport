@@ -67,9 +67,15 @@ FAMILIES = {
         "neutral_cx_channel", "ion_neutral_thermalization",
         "ion_neutral_frictional_heating",
     ],
+    # Both hyperbolic-correction row names belong to this family: artifacts
+    # written before the correction was split carry the combined
+    # "hyperbolic_energy_correction" row, later ones carry
+    # "hyperbolic_dissipation_heating" with the pressure half folded into
+    # "pressure_work". A family may name a term the file does not have; the
+    # coverage assertion runs the other way.
     "advective flux + pressure (the hyperbolic core)": [
         "plasma_advective_flux", "plasma_front_flux", "pressure_work",
-        "hyperbolic_energy_correction",
+        "hyperbolic_energy_correction", "hyperbolic_dissipation_heating",
     ],
     "geometry (flux-tube area)": ["flux_tube_geometry"],
     "boundary / end sink (the structural candidate)": [

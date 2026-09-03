@@ -7850,7 +7850,7 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         # across the pre-breakdown phase change AND across the flag, so it
         # belongs in the unarmed enumeration too.
         "electron_drift_transport",
-        "hyperbolic_energy_correction",
+        "hyperbolic_dissipation_heating",
         "ei_exchange",
         "ionization_energy_cost",
         "electron_ion_cooling",

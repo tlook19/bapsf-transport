@@ -77,14 +77,26 @@ def state_from(sim, n, u, Te, Ti, nn=None):
 
 
 def hyp_rhs(sim, state):
-    """Pure hyperbolic RHS: advective flux + pressure work + KEP correction."""
+    """Pure hyperbolic RHS: advective flux + pressure work + KEP correction.
+
+    The correction arrives as its two bookings -- the pressure re-discretization
+    that the solver folds into ``pressure_work`` and the Rusanov dissipation
+    deposit that it books as ``hyperbolic_dissipation_heating`` -- and the
+    operator this checks is their sum, so both are added here.
+    """
     adv = sim.plasma_flux_rhs_terms(state=state)["plasma_advective_flux"]
     pw = sim.pressure_work_rhs(state=state)
-    corr = sim.hyperbolic_energy_correction_rhs(state=state)
+    kep, diss = sim.hyperbolic_energy_correction_rhs(state=state)
     dn = np.asarray(adv.n)
-    dM = np.asarray(adv.M) + np.asarray(pw.M) + np.asarray(corr.M)
-    dEe = np.asarray(adv.Ee) + np.asarray(pw.Ee) + np.asarray(corr.Ee)
-    dEi = np.asarray(adv.Ei) + np.asarray(pw.Ei) + np.asarray(corr.Ei)
+    dM = np.asarray(adv.M) + np.asarray(pw.M) + np.asarray(kep.M) + np.asarray(diss.M)
+    dEe = (
+        np.asarray(adv.Ee) + np.asarray(pw.Ee)
+        + np.asarray(kep.Ee) + np.asarray(diss.Ee)
+    )
+    dEi = (
+        np.asarray(adv.Ei) + np.asarray(pw.Ei)
+        + np.asarray(kep.Ei) + np.asarray(diss.Ei)
+    )
     return dn, dM, dEe, dEi
 
 
