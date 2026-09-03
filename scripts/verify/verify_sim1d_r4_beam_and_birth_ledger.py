@@ -21,9 +21,10 @@ values follow from the per-term identities the R4 unit gates prove exactly
 intercepted energy -> anode; verify_sim1d_r4_ionization_birth.py: electron birth
 -> 0, dilution).
 
-Needs the gitignored settled M6 artifact; pass --h5 to override the default.
+Needs the settled M6 artifact, named with --h5: it is a run artifact under the
+artifacts root, not a file this repository carries.
 
-Usage:  python scripts/verify/verify_sim1d_r4_beam_and_birth_ledger.py [--h5 PATH]
+Usage:  python scripts/verify/verify_sim1d_r4_beam_and_birth_ledger.py --h5 PATH
 """
 import argparse
 import sys
@@ -37,17 +38,11 @@ except ImportError:  # pragma: no cover
     print("h5py required")
     sys.exit(2)
 
-DEFAULT_H5 = (
-    "es1_nx120_m6_sq4600_g3200_c120_ts1900_l8p1_mn2mom300k_bmom_"
-    "g1vessel150_rp15_baf150p27_r30_es1.h5"
-)
 WINDOW = (18.81e-3, 23.80e-3)  # audit settled window [s]
 
 
 def _open(path):
     p = Path(path)
-    if not p.is_absolute():
-        p = Path(__file__).resolve().parents[1] / p
     if not p.exists():
         print(f"settled M6 artifact not found: {p}")
         print("This diagnostic reads a gitignored campaign artifact; regenerate "
@@ -156,7 +151,12 @@ def analyze(f):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--h5", default=DEFAULT_H5, help="settled M6 artifact path")
+    parser.add_argument(
+        "--h5",
+        required=True,
+        help="settled M6 artifact path: a saved sim1d run under the artifacts "
+             "root, e.g. ~/bapsf/artifacts/<event>/....h5",
+    )
     args = parser.parse_args(argv)
     f = _open(args.h5)
     if f is None:

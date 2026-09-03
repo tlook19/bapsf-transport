@@ -12,7 +12,12 @@ those same readings.
 
 Run from the checkout root::
 
-    PYTHONPATH=<checkout> python scripts/verify/verify_sim1d_edt.py
+    PYTHONPATH=<checkout> python scripts/verify/verify_sim1d_edt.py \
+        --h5 <saved sim1d run>.h5
+
+``--h5`` is required to RUN the gates: the fixture is a saved sim1d run, read
+from the artifacts root rather than from beside this script. ``--registration``
+prints the registry below and exits without one.
 
 Exit 0 = every gated statement passed. A failure is a DELIVERABLE: it is
 printed with its numbers and the suite exits 1. Never relax a tolerance here to
@@ -44,7 +49,7 @@ GATE REGISTRY
   larger side.
   SITE: the operator's own named rows on ONE accepted step.
   FIXTURE: the golden config at nx=60, and the ES1 source region on
-  ``scripts/mgcr1_confirm.h5``'s saved state.
+  ``mgcr1_confirm.h5``'s saved state.
   PASS: <= 1e-10 relative on every arm of the bracket, at a state where the
   operator is NOT vacuous (a zero-current state satisfies the identity
   trivially and would gate nothing).
@@ -56,7 +61,7 @@ GATE REGISTRY
   roundoff. Window-mean over 0.1-20.1 ms.
   SITE: ``edt_cathode_face_handshake_W`` and the face-1 work term, via the
   standalone evaluator on the saved state.
-  FIXTURE: ``scripts/mgcr1_confirm.h5`` (data in hand; no new run).
+  FIXTURE: ``mgcr1_confirm.h5`` (data in hand; no new run).
   PASS: (i) == 0 to roundoff; (ii) |work + pressure_work face-1| / |work| <=
   1e-12, at a magnitude of 4.298 kW.
 
@@ -76,7 +81,7 @@ GATE REGISTRY
   default, and the headline) and on the ``export_counts`` instrument arm --
   the one where NO face is closed, so that row is the operator's own interior
   compression and nothing else.
-  FIXTURE: ``scripts/mgcr1_confirm.h5``.
+  FIXTURE: ``mgcr1_confirm.h5``.
   PASS: under the REGISTERED closure +35.4 kW (bracket A) / +29.9 kW
   (bracket B), and on the instrument arms +13.6 / +8.2 kW, each within 15 %
   ROW-RELATIVE. BOTH are gated and both are labelled, because quoting either
@@ -126,7 +131,7 @@ GATE REGISTRY
   registered closure as the HEADLINE and the other two labelled INSTRUMENT
   ARM. An earlier form reported ``export_counts`` alone and unlabelled, which
   gave the afterglow term the OPPOSITE SIGN to the shipped default.
-  FIXTURE: ``scripts/mgcr1_confirm.h5`` at t = 26 ms AND over the whole
+  FIXTURE: ``mgcr1_confirm.h5`` at t = 26 ms AND over the whole
   afterglow window (t > 20.1 ms). Both, because the window's mean loop current
   is 218 A while at the 26 ms instant the loop carries ~12 A -- the term is
   confined to the ~1.5 ms ring-down and those are two readings, not one.
@@ -147,7 +152,7 @@ GATE REGISTRY
   support -- the drift is absorbed at the mesh and never traverses the last
   gradient) and faces 2-6 (which includes the mesh face's pressure jump, and
   is the support that reproduces the 2026-08-26 consult's figure).
-  FIXTURE: ``scripts/mgcr1_confirm.h5``.
+  FIXTURE: ``mgcr1_confirm.h5``.
   REPORTED: the bracket, expected 3.7-6.2 V against the Boltzmann estimate
   ``T_e ln(n_5/n_1)`` = 5.7 V. **The > 6 V binary is DROPPED** as
   discretization-fragile: one arm spans 5.27-6.22 V across defensible
@@ -171,7 +176,7 @@ GATE REGISTRY
   operator's ``Ee`` row times cell volume.
   SITE: ``edt_consult_pins.evaluate`` against
   ``sources.electron_drift_transport_rhs``, on ONE saved state.
-  FIXTURE: ``scripts/mgcr1_confirm.h5`` at t = 10 ms, on ALL SIX arms
+  FIXTURE: ``mgcr1_confirm.h5`` at t = 10 ms, on ALL SIX arms
   (``CHARGE_DEATH_CHOICES`` x ``ANODE_HANDSHAKE_CHOICES``).
   PASS: <= 1e-12 relative on every cell, on every arm, and both exactly zero
   outside the operator's support. **Not bit-identical, by design**: the kernel
@@ -225,12 +230,6 @@ from edt_consult_pins import (  # noqa: E402
     _window_mean_rows,
     evaluate,
 )
-
-#: The fixture the consult measured its pins on. Data in hand: no new run.
-#: Resolved against this script's own directory rather than the working
-#: directory, because run artifacts live beside the scripts and a worktree's
-#: copy of ``scripts/`` does not carry them -- pass ``--h5`` there.
-DEFAULT_H5 = str(Path(__file__).resolve().parents[1] / "mgcr1_confirm.h5")
 
 #: The consult's window, in seconds.
 WINDOW = (1.0e-4, 2.01e-2)
@@ -960,7 +959,12 @@ def gate6(report, geom, h5, afterglow_lo=2.01e-2):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--h5", default=DEFAULT_H5)
+    ap.add_argument(
+        "--h5",
+        default=None,
+        help="the saved sim1d run the gates read their fixture state from; "
+             "under the artifacts root, e.g. ~/bapsf/artifacts/<event>/....h5",
+    )
     ap.add_argument("--golden-steps", type=int, default=GOLDEN_STEPS)
     ap.add_argument(
         "--registration",
@@ -971,6 +975,9 @@ def main(argv=None):
     if args.registration:
         print(__doc__)
         return 0
+    if args.h5 is None:
+        ap.error("--h5 is required to run the gates; --registration prints "
+                 "the registry without one")
 
     import h5py
 
