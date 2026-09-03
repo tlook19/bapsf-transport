@@ -95,7 +95,7 @@ deviation -- and the comparison is written into the markdown and json
 products.  An artifact without the group is reported as such rather than
 silently skipped.
 
-    port_radiance_sim1d.py [--h5 RUN.h5] [--port 27] [--output-stem STEM]
+    port_radiance_sim1d.py --h5 RUN.h5 [--port 27] [--output-stem STEM]
 """
 
 from __future__ import annotations
@@ -119,9 +119,6 @@ from cablp.atomic.adas import (  # noqa: E402
 from cablp.constants import qe_SI  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
-
-#: Default artifact: the mgcr1 confirmation run this instrument was built on.
-DEFAULT_H5 = SCRIPT_DIR / "mgcr1_confirm.h5"
 
 #: Port -> z anchors, read from the same overlay compare_sim1d_es1.py reads.
 PORT_ANCHOR_OVERLAY = SCRIPT_DIR / "data" / "es1_sim1d_overlay.npz"
@@ -827,7 +824,13 @@ def _parser():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--h5", type=Path, default=DEFAULT_H5)
+    parser.add_argument(
+        "--h5",
+        type=Path,
+        required=True,
+        help="the saved sim1d run to read; under the artifacts root, e.g. "
+             "~/bapsf/artifacts/<event>/....h5",
+    )
     parser.add_argument("--port", type=int, default=27)
     parser.add_argument(
         "--output-stem",

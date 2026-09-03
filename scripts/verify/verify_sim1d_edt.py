@@ -15,8 +15,9 @@ Run from the checkout root::
     PYTHONPATH=<checkout> python scripts/verify/verify_sim1d_edt.py \
         --h5 <saved sim1d run>.h5
 
-``--h5`` is required: the fixture is a saved sim1d run, read from the
-artifacts root rather than from beside this script.
+``--h5`` is required to RUN the gates: the fixture is a saved sim1d run, read
+from the artifacts root rather than from beside this script. ``--registration``
+prints the registry below and exits without one.
 
 Exit 0 = every gated statement passed. A failure is a DELIVERABLE: it is
 printed with its numbers and the suite exits 1. Never relax a tolerance here to
@@ -960,7 +961,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
         "--h5",
-        required=True,
+        default=None,
         help="the saved sim1d run the gates read their fixture state from; "
              "under the artifacts root, e.g. ~/bapsf/artifacts/<event>/....h5",
     )
@@ -974,6 +975,9 @@ def main(argv=None):
     if args.registration:
         print(__doc__)
         return 0
+    if args.h5 is None:
+        ap.error("--h5 is required to run the gates; --registration prints "
+                 "the registry without one")
 
     import h5py
 

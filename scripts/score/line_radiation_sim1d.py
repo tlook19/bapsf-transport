@@ -94,7 +94,7 @@ at the 320.37 nm He II line -- the typical family curve begins near 400 nm --
 so the bulk attenuation applied here is still an ASSUMED representative
 curve.
 
-    line_radiation_sim1d.py [--h5 RUN.h5] [--ports 22 27]
+    line_radiation_sim1d.py --h5 RUN.h5 [--ports 22 27]
                             [--window-ms 15 19.5] [--output-stem STEM]
                             [--fiber-core-um 1000] [--fiber-na 0.39]
 """
@@ -366,9 +366,6 @@ from cablp.constants import qe_SI  # noqa: E402
 from cablp.solvers._sim1d.physics.kinetic_neutrals import (  # noqa: E402
     T_WALL_K,
 )
-
-#: Default subject: the kinetic-neutral arm on the corrected field profile.
-DEFAULT_H5 = SCRIPT_DIR / "m1_arm2_es1.h5"
 
 #: Plateau window on the MAIN-DISCHARGE clock [ms].
 DEFAULT_WINDOW_MS = (15.0, 19.5)
@@ -4051,7 +4048,13 @@ def _parser():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--h5", type=Path, default=DEFAULT_H5)
+    parser.add_argument(
+        "--h5",
+        type=Path,
+        required=True,
+        help="the saved sim1d run to read; under the artifacts root, e.g. "
+             "~/bapsf/artifacts/<event>/....h5",
+    )
     parser.add_argument(
         "--ports",
         type=int,
