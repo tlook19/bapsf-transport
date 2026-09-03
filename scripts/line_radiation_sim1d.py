@@ -78,19 +78,24 @@ end faces are applied separately because the attenuation curve is bulk fiber
 only.  This remains an UPPER BOUND: a real train loses light at every further
 surface, and adding a collimating lens cannot raise it, because a lens
 CONSERVES etendue -- it trades angular acceptance for collection area,
-changing the field of view rather than G.  The fiber geometry, the window
-material and the fiber length are ASSUMED hardware, not measured -- see
-``ASSUMPTIONS``, which is emitted verbatim into the markdown product.
+changing the field of view rather than G.  The fiber core, its NA and the
+run length are MEASURED -- the FT1000UMT spec sheet and the operator's own
+reading of the run -- while the window material and the attenuation curve
+applied to the fiber remain ASSUMED; see ``ASSUMPTIONS``, which is emitted
+verbatim into the markdown product.
 
 WINDOW CUTOFFS.  The three 50 % transmission cutoffs drawn on the figures are
 ASSUMED representative values for generic commercial parts, each carrying its
 datasheet source in ``ASSUMPTIONS``.  The material actually installed on the
-LAPD viewports and the fiber actually on the bench are NOT known to this
-script and are not claimed.
+LAPD viewports is NOT known to this script and is not claimed.  The fiber on
+the bench IS identified, but its manufacturer publishes no attenuation figure
+at the 320.37 nm He II line -- the typical family curve begins near 400 nm --
+so the bulk attenuation applied here is still an ASSUMED representative
+curve.
 
     line_radiation_sim1d.py [--h5 RUN.h5] [--ports 22 27]
                             [--window-ms 15 19.5] [--output-stem STEM]
-                            [--fiber-core-um 400] [--fiber-na 0.22]
+                            [--fiber-core-um 1000] [--fiber-na 0.39]
 """
 
 from __future__ import annotations
@@ -276,7 +281,12 @@ FIBER_ATTENUATION = {
         "certain (+/-0.25 and +/-0.4 decade). Separately, an un-stabilised "
         "high-OH fiber SOLARIZES and its effective UV cutoff drifts red with "
         "dose; this hydrogen-infused product is sold to resist that, but no "
-        "aged curve is given."
+        "aged curve is given. Finally, this is NOT the identified bench "
+        "fiber's own curve: Thorlabs publishes no attenuation figure for the "
+        "FT1000UMT at 320.37 nm and its typical family plot begins near "
+        "400 nm, so a representative solarization-resistant UV curve stands "
+        "in and the fiber attenuation stays ASSUMED. The FT1000UMT readings "
+        "that do exist are tabulated separately, beside this one."
     ),
     "opaque_below_nm": 195.0,
     "points_nm_db_per_m": (
@@ -293,6 +303,46 @@ FIBER_ATTENUATION = {
         (1000.0, 0.03),
     ),
 }
+
+#: The collection fiber actually on the bench, and the cells its own spec
+#: sheet states.  Core diameter, NA and the run length are MEASURED from
+#: here; the bulk attenuation is NOT, because the sheet publishes no figure
+#: at the He II line this instrument is scanned onto -- ``FIBER_ATTENUATION``
+#: above is what the transmission chain applies.
+FIBER_DATASHEET = {
+    "model": "Thorlabs FT1000UMT",
+    "datasheet": "Thorlabs spec sheet TTN004598-S01 Rev A",
+    "core_um": 1000.0,
+    "core_tolerance_um": 15.0,
+    "na": 0.39,
+    "construction": (
+        "pure silica core / TECS hard clad, Tefzel coat; operating range "
+        "300-1200 nm"
+    ),
+    "guaranteed_attenuation": (
+        "12 dB/km max at 808 nm -- the ONLY guaranteed attenuation figure on "
+        "the sheet"
+    ),
+    "plot_start_nm": 400.0,
+    "caveat": (
+        "The typical-family attenuation plot BEGINS at about 400 nm, so the "
+        "sheet carries NO attenuation at the 320.37 nm He II line. The "
+        "readings below are reads off that typical curve, with the bracket "
+        "the plot raster supports; they are not guaranteed values and they "
+        "are not what this script applies. NA carries no tolerance on the "
+        "sheet."
+    ),
+    #: (lambda [nm], read [dB/km], bracket low, bracket high, note)
+    "plot_readings_db_per_km": (
+        (400.0, 110.0, 78.0, 155.0, "plot reading at the curve's blue end"),
+        (587.0, 13.0, 8.0, 21.0, "plot reading"),
+        (706.0, 20.0, 8.0, 50.0, "plot reading, on an OH-peak edge"),
+    ),
+}
+
+#: Fiber run length [m].  MEASURED: the operator's own reading of the
+#: installed run, quoted as the lower bound "> 140 ft".
+DEFAULT_FIBER_LENGTH_M = 43.0
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -365,21 +415,28 @@ STAGE_ORDER = ("he1", "he0")
 ASSUMPTIONS = (
     {
         "quantity": "fiber core diameter",
-        "value": "400 um default; 200 / 400 / 600 um reported as columns",
-        "class": "ASSUMED",
+        "value": (
+            "1000 +/- 15 um (default); 400 and 600 um reported as comparison "
+            "columns"
+        ),
+        "class": "MEASURED",
         "source": (
-            "Bare multimode spectroscopy fiber in the 200-600 um class. NOT "
-            "the fiber on the LAPD bench, which is unknown to this script. "
-            "Substitutable with --fiber-core-um."
+            "Thorlabs FT1000UMT, spec sheet TTN004598-S01 Rev A: core "
+            "1000 +/- 15 um, pure silica core / TECS hard clad, Tefzel coat. "
+            "The 400 and 600 um columns are NOT hardware -- they are kept so "
+            "the core-scaling argument (collected flux ~ core^2 against "
+            "f_slit ~ 1/core) stays readable. Substitutable with "
+            "--fiber-core-um."
         ),
     },
     {
         "quantity": "fiber numerical aperture",
-        "value": "NA = 0.22 default; bracketed by NA 0.12 and NA 0.39",
-        "class": "ASSUMED",
+        "value": "NA = 0.39 (default); NA 0.12 reported as a comparison row",
+        "class": "MEASURED",
         "source": (
-            "Standard step-index silica/silica NA. NOT a measured value for "
-            "the LAPD hardware. Substitutable with --fiber-na."
+            "Thorlabs FT1000UMT, spec sheet TTN004598-S01 Rev A: NA 0.39, "
+            "with NO tolerance stated on the sheet. The NA 0.12 row is a "
+            "comparison, not hardware. Substitutable with --fiber-na."
         ),
     },
     {
@@ -429,13 +486,14 @@ ASSUMPTIONS = (
     },
     {
         "quantity": "fiber run length",
-        "value": "2.0 m (default; --fiber-length-m)",
-        "class": "ASSUMED",
+        "value": "43 m (default; --fiber-length-m)",
+        "class": "MEASURED",
         "source": (
-            "Sets the bulk attenuation 10^(-alpha L / 10). A plausible "
-            "port-to-spectrometer run; NOT a measured length. Attenuation "
-            "readings and their source are tabulated in the Window and fiber "
-            "transmission section."
+            "Operator's own reading of the installed run, quoted as the "
+            "lower bound '> 140 ft'. Sets the bulk attenuation "
+            "10^(-alpha L / 10), so it is one of the largest levers in the "
+            "chain: attenuation readings and their source are tabulated in "
+            "the Window and fiber transmission section."
         ),
     },
     {
@@ -497,7 +555,7 @@ ASSUMPTIONS = (
             "per-line T_window(lambda) and T_fiber(lambda, L), from "
             "datasheet curve readings"
         ),
-        "class": "ASSUMED (datasheet-sourced, representative parts)",
+        "class": "ASSUMED",
         "source": (
             "Tabulated point by point, with the figure, thickness or length, "
             "external-vs-internal basis and caveat, in `WINDOW_TRANSMISSION` "
@@ -505,9 +563,12 @@ ASSUMPTIONS = (
             "fiber transmission section below. NEITHER datasheet tabulates "
             "transmission against wavelength, so every point is a reading "
             "off a plotted curve or a value derived from numbers the same "
-            "document does tabulate. The material on the LAPD viewports and "
-            "the identity of the collection fiber are NOT known to this "
-            "script."
+            "document does tabulate. Datasheet-sourced but for REPRESENTATIVE "
+            "parts: the material on the LAPD viewports is not known to this "
+            "script, and while the collection fiber IS identified (Thorlabs "
+            "FT1000UMT), its sheet publishes no attenuation at 320.37 nm and "
+            "its typical curve begins near 400 nm, so a stand-in curve is "
+            "applied and the applied attenuation stays ASSUMED."
         ),
     },
     {
@@ -521,6 +582,94 @@ ASSUMPTIONS = (
             "through. The fiber's cutoff MOVES WITH THE RUN LENGTH. "
             "Uncertainties are the reading bars of the curves the point is "
             "computed from."
+        ),
+    },
+    {
+        "quantity": "reciprocal linear dispersion",
+        "value": "0.31 nm/mm at 2400 g/mm (0.62 nm/mm at 1200 g/mm)",
+        "class": "MEASURED",
+        "source": (
+            "McPherson Model 209 (1.33 m Czerny-Turner) specification sheet, "
+            "p.1 grating table. The same sheet gives resolution 0.005 nm at "
+            "2400 g/mm, 'typically measured at 313.1 nm'. The 1.5 / 2.5 / "
+            "4.0 nm/mm columns this script carried before the instrument was "
+            "identified are placeholders, and are reachable only through "
+            "--dispersion-bracket."
+        ),
+    },
+    {
+        "quantity": "entrance / exit slit width",
+        "value": "30 um, equal slits",
+        "class": "MEASURED",
+        "source": (
+            "Instrument setting as read by the operator; the micrometer "
+            "readout is in 10-micron thimble divisions (datasheet), and the "
+            "slits are 'continuously adjustable by precision micrometer from "
+            "5 to 4000 um' with a 2-20 mm height."
+        ),
+    },
+    {
+        "quantity": "instrument f-number",
+        "value": "f/9.4 (value of record); bracket [f/7, f/9.4]",
+        "class": "MEASURED",
+        "source": (
+            "McPherson Model 209 specification sheet. Its p.1 states f/9.4 "
+            "('11.6 with smaller grating') while its p.3 drawing title block "
+            "states f/7. THE SHEET CONTRADICTS ITSELF and this script does "
+            "not resolve it: f/9.4 is used and both members are carried "
+            "through the acceptance factor below."
+        ),
+    },
+    {
+        "quantity": "fiber-to-slit acceptance",
+        "value": (
+            "(NA_instr / NA_fiber)^2 = 1.9 % at f/9.4 and NA 0.39 (3.3 % at "
+            "f/7)"
+        ),
+        "class": "DERIVED",
+        "source": (
+            "The fiber butts against the slit with NO coupling optics, so "
+            "the instrument accepts only the part of the fiber's output cone "
+            "that falls inside its own NA_instr = 1 / (2 f/#). Computed from "
+            "two MEASURED datasheet values -- the fiber NA and the "
+            "instrument f-number -- in the same small-angle Omega ~ NA^2 "
+            "form used for the etendue above, and capped at 1. Replaces the "
+            "NA-into-f/# half of the single ASSUMED spectrometer throughput "
+            "this script used to carry."
+        ),
+    },
+    {
+        "quantity": "grating x mirror efficiency",
+        "value": "0.4",
+        "class": "ASSUMED",
+        "source": (
+            "What is left of the spectrometer's optical throughput once the "
+            "acceptance above is computed separately. The Model 209's optics "
+            "are Al + MgF2 and McPherson states NO efficiency, so this is a "
+            "placed number, not a datasheet reading. Every count rate scales "
+            "linearly with it."
+        ),
+    },
+    {
+        "quantity": "detector counting efficiency",
+        "value": (
+            "0.136 at 320.37 nm, 0.0286 at 587.75 nm; ZERO outside "
+            "185-680 nm"
+        ),
+        "class": "DERIVED",
+        "source": (
+            "Hamamatsu H8259 (plain variant) datasheet count sensitivity S "
+            "[s^-1 pW^-1] -- 2.1e5 at 300 nm, 2.6e5 at 400, 1.9e5 at 500, "
+            "7.5e4 at 600, 1.5e3 at 700 -- divided by the photon rate one "
+            "picowatt carries at that wavelength, 1 pW / (hc/lambda), with S "
+            "interpolated LOG-LINEARLY between cells. The datasheet gives "
+            "these only as 'Typ.' with NO min/max, so the result carries no "
+            "tolerance. It folds cathode efficiency, collection and counting "
+            "into one number exactly as the datasheet cell does, which is "
+            "why it is called a counting efficiency and NOT a QE. Outside "
+            "the head's rated 185-680 nm spectral response it is ZERO: the "
+            "tube is not specified there, and at 706 nm the plain head is "
+            "out of range (order 3e-4 if extrapolated)."
         ),
     },
 )
@@ -576,28 +725,93 @@ SWEEP_RANGE_NM = (300.0, 750.0)
 SWEEP_POINTS_PER_BANDPASS = 25
 SWEEP_POINTS_PER_SIGMA = 4
 
-#: Entrance/exit slit width [um].  ENGINEER-SUPPLIED default.
+#: The monochromator actually on the bench, and the cells its own spec sheet
+#: states.  Every scalar below that is read off this sheet says so in its own
+#: comment; the sheet's internal contradiction on f-number is recorded here
+#: rather than resolved.
+MONOCHROMATOR = {
+    "model": "McPherson Model 209, 1.33 m Czerny-Turner",
+    "datasheet": "McPherson 'Model 209' specification sheet",
+    "dispersion": (
+        "reciprocal linear dispersion 0.31 nm/mm at 2400 g/mm (0.62 nm/mm at "
+        "1200 g/mm), p.1 grating table"
+    ),
+    "resolution": (
+        "0.005 nm at 2400 g/mm, carrying the sheet's own qualifier "
+        "'typically measured at 313.1 nm'"
+    ),
+    "f_number": (
+        "p.1 states f/9.4 ('11.6 with smaller grating'); the p.3 drawing "
+        "title block states f/7. The sheet contradicts itself and this "
+        "script does not resolve it: f/9.4 is the value of record and "
+        "[f/7, f/9.4] is the disclosed bracket"
+    ),
+    "wavelength": (
+        "wavelength accuracy 0.05 nm; reproducibility +/-0.005 nm at "
+        "1200 g/mm"
+    ),
+    "slits": (
+        "'continuously adjustable by precision micrometer from 5 to "
+        "4000 um', 'micrometer readout is in 10-micron thimble divisions'; "
+        "slit height 2-20 mm"
+    ),
+}
+
+#: Entrance/exit slit width [um].  MEASURED: the instrument setting as read
+#: by the operator, on a micrometer whose divisions are 10 um.
 DEFAULT_SLIT_UM = 30.0
 
-#: Reciprocal linear dispersion [nm/mm].  UNKNOWN for the real instrument --
-#: the default is a placeholder and results are always reported across the
-#: bracket, never at the default alone.
-DEFAULT_DISPERSION_NM_PER_MM = 2.5
+#: Reciprocal linear dispersion [nm/mm].  MEASURED: the datasheet grating
+#: table cell for the 2400 g/mm grating.
+DEFAULT_DISPERSION_NM_PER_MM = 0.31
+
+#: Placeholder dispersions the sweep tables carried before the instrument was
+#: identified.  Reachable only through --dispersion-bracket, and NOT a
+#: property of the Model 209.
 DISPERSION_BRACKET_NM_PER_MM = (1.5, 2.5, 4.0)
 
-#: Spectrometer optical throughput: NA-into-f/# x grating x mirrors.
-#: ASSUMED single figure, not a measurement of any instrument.
-DEFAULT_SPECTROMETER_THROUGHPUT = 0.12
+#: Instrument f-number and the bracket the datasheet's own contradiction
+#: forces.  MEASURED cells; see MONOCHROMATOR["f_number"].
+DEFAULT_F_NUMBER = 9.4
+F_NUMBER_BRACKET = (7.0, 9.4)
 
-#: PMT quantum efficiency.  ENGINEER-SUPPLIED figure.
-DEFAULT_PMT_QE = 0.3
+#: Grating x mirror efficiency, the part of the spectrometer's throughput
+#: that is left once the fiber-to-slit acceptance is computed from the
+#: f-number.  ASSUMED: the 209's optics are Al + MgF2 and McPherson states
+#: no efficiency.
+DEFAULT_GRATING_MIRROR_EFFICIENCY = 0.4
 
-#: Flat fiber transmission the engineer quotes (2-3x the datasheet chain),
-#: printed alongside the datasheet result rather than replacing it.
-ENGINEER_FIBER_TRANSMISSION = 0.4
+#: The photon-counting head, and the cells its own datasheet states.
+PMT = {
+    "model": "Hamamatsu H8259 (plain variant)",
+    "datasheet": "Hamamatsu H8259 photon-counting head datasheet",
+    "spectral_response_nm": (185.0, 680.0),
+    "peak_nm": 400.0,
+    "effective_area": "4 x 20 mm",
+    "linearity": (
+        "count linearity 2.5e6 s^-1 at 10 % loss; pulse-pair resolution 35 ns"
+    ),
+    "dark_count": "typ 30 s^-1, max 80 s^-1 at 25 degC",
+}
 
-#: Core diameters the sweep tabulates.
-SWEEP_CORE_COLUMNS_UM = (200.0, 400.0, 600.0)
+#: Datasheet count sensitivity S [s^-1 pW^-1] against wavelength [nm].  The
+#: sheet gives these as 'Typ.' with NO min/max, so the counting efficiency
+#: derived from them carries no tolerance either.
+PMT_COUNT_SENSITIVITY_PER_PW = (
+    (300.0, 2.1e5),
+    (400.0, 2.6e5),
+    (500.0, 1.9e5),
+    (600.0, 7.5e4),
+    (700.0, 1.5e3),
+)
+
+#: Flat fiber transmission quoted by the operator (2-3x the datasheet
+#: chain), printed alongside the datasheet result rather than replacing it.
+QUOTED_FLAT_FIBER_TRANSMISSION = 0.4
+
+#: Core diameters the sweep tabulates [um]: the measured core first, then the
+#: two comparison columns the core-scaling argument needs.
+SWEEP_CORE_COLUMNS_UM = (1000.0, 600.0, 400.0)
 
 #: Line the sweep figure's zoom panel resolves.
 SWEEP_ZOOM_LINE_NM = 320.37
@@ -605,10 +819,11 @@ SWEEP_ZOOM_LINE_NM = 320.37
 #: Half-width of that zoom, in bandpasses.
 SWEEP_ZOOM_BANDPASSES = 6.0
 
-#: Core diameters reported as columns alongside the default [um].
-FIBER_CORE_COLUMNS_UM = (200.0, 400.0, 600.0)
+#: Core diameters reported as columns [um]; the measured core is the default
+#: and the other two are comparison columns.
+FIBER_CORE_COLUMNS_UM = (400.0, 600.0, 1000.0)
 
-#: NA values reported as a bracket around the default.
+#: NA values reported as comparison rows beside the measured default.
 FIBER_NA_BRACKET = (0.12, 0.39)
 
 
@@ -1325,6 +1540,62 @@ def slit_fraction(slit_um, core_um):
     return min(1.0, float(slit_um) / float(core_um))
 
 
+def slit_acceptance_fraction(fiber_na, f_number):
+    """Fraction of the fiber's output cone the spectrometer's f/# accepts.
+
+    The fiber butts against the entrance slit with NO coupling optics, so the
+    instrument sees only the part of the fiber's emission cone that falls
+    inside its own acceptance, ``NA_instr = 1 / (2 f/#)``.  Solid angles go
+    as ``NA^2`` in the small-angle form this script uses everywhere else, so
+    the accepted fraction is ``(NA_instr / NA_fiber)^2``, capped at 1 when
+    the instrument is faster than the fiber.
+
+    Raises ``ArtifactRefused`` on a non-positive f-number or an NA outside
+    (0, 1], because both would make the ratio meaningless rather than merely
+    wrong.
+    """
+    if float(f_number) <= 0.0:
+        raise ArtifactRefused(f"f-number must be positive; got {f_number}")
+    if not (0.0 < float(fiber_na) <= 1.0):
+        raise ArtifactRefused(f"fiber NA must lie in (0, 1]; got {fiber_na}")
+    na_instr = 0.5 / float(f_number)
+    return float(min(1.0, (na_instr / float(fiber_na)) ** 2))
+
+
+def pmt_counting_efficiency(lam_nm):
+    """Counting efficiency per INCIDENT photon at each wavelength.
+
+    The datasheet quantity is a count sensitivity ``S`` in counts per second
+    per picowatt, which already folds photocathode efficiency, collection and
+    discriminator counting into ONE number.  Dividing it by the photon rate a
+    picowatt carries at that wavelength, ``1 pW / (hc/lambda)``, turns it into
+    a dimensionless efficiency -- which is why this is a counting efficiency
+    and NOT a quantum efficiency.
+
+    ``S`` is interpolated LOG-LINEARLY between the tabulated cells, as the
+    fiber attenuation is, because it spans two and a half decades across the
+    band.  Outside the head's rated spectral response the efficiency is ZERO:
+    the tube is not specified there and returning a number would put counts
+    on lines it cannot register.  Inside the rated range but outside the
+    tabulated span the nearest cell is HELD; with the shipped sweep range
+    that hold never fires.
+
+    Accepts a scalar or an array and returns the matching shape.
+    """
+    lam = np.atleast_1d(np.asarray(lam_nm, dtype=float))
+    cells_nm = np.array([c[0] for c in PMT_COUNT_SENSITIVITY_PER_PW])
+    cells_s = np.array([c[1] for c in PMT_COUNT_SENSITIVITY_PER_PW])
+    s_per_pw = 10.0 ** np.interp(lam, cells_nm, np.log10(cells_s))
+    photon_J = (PBF.HC_EV_NM / lam) * qe_SI
+    photons_per_pw = 1.0e-12 / photon_J
+    eta = s_per_pw / photons_per_pw
+    lo, hi = PMT["spectral_response_nm"]
+    eta = np.where((lam >= lo) & (lam <= hi), eta, 0.0)
+    if np.ndim(lam_nm) == 0:
+        return float(eta[0])
+    return eta
+
+
 def instrument_triangle(offsets_nm, bandpass):
     """Equal-slit instrument function, PEAK-NORMALIZED to 1.
 
@@ -1389,13 +1660,19 @@ def sweep_at_port(stage, port_record, fibers, knobs):
 
     Only lines the window and fiber actually transmit enter the sweep -- a
     monochromator cannot scan onto a line the port window absorbed.
+
+    The instrument gain splits in two.  ``f_slit * acceptance * grating x
+    mirror`` is wavelength-flat and multiplies the whole curve; the
+    detector's counting efficiency is NOT, so it is evaluated at each
+    feature's centre for the tables and over the whole grid for the curve the
+    figure draws.
     """
     lam_all = np.asarray(stage["lambda_nm"])
     sigma_all = np.asarray(port_record["doppler_sigma_nm"])
     lo, hi = SWEEP_RANGE_NM
     out = {"dispersions": {}, "knobs": dict(knobs)}
 
-    for disp in DISPERSION_BRACKET_NM_PER_MM:
+    for disp in knobs["dispersions"]:
         bp = bandpass_nm(knobs["slit_um"], disp)
         per_core = {}
         curve_for_figure = None
@@ -1416,7 +1693,12 @@ def sweep_at_port(stage, port_record, fibers, knobs):
                 lam_all[keep], rates[keep], sigma_all[keep], bp
             )
             f_slit = slit_fraction(knobs["slit_um"], fib["core_um"])
-            gain = f_slit * knobs["throughput"] * knobs["qe"]
+            acceptance = slit_acceptance_fraction(
+                fib["na"], knobs["f_number"]
+            )
+            gain_optical = (
+                f_slit * acceptance * knobs["grating_mirror_efficiency"]
+            )
             feats = []
             for grp in merge_features(lam_all[keep], bp):
                 idx = keep[grp]
@@ -1424,25 +1706,35 @@ def sweep_at_port(stage, port_record, fibers, knobs):
                 halfwin = bp + 6.0 * float(sigma_all[idx].max())
                 sel = np.flatnonzero(np.abs(grid - centre) <= halfwin)
                 k = sel[int(np.argmax(swept[sel]))]
+                eta_count = float(pmt_counting_efficiency(centre))
                 feats.append(
                     {
                         "lines_nm": [float(v) for v in lam_all[idx]],
                         "centre_nm": centre,
                         "peak_lambda0_nm": float(grid[k]),
+                        "counting_efficiency": eta_count,
                         "exit_counts_per_s": float(swept[k]),
-                        "pmt_counts_per_s": float(swept[k] * gain),
+                        "pmt_counts_per_s": float(
+                            swept[k] * gain_optical * eta_count
+                        ),
                         "merged": len(grp) > 1,
                     }
                 )
             per_core[tag] = {
                 "fiber": fib,
                 "f_slit": f_slit,
-                "gain": gain,
+                "acceptance": acceptance,
+                "gain_optical": gain_optical,
                 "features": feats,
                 "empty": False,
             }
             if fib is fibers[0]:
-                curve_for_figure = (grid, swept, gain, step)
+                curve_for_figure = (
+                    grid,
+                    swept,
+                    gain_optical * pmt_counting_efficiency(grid),
+                    step,
+                )
         out["dispersions"][f"{disp:g}"] = {
             "dispersion_nm_per_mm": float(disp),
             "bandpass_nm": bp,
@@ -2015,6 +2307,53 @@ def markdown_report(rep):
         f"{FIBER_END_FACE_SOURCE}"
     )
     L.append("")
+    fd = FIBER_DATASHEET
+    L.append(f"#### Identified bench fiber: {fd['model']}")
+    L.append("")
+    L.append(
+        f"The collection fiber IS identified ({fd['datasheet']}) and its "
+        f"core ({fd['core_um']:g} +/- {fd['core_tolerance_um']:g} um) and NA "
+        f"({fd['na']:g}) are MEASURED cells used as this script's defaults. "
+        "Its bulk ATTENUATION is not: the curve applied above is the "
+        "representative stand-in, and the readings below are recorded only "
+        "so the difference is visible."
+    )
+    L.append("")
+    L.append(f"* construction: {fd['construction']}")
+    L.append(f"* guaranteed attenuation: {fd['guaranteed_attenuation']}")
+    L.append(f"* caveat: {fd['caveat']}")
+    L.append("")
+    L.extend(
+        _table(
+            [
+                "lambda [nm]",
+                "read [dB/km]",
+                "bracket [dB/km]",
+                "class",
+                "note",
+            ],
+            [
+                [
+                    f"{lam_r:g}",
+                    f"{val:g}",
+                    f"{blo:g} - {bhi:g}",
+                    "MEASURED",
+                    note,
+                ]
+                for lam_r, val, blo, bhi, note in fd[
+                    "plot_readings_db_per_km"
+                ]
+            ],
+        )
+    )
+    L.append("")
+    L.append(
+        "There is NO row at 320.37 nm because the sheet's plot does not "
+        f"reach it: the typical family curve begins near "
+        f"{fd['plot_start_nm']:g} nm. The attenuation this instrument "
+        "applies at that line stays ASSUMED."
+    )
+    L.append("")
     L.extend(
         _table(
             [
@@ -2386,9 +2725,11 @@ def markdown_report(rep):
     L.append("")
     L.append(
         "The three window cutoffs are ASSUMED representative parts. The "
-        "material of the LAPD viewports and the identity of the collection "
-        "fiber are NOT known to this script; nothing here is a statement "
-        "about the installed hardware."
+        "material of the LAPD viewports is NOT known to this script, and "
+        "neither is the attenuation of the identified collection fiber at "
+        "the 320.37 nm He II line, so nothing in that section is a "
+        "statement about the installed viewport or about the FT1000UMT's "
+        "own transmission."
     )
     L.append("")
     return "\n".join(L)
@@ -2401,32 +2742,38 @@ SWEEP_KNOB_CLASS = (
         "slit width",
         "slit_um",
         "um",
-        "ENGINEER-SUPPLIED",
-        "equal entrance and exit slits, butt-coupled fiber, 1:1 imaging",
+        "MEASURED",
+        "instrument setting as read by the operator; the micrometer readout "
+        "is in 10-micron thimble divisions (datasheet). Equal entrance and "
+        "exit slits, butt-coupled fiber, 1:1 imaging",
     ),
     (
         "reciprocal linear dispersion",
         "dispersion_nm_per_mm",
         "nm/mm",
-        "UNKNOWN -- BRACKETED",
-        "not known for the real instrument; every result below is reported "
-        "across the full bracket and the default carries no privilege",
+        "MEASURED",
+        "McPherson Model 209 datasheet grating table, 2400 g/mm cell "
+        "(0.62 nm/mm at 1200 g/mm). Pass --dispersion-bracket to carry the "
+        "placeholder 1.5 / 2.5 / 4.0 nm/mm columns beside it",
     ),
     (
-        "spectrometer throughput",
-        "throughput",
+        "instrument f-number",
+        "f_number",
+        "-",
+        "MEASURED",
+        "McPherson Model 209 datasheet p.1 ('11.6 with smaller grating'); "
+        "its p.3 drawing title block says f/7 instead. The sheet contradicts "
+        "itself, f/9.4 is the value of record and [f/7, f/9.4] the disclosed "
+        "bracket",
+    ),
+    (
+        "grating x mirror efficiency",
+        "grating_mirror_efficiency",
         "-",
         "ASSUMED",
-        "NA-into-f/# x grating efficiency x mirror reflectivities, collapsed "
-        "into one number; not a measurement of any instrument",
-    ),
-    (
-        "PMT quantum efficiency",
-        "qe",
-        "-",
-        "ENGINEER-SUPPLIED",
-        "single figure across the band; real QE is wavelength-dependent and "
-        "would reduce the red lines relative to the blue",
+        "what is left of the spectrometer's optical throughput once the "
+        "fiber-to-slit acceptance is computed from the f-number; the 209's "
+        "optics are Al + MgF2 and McPherson states no efficiency",
     ),
 )
 
@@ -2444,11 +2791,14 @@ def markdown_sweep(rep):
     )
     L.append("")
     L.append(
-        "`S(lambda0) = f_slit * eta_spec * QE * sum_i integral "
-        "G_i(lambda) I(lambda - lambda0) dlambda`, with `G_i` the thermal "
-        "Gaussian of Figure A carrying that line's TRANSMITTED photon rate "
-        "as its AREA, and `I` the equal-slit triangle of base "
-        "`2 * bandpass`."
+        "`S(lambda0) = f_slit * a_slit * eta_gm * eta_count(lambda0) * "
+        "sum_i integral G_i(lambda) I(lambda - lambda0) dlambda`, with `G_i` "
+        "the thermal Gaussian of Figure A carrying that line's TRANSMITTED "
+        "photon rate as its AREA, and `I` the equal-slit triangle of base "
+        "`2 * bandpass`. `a_slit` is the fiber-to-slit acceptance, `eta_gm` "
+        "the grating x mirror efficiency and `eta_count` the detector's "
+        "counting efficiency -- the only one of the four that varies with "
+        "wavelength."
     )
     L.append("")
     L.append(
@@ -2479,17 +2829,120 @@ def markdown_sweep(rep):
     L.extend(_table(["knob", "value", "unit", "class", "note"], rows))
     L.append("")
     L.append(
+        f"Instrument: **{MONOCHROMATOR['model']}** "
+        f"({MONOCHROMATOR['datasheet']}); detector "
+        f"**{PMT['model']}** ({PMT['datasheet']}). Datasheet cells not "
+        "otherwise used here, recorded so the instrument is identified: "
+        f"{MONOCHROMATOR['resolution']}; {MONOCHROMATOR['wavelength']}; "
+        f"slits {MONOCHROMATOR['slits']}. Detector: spectral response "
+        f"{PMT['spectral_response_nm'][0]:g}-"
+        f"{PMT['spectral_response_nm'][1]:g} nm peaking at "
+        f"{PMT['peak_nm']:g} nm, effective area {PMT['effective_area']}, "
+        f"{PMT['linearity']}, dark count {PMT['dark_count']}."
+    )
+    L.append("")
+    L.append("### Fiber-to-slit acceptance")
+    L.append("")
+    L.append(
+        "The fiber butts against the entrance slit with NO coupling optics, "
+        "so the spectrometer accepts only the part of the fiber's output "
+        "cone inside its own `NA_instr = 1 / (2 f/#)`: "
+        "`a_slit = (NA_instr / NA_fiber)^2`, DERIVED from two MEASURED "
+        "datasheet values and capped at 1. Both members of the datasheet's "
+        "own f-number contradiction are carried."
+    )
+    L.append("")
+    na_f = float(rep["fibers"][0]["na"])
+    rows = []
+    for fn in F_NUMBER_BRACKET:
+        rows.append(
+            [
+                f"f/{fn:g}"
+                + (" (of record)" if fn == knobs["f_number"] else ""),
+                f"{0.5 / fn:.4f}",
+                f"{na_f:g}",
+                f"{slit_acceptance_fraction(na_f, fn):.4f}",
+                f"{100.0 * slit_acceptance_fraction(na_f, fn):.2f} %",
+            ]
+        )
+    L.extend(
+        _table(
+            [
+                "f-number",
+                "NA_instr = 1/(2 f/#)",
+                "NA_fiber",
+                "a_slit",
+                "accepted",
+            ],
+            rows,
+        )
+    )
+    L.append("")
+    a_rec = slit_acceptance_fraction(na_f, knobs["f_number"])
+    L.append(
+        f"Combined spectrometer factor at the defaults: `a_slit * eta_gm = "
+        f"{a_rec:.4f} * {knobs['grating_mirror_efficiency']:g} = "
+        f"{a_rec * knobs['grating_mirror_efficiency']:.4e}`. The single "
+        "ASSUMED throughput this script carried before the instrument was "
+        "identified was 0.12, so every count rate below is smaller by a "
+        f"factor "
+        f"{0.12 / (a_rec * knobs['grating_mirror_efficiency']):.3g} on this "
+        "factor alone."
+    )
+    L.append("")
+    L.append("### Detector counting efficiency")
+    L.append("")
+    L.append(
+        "The datasheet gives a count sensitivity `S` in counts per second "
+        "per picowatt, which already folds photocathode efficiency, "
+        "collection and counting into one number. `eta_count = S / (1 pW / "
+        "(hc/lambda))` turns it into a dimensionless efficiency per INCIDENT "
+        "photon -- hence counting efficiency, NOT quantum efficiency. `S` is "
+        "interpolated LOG-LINEARLY between the cells below; the sheet gives "
+        "them only as `Typ.` with no min/max, so `eta_count` carries no "
+        "tolerance. Outside the head's rated "
+        f"{PMT['spectral_response_nm'][0]:g}-"
+        f"{PMT['spectral_response_nm'][1]:g} nm response `eta_count` is "
+        "ZERO: the tube is not specified there, so the sweep cannot book "
+        "counts on a line it could not register."
+    )
+    L.append("")
+    rows = []
+    for lam_c, s_c in PMT_COUNT_SENSITIVITY_PER_PW:
+        lo_r, hi_r = PMT["spectral_response_nm"]
+        rows.append(
+            [
+                f"{lam_c:g}",
+                f"{s_c:.3g}",
+                f"{pmt_counting_efficiency(lam_c):.4f}",
+                "rated" if lo_r <= lam_c <= hi_r else "OUTSIDE rated range",
+            ]
+        )
+    L.extend(
+        _table(
+            [
+                "lambda [nm]",
+                "S [s^-1 pW^-1] (Typ.)",
+                "eta_count",
+                "within rated response?",
+            ],
+            rows,
+        )
+    )
+    L.append("")
+    L.append(
         f"Fiber transmission applied: **{rep['fiber_ports'][rep['fiber_panels'][0][0]]['stages'][rep['fiber_panels'][0][1]]['T_fiber_source']}**. "
-        f"The engineer's flat figure is {ENGINEER_FIBER_TRANSMISSION:g} "
-        "(about 2-3x the datasheet chain); pass `--fiber-transmission "
-        f"{ENGINEER_FIBER_TRANSMISSION:g}` to substitute it, which scales "
+        f"The operator-quoted flat figure is "
+        f"{QUOTED_FLAT_FIBER_TRANSMISSION:g} (about 2-3x the datasheet "
+        "chain); pass `--fiber-transmission "
+        f"{QUOTED_FLAT_FIBER_TRANSMISSION:g}` to substitute it, which scales "
         "every count rate below by the ratio of the two."
     )
     L.append("")
     L.append("### Bandpass per dispersion")
     L.append("")
     rows = []
-    for disp in DISPERSION_BRACKET_NM_PER_MM:
+    for disp in knobs["dispersions"]:
         rows.append(
             [
                 f"{disp:g}",
@@ -2514,8 +2967,10 @@ def markdown_sweep(rep):
     L.append("")
     L.append(
         "Peak of the sweep at each feature, in counts/ms. `fiber exit` sets "
-        "`f_slit = eta = QE = 1` and is what arrives at the spectrometer "
-        "entrance; `PMT` applies all three."
+        "`f_slit = a_slit = eta_gm = eta_count = 1` and is what arrives at "
+        "the spectrometer entrance; `PMT` applies all four. `eta_count` is "
+        "evaluated at the feature centre, so a merged feature carries the "
+        "efficiency of its centroid."
     )
     L.append("")
     for pkey, key in rep["fiber_panels"]:
@@ -2525,7 +2980,7 @@ def markdown_sweep(rep):
         L.append(f"**Port {fp['port']} -- {st['label']}**")
         L.append("")
         rows = []
-        for disp in DISPERSION_BRACKET_NM_PER_MM:
+        for disp in knobs["dispersions"]:
             block = sw["dispersions"][f"{disp:g}"]
             for core in SWEEP_CORE_COLUMNS_UM:
                 tag = f"{core:.0f}um_NA{rep['fibers'][0]['na']:g}"
@@ -2543,6 +2998,7 @@ def markdown_sweep(rep):
                             f"{rec['f_slit']:.4f}",
                             ", ".join(f"{v:.2f}" for v in feat["lines_nm"]),
                             "yes" if feat["merged"] else "no",
+                            f"{feat['counting_efficiency']:.4f}",
                             _fmt(feat["exit_counts_per_s"] * 1.0e-3),
                             _fmt(feat["pmt_counts_per_s"] * 1.0e-3),
                         ]
@@ -2556,6 +3012,7 @@ def markdown_sweep(rep):
                     "f_slit",
                     "line(s) [nm]",
                     "merged?",
+                    "eta_count",
                     "fiber exit [counts/ms]",
                     "PMT [counts/ms]",
                 ],
@@ -2909,8 +3366,8 @@ def figure_sweep(rep, path_stem, dpi=180):
                     fontsize=10, color="0.3",
                 )
             continue
-        grid, swept, gain, _step = curve
-        counts_ms = swept * gain * 1.0e-3
+        grid, swept, gain_lambda, _step = curve
+        counts_ms = swept * gain_lambda * 1.0e-3
         top = max(float(counts_ms.max()), 1.0e-30)
         floor = top * 1.0e-7
         ax.plot(grid, np.maximum(counts_ms, floor), color="tab:blue", lw=0.9,
@@ -2954,8 +3411,10 @@ def figure_sweep(rep, path_stem, dpi=180):
             f"Port {fp['port']} ({st['label']})  --  slit "
             f"{knobs['slit_um']:g} um, {knobs['dispersion_nm_per_mm']:g} "
             f"nm/mm, bandpass {bp:.4f} nm;  f_slit "
-            f"{sw['cores'][tagd]['f_slit']:.3f} x eta "
-            f"{knobs['throughput']:g} x QE {knobs['qe']:g}",
+            f"{sw['cores'][tagd]['f_slit']:.3f} x a_slit "
+            f"{sw['cores'][tagd]['acceptance']:.4f} x eta_gm "
+            f"{knobs['grating_mirror_efficiency']:g} x "
+            r"$\eta_{\mathrm{count}}(\lambda)$",
             fontsize=9.0,
         )
 
@@ -2993,13 +3452,13 @@ def figure_sweep(rep, path_stem, dpi=180):
     axes[1].set_xlabel(r"$\lambda_0$, monochromator setting [nm]")
     fig.suptitle(
         f"Synthetic monochromator sweep -- {Path(rep['h5']).name}\n"
-        f"slit {knobs['slit_um']:g} $\\mu$m, dispersion "
-        f"{knobs['dispersion_nm_per_mm']:g} nm/mm (UNKNOWN for the real "
-        f"instrument -- see the markdown for the "
-        f"{DISPERSION_BRACKET_NM_PER_MM[0]:g}/"
-        f"{DISPERSION_BRACKET_NM_PER_MM[-1]:g} nm/mm bracket), core "
-        f"{rep['fibers'][0]['core_um']:.0f} $\\mu$m, "
-        f"eta {knobs['throughput']:g}, QE {knobs['qe']:g}",
+        f"{MONOCHROMATOR['model']}: slit {knobs['slit_um']:g} $\\mu$m, "
+        f"dispersion {knobs['dispersion_nm_per_mm']:g} nm/mm (datasheet, "
+        f"2400 g/mm), f/{knobs['f_number']:g}; core "
+        f"{rep['fibers'][0]['core_um']:.0f} $\\mu$m NA "
+        f"{rep['fibers'][0]['na']:g}, {rep['fiber_length_m']:g} m; "
+        f"eta_gm {knobs['grating_mirror_efficiency']:g}, "
+        f"{PMT['model']} counting efficiency",
         fontsize=10.2,
     )
     fig.get_layout_engine().set(rect=(0.0, 0.048, 1.0, 0.938))
@@ -3019,9 +3478,11 @@ def figure_sweep(rep, path_stem, dpi=180):
     )
     fig.text(
         0.5, 0.004,
-        "Throughput and QE are ASSUMED/engineer-supplied single figures, NOT "
-        "a calibration of any instrument; the count rates scale linearly "
-        "with both.",
+        "Slit, dispersion and f-number are datasheet MEASURED; the "
+        "fiber-to-slit acceptance is DERIVED from them; the grating x mirror "
+        "efficiency is ASSUMED and every rate scales linearly with it. The "
+        "detector counting efficiency is DERIVED from datasheet 'Typ.' "
+        "cells and is ZERO outside the head's rated response.",
         fontsize=7.0, color="0.35", ha="center",
     )
     for ext in ("pdf", "png"):
@@ -3266,11 +3727,12 @@ def print_console(rep):
         knobs = rep["sweep_knobs"]
         print("")
         print(
-            "[synthetic monochromator sweep -- slit "
-            f"{knobs['slit_um']:g} um, eta {knobs['throughput']:g}, QE "
-            f"{knobs['qe']:g}; dispersion UNKNOWN, bracketed]"
+            f"[synthetic monochromator sweep -- {MONOCHROMATOR['model']}; "
+            f"slit {knobs['slit_um']:g} um, f/{knobs['f_number']:g}, eta_gm "
+            f"{knobs['grating_mirror_efficiency']:g}; "
+            f"{PMT['model']} counting efficiency]"
         )
-        for disp in DISPERSION_BRACKET_NM_PER_MM:
+        for disp in knobs["dispersions"]:
             print(
                 f"  dispersion {disp:g} nm/mm -> bandpass "
                 f"{bandpass_nm(knobs['slit_um'], disp):.4f} nm "
@@ -3282,7 +3744,7 @@ def print_console(rep):
             sw = rep["sweeps"][pkey]
             print("")
             print(f"  port {fp['port']} / {st['short']} -- peak counts/ms")
-            for disp in DISPERSION_BRACKET_NM_PER_MM:
+            for disp in knobs["dispersions"]:
                 block = sw["dispersions"][f"{disp:g}"]
                 for core in SWEEP_CORE_COLUMNS_UM:
                     tag = f"{core:.0f}um_NA{rep['fibers'][0]['na']:g}"
@@ -3299,8 +3761,11 @@ def print_console(rep):
                             f"    disp {disp:>4g} bp "
                             f"{block['bandpass_nm']:.4f} nm  core "
                             f"{core:>4.0f} um  f_slit {rec['f_slit']:.4f}  "
+                            f"a_slit {rec['acceptance']:.4f}  "
                             f"[{lines_txt}]"
                             f"{' MERGED' if feat['merged'] else ''}  "
+                            f"eta_count "
+                            f"{feat['counting_efficiency']:.4f}  "
                             f"exit {feat['exit_counts_per_s'] * 1e-3:.4e}  "
                             f"PMT {feat['pmt_counts_per_s'] * 1e-3:.4e}"
                         )
@@ -3351,8 +3816,20 @@ def _parser():
         help="plateau window on the MAIN-DISCHARGE clock [ms]",
     )
     parser.add_argument("--output-stem", type=Path, default=None)
-    parser.add_argument("--fiber-core-um", type=float, default=400.0)
-    parser.add_argument("--fiber-na", type=float, default=0.22)
+    parser.add_argument(
+        "--fiber-core-um",
+        type=float,
+        default=FIBER_DATASHEET["core_um"],
+        help="fiber core diameter [um]; the default is the datasheet core of "
+        f"the {FIBER_DATASHEET['model']}",
+    )
+    parser.add_argument(
+        "--fiber-na",
+        type=float,
+        default=FIBER_DATASHEET["na"],
+        help="fiber numerical aperture; the default is the datasheet NA of "
+        f"the {FIBER_DATASHEET['model']}",
+    )
     parser.add_argument(
         "--window",
         choices=sorted(WINDOW_TRANSMISSION),
@@ -3363,16 +3840,18 @@ def _parser():
     parser.add_argument(
         "--fiber-length-m",
         type=float,
-        default=2.0,
-        help="fiber run length [m]; sets the bulk attenuation",
+        default=DEFAULT_FIBER_LENGTH_M,
+        help="fiber run length [m]; sets the bulk attenuation. The default "
+        "is the operator's reading of the installed run",
     )
     parser.add_argument(
         "--fiber-transmission",
         type=float,
         default=None,
         help="flat fiber transmission replacing the datasheet chain "
-        f"(the engineer's figure is {ENGINEER_FIBER_TRANSMISSION:g}); the "
-        "datasheet result is printed either way",
+        f"(the operator-quoted figure is "
+        f"{QUOTED_FLAT_FIBER_TRANSMISSION:g}); the datasheet result is "
+        "printed either way",
     )
     parser.add_argument(
         "--sweep",
@@ -3389,21 +3868,30 @@ def _parser():
         "--dispersion-nm-per-mm",
         type=float,
         default=DEFAULT_DISPERSION_NM_PER_MM,
-        help="reciprocal linear dispersion [nm/mm]; UNKNOWN for the real "
-        "instrument, so results are always reported across the bracket "
-        "as well",
+        help="reciprocal linear dispersion [nm/mm]; the default is the "
+        f"{MONOCHROMATOR['model']} datasheet cell at 2400 g/mm",
     )
     parser.add_argument(
-        "--spectrometer-throughput",
-        type=float,
-        default=DEFAULT_SPECTROMETER_THROUGHPUT,
-        help="NA-into-f/# x grating x mirrors (an ASSUMED single figure)",
+        "--dispersion-bracket",
+        action="store_true",
+        help="also carry the placeholder "
+        f"{'/'.join(f'{d:g}' for d in DISPERSION_BRACKET_NM_PER_MM)} nm/mm "
+        "columns the sweep tables held before the instrument was identified",
     )
     parser.add_argument(
-        "--pmt-qe",
+        "--f-number",
         type=float,
-        default=DEFAULT_PMT_QE,
-        help="PMT quantum efficiency",
+        default=DEFAULT_F_NUMBER,
+        help="spectrometer f-number, which sets the fiber-to-slit "
+        f"acceptance; the datasheet contradicts itself and the bracket is "
+        f"[f/{F_NUMBER_BRACKET[0]:g}, f/{F_NUMBER_BRACKET[1]:g}]",
+    )
+    parser.add_argument(
+        "--grating-mirror-efficiency",
+        type=float,
+        default=DEFAULT_GRATING_MIRROR_EFFICIENCY,
+        help="grating x mirror efficiency, the ASSUMED residue of the "
+        "spectrometer throughput once the acceptance is computed",
     )
     parser.add_argument("--dpi", type=int, default=180)
     return parser
@@ -3437,23 +3925,31 @@ def main(argv=None):
     for name, value in (
         ("--slit-um", args.slit_um),
         ("--dispersion-nm-per-mm", args.dispersion_nm_per_mm),
+        ("--f-number", args.f_number),
     ):
         if value <= 0.0:
             raise ArtifactRefused(f"{name} must be positive; got {value}")
-    for name, value in (
-        ("--spectrometer-throughput", args.spectrometer_throughput),
-        ("--pmt-qe", args.pmt_qe),
-    ):
-        if not (0.0 < value <= 1.0):
-            raise ArtifactRefused(f"{name} must lie in (0, 1]; got {value}")
+    if not (0.0 < args.grating_mirror_efficiency <= 1.0):
+        raise ArtifactRefused(
+            "--grating-mirror-efficiency must lie in (0, 1]; got "
+            f"{args.grating_mirror_efficiency}"
+        )
 
     sweep_knobs = None
     if args.sweep:
+        # The measured dispersion is always present, so the figure can key
+        # off it; --dispersion-bracket only ADDS the placeholder columns.
+        dispersions = [float(args.dispersion_nm_per_mm)]
+        if args.dispersion_bracket:
+            for d in DISPERSION_BRACKET_NM_PER_MM:
+                if f"{d:g}" not in {f"{x:g}" for x in dispersions}:
+                    dispersions.append(float(d))
         sweep_knobs = {
             "slit_um": args.slit_um,
             "dispersion_nm_per_mm": args.dispersion_nm_per_mm,
-            "throughput": args.spectrometer_throughput,
-            "qe": args.pmt_qe,
+            "dispersions": tuple(sorted(dispersions)),
+            "f_number": args.f_number,
+            "grating_mirror_efficiency": args.grating_mirror_efficiency,
         }
 
     rep = build(
