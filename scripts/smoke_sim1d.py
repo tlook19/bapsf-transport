@@ -6435,7 +6435,8 @@ def _case_beam_ql_power_disposal_pd1(
     #
     # (b) THE BRANCHING ANCHORS. The formula is the one the pd0 read
     # cross-checked against the QL-onset memo, and these are that read's own
-    # printed numbers (scripts/pd0_branching.py). They are asserted BEFORE the
+    # printed numbers (scripts/pd0_branching.py (at commit 48be9a4, retired
+    # 2026-09-03)). They are asserted BEFORE the
     # closure is exercised, so a drift in K_m, in the omega_pe coefficient or
     # in the Bohm-Gross term fails here rather than downstream.
     #
@@ -8408,7 +8409,8 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         # skip ANNOUNCES ITSELF -- a silent one reached review twice in one
         # cycle reading as a pass, which is the whole reason the solver-branch
         # rule asks for the equivalence lines by eye.
-        # scripts/spike_cython_kernels.py is the full-resolution version.
+        # scripts/spike_cython_kernels.py (at commit 48be9a4, retired
+        # 2026-09-03) is the full-resolution version.
         try:
             import importlib as _importlib
 
@@ -11160,142 +11162,6 @@ def _case_equilibration_puff_width(
     nn_ramp_state_1 = unpack_state(sim.floor_state_vector(nn_ramp_y1), geom.cells)
     assert np.all(np.isfinite(nn_ramp_state_1.nn))
     assert np.all(nn_ramp_state_1.nn >= params["nn_floor"])
-
-
-# --------------------------------------------------------------------
-# cli-run-and-plot-end-to-end
-# --------------------------------------------------------------------
-@_case("cli-run-and-plot-end-to-end")
-def _case_cli_run_and_plot_end_to_end():
-    # --- run_sim1d.py and plot_sim1d_run.py, driven as REAL CLI children --
-    # This block asks a DRIVER question, not a physics one: that the two
-    # shipped CLIs parse their arguments, run end to end as subprocesses,
-    # write a loadable HDF5 result, and render their plot files. It carried
-    # no dependency on the equilibration-puff-width case it sat inside --
-    # it landed there by POSITION at the R4 carve (2ac621c), not by
-    # relation -- so it is registered here on its own and takes no context.
-    #
-    # The child is held to an explicit SMALL equilibration. The shipped
-    # default is 100 cycles, which cost ~18 s of the suite's wall time
-    # here; not one assertion below reads the equilibrated seed, and the
-    # saved state vector is BIT-IDENTICAL at 1, 2, 100 and default cycles
-    # (measured 2026-08-27, drift exactly 0.0 in every case). Two cycles is
-    # what the puff-width case above pins for the same reason.
-    with tempfile.TemporaryDirectory() as tmpdir:
-        from scripts.run_sim1d import _parse_args
-
-        tmp_path = Path(tmpdir)
-        assert (
-            _parse_args(["--output", str(tmp_path / "default_operator_split.h5")])
-            .operator_split
-            is None
-        )
-        assert (
-            _parse_args(
-                [
-                    "--output",
-                    str(tmp_path / "forced_operator_split.h5"),
-                    "--operator-split",
-                ]
-            ).operator_split
-            is True
-        )
-        cli_config = tmp_path / "sim1d_cli_config.toml"
-        cli_output = tmp_path / "sim1d_cli_output.h5"
-        cli_config.write_text(
-            "\n".join(
-                [
-                    "[params]",
-                    "dt_save = 0.0",
-                    "gas_puff_enabled = false",
-                    "pump_enabled = false",
-                    "b_surface_loss = 0.0",
-                    # The inventory assertion below holds the CLI run to
-                    # atol=1e-14 on the 5-field single-zone cold-neutral
-                    # layout it was written against. The R2a fold-in made the
-                    # neutral closure family a config default, and the hot
-                    # channel conserves to ~4e-12 relative rather than to
-                    # 1e-14 on this source-free config: measured 2026-08-20,
-                    # neutral_energy is the member that moves it, and the
-                    # offset is IDENTICAL at 1 and at 100 equilibration cycles
-                    # to every printed digit -- a fixed closure-dependent
-                    # bookkeeping offset, not an accumulating leak. Pin the
-                    # layout rather than loosening the tolerance; the closure
-                    # family's own conservation blocks test it on its terms.
-                    # This is _pin_pre_r2a_neutral_stance spelled as TOML,
-                    # because the CLI reads a file rather than a dict.
-                    "cathode_neutral_jet = false",
-                    "cathode_jet_surface_debit = false",
-                    'cathode_jet_energy_convention = "legacy"',
-                    "[flags]",
-                    "neutral_momentum = false",
-                    "neutral_two_zone = false",
-                    "neutral_energy = false",
-                    "neutral_hot_internal_wall = false",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        cli_run = subprocess.run(
-            [
-                sys.executable,
-                "scripts/run_sim1d.py",
-                "--config",
-                str(cli_config),
-                "--output",
-                str(cli_output),
-                "--t-end",
-                "2e-10",
-                "--dt",
-                "1e-10",
-                "--max-steps",
-                "10",
-                "--neutral-equilibration-cycles",
-                "2",
-            ],
-            cwd=Path(__file__).resolve().parents[1],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        assert "sim1d run complete" in cli_run.stdout
-        assert "sim1d health:" in cli_run.stdout
-        assert "finite=True" in cli_run.stdout
-        assert "steps=2" in cli_run.stdout
-        cli_result = load_result_hdf5(cli_output)
-        cli_summary = summarize_result(cli_result)
-        assert cli_result.steps == 2
-        assert np.isclose(cli_result.final_time, 2.0e-10)
-        assert cli_result.time.shape == (3,)
-        assert cli_result.params["dt_save"] == 0.0
-        assert cli_result.params["b_surface_loss"] == 0.0
-        assert np.all(np.isfinite(cli_result.y))
-        assert cli_summary.finite
-        assert np.isclose(
-            cli_summary.total_particle_inventory_relative_drift,
-            0.0,
-            atol=1e-14,
-        )
-        cli_plot_dir = tmp_path / "sim1d_cli_plots"
-        cli_plot_run = subprocess.run(
-            [
-                sys.executable,
-                "scripts/plot_sim1d_run.py",
-                str(cli_output),
-                "--output-dir",
-                str(cli_plot_dir),
-                "--prefix",
-                "cli",
-            ],
-            cwd=Path(__file__).resolve().parents[1],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        assert "sim1d plots written:" in cli_plot_run.stdout
-        assert (cli_plot_dir / "cli_summary.png").exists()
-        assert (cli_plot_dir / "cli_densities.png").exists()
 
 
 # --------------------------------------------------------------------
@@ -17065,7 +16931,7 @@ def _case_compiled_kernel_equivalence():
         # and it is the pre-R2a 5-field cold-neutral stance -- the child spells
         # _pin_pre_r2a_neutral_stance out itself, since a subprocess cannot
         # import the parent's helper (the TOML block in the
-        # cli-run-and-plot-end-to-end case spells the
+        # cli-run-and-plot-end-to-end case, retired 2026-09-03, spelled the
         # same pin out for the same reason). This block asks a KERNEL
         # EQUIVALENCE question, not a closure question: the compiled kernels
         # are the tier-A sheath solve and the CSDA march, neither of which
@@ -22031,7 +21897,8 @@ def _case_hot_channel_internal_wall():
 # A proportional to 1/B that source IS the isotropic average of
 # -mu grad_par B, so a second term would double-count it exactly. The loader
 # is a library function whose one in-tree consumer is
-# scripts/characterise_mirror_fieldmap.py. These cases pin its arithmetic and
+# scripts/characterise_mirror_fieldmap.py (at commit 48be9a4, retired
+# 2026-09-03). These cases pin its arithmetic and
 # its refusals.
 # --------------------------------------------------------------------
 def _mirror_synthetic_map(directory, *, drop=()):
@@ -22818,7 +22685,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 120, "historical_stance": 53}
+_CASE_CENSUS = {"total": 119, "historical_stance": 53}
 
 
 def _assert_case_census():

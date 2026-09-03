@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Axisymmetric LAPD end-field solve on the MEASURED coil census.
 
-This is the census-based successor to ``solve_lapd_coil_field.py``.  That
+This is the census-based successor to ``solve_lapd_coil_field.py`` (at commit
+48be9a4, retired 2026-09-03).  That
 script represented the machine as a single uniform 80-coil stack (0.153 m
 pitch, 0.6875 m mean radius) terminating at z=0; the real magnet layout is
 segmented, has a 0.83 m bridged gap after the last main coil, and carries a

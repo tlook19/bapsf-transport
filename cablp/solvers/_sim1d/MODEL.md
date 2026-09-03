@@ -710,7 +710,7 @@ solver's only non-helium path, and `"phelps"` is now the sole accepted value.
 Analytic identities
 (`verify_sim1d_r4_collision.py`: momentum antisymmetry, friction $=-\tfrac12
 u_\text{rel}\,dM$, zero-drift thermal) hold to roundoff. On the settled matched-M6
-artifact (`probe_sim1d_r4_collision_bracket.py`) the operator's thermal cooling is
+artifact (`probe_sim1d_r4_collision_bracket.py` (at commit 48be9a4, retired 2026-09-03)) the operator's thermal cooling is
 $-28.2$ kW -- inside the IAEA-based pre-registration bracket $[-30.40,-22.67]$ kW
 and reduced from the present $-46.0$ kW, with no rate tuning (Phelps supersedes the
 IAEA rate set; the bracket is a cross-check).
@@ -1023,7 +1023,7 @@ $-0.18$ to $-6.6$ V across **accepted steps 2–9** while $T_i$ rises from its
 $0.026$ eV floor to $\sim0.9$ eV, so the clamped incident energy is exactly
 zero throughout — $\phi_a$ outruns $T_i$ negatively the whole way — while the
 mesh still collects at $\sim5\times10^{16}$ to $\sim4\times10^{18}\
-\mathrm{s^{-1}}$ (`scripts/b4aj_phi_a_probe.py`).
+\mathrm{s^{-1}}$ (`scripts/b4aj_phi_a_probe.py` (at commit 48be9a4, retired 2026-09-03)).
 
 **The backscatter of an ion that arrives with zero clamped energy is no
 backscatter.** A cell whose committed incident energy is exactly zero launches
@@ -1075,7 +1075,7 @@ that overstates the annulus throughput by
 
 $$\frac{A_{\rm ann}}{A_{\rm open}} = \frac{6788.63}{3898.56} = 1.7413 .$$
 
-The two areas are printed by `scripts/b6bf_base_pins.py`; their RATIO is what
+The two areas are printed by `scripts/b6bf_base_pins.py` (at commit 48be9a4, retired 2026-09-03); their RATIO is what
 `scripts/verify_sim1d_k2_dvm.py` gate BF2 emits and gates on. Armed, the DVM's
 net annulus current per unit density difference matches the fluid orifice to
 $9.7\times10^{-4}$ at $(n_{v_z}, n_{c_\perp}) = (48, 12)$ and
@@ -1887,7 +1887,7 @@ With the circuit integrating the unbounded demand the residual is no longer
 null under the clamp, so $dI/dt$ is free while the bound is active.
 
 Measured, not merely argued: on the ON-probe build leg (`r1vb_run_probe.py
---bound on`, both objects, read by `regime_vcm_onprobe_read.py`) the loop
+--bound on` (at commit 48be9a4, retired 2026-09-03), both objects, read by `regime_vcm_onprobe_read.py` (at commit 48be9a4, retired 2026-09-03)) the loop
 current **falls on 12 of 33 bound saves** and spans 1.10 A while bound — a
 state the old contract excluded as impossible — with every R1 registered
 assertion still holding ($V_b \le V_\text{avail}$ 33/33, zero ceiling

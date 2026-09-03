@@ -108,7 +108,8 @@ RAY_EPS_CM = 1e-7
 # empty recycle channel read as a defect rather than as an empty machine (see
 # ``assert_recycle_channel_live``). Selecting the row is
 # ``boundary_recycle_row``'s job, and it always answers
-# ``characteristic_boundary``. scope_cathode_jet.py reads this same union.
+# ``characteristic_boundary``. scope_cathode_jet.py (at commit 48be9a4, retired
+# 2026-09-03) reads this same union.
 BOUNDARY_ROWS = ("boundary_absorption", "characteristic_boundary")
 
 # Energy range [eV] over which the Phelps He+/He backscatter cross section
