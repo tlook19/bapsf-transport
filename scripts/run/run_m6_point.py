@@ -407,6 +407,10 @@ def main(argv=None):
         nx=args.nx, extra=extra,
         flags_extra=flags_extra or None,
         max_steps=args.max_steps,
+        # WHICH configuration this arm named, for the saved artifact to carry.
+        # None on --no-stance, which records itself as unnamed rather than
+        # borrowing a name it did not use.
+        configuration=None if stance is None else stance.lineage,
     )
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)
     # Standing condition for a DVM-arm run: every report quotes the limited

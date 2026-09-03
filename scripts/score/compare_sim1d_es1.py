@@ -88,7 +88,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
     if _dir not in _sys.path:
         _sys.path.insert(0, _dir)
 
-from stance_config import load_stance  # noqa: E402
+from stance_config import available_stances, load_stance  # noqa: E402
 
 OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
 
@@ -114,6 +114,12 @@ OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
 PRODUCTION_STANCE = "g1atrim"
 _STANCE = load_stance(PRODUCTION_STANCE).params
 
+# WHAT THIS DICT IS, since the "no default plasma" ruling (2026-09-03): the
+# INSTRUMENT BASE LAYER BENEATH A NAMED CONFIGURATION, NOT A PLASMA. It is the
+# shared production package every run_model caller stands on -- the circuit,
+# the rate model, the numerics -- and it is not a configuration anyone runs:
+# both campaign drivers and this file's own run route apply a named
+# configuration over it, and none of them has a bare mode any more.
 PARAM_OVERRIDES = {
     # DISCHARGE CIRCUIT -- corrected stance, 2026-08-03 (Tom's call). These
     # mirror the config defaults EXACTLY (core/config.py active_defaults); the
@@ -478,6 +484,7 @@ def run_model(
     flags_extra=None,
     t_end=None,
     max_steps=None,
+    configuration=None,
 ):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
@@ -528,7 +535,14 @@ def run_model(
         params["cathode_Rp_model"] = Rp_model
     if extra:
         params.update(extra)
-    sim = LAPDSim1D(params, flags)
+    # WHICH configuration this run named, when its caller named one. The
+    # identity is restated over the config assembled above, because a driver's
+    # rung and its command line layer on top of the named file. Metadata only:
+    # the solver stores it, the result carries it, the HDF5 records it, and
+    # nothing reads it, so a run with and without one is bit-identical.
+    if configuration is not None:
+        configuration = configuration.with_identity(params, flags)
+    sim = LAPDSim1D(params, flags, configuration=configuration)
     # t_end=None (default) keeps the historical dynamic end time derived from
     # the tau_* budget; an explicit t_end caps run cost WITHOUT deforming the
     # hardware drive length (the loop terminates at t_end regardless of
@@ -2404,6 +2418,18 @@ def main(argv=None):
         metavar=("T0", "T1"),
         help="beta-collapse afterglow window on the main-discharge clock [ms]",
     )
+    stance_group = parser.add_mutually_exclusive_group()
+    stance_group.add_argument(
+        "--stance", metavar="NAME", default=None,
+        help="committed configuration file (scripts/stances/NAME.toml) the RUN "
+             "route builds its model at; ignored by --from-h5, which scores "
+             "the artifact's own configuration. Available: "
+             + (", ".join(available_stances()) or "(none committed)"))
+    stance_group.add_argument(
+        "--no-stance", action="store_true",
+        help="acknowledge that the RUN route names no configuration and is "
+             "configured by this file's shared package plus the overrides on "
+             "this command line")
     args = parser.parse_args(argv)
 
     if args.beta_collapse is not None:
@@ -2432,6 +2458,21 @@ def main(argv=None):
             "scripts/run/run_mechanism_ladder.py or scripts/run/run_m6_point.py, then "
             f"score the saved artifact: --from-h5 RUN.h5 --es {args.es}."
         )
+    # THE RUN ROUTE NAMES ITS CONFIGURATION. Scoring an artifact does not:
+    # --from-h5 reads the configuration out of the file it scores, and a name
+    # supplied here could only contradict it. Building a model does, and this
+    # route can --save-h5, so an unnamed build would put an artifact on disk
+    # that stands on nothing anyone can name afterwards.
+    if args.from_h5 is None and args.stance is None and not args.no_stance:
+        raise SystemExit(
+            "compare_sim1d_es1: name the configuration package. Pass "
+            "--stance <name> to run a committed stance file "
+            f"(available: {', '.join(available_stances()) or '(none committed)'})"
+            ", or --no-stance to acknowledge that this run has none and is "
+            "configured by this driver's defaults plus the overrides on this "
+            "command line."
+        )
+
     overlay_path = (
         OVERLAY
         if args.es == 1
@@ -2448,6 +2489,13 @@ def main(argv=None):
         label += beam_product_transport_note(getattr(result, "params", None))
     else:
         label = f"resolved ({args.exchange_model}, nx={args.nx or 'default'})"
+        # The named configuration, applied over this file's shared package,
+        # where the campaign drivers apply theirs.
+        configuration = None
+        if args.stance is not None:
+            named = load_stance(args.stance)
+            configuration = named.lineage
+            label += f" [stance={named.name}]"
         if args.drag_closure is not None:
             label += f" [drag={args.drag_closure}]"
         if args.Rp_model is not None:
@@ -2484,12 +2532,25 @@ def main(argv=None):
         # (a scorable non-ignited trajectory that _main_discharge_origin
         # rejects by name) and never as an exception. The dead handler used
         # to imply the "raise" mode was reachable from here; it is not.
+        if configuration is not None:
+            # LAST, as run_model applies `extra` last, so a key the named
+            # configuration owns wins over this file's shared package and over
+            # a driver default that only ever stood in for it. The A/B switches
+            # above are stated BEFORE it for the same reason the drivers state
+            # their rung first: an arm that must beat the configuration says so
+            # on the command line, not by ordering.
+            extra = {**extra, **named.params}
+            flags_extra = dict(named.flags)
+        else:
+            flags_extra = None
         result, geometry, params, flags = run_model(
             nx=args.nx,
             exchange_model=args.exchange_model,
             extra=extra,
+            flags_extra=flags_extra,
             drag_closure=args.drag_closure,
             Rp_model=args.Rp_model,
+            configuration=configuration,
         )
         scored_params = params
         if args.save_h5 is not None:

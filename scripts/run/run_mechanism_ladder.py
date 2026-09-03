@@ -8,8 +8,17 @@ DERIVED standby T_s (the operator-set heater current read through the Fig-10
 map, not a machine temperature reading). Transfer across the ladder is the
 test, so everything else is frozen at the ES1 calibration.
 
-    python scripts/run/run_mechanism_ladder.py --es 1 --warming power_balance \
-        --phi-wf 2.87 --g-cond 1500 --c-th 120 --save-h5 out.h5
+    python scripts/run/run_mechanism_ladder.py --es 1 --stance g1atrim \
+        --warming power_balance --phi-wf 2.87 --g-cond 1500 --c-th 120 \
+        --save-h5 out.h5
+
+The rung is a DELTA, not a configuration. ``--es`` supplies the one measured
+machine-input pair and every switch below states one more override, but what
+those override is a NAMED configuration: ``--stance NAME`` applies a committed
+configuration file, and a rung that genuinely names none says so with
+``--no-stance``. There is no bare mode -- an unnamed rung stood on whichever
+values the shared driver dicts happened to hold, which is not a configuration
+anyone can name afterwards.
 """
 
 import argparse
@@ -24,6 +33,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from compare_sim1d_es1 import run_model
+from stance_config import available_stances, load_stance
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
 # Per-campaign operating points: the MEASURED open-circuit bank voltage V0 and
@@ -69,6 +79,17 @@ ELECTRON_BIRTH_POLICY = "local"
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--es", type=int, choices=(1, 2, 3), required=True)
+    stance_group = p.add_mutually_exclusive_group()
+    stance_group.add_argument(
+        "--stance", metavar="NAME", default=None,
+        help="committed configuration file (scripts/stances/NAME.toml) "
+             "applied over this rung's overrides. Available: "
+             + (", ".join(available_stances()) or "(none committed)"))
+    stance_group.add_argument(
+        "--no-stance", action="store_true",
+        help="acknowledge that this rung names no configuration and is "
+             "configured by this driver's defaults plus the overrides on "
+             "this command line")
     p.add_argument("--nx", type=int, default=120)
     p.add_argument(
         "--warming",
@@ -145,6 +166,19 @@ def main(argv=None):
                         "stage-(iii) afterglow slowdown candidate)")
     p.add_argument("--save-h5", required=True)
     args = p.parse_args(argv)
+    # A rung names its configuration. Same refusal, same words, as
+    # run_m6_point: the two drivers must not disagree about what an unnamed
+    # run is, and a rung that reads as a full package on the command line
+    # while standing on the shared driver dicts is the launch this closes.
+    if args.stance is None and not args.no_stance:
+        raise SystemExit(
+            "run_mechanism_ladder: name the configuration package. Pass "
+            "--stance <name> to run a committed stance file "
+            f"(available: {', '.join(available_stances()) or '(none committed)'})"
+            ", or --no-stance to acknowledge that this run has none and is "
+            "configured by this driver's defaults plus the overrides on this "
+            "command line."
+        )
 
     op = dict(ES_OPERATING[args.es])
     op["Ts_standby_K"] = op["Ts_standby_K"] + float(args.standby_offset_K)
@@ -224,8 +258,35 @@ def main(argv=None):
     if args.smooth:
         extra["cathode_sample_smoothing"] = "presheath"
 
+    # The named configuration, applied OVER this rung's overrides -- the same
+    # order run_m6_point uses, so a key the stance owns wins over a driver
+    # default that only ever stood in for it.
+    configuration = None
+    if args.stance is not None:
+        stance = load_stance(args.stance)
+        superseded = sorted(
+            key for key, value in stance.params.items()
+            if key in extra and extra[key] != value
+        ) + sorted(
+            f"flags:{key}" for key, value in stance.flags.items()
+            if key in flags_extra and flags_extra[key] != value
+        )
+        extra.update(stance.params)
+        flags_extra.update(stance.flags)
+        configuration = stance.lineage
+        print(
+            f"stance {stance.name} from {stance.path}: "
+            f"{len(stance.params)} params, {len(stance.flags)} flags"
+        )
+        if superseded:
+            print(
+                "  stance supersedes this driver's default(s): "
+                + ", ".join(superseded)
+            )
+
     result, geometry, params, flags = run_model(
-        nx=args.nx, extra=extra, flags_extra=flags_extra or None
+        nx=args.nx, extra=extra, flags_extra=flags_extra or None,
+        configuration=configuration,
     )
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)
     print(f"saved {args.save_h5}")

@@ -213,3 +213,92 @@ here is a gap in the schema, not just in the prose.
 It does not change any value, and it does not validate physics. Every presence
 gate, domain check and coupling guard runs afterwards, unchanged, and remains
 the authority on what each edge means.
+
+## Derived configurations — a base and what it moves
+
+*(Adopted 2026-09-03, the "no default plasma" ruling.)*
+
+Every run names a configuration. `default_config()` is the TEMPLATE of keys and
+their classes — never an implied plasma — and the configuration a run names is
+a committed file: `scripts/stances/g1atrim.toml` is the LAPD reference
+configuration, and the alternates the campaign runs against it are DERIVED from
+it. A derived configuration is a first-class object, not a command line, which
+is what lets an arm be identified from its artifact rather than from a shell
+history.
+
+A configuration file may declare a base and the deltas that move it:
+
+```toml
+base = "g1atrim"
+
+[input_dict]
+neutral_model = "moment"
+
+[input_flags]
+neutral_momentum = true
+```
+
+`base` is a committed file NAME, without path or suffix, resolved in
+`scripts/stances/` — a base is a committed configuration by definition, even
+when the deriving file lives elsewhere. The worked example is
+`scripts/stances/examples/g1atrim_fluid_comparator.toml`.
+
+Resolution, and it is the whole contract:
+
+```
+default_config() → the base chain, oldest base first → this file's deltas
+                 → the driver's nx / mesh package
+```
+
+A driver layers only its mesh on top; everything that decides what the plasma
+IS comes from the named file. Deltas are validated exactly as a base
+configuration's keys are — the unknown-key refusal, the wrong-namespace
+refusal, and every declaration-block refusal in the table above. A block in a
+derived file replaces its base's block for that family, and a family the file
+does not select stays undeclarable there, so a derived file that DE-selects a
+family states the freed keys flat. That is the selector rule read from the
+other side, and it is why the fluid comparator's deltas are flat.
+
+Two refusals belong to the derived form alone:
+
+| refusal | message names | why |
+|---|---|---|
+| a delta restating its base's resolved value | every restated delta — a flat key with both values, a block by family name — and the waiver | a delta must MOVE something: a line that repeats its base reads as a decision, changes nothing, and stops agreeing with the base silently the first time the base moves |
+| a base chain deeper than three files, or a cycle | the whole chain, in order | past that depth a value cannot be traced to the file that chose it by reading, only by running the loader |
+
+`allow_restated = true` at the top of a file waives the first, for a file that
+pins a value deliberately against its base drifting.
+
+**The unit of that check is the delta the file WROTE, and a declaration block
+is one delta, not a handful.** A block is an INVENTORY of a family's complete
+membership, written out regardless of value, so an individual member agreeing
+with the base is the form working and is not restatement — a complete block
+with one member moved is a legitimate delta, whatever the other members say.
+What the block as a whole must still do is move something: a block whose EVERY
+member equals the base's resolved value re-declares a decision the base already
+made, which is the same fault one flat line commits, and it is refused by
+family name rather than by listing members that are individually blameless. A
+flat key is checked on its own, as before; a key inside a block is checked only
+through its block, because a member also stated flat is already refused by the
+declaration form.
+
+### The lineage a run records
+
+A load returns the resolved `(params, flags)` and a `ConfigurationLineage`
+(`core/config.py`): the configuration's `name`, its `base_chain` nearest base
+first, the `file_sha256` of every file in that chain, the `delta_keys` this
+file declares (names only — values live in the recorded config), and the
+`identity`, which is `config_identity` over the resolved configuration. That
+identity is the same sha256 `scripts/gates/audit_sim1d_configs.py` pins its
+reviewed snapshots with, so "the same configuration" means one thing
+everywhere.
+
+`LAPDSim1D(..., configuration=<lineage>)` stores it. Nothing reads it: a run
+with a lineage and a run without are bit-identical, and
+`LAPDSim1D(default_config())` stays constructible, because the golden builder,
+the smoke suite and the unit instruments name no committed file and must not
+borrow one's name. `results/io.py` writes `configuration_name` on every file
+(`"<unnamed>"` for such a run) and the other four attributes only when a
+lineage exists. Reading is presence-gated attribute by attribute: a file
+written before 2026-09-03 reports `None` for each, meaning "this file does not
+say" — never "unnamed", and never an identity reconstructed from `params_json`.

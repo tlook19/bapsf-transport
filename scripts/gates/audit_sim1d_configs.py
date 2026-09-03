@@ -3,6 +3,14 @@
 The cases here are the config-complete production/campaign entry points. Their
 canonical JSON hashes are reviewed snapshots: a changed default, precedence
 rule, or driver choice fails before a solver run can silently inherit it.
+
+Both campaign-driver cases name the REFERENCE CONFIGURATION, because since the
+"no default plasma" ruling (2026-09-03) neither driver has a bare mode: a run
+either names a configuration or says with --no-stance that it names none. Each
+case is that driver's own resolution of a stanced command line -- the rung and
+the switch defaults, with the configuration layered last, exactly where the
+driver layers it. The golden case is the reference configuration by
+construction and is unchanged by that ruling.
 """
 
 import argparse
@@ -12,7 +20,13 @@ from pathlib import Path
 
 import h5py
 
-from cablp.solvers._sim1d import config_manifest, default_config, resolve_config
+from cablp.solvers._sim1d import (
+    canonical_config_payload,
+    config_identity,
+    config_manifest,
+    default_config,
+    resolve_config,
+)
 
 # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
 import sys as _sys
@@ -25,7 +39,8 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 
 from baseline_sim1d import build_baseline_config
 from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
-from compare_sim1d_es1 import PRODUCTION_NX
+from compare_sim1d_es1 import PRODUCTION_NX, PRODUCTION_STANCE
+from stance_config import load_stance
 from run_m6_point import ELECTRON_BIRTH_POLICY as M6_ELECTRON_BIRTH_POLICY
 from run_mechanism_ladder import (
     ELECTRON_BIRTH_POLICY as LADDER_ELECTRON_BIRTH_POLICY,
@@ -47,6 +62,21 @@ def _production_base():
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
     params["neutral_exchange_model"] = "knudsen"
+    return params, flags
+
+
+def _apply_reference_configuration(params, flags):
+    """Layer the reference configuration, exactly where the drivers layer it.
+
+    Both campaign drivers apply ``--stance`` LAST, over their own rung and
+    switch defaults, so a key the configuration owns wins over a driver default
+    that only ever stood in for it. Mirrored here rather than transcribed: the
+    case is the configuration the driver resolves, and it must move when the
+    committed file does.
+    """
+    reference = load_stance(PRODUCTION_STANCE)
+    params.update(reference.params)
+    flags.update(reference.flags)
     return params, flags
 
 
@@ -75,6 +105,7 @@ def config_cases():
             "cathode_emissivity": 0.7,
         }
     )
+    _apply_reference_configuration(ladder_params, ladder_flags)
 
     m6_params, m6_flags = _production_base()
     m6_op = ES_OPERATING[1]
@@ -101,34 +132,35 @@ def config_cases():
             "cathode_cleaning_E_th_eV": 20.0,
             "Te_birth_ionization": M6_ELECTRON_BIRTH_POLICY,
             "gas_puff_mode": "square",
+            # --sgp, which the reference configuration then supersedes: the
+            # driver applies the stance over its own switches, so a stanced arm
+            # runs the configuration's puff level and not this one. The value
+            # stays because it is what the command line supplies, and the case
+            # is the driver's resolution of that command line.
             "S_gp": 3649.84,
             "cathode_sample_smoothing": "presheath",
         }
     )
+    _apply_reference_configuration(m6_params, m6_flags)
 
     return {
         "production_golden": resolve_config(golden_params, golden_flags),
         "compare_sim1d_es1": resolve_config(compare_params, compare_flags),
-        "run_mechanism_ladder_es1_defaults": resolve_config(
+        "run_mechanism_ladder_es1_stance_g1atrim": resolve_config(
             ladder_params, ladder_flags
         ),
-        "run_m6_point_es1_sgp3649_defaults": resolve_config(
+        "run_m6_point_es1_stance_g1atrim": resolve_config(
             m6_params, m6_flags
         ),
     }
 
 
-def canonical_payload(params, flags):
-    return json.dumps(
-        {"params": params, "flags": flags},
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-
-
-def config_digest(params, flags):
-    return hashlib.sha256(canonical_payload(params, flags).encode()).hexdigest()
+# The canonical payload and its digest are the SOLVER PACKAGE's, so a
+# configuration's identity has one definition wherever it is asked for -- this
+# gate's reviewed snapshots, a configuration file's lineage, and the identity a
+# saved trajectory records. Both names are kept because callers import them.
+canonical_payload = canonical_config_payload
+config_digest = config_identity
 
 
 def current_snapshots():

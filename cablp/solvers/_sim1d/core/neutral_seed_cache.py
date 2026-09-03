@@ -247,6 +247,25 @@ def save_neutral_seed(path, nn, nn_a, params, flags, meta=None):
     return signature
 
 
+#: The ``meta`` keys a seed uses to record WHICH configuration it was
+#: equilibrated at. A seed is an initial condition that later runs stand on, so
+#: an unnamed seed feeding named runs is the unstanced divergence itself.
+SEED_CONFIGURATION_META = ("configuration_name", "configuration_identity")
+
+
+def neutral_seed_configuration(path):
+    """Return the configuration a cached seed records, or ``None`` for each.
+
+    PRESENCE-GATED: a seed written before seeds named their configuration
+    carries neither key and reports ``None`` for both, meaning "this file does
+    not say". Nothing is inferred from the signature payload -- the signature
+    covers the neutral-flow keys only, and two configurations can share it.
+    """
+    with np.load(path, allow_pickle=False) as data:
+        meta = json.loads(str(data["meta"])) if "meta" in data.files else {}
+    return {key: meta.get(key) for key in SEED_CONFIGURATION_META}
+
+
 def load_neutral_seed(path, params, flags, expected_cells=None):
     """Load and validate the cached seed; raise a loud ValueError on any miss.
 

@@ -1,9 +1,21 @@
 """Run the conducting-phase window, optionally with the coverage closure on.
 
-Applies ``covbuild_conducting_phase.toml`` as a DELTA over the campaign stance
-(``compare_sim1d_es1.PARAM_OVERRIDES`` / ``FLAG_OVERRIDES``) and runs it,
-printing the breakdown instant so the window can be checked against the
-measured >= 4.5 ms conducting phase.
+Runs a NAMED configuration and prints the breakdown instant, so the window can
+be checked against the measured >= 4.5 ms conducting phase.
+
+``--stance NAME`` (or a configuration file's path) names it, and
+``covbuild_conducting_phase.toml`` beside this file is the window DELTA applied
+last over it. Until 2026-09-03 that delta's base was whatever the shared driver
+dicts happened to hold, stated in the table's own comment and enforced by
+nobody; a run that genuinely names none now says so with ``--no-stance``.
+
+The delta is NOT a derived configuration file, and cannot be one today: the
+reference configuration runs ``heating_anomalous_transport =
+"plateau_multigroup"``, which the solver refuses together with the coverage
+closure this instrument's A/B arm arms. Naming a base inside the delta would
+make ``--coverage`` unrunnable; naming it on the command line lets the plain
+window run stand on the reference while the coverage arm names a configuration
+it can actually use.
 
 Shakedown instrument for the coverage-closure build: direction only, never
 scored. ``--coverage f0[,r]`` turns the closure on for the A/B arm.
@@ -30,12 +42,24 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 
 from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 from run_mechanism_ladder import ES_OPERATING
+from stance_config import available_stances, load_named_configuration
 
 
+#: The window DELTA this instrument applies over the configuration it names.
 DELTA_TOML = Path(__file__).resolve().parent / "covbuild_conducting_phase.toml"
 
 
-def build_config(nx, coverage=None, extra=None):
+def build_config(nx, coverage=None, extra=None, configuration=None):
+    """Return ``(params, flags, lineage)`` for the window run.
+
+    Layering, in order: this file's shared instrument package, the ES1 rung and
+    switch defaults, the NAMED CONFIGURATION where the campaign drivers apply
+    theirs, and then the window delta table, which is the whole point of this
+    instrument and therefore goes last. ``configuration`` is a committed name
+    or a configuration file's path; ``None`` is the acknowledged unnamed route
+    and returns no lineage, which is what a caller wanting this instrument's
+    historical configuration passes.
+    """
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
@@ -61,6 +85,12 @@ def build_config(nx, coverage=None, extra=None):
         "gas_puff_mode": "square",
         "cathode_sample_smoothing": "presheath",
     })
+    lineage = None
+    if configuration is not None:
+        named = load_named_configuration(configuration)
+        params.update(named.params)
+        flags.update(named.flags)
+        lineage = named.lineage
     delta = tomllib.loads(DELTA_TOML.read_text())
     params.update(delta.get("params", {}))
     flags.update(delta.get("flags", {}))
@@ -77,7 +107,7 @@ def build_config(nx, coverage=None, extra=None):
         flags["neutral_hot_internal_wall"] = False
     if extra:
         params.update(extra)
-    return params, flags
+    return params, flags, lineage
 
 
 def _deposition_profile_split(sim, result):
@@ -134,7 +164,30 @@ def main(argv=None):
     p.add_argument("--extra", nargs="*", default=(),
                    help="additional k=v param overrides (JSON-parsed)")
     p.add_argument("--save-h5", required=True)
+    config_group = p.add_mutually_exclusive_group()
+    config_group.add_argument(
+        "--stance", metavar="NAME_OR_PATH", default=None,
+        help="the configuration this window is opened on: a committed "
+             "configuration NAME or a configuration file's path. Available: "
+             + (", ".join(available_stances()) or "(none committed)"))
+    config_group.add_argument(
+        "--no-stance", action="store_true",
+        help="acknowledge that this run names no configuration and is "
+             "configured by this driver's defaults plus the window delta and "
+             "the overrides on this command line")
     args = p.parse_args(argv)
+    # A window run names the configuration its delta is a delta OVER.
+    if args.stance is None and not args.no_stance:
+        raise SystemExit(
+            "covbuild_run_conducting_phase: name the configuration package. "
+            "Pass --stance <name> to open the window on a committed stance "
+            "file (available: "
+            f"{', '.join(available_stances()) or '(none committed)'}), or "
+            "--no-stance to acknowledge that this run has none and is "
+            "configured by this driver's defaults plus the window delta and "
+            "the overrides on this command line."
+        )
+    configuration = args.stance
 
     coverage = None
     if args.coverage is not None:
@@ -148,8 +201,18 @@ def main(argv=None):
         except json.JSONDecodeError:
             extra[k] = v
 
-    params, flags = build_config(args.nx, coverage=coverage, extra=extra)
-    sim = LAPDSim1D(params, flags)
+    params, flags, lineage = build_config(
+        args.nx, coverage=coverage, extra=extra, configuration=configuration
+    )
+    if lineage is not None:
+        lineage = lineage.with_identity(params, flags)
+    print(
+        "covbuild configuration: "
+        + ("<unnamed>" if lineage is None else
+           f"{lineage.name} (base {' <- '.join(lineage.base_chain) or 'none'})"
+           f", identity={lineage.identity}")
+    )
+    sim = LAPDSim1D(params, flags, configuration=lineage)
     sim.start_simulation(
         t_end=args.t_end,
         max_steps=args.max_steps,

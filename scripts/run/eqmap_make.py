@@ -68,6 +68,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config  # noqa: E402
+from stance_config import available_stances  # noqa: E402
 from cablp.solvers._sim1d.core.neutral_seed_cache import (  # noqa: E402
     neutral_seed_signature,
 )
@@ -79,12 +80,18 @@ from cablp.solvers._sim1d.physics.neutrals import (  # noqa: E402
 MAP_FORMAT = "sim1d-eqmap-v1"
 
 
-def stance_config(es, nx, sgp, two_zone, extra, extra_flag):
+def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
     """Return the (params, flags) the map is built at.
 
-    Assembled by the SAME path a campaign run uses -- ``default_config()`` plus
-    the ES benchmark overrides -- so the map's equilibrated base is the base
-    that stance's runs would have equilibrated to for themselves.
+    Assembled by the SAME path a campaign run uses -- the NAMED configuration
+    plus the ES benchmark overrides -- so the map's equilibrated base is the
+    base that configuration's runs would have equilibrated to for themselves.
+
+    ``stance`` is the committed configuration's name, or ``None`` for a map
+    that names none. A map header written before configurations were named
+    carries no stance name, and replaying one through here with ``None``
+    reproduces exactly the configuration it was built at; a NEW map states its
+    configuration, because the driver refuses to build one that does not.
     """
     params, flags = default_config()
     if es is not None:
@@ -94,6 +101,12 @@ def stance_config(es, nx, sgp, two_zone, extra, extra_flag):
         flags.update(FLAG_OVERRIDES)
         # run_m6_point's own neutral-exchange stance.
         params["neutral_exchange_model"] = "knudsen"
+    if stance is not None:
+        from stance_config import load_stance
+
+        named = load_stance(stance)
+        params.update(named.params)
+        flags.update(named.flags)
     if nx is not None:
         params["nx"] = int(nx)
     if sgp is not None:
@@ -309,8 +322,19 @@ def main(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("--es", type=int, default=1,
-                    help="ES benchmark stance to build at (default 1). "
-                         "--es 0 uses bare default_config()")
+                    help="ES benchmark rung to build at (default 1). "
+                         "--es 0 omits the rung layer")
+    stance_group = ap.add_mutually_exclusive_group()
+    stance_group.add_argument(
+        "--stance", metavar="NAME", default=None,
+        help="committed configuration file (scripts/stances/NAME.toml) the "
+             "map is built at. Available: "
+             + (", ".join(available_stances()) or "(none committed)"))
+    stance_group.add_argument(
+        "--no-stance", action="store_true",
+        help="acknowledge that this map names no configuration and is built "
+             "from this driver's defaults plus the overrides on this command "
+             "line")
     ap.add_argument("--nx", type=int, default=None)
     ap.add_argument("--sgp", type=float, default=None, help="override S_gp [sccm]")
     ap.add_argument("--two-zone", action="store_true",
@@ -360,9 +384,24 @@ def main(argv=None):
     if map_dt <= 0.0:
         ap.error("--map-dt must be positive")
 
+    # A map names the configuration it was equilibrated at, or says it names
+    # none: a map replayed later reconstructs its own config through
+    # stance_config, and a header that cannot say what it stood on cannot be
+    # replayed onto anything but a guess.
+    if args.stance is None and not args.no_stance:
+        raise SystemExit(
+            "eqmap_make: name the configuration package. Pass "
+            "--stance <name> to build at a committed stance file "
+            f"(available: {', '.join(available_stances()) or '(none committed)'})"
+            ", or --no-stance to acknowledge that this map has none and is "
+            "built from this driver's defaults plus the overrides on this "
+            "command line."
+        )
+
     extra = parse_kv(args.extra)
     extra_flag = parse_kv(args.extra_flag)
     params, flags = stance_config(
+        args.stance,
         None if args.es == 0 else args.es,
         args.nx,
         args.sgp,
@@ -412,6 +451,7 @@ def main(argv=None):
         "kind": "equilibration map: nn(z,t) through a foot-fill 101st cycle",
         "producer": "scripts/run/eqmap_make.py",
         # --- the stance the map was built at ---
+        "stance": "" if args.stance is None else args.stance,
         "es": None if args.es == 0 else int(args.es),
         "nx": int(p_eff["nx"]),
         "cells": int(geometry.cells),

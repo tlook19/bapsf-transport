@@ -17880,7 +17880,11 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
     # silently retire it.
     from covbuild_run_conducting_phase import build_config as _cov_live_config
 
-    _cov_split_sim = LAPDSim1D(*_cov_live_config(24, coverage=(0.05, 0.0)))
+    # build_config returns (params, flags, lineage); the lineage is metadata
+    # and is deliberately not handed to the solver here -- this case measures
+    # the beam split, not the recording of a configuration name.
+    _cov_live_p, _cov_live_f, _ = _cov_live_config(24, coverage=(0.05, 0.0))
+    _cov_split_sim = LAPDSim1D(_cov_live_p, _cov_live_f)
     for _ in range(40):
         _cov_split_sim.advance_one_step(dt=2.0e-9)
     _cov_solve = _cov_split_sim.solve_cathode_boundary(state=_cov_split_sim.state)
@@ -22873,6 +22877,624 @@ def _case_cathode_closed_audit_export():
 
 
 # --------------------------------------------------------------------
+# DERIVED CONFIGURATIONS (the "no default plasma" ruling, 2026-09-03).
+#
+# Every run names a configuration; an alternate the campaign runs against the
+# reference is a FILE (base + declared deltas), not a command line. The four
+# cases below hold the loader's contract: a derived file resolves to exactly
+# what the equivalent hand-built configuration resolves to, and the three
+# refusals that keep a derived file honest fire.
+#
+# Each fixture chain is built in a TEMPORARY stance directory -- a base
+# resolves in ``stance_config.STANCE_DIR`` by definition, so the module global
+# is redirected for the duration and restored after; nothing is written into
+# the committed ``scripts/stances/``.
+# --------------------------------------------------------------------
+@contextlib.contextmanager
+def _derived_fixture_dir():
+    """Yield a temporary stance directory holding a copy of the reference."""
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    import stance_config as _sc
+
+    original = _sc.STANCE_DIR
+    with tempfile.TemporaryDirectory() as _tmp:
+        room = Path(_tmp)
+        shutil.copy2(original / "g1atrim.toml", room / "g1atrim.toml")
+        _sc.STANCE_DIR = room
+        try:
+            yield _sc, room
+        finally:
+            _sc.STANCE_DIR = original
+
+
+@_case("configuration-derived-resolution")
+def _case_configuration_derived_resolution():
+    # A DERIVED configuration resolves to the same configuration a caller would
+    # have built by hand from the base plus the same overrides -- same resolved
+    # values, same identity. That equivalence is the form's whole claim: the
+    # file is a way of NAMING a configuration, never a different one.
+    from cablp.solvers._sim1d import config_identity, default_config
+
+    with _derived_fixture_dir() as (_sc, _room):
+        (_room / "derived.toml").write_text(
+            'base = "g1atrim"\n'
+            "\n"
+            "[input_dict]\n"
+            "nx = 42\n"
+            "S_gp = 1234.0\n"
+            "\n"
+            "[input_flags]\n"
+            "neutral_baffles = false\n"
+        )
+        _dv_params, _dv_flags, _dv_lineage = _sc.load_configuration("derived")
+
+        # The hand-built equivalent: default_config(), the base's whole delta,
+        # then the same three overrides.
+        _hand_p, _hand_f = default_config()
+        _base = _sc.load_stance("g1atrim")
+        _hand_p.update(_base.params)
+        _hand_f.update(_base.flags)
+        _hand_p["nx"] = 42
+        _hand_p["S_gp"] = 1234.0
+        _hand_f["neutral_baffles"] = False
+
+        assert _dv_params == _hand_p, sorted(
+            k for k in set(_dv_params) | set(_hand_p)
+            if _dv_params.get(k) != _hand_p.get(k)
+        )
+        assert _dv_flags == _hand_f
+        assert _dv_lineage.identity == config_identity(_hand_p, _hand_f)
+
+        # The lineage says what the file is, and says it by name only.
+        assert _dv_lineage.name == "derived"
+        assert _dv_lineage.base_chain == ("g1atrim",)
+        assert len(_dv_lineage.file_sha256) == 2
+        assert _dv_lineage.delta_keys == (
+            "S_gp", "neutral_baffles", "nx",
+        ), _dv_lineage.delta_keys
+
+        # NEGATIVE CONTROL. The identity is not a rubber stamp: move one delta
+        # and it must move with it, or the check above proves nothing.
+        (_room / "derived_moved.toml").write_text(
+            'base = "g1atrim"\n'
+            "\n"
+            "[input_dict]\n"
+            "nx = 42\n"
+            "S_gp = 1235.0\n"
+            "\n"
+            "[input_flags]\n"
+            "neutral_baffles = false\n"
+        )
+        _, _, _moved = _sc.load_configuration("derived_moved")
+        assert _moved.identity != _dv_lineage.identity
+
+
+@_case("configuration-restated-delta-refusal")
+def _case_configuration_restated_delta_refusal():
+    # A delta must MOVE something. A line that restates the value it already
+    # inherits reads as a decision and is not one, and it stops agreeing with
+    # its base silently the first time the base moves.
+    with _derived_fixture_dir() as (_sc, _room):
+        _base_sgp = _sc.load_stance("g1atrim").params["S_gp"]
+        (_room / "restated.toml").write_text(
+            'base = "g1atrim"\n'
+            "\n"
+            "[input_dict]\n"
+            f"S_gp = {_base_sgp!r}\n"
+        )
+        try:
+            _sc.load_stance("restated")
+        except ValueError as _rs_exc:
+            assert "restates" in str(_rs_exc), str(_rs_exc)
+            assert "S_gp" in str(_rs_exc), str(_rs_exc)
+            assert "allow_restated" in str(_rs_exc), str(_rs_exc)
+        else:
+            raise AssertionError("a restated delta was ACCEPTED")
+
+        # NEGATIVE CONTROL (a): the declared waiver accepts the same file.
+        (_room / "restated_waived.toml").write_text(
+            'base = "g1atrim"\n'
+            "allow_restated = true\n"
+            "\n"
+            "[input_dict]\n"
+            f"S_gp = {_base_sgp!r}\n"
+        )
+        assert _sc.load_stance("restated_waived").params["S_gp"] == _base_sgp
+
+        # NEGATIVE CONTROL (b): a delta that MOVES the same key is accepted
+        # without any waiver, so the refusal is about restatement and not
+        # about the key.
+        (_room / "moved.toml").write_text(
+            'base = "g1atrim"\n'
+            "\n"
+            "[input_dict]\n"
+            f"S_gp = {_base_sgp + 1.0!r}\n"
+        )
+        assert _sc.load_stance("moved").params["S_gp"] == _base_sgp + 1.0
+
+
+@_case("configuration-chain-depth-refusal")
+def _case_configuration_chain_depth_refusal():
+    # Chains are allowed to MAX_CHAIN_FILES files and refused beyond: past that
+    # depth a value cannot be traced to the file that chose it by reading.
+    with _derived_fixture_dir() as (_sc, _room):
+        assert _sc.MAX_CHAIN_FILES == 3, _sc.MAX_CHAIN_FILES
+        (_room / "d2.toml").write_text(
+            'base = "g1atrim"\n\n[input_dict]\nnx = 41\n'
+        )
+        (_room / "d3.toml").write_text(
+            'base = "d2"\n\n[input_dict]\nnx = 42\n'
+        )
+        (_room / "d4.toml").write_text(
+            'base = "d3"\n\n[input_dict]\nnx = 43\n'
+        )
+
+        # NEGATIVE CONTROL: the depth-3 chain is ACCEPTED, and carries the
+        # whole chain in its lineage.
+        _d3 = _sc.load_stance("d3")
+        assert _d3.lineage.base_chain == ("d2", "g1atrim"), _d3.lineage.base_chain
+        assert len(_d3.lineage.file_sha256) == 3
+        assert _d3.params["nx"] == 42
+
+        try:
+            _sc.load_stance("d4")
+        except ValueError as _cd_exc:
+            assert "4 files deep" in str(_cd_exc), str(_cd_exc)
+        else:
+            raise AssertionError("a depth-4 chain was ACCEPTED")
+
+        # A file that names itself is the same refusal about the same
+        # structure, and must not be reachable by loading one more file.
+        (_room / "loop.toml").write_text('base = "loop"\n\n[input_dict]\nnx = 44\n')
+        try:
+            _sc.load_stance("loop")
+        except ValueError as _lp_exc:
+            assert "its own base" in str(_lp_exc), str(_lp_exc)
+        else:
+            raise AssertionError("a self-referencing base was ACCEPTED")
+
+
+@_case("configuration-unknown-key-delta-refusal")
+def _case_configuration_unknown_key_delta_refusal():
+    # A delta reaches the SAME refusals a base configuration's keys do: a key
+    # no template owns, and a key filed in the wrong namespace. Neither may
+    # survive as a silent inert control just because a base carried it.
+    with _derived_fixture_dir() as (_sc, _room):
+        (_room / "bogus.toml").write_text(
+            'base = "g1atrim"\n\n[input_dict]\nnot_a_real_config_key = 1.0\n'
+        )
+        try:
+            _sc.load_stance("bogus")
+        except ValueError as _uk_exc:
+            assert "not_a_real_config_key" in str(_uk_exc), str(_uk_exc)
+            assert "no LAPDSim1D configuration template owns it" in str(_uk_exc)
+        else:
+            raise AssertionError("an unknown delta key was ACCEPTED")
+
+        # Misfiled: an input_flags key stated in [input_dict]. The message
+        # must name the namespace that DOES own it.
+        (_room / "misfiled.toml").write_text(
+            'base = "g1atrim"\n\n[input_dict]\ncathode_coupling = false\n'
+        )
+        try:
+            _sc.load_stance("misfiled")
+        except ValueError as _mf_exc:
+            assert "input_flags" in str(_mf_exc), str(_mf_exc)
+        else:
+            raise AssertionError("a misfiled delta key was ACCEPTED")
+
+        # NEGATIVE CONTROL: the correctly filed key in the correct namespace
+        # loads, so the refusals above are about the key and not about the
+        # derived form.
+        (_room / "ok.toml").write_text(
+            'base = "g1atrim"\n\n[input_flags]\ncathode_coupling = false\n'
+        )
+        assert _sc.load_stance("ok").flags["cathode_coupling"] is False
+
+
+@_case("configuration-load-config-refuses-configuration-form")
+def _case_configuration_load_config_refuses_configuration_form():
+    # ``load_config`` reads [params]/[flags]/[models] and CANNOT resolve a
+    # base -- the base directory is a scripts/ fact the solver package does not
+    # know. Handed a configuration file it used to ignore every table it did
+    # not recognise and resolve to bare defaults, which is the implied plasma
+    # the ruling forbids. It refuses instead, naming the loader that can.
+    from cablp.solvers._sim1d import load_config
+
+    with tempfile.TemporaryDirectory() as _lc_tmp:
+        _lc_room = Path(_lc_tmp)
+        _lc_bad = _lc_room / "configuration_form.toml"
+        _lc_bad.write_text('base = "g1atrim"\n\n[input_dict]\nnx = 42\n')
+        try:
+            load_config(_lc_bad)
+        except ValueError as _lc_exc:
+            assert "base" in str(_lc_exc), str(_lc_exc)
+            assert "input_dict" in str(_lc_exc), str(_lc_exc)
+            assert "stance_config" in str(_lc_exc), str(_lc_exc)
+        else:
+            raise AssertionError("a configuration-form file was ACCEPTED")
+
+        # NEGATIVE CONTROL: the form load_config DOES own still loads.
+        _lc_good = _lc_room / "params_form.toml"
+        _lc_good.write_text("[params]\nnx = 42\n\n[flags]\ncathode_coupling = false\n")
+        _lc_p, _lc_f = load_config(_lc_good)
+        assert _lc_p["nx"] == 42 and _lc_f["cathode_coupling"] is False
+
+
+@_case("configuration-hdf5-lineage-round-trip")
+def _case_configuration_hdf5_lineage_round_trip():
+    # A saved trajectory says WHICH configuration produced it. The lineage
+    # round-trips through the HDF5 root attrs; a run that named none records
+    # "<unnamed>"; and a file written before the attrs existed reads back None
+    # for every one of them rather than a reconstructed answer.
+    from cablp.solvers._sim1d import ConfigurationLineage, load_result_hdf5
+    from cablp.solvers._sim1d.results.io import (
+        UNNAMED_CONFIGURATION,
+        _CONFIGURATION_ATTRS,
+        save_result_hdf5,
+    )
+
+    _cl_lineage = ConfigurationLineage(
+        name="smoke_derived",
+        base_chain=("g1atrim",),
+        file_sha256=("a" * 64, "b" * 64),
+        delta_keys=("S_gp", "nx"),
+        identity="c" * 64,
+    )
+
+    # NO SOLVE: t_end = 0.0 writes the initial state and stops, which is all a
+    # metadata round-trip needs. The equilibration flag is cleared because
+    # run() does not equilibrate and says so loudly; nothing here reads nn.
+    def _cl_config():
+        _p, _f = default_config()
+        _f["neutral_equilibration"] = False
+        return _p, _f
+
+    _cl_named = LAPDSim1D(*_cl_config(), configuration=_cl_lineage)
+    assert _cl_named._configuration is _cl_lineage
+    _cl_named_result = _cl_named.run(t_end=0.0)
+    assert _cl_named_result.configuration is _cl_lineage
+
+    _cl_unnamed_result = LAPDSim1D(*_cl_config()).run(t_end=0.0)
+    assert _cl_unnamed_result.configuration is None
+
+    with tempfile.TemporaryDirectory() as _cl_tmp:
+        _cl_room = Path(_cl_tmp)
+
+        _cl_named_h5 = _cl_room / "named.h5"
+        save_result_hdf5(_cl_named_h5, _cl_named_result)
+        _cl_back = load_result_hdf5(_cl_named_h5)
+        assert _cl_back.configuration_name == "smoke_derived"
+        assert _cl_back.configuration_base_chain == ["g1atrim"]
+        assert _cl_back.configuration_file_sha256 == ["a" * 64, "b" * 64]
+        assert _cl_back.configuration_delta_keys == ["S_gp", "nx"]
+        assert _cl_back.configuration_identity == "c" * 64
+
+        # A run that named no configuration says so, and says nothing else:
+        # the four derived-form attrs are absent, not empty.
+        _cl_unnamed_h5 = _cl_room / "unnamed.h5"
+        save_result_hdf5(_cl_unnamed_h5, _cl_unnamed_result)
+        with h5py.File(_cl_unnamed_h5, "r") as _cl_file:
+            assert (
+                _cl_file.attrs["configuration_name"] == UNNAMED_CONFIGURATION
+            )
+            for _cl_attr in _CONFIGURATION_ATTRS[1:]:
+                assert _cl_attr not in _cl_file.attrs, _cl_attr
+        _cl_unnamed_back = load_result_hdf5(_cl_unnamed_h5)
+        assert _cl_unnamed_back.configuration_name == UNNAMED_CONFIGURATION
+        for _cl_attr in _CONFIGURATION_ATTRS[1:]:
+            assert getattr(_cl_unnamed_back, _cl_attr) is None, _cl_attr
+
+        # LOAD -> SAVE MUST NOT DROP THE NAME. Re-saving a loaded artifact is
+        # a routine step, and a named run that comes back "<unnamed>" is worse
+        # than one that never carried a name: the loader reconstructs the
+        # lineage and the writer carries it through unchanged.
+        assert _cl_back.configuration == _cl_lineage, _cl_back.configuration
+        _cl_resaved = _cl_room / "resaved.h5"
+        save_result_hdf5(_cl_resaved, _cl_back)
+        _cl_again = load_result_hdf5(_cl_resaved)
+        for _cl_attr in _CONFIGURATION_ATTRS:
+            assert getattr(_cl_again, _cl_attr) == getattr(_cl_back, _cl_attr), (
+                _cl_attr
+            )
+        assert _cl_again.configuration == _cl_lineage
+
+        # ... and an UNNAMED run stays unnamed rather than acquiring one.
+        _cl_unnamed_resaved = _cl_room / "unnamed_resaved.h5"
+        save_result_hdf5(_cl_unnamed_resaved, load_result_hdf5(_cl_unnamed_h5))
+        with h5py.File(_cl_unnamed_resaved, "r") as _cl_file:
+            assert (
+                _cl_file.attrs["configuration_name"] == UNNAMED_CONFIGURATION
+            )
+            for _cl_attr in _CONFIGURATION_ATTRS[1:]:
+                assert _cl_attr not in _cl_file.attrs, _cl_attr
+
+        # NEGATIVE CONTROL (the pre-2026-09-03 file): strip every lineage attr
+        # and the loader must report None for all five -- never "<unnamed>",
+        # never an identity recomputed from params_json.
+        _cl_old_h5 = _cl_room / "pre_lineage.h5"
+        shutil.copy2(_cl_named_h5, _cl_old_h5)
+        with h5py.File(_cl_old_h5, "a") as _cl_file:
+            for _cl_attr in _CONFIGURATION_ATTRS:
+                del _cl_file.attrs[_cl_attr]
+        _cl_old_back = load_result_hdf5(_cl_old_h5)
+        for _cl_attr in _CONFIGURATION_ATTRS:
+            assert getattr(_cl_old_back, _cl_attr) is None, _cl_attr
+
+    # A lineage is a record, not free text: the constructor refuses anything
+    # that is not one, rather than storing a string that would later be
+    # written into an artifact as if it named a committed file.
+    try:
+        LAPDSim1D(*_cl_config(), configuration="g1atrim")
+    except ValueError as _cl_exc:
+        assert "ConfigurationLineage" in str(_cl_exc), str(_cl_exc)
+    else:
+        raise AssertionError("a non-lineage configuration was ACCEPTED")
+
+
+@_case("configuration-drivers-refuse-unnamed-runs")
+def _case_configuration_drivers_refuse_unnamed_runs():
+    # No driver runs an unnamed configuration. Each refusal is checked by
+    # actually INVOKING the driver in a subprocess with no configuration named
+    # -- not by reading its source -- because the failure this closes is a
+    # command line that reads as a full package while standing on whatever the
+    # shared driver dicts happened to hold, and only the real entry point can
+    # say whether it still does.
+    _dr_root = Path(__file__).resolve().parents[2]
+    _dr_env = dict(os.environ)
+    _dr_env["PYTHONPATH"] = str(_dr_root)
+
+    def _dr_run(argv):
+        return subprocess.run(
+            [sys.executable, *argv],
+            cwd=str(_dr_root), env=_dr_env,
+            capture_output=True, text=True,
+        )
+
+    # Each row: the entry point's argv WITHOUT a configuration named, the
+    # phrase its refusal must carry, and the switch that names one. The negative control
+    # names a configuration that does not exist: that gets PAST the
+    # missing-name refusal and dies on the unknown NAME instead, which is what
+    # proves the first refusal is about the name being absent and not about
+    # anything else on the command line. Neither invocation reaches a solve.
+    _dr_missing = "no_such_configuration"
+    _dr_drivers = (
+        (["scripts/run/run_sim1d.py", "--output", "unused.h5"],
+         "run_sim1d: name the configuration to run", "--config"),
+        (["scripts/run/run_mechanism_ladder.py", "--es", "1",
+          "--save-h5", "unused.h5"],
+         "run_mechanism_ladder: name the configuration package", "--stance"),
+        (["scripts/run/run_m6_point.py", "--es", "1", "--sgp", "9010",
+          "--save-h5", "unused.h5"],
+         "run_m6_point: name the configuration package", "--stance"),
+        (["scripts/run/eqmap_make.py", "--out", "unused.npz"],
+         "eqmap_make: name the configuration package", "--stance"),
+        (["scripts/run/profile_sim1d.py", "--mode", "sample"],
+         "profile_sim1d: name the configuration package", "--stance"),
+        (["scripts/gates/audit_sim1d_equilibration_duty.py"],
+         "audit_sim1d_equilibration_duty: name the configuration package",
+         "--stance"),
+        # The scorer's RUN route. Scoring --from-h5 is NOT covered and must not
+        # be: it reads the configuration out of the artifact it scores, and a
+        # name supplied there could only contradict it.
+        (["scripts/score/compare_sim1d_es1.py", "--es", "1"],
+         "compare_sim1d_es1: name the configuration package", "--stance"),
+        # A SEED is an initial condition later runs stand on, so an unnamed one
+        # feeding named runs is the unstanced divergence one layer down.
+        (["scripts/run/build_neutral_seed_cache.py", "--es1",
+          "--db-dir", "unused_seed_db"],
+         "build_neutral_seed_cache: name the configuration package",
+         "--stance"),
+        # A stability verdict is a statement ABOUT a configuration: the same
+        # corner is well behaved under one closure and marginal under another.
+        (["scripts/run/sweep_sim1d_stability.py"],
+         "sweep_sim1d_stability: name the configuration package", "--stance"),
+        # The window instrument: its delta table is a delta OVER something, and
+        # what that something is used to be whatever the shared driver dicts
+        # held.
+        (["scripts/run/covbuild_run_conducting_phase.py",
+          "--save-h5", "unused.h5"],
+         "covbuild_run_conducting_phase: name the configuration package",
+         "--stance"),
+    )
+
+    for _dr_bare, _dr_phrase, _dr_switch in _dr_drivers:
+        _dr_out = _dr_run(_dr_bare)
+        _dr_text = _dr_out.stdout + _dr_out.stderr
+        assert _dr_out.returncode != 0, (_dr_bare, _dr_text[-400:])
+        assert _dr_phrase in _dr_text, (_dr_bare, _dr_text[-800:])
+
+        _dr_named = _dr_run([*_dr_bare, _dr_switch, _dr_missing])
+        _dr_named_text = _dr_named.stdout + _dr_named.stderr
+        assert _dr_named.returncode != 0, (_dr_bare, _dr_named_text[-400:])
+        assert _dr_phrase not in _dr_named_text, (
+            _dr_bare, _dr_named_text[-800:]
+        )
+        assert _dr_missing in _dr_named_text, (_dr_bare, _dr_named_text[-800:])
+
+
+@_case("configuration-fluid-comparator-example")
+def _case_configuration_fluid_comparator_example():
+    # THE COMMITTED WORKED EXAMPLE. The fluid comparator is the campaign's
+    # alternate closure written as a DERIVED FILE rather than as a heap of
+    # --extra flags, and this case is the claim that the two are the same
+    # configuration: it rebuilds the equivalent by hand -- the base
+    # configuration plus exactly the file's own deltas, the way a command line
+    # would supply them -- and compares the RESOLVED dicts key by key before
+    # comparing identities, so a match is a fact about values and not about a
+    # hash.
+    #
+    # It also constructs. A comparator that resolves but refuses at
+    # construction is not an arm anyone can run, and the closure's
+    # kinetic-only machinery (the DVM's own jets and baffles) is exactly what
+    # a hand-written --extra list forgets.
+    from cablp.solvers._sim1d import config_identity, default_config
+
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from stance_config import load_configuration, load_stance
+
+    _fc_path = (
+        Path(__file__).resolve().parents[1]
+        / "stances" / "examples" / "g1atrim_fluid_comparator.toml"
+    )
+    _fc_params, _fc_flags, _fc_lineage = load_configuration(str(_fc_path))
+
+    assert _fc_lineage.name == "g1atrim_fluid_comparator"
+    assert _fc_lineage.base_chain == ("g1atrim",), _fc_lineage.base_chain
+    assert len(_fc_lineage.file_sha256) == 2
+
+    # The hand-built equivalent, stated here in full: this list IS the
+    # --extra/--extra-flag command line the derived file replaces.
+    _fc_extra_params = {
+        "neutral_model": "moment",
+        "cathode_neutral_jet": True,
+        "cathode_jet_surface_debit": True,
+        "cathode_jet_energy_convention": "total_reflected",
+        "neutral_kinetic_dvm_cathode_jet": False,
+        "neutral_kinetic_dvm_anode_jet": False,
+    }
+    _fc_extra_flags = {
+        "neutral_momentum": True,
+        "neutral_energy": True,
+        "neutral_hot_internal_wall": True,
+        "neutral_kinetic_dvm_baffles": False,
+    }
+    assert _fc_lineage.delta_keys == tuple(
+        sorted({*_fc_extra_params, *_fc_extra_flags})
+    ), _fc_lineage.delta_keys
+
+    _fc_hand_p, _fc_hand_f = default_config()
+    _fc_base = load_stance("g1atrim")
+    _fc_hand_p.update(_fc_base.params)
+    _fc_hand_f.update(_fc_base.flags)
+    _fc_hand_p.update(_fc_extra_params)
+    _fc_hand_f.update(_fc_extra_flags)
+
+    _fc_differ = [
+        f"params:{k}" for k in sorted(set(_fc_params) | set(_fc_hand_p))
+        if _fc_params.get(k) != _fc_hand_p.get(k)
+    ] + [
+        f"flags:{k}" for k in sorted(set(_fc_flags) | set(_fc_hand_f))
+        if _fc_flags.get(k) != _fc_hand_f.get(k)
+    ]
+    assert not _fc_differ, _fc_differ
+    assert _fc_lineage.identity == config_identity(_fc_hand_p, _fc_hand_f)
+
+    LAPDSim1D(_fc_params, _fc_flags)
+
+    # NEGATIVE CONTROL. Drop ONE delta from the hand-built equivalent and the
+    # resolved dicts must part company, or the comparison above would pass for
+    # a file that moved nothing at all.
+    _fc_short_p, _fc_short_f = default_config()
+    _fc_short_p.update(_fc_base.params)
+    _fc_short_f.update(_fc_base.flags)
+    _fc_short_p.update(
+        {k: v for k, v in _fc_extra_params.items() if k != "neutral_model"}
+    )
+    _fc_short_f.update(_fc_extra_flags)
+    assert _fc_short_p["neutral_model"] == "kinetic_dvm"
+    assert _fc_lineage.identity != config_identity(_fc_short_p, _fc_short_f)
+
+
+@_case("configuration-restated-block-refusal")
+def _case_configuration_restated_block_refusal():
+    # THE UNIT OF THE RESTATEMENT CHECK IS THE DELTA THE FILE WROTE, and a
+    # declaration block is ONE delta. A block states a family's complete
+    # membership regardless of value, so a member that agrees with the base is
+    # the form working and must not be refused -- but the block as a whole must
+    # still move something, or it re-declares a decision the base already made.
+    #
+    # The fixture is the base's own [models.beam_tail_closure] block, lifted
+    # verbatim so completeness is the base's and not this case's guess, and
+    # then used twice: once with one member moved, once untouched.
+    import re as _rb_re
+
+    with _derived_fixture_dir() as (_sc, _room):
+        # Sliced on LINE-ANCHORED table headers: the block names also appear
+        # inside the file's comments, so a bare substring search finds prose.
+        _rb_lines = (_room / "g1atrim.toml").read_text().splitlines()
+        _rb_start = _rb_lines.index("[models.beam_tail_closure]")
+        _rb_end = next(
+            i for i in range(_rb_start + 1, len(_rb_lines))
+            if _rb_lines[i].startswith("[")
+        )
+        _rb_block = "\n".join(_rb_lines[_rb_start:_rb_end]).rstrip() + "\n"
+        assert "ql_relaxation_coeff = 30.0" in _rb_block
+
+        # NEGATIVE CONTROL (a): every member equal to the base. The block
+        # declares a decision the base already made, and is refused BY FAMILY
+        # NAME rather than by listing members that are individually blameless.
+        (_room / "block_restated.toml").write_text(
+            'base = "g1atrim"\n\n' + _rb_block
+        )
+        try:
+            _sc.load_stance("block_restated")
+        except ValueError as _rb_exc:
+            assert "[models.beam_tail_closure]" in str(_rb_exc), str(_rb_exc)
+            assert "restates" in str(_rb_exc), str(_rb_exc)
+            assert "must move at least one" in str(_rb_exc), str(_rb_exc)
+        else:
+            raise AssertionError("a wholly restated block was ACCEPTED")
+
+        # The same block with ONE member moved is a legitimate delta, and the
+        # nineteen members that still equal the base do NOT make it one.
+        _rb_moved_block = _rb_re.sub(
+            r"^ql_relaxation_coeff = 30\.0$",
+            "ql_relaxation_coeff = 31.0",
+            _rb_block,
+            count=1,
+            flags=_rb_re.MULTILINE,
+        )
+        assert "ql_relaxation_coeff = 31.0" in _rb_moved_block
+        (_room / "block_moved.toml").write_text(
+            'base = "g1atrim"\n\n' + _rb_moved_block
+        )
+        _rb_derived = _sc.load_stance("block_moved")
+        assert _rb_derived.params["ql_relaxation_coeff"] == 31.0
+
+        # NEGATIVE CONTROL (b): the identity moves, and moves by exactly that
+        # key -- so the accepted block is not quietly resolving to the base.
+        _rb_base = _sc.load_stance("g1atrim")
+        assert _rb_derived.lineage.identity != _rb_base.lineage.identity
+        _rb_differ = [
+            k for k in set(_rb_derived.params) | set(_rb_base.params)
+            if _rb_derived.params.get(k) != _rb_base.params.get(k)
+        ] + [
+            f"flags:{k}" for k in set(_rb_derived.flags) | set(_rb_base.flags)
+            if _rb_derived.flags.get(k) != _rb_base.flags.get(k)
+        ]
+        assert _rb_differ == ["ql_relaxation_coeff"], _rb_differ
+
+        # A FLAT key restating the base is still refused, block or no block:
+        # the exemption is about the form a delta is written in, not a licence.
+        (_room / "block_moved_plus_flat.toml").write_text(
+            'base = "g1atrim"\n\n'
+            + _rb_moved_block
+            + f"\n[input_dict]\nS_gp = {_rb_base.params['S_gp']!r}\n"
+        )
+        try:
+            _sc.load_stance("block_moved_plus_flat")
+        except ValueError as _rb_flat_exc:
+            assert "input_dict:S_gp" in str(_rb_flat_exc), str(_rb_flat_exc)
+        else:
+            raise AssertionError("a restated flat key beside a block was ACCEPTED")
+
+
+# --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
 @_case("smoke-summary")
@@ -22896,7 +23518,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 120, "historical_stance": 54}
+_CASE_CENSUS = {"total": 129, "historical_stance": 54}
 
 
 def _assert_case_census():

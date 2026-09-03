@@ -9,6 +9,9 @@ way; new code targets the surface below.
 """
 
 from .core.config import (
+    ConfigurationLineage,
+    canonical_config_payload,
+    config_identity,
     config_manifest,
     default_config,
     input_dict_template_1d,
@@ -42,6 +45,7 @@ from .solver import (
 
 __all__ = [
     "BreakdownError",
+    "ConfigurationLineage",
     "DECLARED_FAMILIES",
     "KINETIC_DVM_INCOMPATIBLE_DEFAULTS",
     "KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS",
@@ -51,6 +55,8 @@ __all__ = [
     "ProgressPrinter1D",
     "SimulationProgress1D",
     "TimestepRejectionError",
+    "canonical_config_payload",
+    "config_identity",
     "config_manifest",
     "default_config",
     "input_dict_template_1d",

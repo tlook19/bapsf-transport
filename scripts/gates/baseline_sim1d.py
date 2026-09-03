@@ -50,6 +50,7 @@ loading the NPZ.
 """
 
 import argparse
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -79,7 +80,12 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
     _dir = str(_Path(__file__).resolve().parents[1] / _sub)
     if _dir not in _sys.path:
         _sys.path.insert(0, _dir)
-from stance_config import load_stance  # noqa: E402
+from stance_config import (  # noqa: E402
+    MESH_SIZED_FLAGS,
+    MESH_SIZED_PARAMS,
+    load_configuration,
+    load_stance,
+)
 
 # --- Baseline config: the stance of record, re-cut to the gate mesh --------
 # GOLDEN-AT-STANCE (ratified 2026-08-20). The config is
@@ -114,16 +120,12 @@ PRODUCTION_STANCE = "g1atrim"
 # operating-point key plus the baffles (whose arrays are physical cm, not
 # per-cell). What the gate loses is the measured flare, the vessel staircase
 # and the shaped foot; what it keeps is the operating point.
-STANCE_MESH_SIZED_PARAMS = (
-    "plasma_radius_profile_cm",
-    "machine_radius_profile_cm",
-    "nn0_profile",
-    "nn0_annulus_profile",
-)
-STANCE_MESH_SIZED_FLAGS = (
-    "prescribed_area_geometry",
-    "neutral_initial_profile",
-)
+# The lists themselves live in stance_config, next to the loader that reads the
+# configurations they describe, so the golden gate and every other caller that
+# must run a named configuration at its own resolution drop the SAME package.
+# These names are kept because this file's callers and its record use them.
+STANCE_MESH_SIZED_PARAMS = MESH_SIZED_PARAMS
+STANCE_MESH_SIZED_FLAGS = MESH_SIZED_FLAGS
 
 BASELINE_PARAM_OVERRIDES = {
     # Axial resolution -- the one run-shape pin. The campaign runs 268 far-column
@@ -294,6 +296,20 @@ def _summary_scalars(summary):
     return out
 
 
+def baseline_lineage(params, flags):
+    """Return the golden configuration's lineage, for the sidecar.
+
+    The golden IS the reference configuration, re-cut to the gate mesh: it is
+    built from ``scripts/stances/g1atrim.toml`` by construction, so the record
+    names that file and carries its sha256. The identity is restated over the
+    config the gate actually runs -- the re-cut and the run-shape pins are
+    real, and an identity that claimed to be the stance's unmodified one would
+    be the only false line in the sidecar.
+    """
+    _, _, lineage = load_configuration(PRODUCTION_STANCE)
+    return lineage.with_identity(params, flags)
+
+
 def capture(baseline_path):
     """Run the baseline config and write the golden NPZ + JSON sidecar."""
     params, flags = build_baseline_config()
@@ -317,6 +333,12 @@ def capture(baseline_path):
         "fields_per_cell": int(trajectory["y"].shape[1] // cells),
         "saves": int(trajectory["y"].shape[0]),
         "summary": _summary_scalars(summary),
+        # WHICH configuration this fixture is, in the same terms a saved
+        # trajectory records. Sidecar only: the NPZ carries the trajectory and
+        # nothing else, and --verify reads the NPZ, so this cannot move the
+        # gate. It lands in the committed sidecar at the next authorized
+        # recapture, like every other field here.
+        "configuration": dataclasses.asdict(baseline_lineage(params, flags)),
         "params": _json_safe(params),
         "flags": _json_safe(flags),
     }

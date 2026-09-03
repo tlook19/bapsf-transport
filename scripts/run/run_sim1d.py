@@ -1,3 +1,17 @@
+"""Run a NAMED configuration and save its trajectory.
+
+The plain sim1d driver. It builds no configuration of its own: ``--config``
+names one -- a committed configuration by name, or the path of a configuration
+file, derived or not -- and this driver adds only the run controls on its
+command line. ``default_config()`` is the template of keys and their classes,
+not a plasma anyone runs, so there is no bare route here to inherit it by
+silence.
+
+The LAPD reference configuration is ``scripts/stances/g1atrim.toml``::
+
+    python scripts/run/run_sim1d.py --config g1atrim --output run.h5
+"""
+
 import argparse
 from collections import Counter
 from pathlib import Path
@@ -5,15 +19,42 @@ from pathlib import Path
 from cablp.solvers._sim1d import (
     LAPDSim1D,
     ProgressPrinter1D,
-    default_config,
-    load_config,
     summarize_result,
 )
+
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
+
+from stance_config import (  # noqa: E402
+    STANCE_DIR,
+    SUFFIX,
+    available_stances,
+    load_configuration,
+)
+
+REFERENCE_CONFIGURATION = STANCE_DIR / f"g1atrim{SUFFIX}"
 
 
 def main(argv=None):
     args = _parse_args(argv)
-    params, flags = load_config(args.config) if args.config else default_config()
+    # A run names its configuration. The refusal is here rather than in
+    # argparse's required= so it can name the reference configuration and the
+    # two forms --config takes; "the following arguments are required" cannot.
+    if args.config is None:
+        raise SystemExit(
+            "run_sim1d: name the configuration to run. Pass --config <name> "
+            "for a committed configuration (available: "
+            f"{', '.join(available_stances()) or '(none committed)'}) or "
+            "--config <path.toml> for a configuration file, derived or not. "
+            f"The LAPD reference configuration is {REFERENCE_CONFIGURATION}."
+        )
+    params, flags, configuration = load_configuration(args.config)
     if args.operator_split:
         flags["implicit_heat_conduction"] = True
     if args.neutral_equilibration:
@@ -26,7 +67,11 @@ def main(argv=None):
     if args.neutral_equilibration_dt is not None:
         params["neutral_equilibration_dt"] = args.neutral_equilibration_dt
 
-    sim = LAPDSim1D(params, flags)
+    # The lineage travels with the run, its identity restated over the config
+    # this driver actually constructs -- the named configuration plus the run
+    # controls above.
+    configuration = configuration.with_identity(params, flags)
+    sim = LAPDSim1D(params, flags, configuration=configuration)
     progress_tracker = (
         ProgressPrinter1D(interval_fraction=args.progress_interval)
         if args.progress
@@ -52,6 +97,15 @@ def main(argv=None):
     )
     if not constraints_text:
         constraints_text = "none"
+    print(
+        f"sim1d configuration: {configuration.name}"
+        + (
+            f" (derived from {' <- '.join(configuration.base_chain)})"
+            if configuration.base_chain
+            else ""
+        )
+        + f", identity={configuration.identity}"
+    )
     print(
         "sim1d run complete: "
         f"steps={result.steps}, "
@@ -97,7 +151,15 @@ def _parse_args(argv):
     parser.add_argument("--output", required=True, help="Output HDF5 path.")
     parser.add_argument("--t-end", type=float, default=None, help="Final time [s].")
     parser.add_argument("--dt", type=float, default=None, help="Fixed timestep [s].")
-    parser.add_argument("--config", default=None, help="Optional TOML config path.")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "REQUIRED. The configuration to run: a committed configuration "
+            "NAME, or the path of a configuration file. The LAPD reference "
+            "configuration is scripts/stances/g1atrim.toml."
+        ),
+    )
     parser.add_argument(
         "--operator-split",
         action="store_true",

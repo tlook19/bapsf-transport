@@ -35,6 +35,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config  # noqa: E402
+from stance_config import available_stances, load_stance  # noqa: E402
 
 
 def _instrument(sim, ledger):
@@ -146,9 +147,37 @@ def main(argv=None):
     ap.add_argument("--production", action="store_true",
                     help="layer compare_sim1d_es1 PARAM/FLAG_OVERRIDES (the "
                          "production point) on top of default_config")
+    stance_group = ap.add_mutually_exclusive_group()
+    stance_group.add_argument(
+        "--stance", metavar="NAME", default=None,
+        help="committed configuration file (scripts/stances/NAME.toml) this "
+             "audit measures. Available: "
+             + (", ".join(available_stances()) or "(none committed)"))
+    stance_group.add_argument(
+        "--no-stance", action="store_true",
+        help="acknowledge that this audit names no configuration and measures "
+             "this script's defaults plus the overrides on this command line")
     args = ap.parse_args(argv)
+    # The duty an equilibration runs is a property OF A CONFIGURATION, so this
+    # audit says which one it measured rather than reporting a number about an
+    # unnamed one.
+    if args.stance is None and not args.no_stance:
+        raise SystemExit(
+            "audit_sim1d_equilibration_duty: name the configuration package. "
+            "Pass --stance <name> to measure a committed stance file "
+            f"(available: {', '.join(available_stances()) or '(none committed)'})"
+            ", or --no-stance to acknowledge that this audit has none and "
+            "measures this script's defaults plus the overrides on this "
+            "command line."
+        )
 
     base_params, base_flags = default_config()
+    if args.stance is not None:
+        named = load_stance(args.stance)
+        base_params.update(named.params)
+        base_flags.update(named.flags)
+        if args.family is None:
+            args.family = str(base_params.get("tau_discharge", 20e-3))
     if args.production:
         from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 
