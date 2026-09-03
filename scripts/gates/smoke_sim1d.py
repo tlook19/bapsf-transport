@@ -23040,8 +23040,8 @@ def _case_configuration_drivers_refuse_unnamed_runs():
             capture_output=True, text=True,
         )
 
-    # Each row: the driver's argv WITHOUT a configuration named, the phrase its
-    # refusal must carry, and the switch that names one. The negative control
+    # Each row: the entry point's argv WITHOUT a configuration named, the
+    # phrase its refusal must carry, and the switch that names one. The negative control
     # names a configuration that does not exist: that gets PAST the
     # missing-name refusal and dies on the unknown NAME instead, which is what
     # proves the first refusal is about the name being absent and not about
@@ -23063,6 +23063,11 @@ def _case_configuration_drivers_refuse_unnamed_runs():
         (["scripts/gates/audit_sim1d_equilibration_duty.py"],
          "audit_sim1d_equilibration_duty: name the configuration package",
          "--stance"),
+        # The scorer's RUN route. Scoring --from-h5 is NOT covered and must not
+        # be: it reads the configuration out of the artifact it scores, and a
+        # name supplied there could only contradict it.
+        (["scripts/score/compare_sim1d_es1.py", "--es", "1"],
+         "compare_sim1d_es1: name the configuration package", "--stance"),
     )
 
     for _dr_bare, _dr_phrase, _dr_switch in _dr_drivers:
@@ -23170,6 +23175,90 @@ def _case_configuration_fluid_comparator_example():
     assert _fc_lineage.identity != config_identity(_fc_short_p, _fc_short_f)
 
 
+@_case("configuration-restated-block-refusal")
+def _case_configuration_restated_block_refusal():
+    # THE UNIT OF THE RESTATEMENT CHECK IS THE DELTA THE FILE WROTE, and a
+    # declaration block is ONE delta. A block states a family's complete
+    # membership regardless of value, so a member that agrees with the base is
+    # the form working and must not be refused -- but the block as a whole must
+    # still move something, or it re-declares a decision the base already made.
+    #
+    # The fixture is the base's own [models.beam_tail_closure] block, lifted
+    # verbatim so completeness is the base's and not this case's guess, and
+    # then used twice: once with one member moved, once untouched.
+    import re as _rb_re
+
+    with _derived_fixture_dir() as (_sc, _room):
+        # Sliced on LINE-ANCHORED table headers: the block names also appear
+        # inside the file's comments, so a bare substring search finds prose.
+        _rb_lines = (_room / "g1atrim.toml").read_text().splitlines()
+        _rb_start = _rb_lines.index("[models.beam_tail_closure]")
+        _rb_end = next(
+            i for i in range(_rb_start + 1, len(_rb_lines))
+            if _rb_lines[i].startswith("[")
+        )
+        _rb_block = "\n".join(_rb_lines[_rb_start:_rb_end]).rstrip() + "\n"
+        assert "ql_relaxation_coeff = 30.0" in _rb_block
+
+        # NEGATIVE CONTROL (a): every member equal to the base. The block
+        # declares a decision the base already made, and is refused BY FAMILY
+        # NAME rather than by listing members that are individually blameless.
+        (_room / "block_restated.toml").write_text(
+            'base = "g1atrim"\n\n' + _rb_block
+        )
+        try:
+            _sc.load_stance("block_restated")
+        except ValueError as _rb_exc:
+            assert "[models.beam_tail_closure]" in str(_rb_exc), str(_rb_exc)
+            assert "restates" in str(_rb_exc), str(_rb_exc)
+            assert "must move at least one" in str(_rb_exc), str(_rb_exc)
+        else:
+            raise AssertionError("a wholly restated block was ACCEPTED")
+
+        # The same block with ONE member moved is a legitimate delta, and the
+        # nineteen members that still equal the base do NOT make it one.
+        _rb_moved_block = _rb_re.sub(
+            r"^ql_relaxation_coeff = 30\.0$",
+            "ql_relaxation_coeff = 31.0",
+            _rb_block,
+            count=1,
+            flags=_rb_re.MULTILINE,
+        )
+        assert "ql_relaxation_coeff = 31.0" in _rb_moved_block
+        (_room / "block_moved.toml").write_text(
+            'base = "g1atrim"\n\n' + _rb_moved_block
+        )
+        _rb_derived = _sc.load_stance("block_moved")
+        assert _rb_derived.params["ql_relaxation_coeff"] == 31.0
+
+        # NEGATIVE CONTROL (b): the identity moves, and moves by exactly that
+        # key -- so the accepted block is not quietly resolving to the base.
+        _rb_base = _sc.load_stance("g1atrim")
+        assert _rb_derived.lineage.identity != _rb_base.lineage.identity
+        _rb_differ = [
+            k for k in set(_rb_derived.params) | set(_rb_base.params)
+            if _rb_derived.params.get(k) != _rb_base.params.get(k)
+        ] + [
+            f"flags:{k}" for k in set(_rb_derived.flags) | set(_rb_base.flags)
+            if _rb_derived.flags.get(k) != _rb_base.flags.get(k)
+        ]
+        assert _rb_differ == ["ql_relaxation_coeff"], _rb_differ
+
+        # A FLAT key restating the base is still refused, block or no block:
+        # the exemption is about the form a delta is written in, not a licence.
+        (_room / "block_moved_plus_flat.toml").write_text(
+            'base = "g1atrim"\n\n'
+            + _rb_moved_block
+            + f"\n[input_dict]\nS_gp = {_rb_base.params['S_gp']!r}\n"
+        )
+        try:
+            _sc.load_stance("block_moved_plus_flat")
+        except ValueError as _rb_flat_exc:
+            assert "input_dict:S_gp" in str(_rb_flat_exc), str(_rb_flat_exc)
+        else:
+            raise AssertionError("a restated flat key beside a block was ACCEPTED")
+
+
 # --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
@@ -23194,7 +23283,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 127, "historical_stance": 53}
+_CASE_CENSUS = {"total": 128, "historical_stance": 53}
 
 
 def _assert_case_census():
