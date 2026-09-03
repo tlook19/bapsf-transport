@@ -23080,6 +23080,96 @@ def _case_configuration_drivers_refuse_unnamed_runs():
         assert _dr_missing in _dr_named_text, (_dr_bare, _dr_named_text[-800:])
 
 
+@_case("configuration-fluid-comparator-example")
+def _case_configuration_fluid_comparator_example():
+    # THE COMMITTED WORKED EXAMPLE. The fluid comparator is the campaign's
+    # alternate closure written as a DERIVED FILE rather than as a heap of
+    # --extra flags, and this case is the claim that the two are the same
+    # configuration: it rebuilds the equivalent by hand -- the base
+    # configuration plus exactly the file's own deltas, the way a command line
+    # would supply them -- and compares the RESOLVED dicts key by key before
+    # comparing identities, so a match is a fact about values and not about a
+    # hash.
+    #
+    # It also constructs. A comparator that resolves but refuses at
+    # construction is not an arm anyone can run, and the closure's
+    # kinetic-only machinery (the DVM's own jets and baffles) is exactly what
+    # a hand-written --extra list forgets.
+    from cablp.solvers._sim1d import config_identity, default_config
+
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from stance_config import load_configuration, load_stance
+
+    _fc_path = (
+        Path(__file__).resolve().parents[1]
+        / "stances" / "examples" / "g1atrim_fluid_comparator.toml"
+    )
+    _fc_params, _fc_flags, _fc_lineage = load_configuration(str(_fc_path))
+
+    assert _fc_lineage.name == "g1atrim_fluid_comparator"
+    assert _fc_lineage.base_chain == ("g1atrim",), _fc_lineage.base_chain
+    assert len(_fc_lineage.file_sha256) == 2
+
+    # The hand-built equivalent, stated here in full: this list IS the
+    # --extra/--extra-flag command line the derived file replaces.
+    _fc_extra_params = {
+        "neutral_model": "moment",
+        "cathode_neutral_jet": True,
+        "cathode_jet_surface_debit": True,
+        "cathode_jet_energy_convention": "total_reflected",
+        "neutral_kinetic_dvm_cathode_jet": False,
+        "neutral_kinetic_dvm_anode_jet": False,
+    }
+    _fc_extra_flags = {
+        "neutral_momentum": True,
+        "neutral_energy": True,
+        "neutral_hot_internal_wall": True,
+        "neutral_kinetic_dvm_baffles": False,
+    }
+    assert _fc_lineage.delta_keys == tuple(
+        sorted({*_fc_extra_params, *_fc_extra_flags})
+    ), _fc_lineage.delta_keys
+
+    _fc_hand_p, _fc_hand_f = default_config()
+    _fc_base = load_stance("g1atrim")
+    _fc_hand_p.update(_fc_base.params)
+    _fc_hand_f.update(_fc_base.flags)
+    _fc_hand_p.update(_fc_extra_params)
+    _fc_hand_f.update(_fc_extra_flags)
+
+    _fc_differ = [
+        f"params:{k}" for k in sorted(set(_fc_params) | set(_fc_hand_p))
+        if _fc_params.get(k) != _fc_hand_p.get(k)
+    ] + [
+        f"flags:{k}" for k in sorted(set(_fc_flags) | set(_fc_hand_f))
+        if _fc_flags.get(k) != _fc_hand_f.get(k)
+    ]
+    assert not _fc_differ, _fc_differ
+    assert _fc_lineage.identity == config_identity(_fc_hand_p, _fc_hand_f)
+
+    LAPDSim1D(_fc_params, _fc_flags)
+
+    # NEGATIVE CONTROL. Drop ONE delta from the hand-built equivalent and the
+    # resolved dicts must part company, or the comparison above would pass for
+    # a file that moved nothing at all.
+    _fc_short_p, _fc_short_f = default_config()
+    _fc_short_p.update(_fc_base.params)
+    _fc_short_f.update(_fc_base.flags)
+    _fc_short_p.update(
+        {k: v for k, v in _fc_extra_params.items() if k != "neutral_model"}
+    )
+    _fc_short_f.update(_fc_extra_flags)
+    assert _fc_short_p["neutral_model"] == "kinetic_dvm"
+    assert _fc_lineage.identity != config_identity(_fc_short_p, _fc_short_f)
+
+
 # --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
@@ -23104,7 +23194,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 126, "historical_stance": 53}
+_CASE_CENSUS = {"total": 127, "historical_stance": 53}
 
 
 def _assert_case_census():

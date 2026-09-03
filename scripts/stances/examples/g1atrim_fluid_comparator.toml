@@ -1,0 +1,93 @@
+# THE FLUID COMPARATOR: the reference configuration with the two-moment fluid
+# neutral closure in place of the kinetic one.
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: everything the reference decides -- the measured machine, the
+# operating point, the drive calibration, the beam closure, the initial neutral
+# state -- is inherited, so this file cannot drift from the reference and a
+# reader can see the whole difference between the two arms at a glance.
+#
+# WHAT IT IS FOR. The campaign runs alternates AGAINST the reference, and the
+# neutral closure is the alternate that matters most: the reference carries the
+# neutral field as a discrete-velocity distribution f(z, v_z, v_perp), and this
+# arm carries it as the two-moment fluid (a density and an evolved wind M_n)
+# that the package ships as its default closure. Scoring the two at the same
+# operating point is what makes the comparison a closure comparison rather
+# than an everything comparison.
+#
+# HOW TO RUN IT:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/g1atrim_fluid_comparator.toml \
+#         --output fluid_comparator.h5
+#
+# The saved trajectory records the lineage -- this file's name, "g1atrim" as
+# its base, both files' sha256, the delta keys below, and the resolved
+# configuration's identity -- so the arm is identifiable from its artifact
+# alone.
+base = "g1atrim"
+
+
+# WHY THESE ARE FLAT AND NOT A [models.neutral_closure] BLOCK. The declared
+# family is engaged at neutral_model = "kinetic_dvm", and a block for a family
+# a file does not select is refused: under a different selection those keys
+# belong to whatever model IS selected, so declaring them would claim a
+# decision this configuration is not making. The reference selects the kinetic
+# closure and declares the family; this file DE-selects it, and the keys stand
+# flat, which is the same rule read from the other side.
+#
+# WHAT MOVES. The reference's block reads as one selection plus thirteen
+# switched-off rows, because the DVM state owns the neutral first moment and
+# nothing else may carry a second copy of it or stand on one. With the fluid
+# closure carrying the wind, seven of those readings come back and six do not
+# move at all -- and the six that do not move are ABSENT here rather than
+# restated at the value they already have. A delta states what it changes; a
+# line that repeats its base is refused, and would be a line that reads as a
+# decision, changes nothing, and stops agreeing with the reference silently the
+# first time the reference moves. Three more rows below the closure itself put
+# the reference's kinetic-only machinery away, for a delta of ten.
+#
+# Not restated, and inherited from the reference: neutral_hot_birth_drift
+# (false), neutral_momentum_radial ("uniform"), neutral_knudsen_temperature
+# ("frozen"), cathode_jet_hot_carrier (false), anode_neutral_jet (false),
+# neutral_mesh_accommodation (false), anode_jet_energy_convention (unset). The
+# last three are the fluid anode-recycle channel, which the fluid-era stance
+# carried in its own declaration and which this arm deliberately does not
+# re-arm: recycle is a separate decision from closure, and an arm that wants it
+# says so.
+#
+# Every value below is the package's own default for that key -- the two-moment
+# fluid IS the shipped closure -- so this file selects the default closure
+# rather than a variant of it.
+[input_dict]
+# The selection.
+neutral_model = "moment"
+# The cathode jet is M_n momentum physics: it launches directed neutrals into
+# the wind this closure evolves, so it is available again, with the
+# total_reflected launch-energy convention that rescales its launch energy and
+# the surface debit that books the reflected share against the cathode.
+cathode_neutral_jet = true
+cathode_jet_surface_debit = true
+cathode_jet_energy_convention = "total_reflected"
+# The DVM's OWN directed-recycle jets, which the reference arms at both
+# electrode faces. They split a counted kinetic recycle stream that the fluid
+# closure does not have, so the solver refuses them under this selection: the
+# recycle channel moves back to the fluid cathode jet above, and these two go
+# off. This is the other half of the same fact -- a closure owns the neutral
+# state, and the machinery that reads that state travels with it.
+neutral_kinetic_dvm_cathode_jet = false
+neutral_kinetic_dvm_anode_jet = false
+
+[input_flags]
+# The wind itself: the M_n field that IS the two-moment closure.
+neutral_momentum = true
+# The frictional half of the collisional energy exchange is booked against the
+# relative velocity u - u_n, which the wind now supplies, and the hot internal
+# wall walls the CX-born hot channel that the neutral energy equation creates.
+neutral_energy = true
+neutral_hot_internal_wall = true
+# The kinetic baffle flag makes the geometry's thin annular baffles intercept
+# the DVM's ANNULUS flux, and there is no such annulus under this selection.
+# The fluid baffles are the separate neutral_baffles flag, which the reference
+# arms and this file inherits untouched.
+neutral_kinetic_dvm_baffles = false
