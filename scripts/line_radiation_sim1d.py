@@ -700,6 +700,12 @@ INSET_LINE_NM = {"he1": 320.37, "he0": 587.75}
 #: well beyond +/-3 sigma.
 INSET_HALF_WIDTH_NM = 0.1
 
+#: How close an adf15 line must lie to a named zoom/sweep target before it
+#: may stand in for it [nm].  Loose against the adf15 wavelengths, which are
+#: quoted to 0.01 nm, and far tighter than the gaps between the He lines
+#: these panels resolve.
+LINE_MATCH_TOL_NM = 0.05
+
 #: Fixed temperature of the dashed comparison trace in the He II zoom [eV].
 INSET_COMPARISON_T_EV = 1.0
 
@@ -829,6 +835,30 @@ FIBER_NA_BRACKET = (0.12, 0.39)
 
 class ArtifactRefused(SystemExit):
     """Raised with an explanatory message when the artifact cannot be read."""
+
+
+def resolve_target_line(lam_nm, target_nm, what, atol_nm=LINE_MATCH_TOL_NM):
+    """Index of the line at ``target_nm``, refusing a silent substitution.
+
+    A bare ``argmin`` over ``|lambda - target|`` ALWAYS returns an index, so a
+    target the line list does not carry is answered with whatever line
+    happens to be nearest -- and a panel captioned 320.37 nm would then be
+    drawn from a different transition, with no diagnostic anywhere.  This
+    matches within ``atol_nm`` and raises ``ArtifactRefused`` otherwise,
+    naming the target, the tolerance and the nearest line actually available.
+
+    ``what`` names the caller in the refusal, since the same target is
+    resolved for the markdown, the figure and the console.
+    """
+    lam = np.asarray(lam_nm, dtype=float)
+    k = int(np.argmin(np.abs(lam - float(target_nm))))
+    if not np.isclose(lam[k], float(target_nm), rtol=0.0, atol=atol_nm):
+        raise ArtifactRefused(
+            f"{what}: no line within {atol_nm:g} nm of the "
+            f"{float(target_nm):g} nm target; the nearest available line is "
+            f"{lam[k]:.4f} nm"
+        )
+    return k
 
 
 # --- adf15 evaluation -----------------------------------------------------
@@ -2171,7 +2201,9 @@ def markdown_report(rep):
         got = fp["stages"][key]
         lam_all = np.asarray(s_["lambda_nm"])
         target = INSET_LINE_NM[key]
-        m = int(np.argmin(np.abs(lam_all - target)))
+        m = resolve_target_line(
+            lam_all, target, f"{s_['short']} zoom line (Figure A, markdown)"
+        )
         drawn[key] = (fp, s_, got, m)
         rows.append(
             [
@@ -2200,7 +2232,11 @@ def markdown_report(rep):
         retired = INSET_RETIRED_LINES_NM.get(key)
         if retired is not None:
             r_nm, r_why = retired
-            k = int(np.argmin(np.abs(lam_all - r_nm)))
+            k = resolve_target_line(
+                lam_all,
+                r_nm,
+                f"{s_['short']} retired zoom line (Figure A, markdown)",
+            )
             rows.append(
                 [
                     str(fp["port"]),
@@ -3121,7 +3157,9 @@ def figure_chord_power(rep, path_stem, dpi=180):
         # stages, which would leave the narrower line invisible on a shared
         # linear axis -- hence peak-normalized, stated in the axis label.
         target = INSET_LINE_NM[key]
-        m = int(np.argmin(np.abs(lam - target)))
+        m = resolve_target_line(
+            lam, target, f"{s['short']} zoom line (Figure A)"
+        )
         half = INSET_HALF_WIDTH_NM
         dl = np.linspace(-half, half, 2400)
         di = spectral_density(dl + lam[m], [lam[m]], [area[m]], [sigma[m]])
@@ -3675,7 +3713,9 @@ def print_console(rep):
         )
         target = INSET_LINE_NM[key]
         lam_all = np.asarray(s["lambda_nm"])
-        m = int(np.argmin(np.abs(lam_all - target)))
+        m = resolve_target_line(
+            lam_all, target, f"{s['short']} zoom line (Figure A, console)"
+        )
         print(
             f"    emitter T {got['emitter_T_eV']:.4f} eV "
             f"({got['emitter_T_source']}) ; Doppler FWHM at "
@@ -3690,7 +3730,11 @@ def print_console(rep):
             )
             retired = INSET_RETIRED_LINES_NM.get(key)
             if retired is not None:
-                k = int(np.argmin(np.abs(lam_all - retired[0])))
+                k = resolve_target_line(
+                    lam_all,
+                    retired[0],
+                    f"{s['short']} retired zoom line (Figure A, console)",
+                )
                 print(
                     f"      not drawn (record only): FWHM at "
                     f"{lam_all[k]:.2f} nm = "
