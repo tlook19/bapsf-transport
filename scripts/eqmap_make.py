@@ -142,6 +142,13 @@ def foot_cycle(params, flags, nn, nn_a, foot_s, cadence_s, map_dt):
     f["neutral_equilibration"] = False
     f["launch_plasma_after_equilibration"] = False
     f["use_cached_neutral_seed"] = False
+    # The two DVM directed-recycle jets, cleared for the same reason as
+    # cathode_coupling above: with no plasma and no cathode solve there is no
+    # collected ion flux to split and no phi_c / phi_a to launch against, and
+    # the construction guard behind each jet refuses an inner sim that arms one
+    # without a cathode solve. Both are input_dict keys, so they go on ``p``.
+    p["neutral_kinetic_dvm_cathode_jet"] = False
+    p["neutral_kinetic_dvm_anode_jet"] = False
     # ...and the two deltas that make this the 101st cycle rather than another
     # standard one. The scalar nn0 is superseded for BOTH zones (the solver
     # refuses an armed flag alongside an explicit scalar), so it is cleared.
