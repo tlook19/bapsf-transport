@@ -863,8 +863,9 @@ Results are written to HDF5 (`results/io.py`, format `sim1d-hdf5-v1`) including
 time series, axial profiles, and per-step diagnostics. `results/health.py`
 reports finiteness and conservation drift (particle inventory, thermal
 energy). See
-`scripts/run_sim1d.py` (drive/save) and `scripts/plot_sim1d_run.py` (contour and
-time-slice plots).
+`scripts/run_sim1d.py` (drive/save). Its companion renderer
+`scripts/plot_sim1d_run.py` (contour and time-slice plots) was retired
+2026-09-03 (commit 48be9a4).
 
 R1 makes `rhs_terms`, `total_rhs`, finiteness, and inventory output follow the
 actual packed five-/six-/seven-/eight-row state while retaining absent-dataset
