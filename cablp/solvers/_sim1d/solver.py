@@ -4810,7 +4810,10 @@ class LAPDSim1D:
         """
         p = self._input_dict
         floor_extent = thermal_sonic_velocity_extent_cm_s()
-        Ti_floor_eV = float(self._floors["Ti"])
+        # Read from the config rather than from ``self._floors``, which the
+        # neutral-closure selection runs ahead of; it is the same number, and
+        # this is the one point of the run where it is not yet resolved.
+        Ti_floor_eV = float(p["Ti_floor"])
         phi_cap_V = float(p.get("cathode_phi_c_cap_V"))
         Ti_allowance_eV = 10.0
 
