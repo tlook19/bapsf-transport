@@ -264,10 +264,24 @@ one key and nothing else — proven case by case by restoring `T_s = 1998.15`
 into each rotated configuration and reproducing the pre-removal digest bit for
 bit. The golden's saved trajectory is unchanged (the 4,000-step digest holds at
 `4c0e105b…`); the identity table is in
-`scripts/gates/golden_baseline_provenance.md`. On the campaign route the move
-the earlier deferrals feared does not occur either: every driver already
-supplied `cathode_Ts_base_K` from the same rung field beside the retired key,
-so dropping `T_s` leaves the rung's standby exactly where it was.
+`scripts/gates/golden_baseline_provenance.md`.
+
+**On the POWER_BALANCE route — this stance, and every arm of record — the
+move the earlier deferrals feared does not occur.** Each driver's
+power-balance branch already supplied `cathode_Ts_base_K` from the same rung
+field beside the retired key, and under that model the retired key was
+overridden on every read anyway, so dropping it leaves the rung's standby
+exactly where it was. That is the scope of the claim, and it is what the
+four-case identity proof covers.
+
+**It does NOT extend to the STATIC route.** `run_mechanism_ladder.py
+--warming none` fed only the retired key, which this stance's row then
+superseded, so `--warming none --stance g1atrim` at ES1 held the surface at
+1998.15 K; at the tip the rung's own `cathode_Ts_base_K` = 1910.0 K survives
+and is what the static model holds. The rung's standby winning is the
+CORRECT direction — a per-rung measurement should not be superseded by a
+stance row — but it is a value change on that route and is listed with the
+other disclosed one in `scripts/gates/golden_baseline_provenance.md`.
 
 `T_s` was one of three RESOLVED-ACCRETION keys; the remaining two are
 `cathode_emission_profile` and `Te_birth_ionization`.

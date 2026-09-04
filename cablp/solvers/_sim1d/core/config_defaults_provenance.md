@@ -1604,7 +1604,11 @@ surface value or by `T_s_override_K` — and live only under the static warming
 model and in the TPMC kinetic background. Tom's ruling (2026-09-03): a
 sim3-era development artifact. **Its successor is `cathode_Ts_base_K` below**,
 which both of those paths now read and which naming `T_s` raises to point at.
-The removal moved no value; the identity rotation it caused is recorded in
+The removal moved no value under `power_balance` — the production model, the
+stance and every arm of record — and no committed fixture moves; the two
+routes where it DOES change the surface temperature (a bare template under
+`neutral_model = "kinetic"`, and the ladder's `--warming none` route under a
+stance) are disclosed with the identity rotation in
 `scripts/gates/golden_baseline_provenance.md`.
 
 **`phi_wf = 2.869` eV — FITTED**, the contaminated shot-start work function.

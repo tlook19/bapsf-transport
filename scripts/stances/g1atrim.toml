@@ -298,8 +298,11 @@ cathode_emission_profile = "uniform"
 # which this stance leaves at its config default 1910.0 for the reason given
 # under C_R above. This stance runs power_balance, under which the retired
 # row was already inert, so removing it rotates the resolved CONFIG IDENTITY
-# by exactly one key and moves no value. See
-# scripts/gates/golden_baseline_provenance.md.
+# by exactly one key and moves no value ON THIS STANCE'S OWN ROUTE. The row
+# was NOT inert on the ladder's --warming none route, which this file also
+# reaches: there it superseded the rung's standby, and dropping it hands
+# that route back to the rung. See scripts/gates/golden_baseline_provenance.md
+# for both disclosures.
 
 # FUELING. The puff window that arms with the equilibrate route is a member of
 # [models.initial_neutral_state] and is stated there.

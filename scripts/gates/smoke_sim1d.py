@@ -12654,6 +12654,12 @@ def _case_kinetic_neutrals_k4a(p2z_flags, p2z_params, p2z_sim):
         raise AssertionError("expected kinetic-without-two-zone to fail")
     k4_params = dict(p2z_params)
     k4_params["neutral_model"] = "kinetic"
+    # The TPMC background launches its cathode-end half-flux at the
+    # configured surface temperature, and reaches it through no other row,
+    # so this chain took it from a config default. Named here at the value
+    # this case has always run (it came from the retired T_s key, whose
+    # default differed from this one's) so the background is unmoved.
+    k4_params["cathode_Ts_base_K"] = 1998.15
     k4_params["neutral_kinetic_refresh_s"] = 2e-4
     k4_params["neutral_kinetic_nvz"] = 24
     k4_params["neutral_kinetic_nvp"] = 8
@@ -20442,7 +20448,16 @@ def _case_cathode_emitting_area_percolation_ea1():
     # (b) PATCH INVARIANCE. The full-disc and throttled device configs at one
     # frozen plasma state, driven far above capability so the solve sits ON
     # the wall -- the object the closure claims to rescale.
-    _ea1_dp, _ea1_df = _ea1_stance()
+    # These two dicts are handed STRAIGHT to cathode_device_config, so they
+    # bypass the solver seam that substitutes the evolving surface
+    # temperature and read the configured row instead. They took it from a
+    # config default; it is named here at the value these calls have always
+    # built at. It is pinned on the CALL dicts and not in _ea1_stance()
+    # because this case's RUNS warm from cathode_Ts_base_K under
+    # power_balance, and moving the shared row would move their initial
+    # condition -- the direct build and the runs sat at different
+    # temperatures here while two keys carried them.
+    _ea1_dp, _ea1_df = _ea1_stance(cathode_Ts_base_K=1998.15)
     _ea1_dev_full = _cathode_mod.cathode_device_config(_ea1_dp, _ea1_df, 4.002602)
     _ea1_dev_thr = _cathode_mod.cathode_device_config(
         _ea1_dp, _ea1_df, 4.002602, f_em=_ea1_default_f0
@@ -20646,7 +20661,9 @@ def _case_cathode_emitting_area_percolation_ea1():
     )
     # The same refusal at the seam itself, for a direct caller that never
     # goes through LAPDSim1D.
-    _ea1_up, _ea1_uf = _ea1_stance(cathode_emission_profile="uniform")
+    _ea1_up, _ea1_uf = _ea1_stance(
+        cathode_emission_profile="uniform", cathode_Ts_base_K=1998.15,
+    )
     try:
         _cathode_mod.cathode_device_config(_ea1_up, _ea1_uf, 4.002602, f_em=0.5)
     except ValueError:

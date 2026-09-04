@@ -296,13 +296,39 @@ header is written from the gate's own source constant, which the
 `[scripts-subdirs]` member had already corrected; only the fixture was carrying
 the stale copy, and this recapture is simply the first to rewrite it.
 
-**Disclosed, and OFF this stance:** the TPMC kinetic background's wall-launch
-temperature changes value for anyone running `neutral_model = "kinetic"`. It
-read the retired key's configured value and now reads `cathode_Ts_base_K` — on
-`default_config()`, 1998.15 K → 1910.0 K. That path is deprecated, is selected
-by no committed configuration, and is not the stance, so no committed
-configuration and no fixture moves; but it IS a value change on a live arm and
-is recorded here rather than left to be discovered.
+**Disclosed value changes, both OFF this stance.** The two config keys had
+DIFFERENT defaults — the retired one 1998.15 K, its successor 1910.0 K — so
+any route that reached a surface-temperature read through the retired
+DEFAULT, with no explicit row of its own, changes temperature. Two do:
+
+1. **The TPMC kinetic background**, for anyone running
+   `neutral_model = "kinetic"` on a bare template: its wall-launch
+   temperature read the retired key and now reads `cathode_Ts_base_K`,
+   1998.15 K → 1910.0 K. That selector is deprecated and no committed
+   configuration chooses it.
+2. **`run_mechanism_ladder.py --warming none` under a stance.** The static
+   branch fed only the retired key, which the stance row then superseded, so
+   `--warming none --stance g1atrim` at ES1 held the surface at 1998.15 K; it
+   now holds the rung's own `cathode_Ts_base_K` = 1910.0 K. The rung winning
+   is the CORRECT direction — a per-rung measurement should not be superseded
+   by a stance row — and the route carries no result of record, but it is a
+   value change and is named here rather than left to be discovered. The
+   `--warming power_balance` route and the `--no-stance` static route are both
+   UNMOVED at 1910.0 K.
+
+**No committed fixture moves, and that was SWEPT rather than assumed.** A
+runtime spy on every reader of a configured surface temperature — the device
+config the emission solve is built from, the gaussian profile's annular peak,
+the TPMC background, and the cathode jet's effusive temperature — was run over
+the FULL smoke suite on the base commit and on this tip and the transcripts
+diffed per case and per site: 77 of 77 (case, site) pairs carry identical
+value sets, with no pair present at base and absent at the tip. The sweep is
+what found the two fixtures that DID reach a read through the retired default
+— the kinetic case's TPMC background, and the emitting-area case's two
+direct `cathode_device_config` calls, which bypass the solver's override seam
+— and both now name the temperature they have always run at. The suite passed
+on both trees either way, which is why a spy and not the suite is the
+instrument here.
 
 **2026-09-03 — THE SPEED-UP EVENT: four bit-moving performance members
 re-anchored in one recapture (AUTHORIZED; the Tier C continuity pair passed all
