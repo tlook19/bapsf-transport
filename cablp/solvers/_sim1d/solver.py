@@ -90,6 +90,8 @@ from .physics.kinetic_dvm import (
     ANNULUS_FLIGHT_MODELS as KINETIC_DVM_ANNULUS_FLIGHT_MODELS,
     ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
     EXCHANGE_MODELS as KINETIC_DVM_EXCHANGE_MODELS,
+    LEDGER_PARTICLE_FLOW_KEYS as KINETIC_DVM_PARTICLE_FLOW_KEYS,
+    LEDGER_PARTICLE_FRAME_KEYS as KINETIC_DVM_PARTICLE_FRAME_KEYS,
     TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
     WALL_REFLECTION_MODELS as KINETIC_DVM_WALL_REFLECTION_MODELS,
     TransientDVM,
@@ -1291,6 +1293,13 @@ class LAPDSim1D:
         # recoverable from the saved trajectory because a tick fires on the
         # neutral clock rather than on the save schedule.
         self._dvm_tick_count = 0
+        # The per-tick PARTICLE ledger the engine returns, summed since the
+        # previous save. Drained and zeroed by
+        # ``_dvm_particle_ledger_sample`` at each save, so consecutive save
+        # frames partition the run's ticks with no gap and no overlap. It
+        # reads what the engine already computed and returned and writes
+        # nothing back, so it cannot move a trajectory.
+        self._dvm_particle_accum = self._zero_dvm_particle_accum()
         self._dvm_transfer_relax_fraction = 1.0
         self._dvm_transfer_hold = KINETIC_DVM_TRANSFER_HOLDS[0]
         self._dvm_step_transfer = None
@@ -11111,6 +11120,9 @@ class LAPDSim1D:
         # the per-save census record; a moment-model snapshot is unchanged.
         if self._dvm is not None:
             snapshot["dvm_ledger"] = self._dvm_ledger_sample(time=time)
+            snapshot["dvm_particle_ledger"] = (
+                self._dvm_particle_ledger_sample(time=time)
+            )
         return snapshot
 
     def _gas_puff_diagnostic_snapshot(self, time):
@@ -11466,6 +11478,7 @@ class LAPDSim1D:
         # census is ABSENT rather than zero wherever it was never kept.
         if self._dvm is not None:
             result.dvm_transfer_ledger = self._dvm_ledger_census(saved)
+            result.dvm_particle_ledger = self._dvm_particle_ledger_frames(saved)
             result.dvm_tick_count = int(self._dvm_tick_count)
         # Cathode-jet arming census, presence-gated on the CRITERION rather
         # than on either jet channel: a run that declared no criterion carries
@@ -13242,6 +13255,66 @@ class LAPDSim1D:
             "ion_shortfall_updates": float(dvm.ion_shortfall_updates),
         }
 
+    def _zero_dvm_particle_accum(self):
+        """Return a fresh zeroed per-save particle-ledger accumulator."""
+        accum = {name: 0.0 for name in KINETIC_DVM_PARTICLE_FLOW_KEYS}
+        accum["ticks"] = 0.0
+        return accum
+
+    def _dvm_accumulate_particle_ledger(self, ledger):
+        """Add one tick's PARTICLE flow rows to the running per-save sums.
+
+        Pure reading: every value is a float the engine has already computed
+        and returned, and nothing here is written back to the engine, to the
+        state vector or to any cache, so a run that accumulates is bit-exact
+        against one that does not.
+        """
+        accum = self._dvm_particle_accum
+        for name in KINETIC_DVM_PARTICLE_FLOW_KEYS:
+            accum[name] += float(ledger[name])
+        accum["ticks"] += 1.0
+
+    def _dvm_particle_ledger_sample(self, time):
+        """Return this save frame's PARTICLE ledger record, draining the sums.
+
+        The flow rows are ATOMS summed over every neutral tick since the
+        previous save frame, so differencing is not needed and consecutive
+        frames partition the run's births and losses. The two state rows are
+        instantaneous ATOMS at the frame -- the domain inventory including the
+        lagged end-return buffers, and the ionization the plasma has booked
+        that the kinetic state has not yet surrendered -- and are read here
+        rather than carried, because the distributions change only on a tick
+        and the frame is where the reading belongs.
+
+        This is what the saved trajectory cannot otherwise answer: the fluid
+        ``nn`` rows are stripped once the arm supersedes them, so which
+        channel the neutrals at a given place came from is invisible in the
+        term ledger from the first tick onward.
+        """
+        dvm = self._dvm
+        sample = dict(self._dvm_particle_accum)
+        self._dvm_particle_accum = self._zero_dvm_particle_accum()
+        sample["time"] = float(time)
+        sample["inventory"] = float(dvm.total_inventory())
+        sample["ion_debt_carried"] = float(np.sum(dvm.ion_debt))
+        return sample
+
+    def _dvm_particle_ledger_frames(self, saved):
+        """Return the saved run's PARTICLE ledger as one array per row.
+
+        Each array runs over save frames in trajectory order and carries what
+        :meth:`_dvm_particle_ledger_sample` recorded at that frame, so a flow
+        row sums over frames to the run's own total for that channel and a
+        state row is read at the frame.
+        """
+        return {
+            name: np.asarray(
+                [snapshot["dvm_particle_ledger"][name] for snapshot in saved],
+                dtype=float,
+            )
+            for name in KINETIC_DVM_PARTICLE_FRAME_KEYS
+        }
+
     def _dvm_ledger_census(self, saved):
         """Return the end-of-run transfer-ledger census for the result.
 
@@ -13462,7 +13535,7 @@ class LAPDSim1D:
             )
         self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
         self._dvm_source_booked = self._zero_dvm_source_counts()
-        self._dvm.update(
+        tick_ledger = self._dvm.update(
             float(dt_neutral),
             n_i=np.asarray(state.n, dtype=float),
             Ti_eV=np.asarray(derived.Ti, dtype=float),
@@ -13501,6 +13574,11 @@ class LAPDSim1D:
         self._dvm_last_s = self._time
         self._dvm_next_s = self._time + self._dvm_cadence_s
         self._dvm_tick_count += 1
+        # The tick's own PARTICLE ledger, which the engine keeps only as
+        # ``last_ledger`` and so is overwritten by the next tick. Summed here,
+        # beside the tick count and for the same reason: it is a fact about
+        # what the run DID that the saved trajectory cannot recover.
+        self._dvm_accumulate_particle_ledger(tick_ledger)
         # Freeze the hold's tick state against the SAME accepted rows the
         # transfer above was booked against, before the republish below
         # rewrites anything.
