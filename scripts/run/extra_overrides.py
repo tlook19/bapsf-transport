@@ -86,6 +86,40 @@ def _coerce(key, raw, value, template, switch):
     )
 
 
+def coerce_override(key, raw, switch="--extra", templates=None):
+    """Return the token ``raw`` as the type ``key``'s template value carries.
+
+    The single-key form of the coercion :func:`parse_extra_overrides` applies
+    across a switch's whole argv list, for the callers that already hold a
+    split ``key`` and ``raw`` token of their own. ``switch`` names the caller's
+    switch in refusal messages, and ``templates`` is a ``default_config()``
+    pair to look ``key`` up in -- resolved on each call when it is ``None``.
+
+    ``input_dict`` and ``input_flags`` share no key, so the template that owns
+    ``key`` is found by looking it up in both.
+
+    Raises ``ValueError`` -- naming the key, the given value and the expected
+    type -- when the value cannot be read as its key's type, and when the key
+    is owned by neither configuration template.
+    """
+    if templates is None:
+        templates = default_config()
+    params_template, flags_template = templates
+    if key in params_template:
+        template = params_template[key]
+    elif key in flags_template:
+        template = flags_template[key]
+    else:
+        raise ValueError(
+            f"{switch} {key}={raw}: {key} is owned by NEITHER "
+            "configuration template -- it is in neither input_dict nor "
+            "input_flags, so it would be a silent/inert control. Check "
+            "which template owns the key in "
+            "cablp/solvers/_sim1d/core/config.py and spell it exactly."
+        )
+    return _coerce(key, raw, _read(raw), template, switch)
+
+
 def parse_extra_overrides(items, switch="--extra"):
     """Return ``{key: value}`` from ``KEY=VALUE`` strings, typed by template.
 
@@ -113,7 +147,7 @@ def parse_extra_overrides(items, switch="--extra"):
     type -- when a value cannot be read as its key's type; when a key is owned
     by neither configuration template; and when an item is not ``KEY=VALUE``.
     """
-    params_template, flags_template = default_config()
+    templates = default_config()
     out = {}
     for item in items or ():
         key, sep, raw = item.partition("=")
@@ -121,17 +155,5 @@ def parse_extra_overrides(items, switch="--extra"):
             raise ValueError(
                 f"{switch} {item!r} is not of the form key=value."
             )
-        if key in params_template:
-            template = params_template[key]
-        elif key in flags_template:
-            template = flags_template[key]
-        else:
-            raise ValueError(
-                f"{switch} {key}={raw}: {key} is owned by NEITHER "
-                "configuration template -- it is in neither input_dict nor "
-                "input_flags, so it would be a silent/inert control. Check "
-                "which template owns the key in "
-                "cablp/solvers/_sim1d/core/config.py and spell it exactly."
-            )
-        out[key] = _coerce(key, raw, _read(raw), template, switch)
+        out[key] = coerce_override(key, raw, switch, templates)
     return out
