@@ -106,8 +106,10 @@ def bin_edges(centers, lo=None, hi=None):
     return e
 
 
-# Condition-number ceiling on the two-basis moment-compensation solve. At
-# 1/eps a double-precision 2x2 solve retains no significant digit, so its
+# Condition-number ceiling on the two-basis moment-compensation solve, read
+# on the DIMENSIONLESS form of that 2x2 (see VGrid.maxwellian for why the
+# raw matrix cannot carry a condition-number test at all). At 1/eps a
+# double-precision 2x2 solve retains no significant digit, so its
 # coefficients are noise -- and they multiply basis functions that are
 # moment-free only to the roundoff of a cancelling sum, which turns that
 # noise into a DENSITY error. A solve at or beyond this is rejected instead.
@@ -161,6 +163,25 @@ class VGrid:
         has drifted past the tolerance. Both are inert while the invariant
         holds -- no informative solve is rejected, and a healthy sum is
         left untouched rather than rescaled by one.
+
+        The conditioning test is read on the NON-DIMENSIONALIZED 2x2, and
+        must be: the two rows of the raw matrix are moments of different
+        order (a ``v_z`` moment [cm/s] and a ``v^2`` moment [cm^2/s^2]) and
+        its two columns carry the reciprocal dimensions of the two basis
+        amplitudes, so the raw condition number is a DIMENSIONAL quantity --
+        it changes with the units velocity is measured in and is not a
+        statement about the solve at all. For a shifted Maxwellian at drift
+        ``u`` and spread ``s`` the raw matrix is
+        ``s^2 [[1, 2u], [2u, 4u^2 + 6s^2]]`` with determinant ``6 s^6``, so
+        that number grows as ``(u^2/s)^2`` in cgs and crosses ``1/eps`` at
+        ``u^2/s ~ 4e7 cm/s`` -- while the solve at that point is still exact,
+        reaching its targets to a few ulps. Read raw it therefore REJECTED
+        healthy projections: on the shipped (64, 24) grid every narrow
+        directed spectrum above roughly 190 eV per atom, which is what put a
+        ceiling on the surface jets' launch band that no grid extent could
+        lift. Scaled, the same 2x2 is O(10^2-10^3) across that band and the
+        guard again catches only what it names -- a genuinely singular
+        system, such as a drift the grid cannot represent at all.
         """
         s = np.sqrt(max(T_eV, 1e-6) * EV / M_HE)  # 1D thermal spread
         from math import erf, sqrt
@@ -205,15 +226,29 @@ class VGrid:
                 ]
             )
             rhs = np.array([target_u - m1, target_e - m2])
+            # NON-DIMENSIONALIZED before it is judged or solved. The two rows
+            # are moments of DIFFERENT order -- row 1 a v_z moment [cm/s],
+            # row 2 a v^2 moment [cm^2/s^2] -- and the two columns carry the
+            # reciprocal dimensions of the two basis amplitudes, so the raw
+            # matrix's condition number is not a dimensionless diagnostic at
+            # all: it scales with the units velocity is measured in. Dividing
+            # row i by s^i and column j by s^j leaves the SAME linear system
+            # (x = col * solve(A_hat, rhs_hat), exactly) expressed in units of
+            # the spectrum's own thermal spread, where the condition number
+            # measures what it is meant to.
+            row = np.array([s, s * s])
+            col = np.array([1.0 / s, 1.0 / (s * s)])
+            A_hat = A / row[:, None] * col[None, :]
+            rhs_hat = rhs / row
             if not (
-                np.isfinite(A).all()
-                and np.linalg.cond(A) <= _MOMENT_SOLVE_COND_MAX
+                np.isfinite(A_hat).all()
+                and np.linalg.cond(A_hat) <= _MOMENT_SOLVE_COND_MAX
             ):
                 # Numerically singular: the correction this would return is
                 # noise, and it is the noise that breaks the density.
                 break
             try:
-                ab = np.linalg.solve(A, rhs)
+                ab = np.linalg.solve(A_hat, rhs_hat) * col
             except np.linalg.LinAlgError:
                 break
             f_new = f + ab[0] * b1 + ab[1] * b2

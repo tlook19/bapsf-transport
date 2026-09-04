@@ -95,6 +95,8 @@ from .physics.kinetic_dvm import (
     TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
     WALL_REFLECTION_MODELS as KINETIC_DVM_WALL_REFLECTION_MODELS,
     TransientDVM,
+    launch_band_velocity_extent_cm_s,
+    thermal_sonic_velocity_extent_cm_s,
 )
 from .physics.kinetic_neutrals import (
     EV as _KIN_EV,
@@ -4747,10 +4749,18 @@ class LAPDSim1D:
                     "neutral_baffle_clear_radii_cm, or "
                     "neutral_kinetic_dvm_baffles off"
                 )
+        (
+            vmax_cm_s,
+            cathode_band_eV,
+            anode_band_eV,
+        ) = self._resolve_dvm_velocity_extent(cathode_jet, anode_jet)
         self._dvm = TransientDVM(
             geometry=self._geometry,
             nvz=int(self._input_dict.get("neutral_kinetic_dvm_nvz")),
             nvp=int(self._input_dict.get("neutral_kinetic_dvm_nvp")),
+            vmax_cm_s=vmax_cm_s,
+            cathode_launch_band_eV=cathode_band_eV,
+            anode_launch_band_eV=anode_band_eV,
             accommodation=accommodation,
             wall_reflection=reflection,
             elastic_model=elastic,
@@ -4765,6 +4775,91 @@ class LAPDSim1D:
             s_L=self._dvm_end_sticking("S_pump_L"),
             s_R=self._dvm_end_sticking("S_pump_R"),
         )
+
+    def _resolve_dvm_velocity_extent(self, cathode_jet, anode_jet):
+        """Resolve the DVM velocity-grid half-extent and the jets' launch bands.
+
+        Returns ``(vmax_cm_s, cathode_band_eV, anode_band_eV)``. Each band is
+        ``(e_min, e_max)`` in eV per atom for an armed jet and ``None`` for
+        one that is not, and a ``None`` band is what makes the engine's
+        construction-time reachability check say nothing for that surface.
+
+        The band. ``e_max`` is the largest per-atom launch energy the
+        CONFIGURATION can ask for: ``(R_E/R_N)(phi + Ti)`` at the raw
+        ``cathode_phi_c_cap_V`` -- resolvable here, unlike the circuit's
+        tighter ``min(cap, V_avail(I))`` bound, which is current-dependent --
+        plus the engine's own 10 eV ion-temperature allowance. The anode jet
+        borrows that same cathode ceiling as a stated allowance rather than as
+        a bound on ``phi_a``, which has no cap and is given none here.
+
+        ``e_min`` is the SMALLEST such energy, and it is set by the ``Ti``
+        floor alone: ``phi`` is clamped non-negative before the sum is formed
+        (:meth:`_dvm_cathode_jet_incident_energy_row`), and the arming latch
+        gates the channel on the booked ion CURRENT, not on the sheath, so no
+        current threshold puts a floor under the potential -- the
+        emission-dominated afterglow solve reaches ``phi_c`` of order zero
+        while the latch is still armed. The tick divides a summed incident
+        energy by a summed count, so its per-atom result is a count-weighted
+        average over the tick's armed steps and lies inside the same bracket.
+
+        The extent. A named ``neutral_kinetic_dvm_vmax_cm_s`` is taken as
+        given, subject to the two refusals below. Unset, it is sized to the
+        top of the widest armed band, and with no jet armed it falls back to
+        the thermal/sonic sizing the engine has always used -- which is the
+        gas's own requirement and has nothing to do with the jets.
+        """
+        p = self._input_dict
+        floor_extent = thermal_sonic_velocity_extent_cm_s()
+        # Read from the config rather than from ``self._floors``, which the
+        # neutral-closure selection runs ahead of; it is the same number, and
+        # this is the one point of the run where it is not yet resolved.
+        Ti_floor_eV = float(p["Ti_floor"])
+        phi_cap_V = float(p.get("cathode_phi_c_cap_V"))
+        Ti_allowance_eV = 10.0
+
+        def band(spec):
+            if spec is None:
+                return None
+            ratio = float(spec["R_E"]) / float(spec["R_N"])
+            return (
+                ratio * Ti_floor_eV,
+                ratio * (phi_cap_V + Ti_allowance_eV),
+            )
+
+        cathode_band = band(cathode_jet)
+        anode_band = band(anode_jet)
+        bands = [b for b in (cathode_band, anode_band) if b is not None]
+
+        named = p.get("neutral_kinetic_dvm_vmax_cm_s")
+        if named is None:
+            if not bands:
+                return floor_extent, None, None
+            e_max = max(b[1] for b in bands)
+            return (
+                launch_band_velocity_extent_cm_s(e_max),
+                cathode_band,
+                anode_band,
+            )
+        vmax = float(named)
+        if not np.isfinite(vmax) or vmax <= 0.0:
+            raise ValueError(
+                "neutral_kinetic_dvm_vmax_cm_s is the velocity grid's "
+                "half-extent in cm/s and must be a positive finite speed "
+                f"(got {named!r}). Accepted: a positive float, or None to "
+                "have the extent sized to the armed jets' launch band"
+            )
+        if bands and vmax < floor_extent:
+            raise ValueError(
+                "neutral_kinetic_dvm_vmax_cm_s="
+                f"{vmax!r} cm/s is below the thermal/sonic sizing the "
+                f"kinetic gas itself needs ({floor_extent:.6g} cm/s: four ion "
+                "thermal speeds at a 10 eV cap plus 1.5 sonic drifts at "
+                "2e6 cm/s), while a surface jet is armed on top of it. The "
+                "charge-exchange tail would leave the grid before the jets "
+                "did. Accepted: an extent at or above that sizing, or None "
+                "to have it sized to the launch band"
+            )
+        return vmax, cathode_band, anode_band
 
     def _dvm_end_sticking(self, key):
         """Return the end-plane sticking probability of a pump speed [L/s].

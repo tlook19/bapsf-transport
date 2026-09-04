@@ -1097,8 +1097,12 @@ The two areas are printed by `scripts/b6bf_base_pins.py` (at commit 48be9a4, ret
 net annulus current per unit density difference matches the fluid orifice to
 $9.7\times10^{-4}$ at $(n_{v_z}, n_{c_\perp}) = (48, 12)$ and
 $2.7\times10^{-4}$ at $(64, 24)$ on a velocity grid sized to the 300 K gas, and
-to $1.8\times10^{-3}$ and $8.7\times10^{-4}$ on the shipped grid extent (which
-is sized for ion drift caps, so a cold gas occupies a small part of it). The
+to $1.8\times10^{-3}$ and $8.7\times10^{-4}$ on the grid extent shipped when
+those numbers were taken (the thermal/sonic sizing, $9.2104\times10^6$ cm/s,
+which is set by ion drift caps, so a cold gas occupies a small part of it).
+Since 2026-09-04 the extent is sized to the armed jets' launch band instead
+(`NUMERICS.md`, § "The DVM velocity grid's extent"), which on this stance is
+wider still and would move both figures; they have not been re-measured. The
 residual is the free-molecular-vs-discrete-grid quadrature gap and shrinks
 under refinement; it is measured, not assumed.
 

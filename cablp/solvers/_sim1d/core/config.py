@@ -946,6 +946,46 @@ def model_mode_defaults():
     neutral_kinetic_dvm_nvp:
         Number of perpendicular-speed bins in that same grid (positive-only,
         carrying the 2D perpendicular speed measure).
+    neutral_kinetic_dvm_vmax_cm_s:
+        Half-extent [cm/s] of that same grid: the axial axis spans
+        ``(-vmax, +vmax)`` and the perpendicular-speed axis ``(0, vmax)``,
+        both sinh-stretched about one fine scale, so this is what fixes
+        which velocities the engine can represent at all. A drift the grid
+        cannot reach is not approximated -- no non-negative weighting of
+        bins has a mean beyond the last bin CENTER -- so a directed spectrum
+        asked for past that point RAISES at the tick.
+
+        ``None`` (the default) DERIVES the extent from the launch band the
+        configuration can actually produce:
+
+        * with a surface jet armed, ``1.25 * sqrt(2 e_max / m_He)``, where
+          ``e_max = max(R_E / R_N) * (cathode_phi_c_cap_V + 10 eV)`` over
+          the armed jets, each reading its own
+          ``neutral_kinetic_dvm_{cathode,anode}_jet_R_E`` and ``_R_N``. The
+          1.25 places the last bin CENTER above the drift at ``e_max`` --
+          by 6.4% on a 48-bin axis and 10.8% on a 64-bin one -- rather than
+          at it, and the validator refuses a grid where it does not.
+        * with neither armed, the thermal/sonic sizing the engine has always
+          used: four ion thermal speeds at a 10 eV ion cap plus 1.5 sonic
+          drifts at 2e6 cm/s, which is what the CX tail and the column's own
+          flows need and is unrelated to any jet.
+
+        The ``cathode_phi_c_cap_V`` in that expression is the RAW atomic-data
+        cap, taken because it is resolvable at construction; the circuit's
+        own ``min(cap, V_avail(I))`` bound is tighter but current-dependent
+        and therefore is not. The same 1000 V allowance is applied to the
+        ANODE fall as a stated assumption about the band the construction
+        check covers -- ``phi_a`` carries no cap of its own and none is
+        implied here -- so the check is conservative on that side rather
+        than predictive, and the tick's own moment refusal remains the
+        backstop for anything the band did not anticipate.
+
+        A positive float pins the extent instead, which is how the historical
+        thermal/sonic sizing is reproduced with the jets armed. Raises at
+        construction on a non-finite or non-positive value, and on a value
+        BELOW that thermal/sonic sizing while a jet is armed, where the grid
+        would be too small for the flows the arm carries irrespective of the
+        launch band. Read only under ``neutral_model = "kinetic_dvm"``.
     neutral_kinetic_dvm_accommodation:
         The THERMAL (energy) accommodation coefficient ``alpha_E`` of the
         vessel's room-temperature technical-metal surfaces, in ``[0, 1]``.
@@ -1301,6 +1341,9 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_cadence_s": 2.5e-5,
         "neutral_kinetic_dvm_nvz": 48,
         "neutral_kinetic_dvm_nvp": 12,
+        # None = "size the grid to the launch band the armed jets can
+        # produce"; a positive float pins the half-extent [cm/s] instead:
+        "neutral_kinetic_dvm_vmax_cm_s": None,
         "neutral_kinetic_dvm_accommodation": 0.40,
         "neutral_kinetic_dvm_wall_reflection": "diffuse_elastic",
         "neutral_kinetic_dvm_elastic": "phelps_iso",

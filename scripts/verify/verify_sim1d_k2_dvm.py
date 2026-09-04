@@ -4990,6 +4990,22 @@ JA_JET_KW = {
     "neutral_kinetic_dvm_cathode_jet_R_E": CJ_R_E,
 }
 
+#: Velocity-grid half-extent [cm/s] the JA1 pair is PINNED to. JA1 is the one
+#: leg here that compares a build with the jet DECLARED against one with it
+#: absent, and the resolved extent is a property of the declared configuration
+#: -- it is sized to the launch band a declared jet can produce, and cannot
+#: follow the latch, which arms mid-run. Left unresolved the two fixtures would
+#: therefore differ in their GRID as well as in their routing, and JA1's
+#: bit-identity clause would be reading the grid rather than the routing it is
+#: about. Pinning both fixtures to one extent removes that difference and
+#: leaves the routing as the only thing the clause can see. The value is ample
+#: for the declared band rather than significant: the LEGACY extent cannot be
+#: pinned here, because on this arm's coefficients the declared band reaches
+#: 157.4 eV per atom and the construction-time check correctly refuses a grid
+#: that cannot carry it -- correctly, because the latch that censors this
+#: fixture over its own horizon is free to arm on a longer one.
+JA_VMAX_CM_S = 3.0e7
+
 
 def _ja_solve(I_i):
     """A stand-in cathode solve carrying one booked ion current."""
@@ -5129,7 +5145,12 @@ def gate_ja1():
     SITE: ``TransientDVM.update``'s cathode-jet launch, reached through
     ``LAPDSim1D``'s accepted-step path and its neutral clock.
     FIXTURE: ``arm_config`` + the B5 jet coefficients at the REGISTERED
-    50 A / 25 A pair, run until the clock ticks.
+    50 A / 25 A pair, run until the clock ticks. BOTH fixtures pin
+    ``neutral_kinetic_dvm_vmax_cm_s`` to :data:`JA_VMAX_CM_S`, because the
+    resolved extent is a property of the DECLARED configuration and would
+    otherwise differ between the declared and the absent build -- which would
+    leave the bit-identity clause below reading the velocity grid instead of
+    the routing this gate is about.
     PASS: the tick COMPLETES (no raise), the jet count and energy are exactly
     zero, the surface debit is exactly zero, and the whole recycled stream is
     routed exactly as an engine with ``neutral_kinetic_dvm_cathode_jet=false``
@@ -5150,9 +5171,11 @@ def gate_ja1():
         **JA_JET_KW,
         neutral_jet_arm_current_A=JA_ARM_A,
         neutral_jet_disarm_current_A=JA_DISARM_A,
+        neutral_kinetic_dvm_vmax_cm_s=JA_VMAX_CM_S,
     )
     absent = _ja_run_to_tick(
         neutral_kinetic_dvm_cathode_jet=False,
+        neutral_kinetic_dvm_vmax_cm_s=JA_VMAX_CM_S,
     )
     non_vacuous = censored["recycled_count"] > 0.0
     routed = (

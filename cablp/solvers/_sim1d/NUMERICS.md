@@ -542,9 +542,44 @@ the ~4x per-tick cost). `"specular"` is the disclosed bracket endpoint, and it
 reproduces the arithmetic the arm carried before this member existed. The
 selector is inert OFF-ARM rather than bit-exact-off in the usual sense: no
 other neutral model constructs the engine that reads it. The two values also
-degenerate at `α_E = 1`, where there is no share to place. **The
-golden is unaffected by construction**: the moment neutral path never builds
-a DVM.
+degenerate at `α_E = 1`, where there is no share to place. **The golden BUILDS
+a DVM**: its stance has selected `neutral_model = "kinetic_dvm"` since
+2026-09-02, so this selector and the extent below are both live in it, and the
+2026-09-04 extent change re-anchored the golden rather than leaving it
+untouched.
+
+### The DVM velocity grid's extent (`neutral_kinetic_dvm_vmax_cm_s`)
+
+Both axes of `VGrid` are sinh-stretched about one fine scale out to a common
+half-extent: `v_z` spans `(-vmax, +vmax)` and the perpendicular SPEED axis
+`(0, vmax)`. The extent is what fixes which velocities the engine can
+represent at all, and a drift past the LAST BIN CENTRE is not approximated —
+no non-negative weighting of bins has a mean beyond it — so a spectrum asked
+for there cannot be projected and raises.
+
+**Unset (the default), the extent is DERIVED from the launch band the armed
+surface jets can produce**, not from the gas: `1.25 sqrt(2 e_max / m_He)`,
+with `e_max = max(R_E/R_N) (cathode_phi_c_cap_V + 10 eV)` taken over the armed
+jets. The `1.25` is a sizing margin, and it is a rule rather than a guarantee:
+what the constructed grid actually clears is checked, not assumed. With NO jet
+armed the extent falls back to the thermal/sonic sizing the engine has always
+used — four ion thermal speeds at a 10 eV cap plus 1.5 sonic drifts at
+`2e6 cm/s` — which is the charge-exchange tail's own requirement and is
+unrelated to any jet. A positive float pins the extent instead, which is how a
+run reproduces the historical thermal/sonic sizing with the jets armed.
+
+**The whole band is checked at CONSTRUCTION, through the tick's own builder.**
+`TransientDVM._refuse_unreachable_launch_band` puts 512 energies spanning each
+armed jet's band (`(R_E/R_N) T_i` floor to `e_max`) through the same
+launch-spectrum builder the tick uses, so a configuration whose jets outrun
+their own velocity mesh is refused at construction rather than mid-discharge.
+It is a SAMPLE of a continuum; the per-tick refusal in the builders remains
+what holds exactly.
+
+**A finer `nvz` LOWERS this ceiling rather than raising it.** The grid-tied
+smear is the local bin width, so more bins narrow the spectrum and push its
+drift further out, and `nvp` does not enter the axial drift at all. Only the
+extent (or a smaller launch energy) moves the ceiling.
 
 ### The DVM cathode jet's launch spectrum
 
@@ -597,8 +632,11 @@ and after four iterations, leaving the analytic bin masses standing at
 whatever moments they happen to have. Here that is a misbooked counted channel
 — the surface has already been debited — so the density, the drift and the
 mean energy of the accepted spectrum are compared with their targets at
-`1e-10` relative and a miss raises naming the cell, the shortfall and the two
-ways out (widen the grid, or leave the smear grid-tied). The energy LEDGER
+`1e-10` relative and a miss raises naming the cell, the shortfall and the ways
+out: a LARGER velocity-grid extent (`neutral_kinetic_dvm_vmax_cm_s`, or unset
+so it is sized to the launch band). A FINER `nvz` is NOT one of them and makes
+it worse — the grid-tied smear IS the local bin width, so narrowing the bins
+narrows the spectrum and pushes its drift further out. The energy LEDGER
 then books the birth as the count times the moment of the array that was
 actually placed, so the ledger closes by construction rather than by the
 projection's accuracy — the same discipline the wall return above follows.
@@ -641,7 +679,9 @@ against the other.
 the channel safe across its whole launch band.** The `v_z` axis is
 geometrically stretched, so the bin containing the launch speed widens with the
 speed and the margin `ε / ((3/2) k T_launch)` does not run away at either end.
-Measured (`scripts/b4aj_smear_margin_probe.py` (at commit 48be9a4, retired 2026-09-03)) on `(48, 12)` it lies between
+Measured (`scripts/b4aj_smear_margin_probe.py` (at commit 48be9a4, retired 2026-09-03)) at the pre-2026-09-04
+thermal/sonic extent of `9.2104e6 cm/s`, which is where those bin widths come
+from, on `(48, 12)` it lies between
 3.1 and 5.4 over `0.005–100 eV`, and on `(64, 24)` between 6.1 and 8.6 over the
 same band; on the coarse `(16, 6)` axis used by most of the K2 gate suite it is
 between 0.22 and 1.4 — the smear carries more energy than the beam and the
