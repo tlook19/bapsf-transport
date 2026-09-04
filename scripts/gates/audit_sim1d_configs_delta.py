@@ -9,11 +9,15 @@ Since the "no default plasma" ruling (2026-09-03) neither campaign driver has a
 bare mode, so both driver cases name the reference configuration and their
 digests rotated with the rename. For each of them this prints:
 
-* the digest WITHOUT the reference layer -- the case exactly as the snapshot
-  recorded it before the rotation, which is how the old committed digest is
-  reproduced here rather than asserted;
-* the digest WITH it, which is the rotated value;
+* the digest WITHOUT the reference layer -- the pre-rotation value, rebuilt
+  from the same code that builds the rotated one so the rotation can be read
+  rather than taken on trust;
+* the digest WITH it, checked by name against both the committed snapshot and
+  the current one;
 * every resolved key the layer moves, with both values.
+
+A case this script names but the snapshot does not hold is a failure, not a
+False row: the script exits nonzero naming the case.
 
 It also reads the committed snapshot and reports, name by name, which cases the
 rotation removed, added, or left alone.
@@ -46,8 +50,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: Git path of the committed snapshot, for the "against a revision" read.
 SNAPSHOT_GIT_PATH = str(audit.SNAPSHOT_PATH.relative_to(REPO_ROOT))
 
-#: The case name each driver case carried BEFORE the rotation, so the
-#: unstanced digest printed below can be matched to the committed one by name.
+#: Current case name -> the name that case carried BEFORE the rotation. The
+#: keys are looked up in the snapshot; the values are HISTORICAL as of
+#: 2026-09-03 -- they name no case in any snapshot from that date on, and are
+#: printed as section headings only, never looked up.
 PRE_ROTATION_NAMES = {
     "run_mechanism_ladder_es1_stance_g1atrim":
         "run_mechanism_ladder_es1_defaults",
@@ -139,6 +145,13 @@ def main(argv=None):
 
     print()
     print("## why each driver case moved: the reference-configuration layer")
+    missing = sorted(n for n in PRE_ROTATION_NAMES if n not in old_digests)
+    if missing:
+        print(
+            "ERROR: case(s) this script explains are absent from "
+            f"{args.revision}:{SNAPSHOT_GIT_PATH}: {', '.join(missing)}"
+        )
+        return 1
     bare = unstanced_cases()
     stanced = audit.config_cases()
     for name, was_called in sorted(PRE_ROTATION_NAMES.items()):
@@ -148,12 +161,13 @@ def main(argv=None):
         after_digest = audit.config_digest(*after)
         print()
         print(f"### {was_called} -> {name}")
-        print(f"  without the reference layer: {before_digest}")
+        print(f"  without the reference layer: {before_digest}"
+              "  (pre-rotation value)")
+        print(f"  with the reference layer:    {after_digest}")
         print(
             "    matches the committed digest for "
-            f"{was_called}: {before_digest == old_digests.get(was_called)}"
+            f"{name}: {after_digest == old_digests[name]}"
         )
-        print(f"  with the reference layer:    {after_digest}")
         print(
             "    matches the rotated digest: "
             f"{after_digest == new_digests.get(name)}"
