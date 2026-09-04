@@ -10,10 +10,7 @@ from cablp.cathode.kernels import PURE_PROVENANCE as PURE_KERNEL_PROVENANCE
 from ..core.config import ConfigurationLineage, resolve_config
 from ..core.timestep import TimestepDiagnostics
 from ..physics.hot_neutrals import HOT_CHANNEL_DIAGNOSTIC_FIELDS
-from ..physics.kinetic_dvm import (
-    LEDGER_PARTICLE_FRAME_KEYS,
-    LEDGER_PARTICLE_ROW_DOC,
-)
+from ..physics.kinetic_dvm import LEDGER_PARTICLE_ROW_DOC
 from ..physics.sources import (
     IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS,
 )
@@ -608,10 +605,15 @@ def _write_dvm_particle_ledger(group, ledger):
     It gets its own writer rather than the shared census one because the
     census writer's rule is "arrays are datasets, everything else is a scalar
     attribute", and these documentation attributes are string LISTS, which
-    that reader would try to read back as numbers.
+    that reader would try to read back as numbers. It keeps that writer's
+    other rule: it writes the rows it is HANDED, in the order it is handed
+    them, so re-saving a result loaded from a file that predates a row does
+    not fail on the row that file never carried. A fresh run hands them in
+    :data:`LEDGER_PARTICLE_FRAME_KEYS` order, which is therefore the order a
+    new file carries.
     """
     str_dtype = h5py.string_dtype(encoding="utf-8")
-    names = tuple(LEDGER_PARTICLE_FRAME_KEYS)
+    names = tuple(ledger)
     for name in names:
         group.create_dataset(name, data=np.asarray(ledger[name], dtype=float))
     group.attrs.create(
