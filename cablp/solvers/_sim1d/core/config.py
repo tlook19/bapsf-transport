@@ -963,8 +963,8 @@ def model_mode_defaults():
           the armed jets, each reading its own
           ``neutral_kinetic_dvm_{cathode,anode}_jet_R_E`` and ``_R_N``. The
           1.25 places the last bin CENTER above the drift at ``e_max`` --
-          by 7% on a 48-bin axis and 11% on a 64-bin one -- rather than at
-          it, and the validator refuses a grid where it does not.
+          by 6.4% on a 48-bin axis and 10.8% on a 64-bin one -- rather than
+          at it, and the validator refuses a grid where it does not.
         * with neither armed, the thermal/sonic sizing the engine has always
           used: four ion thermal speeds at a 10 eV ion cap plus 1.5 sonic
           drifts at 2e6 cm/s, which is what the CX tail and the column's own
