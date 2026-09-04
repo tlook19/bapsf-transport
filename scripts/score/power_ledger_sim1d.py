@@ -465,10 +465,14 @@ def report_window(f, label, lo, hi, geom, port_top):
           f"{P_coupled:>16.5f}  kW")
     print(f"{'  of which gap ohmic (source_P_ohmic)':<44}"
           f"{ohmic:>16.5f}  kW")
-    tau_ms = (W_J / P_coupled if P_coupled != 0.0 else float("nan"))
-    print(f"{'tau_E = W / P_coupled':<44}{tau_ms:>16.6f}  ms")
-    if P_coupled == 0.0:
+    if P_coupled != 0.0:
+        print(f"{'tau_E = W / P_coupled':<44}"
+              f"{W_J / P_coupled:>16.6f}  ms")
+    else:
         # The window couples no power at all, so W / P_coupled has no value.
+        # The row itself is withheld rather than printed as NaN: the header
+        # says tau_E is not reported where the beam is off, and a printed row
+        # contradicts that before the reader reaches the NOTE below.
         # Said out loud: a bare NaN in this row reads as a broken artifact,
         # and the ohmic line above is a CIRCUIT quantity that this window's
         # deposition row does not carry.
