@@ -542,9 +542,11 @@ the ~4x per-tick cost). `"specular"` is the disclosed bracket endpoint, and it
 reproduces the arithmetic the arm carried before this member existed. The
 selector is inert OFF-ARM rather than bit-exact-off in the usual sense: no
 other neutral model constructs the engine that reads it. The two values also
-degenerate at `α_E = 1`, where there is no share to place. **The
-golden is unaffected by construction**: the moment neutral path never builds
-a DVM.
+degenerate at `α_E = 1`, where there is no share to place. **The golden BUILDS
+a DVM**: its stance has selected `neutral_model = "kinetic_dvm"` since
+2026-09-02, so this selector and the extent below are both live in it, and the
+2026-09-04 extent change re-anchored the golden rather than leaving it
+untouched.
 
 ### The DVM velocity grid's extent (`neutral_kinetic_dvm_vmax_cm_s`)
 
