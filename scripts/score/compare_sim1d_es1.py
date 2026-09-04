@@ -39,6 +39,22 @@ Three comparison stages, in tuning order (each scored independently):
       density. Neither changes a scored row above them, and both skip with a
       printed reason on an overlay vintage that lacks the keys.
 
+Stage (ii) has two opt-in readings, both absent unless asked for:
+
+``--window plateau``
+    re-scores every stage (ii) row over the drive plateau alone and prints it
+    in two extra columns beside the default domain, which mixes the rise and
+    the plateau. Stages (i) and (iii) are unaffected -- stage (i) reports a
+    peak and already carries its own plateau current row, and stage (iii)'s
+    configured afterglow window does not overlap the plateau.
+``--density-ftavg``
+    adds a density row set scored against the overlay's FLUX-TUBE average
+    ``density_ftavg_cm3`` -- the radial area-weighted average out to the
+    frame-opening radius the 1D model's single radial cell also spans --
+    rather than the ``n`` rows' legacy core-band line-cut mean. The two
+    comparands are per-time-sample fields on the same time base and are read
+    over the same domain; they differ by the radial weighting alone.
+
 Separately, ``--beta-collapse`` runs the simulation-informed sweep-bias
 diagnostic (HYPOTHESIS ON RECORD 2026-07-22 plus its two addenda) over
 a set of saved reference runs: per
@@ -627,12 +643,100 @@ def _sigma_sys(field, exp_values):
     return np.zeros_like(exp_values)
 
 
-def compare(result, geometry, overlay):
+def _score_samples(field, model_t, exp_t, sem_t, te_exp_t):
+    """Return the scored figures for one port over one set of time samples.
+
+    ``field`` selects the error model: ``Isat`` compares ``n*sqrt(Te)`` on both
+    sides, where the sweep inversion cancels identically and only SEM plus the
+    interferometer calibration survive; ``Te`` carries the fit-window
+    systematic; any other field is a density and carries half the Te
+    systematic through the ``sqrt(Te)`` inversion in quadrature with the
+    calibration term.
+
+    ``model_t``, ``exp_t``, ``sem_t`` and ``te_exp_t`` are the four per-sample
+    arrays on one common time base -- model interpolated onto it, the measured
+    mean, its SEM, and the measured Te used by the systematic model.
+
+    Returns the row's model/measured window means, its ratio, RMS relative
+    deviation, mean ``|dev|/sigma_tot``, the mean ``sigma_tot`` in the row's
+    own units, the mean measured Te over the scored samples, and how many
+    samples were scored. Returns ``None`` when no sample is finite and
+    non-zero on both sides, which is the caller's signal to emit no row.
+    """
+    te_safe = np.maximum(np.abs(te_exp_t), 1e-3)
+    if field == "Isat":
+        exp_t = exp_t * np.sqrt(te_safe)
+        # SEM propagated; systematics: calibration only (the
+        # c_s inversion cancels in n*sqrt(Te)).
+        sem_t = sem_t * np.sqrt(te_safe)
+        sys_t = N_CAL_FRAC * np.abs(exp_t)
+    elif field == "Te":
+        sys_t = _sigma_sys("Te", exp_t)
+    else:
+        sig_te = _sigma_sys("Te", te_exp_t)
+        sys_t = np.abs(exp_t) * np.sqrt(
+            (0.5 * sig_te / te_safe) ** 2 + N_CAL_FRAC**2
+        )
+    err_tot = np.sqrt(sem_t**2 + sys_t**2)
+    good = np.isfinite(exp_t) & np.isfinite(model_t) & (exp_t != 0.0)
+    if not np.any(good):
+        return None
+    return {
+        "model": float(np.mean(model_t[good])),
+        "exp": float(np.mean(exp_t[good])),
+        "ratio": float(np.mean(model_t[good] / exp_t[good])),
+        "rms_rel": float(
+            np.sqrt(np.mean(((model_t - exp_t)[good] / exp_t[good]) ** 2))
+        ),
+        "sigma": float(np.mean(np.abs((model_t - exp_t)[good] / err_tot[good]))),
+        # The row's uncertainty in the ROW'S OWN UNITS -- the window mean of
+        # sigma_tot = sqrt(SEM^2 + sigma_sys^2), the same denominator the
+        # dimensionless `sigma` above divides by pointwise. Carried so a
+        # consumer can express a tolerance as a fraction of the measurement
+        # error without re-deriving the error model; it is measurement-side
+        # (built from exp_t/sem_t/te_exp_t alone) and depends on the model
+        # only through which samples the run's own time coverage admits.
+        # Not printed -- `_report`'s table is unchanged -- and consumed by
+        # --json.
+        "sigma_tot": float(np.mean(err_tot[good])),
+        "te_mean": float(np.mean(te_exp_t[good])),
+        "n_samples": int(np.count_nonzero(good)),
+    }
+
+
+# The flux-tube density row's field label. `density_ftavg_cm3` is the measured
+# density under the overlay's flux-tube convention -- the radial area-weighted
+# average int_0^R 2 pi r n(r) dr / (pi R^2) out to R = `ftavg_radius_cm`, the
+# cathode frame opening the 1D model's single radial cell also spans. The
+# scored `n` row's comparand `density_mean_cm3` is instead the legacy
+# core-band convention: an unweighted line-cut mean over -10 <= x <= 10 cm
+# with no radial weighting. Both are per-time-sample quantities on
+# `density_time_ms`; neither is a time average, and the two differ by the
+# radial weighting alone, not by the window they are read over.
+FTAVG_FIELD = "n_ft"
+FTAVG_DENSITY_KEY = "density_ftavg_cm3"
+
+
+def compare(
+    result, geometry, overlay, plateau_ms=None, density_ftavg=False
+):
     """Return per-port deviation of model Te and density from measurement.
 
     Rung-neutral: every measured quantity, port list and time base is read
     from ``overlay``, so the caller's choice of experiment set is carried
     entirely by which overlay it passes.
+
+    ``plateau_ms`` additionally scores every row a SECOND time over
+    ``(t0, t1)`` intersected with the default domain, and carries the result
+    under the row's ``"plateau"`` key. Left ``None`` no row carries the key
+    and nothing else moves.
+
+    ``density_ftavg`` appends a fourth field, ``FTAVG_FIELD``, comparing the
+    same model density against the overlay's flux-tube-average measured
+    density ``density_ftavg_cm3`` instead of the core-band
+    ``density_mean_cm3`` the ``n`` row uses. Raises ``ValueError`` on an
+    overlay vintage that carries no such field rather than falling back to
+    the core-band comparand under a flux-tube label.
     """
     z_probe = np.asarray(overlay["z_cm"], dtype=float)
     ports = np.asarray(overlay["port"])
@@ -658,6 +762,32 @@ def compare(result, geometry, overlay):
                 "length would attribute a port's spread to the wrong row"
             )
 
+    field_specs = [
+        ("Te", "te_time_ms", "te_mean_ev", "te_sem_ev", "eV"),
+        ("n", "density_time_ms", "density_mean_cm3", "density_total_sem_cm3", "cm^-3"),
+        # I_sat space: n*sqrt(Te) on both sides -- the sweep inversion
+        # cancels identically on the measured side, so this row carries
+        # only SEM + the interferometer calibration.
+        ("Isat", "density_time_ms", "density_mean_cm3", "density_total_sem_cm3", "a.u."),
+    ]
+    if density_ftavg:
+        if FTAVG_DENSITY_KEY not in overlay:
+            raise ValueError(
+                f"overlay carries no {FTAVG_DENSITY_KEY}: the flux-tube "
+                "density row was requested but this overlay vintage exports "
+                "only the core-band convention. Scoring the core-band field "
+                "under a flux-tube label would misname the comparand"
+            )
+        field_specs.append(
+            (
+                FTAVG_FIELD,
+                "density_time_ms",
+                FTAVG_DENSITY_KEY,
+                "density_total_sem_cm3",
+                "cm^-3",
+            )
+        )
+
     rows = []
     # Stage (ii) has no configured window: its comparison domain is the
     # experimental time base intersected with the model's coverage. That
@@ -665,23 +795,40 @@ def compare(result, geometry, overlay):
     # under-covers -- two runs whose traces end at different times average
     # over different windows -- so announce it, once per distinct time base.
     coverage_announced = set()
-    for field, t_key, mean_key, sem_key, unit in (
-        ("Te", "te_time_ms", "te_mean_ev", "te_sem_ev", "eV"),
-        ("n", "density_time_ms", "density_mean_cm3", "density_total_sem_cm3", "cm^-3"),
-        # I_sat space: n*sqrt(Te) on both sides -- the sweep inversion
-        # cancels identically on the measured side, so this row carries
-        # only SEM + the interferometer calibration.
-        ("Isat", "density_time_ms", "density_mean_cm3", "density_total_sem_cm3", "a.u."),
-    ):
+    # The plateau restriction is announced on its own site name: it is a
+    # SECOND window over the same time base, and a run whose trace stops
+    # inside the plateau shortens it exactly the way the coverage clamp
+    # above shortens the default domain.
+    plateau_announced = set()
+    for field, t_key, mean_key, sem_key, unit in field_specs:
         t_exp = np.asarray(overlay[t_key], dtype=float)
         mean = np.asarray(overlay[mean_key], dtype=float)
         sem = np.asarray(overlay[sem_key], dtype=float)
+        if field == FTAVG_FIELD:
+            # The overlay exports no SEM under the flux-tube convention: its
+            # only density SEM, `density_total_sem_cm3`, is the core-band
+            # radial scatter plus the Probe-A area calibration, quoted for
+            # `density_mean_cm3`. The FRACTIONAL error is carried across the
+            # convention instead. That is exact for the calibration term,
+            # which is fractional by construction, and is an APPROXIMATION for
+            # the radial-scatter term, which belongs to the core-band average
+            # and not to the flux-tube quadrature's own propagated weights.
+            # The row's sigma column is therefore a transferred error, not a
+            # measured one; its ratio column is not affected.
+            legacy = np.asarray(overlay["density_mean_cm3"], dtype=float)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                sem = sem * np.where(legacy != 0.0, mean / legacy, np.nan)
         if field == "Isat":
             model_2d = np.asarray(result.n, dtype=float) * np.sqrt(
                 np.maximum(np.asarray(result.Te, dtype=float), 0.0)
             )
         else:
-            model_2d = np.asarray(getattr(result, field), dtype=float)
+            # The flux-tube row scores the SAME model density the `n` row
+            # does: only the MEASURED comparand's radial convention differs,
+            # and the 1D model carries one radial cell spanning exactly the
+            # flux-tube radius, so its density needs no convention change.
+            model_field = "n" if field == FTAVG_FIELD else field
+            model_2d = np.asarray(getattr(result, model_field), dtype=float)
         # Only compare where the experiment has data and the model has run.
         if t_key not in coverage_announced:
             coverage_announced.add(t_key)
@@ -694,57 +841,54 @@ def compare(result, geometry, overlay):
                 f"stage (ii) / {t_key}", "model trace",
             )
         window = (t_exp >= t_model_ms.min()) & (t_exp <= t_model_ms.max())
+        if plateau_ms is not None:
+            if t_key not in plateau_announced:
+                plateau_announced.add(t_key)
+                _clamp_window_bound(
+                    float(plateau_ms[0]), float(t_model_ms.min()), "start",
+                    f"stage (ii) plateau / {t_key}", "model trace",
+                )
+                _clamp_window_bound(
+                    float(plateau_ms[1]), float(t_model_ms.max()), "end",
+                    f"stage (ii) plateau / {t_key}", "model trace",
+                )
+            plateau_window = (
+                window
+                & (t_exp >= float(plateau_ms[0]))
+                & (t_exp <= float(plateau_ms[1]))
+            )
         for p, (z, port) in enumerate(zip(z_probe, ports)):
             iz = int(np.argmin(np.abs(z_model - z)))
             model_t = np.interp(t_exp[window], t_model_ms, model_2d[:, iz])
             exp_t = mean[p, window]
             sem_t = sem[p, window]
             te_exp_t = np.interp(t_exp[window], te_t, te_mean_2d[p])
-            te_safe = np.maximum(np.abs(te_exp_t), 1e-3)
-            if field == "Isat":
-                exp_t = exp_t * np.sqrt(te_safe)
-                # SEM propagated; systematics: calibration only (the
-                # c_s inversion cancels in n*sqrt(Te)).
-                sem_t = sem_t * np.sqrt(te_safe)
-                sys_t = N_CAL_FRAC * np.abs(exp_t)
-            elif field == "Te":
-                sys_t = _sigma_sys("Te", exp_t)
-            else:
-                sig_te = _sigma_sys("Te", te_exp_t)
-                sys_t = np.abs(exp_t) * np.sqrt(
-                    (0.5 * sig_te / te_safe) ** 2 + N_CAL_FRAC**2
-                )
-            err_tot = np.sqrt(sem_t**2 + sys_t**2)
-            good = np.isfinite(exp_t) & np.isfinite(model_t) & (exp_t != 0.0)
-            if not np.any(good):
+            scored = _score_samples(field, model_t, exp_t, sem_t, te_exp_t)
+            if scored is None:
                 continue
-            ratio = float(np.mean(model_t[good] / exp_t[good]))
-            rel = float(np.sqrt(np.mean(((model_t - exp_t)[good] / exp_t[good]) ** 2)))
-            sigma = float(np.mean(np.abs((model_t - exp_t)[good] / err_tot[good])))
-            # The row's uncertainty in the ROW'S OWN UNITS -- the window mean of
-            # sigma_tot = sqrt(SEM^2 + sigma_sys^2), the same denominator the
-            # dimensionless `sigma` above divides by pointwise. Carried so a
-            # consumer can express a tolerance as a fraction of the measurement
-            # error without re-deriving the error model; it is measurement-side
-            # (built from exp_t/sem_t/te_exp_t alone) and depends on the model
-            # only through `window` and `good`, i.e. through which samples the
-            # run's own time coverage admits. Not printed -- `_report`'s table
-            # is unchanged -- and consumed by --json.
-            sigma_tot = float(np.mean(err_tot[good]))
+            ratio = scored["ratio"]
+            rel = scored["rms_rel"]
+            sigma = scored["sigma"]
+            sigma_tot = scored["sigma_tot"]
             # Secondary criterion (unchanged): the measured Te regime. It
             # still covers the n rows, which inherit the doubt through the
-            # sqrt(Te) sweep inversion.
-            te_low = field in ("Te", "n") and float(
-                np.mean(te_exp_t[good])
-            ) < TE_SEMIQUANT_EV
+            # sqrt(Te) sweep inversion -- the flux-tube density row inherits
+            # it on the same grounds.
+            te_low = field in ("Te", "n", FTAVG_FIELD) and (
+                scored["te_mean"] < TE_SEMIQUANT_EV
+            )
             # Primary criterion: the refit-window spread. The Te rows take it
             # at full strength; the n rows at half, since n ~ Isat/sqrt(Te)
             # maps a fractional Te spread S onto a fractional n spread ~ S/2.
             # Both are tested against the same registered threshold.
-            spread_applies = spread_frac is not None and field in ("Te", "n")
+            spread_applies = spread_frac is not None and field in (
+                "Te", "n", FTAVG_FIELD
+            )
             spread_te = float(spread_frac[p]) if spread_applies else np.nan
             spread_eff = spread_te * (
-                N_SPREAD_FROM_TE_SPREAD if field == "n" else 1.0
+                N_SPREAD_FROM_TE_SPREAD
+                if field in ("n", FTAVG_FIELD)
+                else 1.0
             )
             spread_high = bool(
                 np.isfinite(spread_eff) and spread_eff > TE_SPREAD_SEMIQUANT_FRAC
@@ -755,26 +899,43 @@ def compare(result, geometry, overlay):
             spread_undetermined = bool(
                 spread_applies and not np.isfinite(spread_te)
             )
-            rows.append(
-                {
-                    "field": field,
-                    "unit": unit,
-                    "port": str(port),
-                    "z": float(z),
-                    "model": float(np.mean(model_t[good])),
-                    "exp": float(np.mean(exp_t[good])),
-                    "ratio": ratio,
-                    "rms_rel": rel,
-                    "sigma": sigma,
-                    "sigma_tot": sigma_tot,
-                    # Union of the two criteria, so re-basing cannot un-flag.
-                    "semiquant": bool(te_low or spread_high),
-                    "semiquant_te": bool(te_low),
-                    "semiquant_spread": spread_high,
-                    "spread_undetermined": spread_undetermined,
-                    "spread_gated": spread_frac is not None,
-                }
-            )
+            row = {
+                "field": field,
+                "unit": unit,
+                "port": str(port),
+                "z": float(z),
+                "model": scored["model"],
+                "exp": scored["exp"],
+                "ratio": ratio,
+                "rms_rel": rel,
+                "sigma": sigma,
+                "sigma_tot": sigma_tot,
+                # Union of the two criteria, so re-basing cannot un-flag.
+                "semiquant": bool(te_low or spread_high),
+                "semiquant_te": bool(te_low),
+                "semiquant_spread": spread_high,
+                "spread_undetermined": spread_undetermined,
+                "spread_gated": spread_frac is not None,
+            }
+            if plateau_ms is not None:
+                # The same row scored over the plateau alone. The
+                # semi-quantitative verdicts are NOT recomputed here: they are
+                # the row's, and a window that excludes the sub-eV samples
+                # would silently un-flag a row the default domain flags.
+                model_pl = np.interp(
+                    t_exp[plateau_window], t_model_ms, model_2d[:, iz]
+                )
+                te_pl = np.interp(
+                    t_exp[plateau_window], te_t, te_mean_2d[p]
+                )
+                row["plateau"] = _score_samples(
+                    field,
+                    model_pl,
+                    mean[p, plateau_window],
+                    sem[p, plateau_window],
+                    te_pl,
+                )
+            rows.append(row)
     return rows
 
 
@@ -1229,6 +1390,14 @@ def compare_decay_interferometer(result, overlay, window_ms=DECAY_WINDOW_MS):
 # (quasi-static kinetic neutrals; afterglow unscored).
 
 BETA_PLATEAU_MS = (15.0, 19.5)
+
+# Stage (ii) plateau window on the main-discharge clock [ms]. This is not a
+# new window: it is the drive plateau `BETA_PLATEAU_MS` already names, and the
+# same span `compare_peak_current` reads its late-window current over, so a
+# plateau-only stage (ii) row is commensurate with the plateau current row
+# printed above it and with the beta-collapse plateau points.
+PLATEAU_MS = BETA_PLATEAU_MS
+
 BETA_AFTERGLOW_MS = (20.5, 25.0)
 BETA_LICENSE_SIGMA = 2.0
 BETA_ISAT_AREA_FRAC = 0.5 * TE_SYS_FRAC  # addendum (ii): probe-area term
@@ -2140,7 +2309,18 @@ def _report_decay_interferometer(rows, skip_reason, window, clock_offset=None):
     print("    ('=' marks the chord that coincides with its probe port.)")
 
 
-def _report(label, rows, es=1):
+def _report(label, rows, es=1, plateau_ms=None):
+    """Print the stage (ii) table.
+
+    ``plateau_ms`` appends the two plateau-only scoring columns and their
+    per-field summary, reading the ``"plateau"`` block ``compare`` attaches
+    when it is asked for the same window. Left ``None`` the table renders
+    exactly the columns it always did.
+
+    A ``FTAVG_FIELD`` row set in ``rows`` additionally prints the flux-tube
+    convention legend; the rows themselves need no flag here, since a row set
+    that was not requested is simply absent.
+    """
     print(f"\n--- stage (ii): bulk Te / density at the ES{es} ports ---")
     spread_gated = any(r.get("spread_gated") for r in rows)
     if spread_gated:
@@ -2153,10 +2333,38 @@ def _report(label, rows, es=1):
     else:
         print("  (sigma = |dev|/sigma_tot, SEM (+) sweep systematics; '~' marks")
         print("   semi-quantitative rows where measured Te < 1 eV)")
+    if any(r["field"] == FTAVG_FIELD for r in rows):
+        print(
+            f"  ('{FTAVG_FIELD}' rows compare the same model density against "
+            f"the overlay's {FTAVG_DENSITY_KEY}, the FLUX-TUBE average out to"
+        )
+        print(
+            "   the frame-opening radius, in place of the 'n' rows' legacy "
+            "core-band line-cut mean;"
+        )
+        print(
+            "   both are per-time-sample fields on the same time base. The "
+            f"{FTAVG_FIELD} sigma is the 'n' row's"
+        )
+        print(
+            "   fractional error carried across the convention -- the overlay "
+            "exports no flux-tube density SEM.)"
+        )
+    if plateau_ms is not None:
+        print(
+            f"  (the '@pl' columns re-score each row over the drive plateau "
+            f"{plateau_ms[0]:g}-{plateau_ms[1]:g} ms alone, intersected"
+        )
+        print(
+            "   with the same model coverage; the columns left of them are "
+            "the default full-coverage domain.)"
+        )
     header = (
         f"{'field':>5} {'port':>6} {'z [cm]':>8} {'model':>11} {'measured':>11} "
         f"{'ratio':>7} {'rms rel':>8} {'|dev|/sig':>10}"
     )
+    if plateau_ms is not None:
+        header += f" {'ratio@pl':>9} {'|dev|/sig@pl':>13} {'n@pl':>5}"
     print(header)
     print("-" * len(header))
     for r in rows:
@@ -2172,12 +2380,31 @@ def _report(label, rows, es=1):
             marks = "~" if r.get("semiquant") else ""
         # Min-width 1 keeps the un-marked and single-marked rows rendering
         # exactly as they did before the spread criterion existed.
-        print(
+        line = (
             f"{r['field']:>5} {r['port']:>6} {r['z']:8.0f} {r['model']:11.4g} "
             f"{r['exp']:11.4g} {r['ratio']:7.2f} {r['rms_rel']:8.2f} "
             f"{r['sigma']:9.1f}{marks:<1}"
         )
-    for field in ("Te", "n", "Isat"):
+        if plateau_ms is not None:
+            pl = r.get("plateau")
+            if pl is None:
+                # No sample of the plateau survived on both sides. Printed as
+                # absent rather than as a number, so a row scored over an
+                # empty plateau cannot be read as one that scored well.
+                line += f" {'--':>9} {'--':>13} {0:5d}"
+            else:
+                line += (
+                    f" {pl['ratio']:9.2f} {pl['sigma']:13.1f} "
+                    f"{pl['n_samples']:5d}"
+                )
+        print(line)
+    # Ordered over the fields actually present, so a requested extra row set
+    # gets its summary and the default three render in their own order.
+    summary_fields = []
+    for r in rows:
+        if r["field"] not in summary_fields:
+            summary_fields.append(r["field"])
+    for field in summary_fields:
         sub = [r for r in rows if r["field"] == field]
         if sub:
             print(
@@ -2185,6 +2412,27 @@ def _report(label, rows, es=1):
                 f"mean rms rel {np.mean([r['rms_rel'] for r in sub]):.2f}, "
                 f"mean |dev|/sig {np.mean([r['sigma'] for r in sub]):.1f}"
             )
+            if plateau_ms is not None:
+                pls = [r["plateau"] for r in sub if r.get("plateau") is not None]
+                if pls:
+                    print(
+                        f"  {field} plateau "
+                        f"({plateau_ms[0]:g}-{plateau_ms[1]:g} ms): mean ratio "
+                        f"{np.mean([q['ratio'] for q in pls]):.2f}, "
+                        f"mean rms rel "
+                        f"{np.mean([q['rms_rel'] for q in pls]):.2f}, "
+                        f"mean |dev|/sig "
+                        f"{np.mean([q['sigma'] for q in pls]):.1f} "
+                        f"[{len(pls)}/{len(sub)} port(s), "
+                        f"{min(q['n_samples'] for q in pls)}-"
+                        f"{max(q['n_samples'] for q in pls)} samples]"
+                    )
+                else:
+                    print(
+                        f"  {field} plateau "
+                        f"({plateau_ms[0]:g}-{plateau_ms[1]:g} ms): no port "
+                        f"scored -- the plateau admitted no sample"
+                    )
         if len(sub) >= 2:
             # Axial-gradient figure of merit: far-port / near-port ratio.
             # 1.00 means the model's axial falloff matches the measured one
@@ -2390,6 +2638,37 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
+        "--window",
+        default="full",
+        choices=("full", "plateau"),
+        help=(
+            "stage (ii) scoring domain. 'full' (default) is the experimental "
+            "time base intersected with the model's coverage, which mixes the "
+            "rise and the plateau; 'plateau' additionally re-scores every "
+            f"stage (ii) row over {PLATEAU_MS[0]:g}-{PLATEAU_MS[1]:g} ms "
+            "alone and prints it in two extra columns beside the default, so "
+            "the two domains are read side by side. Stages (i) and (iii) are "
+            "unaffected: stage (i) reports a peak and already carries its own "
+            "plateau current row, and stage (iii) has its own configured "
+            "afterglow window, which the plateau does not overlap"
+        ),
+    )
+    parser.add_argument(
+        "--density-ftavg",
+        action="store_true",
+        help=(
+            f"add a '{FTAVG_FIELD}' stage (ii) row set scoring the model "
+            f"density against the overlay's {FTAVG_DENSITY_KEY}, the "
+            "FLUX-TUBE average out to the frame-opening radius the 1D "
+            "model's single radial cell also spans, in place of the 'n' "
+            "rows' legacy core-band line-cut comparand. Both comparands are "
+            "per-time-sample fields on the same time base and are read over "
+            "the same domain; they differ by the radial weighting alone. The "
+            "row's sigma is the 'n' row's fractional error carried across the "
+            "convention, since the overlay exports no flux-tube density SEM"
+        ),
+    )
+    parser.add_argument(
         "--beta-collapse",
         nargs="*",
         default=None,
@@ -2563,8 +2842,15 @@ def main(argv=None):
     # row objects the table rendered; nothing is scored twice.
     peak = compare_peak_current(result, overlay)
     _report_peak_current(peak)
-    rows = compare(result, geometry, overlay)
-    _report(label, rows, es=args.es)
+    plateau_ms = PLATEAU_MS if args.window == "plateau" else None
+    rows = compare(
+        result,
+        geometry,
+        overlay,
+        plateau_ms=plateau_ms,
+        density_ftavg=args.density_ftavg,
+    )
+    _report(label, rows, es=args.es, plateau_ms=plateau_ms)
     decay_rows, window = compare_decay(result, overlay, window_ms=args.decay_window)
     _report_decay(decay_rows, window)
     face_rows, face_skip = compare_decay_faces(
