@@ -109,8 +109,12 @@ def refuse_rung_supersession(driver, es, rung_owned, stance,
 
     ``rung_owned`` maps each :data:`RUNG_OWNED_LIVE` key to the value the rung
     gave it, snapshotted before any layer above it. ``stance`` is the loaded
-    configuration. ``cli_supplied`` names the keys this command line supplied
-    ABOVE that layer and ``resolved`` is the params mapping the driver has
+    configuration, or ``None`` for a run that names none: a rung-owned key is
+    the rung's whether or not a configuration is layered over it, so the
+    command-line half of this check applies to an unstanced run too, and the
+    message then carries no stance clause because there is no stance to name.
+    ``cli_supplied`` names the keys this command line supplied ABOVE that
+    layer and ``resolved`` is the params mapping the driver has
     finished resolving -- stance layer and command-line layer both applied --
     from which each such key's command-line value is read. CONSENT IS
     RESTATEMENT: a command line consents to the layering by naming the RUNG's
@@ -133,7 +137,7 @@ def refuse_rung_supersession(driver, es, rung_owned, stance,
     """
     for key in RUNG_OWNED_LIVE:
         rung_value = rung_owned[key]
-        in_stance = key in stance.params
+        in_stance = stance is not None and key in stance.params
         if key in cli_supplied:
             if values_equal(resolved[key], rung_value):
                 continue
@@ -141,14 +145,21 @@ def refuse_rung_supersession(driver, es, rung_owned, stance,
                 f" The stance {stance.name} ({stance.path}) names it too, "
                 f"as {key}={stance.params[key]!r}." if in_stance else ""
             )
+            consents = (
+                "A command line consents to the "
+                "stance layering by RESTATING the rung value; no other "
+                "value is one it can state."
+                if stance is not None else
+                "A command line consents to the "
+                "rung by RESTATING its value; no other "
+                "value is one it can state."
+            )
             raise ValueError(
                 f"{driver}: the command line sets {key}={resolved[key]!r}, "
                 f"which is not the --es {es} rung value "
                 f"{key}={rung_value!r}.{also} This run would be labelled "
                 f"ES{es} and scored against ES{es} data while carrying "
-                f"another rung's {key}. A command line consents to the "
-                "stance layering by RESTATING the rung value; no other "
-                "value is one it can state. Fix: pass "
+                f"another rung's {key}. " + consents + " Fix: pass "
                 + restatement.format(key=key, value=rung_value)
                 + f" to consent at the rung value, or run the --es rung "
                 f"whose {key} is the one this command line wants."
@@ -395,11 +406,13 @@ def main(argv=None):
     # offers no switch that layers a param above the stance, so there is no
     # restatement route: a configuration that names a rung-owned key is
     # refused, and the command line's way of saying it meant that value is
-    # --no-stance.
-    if stance is not None:
-        refuse_rung_supersession(
-            "run_mechanism_ladder", args.es, rung_owned, stance,
-        )
+    # --no-stance. The guard runs on the --no-stance route too, for one
+    # implementation on both routes of both drivers; here it can only be
+    # inert, because the only thing it judges on an unstanced run is a
+    # command-line layer above the rung and this driver has no --extra.
+    refuse_rung_supersession(
+        "run_mechanism_ladder", args.es, rung_owned, stance,
+    )
 
     result, geometry, params, flags = run_model(
         nx=args.nx, extra=extra, flags_extra=flags_extra or None,

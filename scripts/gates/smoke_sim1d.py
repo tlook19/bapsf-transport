@@ -23485,8 +23485,10 @@ def _case_configuration_drivers_refuse_rung_owned_supersession():
                 "--save-h5", _ro_h5,
             ])
 
-            # (v) --no-stance is UNCHANGED: with no stance layer there is
-            # nothing above the rung to supersede it, and the guard is inert.
+            # (v) --no-stance ON THE LADDER is inert: with no stance layer
+            # there is nothing above the rung to supersede it, and this
+            # driver has no --extra with which a command line could put
+            # something there, so its unstanced route cannot trip the guard.
             _ro_passed(_ro_ladder.main, [
                 "--es", "1", "--warming", "none", "--no-stance",
                 "--save-h5", _ro_h5,
@@ -23537,10 +23539,48 @@ def _case_configuration_drivers_refuse_rung_owned_supersession():
             assert "177.843" in _ro_msg_third, _ro_msg_third
             assert "names it too" not in _ro_msg_third, _ro_msg_third
             assert "--extra V_bank=177.843" in _ro_msg_third, _ro_msg_third
+
+            # (viii) AND THE SAME ON --no-stance, WHICH DROPS THE
+            # CONFIGURATION LAYER, NOT THE RUNG. The run is still labelled
+            # ES1 and still scored against ES1 data, so an --extra that moves
+            # a rung-owned key off its rung mislabels it exactly as it does
+            # under a stance. Both keys, refused off the rung and consenting
+            # at it, with a non-rung-owned key to show the guard still
+            # refuses supersession rather than --extra.
+            for _ro_key, _ro_off, _ro_rung in (
+                ("V_bank", "42.0", "177.843"),
+                ("cathode_Ts_base_K", "1500.0", "1910.0"),
+            ):
+                _ro_msg_ns = _ro_refused(_ro_m6.main, [
+                    "--es", "1", "--no-stance", "--sgp", "9010",
+                    "--extra", f"{_ro_key}={_ro_off}", "--save-h5", _ro_h5,
+                ])
+                assert "run_m6_point:" in _ro_msg_ns, _ro_msg_ns
+                assert _ro_key in _ro_msg_ns, _ro_msg_ns
+                assert _ro_off in _ro_msg_ns, _ro_msg_ns   # the command line's
+                assert _ro_rung in _ro_msg_ns, _ro_msg_ns  # the rung's
+                # No stance to name, so the refusal names none -- neither a
+                # second holder of the key nor a stance layer to consent to.
+                assert "names it too" not in _ro_msg_ns, _ro_msg_ns
+                assert "stance" not in _ro_msg_ns, _ro_msg_ns
+                assert (f"--extra {_ro_key}={_ro_rung}"
+                        in _ro_msg_ns), _ro_msg_ns
+                # Restating the rung value consents, unstanced as stanced.
+                _ro_passed(_ro_m6.main, [
+                    "--es", "1", "--no-stance", "--sgp", "9010",
+                    "--extra", f"{_ro_key}={_ro_rung}", "--save-h5", _ro_h5,
+                ])
+            # A key the rung does not own is --extra's to set on an unstanced
+            # run, at any value: the guard is about the ES label, not about
+            # overrides.
+            _ro_passed(_ro_m6.main, [
+                "--es", "1", "--no-stance", "--sgp", "9010",
+                "--extra", "S_gp=1234.0", "--save-h5", _ro_h5,
+            ])
         finally:
             _ro_ladder.run_model, _ro_m6.run_model = _ro_saved
 
-    # (viii) CONSENT AND IDENTITY AGREE ON THE SPELLING. The guard's equality
+    # (ix) CONSENT AND IDENTITY AGREE ON THE SPELLING. The guard's equality
     # is exact and typeless, so ``1910`` consents to a rung value of
     # ``1910.0`` -- but ``config_identity`` hashes the canonical JSON of the
     # resolved configuration, where the two are different bytes. Consent
