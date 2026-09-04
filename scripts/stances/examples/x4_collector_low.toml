@@ -1,0 +1,63 @@
+# THE COLLECTOR FAST SHARE, LOW ARM: the reference configuration with a fifth
+# of the far-end return re-born fast instead of thermal.
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: everything the reference decides -- the measured machine, the
+# operating point, the drive calibration, the beam closure, the neutral
+# closure and its two electrode jets, the initial neutral state -- is
+# inherited, so this file cannot drift from the reference and a reader can see
+# the whole difference between the two arms at a glance.
+#
+# WHAT IT IS FOR. The reference's collector rebirth is 100 % THERMAL: the
+# plasma flux the characteristic boundary removes at the far end comes back
+# into the end cell as a cosine half-flux at the 300 K wall temperature, so
+# every ion that reaches the collector is handed back as a room-temperature
+# atom no matter what it arrived with. This arm asks what changes when a share
+# of that return leaves the plate FAST instead, on the same footing the
+# cathode and anode jets already stand on. It is the low arm of a two-arm
+# bracket; its partner is x4_collector_high.toml.
+#
+# WHAT THE THREE NUMBERS MEAN. R_N is the PARTICLE share that leaves fast and
+# R_E the share of the ARRIVAL ENERGY that leaves with it, so each launched
+# atom carries R_E/R_N of the per-ion arrival energy. Neither is a reflection
+# coefficient off a material and they are not ordered: R_E above R_N is a
+# legal statement here and means each launched atom leaves with more than the
+# mean arrival energy per collected ion. The arrival energy itself is
+# PRESCRIBED -- sheath_Te_multiple times the end cell's Te, plus its Ti --
+# because this model carries no collector sheath and no collector circuit, so
+# there is no potential to solve and the multiple is the whole statement about
+# one. It is a floating-sheath CONVENTION this file states, not a measurement.
+#
+# HOW TO RUN IT:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/x4_collector_low.toml \
+#         --output x4_collector_low.h5
+#
+# The saved trajectory records the lineage -- this file's name, "g1atrim" as
+# its base, both files' sha256, the delta keys below, and the resolved
+# configuration's identity -- so the arm is identifiable from its artifact
+# alone.
+#
+# WHAT THIS IS NOT: a calibration. No number here is fitted to anything, and
+# the pair of arms is a BRACKET rather than a value.
+base = "g1atrim"
+
+
+# WHY THESE STAND FLAT AND NOT IN A [models.*] BLOCK. None of the four keys is
+# a member of a declared family: the reference's [models.neutral_closure] block
+# claims the fluid-wind machinery the DVM supersedes, and these belong to the
+# DVM's own collector channel, which no family selects for or against.
+#
+# T_launch_eV is NOT set, so the launch smear stays tied to the velocity grid
+# -- the axial bin containing the launch speed, which is the narrowest spectrum
+# the grid resolves there and the value the channel is specified at.
+[input_dict]
+# The arm. Off in the reference, where the whole far-end return is thermal.
+neutral_kinetic_dvm_collector_jet = true
+# A fifth of the returning particles leave fast, carrying three tenths of the
+# arrival energy between them.
+neutral_kinetic_dvm_collector_jet_R_N = 0.2
+neutral_kinetic_dvm_collector_jet_R_E = 0.3
+# The prescribed floating-sheath convention: an ion arrives with 3 Te + Ti.
+neutral_kinetic_dvm_collector_jet_sheath_Te_multiple = 3.0
