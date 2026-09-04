@@ -330,6 +330,141 @@ LEDGER_BOOKKEEPING = (
     "energy",
 )
 
+# The PARTICLE rows of the ledger above, in the order the saved
+# ``dvm_particle_ledger`` group carries them. FLOW rows are counts of ATOMS
+# that passed through a channel during one tick and are therefore additive
+# over any span of ticks; STATE rows are counts of ATOMS standing at the
+# instant the tick ended and are not. The remaining ledger entries are none of
+# these -- a time, a cell count, a signed momentum, the nested energy ledger --
+# and are excluded from both.
+#
+# Membership is DERIVED from the channel tuples above rather than restated, so
+# a channel added there is exported without a second edit and cannot become a
+# silently unexported row.
+LEDGER_PARTICLE_FLOW_KEYS = (
+    tuple(f"loss_{name}" for name in LEDGER_LOSS_CHANNELS)
+    + ("loss_pump_L", "loss_pump_R")
+    + tuple(f"birth_{name}" for name in LEDGER_BIRTH_CHANNELS)
+    + ("ion_booked",)
+)
+LEDGER_PARTICLE_STATE_KEYS = ("inventory", "ion_debt_carried")
+# The saved group's own row order: the frame's time and how many ticks it
+# covers, then the flow rows, then the state rows.
+LEDGER_PARTICLE_FRAME_KEYS = (
+    ("time", "ticks") + LEDGER_PARTICLE_FLOW_KEYS + LEDGER_PARTICLE_STATE_KEYS
+)
+#: What each row of that group is, as ``name -> (unit, meaning)``. It is the
+#: text the saved file carries in its own attributes, so a reader of the
+#: artifact needs neither this module nor the plan that asked for it.
+LEDGER_PARTICLE_ROW_DOC = {
+    "time": ("s", "elapsed time at this save frame"),
+    "ticks": (
+        "ticks",
+        "neutral clock ticks this frame's flow rows sum over; zero on a frame "
+        "no tick fell in, whose flow rows are then zero because nothing "
+        "happened rather than because nothing was recorded",
+    ),
+    "loss_ionization": (
+        "atoms",
+        "column neutrals the marched ionization operator destroyed",
+    ),
+    "loss_cx": (
+        "atoms", "neutrals charge exchange removed; returned as birth_cx"
+    ),
+    "loss_elastic": (
+        "atoms",
+        "neutrals the elastic operator removed; returned as birth_elastic",
+    ),
+    "loss_wall": (
+        "atoms",
+        "landings on the cylindrical wall; returned as "
+        "birth_wall_accommodated + birth_wall_reflected",
+    ),
+    "loss_mesh_blocked": (
+        "atoms",
+        "flux the anode mesh intercepted; returned as birth_mesh_reemit",
+    ),
+    "loss_baffle_blocked": (
+        "atoms",
+        "annulus flux an annular baffle face intercepted; returned as "
+        "birth_baffle_reemit",
+    ),
+    "loss_closed_face_blocked": (
+        "atoms",
+        "flux an interior closed face stopped; returned as "
+        "birth_closed_face_reemit",
+    ),
+    "loss_end_out_L": ("atoms", "flux crossing the left end plane"),
+    "loss_end_out_R": ("atoms", "flux crossing the right end plane"),
+    "loss_pump_L": (
+        "atoms", "the pumped share of loss_end_out_L; leaves the domain"
+    ),
+    "loss_pump_R": (
+        "atoms", "the pumped share of loss_end_out_R; leaves the domain"
+    ),
+    "birth_cx": ("atoms", "charge-exchange neutrals born on the ion spectrum"),
+    "birth_elastic": (
+        "atoms",
+        "elastically scattered neutrals re-emitted on the ion spectrum",
+    ),
+    "birth_wall_accommodated": (
+        "atoms",
+        "the accommodated share of loss_wall, re-emitted at the wall "
+        "temperature",
+    ),
+    "birth_wall_reflected": (
+        "atoms", "the non-accommodated share of loss_wall"
+    ),
+    "birth_mesh_reemit": ("atoms", "loss_mesh_blocked re-emitted by the mesh"),
+    "birth_baffle_reemit": (
+        "atoms", "loss_baffle_blocked re-emitted by the baffle face"
+    ),
+    "birth_closed_face_reemit": (
+        "atoms", "loss_closed_face_blocked re-emitted by the closed face"
+    ),
+    "birth_end_return_L": (
+        "atoms", "the left end plane's lagged return buffer released"
+    ),
+    "birth_end_return_R": (
+        "atoms", "the right end plane's lagged return buffer released"
+    ),
+    "birth_puff": ("atoms", "the configured gas puff"),
+    "birth_recombination": ("atoms", "neutrals from volume recombination"),
+    "birth_cathode_face": (
+        "atoms",
+        "thermal recycle at the cathode face, less the birth_cathode_jet "
+        "share split out of it",
+    ),
+    "birth_cathode_jet": (
+        "atoms",
+        "the energetic backscatter share split out of the cathode face",
+    ),
+    "birth_collector_face": ("atoms", "recycle at the collector face"),
+    "birth_anode": (
+        "atoms",
+        "thermal recycle at the anode, less the birth_anode_jet share split "
+        "out of it",
+    ),
+    "birth_anode_jet": (
+        "atoms", "the energetic backscatter share split out of the anode"
+    ),
+    "ion_booked": (
+        "atoms",
+        "the ionization count the plasma handed the engine to debit, which "
+        "loss_ionization is the marched part of",
+    ),
+    "inventory": (
+        "atoms",
+        "domain inventory at this frame, including the lagged end-return "
+        "buffers",
+    ),
+    "ion_debt_carried": (
+        "atoms",
+        "ionization the plasma booked that the kinetic state has not yet "
+        "surrendered, standing at this frame",
+    ),
+}
+
 # The ENERGY ledger, carried in the ``"energy"`` entry of every ledger the
 # engine emits, in erg. Every entry is the kinetic-energy moment
 # ``sum(counts * (1/2) m |v|^2)`` of exactly the per-bin particle array its

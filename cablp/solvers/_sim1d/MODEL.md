@@ -763,6 +763,16 @@ because charge exchange and elastic scattering return their atoms to the same
 cell within the tick, that count is measured against the inventory the cell
 holds *after* those returns (`NUMERICS.md` § "The counted ionization debit").
 
+**Where the atoms came from.** The engine books every birth and every loss of
+the tick by channel, and an engaged run exports those counts at save cadence
+in the HDF5 group `dvm_particle_ledger`: one row per channel in atoms summed
+over the ticks the frame covers — the surface recycle streams separately from
+the puff, the end returns, the wall and the pump — plus the standing inventory
+and outstanding ionization debt at the frame. This is the only place the
+attribution survives: once the arm supersedes the moment closure the fluid
+$n_n$ rows are stripped, so a saved trajectory shows the neutral density at a
+station without saying which channel put it there.
+
 
 ### The distribution the arm evolves, and why it carries two velocity coordinates
 

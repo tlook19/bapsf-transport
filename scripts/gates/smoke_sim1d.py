@@ -24068,6 +24068,152 @@ def _case_ts_retirement_successor_key(p2z_flags, p2z_params):
 
 
 # --------------------------------------------------------------------
+# dvm-particle-ledger-export
+# --------------------------------------------------------------------
+@_case("dvm-particle-ledger-export", historical_stance=True)
+def _case_dvm_particle_ledger_export(kd_flags, kd_params):
+    # The engine computes a per-tick PARTICLE ledger and the solver kept only
+    # the last one, so the far-end column neutrals could not be attributed to
+    # the collector face, the puff or the wall return from any saved run. The
+    # export books those counts at save cadence. Four statements: the moment
+    # path writes no such group at all, a DVM run carries every declared row
+    # with finite values, the rows are the ENGINE's own numbers rather than a
+    # re-derivation (the internal channels' partners still cancel and every
+    # tick lands in exactly one frame), and the group round-trips through the
+    # file carrying its own documentation.
+    from cablp.solvers._sim1d.physics.kinetic_dvm import (
+        LEDGER_PARTICLE_FLOW_KEYS as _PL_FLOW_KEYS,
+        LEDGER_PARTICLE_FRAME_KEYS as _PL_FRAME_KEYS,
+        LEDGER_PARTICLE_ROW_DOC as _PL_ROW_DOC,
+    )
+    from cablp.solvers._sim1d.results.io import (
+        save_result_hdf5 as _save_result_hdf5_pl,
+    )
+
+    # The K2d observation geometry: the shipped collector block is a 7.8 cm
+    # cell, which this case's fixed dt = 1 ns steps cannot afford.
+    pl_params = dict(kd_params)
+    pl_params.update(
+        {
+            "Lm": 2000.0,
+            "plenum_length_cm": 100.0,
+            "collector_length_cm": 100.0,
+            "gas_puff_z_cm": 60.0,
+            "Rp": 15.0,
+            "R_cath": 15.0,
+            "Rcs": 40.0,
+            "Lcs": 25.0,
+            "Rsup": 0.0,
+            "end_expansion_cells": 10,
+            "end_expansion_machine_radius_cm": 100.0,
+            "end_expansion_plasma_radius_cm": 15.0,
+            "cathode_anode_gap_cm": 50.0,
+            "source_region_length_cm": 100.0,
+            "source_region_dz_cm": 10.0,
+            "dt_save": 5.0e-9,
+        }
+    )
+    pl_flags = dict(kd_flags)
+    pl_flags["end_expansion_geometry"] = True
+    pl_flags["source_fixed_grid"] = True
+
+    # The moment control, differing from the DVM build below in neutral_model
+    # and nothing else, so a layout difference between the two files can be
+    # nothing else either.
+    pl_mom_params = dict(pl_params)
+    pl_mom_params["neutral_model"] = "moment"
+    pl_mom_sim = LAPDSim1D(pl_mom_params, dict(pl_flags))
+    assert pl_mom_sim._dvm is None
+    pl_mom_result = pl_mom_sim.run(t_end=2.0e-8, dt=1.0e-9)
+    assert not hasattr(pl_mom_result, "dvm_particle_ledger")
+
+    pl_sim = LAPDSim1D(dict(pl_params), dict(pl_flags))
+    for _ in range(8):
+        pl_sim.advance_one_step(dt=1.0e-9)
+    assert pl_sim._dvm_engaged
+    # Ticks fired before the first save frame of the run below, which is
+    # exactly what the accumulator has to carry into it.
+    pl_pre_ticks = pl_sim._dvm_tick_count
+    assert pl_pre_ticks > 0
+    pl_result = pl_sim.run(t_end=pl_sim.time + 4.0e-8, dt=1.0e-9)
+    pl = pl_result.dvm_particle_ledger
+
+    # Every declared row, and nothing else.
+    assert set(pl) == set(_PL_FRAME_KEYS)
+    assert set(_PL_ROW_DOC) == set(_PL_FRAME_KEYS)
+    pl_saves = len(pl_result.time)
+    assert pl_saves > 1
+    for pl_name in _PL_FRAME_KEYS:
+        pl_row = pl[pl_name]
+        assert pl_row.shape == (pl_saves,), pl_name
+        assert np.all(np.isfinite(pl_row)), pl_name
+    # At save cadence, on the file's own clock.
+    assert np.array_equal(pl["time"], pl_result.time)
+    # EVERY tick lands in exactly one frame -- including the ones that fired
+    # before the run's first save -- so the flow rows partition the run
+    # rather than sampling it.
+    assert pl["ticks"].sum() == pl_result.dvm_tick_count
+    assert pl["ticks"].sum() > pl_pre_ticks
+    assert np.all(pl["ticks"] >= 0.0)
+    # The ENGINE's numbers, not a re-derivation: an internal channel is a
+    # loss and its equal-and-opposite birth, and the pair still cancels after
+    # the summing.
+    assert np.array_equal(pl["birth_mesh_reemit"], pl["loss_mesh_blocked"])
+    assert np.allclose(
+        pl["birth_wall_accommodated"] + pl["birth_wall_reflected"],
+        pl["loss_wall"],
+        rtol=1.0e-12,
+        atol=0.0,
+    )
+    # The state rows are read AT the frame, not summed over it.
+    assert pl["inventory"][-1] == pl_sim._dvm.total_inventory()
+    assert pl["inventory"][-1] > 0.0
+
+    with tempfile.TemporaryDirectory() as pl_dir:
+        pl_mom_path = Path(pl_dir) / "dvm_particle_moment.h5"
+        _save_result_hdf5_pl(pl_mom_path, pl_mom_result)
+        with h5py.File(pl_mom_path, "r") as pl_mom_h5:
+            assert "dvm_particle_ledger" not in pl_mom_h5
+        assert not hasattr(
+            load_result_hdf5(pl_mom_path), "dvm_particle_ledger"
+        )
+
+        pl_path = Path(pl_dir) / "dvm_particle.h5"
+        _save_result_hdf5_pl(
+            pl_path, pl_result, params=pl_params, flags=pl_flags
+        )
+        with h5py.File(pl_path, "r") as pl_h5:
+            pl_group = pl_h5["dvm_particle_ledger"]
+            assert set(pl_group) == set(_PL_FRAME_KEYS)
+            # The group documents itself: three aligned string attributes in
+            # the group's own row order, so the artifact is readable without
+            # this repo.
+            pl_channels = tuple(pl_group.attrs["channels"])
+            assert pl_channels == tuple(_PL_FRAME_KEYS)
+            for pl_attr, pl_index in (
+                ("channel_units", 0),
+                ("channel_meanings", 1),
+            ):
+                pl_doc = list(pl_group.attrs[pl_attr])
+                assert pl_doc == [
+                    _PL_ROW_DOC[pl_name][pl_index] for pl_name in pl_channels
+                ], pl_attr
+            pl_units = dict(zip(pl_channels, pl_group.attrs["channel_units"]))
+            # Every flow row is a count of atoms; the two rows that are not
+            # are the frame's own time and its tick count.
+            assert all(
+                pl_units[pl_name] == "atoms" for pl_name in _PL_FLOW_KEYS
+            )
+            assert pl_units["time"] == "s"
+            assert pl_units["ticks"] == "ticks"
+
+        pl_back = load_result_hdf5(pl_path).dvm_particle_ledger
+        assert set(pl_back) == set(pl)
+        for pl_name, pl_row in pl.items():
+            assert np.array_equal(pl_back[pl_name], pl_row), pl_name
+
+
+# --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
 @_case("smoke-summary")
@@ -24091,7 +24237,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 132, "historical_stance": 56}
+_CASE_CENSUS = {"total": 133, "historical_stance": 57}
 
 
 def _assert_case_census():
