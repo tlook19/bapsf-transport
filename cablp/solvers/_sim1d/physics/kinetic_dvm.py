@@ -227,6 +227,72 @@ CATHODE_JET_MOMENT_REL_TOL = 1.0e-10
 # book's ``backscatter`` row.
 ANODE_JET_MOMENT_REL_TOL = 1.0e-10
 
+# Ion-temperature and drift ceilings the THERMAL/SONIC velocity-grid sizing is
+# built from: four ion thermal speeds at the temperature cap plus 1.5 of the
+# drift cap covers the charge-exchange tail and the column's own flows. They
+# describe the gas, not any surface jet, and are what the extent falls back to
+# when no jet is armed.
+GRID_TI_CAP_EV = 10.0
+GRID_U_CAP_CM_S = 2.0e6
+
+# Multiple of the launch speed at the top of the band that the velocity grid's
+# half-extent is set to when the extent is derived rather than named. The bin
+# CENTERS stop short of the extent on a stretched axis -- the last one sits at
+# ``sinh(a (1 - 1/nvz)) / sinh(a)`` of it -- and no non-negative weighting of
+# bins has a mean beyond that center, so the extent must exceed the drift it
+# has to carry rather than meet it. 1.25 clears the last center over the top of
+# the band by 7% on a 48-bin axis and 11% on a 64-bin one; the constructed grid
+# is checked against that criterion regardless, so this is the sizing rule and
+# not the guarantee.
+LAUNCH_EXTENT_MARGIN = 1.25
+
+# Sheath-fall allowance [V] applied to the ANODE jet when the construction-time
+# launch band is formed. ``phi_a`` carries no configured cap -- a cap on the
+# anode fall would be a physics statement, and none is made here -- so the
+# cathode's own atomic-data ceiling is borrowed as a conservative allowance:
+# it widens the band the check covers rather than bounding anything. The
+# tick's own moment refusal stays the exact backstop beyond it.
+ANODE_BAND_PHI_ALLOWANCE_SOURCE = "cathode_phi_c_cap_V"
+
+# How many energies the construction-time band check samples. The check is a
+# SAMPLE of a continuum, dense enough (about 1 eV over the cap-implied band) to
+# find any interval a grid cannot project while staying far cheaper than one
+# plasma step; the per-tick refusal in the launch-spectrum builders is what
+# holds exactly.
+LAUNCH_BAND_CHECK_SAMPLES = 512
+
+
+def thermal_sonic_velocity_extent_cm_s(
+    Ti_cap_eV=GRID_TI_CAP_EV, u_cap_cm_s=GRID_U_CAP_CM_S
+):
+    """Return the gas-sized velocity-grid half-extent [cm/s].
+
+    ``4 sqrt(k Ti_cap / m_He) + 1.5 u_cap``: four ion thermal speeds at the
+    ion-temperature cap [eV] plus 1.5 of the drift cap [cm/s], which is what
+    the charge-exchange tail and the column's own flows reach. THE ONE
+    definition of that sizing, so the engine's own default and the config
+    resolver cannot drift apart.
+
+    ``Ti_cap_eV`` is floored at 0.5 eV, below which the expression describes a
+    grid too small for the wall gas itself.
+    """
+    return 4.0 * np.sqrt(
+        max(float(Ti_cap_eV), 0.5) * EV / M_HE
+    ) + 1.5 * float(u_cap_cm_s)
+
+
+def launch_band_velocity_extent_cm_s(e_max_eV, margin=LAUNCH_EXTENT_MARGIN):
+    """Return the half-extent [cm/s] that carries a launch band to ``e_max_eV``.
+
+    ``margin * sqrt(2 e_max / m_He)`` -- the backscatter speed at the top of
+    the band, times :data:`LAUNCH_EXTENT_MARGIN`, so the last bin CENTER of a
+    stretched axis lands above that speed rather than at it. Grid-independent
+    by construction: whether a given ``nvz`` actually clears the criterion is
+    the constructed grid's own question, and
+    :meth:`TransientDVM._refuse_unreachable_launch_band` asks it.
+    """
+    return float(margin) * np.sqrt(2.0 * float(e_max_eV) * EV / M_HE)
+
 # Rate factor on the isotropic-elastic BGK channel. A full-replacement event
 # transfers m (v - u_i), which is twice the isotropic angular average
 # ``mu <1 - cos th> g = m g / 2`` at equal mass; halving the collision rate
@@ -726,8 +792,10 @@ class TransientDVM:
         s_R=0.0,
         T_wall_K=T_WALL_K,
         vmax_cm_s=None,
-        Ti_cap_eV=10.0,
-        u_cap_cm_s=2.0e6,
+        Ti_cap_eV=GRID_TI_CAP_EV,
+        u_cap_cm_s=GRID_U_CAP_CM_S,
+        cathode_launch_band_eV=None,
+        anode_launch_band_eV=None,
         grid=None,
     ):
         if elastic_model not in ELASTIC_MODELS:
@@ -824,9 +892,9 @@ class TransientDVM:
 
         if grid is None:
             if vmax_cm_s is None:
-                vmax_cm_s = 4.0 * np.sqrt(
-                    max(float(Ti_cap_eV), 0.5) * EV / M_HE
-                ) + 1.5 * float(u_cap_cm_s)
+                vmax_cm_s = thermal_sonic_velocity_extent_cm_s(
+                    Ti_cap_eV, u_cap_cm_s
+                )
             v_fine = 0.25 * np.sqrt(KB * self.T_wall_K / M_HE)
             grid = VGrid(float(vmax_cm_s), float(vmax_cm_s), nvz, nvp, v_fine)
         self.g = grid
@@ -1045,6 +1113,84 @@ class TransientDVM:
         self.ion_removed_cum = cells.copy()
         self.ion_shortfall_updates = 0
         self.ion_shortfall_cell_updates = cells.copy()
+
+        # LAST: the launch bands the armed surface jets can produce are
+        # checked against the grid that was just built, so a configuration
+        # whose jets outrun their own velocity mesh is refused here rather
+        # than mid-discharge at the first tick that reaches the ceiling.
+        self._refuse_unreachable_launch_band(
+            "cathode", cathode_launch_band_eV
+        )
+        self._refuse_unreachable_launch_band("anode", anode_launch_band_eV)
+
+    # ------------------------------------------- launch-band reachability
+
+    def _refuse_unreachable_launch_band(self, surface, band_eV):
+        """Refuse a grid that cannot project one surface's whole launch band.
+
+        ``band_eV`` is ``(e_min, e_max)`` in eV per atom -- the least and
+        greatest energy an armed tick of that jet can hand a single
+        backscattered atom -- or ``None`` for a jet that is not armed, which
+        is the whole of this method for that surface: with no directed
+        channel there is no band, nothing is sampled and nothing is said.
+
+        Armed, :data:`LAUNCH_BAND_CHECK_SAMPLES` energies spanning the band
+        are put through the SAME launch-spectrum builder the tick uses, and
+        the first that cannot reach its moments raises here. Reusing the
+        builder rather than reproducing its arithmetic is deliberate: a
+        second copy of the drift solve and the moment check would be free to
+        certify a grid the tick then refuses. The cost is one projection per
+        sample on a grid that is already built, which is a fraction of a
+        plasma step.
+
+        The check is a SAMPLE of a continuum and says so: it is dense enough
+        to find any interval a grid cannot carry, and the builder's own
+        per-tick refusal remains what holds exactly.
+        """
+        if band_eV is None:
+            return
+        e_min, e_max = (float(band_eV[0]), float(band_eV[1]))
+        if not (np.isfinite(e_min) and np.isfinite(e_max)) or e_min <= 0.0:
+            raise ValueError(
+                f"the DVM {surface} jet's launch band must be a pair of "
+                f"positive finite energies [eV] (got {band_eV!r})"
+            )
+        if e_max < e_min:
+            raise ValueError(
+                f"the DVM {surface} jet's launch band is inverted: "
+                f"e_min={e_min!r} eV exceeds e_max={e_max!r} eV"
+            )
+        builder = (
+            self._cathode_jet_launch_spectrum
+            if surface == "cathode"
+            else lambda e, cell: self._anode_jet_launch_spectrum(e, cell, 1.0)
+        )
+        n = int(LAUNCH_BAND_CHECK_SAMPLES)
+        # Log-spaced over the decades below 1 eV (where the band starts, at
+        # the Ti floor with the sheath collapsed) and linear above it, so the
+        # sampling is dense wherever the band actually has structure.
+        low = np.geomspace(e_min, min(1.0, e_max), max(n // 8, 2))
+        high = np.linspace(min(1.0, e_max), e_max, n - low.size)
+        for e_eV in np.unique(np.concatenate([low, high])):
+            try:
+                builder(float(e_eV) * EV, -1)
+            except ValueError as exc:
+                raise ValueError(
+                    f"the DVM {surface} jet's velocity grid cannot carry its "
+                    f"own launch band: {float(e_eV):.6g} eV per atom does not "
+                    f"project onto the constructed grid (nvz={self.g.nvz}, "
+                    f"nvp={self.g.nvp}, half-extent "
+                    f"{float(self.g.vz_edges[-1]):.6g} cm/s, last v_z bin "
+                    f"center {float(self.g.vz[-1]):.6g} cm/s), while the band "
+                    f"this configuration can produce runs {e_min:.6g} to "
+                    f"{e_max:.6g} eV. Accepted: a larger "
+                    "neutral_kinetic_dvm_vmax_cm_s (leave it unset to have it "
+                    "sized to the band), a smaller cathode_phi_c_cap_V, or a "
+                    f"smaller neutral_kinetic_dvm_{surface}_jet_R_E / larger "
+                    f"_R_N -- a FINER neutral_kinetic_dvm_nvz does not help "
+                    "and makes it worse, since it narrows the grid-tied "
+                    f"launch smear. Underlying refusal: {exc}"
+                ) from exc
 
     # ---------------------------------------------------- annular baffles
 
@@ -1748,13 +1894,17 @@ class TransientDVM:
                 f"{u:.6g} cm/s (tolerance "
                 f"{CATHODE_JET_MOMENT_REL_TOL:.1e}, T_launch "
                 f"{T_launch:.6g} eV). The moment compensation gave up -- a "
-                "singular two-basis solve, or a spectrum too narrow or too "
-                "fast for this velocity grid -- and the analytic bin masses "
+                "singular two-basis solve, or a spectrum too fast for this "
+                "velocity grid -- and the analytic bin masses "
                 "it left standing would hand the gas an energy the cathode "
-                "surface was not debited. Accepted: widen the grid "
-                "(neutral_kinetic_dvm_nvz / _nvp), or leave "
-                "neutral_kinetic_dvm_cathode_jet_T_launch_eV unset so the "
-                "smear is tied to the local bin width"
+                "surface was not debited. Accepted: a LARGER velocity-grid "
+                "extent (neutral_kinetic_dvm_vmax_cm_s; unset it to have the "
+                "extent sized to the launch band), or a smaller "
+                "cathode_phi_c_cap_V. A finer neutral_kinetic_dvm_nvz does "
+                "NOT help and makes it worse: the grid-tied smear is the "
+                "local bin width, so narrowing the bins narrows the spectrum "
+                "and pushes its drift further out, and nvp does not enter "
+                "the axial drift at all"
             )
         return spec
 
@@ -1828,13 +1978,17 @@ class TransientDVM:
                 f"{u:.6g} cm/s (tolerance "
                 f"{ANODE_JET_MOMENT_REL_TOL:.1e}, T_launch "
                 f"{T_launch:.6g} eV). The moment compensation gave up -- a "
-                "singular two-basis solve, or a spectrum too narrow or too "
-                "fast for this velocity grid -- and the analytic bin masses "
+                "singular two-basis solve, or a spectrum too fast for this "
+                "velocity grid -- and the analytic bin masses "
                 "it left standing would hand the gas an energy the anode "
-                "book did not record as leaving. Accepted: widen the grid "
-                "(neutral_kinetic_dvm_nvz / _nvp), or leave "
-                "neutral_kinetic_dvm_anode_jet_T_launch_eV unset so the "
-                "smear is tied to the local bin width"
+                "book did not record as leaving. Accepted: a LARGER "
+                "velocity-grid extent (neutral_kinetic_dvm_vmax_cm_s; unset "
+                "it to have the extent sized to the launch band), or a "
+                "smaller neutral_kinetic_dvm_anode_jet_R_E. A finer "
+                "neutral_kinetic_dvm_nvz does NOT help and makes it worse: "
+                "the grid-tied smear is the local bin width, so narrowing "
+                "the bins narrows the spectrum and pushes its drift further "
+                "out, and nvp does not enter the axial drift at all"
             )
         return spec
 
