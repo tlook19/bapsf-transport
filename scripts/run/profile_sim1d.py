@@ -98,6 +98,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 from cablp.solvers._sim1d import LAPDSim1D  # noqa: E402
 from cablp.solvers._sim1d.results.io import save_result_hdf5  # noqa: E402
 from compare_sim1d_es1 import run_model  # noqa: E402
+from extra_overrides import parse_extra_overrides  # noqa: E402
 from stance_config import available_stances, load_stance  # noqa: E402
 
 # This instrument profiles a NAMED configuration -- ``--stance NAME`` -- and
@@ -429,13 +430,7 @@ def _run_production(nx, tau_afterglow, exchange_model, t_end, extra_pairs,
         named = load_stance(stance)
         extra.update(named.params)
         configuration = named.lineage
-    for pair in extra_pairs or ():
-        key, _, raw = pair.partition("=")
-        try:
-            value = json.loads(raw)
-        except json.JSONDecodeError:
-            value = raw
-        extra[key] = value
+    extra.update(parse_extra_overrides(extra_pairs, "--extra"))
     return run_model(
         nx=nx,
         exchange_model=exchange_model,
@@ -522,7 +517,10 @@ def main(argv=None):
         "--extra",
         nargs="*",
         default=(),
-        help="extra params as key=value (JSON-parsed values)",
+        help="extra input_dict overrides as key=value, read and typed by "
+        "extra_overrides.parse_extra_overrides: each value takes the TYPE its "
+        "key carries in the configuration template, and a value that cannot "
+        "be read as one or a key neither template owns is refused here",
     )
     parser.add_argument("--save-h5", default=None, help="also save the trajectory")
     args = parser.parse_args(argv)

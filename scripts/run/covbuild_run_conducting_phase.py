@@ -22,7 +22,6 @@ scored. ``--coverage f0[,r]`` turns the closure on for the A/B arm.
 """
 
 import argparse
-import json
 import tomllib
 from pathlib import Path
 
@@ -41,6 +40,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
+from extra_overrides import parse_extra_overrides
 from run_mechanism_ladder import ES_OPERATING
 from stance_config import available_stances, load_named_configuration
 
@@ -161,7 +161,11 @@ def main(argv=None):
     p.add_argument("--coverage", default=None,
                    help="f_cov0[,r] -- turns the coverage closure on")
     p.add_argument("--extra", nargs="*", default=(),
-                   help="additional k=v param overrides (JSON-parsed)")
+                   help="additional k=v input_dict overrides, read and typed "
+                        "by extra_overrides.parse_extra_overrides: each value "
+                        "takes the TYPE its key carries in the configuration "
+                        "template, and a value that cannot be read as one or "
+                        "a key neither template owns is refused here")
     p.add_argument("--save-h5", required=True)
     config_group = p.add_mutually_exclusive_group()
     config_group.add_argument(
@@ -192,13 +196,7 @@ def main(argv=None):
     if args.coverage is not None:
         parts = args.coverage.split(",")
         coverage = (float(parts[0]), float(parts[1]) if len(parts) > 1 else 0.0)
-    extra = {}
-    for kv in args.extra:
-        k, v = kv.split("=", 1)
-        try:
-            extra[k] = json.loads(v)
-        except json.JSONDecodeError:
-            extra[k] = v
+    extra = parse_extra_overrides(args.extra, "--extra")
 
     params, flags, lineage = build_config(
         args.nx, coverage=coverage, extra=extra, configuration=configuration
