@@ -865,8 +865,9 @@ at `phi_c = 298.4` V, which is a launch energy ABOVE that ceiling; it survived
 only because the first DVM tick after arming averages the falling flank and
 asks for `144.5` eV, so the whole discharge ran one tick of ordering below a
 wall it was already past. A derived configuration that arms 26 µs earlier —
-`x1_local`, the all-local disposal corner — asks `159.1` eV on its first armed
-tick and dies at `t = 153.9` µs. Nothing about the reference's own scores is in
+`scripts/stances/examples/x1_local.toml`, the all-local disposal corner — asks
+`159.1` eV on its first armed tick and dies at `t = 153.9` µs (measured at
+commit `0ae734a`). Nothing about the reference's own scores is in
 question: the hazard was a REACHABILITY ceiling, and every run that completed
 completed below it. The ceiling is what the new key removes.
 
