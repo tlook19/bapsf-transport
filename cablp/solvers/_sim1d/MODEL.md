@@ -2016,13 +2016,16 @@ placed.
 **What it refuses.** The *absence* of `neutral_two_zone` — the flag REQUIRES
 that closure, since the destination row $n_{n,a}$ is one only the two-zone
 state builds; and any geometry whose routed collector cell has no annulus
-($V_\text{ann} = 0$), since the routing would then deposit into nothing. Both
-are construction-time errors rather than silent fallbacks — the alternative is
-a future end-region flare quietly destroying the stream at exactly the cells
-the closure exists to describe. (This is the one place the routing differs
-deliberately from the anode mesh, which falls back to the column in
-annulus-free cells: the anode's annulus is incidental, the collector's is the
-closure.)
+($V_\text{ann} = 0$), since the routing would then deposit into nothing. And a
+kinetic `neutral_model` (`kinetic`, `kinetic_dvm`), whose collector
+wall-return source channel is read from the column $n_n$ row alone, so the
+routed stream — which this flag places entirely on $n_{n,a}$ — would reach it
+as nothing at all. All three are construction-time errors rather than silent
+fallbacks — the alternative is a future end-region flare quietly destroying
+the stream at exactly the cells the closure exists to describe. (This is the
+one place the routing differs deliberately from the anode mesh, which falls
+back to the column in annulus-free cells: the anode's annulus is incidental,
+the collector's is the closure.)
 
 The flag applies to whichever plasma-terminating discretization the run
 configured — the R3.1 characteristic ghost-cell outflow or the volumetric

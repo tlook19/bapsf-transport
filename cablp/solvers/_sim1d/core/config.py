@@ -3671,9 +3671,12 @@ input_flags_template_1d = {
     # when annulus gas re-enters the column. Booking both would plant the same
     # energy twice.
     #
-    # Requires neutral_two_zone (the destination row must exist), and refuses
-    # any geometry whose routed collector cell has no annulus (V_ann = 0);
-    # both are construction-time ValueErrors. Default OFF and bit-exact off
+    # Requires neutral_two_zone (the destination row must exist), refuses
+    # any geometry whose routed collector cell has no annulus (V_ann = 0),
+    # and refuses a kinetic neutral_model ('kinetic', 'kinetic_dvm'), whose
+    # collector wall-return source channel counts the column nn row alone and
+    # would therefore lose the routed stream entirely; all three are
+    # construction-time ValueErrors. Default OFF and bit-exact off
     # (presence-gated: the off path passes no annulus volume to the
     # boundary term and adds no nn_a row).
     "end_recycle_to_annulus": False,
