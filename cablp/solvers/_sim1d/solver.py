@@ -96,6 +96,13 @@ from .physics.kinetic_dvm import (
     TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
     WALL_REFLECTION_MODELS as KINETIC_DVM_WALL_REFLECTION_MODELS,
     TransientDVM,
+    # The engine's own collector-jet spec validator, applied by the solver
+    # BEFORE the launch band is formed. The band divides R_E by R_N, so a
+    # spec that reaches it unchecked answers "R_N = 0" with a
+    # ZeroDivisionError instead of the interval statement the reader needs.
+    # Calling the engine's validator rather than restating its intervals here
+    # is what keeps one statement of them.
+    _validated_collector_jet as validated_dvm_collector_jet_spec,
     launch_band_velocity_extent_cm_s,
     thermal_sonic_velocity_extent_cm_s,
 )
@@ -4793,7 +4800,7 @@ class LAPDSim1D:
                     "that arrival energy), or "
                     "neutral_kinetic_dvm_collector_jet = False"
                 )
-            collector_jet = {
+            collector_jet = validated_dvm_collector_jet_spec({
                 "R_N": float(
                     self._input_dict.get(
                         "neutral_kinetic_dvm_collector_jet_R_N"
@@ -4812,7 +4819,7 @@ class LAPDSim1D:
                         "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple"
                     )
                 ),
-            }
+            })
         else:
             named = [
                 key
