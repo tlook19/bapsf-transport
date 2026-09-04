@@ -74,7 +74,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parents[1]
+#: ``scripts/`` itself -- the parent of the seven purpose
+#: subdirectories, and the default place to leave captured output.
+SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
+
+#: This file's own directory, ``scripts/gates/``. The child relaunch
+#: below re-invokes THIS script, so it is addressed where the script
+#: actually lives rather than at the flat ``scripts/`` root.
+GATE_DIR = Path(__file__).resolve().parent
 
 #: What ``_kernels.PROVENANCE`` must read as on each path.
 PURE_PROVENANCE = "pure"
@@ -150,7 +157,7 @@ def _run_one(arm, path, steps, report_every, outdir):
     else:
         env.pop("CABLP_COMPILED_KERNELS", None)
     cmd = [
-        sys.executable, str(SCRIPT_DIR / "interp_bitexact_gate.py"),
+        sys.executable, str(GATE_DIR / "interp_bitexact_gate.py"),
         "--child", "--arm", arm, "--steps", str(steps),
         "--report-every", str(report_every), "--want", want,
     ]
@@ -209,7 +216,9 @@ def array_leg(outdir):
     # environment carries.
     env.pop("CABLP_COMPILED_KERNELS", None)
     cmd = [
-        sys.executable, str(SCRIPT_DIR / "r3lane_equivalence.py"), "--corpus",
+        sys.executable,
+        str(SCRIPTS_ROOT / "verify" / "r3lane_equivalence.py"),
+        "--corpus",
     ]
     print("  running array-path corpus leg (r3lane_equivalence --corpus) ...",
           flush=True)
@@ -270,7 +279,7 @@ def main(argv=None):
     p.add_argument("--arms", nargs="+", default=["tw", "twion"])
     p.add_argument("--steps", type=int, default=400)
     p.add_argument("--report-every", type=int, default=25)
-    p.add_argument("--outdir", type=Path, default=SCRIPT_DIR)
+    p.add_argument("--outdir", type=Path, default=SCRIPTS_ROOT)
     # Child-mode plumbing; not for direct use.
     p.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--arm", help=argparse.SUPPRESS)
