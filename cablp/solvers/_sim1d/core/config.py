@@ -1208,6 +1208,68 @@ def model_mode_defaults():
         raises at the tick rather than launching at the wrong energy. Read
         only when ``neutral_kinetic_dvm_anode_jet`` is on; must be ``None``
         or positive.
+    neutral_kinetic_dvm_collector_jet:
+        Whether the transient DVM splits the counted COLLECTOR return into an
+        ENERGETIC FAST SHARE and a thermal remainder. Off, every ion the
+        far-end characteristic boundary removes comes back as a cosine
+        half-flux directed into the column at the 300 K wall temperature,
+        which is the shipped reading. On, the
+        ``neutral_kinetic_dvm_collector_jet_R_N`` share is instead born as a
+        ``-z``-directed volume birth in the end cell the return was counted
+        into, carrying ``(R_E/R_N)`` of the arrival energy per atom, and the
+        remaining ``1 - R_N`` keeps the thermal face inflow. The collector
+        plate carries neither a sheath solve nor an energy book in this
+        model, so two things follow that its cathode and anode twins do not
+        share: the per-ion arrival energy is PRESCRIBED, through
+        ``neutral_kinetic_dvm_collector_jet_sheath_Te_multiple``, rather than
+        read from a solve; and the energy the launched atoms carry is debited
+        from no surface book, exactly as the ``(3/2) k T_wall`` per atom the
+        thermal return already carries is debited from none. Inert unless
+        ``neutral_model = "kinetic_dvm"``; arming it under any other neutral
+        model raises at construction, as does arming it without all three of
+        its required numbers, or naming any of its four numbers while it is
+        off.
+    neutral_kinetic_dvm_collector_jet_R_N:
+        Particle share of the counted collector return that leaves the plate
+        as the energetic directed launch rather than desorbing thermally.
+        ``None`` until a configuration names it: required when
+        ``neutral_kinetic_dvm_collector_jet`` is on, refused when it is off,
+        and required there to satisfy ``0 < R_N <= 1``.
+    neutral_kinetic_dvm_collector_jet_R_E:
+        TOTAL returned energy fraction of that same channel: the energy that
+        leaves with the launched atoms over the energy the collected ions
+        arrived with. The ``R_N`` launched atoms carry all of it, so each
+        leaves with ``R_E/R_N`` of the prescribed per-ion arrival energy.
+        ``R_E`` above ``R_N`` is accepted here and means each launched atom
+        leaves with MORE than the mean arrival energy per collected ion,
+        which is a statement about a prescribed channel rather than about a
+        reflection coefficient. ``None`` until a configuration names it:
+        required when the channel is on, refused when it is off, and required
+        there to satisfy ``0 < R_E <= 1``.
+    neutral_kinetic_dvm_collector_jet_T_launch_eV:
+        NUMERICS parameter of that channel: the width of the smear the
+        monoenergetic launch beam is represented by on the discrete velocity
+        grid. ``None`` ties it to the grid -- the axial bin containing the
+        launch speed, expressed as a temperature -- which is the narrowest
+        spectrum the grid resolves there; a positive float pins it instead,
+        as an A/B instrument. It is not a physical gas temperature: the
+        launch spectrum's drift is solved from the ENERGY, so the spectrum's
+        discrete mean energy is the launch energy whatever this is set to,
+        and what this changes is only how wide a bundle of bins carries it. A
+        spectrum this leaves too narrow or too fast for the grid to project
+        raises at the tick rather than launching at the wrong energy. Read
+        only when ``neutral_kinetic_dvm_collector_jet`` is on, refused when
+        it is off; must be ``None`` or positive.
+    neutral_kinetic_dvm_collector_jet_sheath_Te_multiple:
+        The multiple of the end cell's ``Te`` which, plus that cell's ``Ti``,
+        is the kinetic energy ONE collected ion is taken to arrive at the
+        collector with. It is the FLOATING-SHEATH CONVENTION THE CALLER
+        STATES, not a solved potential: this model carries no collector
+        sheath and no collector circuit, so nothing here computes a drop and
+        this number is the whole statement about one. ``None`` until a
+        configuration names it: required when
+        ``neutral_kinetic_dvm_collector_jet`` is on, refused when it is off,
+        and required there to be a positive finite float.
     neutral_kinetic_dvm_transfer_hold:
         How the plasma applies the transient DVM's tick-booked CX/elastic
         transfer between neutral clock ticks. ``"exponential"`` (the
@@ -1366,6 +1428,16 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_anode_jet_R_N": 0.63,
         "neutral_kinetic_dvm_anode_jet_R_E": 0.41,
         "neutral_kinetic_dvm_anode_jet_T_launch_eV": None,
+        # Collector-side energetic return, default OFF. Unlike the two
+        # surfaces above there is no fluid channel to mirror and no sheath
+        # solve to read, so every one of its four numbers is None -- "not
+        # named" -- until a configuration names it, and naming one while the
+        # channel is off is refused rather than left inert:
+        "neutral_kinetic_dvm_collector_jet": False,
+        "neutral_kinetic_dvm_collector_jet_R_N": None,
+        "neutral_kinetic_dvm_collector_jet_R_E": None,
+        "neutral_kinetic_dvm_collector_jet_T_launch_eV": None,
+        "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple": None,
         # None = "not named"; resolved to "exponential" by the arm, and
         # refused outright by every other neutral model, so the key can
         # never be a silently inert control:
