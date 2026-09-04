@@ -138,9 +138,11 @@ def main(argv=None):
              + (", ".join(available_stances()) or "(none committed)"))
     stance_group.add_argument(
         "--no-stance", action="store_true",
-        help="acknowledge that this run names no stance and is configured "
-             "entirely by this driver's defaults plus the explicit overrides "
-             "on this command line")
+        help="acknowledge that this run names no stance and is configured by "
+             "this driver's defaults plus the explicit overrides on this "
+             "command line, except the rung-owned keys ("
+             + ", ".join(RUNG_OWNED_LIVE) + "), which stay the --es rung's "
+             "to set: --extra may only restate one at its rung value")
     p.add_argument("--nx", type=int, default=PRODUCTION_NX)
     p.add_argument("--sgp", type=float, required=True)
     p.add_argument("--close-lag", type=float, default=None)
@@ -220,7 +222,9 @@ def main(argv=None):
             f"(available: {', '.join(available_stances()) or '(none committed)'})"
             ", or --no-stance to acknowledge that this run has none and is "
             "configured by this driver's defaults plus the overrides on this "
-            "command line."
+            "command line, except the rung-owned keys ("
+            + ", ".join(RUNG_OWNED_LIVE) + "), which stay the --es rung's to "
+            "set: --extra may only restate one at its rung value."
         )
 
     op = ES_OPERATING[args.es]
@@ -372,13 +376,16 @@ def main(argv=None):
     # cannot consent, and a third value is refused -- ``--extra`` layers a key
     # above the stance, it does not re-choose the rung. The guard runs after
     # BOTH the stance layer and the ``--extra`` layer are resolved, so the
-    # value it judges is the one the solver would actually be handed.
-    if stance is not None:
-        refuse_rung_supersession(
-            "run_m6_point", args.es, rung_owned, stance,
-            cli_supplied=cli_supplied, resolved=extra,
-            restatement="--extra {key}={value}",
-        )
+    # value it judges is the one the solver would actually be handed. It runs
+    # on the --no-stance route too: what makes an --extra on a rung-owned key
+    # a mislabelling is the --es label the run carries, and --no-stance drops
+    # the configuration layer, not the rung. ``stance`` is None there and the
+    # refusal names no stance.
+    refuse_rung_supersession(
+        "run_m6_point", args.es, rung_owned, stance,
+        cli_supplied=cli_supplied, resolved=extra,
+        restatement="--extra {key}={value}",
+    )
 
     result, geometry, params, flags = run_model(
         nx=args.nx, extra=extra,
