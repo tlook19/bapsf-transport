@@ -23349,6 +23349,162 @@ def _case_configuration_drivers_refuse_unnamed_runs():
         assert _dr_missing in _dr_named_text, (_dr_bare, _dr_named_text[-800:])
 
 
+@_case("configuration-drivers-refuse-rung-owned-supersession")
+def _case_configuration_drivers_refuse_rung_owned_supersession():
+    # A RUNG-OWNED key is the rung's to set, and the named configuration lands
+    # ON TOP of the rung, so a file that carries one silently re-labels which
+    # rung the run is: --es 2 would be scored against ES2 data while carrying
+    # whatever drive the file names. Neither driver's departure report catches
+    # it -- the file's value IS the configuration, so nothing departs from it.
+    #
+    # Both drivers now refuse it through ONE implementation,
+    # run_mechanism_ladder.refuse_rung_supersession, which lives beside the
+    # ES_OPERATING table whose membership RUNG_OWNED_LIVE describes. The check
+    # runs the drivers' real entry points against fixture configurations in a
+    # temporary stance directory: the refusal fires before anything is
+    # constructed, and the positive controls stop at a patched run_model, so no
+    # case here reaches a solve.
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    import run_m6_point as _ro_m6
+    import run_mechanism_ladder as _ro_ladder
+
+    # ONE implementation, reached by both routes: the m6 driver holds the very
+    # object the ladder defines, not a copy of it.
+    assert (_ro_m6.refuse_rung_supersession
+            is _ro_ladder.refuse_rung_supersession)
+    assert _ro_m6.RUNG_OWNED_LIVE is _ro_ladder.RUNG_OWNED_LIVE
+    assert _ro_ladder.RUNG_OWNED_LIVE == ("V_bank", "cathode_Ts_base_K")
+
+    class _RoReached(Exception):
+        """Raised in place of a solve, to mark the guard as passed."""
+
+    def _ro_stub(*_args, **_kwargs):
+        raise _RoReached
+
+    def _ro_refused(entry, argv):
+        """Return the refusal message ``entry(argv)`` raises, or fail."""
+        try:
+            entry(argv)
+        except ValueError as _ro_exc:
+            return str(_ro_exc)
+        except _RoReached:
+            raise AssertionError(f"guard did not fire: {argv}") from None
+        raise AssertionError(f"no refusal and no run: {argv}")
+
+    def _ro_passed(entry, argv):
+        """Assert ``entry(argv)`` gets past the guard to the patched solve."""
+        try:
+            entry(argv)
+        except _RoReached:
+            return
+        raise AssertionError(f"guard fired or run diverted: {argv}")
+
+    _ro_saved = (_ro_ladder.run_model, _ro_m6.run_model)
+    with _derived_fixture_dir() as (_ro_sc, _ro_room):
+        _ro_ladder.run_model = _ro_stub
+        _ro_m6.run_model = _ro_stub
+        try:
+            # The standby clash, on the route the ladder actually took: the
+            # rung's ES1 standby is 1910.0 and this file names another.
+            (_ro_room / "rungclash.toml").write_text(
+                "[input_dict]\ncathode_Ts_base_K = 1234.0\n"
+            )
+            # The bank-voltage clash, the other member of the set.
+            (_ro_room / "vbankclash.toml").write_text(
+                "[input_dict]\nV_bank = 12.0\n"
+            )
+            # A configuration that names NO rung-owned key: the positive
+            # control, and the shape every committed stance has.
+            (_ro_room / "nonrung.toml").write_text(
+                "[input_dict]\nS_gp = 1234.0\n"
+            )
+            _ro_clash_file = str((_ro_room / "rungclash.toml").resolve())
+            _ro_h5 = str(_ro_room / "unused.h5")
+
+            # (i) THE LADDER ROUTE, --warming none, which is where the rung's
+            # standby was being superseded.
+            _ro_msg = _ro_refused(_ro_ladder.main, [
+                "--es", "1", "--warming", "none",
+                "--stance", "rungclash", "--save-h5", _ro_h5,
+            ])
+            assert "run_mechanism_ladder:" in _ro_msg, _ro_msg
+            assert "cathode_Ts_base_K" in _ro_msg, _ro_msg
+            assert "1234.0" in _ro_msg, _ro_msg       # the file's value
+            assert "1910.0" in _ro_msg, _ro_msg       # the rung's value
+            assert _ro_clash_file in _ro_msg, _ro_msg  # the file
+            assert "--no-stance" in _ro_msg, _ro_msg
+            # No restatement route on this driver, so none is offered.
+            assert "--extra" not in _ro_msg, _ro_msg
+
+            # The same refusal on --warming power_balance: the key is live
+            # under both warming models, so neither route may inherit it.
+            _ro_msg_pb = _ro_refused(_ro_ladder.main, [
+                "--es", "1", "--warming", "power_balance",
+                "--stance", "rungclash", "--save-h5", _ro_h5,
+            ])
+            assert "cathode_Ts_base_K" in _ro_msg_pb, _ro_msg_pb
+
+            # (ii) THE OTHER RUNG-OWNED KEY, and a rung that is not ES1, so the
+            # refusal is not reading one hard-coded operating point.
+            _ro_msg_vb = _ro_refused(_ro_ladder.main, [
+                "--es", "2", "--warming", "power_balance",
+                "--stance", "vbankclash", "--save-h5", _ro_h5,
+            ])
+            assert "V_bank" in _ro_msg_vb, _ro_msg_vb
+            assert "12.0" in _ro_msg_vb, _ro_msg_vb
+            assert "138.303" in _ro_msg_vb, _ro_msg_vb
+
+            # (iii) THE M6 ROUTE, same helper, same key, its own name and its
+            # own restatement switch.
+            _ro_msg_m6 = _ro_refused(_ro_m6.main, [
+                "--es", "1", "--stance", "rungclash", "--sgp", "9010",
+                "--save-h5", _ro_h5,
+            ])
+            assert "run_m6_point:" in _ro_msg_m6, _ro_msg_m6
+            assert "cathode_Ts_base_K" in _ro_msg_m6, _ro_msg_m6
+            assert "1234.0" in _ro_msg_m6, _ro_msg_m6
+            assert "1910.0" in _ro_msg_m6, _ro_msg_m6
+            assert _ro_clash_file in _ro_msg_m6, _ro_msg_m6
+            assert "--extra cathode_Ts_base_K=1910.0" in _ro_msg_m6, _ro_msg_m6
+
+            # (iv) POSITIVE CONTROL. A configuration that names no rung-owned
+            # key runs: the guard refuses supersession, not stances.
+            _ro_passed(_ro_ladder.main, [
+                "--es", "1", "--warming", "none",
+                "--stance", "nonrung", "--save-h5", _ro_h5,
+            ])
+            _ro_passed(_ro_m6.main, [
+                "--es", "1", "--stance", "nonrung", "--sgp", "9010",
+                "--save-h5", _ro_h5,
+            ])
+
+            # (v) --no-stance is UNCHANGED: with no stance layer there is
+            # nothing above the rung to supersede it, and the guard is inert.
+            _ro_passed(_ro_ladder.main, [
+                "--es", "1", "--warming", "none", "--no-stance",
+                "--save-h5", _ro_h5,
+            ])
+
+            # (vi) CONSENT, on the driver that offers it. A command line that
+            # re-supplies the key has SAID it means that value, where silence
+            # cannot, so --extra gets past the same guard the stance alone
+            # trips. The ladder exposes no such switch, which is why its
+            # refusal above names only --no-stance.
+            _ro_passed(_ro_m6.main, [
+                "--es", "1", "--stance", "rungclash", "--sgp", "9010",
+                "--extra", "cathode_Ts_base_K=1234.0", "--save-h5", _ro_h5,
+            ])
+        finally:
+            _ro_ladder.run_model, _ro_m6.run_model = _ro_saved
+
+
 @_case("configuration-fluid-comparator-example")
 def _case_configuration_fluid_comparator_example():
     # THE COMMITTED WORKED EXAMPLE. The fluid comparator is the campaign's
@@ -23754,7 +23910,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 130, "historical_stance": 55}
+_CASE_CENSUS = {"total": 131, "historical_stance": 55}
 
 
 def _assert_case_census():
