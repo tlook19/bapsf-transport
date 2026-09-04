@@ -38,6 +38,12 @@ by the wrong key just as well as the right one. Here the verdict is an
 EXPECTED-DELTA SET given on the command line: PASS iff every expected delta is
 present with exactly the expected value AND there are no unexpected deltas.
 
+An expectation's VALUE is read by the same layer that reads a driver's
+``--extra`` token, so it is typed from the key's ``default_config()`` template
+and reported in the one spelling the resolved config uses. A value that cannot
+be read as its key's type, and a key owned by neither configuration template,
+are refused before anything is rebuilt.
+
 Entry points:
 
 ``m6``
@@ -99,6 +105,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 
 import compare_sim1d_es1 as cmp_es1  # noqa: E402
 import run_m6_point  # noqa: E402
+from extra_overrides import coerce_override  # noqa: E402
 from stance_config import available_stances, stance_config  # noqa: E402
 
 NAMESPACES = ("params", "flags")
@@ -225,24 +232,34 @@ def diff_config(reference, rebuilt):
 
 
 def parse_expectation(text):
-    """Parse one ``namespace:key=<json value>`` expectation."""
+    """Parse one ``namespace:key=value`` expectation, typed by the template.
+
+    The value is read by the same layer that reads a driver's ``--extra``
+    token (:func:`extra_overrides.coerce_override`), so an expectation carries
+    the type its key's ``default_config()`` template value carries and is
+    compared against a resolved config of that same type -- ``1910`` and
+    ``1910.0`` name one float on a float key, and both are reported by the one
+    spelling the resolved config uses.
+
+    A value that cannot be read as its key's type, and a key owned by neither
+    configuration template, are refused here -- before any config is rebuilt --
+    rather than reaching the diff as a delta that can never match.
+    """
     namespace, _, rest = text.partition(":")
     if namespace not in NAMESPACES or not rest:
         raise argparse.ArgumentTypeError(
-            f"--expect must read '<{'|'.join(NAMESPACES)}>:key=<json value>' "
+            f"--expect must read '<{'|'.join(NAMESPACES)}>:key=value' "
             f"(got {text!r})"
         )
     key, sep, raw = rest.partition("=")
     if not sep or not key:
         raise argparse.ArgumentTypeError(
-            f"--expect needs 'key=<json value>' after the namespace (got {text!r})"
+            f"--expect needs 'key=value' after the namespace (got {text!r})"
         )
     try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        # A bare word is the common case for selector strings; accept it
-        # rather than making every caller quote JSON inside shell quotes.
-        value = raw
+        value = coerce_override(key, raw, "--expect")
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
     return namespace, key, value
 
 
@@ -300,11 +317,12 @@ def build_parser():
         action="append",
         default=[],
         type=parse_expectation,
-        metavar="NS:KEY=JSON",
+        metavar="NS:KEY=VALUE",
         help=(
             "an intended delta, repeatable; NS is 'params' or 'flags' and "
-            "JSON is the value the rebuilt config must carry. Every delta not "
-            "named here fails the pre-flight."
+            "VALUE is the value the rebuilt config must carry, typed from the "
+            "key's configuration template. Every delta not named here fails "
+            "the pre-flight."
         ),
     )
     parser.add_argument(
