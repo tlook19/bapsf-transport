@@ -12974,6 +12974,55 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
 
 
 # --------------------------------------------------------------------
+# end-recycle-kinetic-refusal
+# --------------------------------------------------------------------
+@_case(
+    "end-recycle-kinetic-refusal",
+    historical_stance=True,
+)
+def _case_end_recycle_kinetic_refusal(
+    kd_flags, kd_params, p2z_flags, p2z_params
+):
+    # --- end_recycle_to_annulus under a KINETIC neutral model. Those arms
+    # source their collector wall-return channel from the boundary term's
+    # COLUMN nn row alone, while this flag moves that face's whole stream
+    # onto the annulus nn_a row and leaves the column row exactly zero, so
+    # the routed atoms would reach the kinetic state as nothing at all.
+    # Construction refuses the pair rather than advancing an arm whose
+    # collector recycle has been deleted.
+    erk_flags_on = dict(kd_flags, end_recycle_to_annulus=True)
+    for erk_params, erk_selector in (
+        (kd_params, "kinetic_dvm"),
+        (dict(p2z_params, neutral_model="kinetic"), "kinetic"),
+    ):
+        try:
+            LAPDSim1D(dict(erk_params), dict(erk_flags_on))
+        except ValueError as erk_exc:
+            # The refusal names BOTH halves of the offending pair. The
+            # selector is matched in its full written form, so 'kinetic'
+            # cannot be satisfied by a message that named 'kinetic_dvm'.
+            assert "end_recycle_to_annulus" in str(erk_exc), str(erk_exc)
+            assert (
+                f"neutral_model={erk_selector!r}" in str(erk_exc)
+            ), str(erk_exc)
+        else:
+            raise AssertionError(
+                "expected end_recycle_to_annulus with neutral_model="
+                f"{erk_selector!r} to fail"
+            )
+    # Positive control: the FLUID two-zone closure integrates the annulus
+    # row itself, so the same flag still constructs there...
+    erk_fluid_f = dict(p2z_flags)
+    erk_fluid_f["neutral_prebreakdown"] = False
+    erk_fluid_f["neutral_equilibration"] = False
+    LAPDSim1D(
+        dict(p2z_params), dict(erk_fluid_f, end_recycle_to_annulus=True)
+    )
+    # ...and the kinetic arm is untouched with the flag off.
+    LAPDSim1D(dict(kd_params), dict(kd_flags))
+
+
+# --------------------------------------------------------------------
 # obstruction-geometry-production-style
 # --------------------------------------------------------------------
 @_case(
@@ -24042,7 +24091,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 131, "historical_stance": 55}
+_CASE_CENSUS = {"total": 132, "historical_stance": 56}
 
 
 def _assert_case_census():

@@ -1230,6 +1230,18 @@ class LAPDSim1D:
                     "the collector face is refused rather than silently "
                     "destroying the routed stream"
                 )
+            if self._neutral_model != "moment":
+                raise ValueError(
+                    "end_recycle_to_annulus is incompatible with "
+                    f"neutral_model={self._neutral_model!r}: a kinetic "
+                    "neutral model sources its collector wall-return channel "
+                    "from the boundary term's COLUMN nn row alone, while this "
+                    "flag moves that face's whole stream onto the annulus "
+                    "nn_a row and leaves the column row exactly zero, so the "
+                    "routed atoms would be counted by nothing and the "
+                    "collector recycle would be lost. Accepted: "
+                    "neutral_model='moment'"
+                )
         if self._neutral_model == "kinetic":
             if not self._neutral_two_zone:
                 raise ValueError(
