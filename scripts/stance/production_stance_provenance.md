@@ -810,6 +810,7 @@ same numbers through their own keys.
 | `neutral_kinetic_dvm_accommodation` | `0.40` | MEASURED (literature-boxed) | bracket `[0.35, 0.46]` |
 | `neutral_kinetic_dvm_wall_reflection` | `"diffuse_elastic"` | CLOSURE SELECTION | TMAC bracket `[alpha_E, 1]`; the two shipped values span it |
 | `neutral_kinetic_dvm_nvz` / `_nvp` | `64` / `24` | ASSUMED (numerical) | discrete-equilibrium offset, below |
+| `neutral_kinetic_dvm_vmax_cm_s` | unset (config default) | DERIVED (from the cap) | `1.25 sqrt(2 e_max / m_He)` at the cap-implied launch maximum; below |
 | `neutral_kinetic_dvm_cadence_s` | `3.125e-6` s | ASSUMED (numerical) | first order by construction; below |
 | `neutral_kinetic_dvm_cathode_jet` | `true` | CHANNEL ARM | the `false` arm is thermal-only recycle |
 | `neutral_kinetic_dvm_anode_jet` | `true` | CHANNEL ARM | the `false` arm is thermal-only rebirth |
@@ -841,6 +842,33 @@ between those two measured points and its own offsets are NOT separately
 recorded here; `scripts/verify/verify_sim1d_k2_dvm.py` (gate L4) is the instrument
 that measures them and is the pointer of record. `nvz` must be EVEN — an odd
 count places a node at exactly `v_z = 0`, which neither transports nor mirrors.
+
+**`neutral_kinetic_dvm_vmax_cm_s` — left unset, so DERIVED from the sheath
+cap.** The velocity grid's half-extent. Unset, it resolves to
+`1.25 sqrt(2 e_max / m_He)` where `e_max = max(R_E/R_N) (cathode_phi_c_cap_V +
+10 eV)` over this stance's two armed jets — the anode pair `0.41/0.63` being the
+wider — which is `657.3` eV and `2.2252e7` cm/s here. It is a DERIVED value, not
+a chosen one: no number in it is free, and it moves only if the cap or a
+reflection pair moves. The `1.25` is a sizing margin, not a fit: bin CENTERS
+stop short of the extent on a stretched axis, and it puts the last one 6.4 %
+above the launch speed at `e_max` on a 48-node axis and 10.8 % above it on this
+stance's 64.
+
+**Disclosed hazard, as this stance stood BEFORE that key existed.** The extent
+was a class constant no configuration key reached — four ion thermal speeds at a
+10 eV cap plus 1.5 sonic drifts, `9.2104e6` cm/s, sized for the charge-exchange
+tail and never for a jet. On this stance's `64 x 24` grid that put the last
+`v_z` node at `8.277e6` cm/s and therefore a hard ceiling at `157.9` eV per
+launched atom, above which no non-negative weighting of nodes can carry the
+drift and the launch spectrum RAISES mid-run. This stance arms its cathode jet
+at `phi_c = 298.4` V, which is a launch energy ABOVE that ceiling; it survived
+only because the first DVM tick after arming averages the falling flank and
+asks for `144.5` eV, so the whole discharge ran one tick of ordering below a
+wall it was already past. A derived configuration that arms 26 µs earlier —
+`x1_local`, the all-local disposal corner — asks `159.1` eV on its first armed
+tick and dies at `t = 153.9` µs. Nothing about the reference's own scores is in
+question: the hazard was a REACHABILITY ceiling, and every run that completed
+completed below it. The ceiling is what the new key removes.
 
 **`neutral_kinetic_dvm_cadence_s = 3.125e-6` s — ASSUMED, numerical, and no
 longer the shipped placeholder.** The neutral clock's tick. The package default
