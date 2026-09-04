@@ -75,6 +75,74 @@ ES_OPERATING = {
 # unstanced rung runs.
 ELECTRON_BIRTH_POLICY = "local"
 
+# Keys ``ES_OPERATING`` owns AND that are live in the solved configuration, so
+# a layer that overwrites one silently re-labels which rung the run is.
+#
+# ``cathode_Ts_base_K`` is in the set because both warming models read it:
+# under "power_balance" it is the surface's initial condition and the
+# substrate the conduction term restores toward, and under "none" it is the
+# temperature the surface is held at -- live either way, so a layer that
+# overwrites it does re-label the rung. (The retired ``T_s`` key, which
+# ``ES_OPERATING`` also fed, was configuration-inert under "power_balance" but
+# NOT under "none"; it is gone as of 2026-09-03 and ``cathode_Ts_base_K`` is
+# its successor.)
+#
+# The set and the refusal below live HERE, beside the rung table whose
+# membership they describe, and ``run_m6_point.py`` imports both alongside
+# ``ES_OPERATING``: the two drivers layer a named configuration over the same
+# rung, so they must not disagree about which keys that rung owns.
+RUNG_OWNED_LIVE = ("V_bank", "cathode_Ts_base_K")
+
+
+def refuse_rung_supersession(driver, es, rung_owned, stance,
+                             cli_supplied=(), restatement=None):
+    """Refuse a named configuration that silently overwrites a rung-owned key.
+
+    A rung is written into a driver's ``extra`` from ``ES_OPERATING[--es]`` and
+    the named configuration lands ON TOP of it, so a configuration that carries
+    a :data:`RUNG_OWNED_LIVE` key overwrites the rung: ``--es 2`` or ``--es 3``
+    then produces an arm that is labelled and scored as that rung while
+    carrying another rung's drive. A driver's departure report does not catch
+    this -- the stance value IS the stance, so nothing departs from it.
+
+    ``rung_owned`` maps each :data:`RUNG_OWNED_LIVE` key to the value the rung
+    gave it, snapshotted before any layer above it. ``stance`` is the loaded
+    configuration. ``cli_supplied`` names the keys this command line supplied
+    ABOVE that layer; they are exempt, because a command line that re-supplies
+    the key has SAID it means that value, where silence cannot. ``restatement``
+    is a format string carrying ``{key}`` and ``{value}`` that names the switch
+    which does so, or ``None`` for a driver that offers no such switch.
+
+    Raises ``ValueError`` -- naming the key, the rung's value, the
+    configuration's value and the file it came from -- on the first rung-owned
+    key the configuration moves. Returns ``None`` when it moves none of them.
+    """
+    for key in RUNG_OWNED_LIVE:
+        if key in cli_supplied or key not in stance.params:
+            continue
+        if stance.params[key] == rung_owned[key]:
+            continue
+        if restatement is None:
+            fix = (
+                "Fix: pass --no-stance to run without the stance layer, "
+                f"or delete the {key} row from {stance.path} -- it is "
+                "the rung's to set."
+            )
+        else:
+            fix = (
+                "Fix: pass "
+                + restatement.format(key=key, value=rung_owned[key])
+                + " to state that the rung value is the intended one, or "
+                "--no-stance to run without the stance layer."
+            )
+        raise ValueError(
+            f"{driver}: stance {stance.name} ({stance.path}) sets "
+            f"{key}={stance.params[key]!r}, overwriting the --es {es} rung "
+            f"value {key}={rung_owned[key]!r}. This run would be labelled "
+            f"ES{es} and scored against ES{es} data while carrying another "
+            f"rung's {key}. {fix}"
+        )
+
 
 def main(argv=None):
     p = argparse.ArgumentParser()
@@ -257,9 +325,16 @@ def main(argv=None):
     if args.smooth:
         extra["cathode_sample_smoothing"] = "presheath"
 
+    # The rung values AS THE RUNG SET THEM, snapshotted before the stance layer
+    # below can touch them. Nothing between here and the rung's own writes
+    # touches either key, and --standby-offset-K is folded into the rung above,
+    # so this is what --es (plus that offset) chose.
+    rung_owned = {key: extra[key] for key in RUNG_OWNED_LIVE}
+
     # The named configuration, applied OVER this rung's overrides -- the same
     # order run_m6_point uses, so a key the stance owns wins over a driver
     # default that only ever stood in for it.
+    stance = None
     configuration = None
     if args.stance is not None:
         stance = load_stance(args.stance)
@@ -282,6 +357,16 @@ def main(argv=None):
                 "  stance supersedes this driver's default(s): "
                 + ", ".join(superseded)
             )
+
+    # RUNG-vs-STANCE LAYERING GUARD, shared with run_m6_point. This driver
+    # offers no switch that layers a param above the stance, so there is no
+    # restatement route: a configuration that names a rung-owned key is
+    # refused, and the command line's way of saying it meant that value is
+    # --no-stance.
+    if stance is not None:
+        refuse_rung_supersession(
+            "run_mechanism_ladder", args.es, rung_owned, stance,
+        )
 
     result, geometry, params, flags = run_model(
         nx=args.nx, extra=extra, flags_extra=flags_extra or None,

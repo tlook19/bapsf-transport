@@ -39,7 +39,11 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from compare_sim1d_es1 import PRODUCTION_NX, run_model
-from run_mechanism_ladder import ES_OPERATING
+from run_mechanism_ladder import (
+    ES_OPERATING,
+    RUNG_OWNED_LIVE,
+    refuse_rung_supersession,
+)
 from stance_config import available_stances, load_stance
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 from cablp.solvers._sim1d.results.health import summarize_result
@@ -54,18 +58,6 @@ from cablp.solvers._sim1d.results.health import summarize_result
 # ("never inherit the shared 'local' default here again") is RETIRED, not
 # overlooked -- Tom's ruling, 2026-08-26.
 ELECTRON_BIRTH_POLICY = "local"
-
-# Keys ``ES_OPERATING`` owns AND that are live in the solved configuration, so
-# a layer that overwrites one silently re-labels which rung the run is.
-#
-# ``cathode_Ts_base_K`` is in the set because this driver sets
-# ``cathode_warming_model="power_balance"`` unconditionally, under which the
-# standby temperature is the surface's initial condition and the substrate
-# the conduction term restores toward -- both live, so a layer that
-# overwrites it does re-label the rung. (The retired ``T_s`` key, which
-# ``ES_OPERATING`` also fed, was configuration-inert under that model and is
-# gone as of 2026-09-03; ``cathode_Ts_base_K`` is its successor.)
-RUNG_OWNED_LIVE = ("V_bank", "cathode_Ts_base_K")
 
 
 def parse_npz_overrides(items):
@@ -372,35 +364,18 @@ def main(argv=None):
             for line in departures:
                 print(f"  WARNING: departs {stance.name} {line}")
 
-    # RUNG-vs-STANCE LAYERING GUARD.
-    #
-    # The rung is written into ``extra`` from ``ES_OPERATING[--es]`` and the
-    # stance layer lands ON TOP of it, so a stance that names a rung-owned
-    # key silently overwrites the rung: ``--es 2`` or ``--es 3`` then produces
-    # an arm that is labelled and scored as that rung while carrying ES1's
-    # drive. The departure WARNING above does not catch this -- the stance
-    # value IS the stance, so nothing departs from it.
-    #
-    # A command line can still say it meant the stance value, by re-supplying
-    # the key through ``--extra``; silence cannot. The guard runs after BOTH
-    # the stance layer and the ``--extra`` layer are resolved, so it sees the
-    # configuration the solver would actually be handed.
+    # RUNG-vs-STANCE LAYERING GUARD, shared with run_mechanism_ladder, which
+    # owns the rung table this set describes. A command line can still say it
+    # meant the stance value, by re-supplying the key through ``--extra``;
+    # silence cannot. The guard runs after BOTH the stance layer and the
+    # ``--extra`` layer are resolved, so it sees the configuration the solver
+    # would actually be handed.
     if stance is not None:
-        for key in RUNG_OWNED_LIVE:
-            if key in cli_supplied or key not in stance.params:
-                continue
-            if stance.params[key] == rung_owned[key]:
-                continue
-            raise ValueError(
-                f"run_m6_point: stance {stance.name} sets "
-                f"{key}={stance.params[key]!r}, overwriting the --es "
-                f"{args.es} rung value {key}={rung_owned[key]!r}. This run "
-                f"would be labelled ES{args.es} and scored against ES"
-                f"{args.es} data while carrying another rung's {key}. Fix: "
-                f"pass --extra {key}={rung_owned[key]} to state that the "
-                f"rung value is the intended one, or --no-stance to run "
-                f"without the stance layer."
-            )
+        refuse_rung_supersession(
+            "run_m6_point", args.es, rung_owned, stance,
+            cli_supplied=cli_supplied,
+            restatement="--extra {key}={value}",
+        )
 
     result, geometry, params, flags = run_model(
         nx=args.nx, extra=extra,
