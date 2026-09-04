@@ -355,7 +355,7 @@ LEDGER_PARTICLE_FRAME_KEYS = (
 )
 #: What each row of that group is, as ``name -> (unit, meaning)``. It is the
 #: text the saved file carries in its own attributes, so a reader of the
-#: artifact needs neither this module nor the plan that asked for it.
+#: artifact needs neither this module nor the solver that wrote it.
 LEDGER_PARTICLE_ROW_DOC = {
     "time": ("s", "elapsed time at this save frame"),
     "ticks": (
@@ -456,7 +456,10 @@ LEDGER_PARTICLE_ROW_DOC = {
     "inventory": (
         "atoms",
         "domain inventory at this frame, including the lagged end-return "
-        "buffers",
+        "buffers; its first engaged frame steps up by the fluid neutral "
+        "state the engine was seeded from, a handover rather than a flow "
+        "row, so differences of this row close against the flow rows only "
+        "from the second engaged frame on",
     ),
     "ion_debt_carried": (
         "atoms",
