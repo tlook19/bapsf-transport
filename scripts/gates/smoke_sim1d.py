@@ -23540,6 +23540,62 @@ def _case_configuration_drivers_refuse_rung_owned_supersession():
         finally:
             _ro_ladder.run_model, _ro_m6.run_model = _ro_saved
 
+    # (viii) CONSENT AND IDENTITY AGREE ON THE SPELLING. The guard's equality
+    # is exact and typeless, so ``1910`` consents to a rung value of
+    # ``1910.0`` -- but ``config_identity`` hashes the canonical JSON of the
+    # resolved configuration, where the two are different bytes. Consent
+    # without this would accept a value that leaves the run carrying a second
+    # identity for one physical configuration. ``--extra`` now types every
+    # value from the owning template, so the two spellings ARE one value: same
+    # float, same identity. Captured on the committed configuration through
+    # the real driver, with LAPDSim1D stubbed, so nothing solves.
+    import preflight_diffcfg as _xt_pre
+    from cablp.solvers._sim1d import config_identity as _xt_identity
+
+    def _xt_capture(spelling):
+        captured = _xt_pre.capture(lambda: _ro_m6.main([
+            "--es", "1", "--stance", "g1atrim", "--sgp", "9010",
+            "--extra", f"cathode_Ts_base_K={spelling}",
+            "--save-h5", "/dev/null",
+        ]))
+        return captured.params, captured.flags
+
+    _xt_int_p, _xt_int_f = _xt_capture("1910")
+    _xt_float_p, _xt_float_f = _xt_capture("1910.0")
+    assert type(_xt_int_p["cathode_Ts_base_K"]) is float, (
+        _xt_int_p["cathode_Ts_base_K"]
+    )
+    assert _xt_int_p["cathode_Ts_base_K"] == 1910.0
+    assert (_xt_identity(_xt_int_p, _xt_int_f)
+            == _xt_identity(_xt_float_p, _xt_float_f)), (
+        _xt_identity(_xt_int_p, _xt_int_f),
+        _xt_identity(_xt_float_p, _xt_float_f),
+    )
+
+    # ...and the two refusals that typing buys: a value that is not readable
+    # as its key's type, and a key neither template owns. Both fire at the
+    # parse layer, before the consent guard and before any construction --
+    # captured the same stubbed way, so a regression here reports a missing
+    # refusal rather than starting a solve.
+    def _xt_refused(spelling):
+        argv = [
+            "--es", "1", "--stance", "g1atrim", "--sgp", "9010",
+            "--extra", spelling, "--save-h5", "/dev/null",
+        ]
+        try:
+            _xt_pre.capture(lambda: _ro_m6.main(argv))
+        except ValueError as _xt_exc:
+            return str(_xt_exc)
+        raise AssertionError(f"--extra {spelling} was not refused")
+
+    _xt_bad = _xt_refused("cathode_Ts_base_K=hot")
+    assert "cathode_Ts_base_K" in _xt_bad, _xt_bad
+    assert "carries float" in _xt_bad, _xt_bad
+    assert "'hot'" in _xt_bad, _xt_bad
+    _xt_unknown = _xt_refused("cathode_Ts_base=1910.0")
+    assert "cathode_Ts_base" in _xt_unknown, _xt_unknown
+    assert "NEITHER" in _xt_unknown, _xt_unknown
+
 
 @_case("configuration-fluid-comparator-example")
 def _case_configuration_fluid_comparator_example():

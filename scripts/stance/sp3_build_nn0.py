@@ -80,11 +80,13 @@ The kernels are stated, not assumed to be right:
 THE STANCE IS OVERRIDABLE. ``--extra k=v`` / ``--extra-flag k=v`` carry
 arbitrary ``input_dict`` / ``input_flags`` overrides into the stance the
 builder assembles -- the same passthrough ``run_m6_point.py`` gives the RUN,
-spelled the same way, so a geometry the arm runs on is a geometry the foot is
-built on. They are applied LAST, after the whole stance is assembled, so the
-grid, the puff lobe, the spread targets and the zone volumes all see them.
-Keys are never screened here: an unknown or misfiled key reaches
-``LAPDSim1D``'s own construction-time refusal, unchanged. Array-valued keys
+read by the same code (``extra_overrides.parse_extra_overrides``), so a
+geometry the arm runs on is a geometry the foot is built on and a value
+spelled one way here means one value there. They are applied LAST, after the
+whole stance is assembled, so the grid, the puff lobe, the spread targets and
+the zone volumes all see them. A key neither template owns is refused at that
+parse layer; a key filed into the WRONG one of the two namespaces still
+reaches ``LAPDSim1D``'s own construction-time refusal. Array-valued keys
 (``plasma_radius_profile_cm`` and friends, one entry per mesh cell) come from
 a file rather than a kilobyte of argv, via ``--extra-npz KEY=path.npz:array``.
 
@@ -110,6 +112,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from compare_sim1d_es1 import PRODUCTION_NX, PARAM_OVERRIDES, FLAG_OVERRIDES
+from extra_overrides import parse_extra_overrides
 from run_mechanism_ladder import ES_OPERATING
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config, load_result_hdf5
@@ -154,34 +157,6 @@ KERNELS = ("diffusive", "ballistic")
 #: Axial band the sp1 response map named as the required-source location
 #: [cm]; reported for orientation only, nothing keys off it.
 SP1_BAND_Z_CM = (790.0, 1045.0)
-
-
-def parse_kv_overrides(items):
-    """Return ``{key: value}`` parsed from ``k=v`` strings.
-
-    The value rule is ``run_m6_point.py``'s, replicated so that a key spelled
-    the same way on the builder and on the run means the same thing: the value
-    is read as JSON when it parses (numbers, ``true``/``false``/``null``,
-    lists) and kept as the raw string when it does not, which is what lets a
-    bare selector name like ``tail_walk`` be written without quoting.
-
-    Keys are NOT screened. A key this stance does not own -- misspelled, or
-    filed into the wrong one of the two namespaces -- must reach ``LAPDSim1D``
-    and raise there, because the solver's construction-time refusal is the one
-    authority on which template owns which key.
-    """
-    overrides = {}
-    for item in items:
-        key, sep, value = item.partition("=")
-        if not sep or not key:
-            raise ValueError(
-                f"override {item!r} is not of the form key=value"
-            )
-        try:
-            overrides[key] = json.loads(value)
-        except json.JSONDecodeError:
-            overrides[key] = value
-    return overrides
 
 
 def parse_npz_overrides(items):
@@ -380,10 +355,10 @@ def build(args):
     # npz-sourced values first, so an inline --extra can still override any of
     # them -- the same precedence run_m6_point.py gives its file-sourced nn0.
     npz_params, npz_provenance = parse_npz_overrides(args.extra_npz)
-    inline_params = parse_kv_overrides(args.extra)
+    inline_params = parse_extra_overrides(args.extra, "--extra")
     extra_params = dict(npz_params)
     extra_params.update(inline_params)
-    extra_flags = parse_kv_overrides(args.extra_flag)
+    extra_flags = parse_extra_overrides(args.extra_flag, "--extra-flag")
     params, flags = stance_config(
         args.es, args.nx, args.sgp, args.two_zone,
         extra_params=extra_params, extra_flags=extra_flags,
@@ -761,18 +736,23 @@ def main(argv=None):
                         "arithmetic of adding zero")
     p.add_argument("--extra", nargs="*", default=(),
                    help="additional k=v input_dict (params) overrides, "
-                        "JSON-parsed values, spelled exactly as "
-                        "run_m6_point.py --extra spells them. Applied AFTER "
-                        "the whole stance is assembled, so the geometry keys "
-                        "(Lm, collector_length_cm, gas_puff_z_cm, ...) take "
-                        "effect everywhere this script reads the config. "
-                        "Unknown or misfiled keys are NOT screened here -- "
-                        "they raise at LAPDSim1D construction, which is the "
-                        "one authority on which template owns a key")
+                        "read and typed by "
+                        "extra_overrides.parse_extra_overrides exactly as "
+                        "run_m6_point.py --extra reads them: each value takes "
+                        "the TYPE its key carries in the configuration "
+                        "template. Applied AFTER the whole stance is "
+                        "assembled, so the geometry keys (Lm, "
+                        "collector_length_cm, gas_puff_z_cm, ...) take effect "
+                        "everywhere this script reads the config. A value "
+                        "that cannot be read as its key's type, and a key "
+                        "neither template owns, are refused here; a key filed "
+                        "into the wrong namespace still raises at LAPDSim1D "
+                        "construction")
     p.add_argument("--extra-flag", nargs="*", default=(),
-                   help="additional k=v input_flags overrides (JSON-parsed), "
-                        "as run_m6_point.py --extra-flag; same ordering and "
-                        "same no-screening rule as --extra")
+                   help="additional k=v input_flags overrides, as "
+                        "run_m6_point.py --extra-flag; same ordering and read "
+                        "by the same parse layer as --extra, where every flag "
+                        "key carries bool, so these take true or false")
     p.add_argument("--extra-npz", nargs="*", default=(),
                    help="array-valued params override, KEY=path.npz:arrayname "
                         "-- reads the named array out of the named .npz and "

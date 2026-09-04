@@ -68,6 +68,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config  # noqa: E402
+from extra_overrides import parse_extra_overrides  # noqa: E402
 from stance_config import available_stances  # noqa: E402
 from cablp.solvers._sim1d.core.neutral_seed_cache import (  # noqa: E402
     neutral_seed_signature,
@@ -358,21 +359,17 @@ def main(argv=None):
                     help="exit non-zero if a consistency check fails "
                          "(default: record the failure in the header and exit 0)")
     ap.add_argument("--extra", nargs="*", default=(),
-                    help="additional k=v input_dict overrides (JSON-parsed)")
+                    help="additional k=v input_dict overrides, read and typed "
+                         "by extra_overrides.parse_extra_overrides: each value "
+                         "takes the TYPE its key carries in the configuration "
+                         "template, and a value that cannot be read as one or "
+                         "a key neither template owns is refused here")
     ap.add_argument("--extra-flag", nargs="*", default=(),
-                    help="additional k=v input_flags overrides (JSON-parsed)")
+                    help="additional k=v input_flags overrides, read and typed "
+                         "exactly as --extra: every flag key carries bool, so "
+                         "these take true or false")
     ap.add_argument("--out", required=True, help="output map .npz")
     args = ap.parse_args(argv)
-
-    def parse_kv(items):
-        out = {}
-        for kv in items:
-            k, v = kv.split("=", 1)
-            try:
-                out[k] = json.loads(v)
-            except json.JSONDecodeError:
-                out[k] = v
-        return out
 
     if args.foot_s <= 0.0:
         ap.error("--foot-s must be positive")
@@ -398,8 +395,8 @@ def main(argv=None):
             "command line."
         )
 
-    extra = parse_kv(args.extra)
-    extra_flag = parse_kv(args.extra_flag)
+    extra = parse_extra_overrides(args.extra, "--extra")
+    extra_flag = parse_extra_overrides(args.extra_flag, "--extra-flag")
     params, flags = stance_config(
         args.stance,
         None if args.es == 0 else args.es,

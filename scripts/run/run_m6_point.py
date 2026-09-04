@@ -25,7 +25,6 @@ Usage:
 """
 
 import argparse
-import json
 
 import numpy as np
 
@@ -39,6 +38,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from compare_sim1d_es1 import PRODUCTION_NX, run_model
+from extra_overrides import parse_extra_overrides
 from run_mechanism_ladder import (
     ES_OPERATING,
     RUNG_OWNED_LIVE,
@@ -79,10 +79,11 @@ def parse_npz_overrides(items):
     IEEE doubles bit-exactly, so this route changes how a value is WRITTEN and
     never what the solver receives.
 
-    Keys are NOT screened, as for ``--extra``: a key this stance does not own
-    must reach ``LAPDSim1D`` and raise there, because the solver's
-    construction-time refusal is the one authority on which template owns
-    which key. The DRIVER does the file I/O -- the solver never opens a file.
+    Keys are NOT screened here: an array-valued key this stance does not own
+    reaches ``LAPDSim1D`` and raises there. (``--extra`` screens its own keys
+    against the two templates, because it also has to TYPE them; see
+    ``extra_overrides.parse_extra_overrides``.) The DRIVER does the file I/O
+    -- the solver never opens a file.
     """
     values, provenance = {}, {}
     for item in items:
@@ -188,9 +189,18 @@ def main(argv=None):
                         "--stance and --nn0-profile-npz and BEFORE --extra, so "
                         "an inline value still overrides a file-sourced one")
     p.add_argument("--extra", nargs="*", default=(),
-                   help="additional k=v param overrides (JSON-parsed values)")
+                   help="additional k=v input_dict overrides. Each value is "
+                        "read as JSON where it is legible as JSON and as the "
+                        "bare token otherwise, then given the TYPE its key "
+                        "carries in the configuration template -- so "
+                        "cathode_Ts_base_K=1910 and =1910.0 are one value and "
+                        "one configuration identity. A value that cannot be "
+                        "read as its key's type, and a key neither template "
+                        "owns, are refused here")
     p.add_argument("--extra-flag", nargs="*", default=(),
-                   help="additional k=v input_flags overrides (JSON-parsed)")
+                   help="additional k=v input_flags overrides, read and typed "
+                        "exactly as --extra: every flag key carries bool, so "
+                        "these take true or false")
     p.add_argument("--max-steps", type=int, default=None,
                    help="accepted-step cap; absent (default) is the "
                         "historical uncapped run. Pair it with "
@@ -317,19 +327,11 @@ def main(argv=None):
         extra[key] = value
         cli_supplied.add(key)
         print(f"array param {key} from {npz_provenance[key]}")
-    for kv in args.extra:
-        k, v = kv.split("=", 1)
-        try:
-            extra[k] = json.loads(v)
-        except json.JSONDecodeError:
-            extra[k] = v
+    for k, v in parse_extra_overrides(args.extra, "--extra").items():
+        extra[k] = v
         cli_supplied.add(k)
-    for kv in args.extra_flag:
-        k, v = kv.split("=", 1)
-        try:
-            flags_extra[k] = json.loads(v)
-        except json.JSONDecodeError:
-            flags_extra[k] = v
+    for k, v in parse_extra_overrides(args.extra_flag, "--extra-flag").items():
+        flags_extra[k] = v
         cli_supplied_flags.add(k)
     if stance is not None:
         # Every layer above the stance is reported as a DEPARTURE: a run that
