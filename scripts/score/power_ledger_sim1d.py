@@ -251,12 +251,24 @@ CHANNEL_PHASE = {
          "solver zeroes it in both branches"),
 }
 
+#: Root the founding artifact is read from. ``scripts/`` holds code only and
+#: every run artifact lives outside the repository under this root (see
+#: scripts/README.md, "Run artifacts do not live here"). It is written the way
+#: every artifact-reading script here writes it and expanded against the
+#: caller's home, so no machine's path is in the source and the root can be
+#: pointed elsewhere by pointing HOME elsewhere.
+ARTIFACTS_ROOT = "~/bapsf/artifacts"
+
 #: Founding drive-window numbers, measured 2026-08-19 on the artifact named
 #: below at the registered drive window, keyed by the quantity the --selftest
 #: mode re-measures and carried as (name, reference, significant figures
 #: compared).  Four figures where the founding read gave four; the cathode
 #: line is held to three.
-SELFTEST_ARTIFACT = "g1a_foot45_cr6p94.h5"
+#:
+#: The artifact path is RELATIVE to :data:`ARTIFACTS_ROOT`: this run predates
+#: the artifacts rehome, so it sits in the collected loose set, which is where
+#: a pointer of the older ``scripts/<artifact>`` form resolves.
+SELFTEST_ARTIFACT = "scripts_loose_2026-09-03/runs/g1a_foot45_cr6p94.h5"
 SELFTEST_WINDOW_MS = (15.25, 19.75)
 SELFTEST_REFERENCE = (
     ("cathode_jet_neutral_energy/En", 22.008, 4),
@@ -580,6 +592,16 @@ def run_report(path, drive, afterglow, port_top):
                       port_top)
 
 
+def selftest_artifact_path():
+    """Absolute path of the founding --selftest artifact.
+
+    :data:`SELFTEST_ARTIFACT` under :data:`ARTIFACTS_ROOT`, with the root
+    expanded against the caller's home. Returns the path whether or not a
+    file is there; the caller reports its absence.
+    """
+    return os.path.join(os.path.expanduser(ARTIFACTS_ROOT), SELFTEST_ARTIFACT)
+
+
 def selftest(path):
     """Re-measure the founding drive-window numbers and hard-assert them."""
     with h5py.File(path, "r") as f:
@@ -627,8 +649,9 @@ def main():
                     "run (read-only).")
     parser.add_argument("run", nargs="?",
                         help="sim1d HDF5 result; optional with --selftest, "
-                             f"which otherwise reads {SELFTEST_ARTIFACT} "
-                             "beside this script")
+                             "which otherwise reads the founding artifact "
+                             f"{SELFTEST_ARTIFACT} under the artifacts root "
+                             f"{ARTIFACTS_ROOT}")
     parser.add_argument("--drive", nargs=2, type=float,
                         metavar=("LO_MS", "HI_MS"), default=DRIVE_WINDOW_MS,
                         help="drive plateau window, run clock [ms]")
@@ -643,8 +666,19 @@ def main():
     args = parser.parse_args()
 
     if args.selftest:
-        path = args.run or os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), SELFTEST_ARTIFACT)
+        path = args.run
+        if path is None:
+            path = selftest_artifact_path()
+            if not os.path.exists(path):
+                parser.error(
+                    f"--selftest found no artifact at {path}. That path is "
+                    f"the founding artifact {SELFTEST_ARTIFACT} resolved "
+                    f"under the artifacts root {ARTIFACTS_ROOT}, which is "
+                    "where run artifacts live -- this script's own directory "
+                    "holds code only, so there is nothing to fall back to "
+                    "beside it. Point at another copy by naming it: "
+                    "power_ledger_sim1d.py --selftest RUN.h5"
+                )
         selftest(path)
         return
     if args.run is None:

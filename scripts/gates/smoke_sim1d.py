@@ -23492,15 +23492,51 @@ def _case_configuration_drivers_refuse_rung_owned_supersession():
                 "--save-h5", _ro_h5,
             ])
 
-            # (vi) CONSENT, on the driver that offers it. A command line that
-            # re-supplies the key has SAID it means that value, where silence
-            # cannot, so --extra gets past the same guard the stance alone
-            # trips. The ladder exposes no such switch, which is why its
-            # refusal above names only --no-stance.
+            # (vi) CONSENT IS RESTATEMENT, on the driver that offers it. A
+            # command line consents to the stance layering by naming the RUNG
+            # value -- the one value that leaves the run's ES label true --
+            # and gets past the guard the stance alone trips. The ladder
+            # exposes no such switch, which is why its refusal above names
+            # only --no-stance. Both rung-owned keys, on their own clashing
+            # file.
             _ro_passed(_ro_m6.main, [
+                "--es", "1", "--stance", "rungclash", "--sgp", "9010",
+                "--extra", "cathode_Ts_base_K=1910.0", "--save-h5", _ro_h5,
+            ])
+            _ro_passed(_ro_m6.main, [
+                "--es", "1", "--stance", "vbankclash", "--sgp", "9010",
+                "--extra", "V_bank=177.843", "--save-h5", _ro_h5,
+            ])
+
+            # (vii) AND ANY OTHER VALUE IS REFUSED. --extra layers a key above
+            # the stance; it does not re-choose the rung, so it can never move
+            # a rung-owned key off the rung. Restating the STANCE's value is
+            # the case that used to consent and is the one that matters: it is
+            # exactly the arm that would be labelled ES1 while carrying
+            # another rung's drive. A THIRD value is refused the same way.
+            _ro_msg_st = _ro_refused(_ro_m6.main, [
                 "--es", "1", "--stance", "rungclash", "--sgp", "9010",
                 "--extra", "cathode_Ts_base_K=1234.0", "--save-h5", _ro_h5,
             ])
+            assert "run_m6_point:" in _ro_msg_st, _ro_msg_st
+            assert "cathode_Ts_base_K" in _ro_msg_st, _ro_msg_st
+            assert "1234.0" in _ro_msg_st, _ro_msg_st   # the command line's
+            assert "1910.0" in _ro_msg_st, _ro_msg_st   # the rung's
+            assert _ro_clash_file in _ro_msg_st, _ro_msg_st  # the stance too
+            assert "--extra cathode_Ts_base_K=1910.0" in _ro_msg_st, _ro_msg_st
+
+            # On the other key, over a stance that does NOT name it: the
+            # refusal is about the rung, not about the stance, so it fires
+            # with no stance clause to report.
+            _ro_msg_third = _ro_refused(_ro_m6.main, [
+                "--es", "1", "--stance", "nonrung", "--sgp", "9010",
+                "--extra", "V_bank=42.0", "--save-h5", _ro_h5,
+            ])
+            assert "V_bank" in _ro_msg_third, _ro_msg_third
+            assert "42.0" in _ro_msg_third, _ro_msg_third
+            assert "177.843" in _ro_msg_third, _ro_msg_third
+            assert "names it too" not in _ro_msg_third, _ro_msg_third
+            assert "--extra V_bank=177.843" in _ro_msg_third, _ro_msg_third
         finally:
             _ro_ladder.run_model, _ro_m6.run_model = _ro_saved
 
