@@ -771,7 +771,12 @@ the puff, the end returns, the wall and the pump — plus the standing inventory
 and outstanding ionization debt at the frame. This is the only place the
 attribution survives: once the arm supersedes the moment closure the fluid
 $n_n$ rows are stripped, so a saved trajectory shows the neutral density at a
-station without saying which channel put it there.
+station without saying which channel put it there. The first engaged frame is
+a handover rather than a balance — engagement seeds the kinetic state from the
+fluid neutral profile, so that frame's `inventory` steps from zero to the whole
+seeded column while its flow rows carry only the tick traffic that fell in it —
+and the per-frame identity, the change in `inventory` being the external births
+less ionization less pumping, holds from the second engaged frame onward.
 
 
 ### The distribution the arm evolves, and why it carries two velocity coordinates
