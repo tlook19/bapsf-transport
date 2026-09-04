@@ -34,6 +34,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 
 from compare_sim1d_es1 import run_model
 from stance_config import available_stances, load_stance
+from cablp.solvers._sim1d.core.model_families import values_equal
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
 # Per-campaign operating points: the MEASURED open-circuit bank voltage V0 and
@@ -95,8 +96,9 @@ RUNG_OWNED_LIVE = ("V_bank", "cathode_Ts_base_K")
 
 
 def refuse_rung_supersession(driver, es, rung_owned, stance,
-                             cli_supplied=(), restatement=None):
-    """Refuse a named configuration that silently overwrites a rung-owned key.
+                             cli_supplied=(), resolved=None,
+                             restatement=None):
+    """Refuse a run that carries a rung-owned key at other than the rung value.
 
     A rung is written into a driver's ``extra`` from ``ES_OPERATING[--es]`` and
     the named configuration lands ON TOP of it, so a configuration that carries
@@ -108,19 +110,50 @@ def refuse_rung_supersession(driver, es, rung_owned, stance,
     ``rung_owned`` maps each :data:`RUNG_OWNED_LIVE` key to the value the rung
     gave it, snapshotted before any layer above it. ``stance`` is the loaded
     configuration. ``cli_supplied`` names the keys this command line supplied
-    ABOVE that layer; they are exempt, because a command line that re-supplies
-    the key has SAID it means that value, where silence cannot. ``restatement``
-    is a format string carrying ``{key}`` and ``{value}`` that names the switch
-    which does so, or ``None`` for a driver that offers no such switch.
+    ABOVE that layer and ``resolved`` is the params mapping the driver has
+    finished resolving -- stance layer and command-line layer both applied --
+    from which each such key's command-line value is read. CONSENT IS
+    RESTATEMENT: a command line consents to the layering by naming the RUNG's
+    value, which is the one thing it can say that the rung's own label stays
+    true of; any other value is refused, so the switch can never move a
+    rung-owned key off its rung. ``restatement`` is a format string carrying
+    ``{key}`` and ``{value}`` that names the switch which restates, or ``None``
+    for a driver that offers no such switch -- a driver that passes
+    ``cli_supplied`` passes ``resolved`` and ``restatement`` with it.
 
-    Raises ``ValueError`` -- naming the key, the rung's value, the
-    configuration's value and the file it came from -- on the first rung-owned
-    key the configuration moves. Returns ``None`` when it moves none of them.
+    Equality is :func:`values_equal`, the same comparison the configuration
+    layer uses to judge a restated delta: exact, with no tolerance, so a
+    restatement reproduces the rung value rather than approaching it. Both
+    routes carry the value through as an IEEE double unchanged, so an exact
+    comparison is the one a caller can satisfy by typing the number.
+
+    Raises ``ValueError`` -- naming the key, the rung's value, the offending
+    value and where it came from -- on the first rung-owned key that is not at
+    its rung value. Returns ``None`` when every one of them is.
     """
     for key in RUNG_OWNED_LIVE:
-        if key in cli_supplied or key not in stance.params:
-            continue
-        if stance.params[key] == rung_owned[key]:
+        rung_value = rung_owned[key]
+        in_stance = key in stance.params
+        if key in cli_supplied:
+            if values_equal(resolved[key], rung_value):
+                continue
+            also = (
+                f" The stance {stance.name} ({stance.path}) names it too, "
+                f"as {key}={stance.params[key]!r}." if in_stance else ""
+            )
+            raise ValueError(
+                f"{driver}: the command line sets {key}={resolved[key]!r}, "
+                f"which is not the --es {es} rung value "
+                f"{key}={rung_value!r}.{also} This run would be labelled "
+                f"ES{es} and scored against ES{es} data while carrying "
+                f"another rung's {key}. A command line consents to the "
+                "stance layering by RESTATING the rung value; no other "
+                "value is one it can state. Fix: pass "
+                + restatement.format(key=key, value=rung_value)
+                + f" to consent at the rung value, or run the --es rung "
+                f"whose {key} is the one this command line wants."
+            )
+        if not in_stance or values_equal(stance.params[key], rung_value):
             continue
         if restatement is None:
             fix = (
@@ -131,14 +164,14 @@ def refuse_rung_supersession(driver, es, rung_owned, stance,
         else:
             fix = (
                 "Fix: pass "
-                + restatement.format(key=key, value=rung_owned[key])
+                + restatement.format(key=key, value=rung_value)
                 + " to state that the rung value is the intended one, or "
                 "--no-stance to run without the stance layer."
             )
         raise ValueError(
             f"{driver}: stance {stance.name} ({stance.path}) sets "
             f"{key}={stance.params[key]!r}, overwriting the --es {es} rung "
-            f"value {key}={rung_owned[key]!r}. This run would be labelled "
+            f"value {key}={rung_value!r}. This run would be labelled "
             f"ES{es} and scored against ES{es} data while carrying another "
             f"rung's {key}. {fix}"
         )

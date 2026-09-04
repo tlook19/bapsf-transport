@@ -365,15 +365,16 @@ def main(argv=None):
                 print(f"  WARNING: departs {stance.name} {line}")
 
     # RUNG-vs-STANCE LAYERING GUARD, shared with run_mechanism_ladder, which
-    # owns the rung table this set describes. A command line can still say it
-    # meant the stance value, by re-supplying the key through ``--extra``;
-    # silence cannot. The guard runs after BOTH the stance layer and the
-    # ``--extra`` layer are resolved, so it sees the configuration the solver
-    # would actually be handed.
+    # owns the rung table this set describes. A command line consents to the
+    # stance layering by RESTATING the rung value through ``--extra``; silence
+    # cannot consent, and a third value is refused -- ``--extra`` layers a key
+    # above the stance, it does not re-choose the rung. The guard runs after
+    # BOTH the stance layer and the ``--extra`` layer are resolved, so the
+    # value it judges is the one the solver would actually be handed.
     if stance is not None:
         refuse_rung_supersession(
             "run_m6_point", args.es, rung_owned, stance,
-            cli_supplied=cli_supplied,
+            cli_supplied=cli_supplied, resolved=extra,
             restatement="--extra {key}={value}",
         )
 
