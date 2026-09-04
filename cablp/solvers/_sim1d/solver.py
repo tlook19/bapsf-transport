@@ -90,6 +90,7 @@ from .physics.kinetic_dvm import (
     ANNULUS_FLIGHT_MODELS as KINETIC_DVM_ANNULUS_FLIGHT_MODELS,
     ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
     EXCHANGE_MODELS as KINETIC_DVM_EXCHANGE_MODELS,
+    GRID_TI_CAP_EV,
     LEDGER_PARTICLE_FLOW_KEYS as KINETIC_DVM_PARTICLE_FLOW_KEYS,
     LEDGER_PARTICLE_FRAME_KEYS as KINETIC_DVM_PARTICLE_FRAME_KEYS,
     TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
@@ -509,6 +510,7 @@ class StepAttempt1D:
     source_booking: dict | None = None
     cathode_jet_energy_booking: np.ndarray | None = None
     anode_jet_energy_booking: np.ndarray | None = None
+    collector_jet_energy_booking: np.ndarray | None = None
     coverage_burn: np.ndarray | None = None
     coverage_reservoir_burn: np.ndarray | None = None
     coverage_w: np.ndarray | None = None
@@ -1363,6 +1365,17 @@ class LAPDSim1D:
         self._dvm_anode_jet_energy_stage_accum = None
         self._dvm_anode_jet_incident_row = None
         self._anode_energy_ledger_J = None
+        # Collector jet: the same four, collector-side. There is no surface
+        # book to go with them -- the collector plate has neither a sheath
+        # solve nor an energy ledger in this model, so the arrival energy is
+        # PRESCRIBED from the end cell's own Te/Ti at the configured multiple
+        # and the launched energy is debited from nothing.
+        self._dvm_collector_jet = None
+        self._dvm_collector_jet_energy_booked = np.zeros(
+            self._geometry.cells, dtype=float
+        )
+        self._dvm_collector_jet_energy_stage_accum = None
+        self._dvm_collector_jet_incident_row = None
         if self._neutral_model == "kinetic_dvm":
             self._configure_kinetic_dvm()
         else:
@@ -1500,6 +1513,39 @@ class LAPDSim1D:
                         f"{_key} parameterizes the transient DVM's anode "
                         "backscatter channel and is read only under "
                         "neutral_kinetic_dvm_anode_jet, which has no "
+                        "meaning under "
+                        f"neutral_model={self._neutral_model!r}. Accepted: "
+                        f"leave it at {_default!r}, or arm the channel with "
+                        f"neutral_model='kinetic_dvm' (got {_given!r})"
+                    )
+            # The same statement, collector-side: the channel splits the
+            # transient DVM's COUNTED far-end return, and no other neutral
+            # model carries one to split.
+            if bool(
+                self._input_dict.get("neutral_kinetic_dvm_collector_jet")
+            ):
+                raise ValueError(
+                    "neutral_kinetic_dvm_collector_jet splits the transient "
+                    "DVM's counted collector return into an energetic fast "
+                    "share and a thermal remainder, and has no meaning under "
+                    f"neutral_model={self._neutral_model!r}, which carries no "
+                    "such counted stream. Accepted: leave it off, or set it "
+                    "with neutral_model='kinetic_dvm' and the "
+                    "neutral_two_zone flag"
+                )
+            for _key in (
+                "neutral_kinetic_dvm_collector_jet_R_N",
+                "neutral_kinetic_dvm_collector_jet_R_E",
+                "neutral_kinetic_dvm_collector_jet_T_launch_eV",
+                "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple",
+            ):
+                _given = self._input_dict.get(_key)
+                _default = input_dict_template_1d.get(_key)
+                if _given != _default:
+                    raise ValueError(
+                        f"{_key} parameterizes the transient DVM's collector "
+                        "fast-share channel and is read only under "
+                        "neutral_kinetic_dvm_collector_jet, which has no "
                         "meaning under "
                         f"neutral_model={self._neutral_model!r}. Accepted: "
                         f"leave it at {_default!r}, or arm the channel with "
@@ -4714,6 +4760,80 @@ class LAPDSim1D:
                 ),
             }
         self._dvm_anode_jet = anode_jet
+        # The collector-side energetic return, default off and ABSENT rather
+        # than present at a neutral setting, exactly as the two jets above
+        # are. It needs no cathode solve and no mesh face: the plate stands at
+        # the downstream end of the column, its thermal return is already
+        # injected in -z, and its arrival energy is prescribed rather than
+        # solved. What it does need is all three of its numbers, and that none
+        # of its four be named while the channel is off -- the two refusals
+        # below, in that order, so a config that armed the channel and forgot
+        # a number is told which number rather than which key is surplus.
+        collector_jet = None
+        if bool(self._input_dict.get("neutral_kinetic_dvm_collector_jet")):
+            missing = [
+                key
+                for key in (
+                    "neutral_kinetic_dvm_collector_jet_R_N",
+                    "neutral_kinetic_dvm_collector_jet_R_E",
+                    "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple",
+                )
+                if self._input_dict.get(key) is None
+            ]
+            if missing:
+                raise ValueError(
+                    "neutral_kinetic_dvm_collector_jet is armed and every "
+                    "number it reads must be named -- there is no default "
+                    "collector plate to fall back on, and this model solves "
+                    "no collector sheath to derive one from. Undeclared "
+                    f"(None): {missing}. Accepted: name R_N (the particle "
+                    "share that leaves fast), R_E (the share of the arrival "
+                    "energy that leaves with it) and sheath_Te_multiple (the "
+                    "multiple of the end cell's Te which, plus its Ti, IS "
+                    "that arrival energy), or "
+                    "neutral_kinetic_dvm_collector_jet = False"
+                )
+            collector_jet = {
+                "R_N": float(
+                    self._input_dict.get(
+                        "neutral_kinetic_dvm_collector_jet_R_N"
+                    )
+                ),
+                "R_E": float(
+                    self._input_dict.get(
+                        "neutral_kinetic_dvm_collector_jet_R_E"
+                    )
+                ),
+                "T_launch_eV": self._input_dict.get(
+                    "neutral_kinetic_dvm_collector_jet_T_launch_eV"
+                ),
+                "sheath_Te_multiple": float(
+                    self._input_dict.get(
+                        "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple"
+                    )
+                ),
+            }
+        else:
+            named = [
+                key
+                for key in (
+                    "neutral_kinetic_dvm_collector_jet_R_N",
+                    "neutral_kinetic_dvm_collector_jet_R_E",
+                    "neutral_kinetic_dvm_collector_jet_T_launch_eV",
+                    "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple",
+                )
+                if self._input_dict.get(key) is not None
+            ]
+            if named:
+                raise ValueError(
+                    f"{named} parameterize the transient DVM's collector "
+                    "fast-share channel, which is OFF "
+                    "(neutral_kinetic_dvm_collector_jet = False), so nothing "
+                    "reads them and a silently inert control is exactly what "
+                    "this refuses. Accepted: leave them at None, or arm the "
+                    "channel with neutral_kinetic_dvm_collector_jet = True"
+                )
+        self._dvm_collector_jet = collector_jet
         # B6: the thin annular baffles, default off and ABSENT rather than
         # present at a neutral setting, exactly as the two jets are. The
         # geometry has already validated and mapped them onto faces (and has
@@ -4753,7 +4873,10 @@ class LAPDSim1D:
             vmax_cm_s,
             cathode_band_eV,
             anode_band_eV,
-        ) = self._resolve_dvm_velocity_extent(cathode_jet, anode_jet)
+            collector_band_eV,
+        ) = self._resolve_dvm_velocity_extent(
+            cathode_jet, anode_jet, collector_jet
+        )
         self._dvm = TransientDVM(
             geometry=self._geometry,
             nvz=int(self._input_dict.get("neutral_kinetic_dvm_nvz")),
@@ -4761,6 +4884,7 @@ class LAPDSim1D:
             vmax_cm_s=vmax_cm_s,
             cathode_launch_band_eV=cathode_band_eV,
             anode_launch_band_eV=anode_band_eV,
+            collector_launch_band_eV=collector_band_eV,
             accommodation=accommodation,
             wall_reflection=reflection,
             elastic_model=elastic,
@@ -4768,6 +4892,7 @@ class LAPDSim1D:
             annulus_flights=flights,
             cathode_jet=cathode_jet,
             anode_jet=anode_jet,
+            collector_jet=collector_jet,
             transparency=1.0 - float(self._input_dict.get("eta")),
             mesh_face=int(anode_faces[0]) if anode_faces.size else -999,
             baffle_faces=baffle_faces,
@@ -4776,13 +4901,17 @@ class LAPDSim1D:
             s_R=self._dvm_end_sticking("S_pump_R"),
         )
 
-    def _resolve_dvm_velocity_extent(self, cathode_jet, anode_jet):
+    def _resolve_dvm_velocity_extent(
+        self, cathode_jet, anode_jet, collector_jet
+    ):
         """Resolve the DVM velocity-grid half-extent and the jets' launch bands.
 
-        Returns ``(vmax_cm_s, cathode_band_eV, anode_band_eV)``. Each band is
-        ``(e_min, e_max)`` in eV per atom for an armed jet and ``None`` for
-        one that is not, and a ``None`` band is what makes the engine's
-        construction-time reachability check say nothing for that surface.
+        Returns
+        ``(vmax_cm_s, cathode_band_eV, anode_band_eV, collector_band_eV)``.
+        Each band is ``(e_min, e_max)`` in eV per atom for an armed jet and
+        ``None`` for one that is not, and a ``None`` band is what makes the
+        engine's construction-time reachability check say nothing for that
+        surface.
 
         The band. ``e_max`` is the largest per-atom launch energy the
         CONFIGURATION can ask for: ``(R_E/R_N)(phi + Ti)`` at the raw
@@ -4791,6 +4920,24 @@ class LAPDSim1D:
         plus the engine's own 10 eV ion-temperature allowance. The anode jet
         borrows that same cathode ceiling as a stated allowance rather than as
         a bound on ``phi_a``, which has no cap and is given none here.
+
+        THE COLLECTOR BAND IS FORMED THE SAME WAY ON A DIFFERENT ARRIVAL
+        ENERGY. Its per-ion arrival energy is not a sheath fall but the
+        prescribed ``sheath_Te_multiple * Te + Ti``, so its ``e_max`` is
+        ``(R_E/R_N)(mult * Te_allowance + Ti_allowance)`` -- the multiple
+        included, because leaving it out would form a band the armed channel
+        can launch straight past and hand the reachability check something
+        other than the band it is named for. THE SOLVER STATES NO CEILING FOR
+        ``Te``: the only upper bound anywhere near it is the bundled ADAS
+        table's own 15 keV top, which is a data-range bound rather than a
+        statement about this plasma and would size the grid absurdly. The
+        allowance used here is therefore a DOCUMENTED one and is the engine's
+        own ``GRID_TI_CAP_EV`` (10 eV) read as an electron temperature, so the
+        two temperatures the arrival energy is formed from carry one stated
+        allowance rather than two. Above it nothing mis-launches silently:
+        the launch-spectrum builder's per-tick moment refusal is exact and
+        remains the backstop, and this band only decides what construction
+        time can rule out.
 
         ``e_min`` is the SMALLEST such energy, and it is set by the ``Ti``
         floor alone: ``phi`` is clamped non-negative before the sum is formed
@@ -4816,6 +4963,10 @@ class LAPDSim1D:
         Ti_floor_eV = float(p["Ti_floor"])
         phi_cap_V = float(p.get("cathode_phi_c_cap_V"))
         Ti_allowance_eV = 10.0
+        # The documented electron-temperature allowance the collector band is
+        # formed at; see the note above for why the solver has no Te ceiling
+        # to read and why this is the engine's own ion-temperature cap.
+        Te_allowance_eV = GRID_TI_CAP_EV
 
         def band(spec):
             if spec is None:
@@ -4826,19 +4977,38 @@ class LAPDSim1D:
                 ratio * (phi_cap_V + Ti_allowance_eV),
             )
 
+        def collector_band_eV(spec):
+            if spec is None:
+                return None
+            ratio = float(spec["R_E"]) / float(spec["R_N"])
+            return (
+                ratio * Ti_floor_eV,
+                ratio
+                * (
+                    float(spec["sheath_Te_multiple"]) * Te_allowance_eV
+                    + Ti_allowance_eV
+                ),
+            )
+
         cathode_band = band(cathode_jet)
         anode_band = band(anode_jet)
-        bands = [b for b in (cathode_band, anode_band) if b is not None]
+        collector_band = collector_band_eV(collector_jet)
+        bands = [
+            b
+            for b in (cathode_band, anode_band, collector_band)
+            if b is not None
+        ]
 
         named = p.get("neutral_kinetic_dvm_vmax_cm_s")
         if named is None:
             if not bands:
-                return floor_extent, None, None
+                return floor_extent, None, None, None
             e_max = max(b[1] for b in bands)
             return (
                 launch_band_velocity_extent_cm_s(e_max),
                 cathode_band,
                 anode_band,
+                collector_band,
             )
         vmax = float(named)
         if not np.isfinite(vmax) or vmax <= 0.0:
@@ -4859,7 +5029,7 @@ class LAPDSim1D:
                 "did. Accepted: an extent at or above that sizing, or None "
                 "to have it sized to the launch band"
             )
-        return vmax, cathode_band, anode_band
+        return vmax, cathode_band, anode_band, collector_band
 
     def _dvm_end_sticking(self, key):
         """Return the end-plane sticking probability of a pump speed [L/s].
@@ -5026,6 +5196,7 @@ class LAPDSim1D:
         self._dvm_source_rows = None
         self._dvm_cathode_jet_incident_row = None
         self._dvm_anode_jet_incident_row = None
+        self._dvm_collector_jet_incident_row = None
         state = self.state if y is None else self._unpack(y)
         # The zone-exchange term exists only in two-zone runs, so the term
         # ledger (and the saved rhs_terms structure) is unchanged when the
@@ -5436,6 +5607,16 @@ class LAPDSim1D:
                             cathode_solve,
                         )
                     )
+                if self._dvm_collector_jet is not None:
+                    # The same reading for the ions the far-end boundary
+                    # removed, off this evaluation's state alone: the
+                    # collector's arrival energy is prescribed from Te/Ti and
+                    # reads no solve.
+                    self._dvm_collector_jet_incident_row = (
+                        self._dvm_collector_jet_incident_energy_row(
+                            self._dvm_source_rows["collector_face"], state
+                        )
+                    )
                 terms = {
                     name: self._strip_dvm_rows(name, term)
                     for name, term in terms.items()
@@ -5837,6 +6018,12 @@ class LAPDSim1D:
                 self._dvm_anode_jet_energy_stage_accum = np.zeros(
                     self._geometry.cells, dtype=float
                 )
+            if self._dvm_collector_jet is not None:
+                # The collector channel's arrival-ENERGY tally, on the same
+                # stage weight and the same attempt lifetime.
+                self._dvm_collector_jet_energy_stage_accum = np.zeros(
+                    self._geometry.cells, dtype=float
+                )
 
         if self._coverage is not None:
             # Arm the covered-only neutral-debit tally AND the coverage field's
@@ -5934,6 +6121,10 @@ class LAPDSim1D:
                 self._dvm_anode_jet_energy_stage_accum
             )
             self._dvm_anode_jet_energy_stage_accum = None
+            attempt_collector_jet_energy_booking = (
+                self._dvm_collector_jet_energy_stage_accum
+            )
+            self._dvm_collector_jet_energy_stage_accum = None
             attempt_coverage_burn = self._coverage_burn_accum
             attempt_coverage_reservoir_burn = (
                 self._coverage_reservoir_burn_accum
@@ -5955,6 +6146,9 @@ class LAPDSim1D:
             source_booking=attempt_source_booking,
             cathode_jet_energy_booking=attempt_jet_energy_booking,
             anode_jet_energy_booking=attempt_anode_jet_energy_booking,
+            collector_jet_energy_booking=(
+                attempt_collector_jet_energy_booking
+            ),
             coverage_burn=attempt_coverage_burn,
             coverage_reservoir_burn=attempt_coverage_reservoir_burn,
             coverage_w=attempt_coverage_w,
@@ -6583,6 +6777,17 @@ class LAPDSim1D:
                 )
                 step_anode_incident_erg = float(
                     np.sum(anode_jet_energy_booking)
+                )
+            collector_jet_energy_booking = getattr(
+                attempt, "collector_jet_energy_booking", None
+            )
+            if collector_jet_energy_booking is not None:
+                # The same discipline collector-side, with no surface book to
+                # hold an increment for: the collector plate has none, so the
+                # tick accumulator is the whole commit.
+                self._dvm_collector_jet_energy_booked = (
+                    self._dvm_collector_jet_energy_booked
+                    + collector_jet_energy_booking
                 )
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
@@ -8181,6 +8386,15 @@ class LAPDSim1D:
         # `get_config()` returned, so these two lines reach the inner sim only.
         params["neutral_kinetic_dvm_cathode_jet"] = False
         params["neutral_kinetic_dvm_anode_jet"] = False
+        # The collector channel is cleared for the same reason and, unlike the
+        # two above, its four numbers with it: they are refused outright while
+        # the channel is off, so clearing the flag alone would turn a legal
+        # outer configuration into an inner refusal.
+        params["neutral_kinetic_dvm_collector_jet"] = False
+        params["neutral_kinetic_dvm_collector_jet_R_N"] = None
+        params["neutral_kinetic_dvm_collector_jet_R_E"] = None
+        params["neutral_kinetic_dvm_collector_jet_T_launch_eV"] = None
+        params["neutral_kinetic_dvm_collector_jet_sheath_Te_multiple"] = None
         # The equilibration OWNS its neutral start; it must not inherit the
         # outer run's nn0. nn0 is the direct-run fill (a realistic pre-shot
         # background), whereas this inner sim accumulates the fill from
@@ -12944,6 +13158,43 @@ class LAPDSim1D:
         )
         return np.asarray(anode_row, dtype=float) * per_ion_erg
 
+    def _dvm_collector_jet_incident_energy_row(self, collector_row, state):
+        """Return the collector return's ARRIVAL ion-energy row [erg/s].
+
+        ``mult * Te + Ti`` per collected ion, clamped at zero, times the
+        counted return rate, per cell -- the row is non-zero only where the
+        far-end characteristic boundary actually drained, so the temperatures
+        that form it are that end cell's own.
+
+        ``mult`` is ``neutral_kinetic_dvm_collector_jet_sheath_Te_multiple``,
+        the PRESCRIBED floating-sheath convention the configuration states.
+        Nothing is solved here and nothing can be: this model carries no
+        collector sheath and no collector circuit, so unlike
+        :meth:`_dvm_anode_jet_incident_energy_row` there is no ``phi`` to
+        read and no cathode solve to read it from. The clamp is kept for
+        parity with the two solved surfaces, where a slightly negative sheath
+        subtracts from the thermal energy the ions arrive with; here both
+        terms are floored temperatures and it can only be inactive.
+
+        NO AFTERGLOW SPECIAL CASE, for the same two reasons the anode channel
+        needs none: the counted return follows the boundary's own Bohm flux
+        and collapses with the plasma, and the arrival energy falls with
+        ``Te`` to the ``Ti`` scale on its own.
+
+        The row is a RATE because its partner (the counted source row) is, and
+        the stage accumulator integrates both over the step at one weight.
+        """
+        derived = derive_state(
+            state, floors=self._floors, ion_mass_g=self._ion_mass_g
+        )
+        multiple = float(self._dvm_collector_jet["sheath_Te_multiple"])
+        per_ion_erg = np.maximum(
+            multiple * np.asarray(derived.Te, dtype=float)
+            + np.asarray(derived.Ti, dtype=float),
+            0.0,
+        ) * ev_to_erg
+        return np.asarray(collector_row, dtype=float) * per_ion_erg
+
     def _accumulate_dvm_source_booking(self):
         """Tally this RHS stage's share of the tick's booked source inflow.
 
@@ -12975,6 +13226,13 @@ class LAPDSim1D:
             self._dvm_anode_jet_energy_stage_accum += (
                 self._dvm_ion_stage_weight
                 * self._dvm_anode_jet_incident_row
+            )
+        if self._dvm_collector_jet_energy_stage_accum is not None:
+            # The ENERGY half of the collector channel's counted pair, on the
+            # same stage weight and from the same evaluation's rows.
+            self._dvm_collector_jet_energy_stage_accum += (
+                self._dvm_ion_stage_weight
+                * self._dvm_collector_jet_incident_row
             )
 
     def _dvm_booked_transfer_rhs(self):
@@ -13547,6 +13805,9 @@ class LAPDSim1D:
         self._dvm_anode_jet_energy_booked = np.zeros(
             self._geometry.cells, dtype=float
         )
+        self._dvm_collector_jet_energy_booked = np.zeros(
+            self._geometry.cells, dtype=float
+        )
 
     def _dvm_advance(self, dt_neutral):
         """Run one transient DVM update and republish the neutral moments.
@@ -13630,6 +13891,12 @@ class LAPDSim1D:
             self._dvm_anode_jet_energy_booked = np.zeros(
                 self._geometry.cells, dtype=float
             )
+        collector_jet_incident = None
+        if self._dvm_collector_jet is not None:
+            collector_jet_incident = self._dvm_collector_jet_energy_booked
+            self._dvm_collector_jet_energy_booked = np.zeros(
+                self._geometry.cells, dtype=float
+            )
         self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
         self._dvm_source_booked = self._zero_dvm_source_counts()
         tick_ledger = self._dvm.update(
@@ -13644,6 +13911,7 @@ class LAPDSim1D:
             cathode_jet_incident_erg=jet_incident,
             cathode_jet_counts=jet_counts,
             anode_jet_incident_erg=anode_jet_incident,
+            collector_jet_incident_erg=collector_jet_incident,
             T_s_K=(
                 float(self._cathode_Ts_K)
                 if self._cathode_Ts_K is not None
