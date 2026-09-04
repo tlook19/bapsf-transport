@@ -1,6 +1,6 @@
 """Small sim1d stability sweep over a NAMED configuration's corners.
 
-Five short fixed-corner cases -- seed density, temperatures, cathode on/off --
+Four short fixed-corner cases -- seed density, temperatures, cathode on/off --
 each run for a fraction of a microsecond and checked for finiteness and drift.
 It answers "does the integrator stay well behaved near these corners", and the
 answer is only meaningful about a configuration someone can name: the same
@@ -88,17 +88,18 @@ CASES = (
         dt_max=1.0e-8,
         cathode=True,
     ),
-    StabilityCase(
-        name="twin_cathode_midrange",
-        ne0=5.0e12,
-        Te0=8.0,
-        Ti0=2.0,
-        t_end=2.5e-7,
-        dt_max=1.0e-8,
-        cathode=True,
-        twin=True,
-    ),
+    # twin_cathode_midrange retired 2026-09-03: it cannot be constructed on
+    # the single-cathode source_fixed_grid layout (see RETIRED_CASES).
 )
+
+#: Corners removed from ``CASES``, and the reason ``--list``/``--only`` state
+#: when the name is asked for. A retired corner is refused by name rather than
+#: skipped, so a caller who names one is told why it is gone.
+RETIRED_CASES = {
+    "twin_cathode_midrange":
+        "source_fixed_grid is defined only for the single-cathode layout, so "
+        "a twin-cathode corner has no meaning on this source grid",
+}
 
 
 def main(argv=None):
@@ -113,7 +114,46 @@ def main(argv=None):
         "--no-stance", action="store_true",
         help="acknowledge that this sweep names no configuration and runs "
              "this script's own corner definitions over the bare templates")
+    ap.add_argument(
+        "--list", action="store_true",
+        help="print the corner names this sweep runs, and any retired name "
+             "with the reason it was retired, then exit")
+    ap.add_argument(
+        "--only", action="append", default=[], metavar="NAME[,NAME...]",
+        help="run only these corners (repeatable, comma-separated); a retired "
+             "or unknown name is refused")
     args = ap.parse_args(argv)
+
+    if args.list:
+        for case in CASES:
+            print(case.name)
+        for name, reason in sorted(RETIRED_CASES.items()):
+            print(f"{name}  RETIRED -- {reason}")
+        return
+
+    # Resolved BEFORE the configuration requirement below: a retired or
+    # misspelled corner name is wrong however the sweep is invoked, and
+    # answering it with the stance error instead would name the wrong fault.
+    requested = [n for chunk in args.only for n in chunk.split(",") if n]
+    retired = [n for n in requested if n in RETIRED_CASES]
+    if retired:
+        raise SystemExit(
+            "sweep_sim1d_stability: "
+            + "; ".join(
+                f"corner {n} is RETIRED -- {RETIRED_CASES[n]}"
+                for n in retired
+            )
+        )
+    known = {case.name for case in CASES}
+    unknown = [n for n in requested if n not in known]
+    if unknown:
+        raise SystemExit(
+            "sweep_sim1d_stability: unknown corner name(s): "
+            f"{', '.join(unknown)} (see --list)"
+        )
+    selected = ([case for case in CASES if case.name in requested]
+                if requested else list(CASES))
+
     # A stability verdict is a statement ABOUT a configuration: the same corner
     # is well behaved under one closure and marginal under another, so a sweep
     # that names none reports a number nobody can place.
@@ -137,7 +177,7 @@ def main(argv=None):
         + ("<unnamed>" if base is None else f"{base.name} ({base.path})")
     )
     reports = []
-    for case in CASES:
+    for case in selected:
         result, summary = run_case(case, base)
         check_case(case, result, summary)
         reports.append(format_report(case, summary))
