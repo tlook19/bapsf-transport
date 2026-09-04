@@ -251,9 +251,9 @@ GRID_U_CAP_CM_S = 2.0e6
 # ``sinh(a (1 - 1/nvz)) / sinh(a)`` of it -- and no non-negative weighting of
 # bins has a mean beyond that center, so the extent must exceed the drift it
 # has to carry rather than meet it. 1.25 clears the last center over the top of
-# the band by 7% on a 48-bin axis and 11% on a 64-bin one; the constructed grid
-# is checked against that criterion regardless, so this is the sizing rule and
-# not the guarantee.
+# the band by 6.4% on a 48-bin axis and 10.8% on a 64-bin one; the constructed
+# grid is checked against that criterion regardless, so this is the sizing rule
+# and not the guarantee.
 LAUNCH_EXTENT_MARGIN = 1.25
 
 # Sheath-fall allowance [V] applied to the ANODE jet when the construction-time
@@ -1899,8 +1899,11 @@ class TransientDVM:
         have; here that is a misbooked counted channel -- the surface has
         already been debited ``R_E`` of the incident energy and this
         spectrum is what receives it -- so the achieved moments are checked
-        against their targets and a miss names the cell, the shortfall and
-        the two ways out.
+        against their targets and a miss names the cell, the shortfall, the
+        three ways out -- a larger velocity-grid extent, that extent left
+        unset so it is sized to the launch band, or a lower sheath cap -- and
+        the one that LOOKS like a fourth and is not: a finer ``nvz`` narrows
+        the grid-tied smear and lowers the ceiling instead of raising it.
         """
         e_launch = float(e_launch)
         if not np.isfinite(e_launch) or e_launch <= 0.0:
@@ -1987,6 +1990,10 @@ class TransientDVM:
         misses its moments RAISES rather than returning an approximate
         spectrum; both statements hold here unchanged, against the anode
         energy book's ``backscatter`` row instead of the cathode surface's.
+        The ways out this side's message names are the same three read
+        against the anode's own coefficients -- a larger extent, that extent
+        left unset, or a smaller ``R_E`` -- with the same non-way, a finer
+        ``nvz``, called out for the same reason.
         """
         e_launch = float(e_launch)
         if not np.isfinite(e_launch) or e_launch <= 0.0:

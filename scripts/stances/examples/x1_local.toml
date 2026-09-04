@@ -1,0 +1,49 @@
+# THE ALL-LOCAL DISPOSAL CORNER: the reference configuration with the
+# anomalous-transport selector moved to "local".
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: everything the reference decides -- the measured machine, the
+# operating point, the drive calibration, the neutral closure, the initial
+# neutral state -- is inherited, so this file cannot drift from the reference
+# and a reader can see the whole difference between the two arms at a glance.
+#
+# WHAT IT IS FOR. The reference disposes of the quasilinear power the anomalous
+# channel deposits by launching tail walkers that carry it away from the
+# extraction cell. This arm is the CORNER of that choice: "local" banks the
+# whole of it in the extraction cell instead, so nothing is carried anywhere.
+# It is the end member that brackets how much of the reference's profile is
+# owed to the walkers' transport rather than to the power itself.
+#
+# HOW TO RUN IT. The campaign drivers resolve `--stance <name>` against
+# `scripts/stances/`, so copy this file there first; `run_sim1d.py` takes the
+# path directly and needs no copy:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/x1_local.toml \
+#         --output x1_local.h5
+#
+# The saved trajectory records the lineage -- this file's name, "g1atrim" as
+# its base, both files' sha256, the delta keys below, and the resolved
+# configuration's identity -- so the arm is identifiable from its artifact
+# alone.
+#
+# WHAT IT IS EVIDENCE FOR, historically. Run at commit 0ae734a this
+# configuration DIED at t = 153.9 us: it arms its cathode jet about 26 us
+# earlier than the reference does, asks 159.1 eV of its first armed DVM tick,
+# and the velocity grid of the day could not represent a drift that fast. That
+# is the defect `neutral_kinetic_dvm_vmax_cm_s` was declared to remove, and
+# this file is the configuration that exhibits it. See
+# `scripts/stance/production_stance_provenance.md`.
+base = "g1atrim"
+
+
+[input_dict]
+# The selection: bank all quasilinear power in the extraction cell rather than
+# launching tail walkers to carry it out.
+heating_anomalous_transport = "local"
+# REQUIRED by the line above, not a second decision. The tail-ionization
+# channel is carried BY the walkers -- it ionizes along their flight -- so with
+# no walkers launched there is nothing for it to ride. The validator refuses it
+# left "on" under this selection rather than letting it stand as a silent
+# no-op, which is the same rule that forbids any inert control.
+heating_anomalous_tail_ionization = "off"
