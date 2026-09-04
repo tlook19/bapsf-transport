@@ -222,7 +222,9 @@ def main(argv=None):
             f"(available: {', '.join(available_stances()) or '(none committed)'})"
             ", or --no-stance to acknowledge that this run has none and is "
             "configured by this driver's defaults plus the overrides on this "
-            "command line."
+            "command line, except the rung-owned keys ("
+            + ", ".join(RUNG_OWNED_LIVE) + "), which stay the --es rung's to "
+            "set: --extra may only restate one at its rung value."
         )
 
     op = ES_OPERATING[args.es]
