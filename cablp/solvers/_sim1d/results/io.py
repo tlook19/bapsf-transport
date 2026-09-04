@@ -614,8 +614,9 @@ def _write_dvm_particle_ledger(group, ledger):
     names = tuple(LEDGER_PARTICLE_FRAME_KEYS)
     for name in names:
         group.create_dataset(name, data=np.asarray(ledger[name], dtype=float))
-    group.attrs.create("channels", np.asarray(names, dtype=object),
-                       dtype=str_dtype)
+    group.attrs.create(
+        "channels", np.asarray(names, dtype=object), dtype=str_dtype
+    )
     for attr, index in (("channel_units", 0), ("channel_meanings", 1)):
         group.attrs.create(
             attr,

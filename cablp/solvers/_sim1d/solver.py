@@ -11478,7 +11478,9 @@ class LAPDSim1D:
         # census is ABSENT rather than zero wherever it was never kept.
         if self._dvm is not None:
             result.dvm_transfer_ledger = self._dvm_ledger_census(saved)
-            result.dvm_particle_ledger = self._dvm_particle_ledger_frames(saved)
+            result.dvm_particle_ledger = (
+                self._dvm_particle_ledger_frames(saved)
+            )
             result.dvm_tick_count = int(self._dvm_tick_count)
         # Cathode-jet arming census, presence-gated on the CRITERION rather
         # than on either jet channel: a run that declared no criterion carries

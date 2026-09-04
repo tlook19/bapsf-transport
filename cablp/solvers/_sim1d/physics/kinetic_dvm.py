@@ -404,7 +404,8 @@ LEDGER_PARTICLE_ROW_DOC = {
     ),
     "birth_cx": ("atoms", "charge-exchange neutrals born on the ion spectrum"),
     "birth_elastic": (
-        "atoms", "elastically scattered neutrals re-emitted on the ion spectrum"
+        "atoms",
+        "elastically scattered neutrals re-emitted on the ion spectrum",
     ),
     "birth_wall_accommodated": (
         "atoms",
@@ -435,7 +436,8 @@ LEDGER_PARTICLE_ROW_DOC = {
         "share split out of it",
     ),
     "birth_cathode_jet": (
-        "atoms", "the energetic backscatter share split out of the cathode face"
+        "atoms",
+        "the energetic backscatter share split out of the cathode face",
     ),
     "birth_collector_face": ("atoms", "recycle at the collector face"),
     "birth_anode": (

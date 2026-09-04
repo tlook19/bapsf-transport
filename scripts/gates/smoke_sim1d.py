@@ -24201,7 +24201,9 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
             pl_units = dict(zip(pl_channels, pl_group.attrs["channel_units"]))
             # Every flow row is a count of atoms; the two rows that are not
             # are the frame's own time and its tick count.
-            assert all(pl_units[pl_name] == "atoms" for pl_name in _PL_FLOW_KEYS)
+            assert all(
+                pl_units[pl_name] == "atoms" for pl_name in _PL_FLOW_KEYS
+            )
             assert pl_units["time"] == "s"
             assert pl_units["ticks"] == "ticks"
 
