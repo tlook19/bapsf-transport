@@ -424,7 +424,12 @@ def _cathode_unit_config():
         "beam_deposition_model": "beer_lambert",
         "beam_anomalous_model": "none",
         "cathode_warming_model": "none",
-        "cathode_Ts_base_K": None,
+        # The surface temperature these unit tests run at. It was carried
+        # by the retired T_s key (whose default this is) while this row
+        # stood empty; under the static model cathode_Ts_base_K IS the
+        # surface temperature, so the value moved onto it and the tests
+        # are unmoved by the retirement.
+        "cathode_Ts_base_K": 1998.15,
         "cathode_heat_capacity_J_per_K": 3.0,
         "cathode_conduction_W_per_K": 0.0,
         "cathode_emission_profile": "uniform",
@@ -2035,7 +2040,7 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
     assert cathode_boundary.twin_cathode == flags["TwinCathode"]
     for key in (
         "V_bank",
-        "T_s",
+        "cathode_Ts_base_K",
         "phi_wf",
         "C_R",
         "R_comp",
@@ -2427,7 +2432,8 @@ def _case_cathode_annular_emission_profile():
     import dataclasses as _dc
 
     knee_params, knee_flags = default_config()
-    knee_params.update({"V_bank": 173.6, "R_comp": 5.72e-3, "T_s": 2008.0,
+    knee_params.update({"V_bank": 173.6, "R_comp": 5.72e-3,
+                        "cathode_Ts_base_K": 2008.0,
                         "R_cath": 15.0, "Rp": 15.0,
                         # this block tests the uniform-disc vs single-annulus
                         # equivalence; gaussian is tested just below.
@@ -2443,7 +2449,7 @@ def _case_cathode_annular_emission_profile():
     # single annulus, fully wetted, at T_s: identical emission physics
     one_annulus = _dc.replace(
         uni_cfg,
-        emission_Ts_K=(knee_params["T_s"],),
+        emission_Ts_K=(knee_params["cathode_Ts_base_K"],),
         emission_area_cm2=(uni_cfg.A_c,),
         emission_plasma_frac=(1.0,),
     )
@@ -2459,14 +2465,14 @@ def _case_cathode_annular_emission_profile():
     gauss_params.update({"R_cath": 19.0, "cathode_emission_profile": "gaussian",
                          "cathode_Ts_fwhm_cm": 28.0})
     Ts_k, area_k, frac_k = cathode_emission_annuli(gauss_params)
-    assert np.isclose(Ts_k[0], gauss_params["T_s"], rtol=2e-2)
+    assert np.isclose(Ts_k[0], gauss_params["cathode_Ts_base_K"], rtol=2e-2)
     assert np.all(np.diff(Ts_k) < 0.0)
     assert Ts_k[0] - Ts_k[-1] > 100.0  # the knee-softening spread
     assert np.isclose(np.sum(area_k), np.pi * 19.0**2, rtol=1e-12)
     assert frac_k[0] == 1.0 and frac_k[-1] == 0.0
     gauss_cfg = cathode_device_config(gauss_params, knee_flags, sim.mu)
     assert gauss_cfg.I_eth < uni_cfg.I_eth * (np.pi * 19.0**2) / uni_cfg.A_c
-    hot_params = dict(gauss_params, T_s=2110.0)
+    hot_params = dict(gauss_params, cathode_Ts_base_K=2110.0)
     hot_cfg = cathode_device_config(hot_params, knee_flags, sim.mu)
     return locals()
 
@@ -2854,7 +2860,7 @@ def _case_cathode_circuit_voltage_bound_r1(
         _p.update({
             "nx": 12,
             "cathode_warming_model": "none",
-            "cathode_Ts_base_K": None,
+            "cathode_Ts_base_K": 1998.15,
             "cathode_surface_model": "none",
             "cathode_phiwf_clean_eV": None,
             "cathode_cleaning_E_th_eV": None,
@@ -3971,7 +3977,6 @@ def _case_cathode_power_balance_under_current_drive(
             dict(
                 m3_params,
                 cathode_warming_model="power_balance",
-                T_s=1910.0,
                 cathode_Ts_base_K=1910.0,
                 cathode_heat_capacity_J_per_K=120.0,
                 cathode_conduction_W_per_K=1200.0,
@@ -4095,7 +4100,7 @@ def _case_cathode_power_balance_under_current_drive(
     sf_lo = sf_sim2.solve_cathode_boundary(update_cache=False)
     assert sf_lo.device_config.I_eth > sf_hi.device_config.I_eth
     sf_dphi = 0.8 * (float(sf_params["phi_wf"]) - 2.75)
-    sf_kT = 8.617333262e-5 * float(sf_params["T_s"])
+    sf_kT = 8.617333262e-5 * float(sf_params["cathode_Ts_base_K"])
     assert np.isclose(
         sf_lo.device_config.I_eth / sf_hi.device_config.I_eth,
         np.exp(sf_dphi / sf_kT),
@@ -8865,9 +8870,13 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
 
     cathode_run_params = dict(no_source_params)
     cathode_run_params["dt_save"] = 0.0
-    # This block checks the STATIC-T_s diagnostics; the power_balance warming is
-    # exercised in its own block just below.
+    # This block checks the STATIC surface-temperature diagnostics; the
+    # power_balance warming is exercised in its own block just below. The
+    # static model holds the surface at cathode_Ts_base_K; the value is the
+    # one this block has always run (it came from the retired T_s key, whose
+    # default this is), so neither block moves with the retirement.
     cathode_run_params["cathode_warming_model"] = "none"
+    cathode_run_params["cathode_Ts_base_K"] = 1998.15
     cathode_run_flags = dict(flags)
     cathode_run_flags["cathode_coupling"] = True
     cathode_run_sim = LAPDSim1D(cathode_run_params, cathode_run_flags)
@@ -8908,9 +8917,10 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     )
     assert np.all(cathode_diag["end_regime"] == "none")
     assert cathode_diag["beam_cross"].shape == (4, geom.cells)
-    # Static T_s is reported as the configured value.
+    # The static surface temperature is reported as the configured value.
     assert np.allclose(
-        cathode_diag["T_s_surface"], float(cathode_run_params["T_s"])
+        cathode_diag["T_s_surface"],
+        float(cathode_run_params["cathode_Ts_base_K"]),
     )
     return locals()
 
@@ -8942,7 +8952,9 @@ def _case_cathode_power_balance_warming(
 
     pb_params = dict(cathode_run_params)
     pb_params["cathode_warming_model"] = "power_balance"
-    pb_params["cathode_Ts_base_K"] = float(pb_params["T_s"]) - 110.0
+    pb_params["cathode_Ts_base_K"] = (
+        float(cathode_run_params["cathode_Ts_base_K"]) - 110.0
+    )
     # This block probes the power-balance TERMS against the pure-radiation
     # baseline (the substrate conduction is exercised separately via
     # pb_cond_dict below); the production default now sets conduction=1200, so
@@ -12642,6 +12654,12 @@ def _case_kinetic_neutrals_k4a(p2z_flags, p2z_params, p2z_sim):
         raise AssertionError("expected kinetic-without-two-zone to fail")
     k4_params = dict(p2z_params)
     k4_params["neutral_model"] = "kinetic"
+    # The TPMC background launches its cathode-end half-flux at the
+    # configured surface temperature, and reaches it through no other row,
+    # so this chain took it from a config default. Named here at the value
+    # this case has always run (it came from the retired T_s key, whose
+    # default differed from this one's) so the background is unmoved.
+    k4_params["cathode_Ts_base_K"] = 1998.15
     k4_params["neutral_kinetic_refresh_s"] = 2e-4
     k4_params["neutral_kinetic_nvz"] = 24
     k4_params["neutral_kinetic_nvp"] = 8
@@ -15079,7 +15097,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     assert jet_ba.M_n[jet_cath] > 0.0
     jet_RN = float(jet_params.get("cathode_jet_R_N", 0.5))
     jet_RE = float(jet_params.get("cathode_jet_R_E", 0.2))
-    jet_Ts = float(jet_params["T_s"])
+    jet_Ts = float(jet_params["cathode_Ts_base_K"])
     jet_veff = np.sqrt(np.pi * jet_kb * jet_Ts / (2.0 * jet_m))
     jet_vback = np.sqrt(
         2.0 * jet_RE
@@ -17030,7 +17048,7 @@ elif scenario == "landau":
         "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
         "cathode_warming_model": "none",
-        "cathode_Ts_base_K": None,
+        "cathode_Ts_base_K": 1998.15,
         "cathode_surface_model": "none",
         "cathode_phiwf_clean_eV": None,
         "cathode_cleaning_E_th_eV": None,
@@ -17053,7 +17071,7 @@ elif scenario == "initial_profile":
         "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
         "cathode_warming_model": "none",
-        "cathode_Ts_base_K": None,
+        "cathode_Ts_base_K": 1998.15,
         "cathode_surface_model": "none",
         "cathode_phiwf_clean_eV": None,
         "cathode_cleaning_E_th_eV": None,
@@ -17074,7 +17092,7 @@ else:
         "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
         "cathode_warming_model": "none",
-        "cathode_Ts_base_K": None,
+        "cathode_Ts_base_K": 1998.15,
         "cathode_surface_model": "none",
         "cathode_phiwf_clean_eV": None,
         "cathode_cleaning_E_th_eV": None,
@@ -17558,7 +17576,7 @@ def _case_coverage_closure_v1():
             "nx": 12,
             "beam_deposition_model": deposition_model,
             "cathode_warming_model": "none",
-            "cathode_Ts_base_K": None,
+            "cathode_Ts_base_K": 1998.15,
             "cathode_surface_model": "none",
             "cathode_phiwf_clean_eV": None,
             "cathode_cleaning_E_th_eV": None,
@@ -18572,7 +18590,7 @@ def _case_neutral_probe_source():
         p.update({
             "nx": 12,
             "cathode_warming_model": "none",
-            "cathode_Ts_base_K": None,
+            "cathode_Ts_base_K": 1998.15,
             "cathode_surface_model": "none",
             "cathode_phiwf_clean_eV": None,
             "cathode_cleaning_E_th_eV": None,
@@ -19667,7 +19685,7 @@ def _case_tracer_ql_booking_passive_cells(_r2, _r2_on_config, solver_module):
         params, flags = _r2_on_config()
         params.update({
             "cathode_warming_model": "none",
-            "cathode_Ts_base_K": None,
+            "cathode_Ts_base_K": 1998.15,
             "cathode_surface_model": "none",
             "cathode_phiwf_clean_eV": None,
             "cathode_cleaning_E_th_eV": None,
@@ -20430,7 +20448,16 @@ def _case_cathode_emitting_area_percolation_ea1():
     # (b) PATCH INVARIANCE. The full-disc and throttled device configs at one
     # frozen plasma state, driven far above capability so the solve sits ON
     # the wall -- the object the closure claims to rescale.
-    _ea1_dp, _ea1_df = _ea1_stance()
+    # These two dicts are handed STRAIGHT to cathode_device_config, so they
+    # bypass the solver seam that substitutes the evolving surface
+    # temperature and read the configured row instead. They took it from a
+    # config default; it is named here at the value these calls have always
+    # built at. It is pinned on the CALL dicts and not in _ea1_stance()
+    # because this case's RUNS warm from cathode_Ts_base_K under
+    # power_balance, and moving the shared row would move their initial
+    # condition -- the direct build and the runs sat at different
+    # temperatures here while two keys carried them.
+    _ea1_dp, _ea1_df = _ea1_stance(cathode_Ts_base_K=1998.15)
     _ea1_dev_full = _cathode_mod.cathode_device_config(_ea1_dp, _ea1_df, 4.002602)
     _ea1_dev_thr = _cathode_mod.cathode_device_config(
         _ea1_dp, _ea1_df, 4.002602, f_em=_ea1_default_f0
@@ -20634,7 +20661,9 @@ def _case_cathode_emitting_area_percolation_ea1():
     )
     # The same refusal at the seam itself, for a direct caller that never
     # goes through LAPDSim1D.
-    _ea1_up, _ea1_uf = _ea1_stance(cathode_emission_profile="uniform")
+    _ea1_up, _ea1_uf = _ea1_stance(
+        cathode_emission_profile="uniform", cathode_Ts_base_K=1998.15,
+    )
     try:
         _cathode_mod.cathode_device_config(_ea1_up, _ea1_uf, 4.002602, f_em=0.5)
     except ValueError:
@@ -20698,7 +20727,7 @@ def _case_shaped_initial_neutral_fill_sp3():
             "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
             "cathode_warming_model": "none",
-            "cathode_Ts_base_K": None,
+            "cathode_Ts_base_K": 1998.15,
             "cathode_surface_model": "none",
             "cathode_phiwf_clean_eV": None,
             "cathode_cleaning_E_th_eV": None,
@@ -23495,6 +23524,213 @@ def _case_configuration_restated_block_refusal():
 
 
 # --------------------------------------------------------------------
+# ts-retirement-successor-key
+# --------------------------------------------------------------------
+@_case("ts-retirement-successor-key", historical_stance=True)
+def _case_ts_retirement_successor_key(p2z_flags, p2z_params):
+    # --- T_s IS RETIRED (2026-09-03): a sim3-era development artifact that
+    # every solver call site already overrode, leaving it inert under the
+    # production warming model and live on only two paths. Both now read
+    # ``cathode_Ts_base_K``, the standby the static model holds the surface at
+    # and ``power_balance`` evolves from, and the retired name is refused at
+    # construction with the successor named -- never silently accepted, and
+    # never silently inert.
+    from cablp.solvers._sim1d.core.config import (
+        RETIRED_PARAM_KEYS,
+        input_dict_template_1d,
+        input_flags_template_1d,
+    )
+    import cablp.solvers._sim1d.solver as _ts_solver_mod
+
+    # (a) the name is gone from BOTH namespaces and is on the retired register
+    assert "T_s" not in input_dict_template_1d
+    assert "T_s" not in input_flags_template_1d
+    assert "T_s" in RETIRED_PARAM_KEYS
+    assert "cathode_Ts_base_K" in input_dict_template_1d
+
+    # (b) naming it in input_dict is refused, and the refusal SAYS WHAT
+    # REPLACED IT -- the case a stored pre-removal configuration file hits.
+    _ts_p, _ts_f = default_config()
+    try:
+        LAPDSim1D(dict(_ts_p, T_s=1998.15), _ts_f)
+    except ValueError as _ts_exc:
+        _ts_msg = str(_ts_exc)
+    else:
+        raise AssertionError("T_s was ACCEPTED in input_dict")
+    assert "unknown LAPDSim1D configuration keys" in _ts_msg, _ts_msg
+    assert "T_s is RETIRED" in _ts_msg, _ts_msg
+    assert "cathode_Ts_base_K" in _ts_msg, _ts_msg
+
+    # (c) the flags namespace refuses it too: the two are separate namespaces
+    # and a key misfiled into the other one still raises rather than going
+    # inert.
+    try:
+        LAPDSim1D(_ts_p, dict(_ts_f, T_s=True))
+    except ValueError as _ts_fexc:
+        assert "flags=['T_s']" in str(_ts_fexc), str(_ts_fexc)
+    else:
+        raise AssertionError("T_s was ACCEPTED in input_flags")
+
+    # (d) NEGATIVE CONTROL on the message class. The successor sentence is
+    # scoped to the retired name: an ordinary unknown key must still get the
+    # bare refusal, with no successor attached. Without the scope this
+    # assertion fails, which is what makes (b) evidence rather than decoration.
+    try:
+        LAPDSim1D(dict(_ts_p, not_a_key=1.0), _ts_f)
+    except ValueError as _ts_unk:
+        _ts_unk_msg = str(_ts_unk)
+    else:
+        raise AssertionError("an unknown key was ACCEPTED")
+    assert "unknown LAPDSim1D configuration keys" in _ts_unk_msg, _ts_unk_msg
+    assert "RETIRED" not in _ts_unk_msg, _ts_unk_msg
+    assert "cathode_Ts_base_K" not in _ts_unk_msg, _ts_unk_msg
+
+    # (e) THE STATIC WARMING MODEL reads the standby. This was T_s's last live
+    # read on the fluid path, so the surface the emission solve is built at,
+    # and the surface the diagnostics report, must both be the configured
+    # cathode_Ts_base_K -- checked at a value that is nobody's default, so a
+    # read that fell back elsewhere could not pass by coincidence.
+    _ts_static, _ts_sflags = _cathode_unit_config()
+    _ts_static.update({
+        "nx": 12,
+        "dt_save": 0.0,
+        "cathode_warming_model": "none",
+        "cathode_Ts_base_K": 1873.0,
+        "cathode_solver_model": "current_driven",
+        "V_bank": 173.6,
+        "R_comp": 5.72e-3,
+    })
+    _ts_sflags = dict(
+        _ts_sflags, cathode_coupling=True, neutral_prebreakdown=False,
+    )
+    _ts_sim = LAPDSim1D(_ts_static, _ts_sflags)
+    _ts_sim._circuit_I_loop = 800.0
+    _ts_dev = _ts_sim.solve_cathode_boundary(update_cache=False).device_config
+    assert _ts_dev.T_s == 1873.0, _ts_dev.T_s
+    _ts_res = _ts_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert np.allclose(_ts_res.cathode_diagnostics["T_s_surface"], 1873.0)
+
+    # The gaussian emission profile re-anchors its peak on the same read, so
+    # the annular ladder must move with the standby and not with anything else.
+    from cablp.solvers._sim1d.physics.cathode import cathode_emission_annuli
+    _ts_gauss = dict(
+        _ts_static, cathode_emission_profile="gaussian", R_cath=19.0, Rp=15.0,
+    )
+    _ts_Ts_k, _, _ = cathode_emission_annuli(_ts_gauss)
+    assert np.isclose(_ts_Ts_k[0], 1873.0, rtol=2e-2), _ts_Ts_k[0]
+    _ts_hot_Ts_k, _, _ = cathode_emission_annuli(
+        dict(_ts_gauss, cathode_Ts_base_K=2073.0)
+    )
+    assert _ts_hot_Ts_k[0] > _ts_Ts_k[0] + 150.0
+
+    # (f) THE TPMC KINETIC BACKGROUND reads the standby too -- the other read
+    # that was live on the retired key. Spied at the jump the kinetic engine is
+    # handed, so the value that reaches the solve is asserted without paying
+    # for one.
+    _ts_kin_params = dict(p2z_params)
+    _ts_kin_params.update({
+        "neutral_model": "kinetic",
+        "neutral_kinetic_refresh_s": 2e-4,
+        "neutral_kinetic_nvz": 24,
+        "neutral_kinetic_nvp": 8,
+        "cathode_Ts_base_K": 1873.0,
+    })
+    _ts_kin_flags = dict(
+        p2z_flags, neutral_prebreakdown=False, neutral_equilibration=False,
+    )
+    _ts_seen = {}
+
+    class _TsSpyStop(Exception):
+        pass
+
+    def _ts_spy(bg, **kwargs):
+        _ts_seen["bg"] = bg
+        raise _TsSpyStop
+
+    _ts_orig_jump = _ts_solver_mod.KN2ZoneJump
+    _ts_solver_mod.KN2ZoneJump = _ts_spy
+    try:
+        _ts_kin_sim = LAPDSim1D(_ts_kin_params, _ts_kin_flags)
+        try:
+            _ts_kin_sim._kinetic_refresh(0.0)
+        except _TsSpyStop:
+            pass
+        else:
+            raise AssertionError("the kinetic background spy never fired")
+    finally:
+        _ts_solver_mod.KN2ZoneJump = _ts_orig_jump
+    assert _ts_seen["bg"]["T_s"] == 1873.0, _ts_seen["bg"]["T_s"]
+
+    # (g) THE SUCCESSOR IS REQUIRED, AND REFUSED AT CONSTRUCTION WHEN UNSET.
+    # It carried no requirement under the static model while the retired key
+    # stood behind it; with that key gone there is nothing to fall back on, so
+    # None reached the emission solve and died as a TypeError deep inside it.
+    # It is refused here instead, where the configuration is still the subject.
+    _ts_bare_p, _ts_bare_f = default_config()
+    _ts_bare_p.update({"nx": 12, "cathode_warming_model": "none",
+                       "cathode_Ts_base_K": None})
+    try:
+        LAPDSim1D(_ts_bare_p, _ts_bare_f)
+    except ValueError as _ts_static_exc:
+        _ts_static_msg = str(_ts_static_exc)
+    else:
+        raise AssertionError(
+            "the static warming model ACCEPTED cathode_Ts_base_K=None"
+        )
+    assert "cathode_Ts_base_K" in _ts_static_msg, _ts_static_msg
+    assert "cathode_warming_model='none'" in _ts_static_msg, _ts_static_msg
+
+    # The TPMC kinetic background reads the same key, and is covered by the
+    # pair of model-side requirements rather than by a third check: under
+    # EITHER warming model an unset key is refused before a kinetic run can
+    # reach that read. Both directions are exercised so the coverage is
+    # measured and not argued.
+    for _ts_wm in ("none", "power_balance"):
+        _ts_kin_bad = dict(_ts_kin_params)
+        _ts_kin_bad.update({"cathode_warming_model": _ts_wm,
+                            "cathode_Ts_base_K": None})
+        try:
+            LAPDSim1D(_ts_kin_bad, _ts_kin_flags)
+        except ValueError as _ts_kb_exc:
+            assert "cathode_Ts_base_K" in str(_ts_kb_exc), str(_ts_kb_exc)
+        else:
+            raise AssertionError(
+                f"neutral_model='kinetic' with cathode_warming_model="
+                f"{_ts_wm!r} ACCEPTED cathode_Ts_base_K=None"
+            )
+
+    # NEGATIVE CONTROL, re-formed against what is actually true at base. The
+    # brief for this check proposed "power_balance with the key None still
+    # constructs"; it does NOT -- that model has refused None since before
+    # this member, with its own message. So the control that carries
+    # information is that the refusal above is SCOPED: power_balance still
+    # raises its OWN message and not the static one, so the new requirement
+    # neither swallowed nor rewrote the existing guard.
+    try:
+        LAPDSim1D(
+            dict(_ts_bare_p, cathode_warming_model="power_balance"),
+            _ts_bare_f,
+        )
+    except ValueError as _ts_pb_exc:
+        _ts_pb_msg = str(_ts_pb_exc)
+    else:
+        raise AssertionError(
+            "power_balance ACCEPTED cathode_Ts_base_K=None"
+        )
+    assert "cathode_warming_model='power_balance' requires" in _ts_pb_msg, _ts_pb_msg
+    assert "cathode_warming_model='none'" not in _ts_pb_msg, _ts_pb_msg
+
+    # Positive control: with the key SET, both models construct, so the
+    # requirement refuses only the unset case and moves no run.
+    for _ts_wm in ("none", "power_balance"):
+        LAPDSim1D(
+            dict(_ts_bare_p, cathode_warming_model=_ts_wm,
+                 cathode_Ts_base_K=1910.0),
+            _ts_bare_f,
+        )
+
+
+# --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
 @_case("smoke-summary")
@@ -23518,7 +23754,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 129, "historical_stance": 54}
+_CASE_CENSUS = {"total": 130, "historical_stance": 55}
 
 
 def _assert_case_census():

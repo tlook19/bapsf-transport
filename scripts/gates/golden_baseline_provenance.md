@@ -233,6 +233,103 @@ builders, `scripts/verify/` for the per-build instruments,
 `scripts/data/` and `scripts/stances/` did not move. The transcripts are
 not rewritten: a record of what was run says what was run.
 
+**2026-09-03 — `T_s` RETIRED: an IDENTITY-ONLY rotation (AUTHORIZED).** Tom's
+ruling: `T_s` is a sim3-era development artifact. The key is removed from the
+config templates and from `g1atrim.toml`; the two paths that still read a
+configured surface temperature — the static warming model
+`cathode_warming_model = "none"` and the TPMC kinetic background under
+`neutral_model = "kinetic"` — now read `cathode_Ts_base_K`, the standby the
+static model holds the surface at and `power_balance` evolves from. Naming
+`T_s` raises at construction with the successor named.
+
+**The TRAJECTORY does not move; the CONFIG IDENTITY does.** This is the
+opposite shape from the speed-up event recorded below and from the 2026-08-28
+R3-tip recapture: there the digest rotated at a fixed identity, here the
+identity rotates at a fixed digest. **`production_discharge.npz` was NOT
+recaptured** — the removed key was inert on this stance, so there is no new
+trajectory to capture, and re-running the fixture would have been the only way
+to move it. Only the identity half of the recapture protocol was performed: the
+digest reference regenerated (twice, byte-identical), the sidecar's parameter
+list re-cut, and the resolved-config snapshots rotated.
+
+| quantity | before | after |
+|---|---|---|
+| `production_discharge.npz` `sha256` | `c286d2f415058c20966d85d6d15c4355887eefd6f548c49c371d9bd64f1578c4` | **UNCHANGED** — `c286d2f4…`, the file was not written |
+| `production_discharge.json` `sha256` | `dd10e5c763f777c62655780afc98d07d8a3e5422760f38170d9bcad6c83a0191` | `da093584b02d2e3b02c462bdca84c95ba13f9f0c59fca7711da88274e3363ce7` |
+| `golden_digest_4k.json` `sha256` | `a38d5a72459d2979fc95000e9fd183d72a3f5eaf94083d2ac91c6176cea6dac4` | `a5ed270ec6aa63997b55ca505e56ed52b207122649b1c0f88f0460a3965d4368` |
+| `golden_digest_4k.json` `digest` | `4c0e105b922e67308595e2cbdd628d9f4dcde2e1686d00225cb69bacec8643ea` | **UNCHANGED** — `4c0e105b…` |
+| `golden_digest_4k.json` `config_identity` | `ea042038a5e01230c11a66f1cf429099fc914633febd2fd6e9721b6b2626c965` | `9b36195dae90448a9adfa90f8304a5e5b4a74072c978aeb67f991df8ae116932` |
+| `golden_digest_4k.json` per-1000-step checkpoints | `5ecba233…` / `f70f9d51…` / `df9458c2…` / `f0fa2259…` / `4c0e105b…` | **ALL UNCHANGED** |
+| `golden_digest_4k.json` `final_time` / `steps` / `cells` / `fields_per_cell` | `0.00045632279608921294` / `4000` / `72` / `6` | UNCHANGED |
+| `config_snapshots.json` `sha256` | `b3c64014d2484497e6b7ff343e79cf7e49d5dede35f5a874e2746228d21088a5` | `98998401d09ee6ccc590d598bd6d309f60d0822568a671ef7ba46557d1580f8e` |
+| `config_snapshots.json` `manifest_sha256` | `fccc124871915b6e4bf3bfc29b7f605a6cb4f97249ec11d4cd638fa094ea1848` | `0b6c2218ca06eab7280b75650bb0e1e137f4c674efdadfcf0f5fef74e5d21777` |
+| sidecar `params` / `flags` key counts | `256` / `53` | **`255`** / `53` — 0 added, **1 removed** (`T_s`), **0 re-valued** |
+| sidecar `saves` / `cells` / `fields_per_cell` / `steps` / `final_time` | `2620` / `72` / `6` / `56,392` / `2.618754254937e-02` s | UNCHANGED |
+
+All four resolved-config snapshot cases rotated, by the same one key:
+
+| case | before | after |
+|---|---|---|
+| `production_golden` | `0f284816…` | `42beb937…` |
+| `compare_sim1d_es1` | `c5b304f8…` | `3318511a…` |
+| `run_m6_point_es1_stance_g1atrim` | `f464caa2…` | `b771c5fd…` |
+| `run_mechanism_ladder_es1_stance_g1atrim` | `f464caa2…` | `b771c5fd…` |
+
+**That the rotation is EXACTLY the removed key was proven, not asserted.** For
+each case the rotated resolved configuration was taken as-is, `T_s = 1998.15`
+restored into it as its single member, and the identity re-hashed: all four
+reproduce their pre-removal digest bit for bit, with zero params added, zero
+re-valued and zero flags changed. Restoring one key and landing back on the old
+hash is a stronger statement than a diff — it leaves no room for a
+compensating second change. The sidecar was checked the same way, key by key:
+one dropped, none added, none moved, and no other sidecar field touched.
+
+**Two-capture byte identity.** `golden_digest_gate.py --capture` was run twice
+against the rotated configuration and produced byte-identical files
+(`sha256 a5ed270e…` both times), so the reference is a property of the
+configuration and not of one run.
+
+**Disclosed, and not a physics move:** the regenerated digest reference also
+picks up its `header` string's post-flatten path
+(`scripts/golden_digest_gate.py` → `scripts/gates/golden_digest_gate.py`). The
+header is written from the gate's own source constant, which the
+`[scripts-subdirs]` member had already corrected; only the fixture was carrying
+the stale copy, and this recapture is simply the first to rewrite it.
+
+**Disclosed value changes, both OFF this stance.** The two config keys had
+DIFFERENT defaults — the retired one 1998.15 K, its successor 1910.0 K — so
+any route that reached a surface-temperature read through the retired
+DEFAULT, with no explicit row of its own, changes temperature. Two do:
+
+1. **The TPMC kinetic background**, for anyone running
+   `neutral_model = "kinetic"` on a bare template: its wall-launch
+   temperature read the retired key and now reads `cathode_Ts_base_K`,
+   1998.15 K → 1910.0 K. That selector is deprecated and no committed
+   configuration chooses it.
+2. **`run_mechanism_ladder.py --warming none` under a stance.** The static
+   branch fed only the retired key, which the stance row then superseded, so
+   `--warming none --stance g1atrim` at ES1 held the surface at 1998.15 K; it
+   now holds the rung's own `cathode_Ts_base_K` = 1910.0 K. The rung winning
+   is the CORRECT direction — a per-rung measurement should not be superseded
+   by a stance row — and the route carries no result of record, but it is a
+   value change and is named here rather than left to be discovered. The
+   `--warming power_balance` route and the `--no-stance` static route are both
+   UNMOVED at 1910.0 K.
+
+**No committed fixture moves, and that was SWEPT rather than assumed.** A
+runtime spy on every reader of a configured surface temperature — the device
+config the emission solve is built from, the gaussian profile's annular peak,
+the TPMC background, and the cathode jet's effusive temperature — was run over
+the FULL smoke suite on the base commit and on this tip and the transcripts
+diffed per case and per site: 77 of 77 (case, site) pairs carry identical
+value sets, with no pair present at base and absent at the tip. The sweep is
+what found the two fixtures that DID reach a read through the retired default
+— the kinetic case's TPMC background, and the emitting-area case's two
+direct `cathode_device_config` calls, which bypass the solver's override seam
+— and both now name the temperature they have always run at. The suite passed
+on both trees either way, which is why a spy and not the suite is the
+instrument here.
+
 **2026-09-03 — THE SPEED-UP EVENT: four bit-moving performance members
 re-anchored in one recapture (AUTHORIZED; the Tier C continuity pair passed all
 seven of its pre-registered gates at the production operating point before this
@@ -1213,6 +1310,13 @@ UNGUARDED into the kinetic background, dead here only because this stance runs
 `neutral_model = "moment"` and live under `"kinetic_dvm"`. The adjudication is
 assigned to the DVM program.
 
+> SUPERSEDED 2026-09-03 — `T_s` is RETIRED, so the deferral is closed and
+> the reading above is corrected twice over: the unguarded read belongs to
+> `neutral_model = "kinetic"`, not `"kinetic_dvm"`, and it now reads
+> `cathode_Ts_base_K`. See this record's 2026-09-03 identity-only rotation
+> entry. The paragraph is left as written because it records what was
+> believed at the recapture it belongs to.
+
 
 **2026-08-24 — the TUBE-BEAMED INJECTION ROW adopted, with the shaped foot
 fill regenerated under it (AUTHORIZED recapture; Tom's `[porf-dvm-consistency]`
@@ -1536,7 +1640,8 @@ two bookings only agreed at `Tn = 300 K`: the `En` side removes the local
 `(3/2) k Tn` per consumed atom while the `Ei` side added
 `(3/2) k T_birth` at the ion floor. Under the cathode neutral jet the
 source-region gas runs near 11.6 eV, so the pair was deleting **~9.7 kW at
-plateau** on the stance arm (9250 W bulk + 427 W beam, `ph_es1.h5`) — a live
+plateau** on the then-current stance arm (9250 W bulk + 427 W beam, `ph_es1`;
+artifact retired 2026-09-03) — a live
 non-conservation inside the previous fixture, named nowhere. `"neutral"`
 closes it; the residual is now carried explicitly by the
 `ionization_birth_thermal_deficit_*_W_cm3` diagnostic rows, which read zero to
@@ -1610,7 +1715,8 @@ throughout.
 adjudicated here.** `Ti_max` **+25.3 %** is the expected direction and the
 expected size: the birth change hands the ions the `(3/2) k Tn` the neutral gas
 gives up, and the ~26 % rise in source-region `Ti` measured on the campaign
-arms (5.32 -> 6.83 eV, cells 1–5, 10–20 ms mean, `ph_es1` -> `tbn2_es1`) is the
+arms (5.32 -> 6.83 eV, cells 1–5, 10–20 ms mean, `ph_es1` -> `tbn2_es1`; both
+artifacts retired 2026-09-03) is the
 same effect at the campaign mesh. `nn_min` falling 14.7 % and `nn_max` rising
 2.8 % is the neutral field keeping the energy it used to lose. Whether any of
 this is an improvement is not a question this fixture answers, and no such

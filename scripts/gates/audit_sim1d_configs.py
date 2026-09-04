@@ -98,7 +98,6 @@ def config_cases():
             "cathode_emission_profile": "gaussian",
             "cathode_warming_model": "power_balance",
             "Te_birth_ionization": LADDER_ELECTRON_BIRTH_POLICY,
-            "T_s": ladder_op["Ts_standby_K"],
             "cathode_Ts_base_K": ladder_op["Ts_standby_K"],
             "cathode_heat_capacity_J_per_K": 120.0,
             "cathode_conduction_W_per_K": 1500.0,
@@ -119,7 +118,6 @@ def config_cases():
             "beam_anomalous_model": "quasilinear",
             "cathode_emission_profile": "gaussian",
             "cathode_warming_model": "power_balance",
-            "T_s": m6_op["Ts_standby_K"],
             "cathode_Ts_base_K": m6_op["Ts_standby_K"],
             "cathode_heat_capacity_J_per_K": 120.0,
             # cathode_conduction_W_per_K is deliberately absent: --g-cond now

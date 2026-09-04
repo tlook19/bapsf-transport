@@ -573,8 +573,12 @@ NON-CONSERVING against an evolved `En` and are retained only as reproduction
 arms: they warn, value-scoped, in `core/deprecations.py`. The size of what they
 delete is not small — under the cathode neutral jet the source-region gas sits
 near 11.6 eV against a 300 K ion floor, and the deleted thermal power measured
-at the plateau of the stance arm `ph_es1.h5` is **9250 W** (bulk) **+ 427 W**
-(beam) = **~9.7 kW**, about a quarter of the ion energy supply there. Under
+at the plateau of the arm that was the stance arm when it was measured
+(`ph_es1`; artifact retired 2026-09-03) is **9250 W** (bulk)
+**+ 427 W** (beam) = **~9.7 kW**, about a quarter of the ion energy supply
+there. The stance has since moved to the kinetic closure: its arm of record
+is `m1r_retrim_cr9.3_es1` and its fluid comparator of record is
+`m1_arm1t_es1`, neither of which this dated magnitude was measured on. Under
 `"floor"` this was a LIVE non-conservation in the golden and was named nowhere;
 it is now disclosed per cell and per save by the
 `ionization_birth_thermal_deficit_*_W_cm3` diagnostic rows, which are recorded
@@ -610,7 +614,8 @@ is launch-cell-only and the saved `l_b_profile` disagrees with the ray survival
 by a factor of order 300, so the declared STEP is what stands in for it. That
 is a disclosed limitation of the bracket, not a modelling preference.
 
-Measured spread between the two arms on `scripts/mgcr1_confirm.h5`, under the
+Measured spread between the two arms on `mgcr1_confirm` (a fluid-closure arm;
+artifact retired 2026-09-03), under the
 registered anode closure: the source-region sum moves +18.95 → +14.50 kW, and
 the compression piece over the cells strictly downstream of the death cell
 +35.4 → +29.9 kW. (On the `export_counts` instrument arm the same compression
@@ -636,7 +641,8 @@ Every fluid channel therefore closes there.
 channel) are RETAINED as disclosed INSTRUMENT arms that bound the size of that
 double count. **They are not claim-bearing, and they are not bracket endpoints
 either** — quoting their source-region sums as a physical range would be
-reporting the double count as physics. Measured on `scripts/mgcr1_confirm.h5`
+reporting the double count as physics. Measured on `mgcr1_confirm` (a
+fluid-closure arm; artifact retired 2026-09-03)
 (cell_1 / cell_2): +18.95 / +14.50 kW under the closure, −2.82 / −7.27 kW
 closing 2.21 only, −53.03 / −57.48 kW closing neither.
 
@@ -1588,14 +1594,22 @@ which is the real uncertainty and is invisible to every ES1 score because
 `C_R` is the fit target — are in `scripts/run/ladder_operating_provenance.md`;
 `run_mechanism_ladder.ES_OPERATING` carries the table.
 
-**`T_s = 1998.15` K — ASSUMED.** Not a machine reading and never fitted: the
-constant surface temperature the pre-warming-model solver was developed with,
-entered as the literal 273.15 + 1725 K and never adjusted. Inert under
-`cathode_warming_model = "power_balance"` — every read is guarded by the
-evolving surface value or by `T_s_override_K` — and the live input is
-`cathode_Ts_base_K`. Marked for retirement; the stance row that still names it,
-and why its deletion has been deferred, are in
-`scripts/stance/production_stance_provenance.md`.
+**`T_s = 1998.15` K — was ASSUMED; RETIRED 2026-09-03.** The history is kept
+because artifacts written before the removal record the key. It was never a
+machine reading and never fitted: the constant surface temperature the
+pre-warming-model solver was developed with, entered as the literal
+273.15 + 1725 K and never adjusted. It was inert under
+`cathode_warming_model = "power_balance"` — every read guarded by the evolving
+surface value or by `T_s_override_K` — and live only under the static warming
+model and in the TPMC kinetic background. Tom's ruling (2026-09-03): a
+sim3-era development artifact. **Its successor is `cathode_Ts_base_K` below**,
+which both of those paths now read and which naming `T_s` raises to point at.
+The removal moved no value under `power_balance` — the production model, the
+stance and every arm of record — and no committed fixture moves; the two
+routes where it DOES change the surface temperature (a bare template under
+`neutral_model = "kinetic"`, and the ladder's `--warming none` route under a
+stance) are disclosed with the identity rotation in
+`scripts/gates/golden_baseline_provenance.md`.
 
 **`phi_wf = 2.869` eV — FITTED**, the contaminated shot-start work function.
 **`cathode_phiwf_clean_eV = 2.809` eV — FITTED**, the per-shot-accessible depth

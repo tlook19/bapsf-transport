@@ -64,7 +64,8 @@ systematic is unresolved between supply regulation and probe gain.
 the stance duplicated the rung and could only go stale against it. **Campaign
 scores are unaffected** — every campaign arm takes `V_bank` from its rung, which
 is why deleting the row produced NO delta in the pre-flight against
-`scripts/mgcr1_confirm.h5` and why the three campaign config-snapshot cases did
+`mgcr1_confirm` (the fluid-stance arm current at the time; artifact retired
+2026-09-03) and why the three campaign config-snapshot cases did
 not move on it. The GOLDEN takes no rung, so its `V_bank` falls back to the
 config default 180.0; the authorized recapture of 2026-08-25 absorbed that move
 (`golden_baseline_provenance.md`). The measurement above is unchanged — what
@@ -134,10 +135,12 @@ is the test. Points: 8.76 → 2800.1 A (0.9449); 9.30 → 2963.4 A
 unconditionally, never entering the selection: Te 1.02, n 1.03, Isat 1.03
 (mean |dev|/σ 1.32 on Isat). Five of six pre-registered predictions held;
 the mid-port density statistic moved +0.009 (below the predicted +0.02…+0.06,
-same sign — the density is drag-limited, not drive-limited). Artifacts:
-`scripts/m1r_retrim_cr9.3_*`; the arm command of record
-`scripts/m1r_retrim_cr9.3_es1.cmd`. RIDER (2026-09-01, Tom): the stance
-plasma-radius profile was found mis-oriented the same day (see the profile
+same sign — the density is drag-limited, not drive-limited). Arm of record:
+`m1r_retrim_cr9.3_es1`, with its own command recorded beside it. Run
+artifacts live OUTSIDE the repo under the artifacts root (see
+`scripts/README.md`); the run NAME is what is quotable here, not a path.
+RIDER (2026-09-01, Tom): the stance plasma-radius profile was found
+mis-oriented the same day (see the profile
 entry below) and its correction is registered; if the corrected profile moves
 the DVM drive out of the 2963 ± 23 A band, this value is re-trimmed ONCE more
 under the SAME one-knob protocol and this entry is superseded — the freeze
@@ -156,7 +159,9 @@ as the scorer prints, rounded to 0.01. The scan arms were `C_R` 8.4 → 2832 A
 `C_R* = 8.762467 → 8.76`, predicting 2962.11 A. The extension clause was NOT
 triggered — `C_R*` lies inside the pre-registered bracket [8.4, 9.4] and the
 target is bracketed from BOTH sides by scan artifacts. The confirm arm at
-`C_R = 8.76` (`scripts/mgcr1_confirm.h5`) measured peak 2982 A against a
+`C_R = 8.76` (`mgcr1_confirm`, on the fluid closure this entry records;
+artifact retired 2026-09-03, and this trim is itself superseded by the live
+`C_R` entry above) measured peak 2982 A against a
 measured 2989 ± 23 A (ratio 0.997) and plateau 2962 A against 2963 A
 (**ratio 1.000**). Artifact of record: `scripts/mgcr1_fit.md`. Port scores
 were reported unconditionally and never entered the selection: Te mean ratio
@@ -171,12 +176,15 @@ FITTED, re-trimmed under the conserving ionization birth.** The predecessor `7.0
 was trimmed on 2026-08-19 with the **ionization-birth thermal leak live** —
 the En sink gave up `(3/2) k Tn` per ionized atom while the ion was born at
 the 300 K floor, deleting **~9.7 kW at plateau** in the source region (9250 W
-bulk + 427 W beam, measured on `ph_es1.h5`, 2026-08-23). Adopting
+bulk + 427 W beam, measured on `ph_es1`, 2026-08-23; artifact retired
+2026-09-03). Adopting
 `Ti_birth_ionization = "neutral"` returns that power to the ions and drops the
 drive, so the knob was re-trimmed ONCE, drive-band target only, at ES1, and
 frozen: peak/plateau ratio 0.965/0.965 at `C_R = 7.09` under the conserving
-birth (`tbn_es1.h5`) -> **1.000/0.999 at `C_R = 7.36`** (`tbn2_es1.h5`, peak
+birth (`tbn_es1`) -> **1.000/0.999 at `C_R = 7.36`** (`tbn2_es1`, peak
 2989 A against a measured 2989 +/- 23 A, plateau 2962 A against 2963 A).
+Both artifacts were retired 2026-09-03; the numbers stand as the dated
+record of that trim.
 Measured pair response over the trim: plateau **2859 -> 2962 A** (peak
 2885 -> 2989 A) for `C_R` **7.09 -> 7.36**. The five pre-registered washout
 gates (pre-registered 2026-08-23) all passed at the trimmed value: drive peak
@@ -227,44 +235,56 @@ point in the code's own expression `J = C_R T^2 exp(-e phi/(kB T))`:
        keeps the point-emission match at 0.03%, inside the 0.1% the derivation
        was pre-registered to hit).
 
-**`T_s = 1998.15` IS named by the stance, and its deletion was DEFERRED a
-third time on 2026-08-25 — now with the reason on record.** It was scheduled for
-deletion alongside `V_bank` (23b R4) on the reading that both merely restate
-config defaults. That reading is correct against `default_config()`, which is
-why deleting `T_s` is invisible to the golden fixture (its `T_s` resolves to
-1998.15 either way). **It is NOT correct on the campaign route:**
-`run_m6_point.py:216` supplies `T_s` from the ES rung's `Ts_standby_K`
-(ES1 = 1910.0) and THIS ROW SUPERSEDES IT, so deleting it would move `T_s`
-1998.15 → 1910.0 on every campaign arm. That was MEASURED as a real second delta
-in the pre-flight against `scripts/mgcr1_confirm.h5` and disappeared the moment
-the row was restored. Whether the move is physically inert was left
-open here on a reading the kinetic stance event (2026-09-02) DISPROVED, so the
-reading is corrected rather than carried forward. Under
-`cathode_warming_model = "power_balance"` the evolving surface temperature is
-seeded from `cathode_Ts_base_K` rather than `T_s`, and every read of `T_s` on
-the cathode path is guarded by that evolving value or by the `T_s_override_K`
-route. The earlier text named ONE unguarded read — the kinetic background's —
-and predicted it would go LIVE under `neutral_model = "kinetic_dvm"`. **It does
-not.** That read belongs to `neutral_model = "kinetic"`, the TPMC path, whose
-`_kinetic` namespace the solver builds only for that selection; under
-`"kinetic_dvm"` it is `None` and the read is unreachable. The DVM's own
-surface-temperature input is taken from the same evolving cathode value, with
-`T_s` only as its fallback. So `T_s` is configuration-inert under the kinetic
-stance too, the row is kept because deleting it would move `T_s` on every
-campaign arm, and the deferred adjudication is now a bookkeeping question
-(which of 1998.15 and the rung's 1910.0 the stance should name) rather than a
-physics one.
+**`T_s` — RETIRED 2026-09-03. The stance no longer names it, because the key
+no longer exists.** Tom's ruling: it is a sim3-era development artifact. The
+row survived three deferrals (the last on 2026-08-25, alongside the `V_bank`
+deletion of 23b R4) on a bookkeeping question — whether the stance should name
+1998.15 or the rung's 1910.0 — that the retirement dissolves rather than
+answers.
 
-It remains
-one of the three RESOLVED-ACCRETION keys (`cathode_emission_profile`,
-`Te_birth_ionization`, `T_s`): keys that equal their config default but are
-stated explicitly in `g1atrim.toml` anyway, because `run_m6_point.py`'s own
-driver defaults do not. Under the stance's
-`cathode_warming_model = "power_balance"` it is ONLY the initial surface
-temperature — the surface then evolves from the power balance, so `T_s` sets no
-steady-state property and `cathode_Ts_base_K` is the live key below. *(Formerly
-listed under "Deliberately absent" on the mistaken reading that the stance does
-not name it; corrected 2026-08-23.)*
+What the key was: a constant surface temperature the pre-warming-model solver
+was developed with. Under `cathode_warming_model = "power_balance"` — this
+stance's model, and the config default — it was configuration-INERT: every
+solver call site passed `T_s_override_K` from the evolving surface value, so
+the raw read was always overridden. Two reads were live, both off this stance:
+the static warming model `"none"`, and the TPMC kinetic background under
+`neutral_model = "kinetic"`. **Both now read `cathode_Ts_base_K`** — the
+heater-maintained standby, which the static model holds the surface at and
+`power_balance` evolves from — so the cathode's surface temperature has one
+configured input on every path that still reads one. The internal
+`T_s_override_K` plumbing is unchanged and is still the seam the evolving
+surface value is substituted at.
+
+Naming `T_s` in a configuration now raises at construction with
+`cathode_Ts_base_K` named as its successor, so a stored pre-removal file
+reports where its value should go rather than going silently inert.
+
+**No value moved.** The removal rotates the resolved CONFIG IDENTITY by exactly
+one key and nothing else — proven case by case by restoring `T_s = 1998.15`
+into each rotated configuration and reproducing the pre-removal digest bit for
+bit. The golden's saved trajectory is unchanged (the 4,000-step digest holds at
+`4c0e105b…`); the identity table is in
+`scripts/gates/golden_baseline_provenance.md`.
+
+**On the POWER_BALANCE route — this stance, and every arm of record — the
+move the earlier deferrals feared does not occur.** Each driver's
+power-balance branch already supplied `cathode_Ts_base_K` from the same rung
+field beside the retired key, and under that model the retired key was
+overridden on every read anyway, so dropping it leaves the rung's standby
+exactly where it was. That is the scope of the claim, and it is what the
+four-case identity proof covers.
+
+**It does NOT extend to the STATIC route.** `run_mechanism_ladder.py
+--warming none` fed only the retired key, which this stance's row then
+superseded, so `--warming none --stance g1atrim` at ES1 held the surface at
+1998.15 K; at the tip the rung's own `cathode_Ts_base_K` = 1910.0 K survives
+and is what the static model holds. The rung's standby winning is the
+CORRECT direction — a per-rung measurement should not be superseded by a
+stance row — but it is a value change on that route and is listed with the
+other disclosed one in `scripts/gates/golden_baseline_provenance.md`.
+
+`T_s` was one of three RESOLVED-ACCRETION keys; the remaining two are
+`cathode_emission_profile` and `Te_birth_ionization`.
 
 **`cathode_Ts_base_K` is deliberately NOT pinned here.** It is inherited from
 the config default, which is the DERIVED standby temperature. An earlier

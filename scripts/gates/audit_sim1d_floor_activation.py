@@ -41,7 +41,6 @@ from cablp.constants import ev_to_erg
 # sccm changeover, so the claim has been dropped along with the stale values.
 PARAM_OVERRIDES = {
     "V_bank": 177.843,
-    "T_s": 1998.15,
     "S_gp": 9010,
     # The pulse/decay puff-waveform family is deliberately ABSENT: the stance
     # runs the "square" waveform, which reads none of those keys, and

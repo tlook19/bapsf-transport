@@ -2414,7 +2414,8 @@ class LAPDSim1D:
         # every consumer is presence-gated on one object.
         self._configure_regime_vessel_node()
         # Cathode warming state: the evolving emitter surface temperature [K]
-        # (config cathode_warming_model). None = static T_s.
+        # (config cathode_warming_model). None = the surface held static at
+        # cathode_Ts_base_K.
         warming_model = str(
             self._input_dict.get("cathode_warming_model")
         )
@@ -2456,6 +2457,24 @@ class LAPDSim1D:
                     f"{CATHODE_ENV_T_K:g} K chamber-wall temperature"
                 )
             self._cathode_Ts_K = float(Ts_base)
+        else:
+            # The STATIC model holds the surface at cathode_Ts_base_K for the
+            # whole shot, so the key is as required here as it is above --
+            # every emission path, the T_s_surface diagnostic and the TPMC
+            # kinetic background read it, and there is no evolving value to
+            # fall back on. Left unset it reached those reads as None and
+            # failed as a TypeError inside the cathode solve; refuse it here
+            # instead, where the configuration is still the thing being
+            # talked about.
+            if self._input_dict.get("cathode_Ts_base_K") is None:
+                raise ValueError(
+                    "cathode_warming_model='none' holds the cathode surface "
+                    "at cathode_Ts_base_K for the whole shot, so that key is "
+                    "required and must not be None. It is the surface "
+                    "temperature under BOTH warming models: set it to the "
+                    "heater-maintained standby temperature, or select "
+                    "cathode_warming_model='power_balance' to evolve from it."
+                )
         # Surface-state coverage (cathode_surface_model="ads_des",
         # M5a): theta in [0, 1] is the contaminant
         # coverage raising the effective work function,
@@ -9079,7 +9098,7 @@ class LAPDSim1D:
         T_s = float(
             self._cathode_Ts_K
             if self._cathode_Ts_K is not None
-            else float(self._input_dict.get("T_s"))
+            else float(self._input_dict.get("cathode_Ts_base_K"))
         )
         return {
             "R_N": self._cathode_jet_R_N,
@@ -11757,11 +11776,12 @@ class LAPDSim1D:
         diag = {
             "enabled": float(bool(self._flags.get("cathode_coupling"))),
             # Instantaneous emitter surface temperature [K]: the configured
-            # T_s, or the evolving value under cathode_warming_model.
+            # cathode_Ts_base_K, or the evolving value under
+            # cathode_warming_model.
             "T_s_surface": float(
                 self._cathode_Ts_K
                 if self._cathode_Ts_K is not None
-                else float(self._input_dict.get("T_s"))
+                else float(self._input_dict.get("cathode_Ts_base_K"))
             ),
             "configured": float(cathode_phase["configured"]),
             # Current-driven circuit state (0.0 under the voltage-driven
@@ -12424,7 +12444,14 @@ class LAPDSim1D:
         geometry = self._geometry
         kin = self._kinetic
         nu_ion, nu_cx = self._kinetic_absorption_fields(state, derived)
-        T_s = float(self._input_dict.get("T_s"))
+        # The cathode-end wall temperature the TPMC background launches its
+        # cosine half-flux at. This is the CONFIGURED standby, not the
+        # evolving power_balance surface: the frozen background is rebuilt
+        # per call from configuration alone, and that is unchanged here. The
+        # ``T_s`` key below is the background dictionary's own name for the
+        # quantity -- the physical symbol shared with kn2zone/mc_neutrals --
+        # and is not the retired configuration key.
+        T_s = float(self._input_dict.get("cathode_Ts_base_K"))
         anode_faces = np.asarray(
             getattr(geometry, "anode_face_indices", ()), dtype=int
         )
@@ -13438,7 +13465,7 @@ class LAPDSim1D:
             T_s_K=(
                 float(self._cathode_Ts_K)
                 if self._cathode_Ts_K is not None
-                else float(self._input_dict.get("T_s"))
+                else float(self._input_dict.get("cathode_Ts_base_K"))
             ),
         )
         if (

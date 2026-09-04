@@ -58,13 +58,13 @@ ELECTRON_BIRTH_POLICY = "local"
 # Keys ``ES_OPERATING`` owns AND that are live in the solved configuration, so
 # a layer that overwrites one silently re-labels which rung the run is.
 #
-# ``T_s`` is deliberately NOT in this set even though ``ES_OPERATING`` also
-# supplies it. This driver sets ``cathode_warming_model="power_balance"``
-# unconditionally, under which ``T_s`` is configuration-INERT: the surface
-# temperature is solved from the power balance rather than held at the
-# configured value, so a stance that names ``T_s`` does not change which rung
-# the run represents. It keeps the ordinary "stance supersedes this driver's
-# default" print below instead of raising.
+# ``cathode_Ts_base_K`` is in the set because this driver sets
+# ``cathode_warming_model="power_balance"`` unconditionally, under which the
+# standby temperature is the surface's initial condition and the substrate
+# the conduction term restores toward -- both live, so a layer that
+# overwrites it does re-label the rung. (The retired ``T_s`` key, which
+# ``ES_OPERATING`` also fed, was configuration-inert under that model and is
+# gone as of 2026-09-03; ``cathode_Ts_base_K`` is its successor.)
 RUNG_OWNED_LIVE = ("V_bank", "cathode_Ts_base_K")
 
 
@@ -230,7 +230,6 @@ def main(argv=None):
         "beam_anomalous_model": "quasilinear",
         "cathode_emission_profile": "gaussian",
         "cathode_warming_model": "power_balance",
-        "T_s": op["Ts_standby_K"],
         "cathode_Ts_base_K": op["Ts_standby_K"],
         "cathode_heat_capacity_J_per_K": args.c_th,
         "cathode_emissivity": 0.7,

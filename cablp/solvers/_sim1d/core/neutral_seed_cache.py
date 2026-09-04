@@ -83,7 +83,7 @@ INERT_PARAM_KEYS = frozenset({
     "tau_prebreakdown", "tau_breakdown", "tau_afterglow",
     "tau_neutral_prebreakdown", "phase_transition_mode",
     # --- cathode / emission / warming / surface (no cathode during equil) ---
-    "T_s", "L_cath", "R_cath", "phi_wf",
+    "L_cath", "R_cath", "phi_wf",
     "cathode_Ts_base_K", "cathode_Ts_fwhm_cm",
     "cathode_cleaning_E_th_eV", "cathode_cleaning_sigma_cm2",
     "cathode_conduction_W_per_K", "cathode_emission_annuli",
