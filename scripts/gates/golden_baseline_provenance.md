@@ -1,5 +1,17 @@
 # Provenance of the golden baseline pins (`baseline_sim1d.BASELINE_*_OVERRIDES`)
 
+**Recaptured 2026-09-04 (THE DVM JET LAUNCH-CEILING RE-ANCHOR — the transient
+DVM's velocity-grid extent stopped being a class constant and became
+`neutral_kinetic_dvm_vmax_cm_s`, derived by default from the launch band the
+armed surface jets can produce; and `VGrid.maxwellian`'s compensation guard now
+reads its condition number on the NON-DIMENSIONALIZED 2x2. Both are defect
+fixes on a path the reference stance runs, so both move the trajectory and the
+event pays for them once.** It moves the TRAJECTORY *and* the config identity:
+the new key rotates the identity, and the wider derived extent — `9.2104e6` to
+`2.2252e7` cm/s on this stance's armed jets — moves the neutral arm's
+arithmetic. The SHAPE does not move. The recapture record's newest entry
+carries the moved numbers; the preceding recaptures are summarized next.
+
 **Recaptured 2026-09-02 (THE KINETIC STANCE EVENT — `g1atrim.toml` adopted the
 transient discrete-velocity neutral closure at wall accommodation 0.40, with
 the `C_R = 9.30` drive calibration promoted from arm override to stance value,
@@ -128,7 +140,7 @@ to be.
 | `nx` | `60` | Axial resolution of the far column: a pure cost knob. The campaign runs 268; a reviewer pays for this gate on the candidate branch and again post-merge. Pinned rather than inherited so a future default-`nx` change cannot multiply every gate's runtime silently. |
 | `max_steps_action` | `"raise"` | Deliberately overrides the stance's `"stop"`. For a campaign arm a step cap is a budget and a truncated arm is still data; here the cap is a tripwire, and tripping it should be loud. |
 | `max_steps` (run kwarg) | `150000` | **A tripwire, not a run length** — ~2.65x the 56,605 steps measured at the 2026-09-02 kinetic stance. It exists so a change that quietly destroys the timestep fails fast instead of running for hours; if it fires, the question is what happened to `dt`, not what happened to the trajectory. The value was SIZED at ~2x deliberately, against the 76,631 steps the fixture ran at the R2b re-anchor (2026-08-20) — a backstop with a few percent of headroom is not a backstop, it is a second cost cap waiting to truncate the gate. The margin has moved with the fixture ever since WITHOUT the cap moving: ~1.6x at the 94,044 steps of the 2026-08-25 stance event, ~2.4x at the 62,612 of the 2026-08-26 adoption and the 2026-08-28 R3-tip recapture (which moved the count by ONE step), ~2.65x now. Re-sizing it remains a golden-touching change rather than a maintenance edit. |
-| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/gates/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **8 min 06 s** on the pure path (2026-09-02 kinetic recapture, clean lane) against the full gate's 26 min 56 s capture / 26 min 50 s verify COMPILED — the pure full-gate figure is not measured at this stance. Over the steps it covers the digest is the STRONGER check, because the golden certifies only what reaches a save. (Earlier figures, each true at its own stance: 7 min 57 s pure against 16 min 27 s compiled / 38 min 41 s pure at the 2026-08-28 R3-tip recapture; 11 min 33 s / 16 min 16 s / 45 min 55 s at the 2026-08-26 adoption; ~2.5 min against a ~17 min gate before the 2026-08-25 adaptive-`dt` change.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
+| digest horizon (`baselines/golden_digest_4k.json`) | first `4000` accepted steps | The companion fixture for `scripts/gates/golden_digest_gate.py`, which folds the packed state into a running SHA-256 after EVERY accepted step of this same configuration. The horizon is a cost knob, not physics: 4,000 steps is **7 min 54 s** on the pure path (2026-09-04 launch-ceiling recapture, clean lane) against the full gate's 16 min 40 s capture / 16 min 57 s verify COMPILED — the pure full-gate figure is not measured at this stance. Over the steps it covers the digest is the STRONGER check, because the golden certifies only what reaches a save. (Earlier figures, each true at its own stance: 8 min 06 s pure against 26 min 56 s / 26 min 50 s compiled at the 2026-09-02 kinetic recapture; 7 min 57 s pure against 16 min 27 s compiled / 38 min 41 s pure at the 2026-08-28 R3-tip recapture; 11 min 33 s / 16 min 16 s / 45 min 55 s at the 2026-08-26 adoption; ~2.5 min against a ~17 min gate before the 2026-08-25 adaptive-`dt` change.) That gate runs at `max_steps_action = "stop"` — the cap is its run length, not a tripwire — which changes what happens AT the cap and nothing before it. |
 
 `BASELINE_FLAG_OVERRIDES` carries one entry, `neutral_equilibration = True`, for
 the reason given in the re-cut section above.
@@ -142,14 +154,14 @@ whole cycle rather than a truncated foot.
 
 | quantity | value |
 |---|---|
-| steps | 56,605 |
-| wall, single lane | **26 min 56 s** CAPTURE compiled, **26 min 50 s** VERIFY compiled. Measured 2026-09-02 on a CLEAN lane, strictly serially, nothing else running. **No PURE full-gate figure is measured at this stance, and none is carried forward from the last one** — the pure path is bit-exact against compiled by construction, so what is missing is a wall time and nothing about the fixture; anyone who needs it must measure it. |
+| steps | 56,232 (2026-09-04 recapture; the sidecar is the authority) |
+| wall, single lane | **16 min 40 s** CAPTURE compiled, **16 min 57 s** VERIFY compiled (2026-09-04 recapture, clean lane). The 2026-09-02 figures were **26 min 56 s** CAPTURE compiled, **26 min 50 s** VERIFY compiled. Measured 2026-09-02 on a CLEAN lane, strictly serially, nothing else running. **No PURE full-gate figure is measured at this stance, and none is carried forward from the last one** — the pure path is bit-exact against compiled by construction, so what is missing is a wall time and nothing about the fixture; anyone who needs it must measure it. |
 | saves | 2,620 |
 | `final_time` | 2.618754e-02 s (the dynamic `t_end`, reached) |
 | trajectory | `y[2620, 432]` = **6** fields × 72 cells |
 | phase census (saves) | 8 `pre_breakdown`, 11 `breakdown`, 2000 `main_discharge`, 600 `afterglow`, 1 `post_afterglow` |
 | save cadence | 10 us — the finest timing shift this fixture can resolve |
-| 4,000-step digest horizon | **8 min 06 s** pure (the reference capture) |
+| 4,000-step digest horizon | **7 min 54 s** pure (the 2026-09-04 reference capture) |
 
 **Six fields per cell, not eight.** The kinetic closure retires the evolved
 neutral momentum and energy rows from the packed state, so the trajectory
@@ -232,6 +244,134 @@ builders, `scripts/verify/` for the per-build instruments,
 `scripts/atomic/` and `scripts/kinetic/` for those. `scripts/baselines/`,
 `scripts/data/` and `scripts/stances/` did not move. The transcripts are
 not rewritten: a record of what was run says what was run.
+
+**2026-09-04 — THE DVM JET LAUNCH-CEILING RE-ANCHOR. RECAPTURED, on the
+compiled path (RULED by Tom; the re-anchor was accepted with the fix).** Two
+independent ceilings stood over the surface jets' launch band, and the merge
+`[dvm-jet-launch-ceiling]` removes both:
+
+| defect | what it was | what it is now |
+|---|---|---|
+| velocity-grid EXTENT | a class constant no config key reached — four ion thermal speeds at a 10 eV cap plus 1.5 sonic drifts, `9.2104e6` cm/s, sized for the charge-exchange tail and never for a jet. On this stance's `64 x 24` grid the last `v_z` node sat at `8.277e6` cm/s, a hard ceiling at `157.9` eV per launched atom above which the launch spectrum RAISES mid-run. | `neutral_kinetic_dvm_vmax_cm_s`, default `None` = DERIVED: `1.25 sqrt(2 e_max / m_He)` at `e_max = max(R_E/R_N)(cathode_phi_c_cap_V + 10 eV)` over the ARMED jets — `657.302` eV and `2.2251880918e7` cm/s here — with a construction-time check that puts 512 energies of each armed band through the tick's own launch-spectrum builder. |
+| moment-compensation GUARD | `np.linalg.cond` read on a raw 2x2 whose rows are moments of different order and whose columns carry the reciprocal dimensions of the basis amplitudes, so the number was DIMENSIONAL: `s^2 [[1, 2u], [2u, 4u^2 + 6s^2]]`, `det = 6 s^6`, growing as `(8/3)(u^2/s)^2` and crossing `1/eps` at `u^2/s ~ 4e7` cm/s while the solve there was still exact to a few ulps. It rejected every narrow directed spectrum above roughly `190` eV per atom at ANY extent. | row `i` divided by `s^i` and column `j` by `s^j` — the identical linear system (`x = col * solve(A_hat, rhs_hat)`), judged and solved in units of the spectrum's own thermal spread. The threshold `_MOMENT_SOLVE_COND_MAX` is UNCHANGED at `1/eps`; what changed is the matrix it is read on. |
+
+**The reference configuration was already past the extent ceiling and survived
+on ordering.** It arms its cathode jet at `phi_c = 298.4` V — a launch energy
+above `157.9` eV — and only the first armed DVM tick's average over the falling
+flank (`144.5` eV) kept it below the wall. The derived configuration
+`scripts/stances/examples/x1_local.toml`, which arms 26 us earlier, asks
+`159.1` eV on its first armed tick and dies at `t = 153.9` us at commit
+`0ae734a`. The stance provenance note carries that disclosure.
+
+**THE ESCAPE HATCH, stated because every pre-2026-09-04 DVM result needs it.**
+Setting `neutral_kinetic_dvm_vmax_cm_s = 9210397.053400524` pins the historical
+thermal/sonic sizing and reproduces the old grid with the jets armed. Nothing
+run before this event is reproducible at the tip without it: every X- and
+B-series arm and every ES1 score taken on the kinetic stance was produced on
+the `9.2104e6` cm/s grid.
+
+| quantity | before | after |
+|---|---|---|
+| `production_discharge.npz` `sha256` | `c286d2f415058c20966d85d6d15c4355887eefd6f548c49c371d9bd64f1578c4` | `bfda63bec6711bdbd8523e0c64f126802323dd842e7047f76a37cf0e1566c008` |
+| `production_discharge.json` `sha256` | `da093584b02d2e3b02c462bdca84c95ba13f9f0c59fca7711da88274e3363ce7` | `98993ab5292f9cb419c8f05efba94892d83a9a75fc08b96df522303d9d8e2546` |
+| `golden_digest_4k.json` `sha256` | `a5ed270ec6aa63997b55ca505e56ed52b207122649b1c0f88f0460a3965d4368` | `ae5654f995fed50ceb1898a02601a3a591913f1fadea7aa132c2227068ff3f97` |
+| `golden_digest_4k.json` `digest` | `4c0e105b922e67308595e2cbdd628d9f4dcde2e1686d00225cb69bacec8643ea` | `3e289382de08bc64c428470fa791f0d47b064606c7fc898f224501468d222ea3` |
+| `golden_digest_4k.json` `config_identity` | `9b36195dae90448a9adfa90f8304a5e5b4a74072c978aeb67f991df8ae116932` | `eb28dae05c52a80408e2b4fdeeac1785811bf21406c535397f0f8d740a267a1c` |
+| `golden_digest_4k.json` `final_time` | `0.00045632279608921294` | `0.00045631353660323837` |
+| `golden_digest_4k.json` `steps` / `cells` / `fields_per_cell` / `checkpoint_interval` / `kernel_provenance` | `4000` / `72` / `6` / `1000` / `pure` | UNCHANGED |
+| sidecar `steps` | `56,392` | **`56,232`** (-160, -0.28 %) |
+| sidecar `final_time` | `2.618754254937e-02` s | `2.618754424630e-02` s — the dynamic `t_end`, still reached |
+| sidecar `saves` / `cells` / `fields_per_cell` | `2620` / `72` / `6` | UNCHANGED |
+| sidecar `params` / `flags` key counts | `255` / `53` | **`256`** / `53` — **1 added** (`neutral_kinetic_dvm_vmax_cm_s`), 0 removed, 0 re-valued |
+| `config_snapshots.json` `sha256` | `98998401d09ee6ccc590d598bd6d309f60d0822568a671ef7ba46557d1580f8e` | `6a3568d5377c21b7de47684f5e8aae3bfbabbd364b1246f3e0ff01585de3bfaa` |
+| `config_snapshots.json` `manifest_sha256` / `parameter_count` / `flag_count` | `0b6c2218…` / `255` / `53` | `d2ea73f4…` / **`256`** / `53` |
+
+Per-1000-step checkpoints, reference vs recapture: `0` UNCHANGED at
+`5ecba233…`; `1000` `f70f9d51…` -> `294380fe…`; `2000` `df9458c2…` ->
+`9bec0c56…`; `3000` `f0fa2259…` -> `09fb1270…`; `4000` `4c0e105b…` ->
+`3e289382…`. **The step-0 checkpoint does not move**, and that is the expected
+shape: step 0 is the equilibrated neutral seed, produced by the implicit
+neutral stepper, which neither defect touches.
+
+All four resolved-config snapshot cases rotated, by the same one added key
+(`cablp/solvers/_sim1d/config_snapshots.json`, re-pinned on the branch):
+
+| case | before | after |
+|---|---|---|
+| `production_golden` | `42beb937…` | `cddb3fed…` |
+| `compare_sim1d_es1` | `3318511a…` | `f483367c…` |
+| `run_m6_point_es1_stance_g1atrim` | `b771c5fd…` | `f492bd8f…` |
+| `run_mechanism_ladder_es1_stance_g1atrim` | `b771c5fd…` | `f492bd8f…` |
+
+**The fixture's shape and cycle coverage are unchanged, and that was measured
+rather than assumed.** `y` is `[2620, 432]` before and after; the `phase` array
+is byte-identical; the phase census is the same `8 / 11 / 2000 / 600 / 1`
+(pre-breakdown / breakdown / main discharge / afterglow / post-afterglow). The
+`time` array differs in exactly **1 of 2620** samples — the last one, where the
+dynamic `t_end` lands 1.7 ns later. `y` differs in **1,120,932 of 1,131,840**
+raw `uint64`.
+
+**What the trajectory movement is, stated honestly.** Over the whole fixture the
+relative move of `y` has median **7.5e-3**, 99th percentile **9.3e-2**, and a
+maximum of 1351 at one main-discharge entry that crosses zero
+(`-3.445911e-10` -> `-4.658815e-07`, a denominator artifact). That is roughly
+50x the median of the 2026-09-03 speed-up recapture, and it should be: this
+event does not re-route arithmetic, it hands the neutral arm a velocity grid
+2.4x wider at fixed `(64, 24)`. **This is why the golden is a REGRESSION
+SCAFFOLD and not a physical claim. NO CONTINUITY PAIR WAS MEASURED FOR THIS
+EVENT** — the physics verdict at the production ES1 operating point is not
+established here and is an OPEN item, flagged at merge.
+
+**Sidecar health, before and after this recapture.** `finite: true` both;
+`samples` 2620 both.
+
+| row | before | after |
+|---|---|---|
+| `Te_max` | `26.51924703839118` | `26.519140507962316` |
+| `Te_min` / `Ti_min` | `0.1` / `0.02585` | UNCHANGED (the floors) |
+| `Ti_max` | `7.318876364837494` | `7.2959756213212605` (-0.31 %) |
+| `n_max` | `33081315555355.5` | `32751736654930.652` (-1.0 %) |
+| `n_min` | `851849034.5862641` | `851849139.6422901` |
+| `nn_max` | `135755895284095.28` | `134563376855846.31` (-0.88 %) |
+| `nn_min` | `234548993631.36646` | `235488745098.592` |
+| `plasma_inventory_relative_drift` | `4584.836734431819` | `4576.227212650526` |
+| `neutral_inventory_relative_drift` | `1.1049859150084276` | `1.1056324439301277` |
+| `thermal_energy_relative_drift` | `4668.466395970876` | `4637.305697805382` |
+| `total_particle_inventory_relative_drift` | `1.1938675471050408` | `1.1943471190898987` |
+
+**Capture evidence.** The NPZ fixture was captured TWICE from clean separate
+processes to temporary paths, strictly serially per the serial-golden rule, and
+compared BEFORE either was installed: `phase` identical at raw bytes, `time`
+**0 differing of 2,620** and `y` **0 differing of 1,131,840** at `uint64`, both
+NPZ `sha256` `bfda63be…` and both JSON sidecars byte-identical (`sha256`
+`98993ab5…`). The digest reference was regenerated in the same event as the
+protocol requires, also twice from clean separate processes, byte-identical
+(`sha256` `ae5654f9…` both). Both captures were taken at the FIRST review's
+trial merge of this branch, whose solver arithmetic is bit-identical to the
+merge that landed — the intervening commits re-cut a gate fixture and
+documentation and touch no solver source — and the installed fixture then
+verified `exact=True` at the landed tip on the compiled path with both digest
+legs green, which is what makes the reuse a measured statement rather than an
+assumption.
+
+Gates at this tip, one desktop lane, strictly serial against each other. DISCLOSED: the compiled verify overlapped the tail of an unrelated
+6,000-step campaign arm, so **17 min 09 s** is an upper bound; the same
+verify on a clean lane at the first trial merge took **16 min 57 s**.
+
+| gate | result |
+|---|---|
+| CAPTURE, compiled | `baseline captured: ... saves=2620, cells=72, fields=6, steps=56232, final_time=2.618754e-02 s` (`kernels=cython/_cathode_kernels_cy/tierA+csda`, probed in-process), twice, byte-identical, **16 min 40 s** / **16 min 46 s** |
+| COMPILED golden | `baseline verify OK: saves=2620, exact=True, max_rel=0.000e+00, max_abs=0.000e+00, time_max_abs=0.000e+00 s (rtol=1.0e-09, atol=0.0e+00)`, **17 min 09 s** (`kernels=cython/_cathode_kernels_cy/tierA+csda`, probed in-process) |
+| 4k digest reference, pure | regenerated in this event, `kernel_provenance: "pure"`, **7 min 54 s** / **7 min 55 s** |
+| PURE 4k digest leg | `digest gate OK: steps=4000, digest=3e289382de08bc64c428470fa791f0d47b064606c7fc898f224501468d222ea3, exact=True` (`digest gate kernels=pure`), **7 min 59 s** |
+| COMPILED 4k digest leg | `digest gate OK: steps=4000, digest=3e289382de08bc64c428470fa791f0d47b064606c7fc898f224501468d222ea3, exact=True` (`digest gate kernels=cython/_cathode_kernels_cy/tierA+csda`), **2 min 07 s** |
+| smoke | exit 0, all five compiled-kernel equivalence blocks LIVE |
+| `scripts/verify/verify_sim1d_k2_dvm.py` | `K2a DVM gates: ALL PASS`, 121 of 121, exit 0 — the same case count as at the base commit |
+| `scripts/gates/interp_bitexact_gate.py` | `GATE OK`, `tw` and `twion` 0 differing of 96 digest lines each, array leg 0 flipped of 17,024 walkers over 364 batches (210 lane-marched) |
+| `scripts/gates/audit_sim1d_configs.py` | `sim1d config snapshots OK: params=256, flags=53, cases=4` |
+
+**Wall times are single measurements on one desktop lane and are not a
+controlled comparison with any earlier entry.**
 
 **2026-09-03 — `T_s` RETIRED: an IDENTITY-ONLY rotation (AUTHORIZED).** Tom's
 ruling: `T_s` is a sim3-era development artifact. The key is removed from the
