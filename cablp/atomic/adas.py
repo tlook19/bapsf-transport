@@ -17,6 +17,7 @@ charge), to be multiplied by the appropriate density product and, for
 energy, ``ev_to_erg``.
 """
 
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -87,6 +88,119 @@ def read_adf11(path):
         stages[z1] = np.array(block, dtype=float).reshape(nte, ndens)
         idx += ndens * nte
     return log_ne, log_te, stages
+
+
+# One block header of a metastable-resolved adf11 file, e.g.
+#   ---------------------/ IPRT= 1  / IGRD= 2  /--------/ Z1= 1   / DATE= 04/11/99
+# The two leading NAME= INDEX pairs identify the block; which names appear is
+# class-dependent (SCD/ACD carry IPRT+IGRD, QCD carries IGRD+JGRD, PLT carries
+# IGRD+IPRT, PRB carries IPRT+IGRD), so the names are returned rather than
+# assumed. DATE is excluded because its value is itself slash-separated.
+_RESOLVED_INDEX = re.compile(r"\b(?!DATE\b)([A-Z][A-Z0-9]*)=\s*(\d+)")
+
+
+def read_adf11_resolved(path):
+    """Parse a metastable-RESOLVED adf11 file (the ``*96r`` partial form).
+
+    The resolved files carry, per ionization stage, one block per
+    (parent metastable, child metastable) index pair rather than the single
+    stage-to-stage block of the unresolved form. Two things differ from
+    :func:`read_adf11` and both are handled here: a metastable-count line
+    follows the header (one integer per stage, ``z1min-1`` upward), and every
+    data block is introduced by a header naming its indices.
+
+    Returns ``(log10_ne, log10_te, metastable_counts, blocks, index_names)``.
+    ``blocks`` maps ``(index_1, index_2, z1)`` to an ``(nte, ndens)`` array of
+    log10 coefficients in the file's own units, with density varying fastest
+    in the file and hence along the columns here. ``index_names`` is the
+    ``(name_1, name_2)`` pair those indices carry in this file's headers, so a
+    caller can assert the convention it expects rather than assume it. An
+    index of 0 means the block is not resolved on that axis (PLT and PRB carry
+    a 0 for the metastable they do not resolve).
+
+    Raises ``ValueError`` if a block is short, if the axes are not strictly
+    increasing, or if the headers do not all carry the same index names --
+    each of which would silently mis-assign a coefficient to the wrong
+    metastable.
+    """
+    try:
+        text = Path(path).read_text()
+    except FileNotFoundError as exc:
+        raise RuntimeError(_missing_data_file_message(path)) from exc
+    lines = text.splitlines()
+    header = lines[0].split("/")[0].split()
+    ndens, nte = int(header[1]), int(header[2])
+
+    axis_values = []
+    blocks = {}
+    names = None
+    current = None
+    seen_counts = False
+    counts = None
+    for line in lines[1:]:
+        if line.startswith("C"):
+            break  # trailing comment section
+        stripped = line.strip()
+        if not stripped or set(stripped) <= {"-"}:
+            continue
+        if "=" in line:
+            found = _RESOLVED_INDEX.findall(line)
+            if len(found) < 3:
+                raise ValueError(
+                    f"{path}: resolved block header carries "
+                    f"{len(found)} indices, expected at least 3 "
+                    f"(two metastable indices and Z1): {line!r}"
+                )
+            block_names = tuple(name for name, _ in found[:2])
+            if names is None:
+                names = block_names
+            elif names != block_names:
+                raise ValueError(
+                    f"{path}: block header names {block_names} differ from "
+                    f"{names}; the index convention must be uniform or a "
+                    "coefficient would be assigned to the wrong metastable"
+                )
+            index = dict(found)
+            current = (
+                int(found[0][1]),
+                int(found[1][1]),
+                int(index["Z1"]),
+            )
+            blocks[current] = []
+            continue
+        tokens = [float(t) for t in line.split()]
+        if not seen_counts:
+            # The metastable-count line: one integer per stage. It is the only
+            # content line before the axes, and is what the unresolved reader
+            # would swallow into the density axis.
+            counts = [int(t) for t in tokens]
+            seen_counts = True
+        elif current is None:
+            axis_values.extend(tokens)
+        else:
+            blocks[current].extend(tokens)
+
+    if counts is None:
+        raise ValueError(f"{path}: no metastable-count line found")
+    log_ne = np.array(axis_values[:ndens], dtype=float)
+    log_te = np.array(axis_values[ndens : ndens + nte], dtype=float)
+    if log_ne.size != ndens or log_te.size != nte:
+        raise ValueError(
+            f"{path}: axes are short -- got {log_ne.size}/{log_te.size} "
+            f"values, expected {ndens}/{nte}"
+        )
+    if not (np.all(np.diff(log_ne) > 0) and np.all(np.diff(log_te) > 0)):
+        raise ValueError(f"{path}: adf11 axes are not strictly increasing")
+
+    tables = {}
+    for key, values in blocks.items():
+        if len(values) != ndens * nte:
+            raise ValueError(
+                f"{path}: block {key} carries {len(values)} values, "
+                f"expected {ndens * nte}"
+            )
+        tables[key] = np.array(values, dtype=float).reshape(nte, ndens)
+    return log_ne, log_te, tuple(counts), tables, names
 
 
 @lru_cache(maxsize=None)
