@@ -245,6 +245,11 @@ builders, `scripts/verify/` for the per-build instruments,
 `scripts/data/` and `scripts/stances/` did not move. The transcripts are
 not rewritten: a record of what was run says what was run.
 
+**Invocation since 2026-09-05:** `interp_bitexact_gate.py` now REQUIRES
+`--outdir <a directory outside the repository>`, so the bare form the
+transcripts above show refuses with exit 2 rather than leaving its capture
+files in `scripts/`.
+
 **2026-09-04 — THE DVM JET LAUNCH-CEILING RE-ANCHOR. RECAPTURED, on the
 compiled path (RULED by Tom; the re-anchor was accepted with the fix).** Two
 independent ceilings stood over the surface jets' launch band, and the merge
