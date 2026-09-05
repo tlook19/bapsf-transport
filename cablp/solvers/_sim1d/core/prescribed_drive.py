@@ -80,6 +80,27 @@ TRACE_CURRENT_KEY = "discharge_current_mean_a"
 TRACE_VOLTAGE_KEY = "discharge_voltage_positive_mean_v"
 TRACE_REQUIRED_KEYS = (TRACE_TIME_KEY, TRACE_CURRENT_KEY, TRACE_VOLTAGE_KEY)
 
+#: The CALIBRATED cathode's own keys: the emission constant, the surface
+#: temperature the emission model reads, the bank loop, and the heater/warming
+#: package. The prescribed drive reads none of them -- and yet a run in this
+#: mode normally still NEEDS them, because its foot is a real current-driven
+#: discharge (see the module docstring). So the refusal below is conditional on
+#: there being no foot: with the hand-off at or before the model clock's own
+#: origin, the calibrated cathode never runs at all, these keys are read by
+#: nothing for the whole run, and a non-default value among them is exactly the
+#: silent inert control the config surface forbids.
+CALIBRATED_ONLY_KEYS = (
+    "C_R",
+    "cathode_Ts_base_K",
+    "V_bank",
+    "C_bank_F",
+    "L_parasitic_H",
+    "cathode_warming_model",
+    "cathode_heat_capacity_J_per_K",
+    "cathode_conduction_W_per_K",
+    "cathode_emissivity",
+)
+
 #: Relative hand-off discontinuity above which the switch is announced as a
 #: JUMP rather than a hand-off. Not a tolerance and not a gate: nothing is
 #: smoothed, clipped or rejected at any size: the number only decides whether
@@ -286,6 +307,31 @@ def resolve_prescribed_drive(input_dict, input_flags, solver_model):
             "the column from the trace's pre-trigger branch, which is the "
             "quiescent baseline and not a drive"
         )
+    if start_s <= 0.0:
+        # NO FOOT: the prescribed drive is in force from the first step, so
+        # the calibrated cathode never runs and its keys are read by nothing.
+        # (With a foot -- every configuration the campaign actually runs --
+        # they ARE read, and are required to be a valid calibrated
+        # configuration; see the module docstring.)
+        from .config import input_dict_template_1d
+
+        offenders = sorted(
+            key
+            for key in CALIBRATED_ONLY_KEYS
+            if key in input_dict_template_1d
+            and input_dict.get(key) != input_dict_template_1d[key]
+        )
+        if offenders:
+            _refuse(
+                f"cathode_prescribed_start_s={start_s!r} s puts the hand-off "
+                "at or before the model clock's origin, so the calibrated "
+                "cathode never runs -- but "
+                f"{offenders} are set away from their defaults. The emission "
+                "constant, the surface temperature, the bank loop and the "
+                "heater package are read by NOTHING on a run with no foot. "
+                "Either restore them, or move the hand-off after the "
+                "breakdown so the foot that reads them exists"
+            )
     if start_s > float(time_s[-1]):
         _refuse(
             f"cathode_prescribed_start_s={start_s!r} s is past the end of the "

@@ -1926,6 +1926,127 @@ still worth reading on a run that gets there.
 free root, 1 it sat on the data cap, 2 it sat on the circuit bound. All three
 are NaN on the voltage-driven (floating) solve, which has no ceiling.
 
+## Prescribed measured drive (`cathode_solver_model = "prescribed_measured"`, default off)
+
+The shipped `current_driven` formulation **predicts** the drive. Richardson
+emission at the cathode's surface temperature sets what the sheath can carry,
+the bank loop integrates $L\,dI/dt = V_\text{src} - I R - V_\text{dis}(I)$ for
+the current, and one knob — `C_R` — is trimmed until the predicted plateau
+matches the measured band. That is a legitimate model of the machine, but it
+makes every column score at every rung conditional on a drive-side fit.
+
+The operator, however, **sets** each rung's discharge current by hand: the
+heater current is raised until the discharge reaches a target power and then
+held there (it is a control variable, not a free input). The drive LEVEL is
+therefore a machine INPUT. This mode takes it as one.
+
+**What is imposed.** Both loop quantities, from the rung's own measured
+overlay trace: the discharge current $I(t)$ and the discharge voltage
+$V_\text{dis}(t)$, linearly interpolated onto the model clock. Nothing about
+the surface is consulted — not the surface temperature, not `C_R`, not the
+work function — and there is no loop equation.
+
+**What follows.** The cathode fall is read out of the loop bookkeeping the
+current-driven `SolverResult` is already assembled with,
+
+$$V_\text{dis} = V_b + V_\text{series},\qquad V_b = \phi_c + V_p - \phi_a,$$
+
+solved for $\phi_c$ instead of for $V_\text{dis}$:
+
+$$\phi_c = (V_\text{dis} - V_\text{series}) + \phi_a - V_p,$$
+
+with $V_p = I R_p$ the resolved gap drop (the Spitzer plasma column between
+cathode and anode mesh, at the boundary cell's own state) and $V_\text{series}
+= I\,[(1-x)R_\text{comp} + R_\text{mesh}]$ the internal series drop the
+$V_\text{dis}$ probe does not see. At the shipped defaults ($x = 1$,
+$R_\text{mesh} = 0$) $V_\text{series} \equiv 0$ and the relation is exactly
+$\phi_c = V_\text{dis} + \phi_a - V_p$.
+
+The relation is implicit through **one** term: $\phi_a$ depends on the fraction
+of the emitted beam the gap passes to the mesh, and that bypass fraction is a
+function of $\phi_c$. So $\phi_c$ is the single bracketed `brentq` root of
+$\phi_c + V_p - \phi_a(\phi_c) - V_b$ on $(0, \phi_{c,\text{cap}}]$ — the same
+construction, and the same monotonicity argument, the current-driven path uses
+for its current root: $d\phi_a/d\phi_c$ is positive and small (the bypass
+fraction varies over a hundred-volt scale and enters $\phi_a$ logarithmically),
+so the residual is strictly increasing and the root unique. Where the bypass
+vanishes the root reproduces the explicit relation exactly.
+
+**The emitted current** is read off the measured loop current and the plasma's
+own Bohm ion current at the cathode cell,
+
+$$I_\text{eth}^* = \max(I - I_i,\ 0),$$
+
+i.e. the loop current the ions do not supply is what the surface emitted. This
+is the deep-repelling-sheath limit of the current-driven cathode Kirchhoff
+$I = I_i(1 - e^{\Lambda - \psi}) + I_\text{eth}^*$; with the emission model
+withdrawn there is no $\psi$ at which to evaluate the returning
+plasma-electron current, so that term is not subtracted, and the
+`I_cathode_kirchhoff_residual` diagnostic MEASURES the dropped current rather
+than hiding it. The beam enters the column at $e\phi_c$ exactly as before.
+
+**The foot, and why there is one.** Prescribing from $t = 0$ would impose the
+plateau current on a column that has not broken down: the sheath cannot carry
+it, and the solve sits at the `cathode_phi_c_cap_V` ceiling — the
+capability-limited regime — for the whole build leg. So the mode hands over at
+`cathode_prescribed_start_s`, and everything before it is the CALIBRATED
+cathode exactly as configured. **A run in this mode therefore needs a valid
+calibrated configuration as well as a trace**, and the reference stance's own
+drive calibration is inherited rather than deleted. Past the hand-off the
+cathode-warming update is frozen (its ledger rows book nothing over those
+steps) because the emission it would be costed against is not the emission the
+trace implies. Open-circuit phases withdraw the prescribed drive entirely, so
+the afterglow keeps its historical floating solve.
+
+**Nothing is smoothed at the switch.** The switch time and the two currents on
+either side of it are printed and written to the saved trajectory's root
+attributes, and a relative discontinuity above `HANDOFF_JUMP_WARN_FRACTION`
+(10 %, `core/prescribed_drive.py`) is announced on its own line. The size of
+the jump is a MEASUREMENT — of how far the calibrated cathode sat from that
+rung's measured drive at the instant the measurement took over — and an
+invented ramp would destroy exactly the quantity the hand-off exists to expose.
+
+**The two clocks.** The overlay's `discharge_time_ms` is referenced to the
+start of the main discharge; the model's own time is seconds since the
+simulation began. `scripts/score/compare_sim1d_es1.py` reconciles them
+post-hoc by shifting the model clock to the first `main_discharge` frame. This
+mode reuses that convention with the origin supplied as configuration —
+$t_\text{trace,ms} = (t_\text{model} - t_0)\cdot 10^3$ — because a solver
+stepping forward cannot search a saved trajectory for its own origin. The
+origin is measured on a calibrated reference run of the same base and must be
+re-measured if that base's breakdown timing moves.
+
+**DECLARED BRACKET AXIS.** Under this mode $\phi_a$ and $V_p$ become
+load-bearing on the beam birth energy in a way they are not under
+`current_driven`, where the emission solve fixes $\phi_c$ directly and the
+anode fall only redistributes the loop's voltage. Here $\phi_c$ is assembled
+FROM the measured $V_\text{dis}$ and those two model quantities, so a beam
+energy quoted from a prescribed-measured run is to be quoted as a **bracket
+over $\phi_a$ and $V_p$**, never as a single number. No new control is exposed
+for either — the anode fall is the anode sheath the model already solves and
+the gap drop is the resolved Spitzer column — so this is a reporting
+obligation, not a knob.
+
+**What the mode reports differently.** `I_eth` is 0 rather than a Richardson
+capability computed from an unused surface temperature; `regime` is
+`prescribed` rather than `classical`, so a reader can tell a sheath the
+emission model produced from one the trace did; `phi_c_minus` is 0 (the
+space-charge barrier is a property of the emission solve). The only ceiling
+that survives is `cathode_phi_c_cap_V`, which remains an atomic-data domain
+guard and still tags `capability_limited` when a measured $V_\text{dis}$ would
+demand a deeper sheath than the tabulated cross section covers.
+
+**Refusals** (all at construction, `core/prescribed_drive.py`): a missing
+trace, origin or hand-off; a trace file lacking any of the three required
+columns, carrying non-finite samples, holding fewer than two samples, or with a
+non-increasing time base; a hand-off before the origin or past the end of the
+trace; `cathode_circuit_voltage_bound` armed (a bound on what the loop can
+supply is meaningless where the device voltage is measured); any of the three
+trace keys set under a different `cathode_solver_model`; and — where the
+hand-off is at or below zero, so the foot is disabled and the calibrated
+cathode never runs at all — any non-default value among the keys only that
+cathode reads.
+
 ## Vessel / common-mode node (`regime_vessel_node`, default off)
 
 The cathode/anode system **floats** with respect to the machine wall. The

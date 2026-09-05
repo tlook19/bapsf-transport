@@ -226,9 +226,9 @@ def save_result_hdf5(path, result, params=None, flags=None):
             h5.attrs["cathode_prescribed_handoff_time_s"] = float(
                 prescribed_handoff["time_s"]
             )
-            h5.attrs["cathode_prescribed_handoff_current_calibrated_a"] = float(
-                prescribed_handoff["current_calibrated_A"]
-            )
+            h5.attrs[
+                "cathode_prescribed_handoff_current_calibrated_a"
+            ] = float(prescribed_handoff["current_calibrated_A"])
             h5.attrs["cathode_prescribed_handoff_current_trace_a"] = float(
                 prescribed_handoff["current_trace_A"]
             )

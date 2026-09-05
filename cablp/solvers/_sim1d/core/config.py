@@ -2025,6 +2025,15 @@ def cathode_defaults():
         ``cathode_prescribed_t0_s`` and inside the trace's span. REQUIRED
         under that mode and refused under any other.
 
+        At or below zero it disables the foot entirely — the prescribed drive
+        is then in force from the first step, the calibrated cathode never
+        runs, and construction refuses any non-default value among the keys
+        only that cathode reads (``CALIBRATED_ONLY_KEYS`` in
+        ``core/prescribed_drive.py``: the emission constant, the surface
+        temperature, the bank loop and the heater package), because on such a
+        run they are read by nothing. That is the regime the foot exists to
+        avoid, and it is available-but-checked rather than forbidden.
+
         Load-bearing on the beam energy through ``phi_c`` — see the bracket
         note under ``cathode_solver_model``.
     cathode_phi_c_cap_V:
