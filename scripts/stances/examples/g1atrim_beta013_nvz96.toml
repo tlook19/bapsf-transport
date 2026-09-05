@@ -1,0 +1,40 @@
+# THE ENERGY-TIED LAUNCH SMEAR AT A FINER VELOCITY GRID: the beta = 0.13 arm
+# with `neutral_kinetic_dvm_nvz` raised from the reference's 64 to 96.
+#
+# A DERIVED configuration whose base is itself derived. It names
+# `g1atrim_beta013` and moves ONE key, so the only difference between the two
+# is the axial velocity resolution and the launch smear is stated identically
+# in both.
+#
+# WHAT IT IS FOR. It is the second half of the resolution instrument. Under the
+# reference's grid-tied smear the launched energy width is (3/2) m dv_z^2 / e
+# and therefore moves with nvz, which is what makes the source-region density
+# move between nvz = 64 and nvz = 96. Under the energy-tied width that fraction
+# is (3/2) beta at both resolutions wherever beta clears the grid-tied floor,
+# so the pair `g1atrim_beta013` / `g1atrim_beta013_nvz96` measures how much of
+# that resolution sensitivity was the launch shape rather than the transport.
+# The comparison is only as good as the floor allows: read
+# `launch_floor_fraction` from each run's `dvm_transfer_ledger` census before
+# reading the density difference, because launches on the floor still carry the
+# grid's width and still move with nvz.
+#
+# HOW TO RUN IT. The campaign drivers resolve `--stance <name>` against
+# `scripts/stances/`, so copy BOTH this file and its base there first;
+# `run_sim1d.py` takes the path directly, but a derived file's base is resolved
+# in `scripts/stances/` either way, so `g1atrim_beta013.toml` must be present
+# there:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/g1atrim_beta013_nvz96.toml \
+#         --output g1atrim_beta013_nvz96.h5
+#
+# The saved trajectory records the whole base chain, so the arm is identifiable
+# from its artifact alone.
+base = "g1atrim_beta013"
+
+
+[input_dict]
+# The selection: 96 axial velocity bins instead of the reference's 64. Nothing
+# else moves -- the launch smear is inherited from the base and is stated as a
+# fraction of the launch energy, so it does not follow this key.
+neutral_kinetic_dvm_nvz = 96
