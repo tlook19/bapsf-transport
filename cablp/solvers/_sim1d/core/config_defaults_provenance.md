@@ -345,17 +345,17 @@ citable; moving the value off `1.0` is a separate, registered calibration
 event and is not part of this decomposition.
 
 The complement `1 - f_gp` is a real gap and not a modelling convenience. The
-inventory read `scripts/fa0_neutral_budget.txt` closes the neutral throughput
-budget on the production ES1 stance and finds the pump venting only 2.0-2.6%
+FA0 neutral-inventory read closes the neutral throughput budget on the
+production ES1 stance and finds the pump venting only 2.0-2.6%
 of the delivered puff across every window, so the model has **no sink capable
 of absorbing a 30-40% shortfall**: whatever the complement represents (valve
 plenum, transit line, entry aperture, gas that never reaches the column) it is
 outside the modelled volume by construction, which is exactly why it belongs
 in a delivery fraction rather than in a pumping speed. Its eventual class will
 be FITTED-with-a-measured-envelope: the measured half is the per-valve plateau
-flow from the censored valve fit (`scripts/flowcal_censored_fit.txt`, which
-gives `A(76.4 V) = 9.01` slm at the ES1 operating point, systematic envelope
-`[8.80, 9.50]` slm, plus 4.8% pass-to-pass valve reproducibility), and the
+flow from the censored valve fit, which gives `A(76.4 V) = 9.01` slm at the
+ES1 operating point (systematic envelope `[8.80, 9.50]` slm, plus 4.8%
+pass-to-pass valve reproducibility), and the
 fitted half is whatever `S_gp` the discharge calibration lands on, so the
 implied `f_gp` is a ratio of one to the other and inherits the envelope of
 both. The bracket registered for the calibration leg is
@@ -429,9 +429,10 @@ regime disclosure, and the collisionless-flight caveat.
 
 **The stance value is the bracket MIDPOINT, not an endpoint.** On the
 geometry of record the two endpoints move the derived fill by < 0.1 %
-(`scripts/foot_orifice_probe.txt`), so the midpoint diameter 3.95 cm at the
-length bound 22.0 cm is quoted as the value and [3.8, 4.1] cm remains the
-bracket; see `scripts/stance/production_stance_provenance.md` for the stance rows.
+(the wide-vs-narrow endpoint probe of the foot fill), so the midpoint diameter
+3.95 cm at the length bound 22.0 cm is quoted as the value and [3.8, 4.1] cm
+remains the bracket; see `scripts/stance/production_stance_provenance.md` for
+the stance rows, which carry that probe's per-cell numbers.
 
 **`S_pump_L = S_pump_R = 3000.0` L/s — DERIVED (elbow leg literature-BOXED),
 bracket [2750, 3300] L/s.**
@@ -858,9 +859,9 @@ carries it. A positive float pins it instead, as an A/B instrument.
 The B5 registration named the grid-tied smear as `≈ 0.18 eV at the (64, 24)
 grid`, as though it were one number. It is not: the smear is
 LAUNCH-ENERGY-DEPENDENT, because the stretched axis's bin width is. Measured
-at base (`scripts/b5cj_t_launch_probe.txt`, the pin measured on the
-unmodified tree before it could be gated on): at (64, 24) the grid-tied smear
-runs `8.60 eV` at a 100 eV launch, `2.38 eV` at 32 eV, `1.01 eV` at 10 eV and
+at base (the B5 launch-energy probe, run on the unmodified tree before the pin
+could be gated on): at (64, 24) the grid-tied smear runs `8.60 eV` at a 100 eV
+launch, `2.38 eV` at 32 eV, `1.01 eV` at 10 eV and
 `0.18 eV` only near a 2 eV launch — so `0.18 eV` is one point of a curve, and
 the production cathode-sheath band (`phi_c + Ti ≈ 189 eV`, so
 `(R_E/R_N)(phi_c + Ti) ≈ 100 eV` per backscattered atom) sits two orders away
@@ -1066,8 +1067,8 @@ Honest bar: `"geometric"` is the one that reproduces the geometry. It is
 measured against the reference geometry by the free-flight billiard probe in
 `scripts/verify/k2_dvm_exchange_measure.py` — the committed E2 ray tracer with
 collisions, sources, pumping and accommodation all switched off, so the
-measurement is a property of `(Rp, Rm)` and the velocity and of nothing else —
-and the record is `scripts/k2_dvm_exchange_measured.txt`. Independently,
+measurement is a property of `(Rp, Rm)` and the velocity and of nothing else.
+Re-running that committed probe reproduces the read. Independently,
 `nu_c->a = 2 vp / (pi Rp)` averages over a Maxwellian to `vbar / (2 Rp)`,
 exactly the free-molecular rate `neutrals.neutral_zone_exchange_conductance`
 already carries in the fluid arm; the `"cauchy_chord"` form does not reduce to
@@ -1076,11 +1077,12 @@ and `4 Rm^2 / (pi (Rm^2 - Rp^2))` on the wall channel, so it is
 CELL-dependent, not a constant.
 
 The DEFAULT nonetheless stays `"cauchy_chord"`, because the pre-registered
-acceptance gate that would have promoted `"geometric"` was MISSED
-(`scripts/k2_dvm_exchange_acceptance.txt`, a reduced-statistics E2 rerun with
-both arms scored against one reference). The two errors in the shipped
-exchange rate partly cancel — the mean chord is too long by `4/pi` and the
-return fraction too large by `(Rp+Rm)/Rm` — but how much they cancel is a
+acceptance gate that would have promoted `"geometric"` was MISSED on a
+reduced-statistics E2 rerun with both arms scored against one reference, run
+by the committed `scripts/verify/k2_dvm_exchange_acceptance.py`. The two
+errors in the shipped exchange rate partly cancel — the mean chord is too long
+by `4/pi` and the return fraction too large by `(Rp+Rm)/Rm` — but how much
+they cancel is a
 function of `Rp/Rm`, and the L2 geometry flip moved it. **Recomputed at the
 shipped `Rp = 18.415`, `Rm = 50` (ratio 0.3683):** the exchange correction is
 `4 Rm / (pi (Rp + Rm)) = 4 x 50 / (pi x 68.415) = 0.9305`, i.e. the exchange
@@ -1135,9 +1137,12 @@ coordinate, whose cost on the production grid is prohibitive; what is
 recovered exactly is the per-flight axial step and hence the annulus's axial
 dispersion, which is the quantity the exponential tail was over-carrying. The
 E2 read of both arms against the step-face ray-traced Monte Carlo was taken on
-the ES1 K3a calibration-2 run at `nx = 240` and recorded in the K5 build
-report; those numbers are RATIFICATION-PENDING and nothing in the kernel was
-tuned to them.
+the ES1 K3a calibration-2 run at `nx = 240` and recorded in the K5 build report
+(2026-08); its numbers are RATIFICATION-PENDING and were never carried into
+this repository, so what stands here is the read's EXISTENCE and its scope, not
+its values — re-running the committed E2 driver
+`scripts/kinetic/neutral_arch_e2_compare.py` on that configuration is how they
+are recovered. Nothing in the kernel was tuned to them.
 
 The DEFAULT stays `"rates"` because the frozen production arm ran on it and
 must stay bit-reproducible; `scripts/k5_frozen_bitexact.py` (at commit 48be9a4, retired 2026-09-03) is the check.
@@ -1943,7 +1948,7 @@ them is set by how far the drive happens to sit from the rung, and the
 sheathwalk read (2026-08-05) measured up to 60% spurious ES1<->ES2 dependence
 from that alone, against <3% under keying. `"fixed"` remains selectable and is
 bit-exact, and is what every pre-K7 arm must name to reproduce.
-Memo: `scripts/sheathwalk_report.txt`.
+Memo: the K7 sheathwalk read (2026-08-05).
 
 **`heating_anomalous_tail_phi_c_fraction = None` (the `f = 0.25` arm) —
 ASSUMED, NEVER fitted.** `f` in `E_tail = f * e*phi_c(t)` is a DECLARED
@@ -1954,7 +1959,7 @@ to within a factor 0.75-1.04, so adopting the keying does not silently move the
 plateau energy at the same time. Honest bar: none — the plateau energy is
 kinetic and a fluid model cannot pin it, which is why the bracket is the claim
 and all three arms are reported together, exactly as for the fixed rungs.
-Memo: `scripts/sheathwalk_report.txt`.
+Memo: the K7 sheathwalk read (2026-08-05).
 
 **`heating_anomalous_tail_cathode_boundary = "reflect"` — DERIVED from a
 MEASURED potential.** The cathode sheath drop measured through drive is
@@ -1970,8 +1975,8 @@ at the wall's much smaller potential. The 1D walk has no radial coordinate and
 cannot size that fraction; it is the one assumption that could pull the ~2x
 below exact, and it is a documented limitation rather than a knob.
 `"escape"` remains selectable, is bit-exact, and is what every pre-K7 arm must
-name to reproduce. Memo: `scripts/sheathwalk_report.txt`,
-`scripts/k7build_sheath_crosscheck.txt`.
+name to reproduce. Memo: the K7 sheathwalk read (2026-08-05) and the K7
+build's sheath cross-check.
 
 **`heating_anomalous_tail_ionization = "off"`** ships off (bit-exact); the
 default needs no physical justification, but the band treatment its `"on"` arm
@@ -1987,7 +1992,7 @@ that spread is over the sampled frames, not a proof of a bound. The one
 surviving refusal, a tail energy past the tabulated He EII cross section
 (eps = 40.671258, ~999.98 eV at the module's `I_ion`), is a DOMAIN limit read
 off the table itself and is unreachable at the 190-310 V drop this device
-produces. Memo: `scripts/sheathwalk_report.txt`.
+produces. Memo: the K7 sheathwalk read (2026-08-05).
 
 **`heating_anomalous_disposal = "local"`** ships off (bit-exact, verified
 raw-uint64 on both kernel paths); the default needs no physical justification,
@@ -2032,10 +2037,10 @@ sensitivity down from <= 0.04 to <= 0.008 because the 25 eV bracket itself
 narrowed from `(1.6, 2.6)e-16` to `(1.950, 2.067)e-16`. The two anchors that
 did NOT move are the ones that do not depend on the table: the `e^-37.0`
 exponent (which recovers `gamma_L` by dividing `nu_en` back out — measured
-drift 7.1e-15) and the ~4e14 threshold. The banked artifact
-`scripts/pd0_branching.txt` is the PRE-2026-08-30 read and still carries the
-old numbers; it is left as the record of that read, and
-`scripts/pd0_branching.py` is what re-derives them.
+drift 7.1e-15) and the ~4e14 threshold. The banked PD0 read is the
+PRE-2026-08-30 one and still carries the old numbers, which are the "before"
+side of every delta above; `scripts/pd0_branching.py` is what re-derives the
+current ones.
 
 Honest bars, both DOCUMENTED rather than sized: (i) the asymptotic Landau
 expression is a large-argument expansion, quantitative for `v_phi/v_te`
@@ -2296,8 +2301,8 @@ sits at >= ~2e1 relative. 1e-3 splits those scales by more than two decades on
 each side; physically it means Te within 0.1% of `Te_floor`.
 
 **`dt_min_lock_max_steps = 250000` — DERIVED from a census of saved runs.**
-Memo: `scripts/dtmin_census_runlengths.txt` (2026-08-05). All 209 result h5
-files then present in `scripts/` were scanned for the per-step
+Memo: the dt_min run-length census (2026-08-05). All 209 result h5 files then
+present in `scripts/` were scanned for the per-step
 `active_constraint` label, which under the pre-2026-08-05 semantics read
 `"dt_min"` on exactly the steps that were clamped. 80 files clamp at least
 once, and the two populations separate cleanly on CONSECUTIVENESS:
@@ -2324,10 +2329,10 @@ the same quarter-of-a-relaxation-time convention as `density_dt_fraction`,
 it exists to resolve, not the fraction: the sheath capability wall's device
 slope reaches ~2 kOhm, giving `tau_circuit = L/(R + dV_dis/dI)` ~ 4 ns against
 an `L/R_comp` of 1.12 ms and a `dt_max` of 1e-4 s, and the sub-wall slew
-crosses the wall in ~45 ns (`scripts/regime_dtq_wallmap.txt`,
-`scripts/regime_dtq_frozen_circuit.txt`, 2026-08-12). The bound is an ACCURACY
-control — the TR-BDF2 loop advance is L-stable and needs no stability
-restriction — and is read only while `cathode_circuit_voltage_bound` is armed.
+crosses the wall in ~45 ns (the regime dt-quantum wall map and its
+frozen-circuit control, 2026-08-12). The bound is an ACCURACY control — the
+TR-BDF2 loop advance is L-stable and needs no stability restriction — and is
+read only while `cathode_circuit_voltage_bound` is armed.
 
 The remaining timestep parameters (`cfl`, the other `*_dt_fraction` limits,
 growth and retry factors) are ASSUMED numerical-control values with no

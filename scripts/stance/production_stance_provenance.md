@@ -465,9 +465,9 @@ the CAD export, so its two numbers are hardware brackets: bore ∈ [3.8, 4.1] cm
 flange must clear). Both push the footprint the same way, so the bracket has
 two unambiguous endpoints — WIDE (4.1 cm at 22 cm) and NARROW (3.8 cm at
 L → ∞). On this geometry the two endpoints move the derived foot fill by
-**less than 0.1 %** (`scripts/foot_orifice_probe.txt`: mid-port column density
-−3.569e-3 wide vs −3.572e-3 narrow against the same control; per-cell max
-|rel| 0.3291 vs 0.3340). The stance therefore quotes the **bracket midpoint
+**less than 0.1 %**: mid-port column density −3.569e-3 wide vs −3.572e-3
+narrow against the same control; per-cell max |rel| 0.3291 vs 0.3340. The
+stance therefore quotes the **bracket midpoint
 bore, 3.95 cm, at the length bound 22.0 cm** as the value, and
 **[3.8, 4.1] cm with L ≥ 22 cm remains the claim's bracket**. Nothing here is
 fitted: no endpoint was chosen to move a score.
@@ -483,8 +483,10 @@ arrival is absent (see `MODEL.md`, the fueling section). Also disclosed: the
 row is applied UNMASKED, so the 3.87 % of its mass that grazing rays place in
 the cathode–anode gap, the plenum and the cathode cell is deposited there
 rather than being redistributed onto the main-chamber roles the length-weighted
-fluid shapes restrict to (`scripts/g1aporf_rowcensus.txt`). Total inflow is
-conserved exactly either way.
+fluid shapes restrict to; the per-role census on both meshes was taken at the
+2026-08-24 tube-beamed-row event and is summarised in
+`scripts/gates/golden_baseline_provenance.md`. Total inflow is conserved
+exactly either way.
 
 **`nn0_profile`, `nn0_annulus_profile` — REGENERATED 2026-08-24 (DERIVED from a
 model run, not measured).** The shaped 4.5 ms ballistic foot, rebuilt by
@@ -497,7 +499,7 @@ registered [2.0, 4.5] ms bracket, and `ballistic` the short-reach end of the
 kernel bracket. This is the first provenance row this pair has had.
 
 **The fill it replaces was STALE, and the staleness is disclosed rather than
-absorbed.** `scripts/g1afix_foot45.npz` was built 2026-08-19 and predates two
+absorbed.** The superseded fill was built 2026-08-19 and predates two
 events: the CAD-span gap re-anchor (`cathode_anode_gap_cm` 50.0 → 53.25), which
 moved every cell downstream of the cathode face, and the sccm changeover to the
 flow meter's own 20 °C / 1013 mbar standard (`SCCM_TO_PARTICLES_PER_S`
@@ -510,16 +512,17 @@ numbers must not be conflated:
 
 | scope | how it was measured | result |
 |---|---|---|
-| the LOBE LEDGER alone, base held fixed | rebuild the fill at the current tip **on the banked file's own base** (`scripts/foot_orifice_probe.txt`) | 3.25 cm z-shift; per-cell **max 4.61 %, mean 1.28 %**; delivered inventory ×0.9315 — the sccm re-reference exactly |
-| the WHOLE recipe, base rebuilt too | rebuild the base as well, still on `cosine_pipe` (`scripts/g1acos_foot45.npz`, the control in `scripts/g1aporf_foot_diff.txt`) | port 11 **−11.3 %**, mid-port (port 29) **−28.6 %**; the base's chamber-mean rises 4.919e12 → 6.958e12 cm⁻³ |
+| the LOBE LEDGER alone, base held fixed | rebuild the fill at the current tip **on the superseded fill's own base** | 3.25 cm z-shift; per-cell **max 4.61 %, mean 1.28 %**; delivered inventory ×0.9315 — the sccm re-reference exactly |
+| the WHOLE recipe, base rebuilt too | rebuild the base as well, still on `cosine_pipe`, as the control arm | port 11 **−11.3 %**, mid-port (port 29) **−28.6 %**; the base's chamber-mean rises 4.919e12 → 6.958e12 cm⁻³ |
 
 The second row is the honest size of the drift, and it is roughly **ten times
 larger than the profile change itself** (port 11 +2.54 %, port 29 −0.95 % for
-orifice against the cosine control). The banked file was therefore never the
-fill this stance's geometry and physics imply. `scripts/g1aporf_foot_diff.txt`
-reports all three side by side — banked, cosine-at-current-tip (staleness
-only), and the adopted orifice fill — because reading the banked file against
-the orifice fill directly would attribute the whole drift to the profile.
+orifice against the cosine control). The superseded fill was therefore never
+the one this stance's geometry and physics imply. The 2026-08-24 comparison
+read all three side by side — the superseded fill, cosine-at-current-tip
+(staleness only), and the adopted orifice fill — because reading the
+superseded fill against the orifice fill directly would attribute the whole
+drift to the profile.
 
 ## Geometry
 
@@ -1088,9 +1091,8 @@ Two consequences follow and are NOT yet discharged:
   convergent to the KERNEL, not to the deposition. Refining `nx` cannot expose
   the assumption; only varying `beam_deposition_smoothing_cm` can.
 
-Evidence: `scripts/smallbatch_beam_smoothing_support.txt` (the raw-vs-applied
-support measurement above); the sub-cell finding it confirms is the deposition
-discriminator of 2026-08-05.
+Evidence: the small-batch raw-vs-applied support measurement quoted above; the
+sub-cell finding it confirms is the deposition discriminator of 2026-08-05.
 
 **`implicit_heat_scheme = "tr_bdf2"`, `operator_splitting = "strang"`,
 `heat_picard_iterations = 2`, `heat_picard_tol = 1e-10`** — DERIVED accuracy

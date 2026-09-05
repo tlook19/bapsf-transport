@@ -566,15 +566,17 @@ neutral_equilibration_dt = 0.01
 equilibration_gas_puff_on_s = 0.025
 use_cached_neutral_seed = false
 
-# INITIAL NEUTRAL FILL. Shaped foot profile from
-# scripts/g1aporf_foot45.npz (equilibrated base scripts/g1aporf_eqbase.h5,
-# dt_foot = 4.5 ms, ballistic kernel), REGENERATED 2026-08-24 with the
-# tube-beamed puff row above. It supersedes scripts/g1afix_foot45.npz, which
-# was built 2026-08-19 and had gone stale against everything this stance
-# absorbed after that date -- the CAD-span gap re-anchor most visibly (its z
-# grid is shifted 3.25 cm), the sccm changeover to the flow meter's 20 C /
-# 1013 mbar standard, and the physics events its equilibrated base predates.
-# scripts/g1aporf_foot_diff.txt separates that staleness from the row change.
+# INITIAL NEUTRAL FILL. Shaped foot profile, REGENERATED 2026-08-24 with the
+# tube-beamed puff row above: built by scripts/stance/sp3_build_nn0.py
+# (dt_foot = 4.5 ms, ballistic kernel) on an equilibrated base run of this
+# stance carrying that row. The fill is not an external file -- the arrays
+# below ARE it, and they are where a reader reads its per-cell values.
+# It supersedes the fill built 2026-08-19, which had gone stale against
+# everything this stance absorbed after that date -- the CAD-span gap
+# re-anchor most visibly (its z grid is shifted 3.25 cm), the sccm changeover
+# to the flow meter's 20 C / 1013 mbar standard, and the physics events its
+# equilibrated base predates. scripts/stance/production_stance_provenance.md
+# separates that staleness from the row change, at both measured scopes.
 # The profile flag stays stance-side because the per-cell nn0_profile it
 # requires is sized to this mesh.
 neutral_initial_profile = true

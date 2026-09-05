@@ -1506,7 +1506,7 @@ the row could not be separated without shipping a fill that matched neither.
 | `gas_puff_profile` (stance `g1atrim.toml`) | `"cosine_pipe"` | `"orifice"` | selector — the row is **DERIVED** (CAD port + Clausing tube beaming) |
 | `gas_puff_orifice_id_cm` (stance; new config key, default `None`) | *absent* | `3.95` | **DERIVED**, the MIDPOINT of the ruled [3.8, 4.1] cm hardware bracket |
 | `gas_puff_orifice_length_cm` (stance; new config key, default `None`) | *absent* | `22.0` | **DERIVED**, the one-sided lower bound L ≥ 22 cm |
-| `nn0_profile`, `nn0_annulus_profile` (stance) | the 2026-08-19 `g1afix_foot45.npz` fill | the `g1aporf_foot45.npz` fill | **DERIVED** from a model run, regenerated at this tip |
+| `nn0_profile`, `nn0_annulus_profile` (stance) | the 2026-08-19 fill | the fill rebuilt at this tip on the tube-beamed row | **DERIVED** from a model run, regenerated at this tip |
 
 Values, classes, brackets and the closure disclosures:
 `production_stance_provenance.md` (the stance rows) and
@@ -1523,8 +1523,8 @@ travel. So the fixture moves for one reason only: the puff's axial row. It also
 runs that row on a DIFFERENT flight than the campaign does, because dropping
 the prescribed radii puts the vessel wall at 50 cm instead of the measured
 40 cm; the row is correspondingly wider here (5–95 % span 87.05 cm vs 59.81 cm
-on the campaign mesh, `scripts/g1aporf_rowcensus.txt`). That is the re-cut
-behaving as documented, not a second change.
+on the campaign mesh). That is the re-cut behaving as documented, not a
+second change.
 
 **Delta discipline — proven BEFORE anything was recaptured.** The code change
 that adds the profile is bit-inert with the profile off, which is what licensed
@@ -1536,7 +1536,7 @@ it to ride this recapture:
 | the same, compiled | `CABLP_COMPILED_KERNELS=1` FULL golden `exact=True` |
 | the shared builder's orifice row vs `scripts/puff_orifice.py` on the same inputs | **bit-for-bit identical** (raw bytes), asserted by the `gas-puff-orifice-profile` smoke case — one derivation, not two |
 | total inflow under the new row | conserved to `0.000e+00` relative on the golden mesh, `1.110e-16` on the campaign mesh |
-| neutral seed cache | all four candidate signatures distinct — the profile and EACH new key re-key the fail-closed hash on their own, so no stale equilibrated seed can be served (`scripts/g1aporf_seedcache.txt`); no salt needed |
+| neutral seed cache | all four candidate signatures distinct — the profile and EACH new key re-key the fail-closed hash on their own, so no stale equilibrated seed can be served; no salt needed |
 
 `config_snapshots.json` was regenerated **twice** in this pass, and the two
 regenerations say different things. After the CODE change alone:
@@ -1587,8 +1587,9 @@ holds the same 2,625 saves, and the sidecar reports `finite: true` with
 shapes, the orifice row is NOT masked to `_PUFF_ELIGIBLE_ROLES` — it deposits
 where the ray optics lands it. On THIS mesh that puts **7.24 %** of the row's
 mass in the cathode–anode gap, the plenum and the cathode cell (3.87 % on the
-campaign mesh, whose measured 40 cm wall shortens the flight);
-`scripts/g1aporf_rowcensus.txt` has the per-role census on both meshes. Total
+campaign mesh, whose measured 40 cm wall shortens the flight). The per-role
+census was taken on both meshes at this event, and those two shares are its
+headline. Total
 inflow is conserved exactly either way, and the `kinetic_dvm` annulus-starvation
 check finds no starved support cell on either mesh.
 
