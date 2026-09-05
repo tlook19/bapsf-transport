@@ -114,6 +114,7 @@ from cablp.atomic.cross_sections import H_EII_cross_lkup, He_EII_cross_lkup
 from cablp.cathode.kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 
 __all__ = [
+    "assemble_beam_arrays",
     "beam_launch_energy_eV",
     "solve_idriven",
     "solve_beam_system_idriven",
@@ -1192,13 +1193,6 @@ def solve_beam_system_idriven(
     the common-mode node moves the whole cathode/anode system together and so
     cannot change the anode-to-cathode differential the circuit integrates.
     """
-    cells = len(Te)
-    v_beam = np.zeros(cells)
-    n_beam = np.zeros(cells)
-    beam_cross = np.zeros(cells)
-    beam_exc_cross = np.zeros(cells)
-    beam_exc_energy = np.zeros(cells)
-
     result = solve_idriven(
         config,
         PlasmaState(
@@ -1219,6 +1213,59 @@ def solve_beam_system_idriven(
         circuit_bound_object=circuit_bound_object,
         tail_anode_current_A=tail_anode_current_A,
     )
+    return assemble_beam_arrays(
+        result=result,
+        config=config,
+        Te=Te,
+        ne=ne,
+        nn=nn,
+        plasma_cross=plasma_cross,
+        I_ion=I_ion,
+        gas_type=gas_type,
+        cathode_index=cathode_index,
+        b_beam_excitation=b_beam_excitation,
+        beam_excitation_energy_eV=beam_excitation_energy_eV,
+        beam_excitation_model=beam_excitation_model,
+        beam_climb_V=beam_climb_V,
+    )
+
+
+def assemble_beam_arrays(
+    result,
+    config: DeviceConfig,
+    Te: np.ndarray,
+    ne: np.ndarray,
+    nn: np.ndarray,
+    plasma_cross: np.ndarray,
+    I_ion: float,
+    gas_type: str,
+    cathode_index: int = 0,
+    b_beam_excitation: float = 0.0,
+    beam_excitation_energy_eV: float = 21.218,
+    beam_excitation_model: str = "2p_scalar",
+    beam_climb_V: float | None = None,
+) -> BeamResult:
+    """Wrap a solved single-cathode sheath in the per-cell beam arrays.
+
+    The second half of every single-cathode beam system: given the sheath
+    ``result``, launch the thermionic beam at its ``phi_c`` and fill the
+    per-cell velocity / density / cross-section arrays the fluid reads.
+    Extracted so the CURRENT-DRIVEN and the PRESCRIBED-MEASURED beam systems
+    share one assembly rather than two copies of it -- the two differ only in
+    how the sheath was solved, and a second copy of this would be free to
+    drift away from the first.
+
+    Twin cathodes are out of scope for both callers, so ``result_twin`` is
+    always ``None`` and the twin arrays stay zero. ``x0_next`` is kept for
+    contract compatibility -- neither caller needs a warm start.
+    """
+    cells = len(Te)
+    v_beam = np.zeros(cells)
+    n_beam = np.zeros(cells)
+    beam_cross = np.zeros(cells)
+    beam_exc_cross = np.zeros(cells)
+    beam_exc_energy = np.zeros(cells)
+
     phi_c_0 = beam_launch_energy_eV(result.phi_c, beam_climb_V)
     if phi_c_0 > I_ion:
         v_beam[cathode_index] = math.sqrt(2.0 * phi_c_0 * _erg_per_eV / _me_cgs)

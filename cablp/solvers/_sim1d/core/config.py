@@ -1936,7 +1936,9 @@ def cathode_defaults():
         (the pure fluence limit). Inert unless
         ``cathode_surface_model = "ads_des"``.
     cathode_solver_model:
-        The live ``"current_driven"`` formulation carries the loop current
+        Which formulation supplies the discharge drive.
+
+        ``"current_driven"`` (default) carries the loop current
         ``I_loop`` (and the
         bank voltage when ``C_bank_F`` is set) as explicit solver state,
         advanced once per *accepted* step by a TR-BDF2 step of
@@ -1948,6 +1950,92 @@ def cathode_defaults():
         cathode (``TwinCathode`` raises). Floating phases route to the
         historical open-circuit solve. The trapezoidal circuit fold and
         its guards are inert in this mode.
+
+        ``"prescribed_measured"`` PRESCRIBES both drive quantities from a
+        measured trace instead of predicting either: the discharge current
+        ``I(t)`` and the discharge voltage ``V_dis(t)`` are interpolated from
+        the rung's own overlay file, and the cathode fall follows from the
+        loop bookkeeping the result is already assembled with,
+        ``phi_c = (V_dis − V_series) + phi_a − V_p``, with ``V_p = I·R_p`` the
+        gap drop the model carries and ``V_series`` the internal series drop
+        the ``V_dis`` probe does not see (identically zero at the shipped
+        ``R_comp_partition = 1``, ``R_mesh_ohm = 0``, where the relation
+        reduces to ``phi_c = V_dis + phi_a − V_p``). The emitted electron
+        current is ``max(I − I_i, 0)`` against the plasma's own Bohm ion
+        current at the cathode cell. Richardson emission, the surface
+        temperature and the bank loop are therefore NOT consulted while the
+        prescribed drive is in force, and the cathode-warming ledger rows
+        accumulate nothing over those steps. Requires all three
+        ``cathode_prescribed_*`` keys below, and refuses
+        ``cathode_circuit_voltage_bound`` (a bound on what the loop can supply
+        is meaningless where the device voltage is measured rather than
+        sourced). See ``cablp/cathode/circuit_prescribed.py``.
+
+        BRACKET AXIS (advisor, 2026-09-05). Under this mode the beam's birth
+        energy is ``e·phi_c`` with ``phi_c`` assembled from the measured
+        ``V_dis`` and the model's OWN ``phi_a`` and ``V_p`` — so those two
+        become load-bearing on the beam energy in a way they are not under
+        ``"current_driven"``, where the emission solve fixes ``phi_c``
+        directly. No new control is exposed for either: the anode fall is the
+        anode sheath the model already solves and the gap drop is the resolved
+        Spitzer column. What follows is a REPORTING obligation, not a knob —
+        a beam energy quoted from a prescribed-measured run is to be quoted as
+        a BRACKET over ``phi_a`` and ``V_p``, never as a single number.
+    cathode_prescribed_trace_path:
+        Path to the measured discharge trace that drives
+        ``cathode_solver_model = "prescribed_measured"``. An ``.npz`` in the ES
+        overlay schema (``scripts/data/es{N}_sim1d_overlay.npz``), which must
+        carry ``discharge_time_ms`` [ms], ``discharge_current_mean_a`` [A] and
+        ``discharge_voltage_positive_mean_v`` [V]; a file missing any of the
+        three, carrying non-finite samples, or whose time base is not strictly
+        increasing is refused at construction. The voltage column is the
+        overlay's POSITIVE convention, which is the sign the model's ``V_dis``
+        carries, and is read as-is. The run records the file's sha256 in its
+        HDF5 root attributes, so a saved trajectory names the exact measured
+        product that drove it. REQUIRED under that mode and refused under any
+        other; ``None`` (default) is the off path.
+
+        Load-bearing on the beam energy through ``phi_c`` — see the bracket
+        note under ``cathode_solver_model``.
+    cathode_prescribed_t0_s:
+        Model time [s] that the trace's own ``t = 0`` names, i.e. the origin
+        that reconciles the two clocks:
+        ``t_trace_ms = (t_model_s − cathode_prescribed_t0_s)·1e3``. This is
+        the convention ``scripts/score/compare_sim1d_es1.py`` aligns with
+        post-hoc, where the origin is the model time of the first
+        ``main_discharge`` frame; a solver stepping forward cannot search a
+        saved trajectory for it, so it is supplied here and measured from a
+        calibrated reference run of the same configuration. REQUIRED under
+        ``cathode_solver_model = "prescribed_measured"`` and refused under any
+        other; there is no defensible default, and a guessed origin slides the
+        whole measured drive against the column.
+    cathode_prescribed_start_s:
+        Model time [s] at which the prescribed drive TAKES OVER. Before it the
+        run is the calibrated cathode exactly as configured — Richardson
+        emission, the bank loop, the warming model — so a run in this mode
+        needs a valid CALIBRATED configuration as well as a trace. The
+        hand-off exists because prescribing from ``t = 0`` would impose the
+        plateau current on a column that has not broken down, where the sheath
+        cannot carry it and the solve sits at ``cathode_phi_c_cap_V`` for the
+        whole build leg. Nothing is smoothed across the switch: the switch
+        time and the two currents on either side of it are recorded in the
+        HDF5 root attributes and printed, and a relative discontinuity above
+        ``HANDOFF_JUMP_WARN_FRACTION`` (``core/prescribed_drive.py``) is
+        announced loudly rather than hidden. Must be at or after
+        ``cathode_prescribed_t0_s`` and inside the trace's span. REQUIRED
+        under that mode and refused under any other.
+
+        At or below zero it disables the foot entirely — the prescribed drive
+        is then in force from the first step, the calibrated cathode never
+        runs, and construction refuses any non-default value among the keys
+        only that cathode reads (``CALIBRATED_ONLY_KEYS`` in
+        ``core/prescribed_drive.py``: the emission constant, the surface
+        temperature, the bank loop and the heater package), because on such a
+        run they are read by nothing. That is the regime the foot exists to
+        avoid, and it is available-but-checked rather than forbidden.
+
+        Load-bearing on the beam energy through ``phi_c`` — see the bracket
+        note under ``cathode_solver_model``.
     cathode_phi_c_cap_V:
         Physical ceiling [V] on the *net* cathode sheath drop in the
         current-driven solve. An imposed current the sheath cannot carry
@@ -2756,6 +2844,13 @@ def cathode_defaults():
         # attribution-only comparison arm.
         "cathode_lnL_model": "nrl_ei",
         "cathode_solver_model": "current_driven",
+        # --- OFF: prescribed measured drive (cathode_solver_model=
+        # "prescribed_measured"). All three are None on the off path and are
+        # REFUSED at construction under any other solver model, so a measured
+        # trace can never be configured into a run that would ignore it.
+        "cathode_prescribed_trace_path": None,
+        "cathode_prescribed_t0_s": None,
+        "cathode_prescribed_start_s": None,
         "cathode_phi_c_cap_V": 1000.0,
         "cathode_circuit_bound_object": "device_voltage",
         # Surface-state coverage model:

@@ -1,0 +1,100 @@
+# THE MEASURED-DRIVE ARM AT ES1: the reference configuration with the discharge
+# current and voltage PRESCRIBED from the rung's own measured overlay trace,
+# in place of the bank circuit and the Richardson/thermal cathode.
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: the measured machine, the operating point, the beam closure,
+# the neutral closure and the initial neutral state are all inherited from the
+# reference, so this file cannot drift from it and a reader can see the whole
+# difference between the two arms at a glance.
+#
+# WHAT IT IS FOR. The operator sets each rung's discharge current by hand --
+# the heater is raised until the discharge reaches a target power and then held
+# there -- so the drive LEVEL is a machine INPUT, not something the model
+# should be predicting. Under the reference configuration the drive is
+# predicted: Richardson emission at the cathode's surface temperature sets what
+# the sheath can carry, the bank loop integrates the current, and ONE knob
+# (C_R) is trimmed until the predicted plateau matches the measured band. This
+# arm removes that knob from the comparison entirely. It scores the column --
+# transport, fuelling, the neutral closure -- at a drive that is measured
+# rather than fitted, with zero drive calibration, at every rung.
+#
+# HOW TO RUN IT:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/g1atrim_measured_drive_es1.toml \
+#         --output measured_drive_es1.h5
+#
+# The saved trajectory records the lineage -- this file's name, "g1atrim" as
+# its base, both files' sha256, the delta keys below, and the resolved
+# configuration's identity -- AND, because this arm takes a measured drive, the
+# trace file's own path and sha256 plus the hand-off record, so the arm is
+# identifiable from its artifact alone.
+#
+# WHAT MOVES: four keys, one namespace, no flags.
+base = "g1atrim"
+
+
+[input_dict]
+# THE SELECTION. Both loop quantities become measurements: the discharge
+# current I(t) and the discharge voltage V_dis(t) are interpolated from the
+# trace, and the cathode fall follows from the loop bookkeeping the result is
+# already assembled with, phi_c = V_dis + phi_a - V_p (the reference leaves
+# R_comp_partition = 1 and R_mesh_ohm = 0, so the internal series drop is
+# identically zero and that relation is exact). The emitted electron current is
+# max(I - I_i, 0) against the plasma's own Bohm ion current at the cathode
+# cell. Richardson emission, the surface temperature and the bank are not
+# consulted past the hand-off below.
+#
+# WHAT THIS DOES NOT DELETE. The reference's drive calibration -- C_R = 9.30,
+# the bank, the heater package -- is INHERITED and still live, because the FOOT
+# of this run is a real current-driven discharge (see start_s below). Removing
+# those rows would break the foot, not clean it up.
+#
+# BRACKET AXIS. Under this mode the beam's birth energy is e*phi_c with phi_c
+# assembled from the measured V_dis and the model's OWN anode fall and gap
+# drop, so phi_a and V_p become load-bearing on the beam energy in a way they
+# are not under the reference. No new control is exposed for either. A beam
+# energy quoted from this arm is to be quoted as a BRACKET over both, never as
+# a single number.
+cathode_solver_model = "prescribed_measured"
+
+# THE TRACE. The committed ES1 overlay -- the same artifact the scorer's
+# stage-(i) current comparison and the circuit fits read, so the arm is driven
+# by exactly the product it is scored against. Three columns are read:
+# discharge_time_ms [ms], discharge_current_mean_a [A] and
+# discharge_voltage_positive_mean_v [V], the last in the overlay's POSITIVE
+# convention, which is the sign the model's own V_dis carries.
+cathode_prescribed_trace_path = "scripts/data/es1_sim1d_overlay.npz"
+
+# THE CLOCK. The model time that the trace's own t = 0 names, i.e.
+# t_trace_ms = (t_model_s - t0)*1e3. This is the convention
+# scripts/score/compare_sim1d_es1.py aligns with post-hoc, where the origin is
+# the model time of the first main_discharge frame; a solver stepping forward
+# cannot search a saved trajectory for it, so it is stated here.
+#
+# 1.2e-4 s is that origin MEASURED on a calibrated reference run of this arm's
+# own base -- run_m6_point.py --es 1 --stance g1atrim --sgp 9010 --two-zone.
+# The reference runs phase_transition_mode = "current", so the origin is not a
+# schedule but a TRIGGER the run discovers: that run broke down at
+# t_breakdown_trigger = 1.1839e-4 s and its first saved main_discharge frame,
+# which is what the scorer takes as the origin, landed at 1.2e-4 s on the
+# 1e-5 s save cadence. It is a measurement of the base's own dynamics, not a
+# free parameter, and it must be RE-MEASURED whenever anything that moves the
+# reference's breakdown timing moves -- which is why the foot below is set to
+# the same instant rather than to a round number near it.
+cathode_prescribed_t0_s = 1.2e-4
+
+# THE HAND-OFF. Everything before this instant is the CALIBRATED cathode
+# exactly as the reference configures it; from it the measured trace takes
+# over. It sits AT the main-discharge origin, which is the earliest instant the
+# prescribed drive is physical: prescribing from t = 0 would impose the plateau
+# current on a column that has not broken down, where the sheath cannot carry
+# it and the solve sits at the cathode_phi_c_cap_V ceiling for the whole build
+# leg. Nothing is smoothed across the switch -- the switch time and the two
+# currents on either side of it are printed and written into the saved
+# trajectory's root attributes, and a large discontinuity is announced rather
+# than hidden, because its SIZE is the measurement of how far the calibrated
+# cathode sat from this rung's measured drive at the moment the measurement
+# took over.
+cathode_prescribed_start_s = 1.2e-4

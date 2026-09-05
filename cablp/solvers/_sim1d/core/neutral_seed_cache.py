@@ -92,6 +92,14 @@ INERT_PARAM_KEYS = frozenset({
     "cathode_phiwf_clean_eV", "cathode_sample_smoothing",
     "cathode_solver_model", "cathode_surface_model", "cathode_warming_model",
     "cathode_Rp_model",
+    # The prescribed measured drive, on the same ground as the solver model
+    # itself: the equilibration runs with Plasma=False and
+    # cathode_coupling=False, so no cathode solve happens and no trace is read.
+    # Categorised rather than left to fail closed BECAUSE the fail-closed
+    # default would rotate every stored seed's signature the moment these keys
+    # joined the template -- an invalidation with no neutral content behind it.
+    "cathode_prescribed_trace_path", "cathode_prescribed_t0_s",
+    "cathode_prescribed_start_s",
     # --- beam deposition / excitation (no plasma/beam during equil) ---
     "beam_anomalous_model", "ql_relaxation_coeff",
     "beam_coulomb_model", "beam_deposition_model",
