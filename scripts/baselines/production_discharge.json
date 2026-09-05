@@ -87,7 +87,7 @@
     "file_sha256": [
       "95e08b0a489bfd1cdc0fad3e003a3ce7f255994cf9ca8718b3329ffadc29c489"
     ],
-    "identity": "e8f661b9ba2878b5bb9081977abf71175a48ddc42a397935c5694aef2166a29e",
+    "identity": "21c6c43278131b21ef465adf06745e4b348fec09b12c6ef5d91880c247ac953b",
     "name": "g1atrim"
   },
   "description": "Golden baseline at the stance of record, re-cut to the gate mesh: default_config() plus the committed stance file scripts/stances/g1atrim.toml, minus that stance's mesh-sized package, plus the run-shape overrides in baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60).",
@@ -342,6 +342,7 @@
     "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple": null,
     "neutral_kinetic_dvm_elastic": "phelps_iso",
     "neutral_kinetic_dvm_exchange": "cauchy_chord",
+    "neutral_kinetic_dvm_jet_launch_width": null,
     "neutral_kinetic_dvm_nvp": 24,
     "neutral_kinetic_dvm_nvz": 64,
     "neutral_kinetic_dvm_transfer_hold": null,
