@@ -1592,6 +1592,68 @@ def ion_neutral_drag_rhs(
     )
 
 
+def parallel_momentum_sink_rhs(state, rate_s, cells):
+    """Return the imposed parallel momentum sink [g cm^-2 s^-2].
+
+    ``S_M = -nu_add * M`` on the cells of the boolean mask ``cells`` and
+    exactly zero everywhere else. ``M`` is the parallel momentum density the
+    solver evolves, so the rate acts on the parallel drift relative to zero:
+    the force density is ``-nu_add * m_i n u``.
+
+    This is a RESPONSE-MAP INSTRUMENT with no physical owner -- no collision
+    process in this model supplies it -- and the configuration keys that arm
+    it carry the whole statement of what that means and where it may appear
+    (``core/config.parallel_momentum_sink_defaults``). Its frictional work is
+    :func:`parallel_momentum_sink_heating_rhs`, which must be booked with it:
+    the pair is what makes the term energy-closing.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    sink = np.where(
+        np.asarray(cells, dtype=bool),
+        -float(rate_s) * np.asarray(state.M, dtype=float),
+        0.0,
+    )
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=sink,
+        Ee=zeros.copy(),
+        Ei=zeros.copy(),
+    )
+
+
+def parallel_momentum_sink_heating_rhs(state, floors, ion_mass_g, rate_s, cells):
+    """Return the imposed sink's frictional heating of the ions.
+
+    ``Q_i = +nu_add * M * u = nu_add * m_i n u^2`` [erg cm^-3 s^-1] on the
+    same cells the momentum sink acts on -- exactly the rate at which that
+    sink destroys the flow's directed kinetic energy, since with ``n`` held
+    fixed ``d((1/2) m_i n u^2)/dt = u dM/dt = -nu_add m_i n u^2``.
+
+    The FULL dissipated drift energy is booked here, not half. The boxed
+    ion-neutral drag books half (:func:`ion_neutral_frictional_heating_rhs`)
+    because its other half leaves with a neutral population that exists and
+    has its own equations; this term has no partner species at all, so a half
+    booking would be an unowned energy leak rather than a convention. The
+    convention it mirrors is ``hyperbolic_dissipation_heating``, which
+    likewise deposits the whole of a destroyed kinetic energy into ``Ei``.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    q = np.where(
+        np.asarray(cells, dtype=bool),
+        float(rate_s) * np.asarray(state.M, dtype=float) * derived.u,
+        0.0,
+    )
+    return ConservativeState1D(
+        n=zeros,
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=q,
+    )
+
+
 def ion_neutral_elastic_frequency(
     nn,
     Ti,

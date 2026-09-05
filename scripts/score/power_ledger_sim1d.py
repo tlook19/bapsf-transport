@@ -180,6 +180,17 @@ CHANNEL_PHASE = {
     "ion_neutral_thermalization":
         ("BOTH",
          "ion-neutral temperature relaxation; zero under the moment closure"),
+    "parallel_momentum_sink":
+        ("BOTH",
+         "the imposed parallel momentum sink of a RESPONSE-MAP arm: it "
+         "carries no energy row of its own, so it appears here only when "
+         "an artifact records it, and its power is the heating row below"),
+    "parallel_momentum_sink_heating":
+        ("BOTH",
+         "the frictional work of that imposed sink, deposited whole into "
+         "the ion internal energy. NO PHYSICAL OWNER: a run carrying this "
+         "row is a response map, not a physical arm, and its ledger is not "
+         "comparable channel-for-channel with a stance run's"),
     "ionization_birth":
         ("BOTH",
          "energy carried by particles born in thermal electron-impact "

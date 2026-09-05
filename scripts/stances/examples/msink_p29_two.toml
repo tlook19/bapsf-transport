@@ -1,0 +1,106 @@
+# THE MOMENTUM RESPONSE MAP, 2x ARM: the reference configuration with an
+# imposed parallel momentum sink beyond port 29, at twice the model's own boxed
+# ion-neutral momentum loss over the measured span.
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: everything the reference decides -- the measured machine, the
+# operating point, the drive calibration, the beam closure, the neutral
+# closure and its jets, the initial neutral state -- is inherited, so this file
+# cannot drift from the reference and a reader can see the whole difference
+# between the two arms at a glance.
+#
+# WHAT THIS IS NOT, AND THE WARNING COMES FIRST. This is not physics. The term
+# it arms has NO PHYSICAL OWNER: no collision process in the model supplies it,
+# no measurement pins it, and nothing derives it. Its value class is PROBE. It
+# must never appear in a stance, no score from it is a validation of anything,
+# and the rate below is NOT a fitted parameter -- it is not fitted to a score,
+# to a profile, or to a ratio. It is CONSTRUCTED, by the arithmetic recorded
+# below, to be a stated multiple of a force the model already carries.
+#
+# WHAT IT IS FOR. The far column sheds parallel momentum, and the model's own
+# boxed ion-neutral coupling supplies only part of what the machine's profiles
+# require. This arm and its two partners (msink_p29_half, msink_p29_one) impose
+# a known extra loss over the column beyond p29 and map the plasma's RESPONSE
+# to it. The deliverable is the REQUIREMENT -- a force in dyn and the
+# momentum-loss length L = u / nu_add that goes with it -- read off the map,
+# never the rate itself. This is the HIGH arm of the three, and the one that
+# doubles the model's total loss over the measured span.
+#
+# READ THE SIGN OF THE RESPONSE CAREFULLY. This column is pressure-dominated
+# and subsonic, so the Fanno reading applies: friction lowers the pressure and
+# RAISES the flow. An arm that removes momentum is not an arm that slows the
+# plasma down, and reading it as one inverts the map.
+#
+# THE ARITHMETIC. Derived from the re-anchor continuity pair's reference ES1
+# run, g1atrim_es1_d0e9748.h5 (the same configuration this file is based on),
+# over the drive plateau 15.0-19.5 ms (450 saved frames) and over the p29 ->
+# p50 column, cells 136..226 of the 280-cell mesh, all plasma-active, sum V_p
+# = 7.259274e+05 cm^3:
+#
+#   the model's own boxed ion-neutral momentum loss over those cells
+#       <int drag.M dV>   = -6.670319e+04 dyn
+#   the parallel momentum held in those cells
+#       <int M dV>        = +2.883985e+01 g cm/s
+#   the rate that removes the first at the second
+#       nu_add(1x) = 6.670319e+04 / 2.883985e+01 = 2.312883e+03 s^-1
+#   and this arm's double of it
+#       nu_add(2x) = 2.0 x 2.312883e+03 = 4.625766e+03 s^-1
+#
+# so this arm's sink removes 2x that force from those cells, by construction.
+# With the plateau block mean <u> = 5.505946e+05 cm/s the momentum-loss length
+# is L = <u> / nu_add = 119.03 cm = 1.19 m.
+#
+# WHICH ROW "THE DRAG" IS, AND WHY IT IS NOT THE ONE YOU EXPECT. In that
+# artifact the fluid ion_neutral_drag / ion_neutral_collision /
+# ion_neutral_frictional_heating / ion_neutral_thermalization /
+# ion_charge_exchange rows are ALL IDENTICALLY ZERO over the whole plateau: the
+# reference carries the engaged transient DVM neutral arm, which supersedes
+# those fluid rows and carries their ion-side momentum in
+# neutral_kinetic_dvm_coupling instead. That row is the drag side of the
+# arithmetic above. Two independent reconstructions from the saved state size
+# what else it can hold: the u_n = 0 friction -m_i nu_in n u integrates to
+# -1.312836e+05 dyn (1.97x the row, i.e. the neutral wind is co-moving at
+# roughly u/2), and the ionization mass loading -m_i u S_iz to -4.822263e+03
+# dyn (0.07x). The row is therefore ~93 % collisional friction and ~7 % mass
+# loading, which is what makes it the right stand-in for "the boxed
+# ion-neutral drag over these cells".
+#
+# WHERE THE SINK ACTS, WHICH IS NOT WHERE IT WAS CALIBRATED. The term acts on
+# EVERY column cell at or beyond z_start -- cells 136..279 on this mesh, i.e.
+# p29 to the far end, 144 cells -- because "beyond p29" is the hypothesis. The
+# p29 -> p50 window above is only where the calibration integral was taken,
+# because that is the span the probe ports measure.
+#
+# THE POSITION. z_start is the z of the p29 PORT CELL, not the port: port 29
+# sits at z = 1045.15 cm and the cell that contains it is cell 136 at
+# z = 1042.9780783582048 cm, with its neighbours at 1035.4902052238765 and
+# 1050.4659514925331. Naming the cell centre rather than the port is what makes
+# cell 136 the first cell the sink acts on; naming the port would start at cell
+# 137 and drop it.
+#
+# HOW TO RUN IT:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/msink_p29_two.toml \
+#         --output msink_p29_two.h5
+#
+# The saved trajectory records the lineage -- this file's name, "g1atrim" as
+# its base, both files' sha256, the delta keys below, and the resolved
+# configuration's identity -- so the arm is identifiable from its artifact
+# alone, and a response-map run can never be mistaken for a stance run.
+base = "g1atrim"
+
+
+# WHY THESE STAND FLAT AND NOT IN A [models.*] BLOCK. None of the three keys is
+# a member of a declared model family: the imposed sink is not a closure, an
+# alternative to a closure, or a member of any family the reference selects for
+# or against. It is an instrument bolted onto whatever physics the base states.
+[input_dict]
+# The arm. Off in the reference, and off in every configuration that is not a
+# response map.
+parallel_momentum_sink = true
+# nu_add [s^-1]. Derived above; not fitted.
+parallel_momentum_sink_rate_s = 4625.77
+# The p29 port cell's centre [cm], on the same axial coordinate as
+# geometry.z_cm. The sink acts at and beyond it.
+parallel_momentum_sink_z_start_cm = 1042.9780783582048

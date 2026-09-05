@@ -24,6 +24,7 @@ from .config import (
     emitting_area_defaults,
     model_mode_defaults,
     neutral_probe_source_defaults,
+    parallel_momentum_sink_defaults,
 )
 from .geometry import _anode_neutral_transparency
 from ..physics.neutrals import (
@@ -1473,6 +1474,99 @@ def resolve_neutral_probe_config(
         table_cumulative=table_cumulative,
         zone=zone,
     )
+
+
+def resolve_parallel_momentum_sink(input_dict, *, geometry):
+    """Validate and RESOLVE the imposed parallel momentum sink.
+
+    Every failure here is a construction-time ``ValueError``. With the sink
+    off both of its numbers must sit at their ``None`` defaults, so a run
+    that configures a response-map arm and forgets to arm it is loud rather
+    than silently unforced; with it on both are required, and the axial
+    position must land inside the plasma column so the term can neither
+    describe a region that is not there nor reach no cell at all.
+
+    Returns the resolved instrument -- the rate and the boolean per-cell
+    mask of the column cells at or beyond the position -- or ``None`` when
+    the sink is off, which is the presence gate every consumer reads.
+    """
+    defaults = parallel_momentum_sink_defaults()
+    values = {
+        name: input_dict.get(name, default)
+        for name, default in defaults.items()
+    }
+    enabled = values["parallel_momentum_sink"]
+    if not isinstance(enabled, bool):
+        raise ValueError(
+            "parallel_momentum_sink must be a bool (got "
+            f"{enabled!r}); it is the arming gate of a response-map "
+            "instrument, not a rate"
+        )
+    rate = values["parallel_momentum_sink_rate_s"]
+    z_start = values["parallel_momentum_sink_z_start_cm"]
+    if not enabled:
+        configured = sorted(
+            name
+            for name in (
+                "parallel_momentum_sink_rate_s",
+                "parallel_momentum_sink_z_start_cm",
+            )
+            if values[name] is not None
+        )
+        if configured:
+            raise ValueError(
+                f"the parallel-momentum-sink parameters {configured} were "
+                "configured without parallel_momentum_sink, where they are "
+                "inert; arm the sink or drop the parameters"
+            )
+        return None
+    if rate is None:
+        raise ValueError(
+            "parallel_momentum_sink requires parallel_momentum_sink_rate_s "
+            "(the imposed damping rate nu_add [s^-1]). There is no default: "
+            "this term has no physical owner, so the rate IS the hypothesis "
+            "the arm states and nothing may supply one for it"
+        )
+    rate = float(rate)
+    if not (math.isfinite(rate) and rate > 0.0):
+        raise ValueError(
+            "parallel_momentum_sink_rate_s must be finite and > 0 (got "
+            f"{values['parallel_momentum_sink_rate_s']!r}); a zero rate is "
+            "an unarmed sink, which is parallel_momentum_sink = false"
+        )
+    if z_start is None:
+        raise ValueError(
+            "parallel_momentum_sink requires "
+            "parallel_momentum_sink_z_start_cm (the axial position [cm] at "
+            "and beyond which the sink acts). There is no default: which "
+            "part of the column sheds the momentum is the other half of the "
+            "hypothesis"
+        )
+    z_start = float(z_start)
+    if not math.isfinite(z_start):
+        raise ValueError(
+            "parallel_momentum_sink_z_start_cm must be finite (got "
+            f"{values['parallel_momentum_sink_z_start_cm']!r})"
+        )
+    active = np.asarray(geometry.plasma_active, dtype=bool)
+    z_cm = np.asarray(geometry.z_cm, dtype=float)
+    column = z_cm[active]
+    if column.size == 0:
+        raise ValueError(
+            "parallel_momentum_sink needs a plasma column to act on and "
+            "this geometry has no plasma-active cell"
+        )
+    lo, hi = float(column.min()), float(column.max())
+    if not (lo <= z_start <= hi):
+        raise ValueError(
+            "parallel_momentum_sink_z_start_cm must lie within the plasma "
+            f"column's axial extent [{lo!r}, {hi!r}] cm (got {z_start!r}); "
+            "below it the sink is not a statement about a region of the "
+            "column, and above it the sink reaches no cell and would be "
+            "silently inert"
+        )
+    cells = active & (z_cm >= z_start)
+    return SimpleNamespace(rate_s=rate, z_start_cm=z_start, cells=cells)
 
 
 def validate_raw_stage(y, stage, unpack):

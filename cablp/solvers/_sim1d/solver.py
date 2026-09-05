@@ -73,6 +73,7 @@ from .core.validation import (
     resolve_jet_arming_criterion,
     resolve_neutral_jet_config,
     resolve_neutral_probe_config,
+    resolve_parallel_momentum_sink,
     validate_equilibration_gas_puff_on,
     validate_gas_puff_config,
     validate_neutral_seed_cache_config,
@@ -207,6 +208,8 @@ from .physics.sources import (
     ion_neutral_drag_rhs,
     ion_neutral_frictional_heating_rhs,
     ion_neutral_thermalization_rhs,
+    parallel_momentum_sink_rhs,
+    parallel_momentum_sink_heating_rhs,
     neutral_energy_wall_rhs,
     neutral_momentum_wall_rhs,
     neutral_momentum_two_zone_rhs,
@@ -358,6 +361,12 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "ion_neutral_drag": "none",
     "ion_neutral_frictional_heating": "none",
     "ion_neutral_thermalization": "none",
+    # The imposed response-map sink and its frictional heating write the
+    # plasma M and Ei rows alone; the momentum they remove has no owner to
+    # receive it, which is the whole point of the instrument, so there are
+    # no neutrals to carry a birth temperature for.
+    "parallel_momentum_sink": "none",
+    "parallel_momentum_sink_heating": "none",
     "neutral_momentum_wall": "none",
     "neutral_momentum_radial": "none",
     "beam_power_deposition": "none",
@@ -3140,6 +3149,14 @@ class LAPDSim1D:
             neutral_model=self._neutral_model,
             neutral_two_zone=self._neutral_two_zone,
         )
+        # Imposed parallel momentum sink -- a RESPONSE-MAP instrument with no
+        # physical owner (default off, bit-exact off). ``None`` when unarmed
+        # IS the presence gate: neither of its two rows is emitted and the
+        # term is never evaluated, so the saved ledger and the trajectory are
+        # those of a checkout that has never heard of it.
+        self._momentum_sink = resolve_parallel_momentum_sink(
+            self._input_dict, geometry=self._geometry
+        )
         # Electron drift transport and EMF work (default off, bit-exact off).
         # ``None`` when unarmed IS the presence gate: the RHS reads it to
         # decide whether to evaluate Gamma_d at all, so the off path never
@@ -5243,6 +5260,13 @@ class LAPDSim1D:
         # equilibration seed. Recording the zero rather than dropping the key
         # keeps the saved structure stable across the phase change and makes
         # the gate readable instead of inferable.
+        # The imposed momentum sink and its frictional heating, present only
+        # when the response-map instrument is armed. Like the probe above they
+        # appear in BOTH branches below and are identically zero in the
+        # neutral-only one: with no plasma solve there is no parallel momentum
+        # to damp, and recording the zeros rather than dropping the keys keeps
+        # the saved term structure stable across the phase change.
+        momentum_sink_terms = {}
         probe_terms = {}
         geometry_terms = {}
         if self._variable_area_geometry:
@@ -5266,9 +5290,17 @@ class LAPDSim1D:
                 )
             if self._probe is not None:
                 probe_terms["neutral_probe_source"] = self._zero_rhs_state()
+            if self._momentum_sink is not None:
+                momentum_sink_terms["parallel_momentum_sink"] = (
+                    self._zero_rhs_state()
+                )
+                momentum_sink_terms["parallel_momentum_sink_heating"] = (
+                    self._zero_rhs_state()
+                )
             terms = {
                 **zone_terms,
                 **probe_terms,
+                **momentum_sink_terms,
                 **energy_wall_terms,
                 **geometry_terms,
                 **kinetic_terms,
@@ -5369,6 +5401,13 @@ class LAPDSim1D:
                 time=time,
                 step_window=step_window,
             )
+        if self._momentum_sink is not None:
+            momentum_sink_terms["parallel_momentum_sink"] = (
+                self.parallel_momentum_sink_rhs(state=state)
+            )
+            momentum_sink_terms["parallel_momentum_sink_heating"] = (
+                self.parallel_momentum_sink_heating_rhs(state=state)
+            )
         ionization_rate_per_neutral = None
         if self._neutral_energy:
             energy_wall_terms["neutral_energy_wall"] = (
@@ -5426,6 +5465,7 @@ class LAPDSim1D:
         terms = {
             **zone_terms,
             **probe_terms,
+            **momentum_sink_terms,
             **geometry_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
@@ -9752,6 +9792,33 @@ class LAPDSim1D:
             geometry=self._geometry,
             **self._ion_neutral_drag_kwargs(),
             **self._slip_closure_kwargs(),
+        )
+
+    def parallel_momentum_sink_rhs(self, y=None, state=None):
+        """Return the imposed parallel momentum sink's ``M`` row.
+
+        Reached only with the response-map instrument armed: ``__init__``
+        leaves ``self._momentum_sink`` as ``None`` otherwise and the RHS
+        assembly never emits the row, so an unarmed run cannot enter here.
+        """
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        return parallel_momentum_sink_rhs(
+            state=state,
+            rate_s=self._momentum_sink.rate_s,
+            cells=self._momentum_sink.cells,
+        )
+
+    def parallel_momentum_sink_heating_rhs(self, y=None, state=None):
+        """Return the imposed sink's frictional heating of the ions."""
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        return parallel_momentum_sink_heating_rhs(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            rate_s=self._momentum_sink.rate_s,
+            cells=self._momentum_sink.cells,
         )
 
     def ion_neutral_thermalization_rhs(self, y=None, state=None):
