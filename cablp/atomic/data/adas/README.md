@@ -190,10 +190,19 @@ not found in database", checked 2026-09-05). That is correct rather than a
 gap: XCD is parent cross-coupling, which needs two metastables in the
 recombining stage, and He+ has one — the count line's second entry is `1`.
 
+ADAS404 collapses this resolved set to the unresolved masters above using the
+ADF10 equilibrium metastable fractions, which balance spontaneous emission
+against collisional excitation and de-excitation ONLY — no ionization loss out
+of the metastable, no recombination feed into it. An ionizing plasma pays that
+ionization loss, so its quasi-static rate sits BELOW the unresolved table;
+a plasma at full ionization balance is additionally fed by recombination and
+sits above it. The unresolved table lies between the two.
+
 No model path consumes these. They were added for
 `scripts/atomic/metastable_bracket.py`, which contracts them back to a
 ground-referenced effective ionization coefficient to size the metastable /
-stepwise channel; that script's docstring carries the calibration verdict.
+stepwise channel and gates on that ordering; that script's docstring carries
+the method.
 
 ## adf15 — helium photon emissivity coefficients (PEC)
 
