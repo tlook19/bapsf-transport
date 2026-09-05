@@ -36,12 +36,17 @@ a sink for electrons and a source for ions.
 
 ## Geometry and state
 
-A conservative finite-volume axial grid: the interior is 1D, the two terminal
-cells are 0D reservoirs. The plasma domain is bounded *inside* the neutral
-domain, so plasma-dead plenum and obstruction cells carry neutral transport
-alone; typed geometry owns one plasma topology (`plasma_active[cell]`,
-`plasma_face_live_cell[face]`), a face bounding the plasma being closed and its
-plasma-terminating subset carrying the outflow below.
+The machine is represented as a straight axial line of finite-volume cells.
+The interior cells resolve the column in 1D; the two cells at either end are 0D
+reservoirs rather than resolved fluid. The neutral gas fills the whole vessel,
+while the plasma occupies only part of it — a plenum behind the cathode, and
+any obstructed volume, carry neutral transport but no plasma at all. Every cell
+and every face therefore records whether plasma lives there: a face at the
+edge of the plasma is CLOSED to it, and the subset of those faces
+where plasma is actually absorbed by a surface carries the outflow described
+below. In the code that map is `plasma_active[cell]` and
+`plasma_face_live_cell[face]`, and it is the single authority both the fluxes
+and the source terms read.
 
 Each cell carries two radial zones: the **column** of radius $R_p$ — the plasma
 channel, $V_\mathrm{p}=A\Delta z$ — and the **annulus** between $R_p$ and the
@@ -73,7 +78,7 @@ giving $F_n=nu$, $F_M=Mu+p$, $F_{E_e}=E_eu$, $F_{E_i}=E_iu$. The advected energy
 flux is the internal-energy flux $E_su$, not the enthalpy flux $(E_s+p_s)u$; the
 missing $p_su$ returns as the explicit pressure work below.
 
-$$\partial_tn+\nabla\!\cdot(n\mathbf u)=S_{iz}+S_{iz}^\text{beam}-(S_{rr}+S_{3b})+S_n^\text{bnd}$$
+$$\partial_tn+\nabla\!\cdot(n\mathbf u)=S_{iz}+S_{iz}^\text{beam}-S_\text{rec}+S_n^\text{bnd}$$
 
 $$\partial_tM+\nabla\!\cdot(M\mathbf u+p)=m_i\mathbf u_{n,\text{eff}}S_{iz}+S_M^{n}+S_M^\text{geom}+S_M^\text{bnd}$$
 
@@ -137,16 +142,26 @@ radial description.
 
 ### Ionization and recombination
 
-$$S_{iz}=n\,n_n\langle\sigma v\rangle_{iz}(T_e),\qquad S_{rr}=\alpha_r(T_e)\,n^2,\qquad S_{3b}=\alpha_3(T_e)\,n^3$$
+$$S_{iz}=n\,n_n\langle\sigma v\rangle_{iz}(n,T_e),\qquad S_\text{rec}=\alpha_\text{rec}(n,T_e)\,n^2$$
 
-$\langle\sigma v\rangle_{iz}$, $\alpha_r$, $\alpha_3$ are ADAS effective
+$\langle\sigma v\rangle_{iz}$ and $\alpha_\text{rec}$ are ADAS effective
 coefficients from the bundled helium `adf11` collisional–radiative files — the
 `scd` class for ionization, `acd` for recombination, `plt` and `prb` for
-radiated power, and the `adf15` `pec` class for line emission;
-`atomic_rate_model` selects them against the Janev analytic fits. They are
-fixed inputs carrying no scale factor, and each result records an
-`atomic_rate_domain` ledger of where the run sampled below the tabulated $T_e$
-edge. $C_e$ is the electron inelastic and radiative cooling: line radiation
+radiated power, and the `adf15` `pec` class for line emission. Both are
+collisional–radiative coefficients tabulated against DENSITY as well as
+temperature, which is why each carries $n$ as an argument.
+
+**There is no separate three-body sink.** `acd` already contains three-body
+recombination at the tabulated density, so the whole recombination loss is the
+quadratic term above and the cubic channel is identically zero; the
+`recombination_3b_loss` row a result carries reads zero throughout. The
+`atomic_rate_model = "janev"` arm instead uses the analytic fits and does split
+the two, $\alpha_r(T_e)n^2$ radiative plus $\alpha_3(T_e)n^3$ three-body.
+The coefficients are fixed inputs carrying no scale factor, and each result
+records an `atomic_rate_domain` ledger of where the run sampled below the
+tabulated $T_e$ edge.
+
+$C_e$ is the electron inelastic and radiative cooling: line radiation
 ($\propto n\,n_n$), the ionization potential cost $I_\text{ion}S_{iz}$, and
 recombination radiation ($\propto n^2$).
 
@@ -184,10 +199,23 @@ The plasma receives **minus the measured moments** of those operators on its ion
 momentum and energy rows, booked once per neutral clock tick; the electron-side
 costs — ionization potential, radiation, excitation — stay on the plasma book.
 The count the plasma books as ionization is exactly what leaves the column, so
-both sides consume the same atoms by construction. The charge-exchange/elastic
-part is a **relaxation**, not a source, with one rate $\nu$ per cell for the pair
-and targets set by the moments of the lost population, taken about the **ion**
-drift:
+both sides consume the same atoms by construction.
+
+**The neutral clock tick.** The neutral gas is advanced on its own clock, whose
+interval $\Delta t_\text{tick}$ is generally many plasma steps long. Everything
+the plasma receives from the neutral side is measured over one such tick and
+held constant across the plasma steps inside it. Over a tick, and per cell, the
+kinetic operators remove a population whose moments are
+
+$$N_\text{loss}\ [\text{atoms}],\qquad P_\text{loss}=\!\!\sum_{\text{lost}}\!\!m v_\parallel\ [\mathrm{g\,cm\,s^{-1}}],\qquad E_\text{loss}=\!\!\sum_{\text{lost}}\!\!\tfrac12m\lvert\mathbf v\rvert^2\ [\mathrm{erg}],$$
+
+a count and two sums over the atoms that left, and $T_{n,\text{loss}}$ is that
+population's own temperature — the second moment about ITS mean velocity
+$P_\text{loss}/(mN_\text{loss})$, in eV.
+
+The charge-exchange/elastic part of the booking is a **relaxation**, not a
+source, with one rate $\nu$ per cell for the pair and targets set by those
+moments, taken about the **ion** drift:
 
 $$\frac{dE_i}{dt}=-\nu\left(E_i-E_i^\text{eq}\right),\qquad \frac{dM}{dt}=-\nu\left(M-M^\text{eq}\right)$$
 
@@ -238,21 +266,34 @@ friction.
 Primaries are launched at the cathode with flux
 $\Gamma_0=I_\text{eth}^\star/e$ and birth energy $e\phi_c$.
 `beam_deposition_model = "beer_lambert"` attenuates them exponentially on one
-absorption length; `"csda"` marches them:
+absorption length. `"csda"` instead SLOWS each primary while carrying its flux
+unattenuated — the march removes energy from the beam, never primaries from it:
 
-$$\frac{dE}{dz}=-L_\text{tot}(E),\qquad \frac{d\gamma}{dz}=-\gamma\,n_n\sigma_\text{iz}(E)$$
+$$\frac{dE}{dz}=-L_\text{tot}(E),\qquad \gamma=\Gamma_0\ \text{along the whole ray}$$
 
 $$L_\text{tot}=\underbrace{n_n\sigma_\text{iz}I_\text{ion}}_\text{potential}+\underbrace{n_n\sigma_\text{iz}\langle W_\text{sec}\rangle}_\text{secondaries}+\underbrace{n_n\sigma_\text{exc}E_\text{rad}}_\text{excitation}+L_\text{coul}+L_\text{anom}$$
 
 $\sigma_\text{iz}$ the He electron-impact ionization cross section,
 $\langle W_\text{sec}\rangle$ the mean secondary energy, $\sigma_\text{exc}$
 and $E_\text{rad}$ the excitation-manifold channel. Each cell banks
-$Q_\text{beam}$, the beam ionization birth $S_{iz}^\text{beam}$, its potential
-cost and excitation radiation; at the anode face the mesh solid fraction $\eta$
-of the flux still streaming is intercepted to the anode surface and only
-$(1-\eta)$ transmits. Per-ray energy closes:
+$Q_\text{beam}$, its potential cost and excitation radiation, and the beam
+ionization birth as the RATE the surviving flux drives,
+$S_{iz}^\text{beam}\,dV=\gamma\,n_n\sigma_\text{iz}(E)\,dz$ integrated over the
+cell's path. Those births cost the primary its potential term but do not
+remove it from the beam.
 
-$$\Gamma_0E_0=\text{heating}+\text{radiated}+\text{cost}+\text{anode-intercepted}+\gamma_\text{exit}E_\text{exit}.$$
+$\gamma$ changes at exactly ONE place along the ray: the anode-face crossing,
+where the mesh solid fraction $\eta$ of the flux still streaming is booked to
+the anode surface and $\gamma\leftarrow(1-\eta)\gamma$ carries downstream. A ray
+ENDS when $E$ falls to the stopping floor $E_\text{stop}$, its remaining power
+$\gamma E$ banked as local heating or walked. Per-ray power then closes:
+
+$$\Gamma_0E_0=\text{heating}+\text{radiated}+\text{cost}+\text{anode-intercepted}+\gamma_\text{exit}E_\text{exit},$$
+
+$\gamma_\text{exit}E_\text{exit}$ being what a ray that reaches the end of the
+mesh carries out of it — with $\gamma_\text{exit}$ equal to $\Gamma_0$, or
+$(1-\eta)\Gamma_0$ past the anode, and the whole term zero for a ray that
+stopped inside.
 
 The selectors below choose among equations for the two remaining stopping terms
 and for where the anomalous bank is deposited; all are CSDA controls, inert
@@ -268,14 +309,27 @@ under `"beer_lambert"`.
 | `heating_anomalous_transport` | `"local"` | the anomalous bank heats the cell that drove it |
 | | `"tail_walk"` | the bank is withheld and launched $50/50$ along $\pm B$ as fast-tail electrons, walked on the Coulomb-slowing kinematics until thermalized at $\tfrac32T_e$ or lost to an end |
 | | `"plateau_multigroup"` | a solved plateau edge $E_1$ splits the bank into a wave/bulk share $(E_b-E_1)/2E_b$ deposited locally and a streaming share $(E_b+E_1)/2E_b$ divided into $N$ equal-power, $E^2$-uniform-edge groups walked at their own midpoint energies ($E_b=e\phi_c$) |
-| `beam_product_transport` | `"local"` | ionization products are born where produced |
-| | `"nonlocal"` / `"terminal_nonlocal"` | products are withheld and walked, depositing along the walk or at its terminus |
+| `beam_product_transport` | `"local"` | BOTH product populations — the mean secondary energy $\langle W_\text{sec}\rangle$ per ionization and the primary's terminal sub-threshold residual — are banked in the cell where the event happened |
+| | `"nonlocal"` | BOTH walk along $B$ from their birth cell on the same mini-CSDA Coulomb integral the primary uses, depositing until they thermalize at $\tfrac32T_e$ or leave an end; secondaries split $50/50$ into $\pm z$ half-weight walks, the terminal residual keeps the primary's direction |
+| | `"terminal_nonlocal"` | ONLY the terminal residual walks; every along-ray product, secondaries included, stays banked in its birth cell |
 
 ### Cathode, anode and the circuit
 
 The emitting surface, the anode mesh and the bank are one system; the electrode
 surfaces are one control surface feeding both the fluid sink and the loop.
-Scaled variables: $\psi=\phi/T_e$, $J=IR_p/T_e$, $\delta=k_BT_s/(eT_e)$.
+
+The sheath relations below are written in scaled variables. A potential is
+scaled by the electron temperature, $\psi=\phi/T_e$; a current by the gap's own
+resistance, $J=IR_p/T_e$; and the surface temperature by the electron
+temperature, $\delta=k_BT_s/(eT_e)$. Four scaled quantities recur and are named
+once here:
+
+- $J_i$ — the cathode's Bohm ion current, scaled: $J_i=I_iR_p/T_e$.
+- $J_{i,a}$ — the same for the anode mesh, $J_{i,a}=I_{i,a}R_p/T_e$.
+- $\psi_\text{bank}$ — the scaled bank voltage, $V_\text{bank}/T_e$.
+- $x$ — the EXTERNAL share of the compliance resistance
+  (`R_comp_partition`), so $xR_\text{comp}$ is the part outside the reported
+  discharge voltage and $(1-x)R_\text{comp}$ the part inside it.
 
 **Emission.** The Richardson capability is
 $I_\text{eth}=A_cC_RT_s^2\exp(-e\phi_\text{wf}/k_BT_s)$, with $A_c$ the
@@ -298,9 +352,9 @@ with $\gamma=R_\text{comp}/R_p$, $\tau_a=T_{e,\text{anode}}/T_e$,
 $\Lambda=\ln\sqrt{m_i/2\pi m_e}$ the electron lift, and
 $\phi_c=(\psi_+-\psi_-)T_e$; the current-driven form imposes $I_\text{tot}$ and
 roots the monotone $J_\text{tot}(\psi_+)=J_\text{imposed}$ instead. Each
-electrode carries its own presheath factor $\alpha$, the electron lift
-generalizing as $\Lambda\to\Lambda-\ln\alpha$, the cathode and anode factors
-independent. Equivalently the cathode Kirchhoff sum closes the loop current,
+electrode carries its own sheath-edge factor $\alpha_\text{se}$, the electron
+lift generalizing as $\Lambda\to\Lambda-\ln\alpha_\text{se}$, the cathode and
+anode factors independent. Equivalently the cathode Kirchhoff sum closes the loop current,
 returning plasma electrons entering with a minus,
 $I_\text{tot}=I_\text{eth}^\star+I_i-I_{e,\text{ret}}$.
 
@@ -325,14 +379,28 @@ the discharge-voltage probe does not see.
 
 **The loop.** `cathode_solver_model = "current_driven"` integrates
 
-$$L\frac{dI}{dt}=V_\text{src}-I\left(R_\text{comp}+R_\text{mesh}\right)-V_\text{dis}(I),\qquad C_\text{bank}\frac{dV_\text{cap}}{dt}=-I$$
+$$L\frac{dI}{dt}=V_\text{src}-I\,xR_\text{comp}-V_\text{dis}(I),\qquad C_\text{bank}\frac{dV_\text{cap}}{dt}=-I$$
 
 $L$ the loop inductance, $R_\text{comp}$ the compliance resistor,
 $R_\text{mesh}$ the anode-mesh series resistance, $V_\text{src}$ the bank
-voltage, $V_\text{dis}(I)$ the monotone device relation the sheath solve
-returns. The load power closes:
+voltage, and $V_\text{dis}(I)$ the monotone device relation the sheath solve
+returns. Only the EXTERNAL share $xR_\text{comp}$ appears beside
+$V_\text{dis}$: the reported
+$V_\text{dis}=V_b+I[(1-x)R_\text{comp}+R_\text{mesh}]$ already carries the
+internal series drop, so subtracting the full $R_\text{comp}+R_\text{mesh}$
+alongside it would count that drop twice.
+Substituting $V_\text{dis}$ shows $x$ cancels identically,
 
-$$P_\text{load}=I_\text{tot}V_b=\underbrace{I_\text{eth}^\star\phi_c+P_{c,i,\phi}-P_{c,e,\phi}}_\text{cathode field work}+\underbrace{I_\text{tot}V_p}_\text{gap ohmic}+\underbrace{I_\text{tot}\phi_a}_\text{anode field work}$$
+$$L\frac{dI}{dt}=V_\text{src}-I\left(R_\text{comp}+R_\text{mesh}\right)-V_b(I),$$
+
+so the loop current responds to the TOTAL series resistance while $x$ moves
+only the reported $V_\text{dis}$. The load power closes:
+
+$$P_\text{load}=I_\text{tot}V_b=\underbrace{I_\text{eth}^\star\phi_c+P_{c,i,\phi}-P_{c,e,\phi}}_\text{cathode field work}+\underbrace{I_\text{tot}V_p}_\text{gap ohmic}-\underbrace{I_\text{tot}\phi_a}_\text{anode field work}$$
+
+The anode term SUBTRACTS, which is the same sign the device relation carries:
+$V_b=\phi_c+V_p-\phi_a$, so multiplying through by $I_\text{tot}$ gives the
+three regions with the anode negative.
 
 Electrode energy is booked to three distinct sources: **circuit field work**
 (sheath fall and work function, sourced from the bank and deposited on the
@@ -362,15 +430,15 @@ returning-electron term; the dropped current is measured by the
 open-circuit phases withdraw the prescribed drive.
 
 **Plasma-terminating boundary.** At each absorbing face a ghost state is set to
-the Bohm outflow — $n_\text{se}=\alpha n$, $u=c_s$ into the wall, the live
+the Bohm outflow — $n_\text{se}=\alpha_\text{se}n$, $u=c_s$ into the wall, the live
 cell's $T_e$ and $T_i$ — and the face flux between the interior cell and that
 ghost is applied one-sidedly to the live cell. The sheath-edge factor
 
-$$\alpha=\alpha_\text{isat}^{\,d/L_\text{ps}},\qquad \alpha_\text{isat}=e^{-1/2},\qquad L_\text{ps}\sim c_s/\nu_{in}$$
+$$\alpha_\text{se}=\alpha_\text{ps}^{\,d/L_\text{ps}},\qquad \alpha_\text{ps}=e^{-1/2},\qquad L_\text{ps}\sim c_s/\nu_{in}$$
 
-is the whole-presheath Boltzmann drop raised to the sampling cell length $d$ over
-the collisional presheath depth $L_\text{ps}$; the fluid boundary and the circuit
-read the same $\alpha$. The advective flux carries nothing at those faces — the
+— $\alpha_\text{ps}$ the whole-presheath Boltzmann drop, raised to the sampling
+cell length $d$ over the collisional presheath depth $L_\text{ps}$. The fluid
+boundary and the circuit read the same $\alpha_\text{se}$. The advective flux carries nothing at those faces — the
 ghost flux supplies $Mu+p$, and a wall pressure on top would count the wall
 momentum twice. Every other face bounding the plasma is closed, carrying no
 particle or thermal-energy flux while keeping the live cell's pressure as its
@@ -392,8 +460,9 @@ Flux reaching a surface is neutralized and reborn as gas. The thermal rebirth
 is the cosine half-flux at the live surface temperature, entered on the
 velocity grid as $v_\perp\exp(-v_\perp^2/2s^2)$ — the azimuthally integrated 2D
 Maxwellian — with one further power of $v_\perp$ from the cosine flux law. At
-the cylindrical wall a landing splits into an accommodated share $\alpha_E$
-re-emitted on that spectrum and a non-accommodated share $1-\alpha_E$;
+the cylindrical wall a landing splits into an accommodated share
+$\alpha_\text{acc}$ re-emitted on that spectrum and a non-accommodated share
+$1-\alpha_\text{acc}$;
 `neutral_kinetic_dvm_wall_reflection` selects the second's treatment —
 `"specular"` returns it in its incident bin (exact on an axisymmetric grid,
 where a specular reflection off the cylinder reverses only the unresolved
@@ -406,10 +475,10 @@ backscattered atoms carry all of $R_E$ and each leaves with
 
 $$\varepsilon_\text{back}=\frac{R_E}{R_N}\left(\phi+T_i\right),$$
 
-$\phi=\phi_c$ at the cathode and $\phi_a$ at the anode — clamped at
-$\max(\phi_a+T_i,0)$, a cell whose clamped incident energy is zero launching
-nothing — while the collector jet reads its arrival energy from $T_e$ and $T_i$
-alone. The remaining $1-R_N$ keeps the thermal re-emission. Each surface's
+$\phi=\phi_c$ at the cathode and $\phi_a$ at the anode. BOTH electrode specs
+clamp the incident energy at zero, $\max(\phi+T_i,0)$, and a cell whose clamped
+incident energy is zero launches nothing; the collector jet reads its arrival
+energy from $T_e$ and $T_i$ alone. The remaining $1-R_N$ keeps the thermal re-emission. Each surface's
 energy book carries the reflected energy as a named loss row formed from the
 same counted (particles, incident energy) pair the birth is formed from, so
 what the surface gives up is what the gas receives. Anode launches are
@@ -515,13 +584,19 @@ Rows a result carries in `rhs_terms`, for the model above.
 | `beam_ionization_cost` | `physics/cathode.py:beam_ionization_rhs_terms` |
 | `beam_excitation_radiation` | `physics/cathode.py:beam_ionization_rhs_terms` |
 | `gas_puff_local_ionization` | `solver.py:gas_puff_local_ionization_rhs` |
-| `neutral_kinetic_dvm_coupling` | `physics/kinetic_dvm.py:neutral_kinetic_dvm_coupling_rhs` |
+| `neutral_kinetic_dvm_coupling` | `solver.py:neutral_kinetic_dvm_coupling_rhs` (moments from `physics/kinetic_dvm.py`) |
 | `parallel_momentum_sink` | `physics/sources.py:parallel_momentum_sink_rhs` |
 | `parallel_momentum_sink_heating` | `physics/sources.py:parallel_momentum_sink_heating_rhs` |
 
 `boundary_absorption` and `surface_loss` are permanently zero rows kept for
-saved-ledger schema stability. A result may carry further rows belonging to the
-alternative fluid neutral closure, which this document does not describe.
+saved-ledger schema stability, as is `recombination_3b_loss` under the ADAS
+coefficients.
+
+The model presented here is the equation set the reference configuration
+integrates. A result may carry further rows that are not part of it: those of
+the alternative fluid neutral closure, and the additional terms
+`electron_drift_transport` and `neutral_probe_source`, all available in the
+code and none described by this document.
 Supporting modules: `cablp/atomic/` (cross sections, ADAS access, empirical
 fits), `cablp/plasma/` (Braginskii conductivities, collision times),
 `cablp/cathode/` (circuit solve, CSDA beam march, compiled kernels),

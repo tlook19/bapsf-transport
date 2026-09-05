@@ -159,7 +159,7 @@ $$\text{distance: }\Delta t\le\varepsilon\min\frac{d}{s},\qquad \text{fractional
 | `neutral_sources` | fractional on $n_n$ against the fueling and pumping rows |
 | `neutral_wind` | distance, $\Delta t\le\varepsilon\min(\Delta z/\lvert u_n\rvert)$, the neutral advective CFL |
 | `neutral_energy` | rate — $\Delta t$ times the summed neutral-energy relaxation rates below `neutral_dt_fraction`, folding in the neutral signal speed $\lvert u_n\rvert+c_n$ |
-| `circuit` | $\Delta t\le\varepsilon\,\tau_\text{circuit}$, $\tau_\text{circuit}=L/(R_\text{comp}+R_\text{mesh}+dV_\text{dis}/dI)$, the device slope read by a one-sided finite difference of the same evaluator the loop advance integrates. Withdrawn once the loop reaches local equilibrium, tested as $\lvert f(I)\rvert\,\tau_\text{circuit}<dI_\text{probe}$. An accuracy bound, the loop advance being L-stable |
+| `circuit` | $\Delta t\le\varepsilon\,\tau_\text{circuit}$, $\tau_\text{circuit}=L/(xR_\text{comp}+dV_\text{dis}/dI)$ — the SAME external series share the loop advance integrates against, the rest being inside $V_\text{dis}$ — with the device slope read by a one-sided finite difference of that same evaluator. Withdrawn once the loop reaches local equilibrium, tested as $\lvert f(I)\rvert\,\tau_\text{circuit}<dI_\text{probe}$. An accuracy bound, the loop advance being L-stable |
 | `dt_max` | the configured ceiling |
 
 **Floor-aware drain exemption.** A cell whose energy margin above its floor
@@ -229,16 +229,26 @@ clip sites at run time, which cannot be done post-hoc.
 
 ## The cathode solve
 
-The sheath root is bracketed on a monotone residual and solved to the bracket's
-floating-point resolution: the voltage-driven form roots the coupled residual in
-$\psi_+$, the current-driven form roots
-$J_\text{tot}(\psi_+)=J_\text{imposed}$, and the prescribed-drive form roots
-$\phi_c+V_p-\phi_a(\phi_c)-V_b$ on $(0,\phi_{c,\text{cap}}]$. Uniqueness rests on
-each residual's monotonicity, and a root above the composed ceiling raises rather
-than being accepted. The loop current is advanced by an L-stable TR-BDF2 stage
-split over $L\,dI/dt=V_\text{src}-IR-V_\text{dis}(I)$, with $V_\text{dis}$
-evaluated at the frozen plasma state as a function of trial current and a
-modelled bank capacitor discharging trapezoidally alongside. The fluid stages run
+The sheath root is bracketed on a monotone residual and closed by `brentq`: the
+voltage-driven form roots the coupled residual in $\psi_+$ at `xtol` $10^{-8}$
+and `rtol` $10^{-6}$; the current-driven form roots
+$J_\text{tot}(\psi_+)=J_\text{imposed}$ and the prescribed-drive form roots
+$\phi_c+V_p-\phi_a(\phi_c)-V_b$ on $(0,\phi_{c,\text{cap}}]$, both at `xtol`
+$10^{-12}$ and `rtol` $10^{-14}$. Uniqueness rests on each residual's
+monotonicity.
+
+**A demand past the composed ceiling is CLAMPED, not raised.** Where the
+residual has no root below the ceiling the solve returns the ceiling value and
+TAGS itself `capability_limited`, `bound_active` recording which member of the
+ceiling bound; no error is raised and the run continues. Reading such a solve
+as a free root is the error the tag exists to prevent.
+
+The loop current is advanced by an L-stable TR-BDF2 stage split over
+$L\,dI/dt=V_\text{src}-I\,xR_\text{comp}-V_\text{dis}(I)$ — the external share
+of the compliance resistance only, the rest being already inside
+$V_\text{dis}$ — with $V_\text{dis}$ evaluated at the frozen plasma state as a
+function of trial current and a modelled bank capacitor discharging
+trapezoidally alongside. The fluid stages run
 at a loop current frozen over the step; `coupled_circuit_picard` re-runs the
 accepted step, at most `circuit_picard_max_iter` times, with that current updated
 to the previous iteration's result until the current a step produces matches the
@@ -247,11 +257,22 @@ every step-mutated attribute exactly so a rejected iteration leaves no trace.
 
 **The beam march.** The CSDA ray is integrated over adaptive substeps
 $dz_\text{sub}=\min(\text{remaining},\,f_\text{sub}E/L_\text{tot})$, so each
-substep resolves a fixed fraction of the primary's remaining energy. The same
-floating-point decrements feed the energy update and the per-channel banks, so
-the per-ray energy identity closes to accumulated roundoff by construction
-rather than by a tolerance. The beam coupling length is solved by bisection on a
-monotone relation at every extraction solve.
+substep resolves a fixed fraction of the primary's remaining energy. The flux
+is carried unattenuated, so the same floating-point products feed the energy
+decrement and every per-channel bank and the per-ray power identity closes to
+accumulated roundoff by construction rather than by a tolerance.
+
+Nothing about the coupling length is iterated: $l_b$ is CLOSED FORM, the
+harmonic sum of a Coulomb range and a neutral range,
+
+$$\frac{1}{l_b}=\frac{1}{l_{bi}}+\frac{1}{l_{bn}},\qquad l_{bi}=v_b\,\tau_{ei}(T_e,n_e),\qquad l_{bn}=\frac{1}{\sigma_b n_n},$$
+
+$v_b=\sqrt{2e\phi_c/m_e}$ the launch speed, reducing to $l_{bi}$ where there is
+no neutral term. The one bisected quantity in the deposition module is the
+plateau-edge energy $E_1$ of the multigroup disposal: a fixed number of
+bisections on a monotone residual between the stopping floor and the beam
+energy, clamped to the floor and COUNTED when the edge the equation asks for
+falls inside the bulk, where the flat-plateau picture does not hold.
 
 ## The kinetic neutral solver
 
@@ -424,6 +445,17 @@ a later solver whose initial condition is that state (`results/restart.py`:
 self-describing HDF5 file with its own format string, `sim1d-restart-v1`,
 independent of the trajectory format; it carries one instant, not a history.
 
+**The kinetic neutral closure cannot be restarted, and says so.** The payload
+serialises fluid rows, not a distribution function, so combining `restart_from`
+with `neutral_model` in `{"kinetic", "kinetic_dvm"}` RAISES at construction
+rather than resuming: reseeding the kinetic half from a Maxwellian would not be
+a continuation. The model this document presents uses that closure, so what
+follows covers the fluid neutral closure and every plasma-side member — the
+conserved rows, the cathode and circuit continuation state, the latches,
+accumulators and controller state — and does NOT cover a run of the presented
+model. `neutral_equilibration` is refused alongside it, for the different
+reason that it would overwrite the restored state.
+
 **The contract is continuation bit-identity**: running $0\to t_\text{end}$ in one
 call and running $0\to t_\text{mid}$, exporting, restarting, then
 $t_\text{mid}\to t_\text{end}$ produce raw-byte-identical saved frames after
@@ -475,7 +507,8 @@ bookkeeping.
 | Sheath-edge sampling | `physics/sources.py:presheath_alpha`, `electrode_sheath_alpha` |
 | Geometric momentum source | `physics/sources.py:flux_tube_geometry_rhs` |
 | Pressure work, velocity divergence | `physics/sources.py:pressure_work_rhs`, `velocity_divergence` |
-| SSPRK2, operator split | `core/integrator.py:ssprk2_step`, `operator_split_step` |
+| SSPRK2 | `core/integrator.py:ssprk2_step` |
+| Operator split | `solver.py:operator_split_step` |
 | Theta / TR-BDF2 heat substep | `physics/conduction.py:implicit_heat_conduction_step`, `_banded_heat_operator` |
 | Flux-limited conductivity | `physics/conduction.py:flux_limited_electron_conductivity` |
 | Adaptive timestep | `core/timestep.py:suggest_timestep` and the per-candidate functions |
