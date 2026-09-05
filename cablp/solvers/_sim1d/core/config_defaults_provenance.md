@@ -2828,12 +2828,25 @@ Three consequences worth stating, because each looks like a missing entry:
   spelling, `parallel_momentum_sink = false`, and that spelling is bit-exact
   against a checkout that has never heard of the term because neither of its
   two ledger rows is emitted at all.
-- **There is no timestep entry.** The rate does not enter the timestep ladder:
-  it is an explicit linear damping whose stability condition `nu_add dt << 1`
-  is satisfied by four orders of magnitude at the rates the instrument is
-  derived at (order `10^3 s^-1` against a plateau step of order `10^-7 s`).
-  A rate large enough to bind would be a statement about the machine no
-  response map is asking, and is disclosed here rather than guarded against.
+- **There is no timestep entry, and the margin behind that ruling is
+  MEASURED.** The rate does not enter the timestep ladder: it is an explicit
+  linear damping whose stability condition `nu_add dt << 1` the accepted step
+  must satisfy on its own, and the reference ES1 run the three arms are
+  derived from, `g1atrim_es1_d0e9748.h5` (49,415 accepted steps), says by how
+  much. Its largest accepted step on the drive plateau is `6.03e-7 s`, giving
+  `nu_add dt <= 2.8e-3` on the largest of the three arms
+  (`nu_add = 4.63e3 s^-1`, the 2x arm); its largest step anywhere, taken in
+  the afterglow, is `5.96e-6 s`, giving `nu_add dt <= 2.8e-2`. SSPRK2 applied
+  to `y' = -nu_add y` has amplification `1 - x + x^2/2` with `x = nu_add dt`,
+  which is stable for `0 <= x <= 2`, so the margin at the largest step the run
+  takes is `72.5x`, and the step would have to reach `4.3e-4 s` before this
+  term bound anything. The RULING is therefore that no ladder entry is
+  needed: the bounds the limiter already carries hold the term well inside its
+  own stability limit without knowing it exists, so adding an entry would buy
+  nothing and would misrepresent an unowned probe as a physical rate the
+  stepper must respect. A rate large enough to bind would be a statement about
+  the machine no response map is asking, and is disclosed here rather than
+  guarded against.
 
 Nothing in this group is on any shipped trajectory.
 

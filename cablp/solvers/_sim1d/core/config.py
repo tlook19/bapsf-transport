@@ -3667,12 +3667,22 @@ def parallel_momentum_sink_defaults():
     unless the term is armed, so an unarmed run's saved term structure and
     trajectory are bit-identical to a checkout that has never heard of it.
 
-    The rate does NOT enter the timestep ladder. It is an explicit linear
+    The rate does NOT enter the timestep ladder, and the margin behind that
+    ruling is MEASURED rather than asserted. The term is an explicit linear
     damping, so the accepted step must satisfy ``nu_add * dt << 1`` on its
-    own; at the rates this instrument is derived at (order 10^3 s^-1,
-    against a plateau step of order 10^-7 s) that is satisfied by four
-    orders of magnitude, and a rate large enough to bind would be a
-    statement about the machine no response map is asking.
+    own, and the reference ES1 run the three response-map arms are derived
+    from (49,415 accepted steps) says by how much. Its largest accepted step
+    on the drive plateau is 6.03e-7 s, giving ``nu_add * dt <= 2.8e-3`` on
+    the largest of the three arms; its largest step anywhere, taken in the
+    afterglow, is 5.96e-6 s, giving ``nu_add * dt <= 2.8e-2``. SSPRK2
+    applied to ``y' = -nu_add * y`` has amplification ``1 - x + x^2/2`` with
+    ``x = nu_add * dt``, which is stable for ``0 <= x <= 2``, so the margin
+    at the largest step the run takes is 72.5x and the step would have to
+    reach 4.3e-4 s before this term bound anything. That is the ruling: no
+    ladder entry is needed, because the bounds the limiter already carries
+    hold the term well inside its own stability limit without knowing it
+    exists. A rate large enough to bind would be a statement about the
+    machine no response map is asking.
 
     parallel_momentum_sink:
         Whether the sink is armed. ``False`` (the default) is the whole
