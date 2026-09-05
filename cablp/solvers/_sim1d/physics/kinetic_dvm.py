@@ -207,7 +207,7 @@ WALL_ENERGY_SECANT_MAX_STEP = 1.0
 # the tick's frozen (nu, target) and is unconditionally stable; "zoh" freezes
 # the booked RATE instead and is oscillatory-unstable for nu*dt_tick > 2. The
 # first entry is the resolved default. See the solver's transfer-hold scope
-# and NUMERICS.md.
+# and NUMERICS.md, "The kinetic neutral solver".
 TRANSFER_HOLDS = ("exponential", "zoh")
 
 # Relative agreement the CATHODE JET's launch spectrum must reach on its

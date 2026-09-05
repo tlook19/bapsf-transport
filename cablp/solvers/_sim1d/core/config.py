@@ -3226,7 +3226,7 @@ def coverage_closure_defaults():
     ``f_cov(z, t) in (0, 1]``: the plasma occupies that fraction of the column
     cross-section at each axial position, so channel-local densities are the
     mean divided by ``f_cov(z)`` and the remaining ``1 - f_cov(z)`` is a
-    neutral reservoir. See ``MODEL.md`` for the term placement.
+    neutral reservoir.
 
     coverage_growth_rate_per_s:
         Column-mean logistic growth rate ``r0`` [s^-1] of the coverage field,
@@ -3338,7 +3338,9 @@ def restart_defaults():
         ``neutral_equilibration`` (which would overwrite the restored state) or
         a ``neutral_model`` whose distribution function the payload does not
         carry. The full inventory, and the justification for each deliberately
-        dropped member, is ``_sim1d/RESTART.md``.
+        dropped member, is ``_sim1d/results/restart.py`` together with the
+        restart state carried in ``_sim1d/solver.py``; the resume contract is
+        ``_sim1d/NUMERICS.md``, section "Restart".
     """
     return {
         "restart_from": None,
@@ -3480,8 +3482,8 @@ def regime_tracer_defaults():
     minus surface absorption) and ``S`` the n-independent beam-impact
     ionization birth. ``Te`` on those cells is the root of a quasi-static local
     electron energy balance rather than an integrated field. The method, the
-    passive/active interface, and the neglect bounds are ``_sim1d/NUMERICS.md``
-    (section "Regime-R2 pre-breakdown passive-tracer bridge"). Values and their
+    passive/active interface, and the neglect bounds are
+    ``_sim1d/physics/tracer.py``. Values and their
     provenance classes are ``config_defaults_provenance.md``.
 
     A cell is PASSIVE while all three criteria below hold; it activates (and
@@ -3577,8 +3579,9 @@ def regime_vessel_node_defaults():
     anode-to-wall (common-mode) potential, obeying
     ``C_total dV_cm/dt = I_wall_net`` with ``I_wall_net`` the electron current
     landing on wall-connected surfaces minus the ion wall flux from the column
-    minus the leak. Method of record: ``_sim1d/NUMERICS.md``, section "Vessel
-    common-mode node"; hardware provenance and its class are
+    minus the leak. Method of record: ``_sim1d/physics/cathode.py``
+    (``vessel_node_advance``, the closed-form step and its charge ledger);
+    hardware provenance and its class are
     ``config_defaults_provenance.md``.
 
     vessel_capacitance_F:
@@ -4491,8 +4494,8 @@ input_flags_template_1d = {
     # NOT CERTIFIABLE BY scripts/gates/verify_sim1d_order.py: that harness measures
     # the split step in a deliberately cathode-free regime, where the beam
     # deposition row is identically zero and this flag therefore changes
-    # nothing. It changes the A/B commutator, so the NUMERICS.md split-order
-    # table is stale under it until re-measured.
+    # nothing. It changes the A/B commutator, so any split-order measurement
+    # taken with it clear is stale under it until re-measured.
     "beam_deposition_in_heat_substep": False,
     # The electron-energy sink charged per ionization event, I_ion * S_ion. Off
     # zeroes that cooling row, so ionizations cost the electrons nothing. This

@@ -1239,7 +1239,7 @@ def gas_puff_rate_profile(
     the ray optics reaches, and folding either operation on top would move
     fuel away from the geometry that derived it. It is a kinetic first-flight
     row read as a fluid deposition row -- a disclosed closure, stated in
-    ``MODEL.md`` and in :mod:`.puff_orifice`.
+    :mod:`.puff_orifice`.
 
     The ``"gaussian"`` and ``"cosine_pipe"`` profiles weight by cell length and
     land only on main-chamber cells. Every distributed profile, ``"orifice"``

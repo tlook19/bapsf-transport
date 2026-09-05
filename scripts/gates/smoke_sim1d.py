@@ -18485,7 +18485,7 @@ def _case_coverage_closure_v2(_cov_ref_sim, _coverage_config, deposit_beam):
     assert not np.any(_cov_ts_res.ionization_events[_cov_ts_f >= 1.0])
     assert np.any(_cov_ts_res.ionization_events[_cov_ts_f < 1.0] > 0.0)
     # A uniform profile does NOT reproduce the v1.1 partition-once split. This
-    # is EXPECTED (MODEL.md states it): re-mixing at every cell is a different
+    # is EXPECTED: re-mixing at every cell is a different
     # model from partitioning at emission. Asserted so the difference cannot be
     # mistaken for a regression later.
     _cov_flat = np.full(_cov_ts_cells, 0.05)

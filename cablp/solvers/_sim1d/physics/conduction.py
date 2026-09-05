@@ -23,7 +23,7 @@ HEAT_DT_FRACTION = 0.25
 # L-stable: the amplification factor tends to -(1 - theta)/theta as dt*lambda
 # tends to -infinity, so theta=1/2 leaves stiff modes ringing at amplitude 1
 # with alternating sign, while "shifted" damps them by ~2/3 per step at the cost
-# of formal second-order accuracy. See NUMERICS.md.
+# of formal second-order accuracy. See NUMERICS.md, "Implicit heat substep".
 IMPLICIT_HEAT_SCHEME_THETA = {
     "backward_euler": 1.0,
     "shifted": 0.6,
@@ -314,7 +314,8 @@ def implicit_heat_conduction_step(
 
     Note that even a fully converged Picard does not by itself make the *split
     step* second-order: ``operator_split_step`` uses Lie rather than Strang
-    splitting, which is an independent first-order term. See NUMERICS.md.
+    splitting, which is an independent first-order term. See NUMERICS.md,
+    section "Implicit heat substep".
     """
     if dt <= 0.0:
         raise ValueError(f"dt must be positive (got {dt})")

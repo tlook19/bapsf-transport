@@ -1770,7 +1770,7 @@ def _csda_beam_deposition(
     per-cell deposition is the sum of both arms' deposits in that cell. This
     REPLACES v1.1's partition-once-at-emission, and it does not reduce to it at
     uniform ``f_cov``: see ``deposit_beam_two_stream`` for the axial-
-    decorrelation approximation the re-mix states, and MODEL.md for why that
+    decorrelation approximation the re-mix states, which is why that
     difference is expected rather than a defect.
 
     Note what the split does to the quasilinear beam density: each arm carries
