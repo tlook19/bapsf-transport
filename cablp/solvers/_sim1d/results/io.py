@@ -198,6 +198,43 @@ def save_result_hdf5(path, result, params=None, flags=None):
             from .phase3_capture import validate_run_id
 
             h5.attrs["run_id"] = validate_run_id(run_id)
+        # WHICH MEASURED DRIVE this run was given (cathode_solver_model =
+        # "prescribed_measured"). PRESENCE-GATED both ways: a run on any other
+        # solver model carries neither record and its file keeps exactly the
+        # attributes it always had. The trace's sha256 is the digest of the
+        # FILE's bytes, so the artifact names the measured product itself and
+        # not merely a path that may since have been rewritten; the hand-off
+        # attributes appear only once the switch actually happened, and their
+        # absence on a prescribed run says the run ended inside its calibrated
+        # foot.
+        prescribed_drive = getattr(result, "prescribed_drive", None)
+        if prescribed_drive is not None:
+            h5.attrs["cathode_prescribed_trace_path"] = str(
+                prescribed_drive["trace_path"]
+            )
+            h5.attrs["cathode_prescribed_trace_sha256"] = str(
+                prescribed_drive["trace_sha256"]
+            )
+            h5.attrs["cathode_prescribed_t0_s"] = float(
+                prescribed_drive["t0_s"]
+            )
+            h5.attrs["cathode_prescribed_start_s"] = float(
+                prescribed_drive["start_s"]
+            )
+        prescribed_handoff = getattr(result, "prescribed_handoff", None)
+        if prescribed_handoff is not None:
+            h5.attrs["cathode_prescribed_handoff_time_s"] = float(
+                prescribed_handoff["time_s"]
+            )
+            h5.attrs["cathode_prescribed_handoff_current_calibrated_a"] = float(
+                prescribed_handoff["current_calibrated_A"]
+            )
+            h5.attrs["cathode_prescribed_handoff_current_trace_a"] = float(
+                prescribed_handoff["current_trace_A"]
+            )
+            h5.attrs["cathode_prescribed_handoff_relative_jump"] = float(
+                prescribed_handoff["relative_jump"]
+            )
         # WHICH CONFIGURATION this run named. ``params_json`` records what the
         # run resolved TO; this records what it WAS -- the configuration's own
         # name, what it was derived from, the bytes of each file in that chain,

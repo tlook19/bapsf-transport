@@ -28,6 +28,7 @@ from cablp.cathode.circuit_idriven import (
     solve_beam_system_idriven,
     solve_idriven,
 )
+from cablp.cathode.circuit_prescribed import solve_beam_system_prescribed
 from cablp.constants import ev_to_erg, qe_SI
 
 from ..core.geometry import (
@@ -560,23 +561,37 @@ def resolved_gap_resistance_ohm(Te, n, geometry, lnL_model="nrl_ei"):
     return float(np.sum(dz / (sigma * area)))
 
 
+#: The drive formulations ``cathode_solver_model`` dispatches on. EXPORTED
+#: because the validator's refusal message and the solver's own dispatch read
+#: one domain; a domain stated twice is a domain that drifts.
+CATHODE_SOLVER_MODELS = ("current_driven", "prescribed_measured")
+
+
 def validate_cathode_solver_model(input_dict, input_flags):
-    """Validate and return the ``cathode_solver_model`` selection."""
+    """Validate and return the ``cathode_solver_model`` selection.
+
+    ``"prescribed_measured"`` inherits the current-driven path's two
+    structural requirements unchanged: it drives ONE cathode (the prescribed
+    beam system, like the current-driven one, has no twin), and its FOOT is a
+    real current-driven discharge, so the loop inductance the foot integrates
+    must still be positive. What it does not inherit is the emission and bank
+    calibration's meaning past the hand-off; that is stated at the key, and
+    the trace keys themselves are resolved in ``core/prescribed_drive.py``.
+    """
     model = str(input_dict.get("cathode_solver_model", "current_driven"))
-    if model != "current_driven":
+    if model not in CATHODE_SOLVER_MODELS:
         raise ValueError(
-            f"cathode_solver_model must be 'current_driven' (got {model!r})"
+            "cathode_solver_model must be 'current_driven' or "
+            f"'prescribed_measured' (got {model!r})"
         )
     coupling = bool(input_flags.get("cathode_coupling", False))
     if coupling and bool(input_flags.get("TwinCathode", False)):
         raise ValueError(
-            "cathode_solver_model='current_driven' does not support "
-            "TwinCathode"
+            f"cathode_solver_model={model!r} does not support TwinCathode"
         )
     if coupling and float(input_dict.get("L_parasitic_H", 0.0)) <= 0.0:
         raise ValueError(
-            "cathode_solver_model='current_driven' requires "
-            "L_parasitic_H > 0"
+            f"cathode_solver_model={model!r} requires L_parasitic_H > 0"
         )
     return model
 
@@ -1231,8 +1246,18 @@ def solve_cathode_boundary(
     coverage=None,
     vessel_V_cm_V=None,
     tail_anode_current_prev_A=0.0,
+    prescribed_drive=None,
 ):
     """Call the cathode/beam solver and return raw diagnostics only.
+
+    ``prescribed_drive`` is the measured ``(I [A], V_dis [V])`` pair when
+    ``cathode_solver_model = "prescribed_measured"`` has taken over, and
+    ``None`` otherwise -- which is every step of every other configuration,
+    and every step of a prescribed run before its hand-off. It is the presence
+    gate on the whole prescribed branch: without it this function cannot reach
+    ``solve_beam_system_prescribed`` at all, so the off path is the historical
+    dispatch bit for bit. The caller resolves it, because the trace lives on
+    the model clock and this function is not given a time.
 
     ``vessel_V_cm_V`` is the anode-to-wall common-mode potential [V] when the
     vessel node is armed, and ``None`` otherwise. It reaches exactly two
@@ -1328,7 +1353,50 @@ def solve_cathode_boundary(
             "beam_cross_prev must have shape "
             f"({geometry.cells},), got {beam_cross_prev.shape}"
         )
-    if not floating:
+    if prescribed_drive is not None and not floating:
+        # PRESCRIBED MEASURED DRIVE. Both loop quantities are measurements
+        # this step, so there is no root to find in the current and no
+        # emission ceiling to consult: the sheath follows from the loop
+        # relation (see cablp/cathode/circuit_prescribed.py). Floating phases
+        # are excluded on purpose -- an open circuit carries no measured
+        # discharge, and the caller withdraws the drive there -- so the
+        # afterglow keeps the historical open-circuit solve unchanged.
+        beam_result = solve_beam_system_prescribed(
+            config=device_config,
+            Te=derived.Te,
+            ne=state.n,
+            nn=state.nn,
+            beam_cross_prev=beam_cross_prev,
+            plasma_cross=geometry.plasma_area_cm2,
+            I_ion=I_ion,
+            gas_type=gas_type,
+            # Floored at zero on the same convention the current-driven
+            # branch floors its loop current: the device carries what it can,
+            # never a backwards current, and a trace sample below zero is
+            # baseline noise rather than a reverse discharge.
+            I_tot_A=max(float(prescribed_drive.I_A), 0.0),
+            V_dis_V=float(prescribed_drive.V_dis_V),
+            cathode_index=beam_launch(geometry, end=0)[0],
+            anode_current_A=anode_source[0],
+            anode_T_e=anode_source[1],
+            alpha_sheath=cathode_circuit_alpha_sheath(
+                state, derived, geometry, beam_launch(geometry, end=0)[0],
+                mu, ion_mass_g, input_dict,
+            ),
+            b_beam_excitation=float(
+                input_dict.get("b_beam_excitation", 0.0)
+            ),
+            beam_excitation_energy_eV=float(
+                input_dict.get("beam_excitation_energy_eV", 21.218)
+            ),
+            beam_excitation_model=str(
+                input_dict.get("beam_excitation_model", "2p_scalar")
+            ),
+            phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
+            beam_climb_V=beam_climb_V,
+            tail_anode_current_A=float(tail_anode_current_prev_A),
+        )
+    elif not floating:
         # The circuit is explicit solver state: no inductive fold, no
         # warm start -- the solve is a well-posed evaluation at the frozen
         # loop current. Floating phases fall through to the historical

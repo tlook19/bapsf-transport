@@ -59,6 +59,11 @@ from .core.state import (
 )
 from .core.timestep import apply_dt_global_scale, suggest_timestep
 from .core.options import build_solver_options
+from .core.prescribed_drive import (
+    HANDOFF_JUMP_WARN_FRACTION,
+    PrescribedDrivePoint,
+    resolve_prescribed_drive,
+)
 from .core.validation import (
     OPERATOR_SPLITTINGS,
     _RawStageError,
@@ -2426,6 +2431,24 @@ class LAPDSim1D:
         self._cathode_solver_model = validate_cathode_solver_model(
             self._input_dict, self._flags
         )
+        # PRESCRIBED MEASURED DRIVE (cathode_solver_model =
+        # "prescribed_measured"). Resolved ONCE, here: the trace file is read,
+        # its columns and clock validated, its bytes digested, and the hand-off
+        # checked against its span -- so a run that cannot legally take a
+        # measured drive says so at construction instead of discovering it
+        # after the foot. ``None`` on every other configuration, and it is the
+        # presence gate every consumer below reads.
+        self._prescribed_drive = resolve_prescribed_drive(
+            self._input_dict, self._flags, self._cathode_solver_model
+        )
+        # Live prescribed state: whether the trace has taken over (set on the
+        # accept path together with the loop current it prescribes), the
+        # prescribed device voltage for the step the RHS is inside, and the
+        # one-time hand-off record. All three stay at these values on every
+        # run whose mode is off.
+        self._prescribed_active = False
+        self._circuit_V_dis_prescribed = 0.0
+        self._prescribed_handoff = None
         # Circuit voltage bound (R1): a ceiling on the device voltage set by
         # what the loop can supply. It lives inside the current-driven sheath
         # solve and is formed from the bank/capacitor source, so a
@@ -6927,6 +6950,16 @@ class LAPDSim1D:
             solve is not None
             and solve.beam_result is not None
             and not bool(solve.metadata.get("floating", False))
+            # PRESCRIBED MEASURED DRIVE: the surface updates below are the
+            # calibrated cathode's, and past the hand-off there is no
+            # calibrated cathode -- the emission that would be cooling the
+            # surface is not the emission the trace implies, and the warming
+            # model's own T_s reaches nothing the sheath solve reads. So the
+            # re-solve is not spent and the surface is frozen where the foot
+            # left it, which is what makes the warming ledger's rows report
+            # ZERO over the prescribed steps rather than a number computed
+            # from a model that is no longer driving anything.
+            and not self._prescribed_active
             and (
                 self._cathode_warming_model == "power_balance"
                 or self._cathode_theta is not None
@@ -6986,6 +7019,9 @@ class LAPDSim1D:
             self._cathode_Ts_K is not None
             and solve is not None
             and solve.beam_result is not None
+            # Frozen past the prescribed hand-off, for the reason given at the
+            # honest re-solve above.
+            and not self._prescribed_active
         ):
             if self._cathode_warming_model == "power_balance":
                 result = solve.beam_result.result
@@ -7138,6 +7174,19 @@ class LAPDSim1D:
             # Open circuit: no loop; the stored inductor energy is dropped.
             self._circuit_I_loop = 0.0
             self._circuit_V_dis_step = 0.0
+            # An open circuit carries no measured discharge either, so the
+            # prescribed drive is WITHDRAWN across these phases and the
+            # afterglow keeps its historical open-circuit sheath solve. Inert
+            # unless the mode is on.
+            self._prescribed_active = False
+            self._circuit_V_dis_prescribed = 0.0
+        elif (
+            self._prescribed_drive is not None
+            and self._prescribed_drive.active(self._time)
+        ):
+            # PRESCRIBED MEASURED DRIVE past its hand-off: nothing is
+            # integrated, because both loop quantities are measurements.
+            self._advance_circuit_prescribed(self._time, float(attempt.dt))
         else:
             C_bank_id = self._input_dict.get("C_bank_F")
             bank_off = bool(step_phase.get("inductive_tail", False))
@@ -7279,6 +7328,12 @@ class LAPDSim1D:
         "_jet_arming_censored_steps",
         "_jet_arming_transitions",
         "_jet_arming_last_transition_s",
+        # Prescribed measured drive: both are written on the accepted step
+        # alongside _circuit_I_loop, so a Picard re-run must start from the
+        # values the step started from. Constant on every run whose mode is
+        # off.
+        "_prescribed_active",
+        "_circuit_V_dis_prescribed",
     )
 
     def _picard_snapshot(self):
@@ -7361,6 +7416,16 @@ class LAPDSim1D:
         "_circuit_V_dis_step",
         "_circuit_V_dis_time_integral",
     )
+    # DELIBERATE OMISSION: the prescribed measured drive's two step members
+    # (_prescribed_active, _circuit_V_dis_prescribed). Both are pure functions
+    # of the resolved trace and the time, so the first accepted step after a
+    # resume re-establishes them from the trace itself -- nothing is lost from
+    # the trajectory. What a resume does lose is the ONE-TIME hand-off record,
+    # so a resumed prescribed run re-announces its switch (against the
+    # restored loop current, which is the calibrated foot's only if the resume
+    # instant is the switch). Restart of a prescribed run is therefore
+    # trajectory-faithful and hand-off-diagnostic-lossy, and the payload stays
+    # byte-unchanged for every run whose mode is off.
     _RESTART_TRIGGER_ATTRS = (
         "_t_prebreakdown_trigger",
         "_t_breakdown_trigger",
@@ -10030,6 +10095,12 @@ class LAPDSim1D:
             _memo_key_part(phi_wf_override_eV),
             _memo_key_part(self._cathode_f_em),
             _memo_key_part(self._circuit_I_loop),
+            # The prescribed drive's other half, and the switch that says
+            # whether the pair is in force at all: two solves at one
+            # (y, t, I_loop) under different prescribed voltages -- or one
+            # before and one after the hand-off -- are different solves.
+            _memo_key_part(self._circuit_V_dis_prescribed),
+            _memo_key_part(self._prescribed_active),
             _memo_key_part(circuit_V_src_V),
             _memo_key_part(coverage),
             _memo_key_part(self._vessel_V_cm),
@@ -10116,6 +10187,7 @@ class LAPDSim1D:
             circuit_V_src_V=circuit_V_src_V,
             coverage=coverage,
             vessel_V_cm_V=self._vessel_V_cm,
+            prescribed_drive=self._prescribed_drive_point(),
         )
         if memo_key is not None:
             self._cathode_solve_memo = (memo_key, result)
@@ -10524,6 +10596,91 @@ class LAPDSim1D:
             "inductive_tail": inductive_tail,
             "solve_enabled": cathode_enabled or floating or inductive_tail,
         }
+
+    def _prescribed_drive_point(self):
+        """Return the measured ``(I, V_dis)`` driving this step, or ``None``.
+
+        ``None`` -- the off path, and every step before the hand-off -- is the
+        PRESENCE GATE on the whole prescribed branch: the dispatched cathode
+        solve cannot reach ``solve_beam_system_prescribed`` without it.
+
+        The pair is read off the FROZEN step state, not off the trace, exactly
+        as the current-driven path reads its frozen ``I_loop``: within a step
+        every RHS call sees one drive, and the accept path is where the drive
+        moves. That is what makes the two routes the same integration with a
+        different drive underneath, rather than two integrations.
+        """
+        if not self._prescribed_active:
+            return None
+        return PrescribedDrivePoint(
+            I_A=float(self._circuit_I_loop),
+            V_dis_V=float(self._circuit_V_dis_prescribed),
+        )
+
+    def _advance_circuit_prescribed(self, time_s, dt_s):
+        """Set the loop state from the measured trace for one accepted step.
+
+        The prescribed counterpart of ``advance_circuit_current_driven``, and
+        deliberately trivial beside it: there is no loop equation to integrate,
+        because both of its unknowns are measurements. The trace is read at the
+        step's END time -- the instant the current-driven advance's ``I_new``
+        lands on -- so the state the NEXT step's RHS freezes is the measurement
+        at the time that step begins.
+
+        ``V_dis`` is booked into the same step integral the current-driven
+        advance feeds, so the discharge-voltage diagnostic means one thing
+        across the hand-off.
+        """
+        I_trace_A, V_dis_V = self._prescribed_drive.at(time_s)
+        if not self._prescribed_active:
+            self._record_prescribed_handoff(time_s, I_trace_A)
+            self._prescribed_active = True
+        self._circuit_I_loop = I_trace_A
+        self._circuit_V_dis_prescribed = V_dis_V
+        self._circuit_V_dis_step = V_dis_V
+        self._circuit_V_dis_time_integral += float(dt_s) * V_dis_V
+
+    def _record_prescribed_handoff(self, time_s, I_trace_A):
+        """Record and announce the calibrated -> prescribed switch, once.
+
+        NOTHING IS SMOOTHED across it. The two currents on either side are the
+        calibrated loop current the foot had integrated to and the trace's own
+        value at the switch, and their relative difference is reported as it
+        falls out. A difference above ``HANDOFF_JUMP_WARN_FRACTION`` is
+        announced as a JUMP on its own line: an invented ramp would hide
+        exactly the thing the hand-off is there to expose, which is whether
+        the calibrated cathode was reproducing this rung's measured drive at
+        the moment the measurement took over.
+        """
+        I_calibrated_A = float(self._circuit_I_loop)
+        # Normalized on the MEASURED current, which is the reference the
+        # calibrated foot is being judged against; floored only so a switch
+        # onto a zero-current sample is a finite number rather than an
+        # exception.
+        jump = (float(I_trace_A) - I_calibrated_A) / max(
+            abs(float(I_trace_A)), 1.0e-12
+        )
+        self._prescribed_handoff = {
+            "time_s": float(time_s),
+            "current_calibrated_A": I_calibrated_A,
+            "current_trace_A": float(I_trace_A),
+            "relative_jump": float(jump),
+        }
+        print(
+            f"[prescribed_measured] hand-off at t = {float(time_s):.9e} s: "
+            f"calibrated I = {I_calibrated_A:.6f} A -> trace I = "
+            f"{float(I_trace_A):.6f} A (relative jump {jump:+.6f})",
+            flush=True,
+        )
+        if abs(jump) > HANDOFF_JUMP_WARN_FRACTION:
+            print(
+                f"[prescribed_measured] HAND-OFF JUMP: {jump:+.6f} exceeds "
+                f"{HANDOFF_JUMP_WARN_FRACTION:.6f}. Nothing is smoothed -- the "
+                "column takes the step as a step -- and the size of it is the "
+                "measurement of how far the calibrated cathode sat from this "
+                "rung's measured drive at the switch",
+                flush=True,
+            )
 
     def _circuit_source_voltage_V(self, step_phase):
         """Return the loop's source voltage [V] for this phase.
@@ -11758,6 +11915,23 @@ class LAPDSim1D:
         # is None on a run that named none), so a reader never has to guess
         # whether the attribute is missing or the configuration was unnamed.
         result.configuration = getattr(self, "_configuration", None)
+        # WHICH MEASURED DRIVE this run was given, when it took one. Both are
+        # presence-gated: a run whose cathode_solver_model is not
+        # "prescribed_measured" carries neither attribute and its saved file is
+        # unchanged. The trace record names the file and its BYTES, so an
+        # artifact can be matched back to the exact measured product that drove
+        # it; the hand-off record is written only once the switch has actually
+        # happened, so its absence on a prescribed run says the run ended in
+        # its calibrated foot.
+        if self._prescribed_drive is not None:
+            result.prescribed_drive = {
+                "trace_path": self._prescribed_drive.path,
+                "trace_sha256": self._prescribed_drive.sha256,
+                "t0_s": float(self._prescribed_drive.t0_s),
+                "start_s": float(self._prescribed_drive.start_s),
+            }
+            if self._prescribed_handoff is not None:
+                result.prescribed_handoff = dict(self._prescribed_handoff)
         if self._t_ignition_abort is not None:
             # Present ONLY on a run that aborted, so normal results (and their
             # saved HDF5 files) are unchanged. This is the event context the

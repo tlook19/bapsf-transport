@@ -2851,10 +2851,11 @@ def _case_cathode_circuit_voltage_bound_r1(
 
     # (vi) CONSTRUCTION-TIME REFUSALS. The flag reaches the solve only through
     # a cathode solve fed by a bank, so every configuration in which it would
-    # be inert is refused rather than silently ignored. (There is no
-    # solver-model case to check: ``cathode_solver_model`` accepts only
-    # ``"current_driven"``, and ``validate_cathode_solver_model`` refuses
-    # anything else before this flag is ever read.)
+    # be inert is refused rather than silently ignored. (The one OTHER solver
+    # model, ``"prescribed_measured"``, refuses this flag on its own ground --
+    # a bound on what the loop can supply is meaningless where the device
+    # voltage is measured -- and that refusal lives with the mode, in
+    # ``core/prescribed_drive.py``, not here.)
     def _r1_sim_config(**overrides):
         _p, _f = default_config()
         _p.update({
