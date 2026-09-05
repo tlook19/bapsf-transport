@@ -29,17 +29,301 @@ carries a value, a declared equivalence band and a status, and NONE of them
 can raise: "the feature is absent on this arm" is a reading, not a failure,
 and must not take the other rows down with it.
 
+PRESCRIBED MEASURED DRIVE. A run saved with
+``cathode_solver_model = "prescribed_measured"`` did not predict its drive: the
+discharge current ``I(t)`` and the discharge voltage ``V_dis(t)`` were read
+from the rung's own measured overlay trace. Every drive-side row is then an
+IDENTITY with that trace rather than a result, and is printed with the tag
+``prescribed (identity)`` under a header block naming the trace, its sha256,
+the two clock origins and the calibrated -> prescribed hand-off. The tagged
+rows are: peak current and its timing, the plateau current, t90, row (a), row
+(b), the per-solve ``V_b`` and ``V_dis`` plateau spreads, the row ``(ii)`` ramp
+members and their crossing family, and the row ``(iii)`` V_dis plateau mean and
+plateau current. On the row ``(ii)`` members and their crossings the identity
+tag REPLACES the status bracket, with any status other than ``ok`` folded into
+the reason text, so no bracketed status word stands beside an identity. Under
+``--pair`` an input row differenced against a calibrated partner prints
+``prescribed vs calibrated: <delta>`` and carries NO verdict word: neither
+side's number is a model result on that member.
+
+WHAT REMAINS A RESPONSE in that mode, printed with its normal treatment and no
+tag: the cathode ion share ``I_i/I`` and the emitted current
+``I_eth* = max(I - I_i, 0)``; ``P_cathode_i``; the solved anode fall
+``phi_a``; the beam launch energy ``phi_c = (V_dis - V_series) + phi_a - V_p``;
+the row ``(i)`` trigger times and the row ``(iv)`` breakdown-phase maximum,
+both produced by the CALIBRATED cathode that runs the foot up to the hand-off.
+``T_s`` and the rest of the surface package (``theta``, ``phi_wf_eff``, the
+warming ledger) are FROZEN at the hand-off and report the foot's last values.
+A calibrated run's transcript is unchanged, byte for byte.
+
 Usage::
 
     python scripts/score/fingerprints_sim1d.py run.h5 [run2.h5 ...]
     python scripts/score/fingerprints_sim1d.py --pair post.h5=pre.h5 post.h5 pre.h5
 """
 
+import json
 import sys
 
 import numpy as np
 
 from cablp.solvers._sim1d import load_result_hdf5
+
+#: The ``cathode_solver_model`` whose drive-side rows are INPUTS rather than
+#: results. Any other value -- including a run saved before the selector
+#: existed, which carries the key not at all -- is the calibrated cathode.
+PRESCRIBED_MEASURED_MODEL = "prescribed_measured"
+
+#: The four root attributes ``results/io.py`` writes for every run in that
+#: mode: which measured product drove it, and how its two clocks line up.
+PRESCRIBED_DRIVE_ATTRS = (
+    "cathode_prescribed_trace_path",
+    "cathode_prescribed_trace_sha256",
+    "cathode_prescribed_t0_s",
+    "cathode_prescribed_start_s",
+)
+
+#: The four hand-off attributes, written only once the calibrated -> measured
+#: switch ACTUALLY HAPPENED. Their absence on a prescribed run is a reading,
+#: not a defect: the run ended inside its calibrated foot and nothing below it
+#: is an identity with the trace.
+PRESCRIBED_HANDOFF_ATTRS = (
+    "cathode_prescribed_handoff_time_s",
+    "cathode_prescribed_handoff_current_calibrated_a",
+    "cathode_prescribed_handoff_current_trace_a",
+    "cathode_prescribed_handoff_relative_jump",
+)
+
+#: The tag every drive-side input row carries in that mode. It is deliberately
+#: not one of the status words: an identity is not "ok", has not "moved" and is
+#: not "unmoved" -- those words all assert that a number was computed and then
+#: compared, and this one was read back out of the input.
+IDENTITY_TAG = "prescribed (identity)"
+
+
+def _identity_status_word(status):
+    """Return a row ``(ii)`` member status as it is printed beside an identity.
+
+    ``ok`` becomes ``resolved``. The status is an estimator reading -- "this
+    member came out inside its declared band" -- and stays true of a member
+    read off a prescribed trace, but the WORD has already been misread once in
+    this campaign as a verdict of agreement, and beside a value that is a
+    re-reading of the run's own input there is nothing for it to agree with.
+    Every other status (``coarse``, ``absent``, ``not-contained``) names a
+    conditioning or containment fact and is printed unchanged.
+    """
+    return "resolved" if status == "ok" else status
+
+
+def _decode_attr(value):
+    """Return an HDF5 root attribute as a plain Python string."""
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
+def _prescribed_record(path):
+    """Return the run's measured-drive record, or ``None`` for a calibrated run.
+
+    The mode is read from TWO places that must agree -- ``params_json``'s
+    ``cathode_solver_model`` and the ``cathode_prescribed_*`` root attributes
+    -- and a file whose two records disagree is REFUSED rather than resolved.
+    Guessing either way is the failure this instrument exists to prevent: a
+    prescribed run read as calibrated prints its own inputs as though the model
+    had predicted them, and a calibrated run read as prescribed tags real
+    predictions as identities and hides them.
+
+    The returned record is ``{"drive": {...}, "handoff": {...} or None}``. A
+    ``None`` hand-off says the run ended inside its calibrated foot, so the
+    measured drive never took over and no row is an identity with the trace.
+    """
+    import h5py
+
+    with h5py.File(path, "r") as handle:
+        attrs = {
+            key: handle.attrs[key]
+            for key in PRESCRIBED_DRIVE_ATTRS + PRESCRIBED_HANDOFF_ATTRS
+            if key in handle.attrs
+        }
+        params_json = handle.attrs.get("params_json")
+    params = (
+        json.loads(_decode_attr(params_json)) if params_json is not None else {}
+    )
+    model = params.get("cathode_solver_model")
+    drive = {key: attrs[key] for key in PRESCRIBED_DRIVE_ATTRS if key in attrs}
+    handoff = {
+        key: attrs[key] for key in PRESCRIBED_HANDOFF_ATTRS if key in attrs
+    }
+    if model != PRESCRIBED_MEASURED_MODEL:
+        if attrs:
+            raise SystemExit(
+                f"{path}: cathode_solver_model={model!r} but the file carries "
+                f"measured-drive attributes {sorted(attrs)}. The two records "
+                f"of which drive produced this artifact disagree, and this "
+                f"tool will not choose between them: a wrong choice either "
+                f"prints prescribed inputs as predictions or hides real "
+                f"predictions behind an identity tag."
+            )
+        return None
+    if len(drive) != len(PRESCRIBED_DRIVE_ATTRS):
+        raise SystemExit(
+            f"{path}: cathode_solver_model={PRESCRIBED_MEASURED_MODEL!r} but "
+            f"the measured-drive attributes are incomplete (present: "
+            f"{sorted(drive)}; required: {list(PRESCRIBED_DRIVE_ATTRS)}). "
+            f"Without them the trace this run was driven from cannot be "
+            f"named, and an untraceable prescribed run must not be reported "
+            f"as though it were calibrated."
+        )
+    if handoff and len(handoff) != len(PRESCRIBED_HANDOFF_ATTRS):
+        raise SystemExit(
+            f"{path}: the hand-off record is partial (present: "
+            f"{sorted(handoff)}; required: {list(PRESCRIBED_HANDOFF_ATTRS)}). "
+            f"Either the switch happened and all four are written, or it "
+            f"never happened and none are; a partial set says neither."
+        )
+    return {"drive": drive, "handoff": handoff or None}
+
+
+def _prescribed_lookup(path, cache):
+    """Return ``_prescribed_record(path)``, read once per artifact per run."""
+    key = ("prescribed", path)
+    if key not in cache:
+        cache[key] = _prescribed_record(path)
+    return cache[key]
+
+
+def _drive_word(record):
+    """Return ``'prescribed'`` when the measured drive took over, else ``'calibrated'``.
+
+    A prescribed run whose hand-off never happened reads ``'calibrated'``,
+    which is what it is: every step it took was the calibrated cathode's.
+    """
+    if record is not None and record["handoff"] is not None:
+        return "prescribed"
+    return "calibrated"
+
+
+def _print_prescribed_block(record):
+    """Announce the measured drive, and return whether its rows are identities.
+
+    Prints NOTHING and returns ``False`` for a calibrated run, so a calibrated
+    transcript is unchanged byte for byte.
+    """
+    if record is None:
+        return False
+    drive = record["drive"]
+    handoff = record["handoff"]
+    print(
+        "PRESCRIBED MEASURED DRIVE -- cathode_solver_model="
+        f"{PRESCRIBED_MEASURED_MODEL!r}. The discharge current I(t) and the "
+        "discharge voltage V_dis(t) below were READ FROM THE MEASURED TRACE, "
+        "not predicted. Every drive-side row is therefore an identity with "
+        f"that trace and carries the tag [{IDENTITY_TAG}]: it is a re-reading "
+        "of this run's own input and is not evidence of agreement. Untagged "
+        "rows are what the model still answers."
+    )
+    print(
+        "  trace        "
+        f"{_decode_attr(drive['cathode_prescribed_trace_path'])}"
+    )
+    print(
+        "  sha256       "
+        f"{_decode_attr(drive['cathode_prescribed_trace_sha256'])}"
+    )
+    print(
+        f"  t0           {float(drive['cathode_prescribed_t0_s']):.9e} s -- "
+        "the model time the trace's own t = 0 names"
+    )
+    print(
+        f"  start        {float(drive['cathode_prescribed_start_s']):.9e} s "
+        "-- the prescribed drive begins here; the calibrated cathode runs "
+        "everything before it"
+    )
+    if handoff is None:
+        print(
+            "  hand-off     <never happened> -- this run ended inside its "
+            "calibrated foot, so the measured drive never took over and NO "
+            "row below is an identity with the trace. Nothing is tagged."
+        )
+        return False
+    print(
+        "  hand-off     "
+        f"{float(handoff['cathode_prescribed_handoff_time_s']):.9e} s | "
+        "calibrated I "
+        f"{float(handoff['cathode_prescribed_handoff_current_calibrated_a']):.6f}"
+        " A -> trace I "
+        f"{float(handoff['cathode_prescribed_handoff_current_trace_a']):.6f} A"
+        " | relative jump "
+        f"{float(handoff['cathode_prescribed_handoff_relative_jump']):+.6f} "
+        "-- nothing is smoothed across the switch, and the size of the jump "
+        "is how far the calibrated cathode sat from this rung's measured "
+        "drive at the moment the measurement took over"
+    )
+    print(
+        "  RESPONSES    what this run still predicts, printed with their "
+        "normal treatment and no tag: the cathode ion share I_i/I and the "
+        "emitted current I_eth* = max(I - I_i, 0); P_cathode_i; the solved "
+        "anode fall phi_a; the beam launch energy phi_c = (V_dis - V_series) "
+        "+ phi_a - V_p; and the row (i) trigger times together with the row "
+        "(iv) breakdown-phase maximum, which the CALIBRATED cathode produced "
+        "-- the foot runs the calibrated model up to the hand-off above. T_s "
+        "and the rest of the surface package (theta, phi_wf_eff, the warming "
+        "ledger) are FROZEN at the hand-off: the emission model is withdrawn "
+        "past the switch, so those rows carry the foot's last values and the "
+        "ledger takes no increment over the prescribed steps."
+    )
+    return True
+
+
+def _window_median(series, window):
+    """Return the median of ``series`` over the finite samples in ``window``."""
+    values = series[window][np.isfinite(series[window])]
+    return float(np.median(values)) if values.size else np.nan
+
+
+def _print_prescribed_responses(diag, I, early, plateau):
+    """Print the response rows a prescribed drive does NOT fix.
+
+    Emitted only in the prescribed mode, so a calibrated transcript is
+    unchanged. Each row is a quantity the measured drive leaves to the model:
+    the loop current is imposed, but how it is CARRIED is not.
+
+    The two constructions are transcribed from
+    ``cablp/cathode/circuit_prescribed.py``, which states them as the mode's
+    own definition: the emitted electron current is ``I_eth* = max(I - I_i, 0)``
+    -- the loop current the plasma's Bohm ion current at the cathode does not
+    supply -- and the sheath is located by reading the loop bookkeeping for the
+    net cathode drop, ``phi_c = (V_dis - V_series) + phi_a - V_p``, which is
+    the energy the beam is launched at (in eV, absent a vessel common-mode
+    climb). Both leave ``phi_a`` and ``V_p`` solved, which is why these rows
+    remain the model's answer under an imposed drive.
+    """
+    I_i = np.asarray(diag.get("source_I_i", np.full_like(I, np.nan)), float)
+    emitted = np.asarray(
+        diag.get("source_I_eth_star", np.full_like(I, np.nan)), float
+    )
+    with np.errstate(invalid="ignore", divide="ignore"):
+        share = np.where(I != 0.0, I_i / I, np.nan)
+    print(
+        f"ion share I_i/I: early(1-5ms) {_window_median(share, early):.4f}, "
+        f"plateau {_window_median(share, plateau):.4f} | emitted I_eth* = "
+        f"max(I - I_i, 0): early {_window_median(emitted, early):.1f} A, "
+        f"plateau {_window_median(emitted, plateau):.1f} A"
+    )
+    phi_a = np.asarray(
+        diag.get("source_phi_a", np.full_like(I, np.nan)), float
+    )
+    print(
+        f"phi_a (solved anode fall): early(1-5ms) "
+        f"{_window_median(phi_a, early):.3f} V, plateau "
+        f"{_window_median(phi_a, plateau):.3f} V"
+    )
+    phi_c = np.asarray(
+        diag.get("source_phi_c", np.full_like(I, np.nan)), float
+    )
+    print(
+        f"beam launch energy phi_c = (V_dis - V_series) + phi_a - V_p: "
+        f"early(1-5ms) {_window_median(phi_c, early):.3f} eV, plateau "
+        f"{_window_median(phi_c, plateau):.3f} eV"
+    )
 
 
 def non_ignited_message(result, caller):
@@ -628,6 +912,14 @@ def report(path, partner=None, reference_cache=None):
     result = load_result_hdf5(path)
     diag = result.cathode_diagnostics
     params = dict(getattr(result, "params", None) or {})
+    # WHICH DRIVE produced this artifact, resolved BEFORE the first line is
+    # printed so a file whose two records disagree refuses without having
+    # already reported a row under the wrong reading. ``identity`` is the one
+    # switch the drive-side rows below consult: it is true only when the
+    # measured drive actually took over, and ``tag`` is the empty string in
+    # every other case, which is what keeps a calibrated transcript
+    # byte-identical.
+    prescribed = _prescribed_lookup(path, reference_cache)
     t_ms = (np.asarray(result.time, float) - _origin_s(result)) * 1e3
     I = np.asarray(diag["source_I_tot"], float)
     t_end = _drive_end_ms(t_ms, result.phase)
@@ -639,6 +931,8 @@ def report(path, partner=None, reference_cache=None):
     bpt_note = "" if bpt == "local" else f" [beam_product_transport={bpt}]"
     print(f"\n=== {path} (drive end +{t_end:.2f} ms){bpt_note} ===")
     print(_wpe_arm_line(params))
+    identity = _print_prescribed_block(prescribed)
+    tag = f"  [{IDENTITY_TAG}]" if identity else ""
 
     # The masks are pure computation and were previously built above the
     # header; they are built here so the plateau clamp notice lands UNDER the
@@ -661,9 +955,9 @@ def report(path, partner=None, reference_cache=None):
     I5 = float(np.interp(5.0, t_ms[drive], I[drive]))
     Iend = float(I[drive][-1])
     print(f"peak {Ipk:.0f} A at +{tpk:.2f} ms | plateau(15-19.5) {Iplat:.0f} A"
-          f" | t90 {t90:.2f} ms")
+          f" | t90 {t90:.2f} ms{tag}")
     print(f"(a) late ramp +5ms->end: {100.0 * (Iend / I5 - 1.0):+.1f} %"
-          f"  (I(+5) {I5:.0f} -> I(end) {Iend:.0f} A)")
+          f"  (I(+5) {I5:.0f} -> I(end) {Iend:.0f} A){tag}")
 
     # --- V_dis, best available honest reading, in preference order:
     # (1) the dt-weighted average from the running \int V_dis dt (bias-free
@@ -734,7 +1028,7 @@ def report(path, partner=None, reference_cache=None):
     tail = (t_ms >= t_end - 2.0) & (t_ms <= t_end)
     tail_slope = float(np.polyfit(t_ms[tail], V[tail], 1)[0]) if tail.sum() > 3 else np.nan
     print(f"(b) {v_label} +6ms->end-1: {Vend - V5:+.1f} V  ({V5:.1f} -> {Vend:.1f} V)"
-          f" | end slope {tail_slope:+.2f} V/ms")
+          f" | end slope {tail_slope:+.2f} V/ms{tag}")
 
     # --- Mechanism internals.
     Ts = np.asarray(diag.get("T_s_surface", np.zeros_like(I)), float)
@@ -756,6 +1050,8 @@ def report(path, partner=None, reference_cache=None):
     if np.any(Pi != 0.0):
         print(f"P_cathode_i: early(1-5ms) {np.median(Pi[early]) / 1e3:.1f} kW, "
               f"plateau {np.median(Pi[plateau]) / 1e3:.1f} kW")
+    if prescribed is not None:
+        _print_prescribed_responses(diag, I, early, plateau)
     if "warming_E_ion_J" in diag:
         E = {k: float(np.asarray(diag[f"warming_E_{k}_J"], float)[-1])
              for k in ("heater", "ion", "rad", "emis", "cond")}
@@ -769,14 +1065,18 @@ def report(path, partner=None, reference_cache=None):
     Vb = np.asarray(diag.get("source_V_b", np.zeros_like(I)), float)
     if plateau.any() and np.any(Vb[plateau] != 0.0):
         vb = Vb[plateau]
+        # V_b IS the prescribed quantity in that mode -- the measured
+        # V_dis enters the loop bookkeeping as V_b = V_dis - V_series, and
+        # V_series is identically zero at the shipped defaults -- so this row
+        # and the V_dis spread below it are tagged together.
         print(f"per-solve V_b plateau: p5/p50/p95 = {np.percentile(vb, 5):.0f}/"
               f"{np.percentile(vb, 50):.0f}/{np.percentile(vb, 95):.0f} V, "
-              f"sigma {np.std(vb):.1f} V")
+              f"sigma {np.std(vb):.1f} V{tag}")
         if v_label == "V_dis_tavg":
             vs = V[plateau][np.isfinite(V[plateau])]
             print(f"V_dis_tavg plateau: p5/p50/p95 = {np.percentile(vs, 5):.0f}/"
                   f"{np.percentile(vs, 50):.0f}/{np.percentile(vs, 95):.0f} V, "
-                  f"sigma {np.std(vs):.1f} V")
+                  f"sigma {np.std(vs):.1f} V{tag}")
 
     # --- The high-precision watch-class rows. -------------------------------
     #
@@ -831,6 +1131,28 @@ def report(path, partner=None, reference_cache=None):
     # it. At the previous 1e-4 ms the printed absolute difference and the
     # printed t_trig-relative difference disagreed by ~7 % on a banked
     # sub-microsecond reading -- pure print artifact, no physics in it.
+    def _member_suffix(member):
+        """Return the trailing ``[status] -- reason`` for one row (ii) member.
+
+        UNDER A PRESCRIBED DRIVE THE STATUS BRACKET IS THE IDENTITY TAG, and
+        the status word moves into the reason text. These six members and
+        their crossing family are read off a trace the run was handed, so the
+        bracket a reader scans for must say that and nothing else; ``[ok]``
+        sitting on such a row is the exact misreading the tag exists to
+        prevent. Nothing is lost: a status other than ``ok`` is printed as the
+        first word of the reason, and ``ok`` is precisely the case where the
+        row already carries a value and has no reason to give.
+        """
+        note = f" -- {member['reason']}" if member["reason"] else ""
+        if not identity:
+            return f"[{member['status']}]{note}"
+        word = _identity_status_word(member["status"])
+        if member["status"] == "ok":
+            return f"[{IDENTITY_TAG}]{note}"
+        reason = member["reason"]
+        return (f"[{IDENTITY_TAG}] -- {word}: {reason}" if reason
+                else f"[{IDENTITY_TAG}] -- {word}")
+
     def _t_row(name, member):
         if member["status"] in ("ok", "coarse"):
             value = member["value"]
@@ -839,8 +1161,7 @@ def report(path, partner=None, reference_cache=None):
                     f"+-{member['band'] * 1e6:.2f} us")
         else:
             body = "<not resolved> | band n/a"
-        note = f" -- {member['reason']}" if member["reason"] else ""
-        print(f"(ii)   {name:<8} {body} [{member['status']}]{note}")
+        print(f"(ii)   {name:<8} {body} {_member_suffix(member)}")
 
     def _v_row(name, member, unit, scale, fmt):
         if member["status"] in ("ok", "coarse"):
@@ -848,8 +1169,7 @@ def report(path, partner=None, reference_cache=None):
                     f"+-{member['band'] / scale:{fmt}} {unit}")
         else:
             body = "<not resolved> | band n/a"
-        note = f" -- {member['reason']}" if member["reason"] else ""
-        print(f"(ii)   {name:<8} {body} [{member['status']}]{note}")
+        print(f"(ii)   {name:<8} {body} {_member_suffix(member)}")
 
     trig_text = (
         "<absent>" if not np.isfinite(t_trig) else f"{t_trig * 1e3:.8f} ms"
@@ -903,9 +1223,8 @@ def report(path, partner=None, reference_cache=None):
                         f"({(member['value'] - t_trig) * 1e6:+.2f} us vs t_trig)"
                         f" | s_loc {s_loc / 1e3:.4f} A/ms | band "
                         f"+-{member['band'] * 1e6:.2f} us")
-            note = f" -- {member['reason']}" if member["reason"] else ""
             print(f"(ii)     {fraction:.2f}*I_ref={level:.4f} A  {body} "
-                  f"[{member['status']}]{note}")
+                  f"{_member_suffix(member)}")
 
     # --- (ii-pair) The row-(ii) PAIR DELTAS. --------------------------------
     #
@@ -933,13 +1252,33 @@ def report(path, partner=None, reference_cache=None):
             partner, reference_cache,
             loaded=result if partner == path else None,
         )
+        # THE VERDICT WORD IS WITHDRAWN when either side of the pair ran on
+        # a prescribed measured drive. On that side these six members are
+        # INPUTS -- geometry of a trace the run was handed -- so "moved" and
+        # "unmoved", which both assert that the instrument compared two
+        # computed numbers, would be false of the row whatever the delta is.
+        # The delta itself is still worth printing, and is: it is the
+        # difference between a measured drive and a modelled one, labelled by
+        # which is which and carrying no verdict.
+        post_word = _drive_word(prescribed)
+        pre_word = _drive_word(_prescribed_lookup(partner, reference_cache))
+        verdict_free = "prescribed" in (post_word, pre_word)
         print(f"(ii-pair) row (ii) pre->post deltas | pre {partner} -> "
               f"post {path}")
-        print("(ii-pair)   VERDICT WORDS -- 'moved' = the pre->post "
-              "difference is resolved BEYOND this member's declared "
-              "conditioning band; 'unmoved' = it falls WITHIN that band. A "
-              "resolution statement about the instrument, not a "
-              "physics-significance test.")
+        if verdict_free:
+            print(f"(ii-pair)   NO VERDICT WORD -- the {post_word} post run "
+                  f"and the {pre_word} pre run are not two model results on "
+                  "these members: the prescribed side's are identities with "
+                  "its measured trace. Each row prints "
+                  f"'{post_word} vs {pre_word}: <delta>' and stops there; "
+                  "'moved' and 'unmoved' are resolution statements about two "
+                  "computed numbers and would be false here.")
+        else:
+            print("(ii-pair)   VERDICT WORDS -- 'moved' = the pre->post "
+                  "difference is resolved BEYOND this member's declared "
+                  "conditioning band; 'unmoved' = it falls WITHIN that band. A "
+                  "resolution statement about the instrument, not a "
+                  "physics-significance test.")
         if pair is None:
             print(f"(ii-pair)   <no pair reading> -- partner {partner} could "
                   f"not be read for its row (ii) members, so there is no pre "
@@ -957,8 +1296,14 @@ def report(path, partner=None, reference_cache=None):
                 resolved = ("ok", "coarse")
                 if (post_m["status"] not in resolved
                         or pre_m["status"] not in resolved):
+                    pre_word_s, post_word_s = (
+                        (_identity_status_word(pre_m["status"]),
+                         _identity_status_word(post_m["status"]))
+                        if verdict_free
+                        else (pre_m["status"], post_m["status"])
+                    )
                     print(f"(ii-pair)   {name:<8} no pair reading "
-                          f"({pre_m['status']}/{post_m['status']})")
+                          f"({pre_word_s}/{post_word_s})")
                     return
                 pre_v = float(pre_m["value"]) - (
                     pre_trig if on_trig_basis else 0.0
@@ -968,11 +1313,16 @@ def report(path, partner=None, reference_cache=None):
                 )
                 delta = post_v - pre_v
                 band = float(post_m["band"])
-                verdict = "unmoved" if abs(delta) <= band else "moved"
                 sign = "+" if on_trig_basis else ""
-                print(f"(ii-pair)   {name:<8} pre {pre_v / scale:{sign}{fmt}} "
-                      f"{unit} | post {post_v / scale:{sign}{fmt}} {unit} | "
-                      f"delta {delta / scale:+{fmt}} {unit} | band "
+                head = (f"(ii-pair)   {name:<8} pre {pre_v / scale:{sign}{fmt}}"
+                        f" {unit} | post {post_v / scale:{sign}{fmt}} {unit}")
+                if verdict_free:
+                    print(f"{head} | {post_word} vs {pre_word}: "
+                          f"{delta / scale:+{fmt}} {unit} | band "
+                          f"+-{band / scale:{fmt}} {unit}")
+                    return
+                verdict = "unmoved" if abs(delta) <= band else "moved"
+                print(f"{head} | delta {delta / scale:+{fmt}} {unit} | band "
                       f"+-{band / scale:{fmt}} {unit} [{verdict}]")
 
             _pair_row("t_dImax", "us", 1.0e-6, ".2f", True)
@@ -991,11 +1341,11 @@ def report(path, partner=None, reference_cache=None):
             "<no finite samples>" if not vs_full.size
             else f"{np.mean(vs_full):.4f} V"
         )
-        print(f"(iii) {v_label} plateau mean: {v_text}")
+        print(f"(iii) {v_label} plateau mean: {v_text}{tag}")
         Ip = I[plateau][np.isfinite(I[plateau])]
         if Ip.size:
             print(f"(iii) plateau current: mean {np.mean(Ip):.3f} A | "
-                  f"median {np.median(Ip):.3f} A")
+                  f"median {np.median(Ip):.3f} A{tag}")
         # The gap P_ohmic ledger row. ``P_ohmic = I_tot * V_p`` is the
         # circuit's I^2 R_p dissipated in the plasma between cathode and
         # anode (cathode/circuit.py), and physics/cathode.py deposits
