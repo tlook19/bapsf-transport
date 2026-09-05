@@ -24215,6 +24215,786 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
 
 
 # --------------------------------------------------------------------
+# parallel-momentum-sink-refusals
+# --------------------------------------------------------------------
+@_case("parallel-momentum-sink-refusals")
+def _case_parallel_momentum_sink_refusals():
+    # THE RESPONSE-MAP SINK'S CONSTRUCTION-TIME REFUSALS. This term has no
+    # physical owner: nothing in the model supplies its damping rate, and
+    # nothing decides which part of the column sheds the momentum, so those
+    # two numbers ARE the hypothesis an arm states. Neither may be defaulted,
+    # guessed, or left configured-but-inert. Fifteen misconfigurations must
+    # each raise a ValueError before the first step, a complete configuration
+    # must construct, and the presence gate must be visible in the LEDGER --
+    # the two booked rows exist only when the sink is armed.
+    #
+    # A deliberately tiny mesh (nx=12, no equilibration): every statement here
+    # is about the configuration surface and the resolved mask, and none of it
+    # is mesh-sized. Construction only, no solve.
+    def _ms_config(**over):
+        _p, _f = default_config()
+        _p.update({"nx": 12, "max_steps_action": "stop"})
+        _f["neutral_equilibration"] = False
+        _p.update(over)
+        return _p, _f
+
+    _ms_off_sim = LAPDSim1D(*_ms_config())
+    assert _ms_off_sim._momentum_sink is None
+    _ms_z = np.asarray(_ms_off_sim.geometry.z_cm, dtype=float)
+    _ms_active = np.asarray(_ms_off_sim.geometry.plasma_active, dtype=bool)
+    _ms_column = _ms_z[_ms_active]
+    _ms_lo, _ms_hi = float(_ms_column.min()), float(_ms_column.max())
+    _ms_mid = float(_ms_column[_ms_column.size // 2])
+    #: The imposed damping rate [s^-1] the response map was cut at. Any
+    #: positive number serves here: what these cases assert is the refusal,
+    #: never the value.
+    _ms_rate = 2312.88
+
+    # (i) THE input_dict REFUSALS. Three shapes of failure: parameters
+    # configured while the sink is off (inert), an armed sink missing half of
+    # its statement, and a number that cannot mean what it claims to.
+    for _ms_bad, _ms_needle in (
+        # Configured-but-unarmed, in every combination. An arm that forgets to
+        # set the flag would otherwise run as its own control and be reported
+        # as a null.
+        ({"parallel_momentum_sink_rate_s": _ms_rate},
+         "were configured without parallel_momentum_sink"),
+        ({"parallel_momentum_sink_z_start_cm": _ms_mid},
+         "were configured without parallel_momentum_sink"),
+        ({"parallel_momentum_sink_rate_s": _ms_rate,
+          "parallel_momentum_sink_z_start_cm": _ms_mid},
+         "were configured without parallel_momentum_sink"),
+        # Armed with half a hypothesis, or none of it.
+        ({"parallel_momentum_sink": True},
+         "requires parallel_momentum_sink_rate_s"),
+        ({"parallel_momentum_sink": True,
+          "parallel_momentum_sink_z_start_cm": _ms_mid},
+         "requires parallel_momentum_sink_rate_s"),
+        ({"parallel_momentum_sink": True,
+          "parallel_momentum_sink_rate_s": _ms_rate},
+         "requires parallel_momentum_sink_z_start_cm"),
+        # A rate that is not a rate. Zero is an UNARMED sink spelled as an
+        # armed one, which is the silent no-op the config surface forbids.
+        ({"parallel_momentum_sink": True,
+          "parallel_momentum_sink_rate_s": 0.0,
+          "parallel_momentum_sink_z_start_cm": _ms_mid},
+         "must be finite and > 0"),
+        ({"parallel_momentum_sink": True,
+          "parallel_momentum_sink_rate_s": -_ms_rate,
+          "parallel_momentum_sink_z_start_cm": _ms_mid},
+         "must be finite and > 0"),
+        ({"parallel_momentum_sink": True,
+          "parallel_momentum_sink_rate_s": float("inf"),
+          "parallel_momentum_sink_z_start_cm": _ms_mid},
+         "must be finite and > 0"),
+        # A position outside the column: below it the sink is not a statement
+        # about a region that exists, above it the mask is empty and the arm
+        # would be inert while claiming to be armed.
+        ({"parallel_momentum_sink": True,
+          "parallel_momentum_sink_rate_s": _ms_rate,
+          "parallel_momentum_sink_z_start_cm": _ms_lo - 1.0},
+         "must lie within the plasma column's axial extent"),
+        ({"parallel_momentum_sink": True,
+          "parallel_momentum_sink_rate_s": _ms_rate,
+          "parallel_momentum_sink_z_start_cm": _ms_hi + 1.0},
+         "must lie within the plasma column's axial extent"),
+        ({"parallel_momentum_sink": True,
+          "parallel_momentum_sink_rate_s": _ms_rate,
+          "parallel_momentum_sink_z_start_cm": float("nan")},
+         "parallel_momentum_sink_z_start_cm must be finite"),
+        # The arming gate is a bool, not a magnitude: a truthy float here
+        # reads as a rate that is silently discarded.
+        ({"parallel_momentum_sink": 1.0,
+          "parallel_momentum_sink_rate_s": _ms_rate,
+          "parallel_momentum_sink_z_start_cm": _ms_mid},
+         "parallel_momentum_sink must be a bool"),
+    ):
+        try:
+            LAPDSim1D(*_ms_config(**_ms_bad))
+        except ValueError as error:
+            assert _ms_needle in str(error), (_ms_bad, str(error))
+        else:
+            raise AssertionError(
+                f"parallel_momentum_sink accepted {_ms_bad!r}"
+            )
+
+    # (ii) THE NAMESPACE REFUSALS. Every one of these keys belongs to
+    # input_dict; filed into input_flags they would be unread. The namespace
+    # guard is what makes that loud, and it is asserted HERE because a
+    # response-map arm is written as a command line and the arming key reads
+    # like a flag.
+    for _ms_flag_key, _ms_flag_value in (
+        ("parallel_momentum_sink", True),
+        ("parallel_momentum_sink_rate_s", _ms_rate),
+    ):
+        _ms_p, _ms_f = _ms_config()
+        _ms_f[_ms_flag_key] = _ms_flag_value
+        try:
+            LAPDSim1D(_ms_p, _ms_f)
+        except ValueError as error:
+            assert "unknown LAPDSim1D configuration keys" in str(error), (
+                _ms_flag_key, str(error)
+            )
+            assert _ms_flag_key in str(error), (_ms_flag_key, str(error))
+        else:
+            raise AssertionError(
+                f"input_flags accepted the input_dict key {_ms_flag_key!r}"
+            )
+
+    # (iii) THE POSITIVE CONTROL. A complete, in-column configuration
+    # constructs, and the mask it resolves to is exactly the plasma-active
+    # cells at or beyond the stated position -- no boundary cell, nothing
+    # below z_start.
+    _ms_on_sim = LAPDSim1D(*_ms_config(
+        parallel_momentum_sink=True,
+        parallel_momentum_sink_rate_s=_ms_rate,
+        parallel_momentum_sink_z_start_cm=_ms_mid,
+    ))
+    _ms_sink = _ms_on_sim._momentum_sink
+    assert _ms_sink is not None
+    assert _ms_sink.rate_s == _ms_rate
+    assert _ms_sink.z_start_cm == _ms_mid
+    _ms_mask = np.asarray(_ms_sink.cells, dtype=bool)
+    assert np.array_equal(_ms_mask, _ms_active & (_ms_z >= _ms_mid))
+    assert bool(_ms_active[_ms_mask].all())
+    assert bool((_ms_z[_ms_mask] >= _ms_sink.z_start_cm).all())
+    # A mask that reached nothing, or reached everything, would make the
+    # mechanism case's off-support statement vacuous.
+    _ms_on_cells = np.flatnonzero(_ms_mask)
+    assert _ms_on_cells.size >= 4 and (~_ms_mask).sum() >= 4
+    assert np.array_equal(
+        _ms_on_cells,
+        np.arange(_ms_on_cells[0], _ms_on_cells[-1] + 1),
+    ), _ms_on_cells
+
+    # (iv) THE PRESENCE GATE, read off the LEDGER. Arming the sink adds
+    # exactly two named rows and removes none; with it off neither row is
+    # built, so the off path cannot enter the branch and a saved trajectory
+    # from an unarmed run carries the row set it always did.
+    _ms_off_rows = set(_ms_off_sim.rhs_terms())
+    _ms_on_rows = set(_ms_on_sim.rhs_terms())
+    assert _ms_on_rows - _ms_off_rows == {
+        "parallel_momentum_sink", "parallel_momentum_sink_heating"
+    }, sorted(_ms_on_rows - _ms_off_rows)
+    assert not _ms_off_rows - _ms_on_rows
+    assert len(_ms_on_rows) == len(_ms_off_rows) + 2
+
+
+# --------------------------------------------------------------------
+# parallel-momentum-sink-mechanism
+# --------------------------------------------------------------------
+@_case("parallel-momentum-sink-mechanism")
+def _case_parallel_momentum_sink_mechanism():
+    # WHAT THE ARMED SINK ACTUALLY DOES, over a short march. Four statements,
+    # and all four are exact rather than tolerant:
+    #
+    #   * the M row IS -nu_add * M on the mask and bitwise zero off it, so the
+    #     instrument acts on the stated cells and nowhere else;
+    #   * the Ei row IS -(M row) * u -- the PAIRWISE PARTNER of the momentum
+    #     book, which is what makes the term energy-closing: the whole of the
+    #     destroyed drift energy reappears as ion heating and none of it is
+    #     dropped (sum-closure alone cannot see a compensated double-book);
+    #   * the sink writes M and Ei and NOTHING else -- arming it moves the
+    #     applied RHS in exactly those two fields, by exactly the two booked
+    #     rows, and leaves every other field bitwise unchanged;
+    #   * the saved ledger closes: the named rows sum to the exported total.
+    #
+    # Tiny mesh, 40 steps, every step saved. The physics of the response map
+    # is not this case's subject -- the BOOKING is.
+    def _mm_config(**over):
+        _p, _f = default_config()
+        _p.update({"nx": 12, "max_steps_action": "stop", "dt_save": 0.0})
+        _f["neutral_equilibration"] = False
+        _p.update(over)
+        return _p, _f
+
+    _mm_probe = LAPDSim1D(*_mm_config())
+    _mm_z = np.asarray(_mm_probe.geometry.z_cm, dtype=float)
+    _mm_active = np.asarray(_mm_probe.geometry.plasma_active, dtype=bool)
+    _mm_column = _mm_z[_mm_active]
+    #: The stated cell range: the plasma column from its own mid-cell centre
+    #: to the far end. On this fixture that is the outer half of the column,
+    #: with the source-region cells left OUT so "exactly zero off it" has
+    #: cells to be true on.
+    _mm_z_start = float(_mm_column[_mm_column.size // 2])
+    _mm_rate = 2312.88
+    _mm_on_config = dict(
+        parallel_momentum_sink=True,
+        parallel_momentum_sink_rate_s=_mm_rate,
+        parallel_momentum_sink_z_start_cm=_mm_z_start,
+    )
+
+    _mm_sim = LAPDSim1D(*_mm_config(**_mm_on_config))
+    _mm_mask = np.asarray(_mm_sim._momentum_sink.cells, dtype=bool)
+    assert _mm_mask.any() and not _mm_mask.all()
+    _mm_result = _mm_sim.run(t_end=None, dt=None, max_steps=40)
+    assert _mm_result.steps == 40
+    assert len(_mm_result.time) > 1
+
+    _mm_row_M = np.asarray(
+        _mm_result.rhs_terms["parallel_momentum_sink"]["M"], dtype=float
+    )
+    _mm_row_Ei = np.asarray(
+        _mm_result.rhs_terms["parallel_momentum_sink_heating"]["Ei"],
+        dtype=float,
+    )
+    _mm_M = np.asarray(_mm_result.M, dtype=float)
+    _mm_u = np.asarray(_mm_result.u, dtype=float)
+    # The term has to have DONE something, or every identity below is a
+    # statement about zeros.
+    assert np.max(np.abs(_mm_row_M)) > 0.0
+    assert np.max(np.abs(_mm_row_Ei)) > 0.0
+
+    # ON the mask: -nu_add * M, at raw float64. OFF it: exactly zero, in both
+    # rows -- not small, zero.
+    assert np.array_equal(
+        _mm_row_M[:, _mm_mask], -_mm_rate * _mm_M[:, _mm_mask]
+    )
+    assert np.all(_mm_row_M[:, ~_mm_mask] == 0.0)
+    assert np.all(_mm_row_Ei[:, ~_mm_mask] == 0.0)
+    # THE PAIRWISE PARTNER: Q_i = +nu_add * M * u = -(M row) * u, everywhere,
+    # so the momentum book and the energy book are one statement.
+    assert np.array_equal(_mm_row_Ei, -_mm_row_M * _mm_u)
+    # The sink is a MOMENTUM term with a heating partner and nothing else: no
+    # particles are born or lost, no electron energy is touched.
+    for _mm_row_name in (
+        "parallel_momentum_sink", "parallel_momentum_sink_heating"
+    ):
+        for _mm_field, _mm_values in _mm_result.rhs_terms[_mm_row_name].items():
+            if _mm_row_name == "parallel_momentum_sink" and _mm_field == "M":
+                continue
+            if (
+                _mm_row_name == "parallel_momentum_sink_heating"
+                and _mm_field == "Ei"
+            ):
+                continue
+            assert np.all(np.asarray(_mm_values, dtype=float) == 0.0), (
+                _mm_row_name, _mm_field
+            )
+
+    # THE EXPORTED LEDGER CLOSES: the named rows sum to total_rhs, reported
+    # row-relative as well as absolute (a misbooking that moves its own row by
+    # O(1) can read as O(1e-2) throughput-normalized).
+    for _mm_field, _mm_total in _mm_result.total_rhs.items():
+        _mm_acc = np.zeros_like(np.asarray(_mm_total, dtype=float))
+        _mm_biggest = 0.0
+        for _mm_row in _mm_result.rhs_terms.values():
+            if _mm_field in _mm_row:
+                _mm_values = np.asarray(_mm_row[_mm_field], dtype=float)
+                _mm_acc = _mm_acc + _mm_values
+                _mm_biggest = max(
+                    _mm_biggest, float(np.max(np.abs(_mm_values)))
+                )
+        _mm_resid = float(
+            np.max(np.abs(_mm_acc - np.asarray(_mm_total, dtype=float)))
+        )
+        _mm_rel = _mm_resid / _mm_biggest if _mm_biggest > 0.0 else 0.0
+        assert _mm_rel <= 1.0e-12, (_mm_field, _mm_resid, _mm_rel)
+
+    # WHAT ARMING THE SINK MOVES, at ONE fixed state. Two freshly-constructed
+    # sims -- identical but for the sink keys -- evaluate the packed RHS the
+    # integrator applies at the same y. Every field except M and Ei is bitwise
+    # unchanged, and so is every cell off the mask; on the mask the two moved
+    # fields differ from the control by the booked rows themselves, to
+    # roundoff (the rows are summed into the accumulator, so the SUMMATION
+    # ORDER of the other terms moves in the last bits -- that is the only
+    # reason this leg is not bit-exact).
+    #
+    # The residual is normalized ROW-RELATIVE, on the booked row's own scale:
+    # against the whole field's scale the M row is O(1e-17) here and a
+    # misbooking of the entire term would still read as passing.
+    _mm_y = np.array(_mm_sim._y, dtype=float, copy=True)
+    _mm_fresh_on = LAPDSim1D(*_mm_config(**_mm_on_config))
+    _mm_fresh_off = LAPDSim1D(*_mm_config())
+    _mm_rhs_on = _mm_fresh_on._unpack(_mm_fresh_on.rhs(y=_mm_y))
+    _mm_rhs_off = _mm_fresh_off._unpack(_mm_fresh_off.rhs(y=_mm_y))
+    _mm_terms_on = _mm_fresh_on.rhs_terms(y=_mm_y)
+    _mm_booked = {
+        "M": np.asarray(
+            _mm_terms_on["parallel_momentum_sink"].M, dtype=float
+        ),
+        "Ei": np.asarray(
+            _mm_terms_on["parallel_momentum_sink_heating"].Ei, dtype=float
+        ),
+    }
+    for _mm_packed in dataclasses.fields(_mm_rhs_on):
+        _mm_field = _mm_packed.name
+        _mm_on_values = getattr(_mm_rhs_on, _mm_field)
+        _mm_off_values = getattr(_mm_rhs_off, _mm_field)
+        # Optional rows (the neutral-momentum, two-zone and neutral-energy
+        # fields) are None on both sides at this stance; a row present on one
+        # side only would be a configuration difference this case never made.
+        assert (_mm_on_values is None) == (_mm_off_values is None), _mm_field
+        if _mm_on_values is None:
+            continue
+        _mm_delta = (
+            np.asarray(_mm_on_values, dtype=float)
+            - np.asarray(_mm_off_values, dtype=float)
+        )
+        assert np.all(_mm_delta[~_mm_mask] == 0.0), _mm_field
+        if _mm_field not in _mm_booked:
+            assert np.all(_mm_delta == 0.0), _mm_field
+            continue
+        _mm_want = _mm_booked[_mm_field]
+        _mm_row_scale = float(np.max(np.abs(_mm_want)))
+        assert _mm_row_scale > 0.0, _mm_field
+        _mm_row_rel = (
+            float(np.max(np.abs(_mm_delta - _mm_want))) / _mm_row_scale
+        )
+        assert _mm_row_rel <= 1.0e-12, (_mm_field, _mm_row_rel)
+
+
+# --------------------------------------------------------------------
+# prescribed-drive-refusals
+# --------------------------------------------------------------------
+@_case("prescribed-drive-refusals")
+def _case_prescribed_drive_refusals():
+    # cathode_solver_model='prescribed_measured' REPLACES the predicted drive
+    # with a measured one, and everything that could make that silently wrong
+    # is refused at construction: a trace that cannot be read, a clock that
+    # cannot be reconciled, a hand-off that cannot be honoured, a calibrated
+    # key that nothing will read, and the three drive keys set under any other
+    # solver model. Thirteen cases, all construction-only.
+    #
+    # The valid trace is the COMMITTED ES1 overlay, resolved from this file's
+    # own tree -- the same artifact the scorer and the circuit fits read, so a
+    # schema drift in it fails here. The malformed traces are written into a
+    # temporary directory; none of them may land under scripts/.
+    from cablp.solvers._sim1d.core.prescribed_drive import (
+        PRESCRIBED_DRIVE_KEYS as _pr_DRIVE_KEYS,
+        PRESCRIBED_MEASURED as _pr_MEASURED,
+        TRACE_REQUIRED_KEYS as _pr_TRACE_KEYS,
+    )
+    from cablp.solvers._sim1d.physics.cathode import (
+        CATHODE_SOLVER_MODELS as _pr_MODELS,
+    )
+
+    _pr_trace = str(
+        Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz"
+    )
+    assert Path(_pr_trace).is_file(), _pr_trace
+    # The registered sets are what the refusal messages promise, so a model or
+    # a required trace column added without a case here fails rather than
+    # shipping untested.
+    assert set(_pr_MODELS) == {"current_driven", _pr_MEASURED}, _pr_MODELS
+    assert _pr_DRIVE_KEYS == (
+        "cathode_prescribed_trace_path",
+        "cathode_prescribed_t0_s",
+        "cathode_prescribed_start_s",
+    )
+    assert _pr_TRACE_KEYS == (
+        "discharge_time_ms",
+        "discharge_current_mean_a",
+        "discharge_voltage_positive_mean_v",
+    )
+
+    def _pr_config(_pr_flag_over=None, **over):
+        _p, _f = default_config()
+        _p.update({"nx": 12})
+        _f["cathode_coupling"] = True
+        _f["neutral_equilibration"] = False
+        _p.update(over)
+        if _pr_flag_over:
+            _f.update(_pr_flag_over)
+        return _p, _f
+
+    _pr_on = {"cathode_solver_model": _pr_MEASURED}
+
+    def _pr_refuses(label, params, flags=None, needle=""):
+        try:
+            LAPDSim1D(*_pr_config(_pr_flag_over=flags, **params))
+        except ValueError as error:
+            assert needle in str(error), (label, str(error))
+        else:
+            raise AssertionError(
+                f"prescribed_measured accepted {label}: {params!r}"
+            )
+
+    with tempfile.TemporaryDirectory() as _pr_dir:
+        # Three malformed traces, each a different way an .npz can fail to be
+        # a drive: the wrong schema, too few samples to interpolate between,
+        # and a time base with no unique value at a given time.
+        _pr_wrong = Path(_pr_dir) / "wrong_columns.npz"
+        np.savez(
+            _pr_wrong,
+            time_s=np.linspace(0.0, 1.0, 8),
+            current=np.linspace(0.0, 1.0, 8),
+            voltage=np.linspace(0.0, 1.0, 8),
+        )
+        _pr_short = Path(_pr_dir) / "one_sample.npz"
+        np.savez(
+            _pr_short,
+            discharge_time_ms=np.array([0.0]),
+            discharge_current_mean_a=np.array([1.0]),
+            discharge_voltage_positive_mean_v=np.array([1.0]),
+        )
+        _pr_unsorted = Path(_pr_dir) / "unsorted.npz"
+        np.savez(
+            _pr_unsorted,
+            discharge_time_ms=np.array([0.0, 2.0, 1.0]),
+            discharge_current_mean_a=np.array([1.0, 2.0, 3.0]),
+            discharge_voltage_positive_mean_v=np.array([1.0, 2.0, 3.0]),
+        )
+
+        for _pr_label, _pr_params, _pr_flags, _pr_needle in (
+            # (a) THE MODE IS THE TRACE, AND THE TWO CLOCKS. Each of the three
+            # drive keys is required, and none has a defensible default: a
+            # guessed origin would slide the whole measured drive against the
+            # column.
+            ("no trace path",
+             dict(_pr_on, cathode_prescribed_t0_s=2.0e-3,
+                  cathode_prescribed_start_s=2.0e-3),
+             None, "cathode_prescribed_trace_path is REQUIRED and unset"),
+            ("no t0",
+             dict(_pr_on, cathode_prescribed_trace_path=_pr_trace,
+                  cathode_prescribed_start_s=2.0e-3),
+             None, "cathode_prescribed_t0_s is REQUIRED and unset"),
+            ("no start",
+             dict(_pr_on, cathode_prescribed_trace_path=_pr_trace,
+                  cathode_prescribed_t0_s=2.0e-3),
+             None, "cathode_prescribed_start_s is REQUIRED and unset"),
+            # (b) A HAND-OFF THAT CANNOT BE HONOURED: below the origin it
+            # would drive the column from the trace's quiescent pre-trigger
+            # branch; past the trace's end it would never take over at all.
+            ("start before t0",
+             dict(_pr_on, cathode_prescribed_trace_path=_pr_trace,
+                  cathode_prescribed_t0_s=2.0e-3,
+                  cathode_prescribed_start_s=1.0e-3),
+             None, "is before cathode_prescribed_t0_s"),
+            ("start past the end of the trace",
+             dict(_pr_on, cathode_prescribed_trace_path=_pr_trace,
+                  cathode_prescribed_t0_s=2.0e-3,
+                  cathode_prescribed_start_s=1.0),
+             None, "is past the end of the trace on the model clock"),
+            # (c) A FILE THAT IS NOT A TRACE.
+            ("a trace with the wrong columns",
+             dict(_pr_on, cathode_prescribed_trace_path=str(_pr_wrong),
+                  cathode_prescribed_t0_s=2.0e-3,
+                  cathode_prescribed_start_s=2.0e-3),
+             None, "does not carry"),
+            ("a trace with one sample",
+             dict(_pr_on, cathode_prescribed_trace_path=str(_pr_short),
+                  cathode_prescribed_t0_s=2.0e-3,
+                  cathode_prescribed_start_s=2.0e-3),
+             None, "interpolating a drive needs at least two"),
+            ("a trace whose time base is not increasing",
+             dict(_pr_on, cathode_prescribed_trace_path=str(_pr_unsorted),
+                  cathode_prescribed_t0_s=2.0e-3,
+                  cathode_prescribed_start_s=2.0e-3),
+             None, "must be strictly increasing"),
+            ("a trace file that does not exist",
+             dict(_pr_on,
+                  cathode_prescribed_trace_path="/nonexistent/es9_overlay.npz",
+                  cathode_prescribed_t0_s=2.0e-3,
+                  cathode_prescribed_start_s=2.0e-3),
+             None, "does not exist"),
+            # (d) KEYS NOTHING WILL READ. With the hand-off at or before the
+            # model clock's origin there is no calibrated foot, so the
+            # emission constant, the surface temperature, the bank loop and
+            # the heater package are read by nothing for the whole run.
+            ("a calibrated key with the foot disabled",
+             dict(_pr_on, cathode_prescribed_trace_path=_pr_trace,
+                  cathode_prescribed_t0_s=-1.0e-3,
+                  cathode_prescribed_start_s=0.0, C_R=9.3),
+             None, "are set away from their defaults"),
+            # (e) A BOUND WITH NOTHING TO BOUND AGAINST: this mode has no loop
+            # equation, so there is no bank supply for the sheath to be
+            # bounded by.
+            ("the circuit voltage bound armed",
+             dict(_pr_on, cathode_prescribed_trace_path=_pr_trace,
+                  cathode_prescribed_t0_s=2.0e-3,
+                  cathode_prescribed_start_s=2.0e-3),
+             {"cathode_circuit_voltage_bound": True},
+             "cathode_circuit_voltage_bound bounds the sheath"),
+            # (f) THE PRESENCE GATE, the other way: a measured drive nothing
+            # reads is exactly the silent inert control the config surface
+            # forbids.
+            ("a prescribed key while the mode is off",
+             dict(cathode_prescribed_trace_path=_pr_trace),
+             None, "are read only under cathode_solver_model"),
+            # (g) A model that does not exist. Refused by name, never by
+            # falling back to the calibrated solve.
+            ("an unknown cathode_solver_model",
+             dict(cathode_solver_model="prescribed"),
+             None, "cathode_solver_model must be"),
+        ):
+            _pr_refuses(
+                _pr_label, _pr_params, flags=_pr_flags, needle=_pr_needle
+            )
+
+        # Each of the three drive keys is refused on its own with the mode
+        # off, not merely as a set: a run that sets one of them under the
+        # calibrated cathode is as silently inert as one that sets all three.
+        for _pr_off_key, _pr_off_value in (
+            ("cathode_prescribed_trace_path", _pr_trace),
+            ("cathode_prescribed_t0_s", 2.0e-3),
+            ("cathode_prescribed_start_s", 2.0e-3),
+        ):
+            _pr_refuses(
+                f"{_pr_off_key} while the mode is off",
+                {_pr_off_key: _pr_off_value},
+                needle="are read only under cathode_solver_model",
+            )
+
+    # THE POSITIVE CONTROL: the committed overlay, a hand-off inside its span
+    # and after a calibrated foot, resolves -- and it resolves onto the MODEL
+    # clock, carrying the digest of the file's own bytes so a saved artifact
+    # names the measured product rather than a path.
+    _pr_sim = LAPDSim1D(*_pr_config(
+        cathode_solver_model=_pr_MEASURED,
+        cathode_prescribed_trace_path=_pr_trace,
+        cathode_prescribed_t0_s=2.0e-3,
+        cathode_prescribed_start_s=2.0e-3,
+    ))
+    _pr_resolved = _pr_sim._prescribed_drive
+    assert _pr_resolved is not None
+    assert _pr_resolved.t0_s == 2.0e-3 and _pr_resolved.start_s == 2.0e-3
+    assert len(_pr_resolved.sha256) == 64
+    with np.load(_pr_trace, allow_pickle=False) as _pr_raw:
+        assert np.array_equal(
+            _pr_resolved.time_s,
+            2.0e-3 + 1.0e-3 * np.asarray(
+                _pr_raw["discharge_time_ms"], dtype=float
+            ),
+        )
+        assert np.array_equal(
+            _pr_resolved.current_A,
+            np.asarray(_pr_raw["discharge_current_mean_a"], dtype=float),
+        )
+        assert np.array_equal(
+            _pr_resolved.V_dis_V,
+            np.asarray(
+                _pr_raw["discharge_voltage_positive_mean_v"], dtype=float
+            ),
+        )
+    assert not _pr_resolved.active(1.9e-3)
+    assert _pr_resolved.active(2.0e-3)
+    # The calibrated cathode is what the OFF path keeps: no trace resolved,
+    # and the solver carries no hand-off to record.
+    _pr_off_sim = LAPDSim1D(*_pr_config())
+    assert _pr_off_sim._prescribed_drive is None
+    assert _pr_off_sim._prescribed_handoff is None
+
+
+# --------------------------------------------------------------------
+# prescribed-drive-handoff
+# --------------------------------------------------------------------
+@_case("prescribed-drive-handoff")
+def _case_prescribed_drive_handoff():
+    # THE HAND-OFF ITSELF, over a short march that reaches the main discharge.
+    # Three statements:
+    #
+    #   * past the hand-off the loop current IS the trace, interpolated onto
+    #     the model clock -- bitwise, at every saved frame, not merely close;
+    #   * the switch is RECORDED on the file: which trace drove the run (path
+    #     and the digest of its bytes), when the switch happened, the two
+    #     currents on either side of it, and their relative difference, which
+    #     is the measurement of how far the calibrated cathode sat from this
+    #     rung's measured drive. Nothing is smoothed across it;
+    #   * the presence gate: with the mode off, the three drive keys sitting
+    #     at their None defaults produce a run BIT-IDENTICAL to the same
+    #     configuration that never names them, and a file that carries neither
+    #     the drive record nor the hand-off record.
+    #
+    # The trace is a small synthetic overlay written into a temporary
+    # directory: a coarse, strictly-increasing ramp, so the interpolation
+    # between its samples is non-trivial and the identity below cannot pass on
+    # a constant. It must never be written under scripts/.
+    #
+    # THE HAND-OFF JUMP LINE THIS CASE PRINTS IS EXPECTED, and is not a
+    # failure: an invented current on a 12-cell fixture has nothing to do with
+    # what an uncalibrated tiny cathode integrates to, so the switch is a large
+    # one and the loud line fires. That it fires is part of what is exercised.
+    from cablp.solvers._sim1d.core.prescribed_drive import (
+        HANDOFF_JUMP_WARN_FRACTION as _ho_JUMP_WARN,
+        PRESCRIBED_MEASURED as _ho_MEASURED,
+    )
+    from cablp.solvers._sim1d.results.io import save_result_hdf5 as _ho_save
+
+    #: The phase schedule: long enough to break down and reach the main
+    #: discharge (an aborted ignition is not the fixture this case wants),
+    #: short enough to stay a smoke-scale run.
+    _ho_tau_pre, _ho_tau_bd = 8.0e-5, 4.0e-5
+    #: The hand-off, at the main discharge's own start; the trace's t = 0 is
+    #: named to the same model time, so the trace is read from its trigger.
+    _ho_t0 = _ho_tau_pre + _ho_tau_bd
+    _ho_t_ms = np.array([-1.0, 0.0, 0.005, 0.01, 0.02, 0.05, 2.0])
+    _ho_I_A = np.array([0.0, 50.0, 300.0, 700.0, 900.0, 950.0, 400.0])
+    _ho_V_V = np.array([0.0, 40.0, 90.0, 120.0, 130.0, 128.0, 60.0])
+
+    def _ho_config(trace_path=None, explicit_none=False):
+        _p, _f = default_config()
+        _p.update({
+            "nx": 12,
+            "dt_save": 0.0,
+            "max_steps_action": "stop",
+            "tau_prebreakdown": _ho_tau_pre,
+            "tau_breakdown": _ho_tau_bd,
+            "tau_discharge": 5.0e-4,
+            "tau_afterglow": 1.0e-4,
+        })
+        _f["cathode_coupling"] = True
+        _f["neutral_prebreakdown"] = False
+        _f["neutral_equilibration"] = False
+        if trace_path is not None:
+            _p.update({
+                "cathode_solver_model": _ho_MEASURED,
+                "cathode_prescribed_trace_path": str(trace_path),
+                "cathode_prescribed_t0_s": _ho_t0,
+                "cathode_prescribed_start_s": _ho_t0,
+            })
+        if explicit_none:
+            # The keys NAMED and left at their template defaults: the presence
+            # gate is that naming them changes nothing at all.
+            _p.update({
+                "cathode_solver_model": "current_driven",
+                "cathode_prescribed_trace_path": None,
+                "cathode_prescribed_t0_s": None,
+                "cathode_prescribed_start_s": None,
+            })
+        return _p, _f
+
+    with tempfile.TemporaryDirectory() as _ho_dir:
+        _ho_trace = Path(_ho_dir) / "synthetic_overlay.npz"
+        np.savez(
+            _ho_trace,
+            discharge_time_ms=_ho_t_ms,
+            discharge_current_mean_a=_ho_I_A,
+            discharge_voltage_positive_mean_v=_ho_V_V,
+        )
+        _ho_sim = LAPDSim1D(*_ho_config(trace_path=_ho_trace))
+        _ho_result = _ho_sim.run(t_end=_ho_t0 + 2.0e-5, dt=None)
+        _ho_time = np.asarray(_ho_result.time, dtype=float)
+        _ho_after = _ho_time >= _ho_t0
+        # The march must actually cross the hand-off, and must have ignited:
+        # a run that never reached the main discharge would be asserting on
+        # the wind-down instead.
+        assert _ho_after.sum() >= 8, int(_ho_after.sum())
+        assert "main_discharge" in set(
+            np.asarray(_ho_result.phase).tolist()
+        ), sorted(set(np.asarray(_ho_result.phase).tolist()))
+
+        # (i) I(t) IS THE TRACE past the hand-off. The loop current is a
+        # measurement in this mode -- nothing is integrated -- so the saved
+        # row equals the trace interpolated onto the model clock exactly.
+        _ho_loop_A = np.asarray(
+            _ho_result.cathode_diagnostics["circuit_I_loop"], dtype=float
+        )
+        _ho_want_A = np.interp(
+            _ho_time, _ho_t0 + 1.0e-3 * _ho_t_ms, _ho_I_A
+        )
+        assert np.array_equal(_ho_loop_A[_ho_after], _ho_want_A[_ho_after])
+        # ... and the trace is being READ, not held: the ramp gives a
+        # different value at every frame, so a stuck sample-and-hold would
+        # fail here rather than pass the identity above trivially.
+        assert (
+            np.unique(_ho_loop_A[_ho_after]).size == int(_ho_after.sum())
+        )
+
+        # (ii) THE SWITCH IS RECORDED, and the record reaches the FILE. The
+        # relative jump is normalized on the MEASURED current, which is the
+        # reference the calibrated foot is judged against.
+        _ho_handoff = _ho_result.prescribed_handoff
+        assert _ho_handoff["time_s"] >= _ho_t0
+        _ho_jump = (
+            _ho_handoff["current_trace_A"]
+            - _ho_handoff["current_calibrated_A"]
+        ) / max(abs(_ho_handoff["current_trace_A"]), 1.0e-12)
+        assert _ho_handoff["relative_jump"] == _ho_jump
+        assert _ho_handoff["current_trace_A"] == float(
+            np.interp(
+                _ho_handoff["time_s"],
+                _ho_t0 + 1.0e-3 * _ho_t_ms,
+                _ho_I_A,
+            )
+        )
+        assert 0.0 < _ho_JUMP_WARN < 1.0
+
+        _ho_path = Path(_ho_dir) / "prescribed_handoff.h5"
+        _ho_save(_ho_path, _ho_result)
+        with h5py.File(_ho_path, "r") as _ho_h5:
+            _ho_attrs = dict(_ho_h5.attrs)
+        assert _ho_attrs["cathode_prescribed_trace_path"] == str(_ho_trace)
+        assert (
+            _ho_attrs["cathode_prescribed_trace_sha256"]
+            == _ho_sim._prescribed_drive.sha256
+        )
+        assert _ho_attrs["cathode_prescribed_t0_s"] == _ho_t0
+        assert _ho_attrs["cathode_prescribed_start_s"] == _ho_t0
+        assert (
+            _ho_attrs["cathode_prescribed_handoff_time_s"]
+            == _ho_handoff["time_s"]
+        )
+        assert (
+            _ho_attrs["cathode_prescribed_handoff_current_calibrated_a"]
+            == _ho_handoff["current_calibrated_A"]
+        )
+        assert (
+            _ho_attrs["cathode_prescribed_handoff_current_trace_a"]
+            == _ho_handoff["current_trace_A"]
+        )
+        assert (
+            _ho_attrs["cathode_prescribed_handoff_relative_jump"]
+            == _ho_handoff["relative_jump"]
+        )
+
+        # (iii) THE PRESENCE GATE. Two calibrated runs of the same length:
+        # one whose config never names the three drive keys, one that names
+        # all three at their None defaults. Bit-identical, field by field, at
+        # raw uint64 -- and the OFF file carries none of the eight attributes
+        # above, so an unarmed run's artifact is exactly the one it always was.
+        _ho_bare = LAPDSim1D(*_ho_config()).run(
+            t_end=None, dt=None, max_steps=30
+        )
+        _ho_named = LAPDSim1D(*_ho_config(explicit_none=True)).run(
+            t_end=None, dt=None, max_steps=30
+        )
+        assert _ho_bare.steps == _ho_named.steps == 30
+
+        def _ho_identical(a, b):
+            """True when two saved rows agree BIT for bit.
+
+            Float rows are compared as raw uint64 rather than by value: the
+            cathode diagnostics carry NaN rows (``x0_twin_next`` on a
+            single-cathode run), and NaN != NaN would report an unmoved row as
+            a divergence. The regime row is a string row and is compared as
+            one.
+            """
+            _a = np.ascontiguousarray(np.asarray(a))
+            _b = np.ascontiguousarray(np.asarray(b))
+            if _a.shape != _b.shape or _a.dtype != _b.dtype:
+                return False
+            if _a.dtype != np.float64:
+                return np.array_equal(_a, _b)
+            return np.array_equal(_a.view(np.uint64), _b.view(np.uint64))
+
+        for _ho_field in ("time",) + tuple(STATE_NAMES_1D) + ("u", "Te", "Ti"):
+            assert _ho_identical(
+                getattr(_ho_bare, _ho_field), getattr(_ho_named, _ho_field)
+            ), _ho_field
+        assert set(_ho_bare.cathode_diagnostics) == set(
+            _ho_named.cathode_diagnostics
+        )
+        for _ho_row in _ho_bare.cathode_diagnostics:
+            assert _ho_identical(
+                _ho_bare.cathode_diagnostics[_ho_row],
+                _ho_named.cathode_diagnostics[_ho_row],
+            ), _ho_row
+        assert not hasattr(_ho_bare, "prescribed_drive")
+        assert not hasattr(_ho_named, "prescribed_drive")
+        assert not hasattr(_ho_named, "prescribed_handoff")
+
+        _ho_off_path = Path(_ho_dir) / "calibrated_control.h5"
+        _ho_save(_ho_off_path, _ho_named)
+        with h5py.File(_ho_off_path, "r") as _ho_off_h5:
+            _ho_off_attrs = set(_ho_off_h5.attrs)
+        assert not {
+            _ho_name for _ho_name in _ho_attrs
+            if _ho_name.startswith("cathode_prescribed_")
+        } & _ho_off_attrs
+
+
+# --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
 @_case("smoke-summary")
@@ -24238,7 +25018,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 133, "historical_stance": 57}
+_CASE_CENSUS = {"total": 137, "historical_stance": 57}
 
 
 def _assert_case_census():
