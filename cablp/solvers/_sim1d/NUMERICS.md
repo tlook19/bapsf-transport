@@ -64,8 +64,10 @@ at the frozen incoming $T_e$ in both paths.
 
 ## Time integration
 
-**Explicit stage** — a two-stage strong-stability-preserving Runge–Kutta step
-(SSPRK2 / Heun), `core/integrator.py`:
+### Explicit stage
+
+A two-stage strong-stability-preserving Runge–Kutta step (SSPRK2 / Heun),
+`core/integrator.py`:
 
 $$y^{(1)}=\Pi\!\left[y^n+\Delta t\,L(t^n,y^n)\right],\qquad y^{n+1}=\Pi\!\left[\tfrac12y^n+\tfrac12\left(y^{(1)}+\Delta t\,L(t^n+\Delta t,y^{(1)})\right)\right]$$
 
@@ -74,7 +76,9 @@ evaluated at $t^n$ and $t^n+\Delta t$, preserving second-order accuracy for
 explicitly time-dependent forcing; omitting the `time` argument freezes the
 forcing at the step start and is first-order in it.
 
-**Operator split.** `implicit_heat_conduction` composes an explicit SSPRK2 step
+### Operator split
+
+`implicit_heat_conduction` composes an explicit SSPRK2 step
 over all non-heat terms (operator $A$) with an implicit heat substep (operator
 $B$), removing the stiff parabolic stability limit from the explicit step.
 `operator_splitting` selects the composition: `"lie"` applies $A(\Delta t)$ then
@@ -87,8 +91,10 @@ $A$'s explicit sum into $B$, applied as a source held constant over each substep
 on the same tridiagonal operator; the beam's particle births, ionization cost
 and excitation radiation stay in $A$.
 
-**Implicit heat substep**, solved per species as a tridiagonal system via
-`scipy.linalg.solve_banded`. Three of the four schemes are theta methods,
+### Implicit heat substep
+
+Solved per species as a tridiagonal system via `scipy.linalg.solve_banded`.
+Three of the four schemes are theta methods,
 
 $$\left(C+\theta\,\Delta t\,K\right)T^{n+1}=C\,T^n-(1-\theta)\,\Delta t\,K\,T^n$$
 
