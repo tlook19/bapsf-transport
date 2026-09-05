@@ -11,56 +11,67 @@ cell-centred states and face-based fluxes (`core/state.py`,
 `core/geometry.py`); $T_e$, $T_i$, $u$ are recovered by `derive_state`. Plasma
 and neutral fields carry separate face areas and cell volumes, so inventory
 (area $\times$ flux, volume $\times$ density) is tracked consistently on each.
-The neutral gas is carried as bin masses on the velocity grid below.
+The neutral gas is carried as bin masses on the velocity grid below; the packed
+$n_n$ row rides alongside as $\max(\text{moment},\,\text{floor})$, republished
+from the distribution each tick rather than independently evolved.
 
 ## Spatial discretization
 
 **Rusanov / local Lax–Friedrichs flux** at each interior face
 (`physics/flux.py`):
 
-$$F=\tfrac12\left(F_L+F_R\right)-\tfrac12\,a_\text{max}\left(U_R-U_L\right)$$
+$$F=\tfrac12\left(F_L+F_R\right)-\tfrac12\,a_\text{max}\left(U_R-U_L\right),\qquad a_\text{max}=\max\left(\lvert u_L\rvert+c_L,\ \lvert u_R\rvert+c_R\right)$$
 
-`hyperbolic_wave_speed` selects $a_\text{max}$: `"adiabatic"` uses
-$\sqrt{\tfrac53(T_e+T_i)/m_i}$, the exact spectral radius of the $\gamma=5/3$
-two-species system, `"isothermal"` uses $\sqrt{T_e/m_i}$, which under-bounds
-it. It sets the dissipation strength and the CFL, not the physical wave speed,
-which the pressure flux carries. RHS rows are formed as
+`hyperbolic_wave_speed` selects the sound speed in that pair: `"adiabatic"`
+uses $\sqrt{\tfrac53(T_e+T_i)/m_i}$, the exact spectral radius of the
+$\gamma=5/3$ two-species system, `"isothermal"` uses $\sqrt{T_e/m_i}$, which
+under-bounds it. It sets the dissipation strength and the CFL, not the physical
+wave speed, which the pressure flux carries. RHS rows are formed as
 $-\Delta(\text{area}\cdot F)/\text{volume}$ per cell, each
 $\mathbf u\!\cdot\!\nabla$ derivative fused with its compression partner inside
 one face flux rather than discretized separately.
 
+**A second face-flux operator** is available beside the Rusanov one:
+`front_filling_fluxes` adds a sonic-relaxation front flux that fills unfilled
+cells, capped by `alpha_front` and carrying donor-cell energy. It is the
+operator the `front_density` timestep bound below describes.
+
 **Walls.** Every face bounding the plasma carries no particle or
-thermal-energy flux and keeps the live cell's pressure as its momentum flux. At
-the plasma-terminating subset the advective flux carries nothing at all: the
-ghost-cell Bohm flux (`sources.characteristic_boundary_rhs`) supplies particle,
-momentum and energy flux with its own pressure term, using the same face kernel
-as the interior (`flux.kep_rusanov_face_scalar`) between the interior cell and
-the ghost state, applied as a one-sided divergence
-$\pm\,\text{area}\cdot F/V$ on the live cell.
+thermal-energy flux and keeps the live cell's pressure as its momentum flux
+(zero where there is no live cell at all). At the plasma-terminating subset the
+advective flux carries nothing: the ghost-cell Bohm flux
+(`sources.characteristic_boundary_rhs`) supplies particle, momentum and energy
+flux with its own pressure term, using the same face kernel as the interior
+(`flux.kep_rusanov_face_scalar`) between the interior cell and the ghost state,
+applied as a one-sided divergence $\pm\,\text{area}\cdot F/V$ on the live cell.
 
 **Energy-consistent hyperbolic core** (`hyperbolic_energy_consistent`). The
 convective momentum flux becomes the kinetic-energy-preserving $\{u\}\{M\}$
-form, the pressure work a kinetic-energy-preserving $-u\,dM_\text{press}$ per
-species folded into the `pressure_work` row, and the Rusanov $(n,M)$ numerical
-kinetic-energy dissipation is deposited into $E_i$ as
-`hyperbolic_dissipation_heating` — a flux divergence contracted with the local
-velocity, so non-negative only in the volume-weighted total. $\sum V(K+E_e+E_i)$
-is then conserved by the semi-discrete flux and pressure-work operator to
-machine precision, the explicit integration leaving an $O(\Delta t^2)$ drift of
-the nonlinear kinetic energy.
+form, the pressure work a kinetic-energy-preserving
+$-\mathbf u\!\cdot\!\nabla p_s$ per species folded into the `pressure_work`
+row, and the Rusanov $(n,M)$ numerical kinetic-energy dissipation is deposited
+into $E_i$ as `hyperbolic_dissipation_heating` — a flux divergence contracted
+with the local velocity, so non-negative only in the volume-weighted total. The
+operator is CONSTRUCTED so that the semi-discrete flux and pressure-work pair
+conserves $\sum V(K+E_e+E_i)$ on a closed domain, the explicit integration
+leaving a time-integration drift of the nonlinear kinetic energy; the size of
+that drift is a property of the step, not of this operator, and the suite that
+exercises the claim is `scripts/verify/verify_sim1d_r2_hyperbolic.py`.
 
 **Geometry source and conduction.** With a varying area the momentum ledger
 carries
 
-$$\left.\frac{\partial M_i}{\partial t}\right|_\text{geom}=\frac{p_iA_{i+1/2}-p_iA_{i-1/2}}{V_{\mathrm{p},i}}$$
+$$\left.\frac{\partial M_i}{\partial t}\right|_\text{geom}=\frac{p_iA_{i+1/2}-p_iA_{i-1/2}}{V_{\text{col},i}}$$
 
 written with the same multiply-then-subtract ordering as the area-weighted
 pressure flux it pairs with, so for a stationary uniform-pressure plasma the two
 cancel bit for bit — the well-balanced property, excepting the
 plasma-terminating cells where the ghost-cell outflow supplies the face
-momentum. Conductive face fluxes $q=-\kappa\nabla T$ are differenced to a
-conservative flux divergence (`physics/conduction.py`), the flux limiter applied
-at the frozen incoming $T_e$ in both paths.
+momentum. Conductive face fluxes $q=-\kappa_\text{face}\nabla T$ are differenced
+to a conservative flux divergence (`physics/conduction.py`) with
+$\kappa_\text{face}$ the arithmetic mean of the two cells, each face scaled by
+its transmission factor (zero at a plasma wall, $1-\eta$ across the anode mesh,
+one otherwise).
 
 ## Time integration
 
@@ -76,16 +87,31 @@ evaluated at $t^n$ and $t^n+\Delta t$, preserving second-order accuracy for
 explicitly time-dependent forcing; omitting the `time` argument freezes the
 forcing at the step start and is first-order in it.
 
+### The neutral-only step
+
+**The plasma is not always integrated by the stage above.** While the plasma is
+off, and through the pre-breakdown phase, the step is a backward-Euler solve of
+the neutral density alone:
+
+$$\left(\mathbb I+\Delta t\,K_n\right)n_n^{\,\text{next}}=n_n+\Delta t\,S_n$$
+
+$K_n$ the tridiagonal operator assembled from the face exchange conductances
+(each face writing $(i,i)$, $(i,i{+}1)$, $(i{+}1,i{+}1)$ and $(i{+}1,i)$) plus
+the pump on the diagonal, and $S_n$ the fueling row. It is held in LAPACK
+banded storage with bandwidths $(1,1)$, so assembly and solve are $O(N)$; a
+two-zone variant solves the column/annulus pair together. This is the update
+formula the pre-breakdown phase runs, and the density floor is applied to its
+result unless the caller asks otherwise.
+
 ### Operator split
 
-`implicit_heat_conduction` composes an explicit SSPRK2 step
-over all non-heat terms (operator $A$) with an implicit heat substep (operator
-$B$), removing the stiff parabolic stability limit from the explicit step.
-`operator_splitting` selects the composition: `"lie"` applies $A(\Delta t)$ then
-$B(\Delta t)$ and is $O(\Delta t)$, the splitting error going as
-$\Delta t\,[A,B]$; `"strang"` applies
-$B(\Delta t/2)\to A(\Delta t)\to B(\Delta t/2)$, whose symmetry cancels that
-leading commutator and leaves $O(\Delta t^2)$.
+`implicit_heat_conduction` composes an explicit SSPRK2 step over all non-heat
+terms (operator $A$) with an implicit heat substep (operator $B$), removing the
+stiff parabolic stability limit from the explicit step. `operator_splitting`
+selects the composition: `"lie"` applies $A(\Delta t)$ then $B(\Delta t)$ and is
+$O(\Delta t)$, the splitting error going as $\Delta t\,[A,B]$; `"strang"`
+applies $B(\Delta t/2)\to A(\Delta t)\to B(\Delta t/2)$, whose symmetry cancels
+that leading commutator and leaves $O(\Delta t^2)$.
 `beam_deposition_in_heat_substep` moves the beam's electron-energy row from
 $A$'s explicit sum into $B$, applied as a source held constant over each substep
 on the same tridiagonal operator; the beam's particle births, ionization cost
@@ -119,54 +145,69 @@ $t^n+\gamma\Delta t$ then a BDF2 stage through $(T^n,T_\gamma,T^{n+1})$, with
 $\gamma=2-\sqrt2$ making both stages share the implicit coefficient
 $\gamma/2=(1-\gamma)/(2-\gamma)$ and hence one banded operator — two
 `solve_banded` calls against a single matrix. It damps undershoot rather than
-preventing it.
+preventing it. A third floor clip sits inside the substep itself, on its
+returned temperatures.
 
 **Picard iterations on $\kappa$.** The conductivity is frozen at the incoming
-state, and that — not the scheme — caps the substep at first order: against the
-live $\kappa\propto T^{5/2}$ the measured substep order is $\approx1.03$ for
-`backward_euler` and $\approx1.06$ for `tr_bdf2`, while at fixed linear $\kappa$
-the same schemes measure $1.02$ and $2.02$. `heat_picard_iterations`
-re-evaluates $\kappa$ at the scheme's own flux point, one more banded solve per
-species per iteration. Second order in the whole split step requires **all
-three** of a second-order `implicit_heat_scheme`, a positive
-`heat_picard_iterations`, and `operator_splitting = "strang"`, the frozen
-conductivity and the Lie splitting being independent first-order error terms.
-`scripts/gates/verify_sim1d_order.py` measures the observed order by
-fixed-$\Delta t$ Richardson refinement, in a regime with floors inert and
-watched, a single phase, an autonomous RHS and no cathode; a discharge does not
-show it, floors binding and phase transitions being threshold-triggered.
+state, and that — not the scheme — caps the substep at first order.
+`heat_picard_iterations` re-evaluates $\kappa$ at the scheme's own flux point,
+costing one more SUBSTEP solve per species per iteration: one banded solve for a
+theta method, TWO for `tr_bdf2`. The iteration stops early once
+$\max\lvert\Delta T\rvert\le$ `heat_picard_tol` $\cdot\max\lvert T\rvert$ on
+both species, and the temperature at which $\kappa$ is evaluated is clamped at
+$10^4$ eV as an overflow guard. **The flux limiter follows the same iterate:**
+in the explicit path it is applied at the incoming $T_e$, but in the implicit
+substep it is re-evaluated at the blended temperature each Picard pass uses —
+the incoming $T_e$ only when `heat_picard_iterations = 0`.
+
+Second order in the whole split step requires **all three** of a second-order
+`implicit_heat_scheme`, a positive `heat_picard_iterations`, and
+`operator_splitting = "strang"`: the frozen conductivity and the Lie splitting
+are independent first-order error terms, so each caps the step on its own.
+`scripts/gates/verify_sim1d_order.py` is the harness that measures the observed
+order by fixed-$\Delta t$ Richardson refinement, in a regime with floors inert
+and watched, a single phase, an autonomous RHS and no cathode. A discharge does
+not show that order: floors bind and phase transitions are threshold-triggered,
+so the step degrades to first order wherever those engage.
 
 ## Adaptive timestep control
 
 `core/timestep.py:suggest_timestep` takes $\Delta t$ as the minimum over
-candidate bounds, then clamps to $[\Delta t_\text{min},\Delta t_\text{max}]$.
-Three inequality forms recur, over the plasma-active cells:
+candidate bounds, then clamps to $[\Delta t_\text{min},\Delta t_\text{max}]$;
+`dt_global_scale` multiplies the result AFTER that clamp and is an instrument,
+not a bound. Three inequality forms recur:
 
 $$\text{distance: }\Delta t\le\varepsilon\min\frac{d}{s},\qquad \text{fractional: }\Delta t\le\varepsilon\min\frac{X-X_\text{floor}}{|\dot X|},\qquad \text{rate: }\Delta t\le\frac{\varepsilon}{\max\nu}$$
 
+The fractional form skips any cell with a zero rate or a non-positive margin.
+**The plasma bounds run over the plasma-active cells; the neutral bounds
+(`neutral_exchange`, `neutral_sources`, `neutral_wind`, `neutral_energy`) run
+over every cell.**
+
 | candidate | inequality |
 |---|---|
-| `plasma_cfl` | distance, $d$ the centre distance and $s=\tfrac12(|u_L|+|u_R|+c_{s,L}+c_{s,R})$ per face, $\varepsilon$ = `cfl` |
+| `plasma_cfl` | distance, $d$ the centre distance and $s=\tfrac12(\lvert u_L\rvert+\lvert u_R\rvert+c_L+c_R)$ per face, $\varepsilon$ = `cfl`; a face counts only where both cells are active and the face is open |
 | `front_density` | fractional on $n$ against the front-filling flux row, $\varepsilon$ = `density_dt_fraction` |
-| `reactions` | fractional on $n$ against the bulk reaction row |
-| `surface_loss` | negative-margin — $\Delta t\le\varepsilon\min(\text{margin}/\lvert\dot X\rvert)$ over DRAINING cells only, margins $n-n_\text{floor}$ and the exact conservative $E_s-\tfrac32nT_{s,\text{floor}}$ whose rates include the change in floor energy when $n$ changes, $d(E-\tfrac32nT_\text{floor})/dt=\dot E-\tfrac32T_\text{floor}\dot n$. Bundles the cathode/sheath, anode-collection and plasma-terminating boundary rows, plus an engaged kinetic arm's plasma-side coupling term |
-| `energy_exchange` | fractional on $E_e$, $E_i$ against $Q_{ie}$ |
+| `reactions` | fractional on $n$ (floor $n_\text{floor}$) AND on $n_n$ (floor 0) against the bulk reaction row |
+| `surface_loss` | negative-margin — $\Delta t\le\varepsilon\min(\text{margin}/\lvert\dot X\rvert)$ over DRAINING cells only ($\varepsilon$ = `density_dt_fraction`), margins $n-n_\text{floor}$ and the exact conservative $E_s-\tfrac32nT_{s,\text{floor}}$ whose rates include the change in floor energy when $n$ changes, $d(E-\tfrac32nT_\text{floor})/dt=\dot E-\tfrac32T_\text{floor}\dot n$; a non-positive margin returns 0. Bundles the cathode/sheath, anode-collection and plasma-terminating boundary rows plus an engaged kinetic arm's coupling term, and is assembled only under `raw_stage_validation` or an engaged kinetic arm |
+| `energy_exchange` | fractional on $E_e$, $E_i$ against $Q_{ie}$ (floor 0) |
 | `electron_cooling` | fractional on $E_e$ against the inelastic and radiative rows |
 | `ion_charge_exchange` | fractional on $E_i$ against the charge-exchange row |
-| `ion_neutral_drag` | rate, $\Delta t\max\nu_{in}\le$ `DRAG_DT_FRACTION` |
-| `heat_conduction` | explicit parabolic diffusion bound $\Delta t\le\varepsilon\min(\Delta z^2C/\kappa)$ at `conduction.HEAT_DT_FRACTION`; withdrawn on the implicit path |
+| `ion_neutral_drag` | rate, $\Delta t\max\nu_{in}\le$ `DRAG_DT_FRACTION`, $\nu$ scaled by $\lvert b_\text{ion\_neutral\_drag}\rvert$ |
+| `heat_conduction` | explicit parabolic bound $\displaystyle\Delta t\le\varepsilon\min_i\frac{V_iC_i}{\sum_{\text{faces of }i}A_f\kappa_fh_f/d_f}$ at `conduction.HEAT_DT_FRACTION`, $h_f$ the face transmission — on a uniform grid $\varepsilon\Delta z^2C/(2\kappa)$, the 2 being the two faces; withdrawn on the implicit path |
 | `neutral_exchange` | fractional on $n_n$ against the pair-exchange row, $\varepsilon$ = `neutral_dt_fraction` |
 | `neutral_sources` | fractional on $n_n$ against the fueling and pumping rows |
-| `neutral_wind` | distance, $\Delta t\le\varepsilon\min(\Delta z/\lvert u_n\rvert)$, the neutral advective CFL |
-| `neutral_energy` | rate — $\Delta t$ times the summed neutral-energy relaxation rates below `neutral_dt_fraction`, folding in the neutral signal speed $\lvert u_n\rvert+c_n$ |
-| `circuit` | $\Delta t\le\varepsilon\,\tau_\text{circuit}$, $\tau_\text{circuit}=L/(xR_\text{comp}+dV_\text{dis}/dI)$ — the SAME external series share the loop advance integrates against, the rest being inside $V_\text{dis}$ — with the device slope read by a one-sided finite difference of that same evaluator. Withdrawn once the loop reaches local equilibrium, tested as $\lvert f(I)\rvert\,\tau_\text{circuit}<dI_\text{probe}$. An accuracy bound, the loop advance being L-stable |
+| `neutral_wind` | distance, $\Delta t\le\varepsilon\min(\Delta z/\lvert u_n\rvert)$ at $\varepsilon$ = `cfl`, folding in the annulus drift where the state carries one |
+| `neutral_energy` | rate — $\Delta t$ times the summed neutral-energy relaxation rates below `neutral_dt_fraction`, folding in the neutral signal speed $(\lvert u_n\rvert+c_n)/\Delta z$ |
+| `circuit` | $\Delta t\le\varepsilon\,\tau_\text{circuit}$, $\tau_\text{circuit}=L/(xR_\text{comp}+dV_\text{dis}/dI)$ — the same external series share the loop advance integrates against — with the device slope read by a one-sided finite difference of that same evaluator. Withdrawn at local equilibrium ($\lvert f(I)\rvert\,\tau_\text{circuit}<dI_\text{probe}$), for $L\le0$ or a non-positive slope, and unless `cathode_circuit_voltage_bound` is armed. An accuracy bound, the loop advance being L-stable |
 | `dt_max` | the configured ceiling |
 
-**Floor-aware drain exemption.** A cell whose energy margin above its floor
-energy is within `SURFACE_LOSS_FLOOR_EXEMPT_RTOL` of it is dropped from the
-`surface_loss` bound alone, re-admitted at the wider
-`surface_loss_floor_exempt_exit_rtol` so a hovering cell holds its previous
-verdict inside the band (values at or above 1 are refused). The accept-time clip
+**Floor-aware drain exemption** (under `surface_loss_floor_exempt`). A cell
+whose energy margin above its floor energy is within
+`SURFACE_LOSS_FLOOR_EXEMPT_RTOL` of it is dropped from the `surface_loss` bound
+alone, re-admitted at the wider `surface_loss_floor_exempt_exit_rtol` so a
+hovering cell holds its previous verdict inside the band; an exit threshold at
+or below the entry one, or at or above 1, is refused. The accept-time clip
 resets a floor-pinned cell's margin to float residue every step, so without the
 exemption a persistent drain re-trips the bound forever and pins $\Delta t$ at
 $\Delta t_\text{min}$ while the floor holds the cell. The density channel is
@@ -184,102 +225,139 @@ bound keeps only its plasma channel, their replacements bounded through the
 `dt_growth_factor`, applied after `suggest_timestep` as one more cap, so it can
 only shrink the step; after `dt_growth_recovery_patience` CONSECUTIVE
 ramp-capped accepted steps the factor becomes `dt_growth_recovery_factor`, and
-one step capped by anything else resets the streak. The active constraint names
-the bound that actually minimized; when it asked for less than
-$\Delta t_\text{min}$, `clamped_to_dt_min` is set and `dt_raw` keeps the
-unclamped request, $\texttt{dt\_raw}=0$ being the drained floor-pinned signature.
-`dt_min_lock_max_steps` bounds CONSECUTIVE clamped adaptive steps and raises past
-it, its counter driven by
-`clamped_to_dt_min OR (accepted_dt <= dt_min AND dt_raw > dt_min)` evaluated
-after acceptance.
+one step capped by anything else — a physics bound, an output cadence, or a
+retry — resets the streak. The active constraint names the bound that actually
+minimized; when it asked for less than $\Delta t_\text{min}$,
+`clamped_to_dt_min` is set and `dt_raw` keeps the unclamped request,
+$\texttt{dt\_raw}=0$ being the drained floor-pinned signature.
+`dt_min_lock_max_steps` bounds CONSECUTIVE clamped ADAPTIVE steps and raises
+past it; its counter is driven by
+
+```
+clamped_to_dt_min  OR  (accepted_dt <= dt_min(1 + 1e-9)  AND  dt_raw > dt_min(1 + 1e-9))
+```
+
+evaluated after acceptance, the relative slack keeping a step that merely lands
+on the floor from counting, and the run loop's own caps and the retry ladder
+being able to push an accepted step under the floor while no candidate asked for
+less.
 
 ## Step acceptance and rejection
 
 A candidate step is attempted without committing state (`_attempt_step`) and
-then validated; a non-finite or otherwise invalid state is rejected and retried
-at a reduced $\Delta t$, with rejection events and constraint histories stored
-for post-run diagnostics. `raw_stage_validation` additionally inspects both
-SSPRK candidates and the implicit candidates *before* floors are applied,
-covering $n$, $n_n$, $E_e$ and $E_i$; a failed candidate carries its raw
-rejection evidence but cannot mutate accepted state, the circuit or surface
-caches, kinetic targets, time, or the cumulative floor ledger.
+then validated. **The retry ladder** halves the step on rejection
+(`DT_REJECT_FACTOR` $=0.5$), retries at most `max_step_retries` times under
+`adaptive_retries_enabled`, and raises `TimestepRejectionError` once the next
+$\Delta t$ would fall below $\Delta t_\text{min}$. A candidate is rejected on a
+non-finite value, a negative density or energy, or a fractional change past
+`max_density_step_fraction`, `max_neutral_step_fraction` or
+`max_energy_step_fraction` where those are set; rejection events and constraint
+histories are stored for post-run diagnostics.
 
-A run that fails to ignite is a phase transition, not a step rejection. Two
-guards open the cathode switch and route the run through the ordinary afterglow
-to a finite end time (`core/ignition.py`): a **stall detector**,
-$\gamma_N\le0$ AND $d(E_{e,\text{total}})/dt\le0$ for every saved sample across a
-sustained window — a structural joint condition with no tuned rates — and the
-**pre-breakdown timeout**, the machine's own hardware guard.
-`prebreakdown_timeout_action` selects between opening the switch and raising.
+`raw_stage_validation` additionally inspects both SSPRK candidates, the implicit
+heat candidate and the neutral-only candidate *before* floors are applied,
+covering $n$, $n_n$, $n_{n,a}$, $E_e$ and $E_i$, with non-finiteness scanned
+over the whole packed vector; a failed candidate carries its raw rejection
+evidence but cannot mutate accepted state, the circuit or surface caches,
+kinetic targets, time, or the cumulative floor ledger.
+
+A run that fails to ignite is a phase transition, not a step rejection. **Four
+routes open the cathode switch** and send the run through the ordinary afterglow
+to a finite end time: the **stall detector** — $\gamma_N\le0$ AND
+$d(E_{e,\text{total}})/dt\le0$ for every saved sample across a sustained window,
+a structural joint condition with no tuned rates, evaluated over a fixed window
+and rate sub-window with a minimum sample count; the **pre-breakdown timeout**,
+the machine's own hardware guard, whose `prebreakdown_timeout_action` selects
+between opening the switch and raising; and the **wall-clock and accepted-step
+budgets**, `ignition_wall_clock_cap_s` and `ignition_accepted_step_cap`, which
+route to the same wind-down so a tripped run leaves the same kind of artifact.
 
 ## Floors
 
 Enforced by `apply_state_floors` / `floor_state_vector` at construction and at
 the end of every stage, with `derive_state` additionally applying the
-temperature floors on every read. Densities are clipped directly on the packed
-rows; the temperatures are clipped on the DERIVED quantities, and the packed
-$E_e$, $E_i$ change only where `conservative_from_primitives` rebuilds them from
-the floored primitives. Order within a call: $n$, then $n_n$, then the
-temperatures, then the rebuild, then the optional rows, the neutral energy floor
-taken last against the already-floored $n_n$. Momenta are not clipped — $u$ is
-recovered with the floored density and $M$ rebuilt from it, leaving $M$
-numerically unchanged. Each accepted repair books its exact extensive debit in
+temperature floors on every read and the implicit heat substep clipping its own
+result. Densities are clipped directly on the packed rows; the temperatures are
+clipped on the DERIVED quantities, and the packed $E_e$, $E_i$ change only where
+`conservative_from_primitives` rebuilds them from the floored primitives. Order
+within a call: $n$, then $n_n$, then the temperatures, then the rebuild, then
+the optional rows, the neutral energy floor taken last against the
+already-floored $n_n$. Momenta are not clipped — $u$ is recovered with the
+floored density and $M$ rebuilt from it, which leaves $M$ unchanged to roundoff
+and bit-identical on every state probed, though $(m n)(M/(m n))$ carries no IEEE
+guarantee of exactness. Each accepted repair books its exact extensive debit in
 `floor_ledger`; `scripts/gates/audit_sim1d_floor_activation.py` instruments the
 clip sites at run time, which cannot be done post-hoc.
 
 ## The cathode solve
 
-The sheath root is bracketed on a monotone residual and closed by `brentq`: the
+The sheath root is bracketed on a monotone residual and closed by `brentq`. The
 voltage-driven form roots the coupled residual in $\psi_+$ at `xtol` $10^{-8}$
-and `rtol` $10^{-6}$; the current-driven form roots
-$J_\text{tot}(\psi_+)=J_\text{imposed}$ and the prescribed-drive form roots
-$\phi_c+V_p-\phi_a(\phi_c)-V_b$ on $(0,\phi_{c,\text{cap}}]$, both at `xtol`
-$10^{-12}$ and `rtol` $10^{-14}$. Uniqueness rests on each residual's
-monotonicity.
+and `rtol` $10^{-6}$, bracketing outward by up to fifteen doublings and, on a
+convergence failure, re-bracketing through two warm windows
+($\times[0.5,2]$, then $\times[0.125,8]$) before the full range. The
+current-driven form roots $J_\text{tot}(\psi_+)=J_\text{imposed}$ at `xtol`
+$10^{-12}$ and `rtol` $10^{-14}$, doubling $\psi_\text{top}$ up to two hundred
+times and carrying a plateau tolerance of $64\epsilon$. The prescribed-drive
+form roots $\phi_c+V_p-\phi_a(\phi_c)-V_b$ on
+$[10^{-8}\ \mathrm{V},\ \phi_{c,\text{cap}}]$ at the same tight tolerances; a
+residual already non-negative at the bottom returns $10^{-8}$ V UNTAGGED.
+Uniqueness rests on each residual's monotonicity.
 
-**A demand past the composed ceiling is CLAMPED, not raised.** Where the
-residual has no root below the ceiling the solve returns the ceiling value and
-TAGS itself `capability_limited`, `bound_active` recording which member of the
-ceiling bound; no error is raised and the run continues. Reading such a solve
-as a free root is the error the tag exists to prevent.
+**A demand past the composed ceiling is CLAMPED, not raised — in the
+current-driven and prescribed forms.** There the solve returns the ceiling value
+and TAGS itself `capability_limited`, `bound_active` recording which member of
+the ceiling bound; no error is raised and the run continues. The voltage-driven
+form does not share that contract: on a convergence failure it re-brackets
+UNCONSTRAINED, so a root it returns is not bounded by the ceiling.
 
 The loop current is advanced by an L-stable TR-BDF2 stage split over
 $L\,dI/dt=V_\text{src}-I\,xR_\text{comp}-V_\text{dis}(I)$ — the external share
-of the compliance resistance only, the rest being already inside
-$V_\text{dis}$ — with $V_\text{dis}$ evaluated at the frozen plasma state as a
-function of trial current and a modelled bank capacitor discharging
-trapezoidally alongside. The fluid stages run
-at a loop current frozen over the step; `coupled_circuit_picard` re-runs the
-accepted step, at most `circuit_picard_max_iter` times, with that current updated
-to the previous iteration's result until the current a step produces matches the
-one it ran at to `circuit_picard_tol_rel`, a snapshot/restore pair restoring
-every step-mutated attribute exactly so a rejected iteration leaves no trace.
+of the compliance resistance only, the rest being inside $V_\text{dis}$ — with
+$V_\text{dis}$ evaluated at the frozen plasma state as a function of trial
+current and a modelled bank capacitor discharging trapezoidally alongside. Each
+stage is itself a `brentq` root at `xtol` $10^{-10}$ and `rtol` $10^{-12}$,
+bracketed by up to two hundred doublings, with the current clamped at $I\ge0$.
+The fluid stages run at a loop current frozen over the step;
+`coupled_circuit_picard` re-runs the accepted step, at most
+`circuit_picard_max_iter` times in a driven phase, until the current a step
+produces matches the one it ran at to `circuit_picard_tol_rel` relative to
+$\max(\lvert I\rvert,1\ \mathrm{A})$, a snapshot/restore pair restoring every
+step-mutated attribute exactly so a rejected iteration leaves no trace.
 
 **The beam march.** The CSDA ray is integrated over adaptive substeps
-$dz_\text{sub}=\min(\text{remaining},\,f_\text{sub}E/L_\text{tot})$, so each
-substep resolves a fixed fraction of the primary's remaining energy. The flux
-is carried unattenuated, so the same floating-point products feed the energy
-decrement and every per-channel bank and the per-ray power identity closes to
-accumulated roundoff by construction rather than by a tolerance.
+$dz_\text{sub}=\min(\text{remaining},\,f_\text{sub}E/L_\text{tot})$,
+$f_\text{sub}$ = `max_energy_fraction_per_substep`, so each substep resolves a
+fixed fraction of the primary's remaining energy; the substep is additionally
+clamped so the ray lands exactly on the stopping energy
+$E_\text{stop}=20.6158$ eV rather than stepping past it, and the sub-threshold
+residual is banked there. The flux is carried unattenuated, so the same
+floating-point products feed the energy decrement and every per-channel bank and
+the per-ray power identity closes to accumulated roundoff by construction.
 
-Nothing about the coupling length is iterated: $l_b$ is CLOSED FORM, the
-harmonic sum of a Coulomb range and a neutral range,
+$l_b$ itself is CLOSED FORM, the harmonic sum of a Coulomb range and a neutral
+range,
 
 $$\frac{1}{l_b}=\frac{1}{l_{bi}}+\frac{1}{l_{bn}},\qquad l_{bi}=v_b\,\tau_{ei}(T_e,n_e),\qquad l_{bn}=\frac{1}{\sigma_b n_n},$$
 
 $v_b=\sqrt{2e\phi_c/m_e}$ the launch speed, reducing to $l_{bi}$ where there is
-no neutral term. The one bisected quantity in the deposition module is the
-plateau-edge energy $E_1$ of the multigroup disposal: a fixed number of
-bisections on a monotone residual between the stopping floor and the beam
-energy, clamped to the floor and COUNTED when the edge the equation asks for
-falls inside the bulk, where the flat-plateau picture does not hold.
+no neutral term and returning zero for $\phi_c\le0$. **It is nevertheless
+reached by an iteration in the voltage-driven solve**, which evaluates $l_b$
+inside its residual and cycles the $(\psi_+,\,l_b,\,\beta_\text{bypass})$ triple
+to $10^{-4}$ in the bypass fraction over at most four passes. The one BISECTED
+quantity in the deposition module is the plateau-edge energy $E_1$: a fixed
+bisection budget on a monotone residual between $E_\text{stop}$ and the beam
+energy, exiting early when the midpoint reaches a bracket endpoint, and clamped
+to the floor and COUNTED when the edge the equation asks for falls inside the
+bulk.
 
 ## The kinetic neutral solver
 
 **Velocity grid** (`physics/kinetic_neutrals.py:VGrid`). Both axes are
-sinh-stretched about one fine scale $v_\text{fine}$ out to a common half-extent,
-$v_\parallel$ spanning $(-v_\text{max},+v_\text{max})$ and the perpendicular
-SPEED axis $(0,v_\text{max})$:
+sinh-stretched about one fine scale $v_\text{fine}=\tfrac14\sqrt{kT_\text{wall}/m}$
+out to a common half-extent, $v_\parallel$ spanning
+$(-v_\text{max},+v_\text{max})$ and the perpendicular SPEED axis
+$(0,v_\text{max})$:
 
 $$v_k=v_\text{fine}\sinh\!\left(a\,u_k\right),\qquad a=\operatorname{arcsinh}\!\left(v_\text{max}/v_\text{fine}\right)$$
 
@@ -287,20 +365,23 @@ $u_k$ the half-offset normalized index, so resolution is $\sim v_\text{fine}$
 near zero (the wall gas) and coarsens toward $v_\text{max}$ (the
 charge-exchange tail). No bin sits at exactly zero — centres are at
 half-offsets — so the upwind march never divides by zero and every bin
-transports.
+transports; an even axial bin count is refused.
 
 **Extent.** `neutral_kinetic_dvm_vmax_cm_s` pins the half-extent. Unset, it is
 sized to the launch band the armed surface jets can produce,
-$1.25\sqrt{2\varepsilon_\text{max}/m}$ with
-$\varepsilon_\text{max}=\max(R_E/R_N)(\phi_{c,\text{cap}}+10\ \mathrm{eV})$ over
-those jets, the factor a sizing margin whose sufficiency is checked rather than
-assumed; with no jet armed it falls back to a thermal/sonic sizing from the ion
-thermal speed and sonic drift. The whole band is checked at CONSTRUCTION,
-energies spanning each armed jet's band going through the same launch-spectrum
-builder the tick uses. A drift past the LAST BIN CENTRE is not approximated — no
-non-negative weighting of bins has a mean beyond it — so a spectrum asked for
-there raises, and a finer $n_{v_\parallel}$ LOWERS that ceiling, the grid-tied
-smear being the local bin width.
+$1.25\sqrt{2\varepsilon_\text{max}/m}$ with $\varepsilon_\text{max}$ the largest
+per-atom launch energy over those jets, the factor a sizing margin whose
+sufficiency is checked rather than assumed; with no jet armed it falls back to a
+thermal/sonic sizing built from an ion-temperature cap and a drift cap. The
+whole band is checked at CONSTRUCTION, sampled energies spanning each armed
+jet's band going through the same launch-spectrum builder the tick uses. A drift
+past the LAST BIN CENTRE cannot be represented — no non-negative weighting of
+bins has a mean beyond it — and a finer axial resolution LOWERS that ceiling,
+the grid-tied smear being the local bin width. **The refusal is the launch
+path's, not the projection's:** `VGrid.maxwellian` itself silently CLAMPS an
+off-grid drift to the boundary half-space for every other caller (the ion
+Maxwellian the charge-exchange and elastic births are placed on, among them);
+what turns that clamp into a raise on the launch path is the moment check below.
 
 **Moment-preserving projection** (`VGrid.maxwellian`). A drifting Maxwellian is
 placed as analytic per-bin masses — erf differences along $v_\parallel$,
@@ -312,15 +393,17 @@ $$f'=f+a\left(v_\parallel-\langle v_\parallel\rangle\right)f+b\left(V^2-\langle 
 
 is then solved so the DISCRETE first and second moments, evaluated at bin centres
 the way the transport uses them, hit their analytic targets
-$\langle v_\parallel\rangle=u$ and $\langle V^2\rangle=u^2+3s^2$. Both basis
-functions are moment-free about the current state analytically, so the density is
-preserved; numerically that cancellation leaves a residue, which two guards hold.
-The $2\times2$ is NON-DIMENSIONALIZED before it is judged or solved — its rows
-are moments of different order and its columns carry the reciprocal dimensions of
+$\langle v_\parallel\rangle=u$ and $\langle V^2\rangle=u^2+3s^2$. At most four
+passes run, stopping once both moments are within $10^{-10}$ relative, with a
+positivity clip-and-retry at $-10^{-12}\max f$. Both basis functions are
+moment-free about the current state analytically, so the density is preserved;
+numerically that cancellation leaves a residue, which two guards hold. The
+$2\times2$ is NON-DIMENSIONALIZED before it is judged or solved — its rows are
+moments of different order and its columns carry the reciprocal dimensions of
 the two amplitudes, so the raw condition number is dimensional and says nothing
-about the solve. A scaled condition number at or above $1/\epsilon$ is REJECTED,
-and the sum is restored at the end if it has drifted past tolerance; both guards
-are inert while the invariant holds.
+about the solve. A scaled condition number strictly ABOVE $1/\epsilon$ is
+rejected, and the sum is restored at the end if it has drifted past
+$10^{-12}$; both guards are inert while the invariant holds.
 
 **Launch spectra.** A monoenergetic surface jet at energy per atom
 $\varepsilon$, equivalently a speed $v_\text{back}=\sqrt{2\varepsilon/m}$, is
@@ -331,20 +414,24 @@ $$u=\pm\sqrt{v_\text{back}^2-3kT_\text{launch}/m}$$
 which makes $\langle V^2\rangle=v_\text{back}^2$ and the discrete mean energy
 exactly $\varepsilon$; a spectrum drifting at $v_\text{back}$ would carry
 $\varepsilon+\tfrac32kT_\text{launch}$ per atom, the smear's own thermal content
-on top of the beam, which the surface book was not debited for. The sign is taken
-from the launch side. $T_\text{launch}$ is grid-tied,
+on top of the beam, which the surface book was not debited for. The sign is
+taken from the launch side. $T_\text{launch}$ is grid-tied,
 $m\,\Delta v_\parallel(v_\text{back})^2/k_B$ — the narrowest spectrum the grid
-resolves there, narrower leaving the compensation nothing to redistribute. The
-accepted spectrum's density, drift and mean energy are compared against their
-targets at a relative bar and a miss RAISES; the energy ledger books the birth as
-the count times the moment of the array actually placed, closing by construction
-rather than by the projection's accuracy. A launch energy below
-$\tfrac32kT_\text{launch}$ has no drift and raises.
+resolves there, narrower leaving the compensation nothing to redistribute —
+unless a named launch temperature overrides it. The accepted spectrum's density,
+drift and mean energy are compared against their targets at a relative bar and a
+miss RAISES; the energy ledger books the birth as the count times the moment of
+the array actually placed, closing by construction rather than by the
+projection's accuracy. A launch energy at or below $\tfrac32kT_\text{launch}$
+has no drift and raises.
 
-**Energy-matched wall return.** The non-accommodated share is re-emitted on the
-cosine shape at a temperature that must be SOLVED, so the spectrum carries the
-retained share's own incident mean energy per atom
-$\bar e=E_\text{incident}/N_\text{incident}$. The discrete mean energy
+**Energy-matched wall return.** Under
+`neutral_kinetic_dvm_wall_reflection = "diffuse_elastic"` the non-accommodated
+share is re-emitted on the cosine shape at a temperature that must be SOLVED, so
+the spectrum carries the retained share's own incident mean energy per atom
+$\bar e=E_\text{incident}/N_\text{incident}$; the `"specular"` alternative
+instead returns the incident array scaled by $1-\alpha_\text{acc}$ and solves
+nothing. The discrete mean energy
 
 $$E(s)=\sum_{jk}f_{jk}(s)\,\tfrac12m\left(v_{\parallel,j}^2+v_{\perp,k}^2\right),\qquad s=\sqrt{kT/m}$$
 
@@ -354,28 +441,33 @@ $F(\ln s)=\ln E(s)-\ln\bar e$, evaluated on the SEPARABLE contraction of that su
 so no per-cell $(\text{cells},n_{v_\parallel},n_{v_\perp})$ array is built per
 evaluation: in logs the continuum relation $E=2ms^2$ is an exactly linear
 residual of slope 2, so the seed $s_0=\sqrt{\bar e/2m}$ plus one Newton step at
-that slope lands close and the secant closes the rest. Every cell steps on every
-sweep and the stopping test is a single whole-call reduction. The secant hands
-the WHOLE call to the second tier when it misses its bar, when a residual or step
-is not finite, or when its denominator vanishes on a flat residual — what a
-target above the grid's saturation energy produces. The second tier is a
-**bracketed bisection**: seeded at the same continuum relation, bracketed outward
-by halving and doubling, then bisected to the floating-point resolution of its
-endpoints. $E(s)$ SATURATES once the spectrum outruns the outermost bins, so a
-target above that has no solution and both the bracket search and the final
-agreement check raise rather than returning a spectrum at an energy the caller
-did not ask for.
+that slope lands close and the secant closes the rest, its step clipped to
+$\pm1$ in $\ln s$. Every cell steps on every sweep and the stopping test is a
+single whole-call reduction on $\max\lvert F\rvert$. The secant hands the WHOLE
+call to the second tier when it misses its bar, when a residual or step is not
+finite, or when its denominator vanishes on a flat residual — what a target
+above the grid's saturation energy produces. The second tier is a **bracketed
+bisection**: seeded at the same continuum relation, bracketed outward by halving
+and doubling, then bisected until the bracket reaches the floating-point
+resolution of its endpoints. $E(s)$ SATURATES once the spectrum outruns the
+outermost bins, so a target above that has no solution and both the bracket
+search and the final agreement check raise rather than returning a spectrum at
+an energy the caller did not ask for.
 
 **The transfer relaxation.** The plasma-side momentum/energy transfer is booked
-once per neutral clock tick while the plasma steps many times inside it. The
-charge-exchange/elastic pair is a relaxation,
+once per neutral clock tick (`neutral_kinetic_dvm_cadence_s`) while the plasma
+steps many times inside it. The charge-exchange/elastic pair is a relaxation,
 $dE_i/dt=-\nu(E_i-E_i^\text{eq})$ and $dM/dt=-\nu(M-M^\text{eq})$, with one
-$\nu=N_\text{loss}/(V\Delta t\,n_i)$ per cell for the pair.
+$\nu=N_\text{loss}/(V\Delta t\,n_i)$ per cell.
 `neutral_kinetic_dvm_transfer_hold` selects how the plasma applies it between
-ticks: `"zoh"` freezes the booked rate, advancing
-$X_{k+1}=X_k-\nu\Delta t(X_k-X_\text{eq})$, which for $\nu\Delta t>2$ is an
-amplification with a sign flip; `"exponential"` applies, per cell and per plasma
-step, at the tick's frozen rate and target,
+ticks: `"zoh"` freezes the booked rate, which over a TICK advances
+
+$$X_{k+1}=X_k-\nu\,\Delta t_\text{tick}\left(X_k-X_\text{eq}\right)$$
+
+— multiplying the distance to the target by $1-\nu\Delta t_\text{tick}$ each
+tick, an amplification with a sign flip once $\nu\Delta t_\text{tick}>2$ (within
+a tick it is simply a constant rate). `"exponential"` applies, per cell and per
+plasma step, at the tick's frozen rate and target,
 
 $$E_i\leftarrow E_i^\text{eq}+\left(E_i-E_i^\text{eq}\right)e^{-\nu\,dt}$$
 
@@ -384,11 +476,14 @@ so the SSPRK2 stages integrate it exactly: unconditionally stable, exact for the
 linearized system, unable to carry a row past its target at any $\Delta t$, and
 reducing to the zero-order hold to $O(\nu\,dt)$.
 
-What the plasma applies differs from what the tick booked, and the difference is
-carried as a per-cell **hold debt** — distinct from the floor debt, which says
-the plasma could not absorb it, where hold debt says the tick froze a rate at a
-state that then moved. It is first-order in $\nu\Delta t$ and vanishes as the
-neutral clock refines, making it the cadence meter, and the ledger identity
+Two ledgers separate two different shortfalls. **Floor debt** comes from a cap:
+the applied drain is limited to
+`relax_fraction` $\cdot(E_i-E_i^\text{floor})/dt$, with the same factor on the
+momentum row, and whatever the plasma could not absorb is withheld as `debt`.
+**Hold debt** is the difference between what the plasma applied and what the
+tick booked — the tick froze a rate at a state that then moved. It is
+first-order in $\nu\Delta t$ and vanishes as the neutral clock refines, making it
+the cadence meter, and the ledger identity
 `applied_cum + debt + hold_debt == booked_cum` holds per cell at every accepted
 step. Repayment goes THROUGH the relaxation as
 $D\,\varphi(\nu\,dt)/\Delta t_\text{tick}$ with $\varphi(x)=(1-e^{-x})/x$,
@@ -406,18 +501,22 @@ many e-folds cannot be integrated accurately by any scheme frozen at its start,
 and what the hold guarantees there is a bounded, self-retiring debt saying the
 cadence is too coarse.
 
-**The counted ionization debit** is taken LAST in the tick, against
-$f_c^\text{marched}+\text{birth}_{cx}+\text{birth}_{el}$ — the inventory the cell
-carries once the tick ends, net of the non-conserving losses only — so the drop
-is drawn from an array that actually exists and positivity is structural rather
-than checked. The per-cell handshake
-`ion_removed_cum + ion_debt == ion_booked_cum` and the ledger's
+**The counted ionization debit** is taken LAST AMONG THE LOSS RECONCILIATIONS —
+after the charge-exchange and elastic re-births, against
+$f_c^\text{marched}+\text{birth}_{cx}+\text{birth}_{el}$, the inventory the cell
+carries once those returns are in — so the drop is drawn from an array that
+actually exists and positivity is structural rather than checked. It is NOT the
+last operation of the tick: the anode-mesh re-emission, the recombination births
+and the external births (fueling, the surface jets) are all added to $f_c$
+AFTER it, and so sit outside the inventory the debit draws from. The per-cell
+handshake `ion_removed_cum + ion_debt == ion_booked_cum` and the ledger's
 `inventory_after − inventory_before == births − losses` are exact at every tick.
 
 ## Compiled kernels
 
-The cathode scalar kernels and the sheath root find built on them have a Cython
-transcription. It is a **faithful transcription, not a reimplementation**, and is
+The Cython module transcribes **the cathode scalar kernels, the current-driven
+sheath root find, the beam coupling length, the CSDA beam march and the fused
+lerp**. It is a **faithful transcription, not a reimplementation**, and is
 bit-exact against the pure path by CONSTRUCTION of the source: both write the
 interpolation fusion out explicitly — `math.fma` in `cablp/numerics/interp.py`,
 C's `fma()` in the kernel module — so neither depends on whether the compiler
@@ -449,24 +548,24 @@ independent of the trajectory format; it carries one instant, not a history.
 serialises fluid rows, not a distribution function, so combining `restart_from`
 with `neutral_model` in `{"kinetic", "kinetic_dvm"}` RAISES at construction
 rather than resuming: reseeding the kinetic half from a Maxwellian would not be
-a continuation. The model this document presents uses that closure, so what
-follows covers the fluid neutral closure and every plasma-side member — the
-conserved rows, the cathode and circuit continuation state, the latches,
-accumulators and controller state — and does NOT cover a run of the presented
-model. `neutral_equilibration` is refused alongside it, for the different
-reason that it would overwrite the restored state.
+a continuation. The model [`MODEL.md`](MODEL.md) presents uses that closure, so
+what follows covers the fluid neutral closure and every plasma-side member and
+does NOT cover a run of the presented model. `neutral_equilibration` is refused
+alongside it, for the different reason that it would overwrite the restored
+state.
 
 **The contract is continuation bit-identity**: running $0\to t_\text{end}$ in one
 call and running $0\to t_\text{mid}$, exporting, restarting, then
 $t_\text{mid}\to t_\text{end}$ produce raw-byte-identical saved frames after
-$t_\text{mid}$. Meeting it requires carrying more than the conserved rows: the
-continuation caches that seed the next nonlinear solve, latched phase triggers,
-accumulators, and the run-loop controller state living in local variables rather
-than on the instance. Two are order-unity rather than last-bit — the previous
-solve's beam attenuation cross-section, which seeds the next one, and the
-save-cadence bookkeeping, a save not being passive: taking one issues a cathode
-solve that rewrites the continuation cache, so save times are part of the
-trajectory.
+$t_\text{mid}$. `scripts/gates/restart_bitidentity.py` is the gate, comparing
+every frame at raw uint64 across four scenarios. Meeting it requires carrying
+more than the conserved rows: the continuation caches that seed the next
+nonlinear solve, latched phase triggers, accumulators, and the run-loop
+controller state living in local variables rather than on the instance. Two are
+order-unity rather than last-bit — the previous solve's beam attenuation
+cross-section, which seeds the next one, and the save-cadence bookkeeping, a save
+not being passive: taking one issues a cathode solve that rewrites the
+continuation cache, so save times are part of the trajectory.
 
 The identity reproduces the continuation of the step sequence the first stage
 actually took, and an unsplit run's frames only when the handoff instant is one
@@ -500,30 +599,34 @@ bookkeeping.
 
 | method | implementation |
 |---|---|
-| Rusanov / LLF face flux, wall closure | `physics/flux.py:physical_fluxes`, `_apply_plasma_walls` |
+| Rusanov / LLF face flux | `physics/flux.py:_rusanov_raw_faces`, `_rusanov_face` |
+| Cell-centred physical fluxes; wall closure | `physics/flux.py:physical_fluxes`, `_apply_plasma_walls` |
+| Front-filling flux | `physics/flux.py:front_filling_fluxes` |
 | KEP single-face flux (boundary) | `physics/flux.py:kep_rusanov_face_scalar` |
 | Flux divergence | `physics/flux.py:_flux_divergence` |
 | Ghost-cell Bohm outflow | `physics/sources.py:characteristic_boundary_rhs` |
 | Sheath-edge sampling | `physics/sources.py:presheath_alpha`, `electrode_sheath_alpha` |
 | Geometric momentum source | `physics/sources.py:flux_tube_geometry_rhs` |
-| Pressure work, velocity divergence | `physics/sources.py:pressure_work_rhs`, `velocity_divergence` |
+| Pressure work, velocity divergence | `physics/sources.py:pressure_work_rhs`, `velocity_divergence`, `hyperbolic_energy_correction_rhs` |
 | SSPRK2 | `core/integrator.py:ssprk2_step` |
 | Operator split | `solver.py:operator_split_step` |
-| Theta / TR-BDF2 heat substep | `physics/conduction.py:implicit_heat_conduction_step`, `_banded_heat_operator` |
+| Neutral-only backward-Euler step | `solver.py:_implicit_neutral_step`, `_implicit_neutral_step_two_zone` |
+| Theta / TR-BDF2 heat substep | `physics/conduction.py:implicit_heat_conduction_step`, `_theta_temperature`, `_tr_bdf2_temperature`, `_banded_heat_operator` |
 | Flux-limited conductivity | `physics/conduction.py:flux_limited_electron_conductivity` |
 | Adaptive timestep | `core/timestep.py:suggest_timestep` and the per-candidate functions |
 | Floors and the floor ledger | `core/state.py:apply_state_floors`, `derive_state`; `solver.py:_floor_additions` |
-| Step attempt, validation, retry | `solver.py:_attempt_step`, `_accept_step_attempt` |
-| Ignition guards | `core/ignition.py` |
+| Step attempt, validation, retry ladder | `solver.py:_attempt_step`, `_accept_step_attempt`, `_attempt_step_with_retries` |
+| Ignition guards | `core/ignition.py`; `solver.py:_open_ignition_switch` |
 | Sheath root find, loop advance | `cablp/cathode/circuit.py:solve`, `circuit_idriven.py:solve_idriven`, `circuit_prescribed.py:solve_prescribed`; `physics/cathode.py:advance_circuit_current_driven` |
 | Fluid↔circuit Picard | `solver.py:_accept_step_with_picard`, `_picard_snapshot`, `_picard_restore` |
-| CSDA beam march | `cablp/cathode/beam_deposition.py:deposit_beam` |
+| CSDA beam march; plateau edge | `cablp/cathode/beam_deposition.py:deposit_beam`, `plateau_edge_energy_eV` |
 | Velocity grid, moment projection | `physics/kinetic_neutrals.py:stretched_axis`, `stretched_positive_axis`, `VGrid.maxwellian` |
-| Launch spectra, extent guard | `physics/kinetic_dvm.py:TransientDVM._refuse_unreachable_launch_band` |
-| Energy-matched wall return | `physics/kinetic_dvm.py:_secant_wall_return_speeds`, `_bisect_wall_return_speeds` |
-| Transfer hold, debt ledger, ionization debit | `physics/kinetic_dvm.py` (tick booking; `_debit_booked_ionization`) |
+| Launch spectra; extent guard | `physics/kinetic_dvm.py:_cathode_jet_launch_spectrum`, `_anode_jet_launch_spectrum`, `_collector_jet_launch_spectrum`, `_refuse_unreachable_launch_band` |
+| Energy-matched wall return | `physics/kinetic_dvm.py:_solve_wall_return_spectra`, `_secant_wall_return_speeds`, `_bisect_wall_return_speeds` |
+| Tick booking and ionization debit | `physics/kinetic_dvm.py:_book_transfer`, `_debit_booked_ionization` |
+| Transfer hold, scoping and debt ledger | `solver.py:_dvm_scope_step_transfer`, `_dvm_arm_transfer_hold`, `_dvm_transfer_hold_offer`, `_dvm_book_step_transfer` |
 | Compiled-kernel selection | `cablp/cathode/kernels.py`; fused lerp `cablp/numerics/interp.py` |
-| Restart export and load | `results/restart.py:save_restart_state` |
+| Restart export, load and compatibility | `results/restart.py:save_restart_state`, `load_restart_state`, `check_restart_compatibility` |
 | HDF5 output, health | `results/io.py`, `results/health.py` |
 
 Gate scripts live under `scripts/gates/` (smoke suite, golden baseline and its
