@@ -3535,6 +3535,80 @@ def regime_vessel_node_defaults():
     }
 
 
+def parallel_momentum_sink_defaults():
+    """Imposed parallel momentum sink beyond a stated axial position.
+
+    A RESPONSE-MAP INSTRUMENT, and nothing else. Its VALUE CLASS is PROBE:
+    the rate below has NO PHYSICAL OWNER in this model -- no collision
+    process supplies it, no measurement pins it, and nothing derives it.
+    What it is for is the inverse question: how much parallel momentum
+    loss, imposed over which length of column, the machine's observed
+    profiles would require. The deliverable is the REQUIREMENT (a force in
+    dyn and the momentum-loss length that goes with it), not the number
+    that produced it.
+
+    **It must never appear in a stance.** A configuration that names a
+    plasma states physics with owners; this term has none, so arming it in
+    a base configuration would put an unowned force inside the reference
+    everything else is compared against. Response-map arms are DERIVED
+    configurations that arm it, run, and are read as a map.
+
+    The term is a linear damping of the evolved parallel momentum density
+    on the column cells at or beyond ``parallel_momentum_sink_z_start_cm``,
+
+        S_M = -nu_add * M = -nu_add * m_i n u   [g cm^-2 s^-2],
+
+    booked as its own RHS row ``parallel_momentum_sink``, with the
+    frictional work it does,
+
+        Q_i = +nu_add * M * u = nu_add * m_i n u^2   [erg cm^-3 s^-1],
+
+    booked into the ION internal energy as the row
+    ``parallel_momentum_sink_heating``. The full dissipated drift energy is
+    booked, not half: the boxed ion-neutral drag gives its other half to a
+    neutral population that exists, and this term has no partner species to
+    give anything to, so a half-booking would be an unowned energy leak
+    rather than a convention. Both rows are absent from the ledger entirely
+    unless the term is armed, so an unarmed run's saved term structure and
+    trajectory are bit-identical to a checkout that has never heard of it.
+
+    The rate does NOT enter the timestep ladder. It is an explicit linear
+    damping, so the accepted step must satisfy ``nu_add * dt << 1`` on its
+    own; at the rates this instrument is derived at (order 10^3 s^-1,
+    against a plateau step of order 10^-7 s) that is satisfied by four
+    orders of magnitude, and a rate large enough to bind would be a
+    statement about the machine no response map is asking.
+
+    parallel_momentum_sink:
+        Whether the sink is armed. ``False`` (the default) is the whole
+        shipped package: the term is never constructed, neither row is
+        emitted, and naming either number below while this is off raises at
+        construction rather than leaving an inert control.
+    parallel_momentum_sink_rate_s:
+        The rate ``nu_add`` [s^-1]. ``None`` until a configuration names it:
+        REQUIRED when the sink is armed, refused when it is off, and
+        required there to be a finite float strictly greater than zero.
+        There is no default -- the rate IS the hypothesis the arm states,
+        and inheriting one would make the map read as a physical claim.
+        With the local flow speed ``u`` it states a momentum-loss length
+        ``L = u / nu_add``, which is the form the requirement is quoted in.
+    parallel_momentum_sink_z_start_cm:
+        Axial position [cm] on the same coordinate as ``geometry.z_cm``,
+        at and beyond which the sink acts. ``None`` until a configuration
+        names it: REQUIRED when the sink is armed, refused when it is off,
+        and required there to be finite and to lie WITHIN the plasma
+        column's own axial extent. A position outside it raises: below the
+        column the term is not a statement about a region at all, and above
+        it the term reaches no cell and would be silently inert, which is
+        the one thing a presence gate exists to prevent.
+    """
+    return {
+        "parallel_momentum_sink": False,
+        "parallel_momentum_sink_rate_s": None,
+        "parallel_momentum_sink_z_start_cm": None,
+    }
+
+
 _PARAMETER_DEFAULT_GROUPS = (
     initial_condition_defaults,
     geometry_defaults,
@@ -3553,6 +3627,7 @@ _PARAMETER_DEFAULT_GROUPS = (
     neutral_probe_source_defaults,
     regime_tracer_defaults,
     regime_vessel_node_defaults,
+    parallel_momentum_sink_defaults,
 )
 
 

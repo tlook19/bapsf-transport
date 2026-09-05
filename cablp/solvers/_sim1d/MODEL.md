@@ -143,6 +143,23 @@ prescribed area profile rather than from a separately imposed force law.
   charge-exchange rate $\nu_{cx} = n_n\langle\sigma v\rangle_{cx}$ instead of
   $\nu_{in}$; in that mode the elastic fraction $\nu_{el}\to0$, so the
   $Q_{\text{fric}}$ and $Q_{\text{eq,el}}$ ion-energy terms below vanish.
+- $-\nu_{\text{add}}\,m_i\,n\,u$ — **imposed parallel momentum sink**, a
+  RESPONSE-MAP INSTRUMENT and not a physical term. Off by default and absent
+  from the ledger entirely when off. Armed by the `parallel_momentum_sink`
+  parameter, it damps the evolved momentum density at the constant rate
+  $\nu_{\text{add}}$ (`parallel_momentum_sink_rate_s`) on every column cell at
+  or beyond `parallel_momentum_sink_z_start_cm`, booked as the row
+  `parallel_momentum_sink`, and deposits its whole frictional work
+  $\nu_{\text{add}} m_i n u^2$ into the ion internal energy as the row
+  `parallel_momentum_sink_heating`. **No collision process in this model
+  supplies it and nothing pins it**: its value class is PROBE, its rate is
+  stated by the arm rather than derived, and it must never appear in a stance.
+  What it measures is the REQUIREMENT — the parallel momentum loss, and the
+  momentum-loss length $L = u/\nu_{\text{add}}$ that goes with it, that a
+  region of the column would have to shed for the model to reach the measured
+  profiles. The column here is pressure-dominated and subsonic, so a Fanno
+  reading applies: friction lowers the pressure and RAISES the flow, which is
+  why the response is not a simple slowing.
 
 **4. Electron energy** (`physics/sources.py`, `physics/conduction.py`,
 `physics/energy.py`)
