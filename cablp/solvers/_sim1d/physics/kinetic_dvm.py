@@ -264,6 +264,16 @@ LAUNCH_EXTENT_MARGIN = 1.25
 # tick's own moment refusal stays the exact backstop beyond it.
 ANODE_BAND_PHI_ALLOWANCE_SOURCE = "cathode_phi_c_cap_V"
 
+# Exclusive upper bound on the ENERGY-TIED launch smear beta, the dimensionless
+# ratio ``T_launch / e_launch`` the surface jets are smeared at when
+# ``jet_launch_width`` is set. The launch spectrum's drift is solved from the
+# energy -- ``u^2 = v_back^2 - 3 k T_launch / m`` -- so at ``T = beta e`` the
+# drift is ``u^2 = v_back^2 (1 - 3 beta / 2)`` and vanishes at ``beta = 2/3``:
+# above it the projection has no drift to carry and the smear alone exceeds the
+# energy it is meant to represent. The bound is therefore a property of the
+# construction, not a taste.
+LAUNCH_WIDTH_MAX = 2.0 / 3.0
+
 # How many energies the construction-time band check samples. The check is a
 # SAMPLE of a continuum, dense enough (about 1 eV over the cap-implied band) to
 # find any interval a grid cannot project while staying far cheaper than one
@@ -846,6 +856,7 @@ class TransientDVM:
         cathode_launch_band_eV=None,
         anode_launch_band_eV=None,
         collector_launch_band_eV=None,
+        jet_launch_width=None,
         grid=None,
     ):
         if elastic_model not in ELASTIC_MODELS:
@@ -871,6 +882,20 @@ class TransientDVM:
         self.cathode_jet = _validated_cathode_jet(cathode_jet)
         self.anode_jet = _validated_anode_jet(anode_jet)
         self.collector_jet = _validated_collector_jet(collector_jet)
+        self.jet_launch_width = _validated_jet_launch_width(
+            jet_launch_width,
+            (self.cathode_jet, self.anode_jet, self.collector_jet),
+        )
+        # How many launch spectra this tick projected, and how many of those
+        # took the GRID-TIED floor because the energy-tied width was narrower
+        # than the local bin. Both are zero and both ledger rows are absent
+        # unless the energy-tied smear is armed. Reset at the head of every
+        # update, so the pair reads the tick rather than the run; the two
+        # ``_cum`` counters below are the run's own totals and are never reset.
+        self._launch_projections = 0
+        self._launch_projections_on_floor = 0
+        self.launch_projections_cum = 0
+        self.launch_projections_on_floor_cum = 0
         self.accommodation = float(accommodation)
         self.wall_reflection = str(wall_reflection)
         self.elastic_model = str(elastic_model)
@@ -1854,26 +1879,83 @@ class TransientDVM:
         dv = float(edges[k + 1] - edges[k])
         return M_HE * dv * dv / EV
 
+    def _smeared_launch_temperature_eV(self, v_back):
+        """Return the ENERGY-TIED launch smear [eV] at a speed [cm/s].
+
+        ``beta e_launch`` with ``e_launch = m v_back^2 / 2``, floored at the
+        grid-tied width of :meth:`_grid_tied_launch_temperature_eV`: the
+        energy-tied width is used wherever the local bin is narrower than it,
+        and the bin width stands where it is not. The floor is not a taste --
+        below it the spectrum collapses onto a single bin and the two-basis
+        moment compensation has nothing to redistribute -- so a smear this
+        narrow is not representable on this grid at all.
+
+        THE POINT OF THE ENERGY-TIED FORM is that the launched SHAPE stops
+        moving with the velocity resolution. The grid-tied width is
+        ``m dv_z^2``, so the fractional energy width ``(3/2) T / e_launch`` a
+        launch is smeared over halves with every doubling of ``nvz`` and the
+        spectrum a given surface launches is a property of the grid rather
+        than of the surface. At ``T = beta e_launch`` that fraction is
+        ``(3/2) beta`` at every launch energy and every resolution, which is
+        the quantity a measured backscatter spectrum states.
+
+        The drift then follows from the energy as it always does:
+        ``u^2 = v_back^2 - 3 k T / m = v_back^2 (1 - 3 beta / 2)``, positive
+        for every launch energy because :data:`LAUNCH_WIDTH_MAX` bounds
+        ``beta`` below ``2/3`` -- so the energy-tied branch has no low-energy
+        band it must refuse. Where the FLOOR binds instead, the width is the
+        grid-tied one and carries exactly the guarantee it always did, with
+        the launch-spectrum builders' own refusal as the backstop.
+
+        Counts what it did, per tick: every call is one launch projection and
+        a call that took the floor is one more on the floor, which is how a
+        run reports how often the energy-tied width was actually in force.
+        """
+        e_launch_eV = 0.5 * M_HE * v_back * v_back / EV
+        T_smear = self.jet_launch_width * e_launch_eV
+        T_grid = self._grid_tied_launch_temperature_eV(v_back)
+        self._launch_projections += 1
+        if T_grid > T_smear:
+            self._launch_projections_on_floor += 1
+            return T_grid
+        return T_smear
+
     def _cathode_jet_launch_temperature_eV(self, v_back):
         """Return the launch smear [eV] for a backscatter speed [cm/s].
 
-        The configured ``T_launch_eV`` when one was named, and otherwise the
-        grid-tied width of :meth:`_grid_tied_launch_temperature_eV`.
+        The configured ``T_launch_eV`` when one was named; otherwise the
+        shared ENERGY-TIED width of
+        :meth:`_smeared_launch_temperature_eV` when ``jet_launch_width`` is
+        set, and the grid-tied width of
+        :meth:`_grid_tied_launch_temperature_eV` when it is not. The first two
+        are mutually exclusive by construction
+        (:func:`_validated_jet_launch_width`), so the order here decides
+        nothing.
         """
         named = self.cathode_jet["T_launch_eV"]
         if named is not None:
             return float(named)
+        if self.jet_launch_width is not None:
+            return self._smeared_launch_temperature_eV(v_back)
         return self._grid_tied_launch_temperature_eV(v_back)
 
     def _anode_jet_launch_temperature_eV(self, v_back):
         """Return the ANODE jet's launch smear [eV] at a speed [cm/s].
 
-        The configured ``T_launch_eV`` when one was named, and otherwise the
-        grid-tied width of :meth:`_grid_tied_launch_temperature_eV`.
+        The configured ``T_launch_eV`` when one was named; otherwise the
+        shared ENERGY-TIED width of
+        :meth:`_smeared_launch_temperature_eV` when ``jet_launch_width`` is
+        set, and the grid-tied width of
+        :meth:`_grid_tied_launch_temperature_eV` when it is not. The first two
+        are mutually exclusive by construction
+        (:func:`_validated_jet_launch_width`), so the order here decides
+        nothing.
         """
         named = self.anode_jet["T_launch_eV"]
         if named is not None:
             return float(named)
+        if self.jet_launch_width is not None:
+            return self._smeared_launch_temperature_eV(v_back)
         return self._grid_tied_launch_temperature_eV(v_back)
 
     def _cathode_jet_launch_spectrum(self, e_launch, cell):
@@ -2068,12 +2150,20 @@ class TransientDVM:
     def _collector_jet_launch_temperature_eV(self, v_back):
         """Return the COLLECTOR jet's launch smear [eV] at a speed [cm/s].
 
-        The configured ``T_launch_eV`` when one was named, and otherwise the
-        grid-tied width of :meth:`_grid_tied_launch_temperature_eV`.
+        The configured ``T_launch_eV`` when one was named; otherwise the
+        shared ENERGY-TIED width of
+        :meth:`_smeared_launch_temperature_eV` when ``jet_launch_width`` is
+        set, and the grid-tied width of
+        :meth:`_grid_tied_launch_temperature_eV` when it is not. The first two
+        are mutually exclusive by construction
+        (:func:`_validated_jet_launch_width`), so the order here decides
+        nothing.
         """
         named = self.collector_jet["T_launch_eV"]
         if named is not None:
             return float(named)
+        if self.jet_launch_width is not None:
+            return self._smeared_launch_temperature_eV(v_back)
         return self._grid_tied_launch_temperature_eV(v_back)
 
     def _collector_jet_launch_spectrum(self, e_launch, cell):
@@ -2711,6 +2801,13 @@ class TransientDVM:
         source_counts = {} if source_counts is None else source_counts
         self._check_source_channels(sources, source_counts)
         T_s_K = self.T_wall_K if T_s_K is None else float(T_s_K)
+        # The launch-projection counters read THIS tick, so they are zeroed
+        # here rather than accumulated: the construction-time launch-band
+        # check runs the same builders over a sampled band before any tick
+        # fires, and its projections are a statement about the grid rather
+        # than about the run.
+        self._launch_projections = 0
+        self._launch_projections_on_floor = 0
         inv_before = self.total_inventory()
         f_before = self.f_inventory()
         e_inv_before = self.total_energy()
@@ -3213,6 +3310,26 @@ class TransientDVM:
             # The same tick in ERG, per channel; see _book_energy_ledger.
             "energy": energy,
         }
+        if self.jet_launch_width is not None:
+            # PRESENCE-GATED on the ENERGY-TIED smear, so a run that does not
+            # arm it carries the ledger it always carried. How many launch
+            # spectra this tick projected, how many of those fell back on the
+            # grid-tied floor because the local bin was wider than
+            # ``beta e_launch``, and that ratio -- the share of the tick's
+            # launches whose SHAPE was the grid's rather than the surface's.
+            # Zero launches is a tick in which no jet fired, and its fraction
+            # is reported as zero rather than as a division.
+            launches = float(self._launch_projections)
+            on_floor = float(self._launch_projections_on_floor)
+            self.launch_projections_cum += self._launch_projections
+            self.launch_projections_on_floor_cum += (
+                self._launch_projections_on_floor
+            )
+            ledger["launch_projections"] = launches
+            ledger["launch_projections_on_floor"] = on_floor
+            ledger["launch_floor_fraction"] = (
+                on_floor / launches if launches else 0.0
+            )
         if self.anode_jet is not None:
             # PRESENCE-GATED, so a run without the anode jet carries the
             # ledger it always carried. Two readings, not a ledger: what the
@@ -4389,6 +4506,72 @@ def _validated_collector_jet(spec):
         "T_launch_eV": T_launch,
         "sheath_Te_multiple": multiple,
     }
+
+
+def _validated_jet_launch_width(width, jets):
+    """Return a validated ENERGY-TIED launch smear beta, or ``None``.
+
+    ``width`` is the dimensionless ratio ``T_launch / e_launch`` every armed
+    surface jet smears its launch spectrum at; ``jets`` is the resolved
+    ``(cathode, anode, collector)`` spec triple, ``None`` where a channel is
+    off. ``None`` leaves every jet on the GRID-TIED width it has always used
+    and this function says nothing further.
+
+    Set, it is required in ``(0, 2/3)`` -- :data:`LAUNCH_WIDTH_MAX`, the bound
+    at which the launch drift ``u^2 = v_back^2 (1 - 3 beta / 2)`` vanishes --
+    and the two ways it could be a statement about nothing are refused here:
+
+    * NO JET ARMED. The width parameterizes the surface jets' launch spectra
+      and there is no other launch on this grid, so with all three channels
+      off nothing would read it.
+    * A JET CARRYING ITS OWN ``T_launch_eV``. That key pins one channel's
+      smear to a fixed temperature and this one ties every channel's to its
+      launch energy; the two are different smear rules for the same spectrum
+      with no rule for which wins.
+    """
+    if width is None:
+        return None
+    width = float(width)
+    if not np.isfinite(width) or not 0.0 < width < LAUNCH_WIDTH_MAX:
+        raise ValueError(
+            "neutral_kinetic_dvm_jet_launch_width is the DIMENSIONLESS ratio "
+            "T_launch / e_launch the surface jets smear their launch spectra "
+            f"at and requires 0 < beta < {LAUNCH_WIDTH_MAX!r} (got "
+            f"{width!r}). The upper bound is the construction's own: the "
+            "drift is solved from the energy, so u^2 = v_back^2 (1 - 3 "
+            "beta / 2), and at 2/3 there is no drift left to carry. Accepted: "
+            "a width inside that interval, or None to tie every jet's smear "
+            "to the local velocity-grid bin"
+        )
+    if all(spec is None for spec in jets):
+        raise ValueError(
+            "neutral_kinetic_dvm_jet_launch_width smears the SURFACE JETS' "
+            "launch spectra and every one of them is off "
+            "(neutral_kinetic_dvm_cathode_jet, _anode_jet and "
+            "_collector_jet), so nothing reads it and a silently inert "
+            f"control is exactly what this refuses (got {width!r}). "
+            "Accepted: arm at least one jet, or leave the width unset"
+        )
+    named = [
+        surface
+        for surface, spec in zip(("cathode", "anode", "collector"), jets)
+        if spec is not None and spec["T_launch_eV"] is not None
+    ]
+    if named:
+        keys = ", ".join(
+            f"neutral_kinetic_dvm_{surface}_jet_T_launch_eV"
+            for surface in named
+        )
+        raise ValueError(
+            "neutral_kinetic_dvm_jet_launch_width ties every armed jet's "
+            "launch smear to its own launch energy (T = beta e_launch), and "
+            f"{keys} pins that same smear to a fixed temperature. They are "
+            "TWO SMEAR RULES for one spectrum and there is no rule for which "
+            "wins, so both being named is refused rather than resolved. "
+            "Accepted: the shared width with every _T_launch_eV left at None, "
+            "or the per-jet temperatures with the width unset"
+        )
+    return width
 
 
 def _throat_areas(cell_areas):

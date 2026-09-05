@@ -1270,6 +1270,30 @@ def model_mode_defaults():
         configuration names it: required when
         ``neutral_kinetic_dvm_collector_jet`` is on, refused when it is off,
         and required there to be a positive finite float.
+    neutral_kinetic_dvm_jet_launch_width:
+        ONE dimensionless width, shared by every armed surface jet, tying the
+        launch smear to the launch ENERGY rather than to the velocity grid:
+        ``T_launch = beta * e_launch``, so the fractional energy width a
+        launch is smeared over is ``(3/2) beta`` at every launch energy and
+        every velocity resolution. ``None`` (the shipped value) leaves each
+        jet on its grid-tied width -- the axial bin containing the launch
+        speed, expressed as a temperature -- whose fractional width instead
+        halves with each doubling of ``neutral_kinetic_dvm_nvz``, so the
+        launched SHAPE is a property of the grid there and of the surface
+        here. Set, the grid-tied width remains a FLOOR: it is used wherever
+        it exceeds ``beta * e_launch``, because a smear narrower than the
+        local bin collapses onto one bin and cannot be projected at all. It
+        is not a physical gas temperature -- the launch spectrum's drift is
+        solved from the energy, so the discrete mean energy is the launch
+        energy whatever this is -- and it carries no low-energy refusal band:
+        ``u^2 = v_back^2 (1 - 3 beta / 2)`` is positive for every launch
+        energy. Read only under ``neutral_model = "kinetic_dvm"``; must be
+        ``None`` or a float in ``(0, 2/3)``, is refused with every surface jet
+        off (nothing would read it), and is refused together with any
+        ``neutral_kinetic_dvm_*_jet_T_launch_eV`` (two smear rules for one
+        spectrum). Each armed tick reports how often the floor bound, as the
+        ``launch_projections``, ``launch_projections_on_floor`` and
+        ``launch_floor_fraction`` rows of the engine's per-tick ledger.
     neutral_kinetic_dvm_transfer_hold:
         How the plasma applies the transient DVM's tick-booked CX/elastic
         transfer between neutral clock ticks. ``"exponential"`` (the
@@ -1438,6 +1462,10 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_collector_jet_R_E": None,
         "neutral_kinetic_dvm_collector_jet_T_launch_eV": None,
         "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple": None,
+        # Shared ENERGY-TIED launch smear for every armed surface jet.
+        # None = "keep the grid-tied width", the shipped behaviour; a float
+        # in (0, 2/3) smears every jet at T = beta * e_launch instead:
+        "neutral_kinetic_dvm_jet_launch_width": None,
         # None = "not named"; resolved to "exponential" by the arm, and
         # refused outright by every other neutral model, so the key can
         # never be a silently inert control:

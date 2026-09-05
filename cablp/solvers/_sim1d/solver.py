@@ -1572,6 +1572,24 @@ class LAPDSim1D:
                         f"leave it at {_default!r}, or arm the channel with "
                         f"neutral_model='kinetic_dvm' (got {_given!r})"
                     )
+            # The same statement for the shared energy-tied launch smear: it
+            # sets the width every armed SURFACE JET launches its backscatter
+            # spectrum at, and no other neutral model carries such a jet or
+            # such a spectrum. One key for the three channels, so it is
+            # refused once here rather than per surface.
+            _width = self._input_dict.get(
+                "neutral_kinetic_dvm_jet_launch_width"
+            )
+            if _width is not None:
+                raise ValueError(
+                    "neutral_kinetic_dvm_jet_launch_width ties the surface "
+                    "jets' launch smear to their launch energy and has no "
+                    "meaning under "
+                    f"neutral_model={self._neutral_model!r}, which launches "
+                    "no such spectrum. Accepted: leave it unset, or set it "
+                    "with neutral_model='kinetic_dvm', the neutral_two_zone "
+                    f"flag and at least one armed jet (got {_width!r})"
+                )
             # B6: the same statement for the baffle interception. It makes the
             # geometry's thin annular baffles act on the transient DVM's
             # ANNULUS, and no other neutral model carries such an annulus for
@@ -4940,6 +4958,9 @@ class LAPDSim1D:
             cathode_jet=cathode_jet,
             anode_jet=anode_jet,
             collector_jet=collector_jet,
+            jet_launch_width=self._input_dict.get(
+                "neutral_kinetic_dvm_jet_launch_width"
+            ),
             transparency=1.0 - float(self._input_dict.get("eta")),
             mesh_face=int(anode_faces[0]) if anode_faces.size else -999,
             baffle_faces=baffle_faces,
@@ -13857,6 +13878,25 @@ class LAPDSim1D:
             "ion_debt_total": float(np.sum(dvm.ion_debt)),
             "ion_shortfall_updates": float(dvm.ion_shortfall_updates),
         }
+        if dvm.jet_launch_width is not None:
+            # PRESENCE-GATED on the energy-tied launch smear, so a run that
+            # does not arm it carries the census it always carried. The
+            # per-tick ledger's launch counters summed over the WHOLE run,
+            # which is where a saved artifact answers how often the run's
+            # launches actually ran at the stated physical width rather than
+            # on the grid-tied floor.
+            launches = float(dvm.launch_projections_cum)
+            on_floor = float(dvm.launch_projections_on_floor_cum)
+            census.update(
+                {
+                    "launch_width": float(dvm.jet_launch_width),
+                    "launch_projections_cum": launches,
+                    "launch_projections_on_floor_cum": on_floor,
+                    "launch_floor_fraction": (
+                        on_floor / launches if launches else 0.0
+                    ),
+                }
+            )
 
     def _zero_dvm_particle_accum(self):
         """Return a fresh zeroed per-save particle-ledger accumulator."""
