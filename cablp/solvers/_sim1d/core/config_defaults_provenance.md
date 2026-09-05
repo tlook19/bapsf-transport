@@ -1134,9 +1134,10 @@ fixed-duration delay is not representable in an Eulerian `f_a` without an age
 coordinate, whose cost on the production grid is prohibitive; what is
 recovered exactly is the per-flight axial step and hence the annulus's axial
 dispersion, which is the quantity the exponential tail was over-carrying. The
-E2 read of both arms against the step-face ray-traced Monte Carlo on
-`scripts/es1_k3a_cal2_nx240.h5` is `scripts/k5build_report.txt`; the numbers
-there are RATIFICATION-PENDING and nothing in the kernel was tuned to them.
+E2 read of both arms against the step-face ray-traced Monte Carlo was taken on
+the ES1 K3a calibration-2 run at `nx = 240` and recorded in the K5 build
+report; those numbers are RATIFICATION-PENDING and nothing in the kernel was
+tuned to them.
 
 The DEFAULT stays `"rates"` because the frozen production arm ran on it and
 must stay bit-reproducible; `scripts/k5_frozen_bitexact.py` (at commit 48be9a4, retired 2026-09-03) is the check.
@@ -2302,12 +2303,13 @@ files then present in `scripts/` were scanned for the per-step
 once, and the two populations separate cleanly on CONSECUTIVENESS:
 
 - self-releasing episodes (79 files), median run length 1–2 steps, with the
-  longest at **23296 consecutive steps** in `es1_r5_hflim01_exp2.h5` (t =
-  2.002–2.005 ms, `dt_surface_loss` small but strictly positive throughout).
-  That run released, completed, and was scored;
-- one permanent lock, `es1_r5_f01_ag26ms.h5`: a run of 36690 steps still open
-  at the last recorded step, with `dt_surface_loss` exactly `0.0` on 1446 of
-  them, truncated at 22.3 ms against a 26.0 ms target.
+  longest at **23296 consecutive steps** in an ES1 run at the then-current R5
+  stance (t = 2.002–2.005 ms, `dt_surface_loss` small but strictly positive
+  throughout). That run released, completed, and was scored;
+- one permanent lock, in a second ES1 run at that stance carrying a 26.0 ms
+  afterglow target: a run of 36690 steps still open at the last recorded step,
+  with `dt_surface_loss` exactly `0.0` on 1446 of them, truncated at 22.3 ms
+  against that 26.0 ms target.
 
 The pre-registered rule was **≥ 10× the longest run in any completed
 (non-pathological) run**, i.e. ≥ 232960; 250000 is the round number above it.
@@ -2832,8 +2834,10 @@ Three consequences worth stating, because each looks like a missing entry:
   MEASURED.** The rate does not enter the timestep ladder: it is an explicit
   linear damping whose stability condition `nu_add dt << 1` the accepted step
   must satisfy on its own, and the reference ES1 run the three arms are
-  derived from, `g1atrim_es1_d0e9748.h5` (49,415 accepted steps), says by how
-  much. Its largest accepted step on the drive plateau is `6.03e-7 s`, giving
+  derived from says by how much: the `g1atrim` reference configuration at the
+  ES1 rung, run at the golden re-anchor commit `d0e9748` (2026-09-04) as the
+  re-anchor continuity pair's reference arm, 49,415 accepted steps. Its
+  largest accepted step on the drive plateau is `6.03e-7 s`, giving
   `nu_add dt <= 2.8e-3` on the largest of the three arms
   (`nu_add = 4.63e3 s^-1`, the 2x arm); its largest step anywhere, taken in
   the afterglow, is `5.96e-6 s`, giving `nu_add dt <= 2.8e-2`. SSPRK2 applied

@@ -488,12 +488,13 @@ conserved exactly either way.
 
 **`nn0_profile`, `nn0_annulus_profile` — REGENERATED 2026-08-24 (DERIVED from a
 model run, not measured).** The shaped 4.5 ms ballistic foot, rebuilt by
-`scripts/stance/sp3_build_nn0.py` on the equilibrated base
-`scripts/g1aporf_eqbase.h5` and written to `scripts/g1aporf_foot45.npz`
-(`scripts/g1aporf_foot45.cmd` is the verbatim command; `dt_foot = 4.5 ms` is
-the pedestal-floor end of the registered [2.0, 4.5] ms bracket, `ballistic` the
-short-reach end of the kernel bracket). This is the first provenance row this
-pair has had.
+`scripts/stance/sp3_build_nn0.py` on an equilibrated base run of this stance
+carrying the tube-beamed `"orifice"` injection row (2026-08-24). The rebuilt
+fill is not an external file: its per-cell values ARE the `nn0_profile` and
+`nn0_annulus_profile` rows of `scripts/stances/g1atrim.toml`, which is where a
+reader reads them. `dt_foot = 4.5 ms` is the pedestal-floor end of the
+registered [2.0, 4.5] ms bracket, and `ballistic` the short-reach end of the
+kernel bracket. This is the first provenance row this pair has had.
 
 **The fill it replaces was STALE, and the staleness is disclosed rather than
 absorbed.** `scripts/g1afix_foot45.npz` was built 2026-08-19 and predates two
