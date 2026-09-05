@@ -3601,6 +3601,8 @@ def parallel_momentum_sink_defaults():
         column the term is not a statement about a region at all, and above
         it the term reaches no cell and would be silently inert, which is
         the one thing a presence gate exists to prevent.
+
+    The value class and the honest bar: ``config_defaults_provenance.md``.
     """
     return {
         "parallel_momentum_sink": False,
