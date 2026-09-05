@@ -30,10 +30,11 @@
 # plasma down, and reading it as one inverts the map.
 #
 # THE ARITHMETIC. Derived from the re-anchor continuity pair's reference ES1
-# run, g1atrim_es1_d0e9748.h5 (the same configuration this file is based on),
-# over the drive plateau 15.0-19.5 ms (450 saved frames) and over the p29 ->
-# p50 column, cells 136..226 of the 280-cell mesh, all plasma-active, sum V_p
-# = 7.259274e+05 cm^3:
+# run -- the g1atrim reference configuration at ES1, taken at the golden
+# re-anchor commit d0e9748 (2026-09-04), 49,415 accepted steps; the same
+# configuration this file is based on -- over the drive plateau 15.0-19.5 ms
+# (450 saved frames) and over the p29 -> p50 column, cells 136..226 of the
+# 280-cell mesh, all plasma-active, sum V_p = 7.259274e+05 cm^3:
 #
 #   the model's own boxed ion-neutral momentum loss over those cells
 #       <int drag.M dV>   = -6.670319e+04 dyn
