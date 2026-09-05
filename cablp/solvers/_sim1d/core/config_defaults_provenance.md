@@ -2787,6 +2787,57 @@ question posed over seconds.
 Zero and negative values raise at construction: they are not ties.
 
 
+## `parallel_momentum_sink_defaults`
+
+**Three keys — `false`, `None`, `None` — and that is the whole entry: this
+group ships no number, and the two it could ship are refused rather than
+defaulted.** The imposed parallel momentum sink is a RESPONSE-MAP
+INSTRUMENT, and the class of both its values is **PROBE**: not MEASURED, not
+DERIVED from anything about the machine, not FITTED to anything, and not
+ASSUMED in the sense the other groups use — the rate and the position are the
+HYPOTHESIS an arm states, and the deliverable is the plasma's response to
+them, never the values themselves.
+
+**The honest bar is that there is no owner.** No collision process in this
+model supplies this force. Nothing in the atomic data, the Braginskii
+transport, the boxed ion-neutral coupling or the geometry produces it, and no
+measurement pins it. What the instrument is for is the inverse question — how
+much parallel momentum loss, over which length of column, the machine's
+observed profiles would require — so the quotable product of an arm is the
+REQUIREMENT it maps out (a force in dyn, and the momentum-loss length
+`L = u / nu_add` that goes with it), never `parallel_momentum_sink_rate_s`.
+
+**It must never appear in a stance,** and this is the reason the group ships
+no number: a base configuration states the physics a plasma HAS, and a default
+rate would put an unowned force inside the reference that every alternate arm
+is compared against, silently, on trajectories nobody armed it on. Response-map
+arms are DERIVED configurations (`scripts/stances/examples/msink_p29_*.toml`),
+each of which records in its own header the arithmetic that produced its rate
+and the reference artifact that arithmetic was read off.
+
+Three consequences worth stating, because each looks like a missing entry:
+
+- **There is no default position.** Which part of the column sheds the
+  momentum is half the hypothesis, so `parallel_momentum_sink_z_start_cm` is
+  required with the sink on and refused with it off, and a position outside
+  the plasma column's own axial extent raises: below it the term is not a
+  statement about a region of the column at all, and above it the term reaches
+  no cell and would be a silently inert control.
+- **There is no null-control value.** Unlike the probe source's explicit
+  `amplitude = 0`, a zero rate here is refused — an unarmed sink already has a
+  spelling, `parallel_momentum_sink = false`, and that spelling is bit-exact
+  against a checkout that has never heard of the term because neither of its
+  two ledger rows is emitted at all.
+- **There is no timestep entry.** The rate does not enter the timestep ladder:
+  it is an explicit linear damping whose stability condition `nu_add dt << 1`
+  is satisfied by four orders of magnitude at the rates the instrument is
+  derived at (order `10^3 s^-1` against a plateau step of order `10^-7 s`).
+  A rate large enough to bind would be a statement about the machine no
+  response map is asking, and is disclosed here rather than guarded against.
+
+Nothing in this group is on any shipped trajectory.
+
+
 ## `surface_loss_floor_exempt_exit_rtol` (0.1) and `dt_growth_recovery_patience` (4) — pointer
 
 Both defaults were adopted 2026-08-26 as one reviewed stance event (the
