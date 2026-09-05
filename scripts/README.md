@@ -106,3 +106,15 @@ never be mistaken for a base.
 2026-09-03 were collected into `~/bapsf/artifacts/scripts_loose_2026-09-03/`,
 which is where a log pointer of the form `scripts/<artifact>` from before that
 date resolves.
+
+**In-repo notes therefore SUMMARISE the evidence rather than cite the run file
+(2026-09-05).** Because run artifacts live outside this repository, a reader of
+this PUBLIC repo cannot obtain one, so a note that rests its claim on a bare
+file name states nothing that reader can check. Notes instead carry the numbers
+and the derivation in the prose, and identify the run that produced them by
+CONFIGURATION, rung, date and tip — "the ES1 reference run at the `g1atrim`
+reference configuration, taken at commit `d0e9748` (2026-09-04), 49,415
+accepted steps" — rather than by file name. A committed fixture under
+`data/` or `baselines/` is obtainable and is still named directly; so is any
+committed script. The point is not to hide the artifact but to make the note
+survive without it.

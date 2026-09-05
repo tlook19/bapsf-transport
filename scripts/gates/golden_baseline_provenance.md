@@ -1474,8 +1474,9 @@ default `1998.15` either way. It is NOT correct on the campaign route:
 `run_m6_point.py:216` supplies `T_s` from the ES rung's `Ts_standby_K`
 (ES1 = 1910.0) and the stance row SUPERSEDES it, so deleting the row would move
 `T_s` 1998.15 → 1910.0 on every campaign arm. That was measured as a real second
-delta in the pre-flight against `scripts/mgcr1_confirm.h5` and disappeared the
-moment the row was restored. Whether the move is physically inert is unsettled:
+delta in the config pre-flight for this event's campaign-route ES1 confirmation
+arm (the `run_m6_point.py` route, 2026-08-25), and it disappeared the moment the
+row was restored. Whether the move is physically inert is unsettled:
 under `cathode_warming_model = "power_balance"` the evolving surface temperature
 is seeded from `cathode_Ts_base_K`, not `T_s` (`solver.py:1917`), and every live
 read of `T_s` is guarded by that evolving value — but `solver.py:10925` reads it
