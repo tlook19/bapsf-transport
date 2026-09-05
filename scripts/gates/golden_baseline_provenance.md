@@ -270,6 +270,34 @@ run before this event is reproducible at the tip without it: every X- and
 B-series arm and every ES1 score taken on the kinetic stance was produced on
 the `9.2104e6` cm/s grid.
 
+**CONTINUITY PAIR AT THE PRODUCTION ES1 POINT (2026-09-04, scored after
+the recapture; ruled by Tom the same day: score-level continuity ACCEPTED,
+the two failed bars DISCLOSED here).** The ES1 reference arm was re-run on
+the re-anchored tip and scored pairwise against the same arm at the previous
+tip under the seven-gate instrument the 2026-09-03 speed-up recapture used.
+FIVE OF SEVEN pass: stage-(ii) deviations moved at most 0.07 sigma; the
+afterglow taus are identical to print; t90 and the peak time moved 0.08 ms
+and 0.01 ms; the floor census is statistically unchanged; steps moved -0.1 %
+with saves identical and the configuration delta exactly the two declared
+keys. TWO FAIL, and both bars were set for a bit-preserving numerical event:
+the plateau current moved +0.39 % (2955.7 to 2967.3 A) against a 0.1 % bar,
+which is 0.05 sigma of the measured peak; and 19 of 23 run-integrated
+ledger channels moved by more than 1e-3 (worst: heat conduction, 4.8 %)
+against a 1e-3 bar, with every closure still at roundoff. This change is a
+RESOLUTION change to the neutral closure (the velocity grid widens 2.4x at
+fixed nvz), so the state moves about 0.5 % and those two bars measure
+exactly what such a change must move. Every score-level verdict is
+invariant: Isat mean ratio 1.01 to 1.00 at unchanged sigma, T_e mean
+unchanged, the trough at p21 with depth 0.931 to 0.929, all four far-end
+bins within 2e-3, afterglow tau ratio 2.26 to 2.25, no fingerprint class
+moved, the breakdown trigger identical. Two numerics facts in the change's
+favour: the previous run's one relaxation-limited DVM step and its 11 steps
+below dt_min (down to 2.6e-12 s) are both ZERO on the new grid -- the old
+extent was clipping. The R1 faithfulness contract's continuity sentence for
+this anchor therefore reads: score-level continuity with the 2026-09-03
+tip, five of seven gates, the plateau-current and ledger-row bars not met
+and disclosed.
+
 | quantity | before | after |
 |---|---|---|
 | `production_discharge.npz` `sha256` | `c286d2f415058c20966d85d6d15c4355887eefd6f548c49c371d9bd64f1578c4` | `bfda63bec6711bdbd8523e0c64f126802323dd842e7047f76a37cf0e1566c008` |
