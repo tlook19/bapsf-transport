@@ -28,8 +28,8 @@ I4  THE INTERFACE FLUX IS ZERO BY CONSTRUCTION, NOT BY OVERSIGHT. Every
     exactly zero particle and thermal-energy flux, while the same state on the
     BASE geometry -- interface open -- drives a nonzero particle flux through
     those same faces. This is the term the design DROPS (it is the
-    seed-transport neglect; see ``physics/tracer.py``), and the check exists so a reader can
-    see it is zero deliberately.
+    seed-transport neglect; see ``physics/tracer.py``), and the check exists
+    so a reader can see it is zero deliberately.
 
     Asserted at the FACE, not on a cell RHS row: ``_mask_inactive_rhs`` writes
     literal zeros onto every cell the tracer owns, so a cell-row assertion
@@ -128,9 +128,9 @@ def print_cadence_caveat(sim):
     """Print, next to the refresh count, what a PASS from this script does not mean.
 
     The caveat has to travel WITH the result: a printed PASS that a reader
-    cannot reconcile against what ``physics/tracer.py`` says about the Te closure is
-    worse than no output at all, and a gate log outside the repository is not
-    a substitute.
+    cannot reconcile against what ``physics/tracer.py`` says about the Te
+    closure is worse than no output at all, and a gate log outside the
+    repository is not a substitute.
 
     What it says was rewritten when the passive-cell beam power booking was
     corrected (``physics/tracer.py``, the passive-cell beam power booking).

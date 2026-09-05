@@ -3899,9 +3899,9 @@ class LAPDSim1D:
         ``plasma_face_live_cell`` from the composed mask. A closed face carries
         no particle, advective-momentum or thermal-energy flux and no
         conduction, with the active cell's pressure acting on it -- which is
-        the interface treatment ``physics/tracer.py`` describes, reached by reusing the
-        operator that already implements it rather than by adding a branch to
-        the flux.
+        the closed-face interface a passive cell gets, reached by reusing the
+        operator that already implements it rather than by adding a branch
+        to the flux.
         """
         if not self._tracer_engaged:
             return self._geometry
