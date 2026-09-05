@@ -74,9 +74,15 @@ cathode_prescribed_trace_path = "scripts/data/es1_sim1d_overlay.npz"
 # cannot search a saved trajectory for it, so it is stated here.
 #
 # 1.2e-4 s is that origin MEASURED on a calibrated reference run of this arm's
-# own base -- run_m6_point.py --es 1 --stance g1atrim --sgp 9010 --two-zone --
-# and it is a property of the base's phase schedule, not a free parameter. It
-# must be re-measured if the reference's breakdown timing moves.
+# own base -- run_m6_point.py --es 1 --stance g1atrim --sgp 9010 --two-zone.
+# The reference runs phase_transition_mode = "current", so the origin is not a
+# schedule but a TRIGGER the run discovers: that run broke down at
+# t_breakdown_trigger = 1.1839e-4 s and its first saved main_discharge frame,
+# which is what the scorer takes as the origin, landed at 1.2e-4 s on the
+# 1e-5 s save cadence. It is a measurement of the base's own dynamics, not a
+# free parameter, and it must be RE-MEASURED whenever anything that moves the
+# reference's breakdown timing moves -- which is why the foot below is set to
+# the same instant rather than to a round number near it.
 cathode_prescribed_t0_s = 1.2e-4
 
 # THE HAND-OFF. Everything before this instant is the CALIBRATED cathode
