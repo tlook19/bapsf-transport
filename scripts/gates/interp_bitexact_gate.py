@@ -1,4 +1,4 @@
-"""Certify pure == compiled on a configuration that actually INTERPOLATES.
+r"""Certify pure == compiled on a configuration that actually INTERPOLATES.
 
 The production golden returns ``exact=True`` on both the pure and the compiled
 path while saying nothing whatever about ``_interp_scalar``. The reason is NOT
@@ -60,11 +60,18 @@ streams:
   array-path form of leg A's empty-stream trap: it is a vacuous pass, and it
   fails the gate rather than passing it.
 
+Both legs leave capture files behind -- one per arm per kernel path, plus the
+array leg's own transcript -- so ``--outdir`` is REQUIRED and names a
+directory OUTSIDE the repository, whose ``scripts/`` tree holds code only.
+There is deliberately no default: a bare invocation refuses rather than
+scattering run artifacts into the checkout.
+
 Usage (from the checkout ROOT, with PYTHONPATH set to that same root, and the
 extension built with ``python build_ext.py --inplace``)::
 
-    python scripts/gates/interp_bitexact_gate.py
-    python scripts/gates/interp_bitexact_gate.py --steps 400 --report-every 25
+    python scripts/gates/interp_bitexact_gate.py --outdir <artifacts-dir>
+    python scripts/gates/interp_bitexact_gate.py --outdir <artifacts-dir> \
+        --steps 400 --report-every 25
 """
 
 import argparse
@@ -74,8 +81,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-#: ``scripts/`` itself -- the parent of the seven purpose
-#: subdirectories, and the default place to leave captured output.
+#: ``scripts/`` itself -- the parent of the seven purpose subdirectories,
+#: used to address leg B's sibling instrument. It is NOT an output
+#: location: captured output goes where ``--outdir`` says, outside the repo.
 SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
 
 #: This file's own directory, ``scripts/gates/``. The child relaunch
@@ -279,7 +287,9 @@ def main(argv=None):
     p.add_argument("--arms", nargs="+", default=["tw", "twion"])
     p.add_argument("--steps", type=int, default=400)
     p.add_argument("--report-every", type=int, default=25)
-    p.add_argument("--outdir", type=Path, default=SCRIPTS_ROOT)
+    p.add_argument("--outdir", type=Path, default=None,
+                   help="directory to write the capture files into; REQUIRED, "
+                        "and must be outside the repository")
     # Child-mode plumbing; not for direct use.
     p.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--arm", help=argparse.SUPPRESS)
@@ -288,6 +298,14 @@ def main(argv=None):
 
     if a.child:
         return child(a.arm, a.steps, a.report_every, a.want)
+
+    if a.outdir is None:
+        print("interp_bitexact_gate.py writes run artifacts (one capture file "
+              "per arm per kernel path, plus the array leg's transcript) and "
+              "so requires --outdir naming a directory outside the "
+              "repository, whose scripts/ tree holds code only.",
+              file=sys.stderr)
+        return 2
 
     a.outdir.mkdir(parents=True, exist_ok=True)
     print(f"interp bit-exactness gate: arms={a.arms} steps={a.steps} "
