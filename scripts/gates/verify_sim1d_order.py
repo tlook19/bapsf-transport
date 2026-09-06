@@ -26,36 +26,55 @@ solution:
 A reference-based estimate against a much finer run is reported alongside it as
 a cross-check; the two should agree.
 
-Measured at 72 cells with t_end = 1e-6 s, dt from 1.25e-7 down to 3.13e-8, as
-the reference-free triplet order:
+RESOLUTION IS A PRECONDITION, not a detail. The seeded state's fastest
+conduction mode has lambda_max ~ 1.5e8 s^-1, so at the harness's old default of
+8 base-steps the coarsest step ran at dt*lambda_max ~ 18. Nothing about a
+scheme's TRUNCATION error is observable there: a Richardson triplet at large
+|z| measures the substep's stability function instead, and the two are not the
+same ranking. Crank-Nicolson is the trap -- its Strang equilibrium error is
+exactly -z^2/16, a clean power law, so it returns 2.00 at EVERY |z| however
+unresolved, while the L-stable schemes beside it read ~1. A table built there
+says tr_bdf2 is not second order, and that reading is an artefact of the
+sampling, not a property of the scheme.
+
+So ``--base-steps`` now DEFAULTS to a value derived from the seed's own
+conduction operator (see :func:`resolved_base_steps`), chosen so the coarsest
+dt satisfies ``dt * lambda_max <= DT_LAMBDA_RESOLVED``. Every reading is
+printed with its ``dt * lambda_max``, a triplet coarser than
+``DT_LAMBDA_FLAG`` is flagged PRE-ASYMPTOTIC, and the closing line reports
+both preconditions -- floors inert AND the stiff mode resolved.
+
+Measured at 72 cells, t_end = 1e-6 s, in the RESOLVED regime the default now
+selects (base-steps 128, dt*lambda_max = 1.15 / 0.58 / 0.29), as the
+reference-free triplet order:
 
     picard  splitting   backward_euler  shifted  crank_nicolson  tr_bdf2
     ------  ---------   --------------  -------  --------------  -------
-      0       lie            1.05         0.98        1.00         1.07
-      4       lie            1.04         0.99        0.99         1.07
-      0       strang         1.09         1.58        1.77         1.11
-      4       strang         1.10         1.65        1.89         1.11
+      0       lie            0.99         1.00        1.00         0.95
+      4       lie            0.99         1.00        1.00         0.95
+      0       strang         0.82         1.45        1.79         1.74
+      4       strang         0.81         1.45        2.00         1.98
 
 Second order needs all three of a second-order substep scheme, a non-frozen
 conductivity, and Strang splitting. Each of the first-order terms caps the step
 on its own, so knocking out only one changes nothing: --picard alone is still
 capped by Lie splitting, which is why every Lie row sits at ~1.0 whatever the
-substep scheme is.
+substep scheme is, and --splitting strang alone is still capped by the frozen
+conductivity, which is the 1.74-1.79 of the picard-0 Strang row.
 
-backward_euler staying at ~1.0 in every row is the negative control: theta = 1
-cannot be second-order at any dt, so if it reaches 2.0 the harness is wrong
-rather than good. shifted is theta = 0.6 and is first-order for the same
-reason, but its leading first-order coefficient is (theta - 1/2) = 0.1 of
-backward Euler's, so on the Strang rows the second-order term still dominates
-at these dt and the observed order reads pre-asymptotically high; it falls back
-toward 1.0 as dt shrinks. Read shifted as a scale check, not as an order claim.
+The bottom row is the shipped production package, and both second-order
+L-stable-or-symmetric substeps reach second order in it: crank_nicolson 2.00
+(2.00 -> 2.02 against the reference) and tr_bdf2 1.98 (1.99 -> 2.02). tr_bdf2
+is the shipped choice because it is the only one that is second-order AND
+L-stable.
 
-crank_nicolson at picard 4 + strang is the row that reaches second order:
-triplet 1.89, and 1.91 -> 1.99 against the reference. tr_bdf2 -- second-order
-AND L-stable, and the shipped substep scheme -- does NOT reach it in that same
-row (triplet 1.11; 1.25 -> 1.57 against the reference). Two schemes that are
-both formally second order separating by that much in one row is a measurement
-this harness reports; it does not diagnose it.
+backward_euler is the negative control: theta = 1 cannot be second-order at any
+dt, so if it reaches 2.0 the harness is wrong rather than good. shifted is
+theta = 0.6, first-order for the same reason, and its 1.45 on the Strang rows
+is the same band effect described above rather than an order claim -- its
+leading first-order coefficient is (theta - 1/2) = 0.1 of backward Euler's, so
+the second-order term still contributes at these dt. Read shifted as a scale
+check.
 
 Usage:
     python scripts/gates/verify_sim1d_order.py
@@ -77,10 +96,25 @@ from cablp.solvers._sim1d.core.state import (
     neutral_energy_floor,
     pack_state,
 )
-from cablp.solvers._sim1d.physics.conduction import IMPLICIT_HEAT_SCHEMES
+from cablp.solvers._sim1d.physics.conduction import (
+    HEAT_DT_FRACTION,
+    IMPLICIT_HEAT_SCHEMES,
+    heat_conduction_timestep_bound,
+)
 from cablp.constants import ev_to_erg
 
 FLOOR_RTOL = 1e-9
+
+#: The coarsest ``dt * lambda_max`` at which a Richardson triplet is inside the
+#: asymptotic regime, and the value the default ``--base-steps`` is derived to
+#: satisfy. Above it the stiff conduction modes are not resolved and the
+#: measured order is a property of each scheme's stability function at large
+#: ``|z|``, not of its truncation error.
+DT_LAMBDA_RESOLVED = 2.0
+
+#: The coarsest ``dt * lambda_max`` beyond which a triplet is reported as
+#: PRE-ASYMPTOTIC and its orders as not meaningful.
+DT_LAMBDA_FLAG = 4.0
 
 #: Neutral temperature [K] the seed puts the optional ``En`` row at. The ``En``
 #: floor clips up to the vessel wall, so a seed AT the wall would sit on its own
@@ -264,6 +298,61 @@ def run_fixed_dt(scheme, nsteps, t_end, amplitude, picard=0, splitting="lie"):
     return fields, watch.clips
 
 
+def build_sim(scheme, picard, splitting):
+    """Return a solver configured exactly as :func:`run_fixed_dt` configures it."""
+    params, flags = default_config()
+    params.update(CLEAN_PARAMS)
+    params["implicit_heat_scheme"] = scheme
+    params["heat_picard_iterations"] = picard
+    params["operator_splitting"] = splitting
+    flags.update(CLEAN_FLAGS)
+    return LAPDSim1D(params, flags)
+
+
+def seed_conduction_lambda_max(scheme, amplitude, picard, splitting):
+    """Return the fastest conduction rate [s^-1] of the SEEDED state.
+
+    Read out of the solver's own explicit heat bound rather than restated: that
+    bound is ``HEAT_DT_FRACTION / max(cell_coeff)``, and ``max(cell_coeff)`` is
+    exactly the largest diagonal rate of the conduction operator this harness's
+    implicit substep has to integrate. Inverting the bound therefore reuses the
+    operator the solver actually builds -- one source, so the two cannot drift.
+
+    The conduction operator does not depend on which substep scheme integrates
+    it, so this is a property of the seed alone and is computed once per run.
+    """
+    sim = build_sim(scheme, picard, splitting)
+    dt_bound = heat_conduction_timestep_bound(
+        seeded_state(sim, amplitude),
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        mu=sim.mu,
+        geometry=sim._geometry,
+        **sim._heat_conduction_kwargs(),
+    )
+    if not np.isfinite(dt_bound) or dt_bound <= 0.0:
+        raise RuntimeError(
+            "the seeded state has no finite explicit heat bound, so the "
+            f"resolution of the triplet cannot be established (got {dt_bound})"
+        )
+    return HEAT_DT_FRACTION / float(dt_bound)
+
+
+def resolved_base_steps(t_end, lambda_max):
+    """Return the smallest power-of-two base-steps that resolves the seed.
+
+    "Resolves" means the COARSEST dt of the triplet satisfies
+    ``dt * lambda_max <= DT_LAMBDA_RESOLVED``. A power of two is used so the
+    triplet's successive halvings and the reference multiple all land on
+    exactly representable steps.
+    """
+    need = t_end * float(lambda_max) / DT_LAMBDA_RESOLVED
+    n = 1
+    while n < need:
+        n *= 2
+    return n
+
+
 def rel_diff(a, b):
     """Relative L-inf difference, scaled by the magnitude of b."""
     scale = np.max(np.abs(b))
@@ -280,7 +369,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--schemes", nargs="+", default=list(IMPLICIT_HEAT_SCHEMES))
     parser.add_argument("--t-end", type=float, default=1.0e-6)
-    parser.add_argument("--base-steps", type=int, default=8)
+    parser.add_argument(
+        "--base-steps",
+        type=int,
+        default=None,
+        help=(
+            "coarsest step count of the triplet; default is DERIVED from the "
+            "seed's own conduction rate so the coarsest dt*lambda_max is at "
+            "or below the resolved bound"
+        ),
+    )
     parser.add_argument("--amplitude", type=float, default=0.3)
     parser.add_argument(
         "--picard",
@@ -292,14 +390,25 @@ def main(argv=None):
     parser.add_argument(
         "--ref-factor",
         type=int,
-        default=32,
+        default=8,
         help="reference run uses base-steps*4*ref-factor steps",
     )
     args = parser.parse_args(argv)
 
-    N = args.base_steps
+    lambda_max = seed_conduction_lambda_max(
+        args.schemes[0], args.amplitude, args.picard, args.splitting
+    )
+    if args.base_steps is None:
+        N = resolved_base_steps(args.t_end, lambda_max)
+        base_steps_origin = "derived"
+    else:
+        N = args.base_steps
+        base_steps_origin = "given"
     counts = (N, 2 * N, 4 * N)
     ref_steps = 4 * N * args.ref_factor
+    z_coarse = args.t_end / counts[0] * lambda_max
+    resolved = z_coarse <= DT_LAMBDA_RESOLVED
+    pre_asymptotic = z_coarse > DT_LAMBDA_FLAG
 
     print("=" * 76)
     print("sim1d SPLIT-STEP TEMPORAL ORDER")
@@ -308,6 +417,23 @@ def main(argv=None):
     print(f"heat_picard_iterations={args.picard}  operator_splitting={args.splitting}")
     print(f"dt from {args.t_end/counts[0]:.3e} s down to {args.t_end/counts[-1]:.3e} s")
     print("regime: fixed dt, floors inert, single phase, autonomous RHS, no cathode")
+    print(
+        f"seed conduction lambda_max = {lambda_max:.4e} s^-1 "
+        f"(from the solver's own explicit heat bound)"
+    )
+    print(
+        f"base-steps={N} ({base_steps_origin}); dt*lambda_max = "
+        + ", ".join(f"{args.t_end/n*lambda_max:.2f}" for n in counts)
+        + f"   [resolved bound {DT_LAMBDA_RESOLVED:.0f}, "
+        f"flag above {DT_LAMBDA_FLAG:.0f}]"
+    )
+    if pre_asymptotic:
+        print(
+            f"  *** PRE-ASYMPTOTIC: coarsest dt*lambda_max = {z_coarse:.2f} > "
+            f"{DT_LAMBDA_FLAG:.0f}. ORDERS BELOW ARE NOT MEANINGFUL -- at this "
+            "stiffness each\n      scheme reports its stability function at "
+            "large |z|, not its truncation error."
+        )
 
     any_dirty = False
     for scheme in args.schemes:
@@ -339,8 +465,16 @@ def main(argv=None):
         if clips:
             flag = f"   <-- INVALID: {clips} floor activations"
             any_dirty = True
+        if pre_asymptotic:
+            flag += (
+                f"   <-- PRE-ASYMPTOTIC (dt*lambda_max={z_coarse:.2f}): "
+                "orders not meaningful"
+            )
         print(f"\n--- {scheme} ---{flag}")
-        print(f"  triplet order            : {triplet:.2f}")
+        print(
+            f"  triplet order            : {triplet:.2f}"
+            f"   [coarsest dt*lambda_max = {z_coarse:.2f}]"
+        )
         print(f"  vs reference, per field  :")
         for k in FIELDS:
             ek = [rel_diff(runs[n][k], ref[k]) for n in counts]
@@ -355,11 +489,33 @@ def main(argv=None):
         print(f"  combined ref order       : {[f'{r:.2f}' for r in ref_rates]}")
 
     print("\n" + "-" * 76)
-    if any_dirty:
+    # BOTH preconditions have to hold. Floors are a non-smooth projection and
+    # break order wherever they bind; an unresolved stiff mode replaces the
+    # truncation error with the substep's large-|z| stability behaviour. Either
+    # one alone leaves the orders unreadable, so the closing line states both.
+    print(f"precondition 1, floors inert                  : "
+          f"{'no' if any_dirty else 'yes'}")
+    print(f"precondition 2, coarsest dt*lambda_max <= "
+          f"{DT_LAMBDA_RESOLVED:.0f} : "
+          f"{'yes' if resolved else 'no'} ({z_coarse:.2f})")
+    if any_dirty and not resolved:
+        print("NEITHER precondition holds: the orders above are not meaningful.")
+        print("Raise --amplitude headroom, and raise --base-steps.")
+    elif any_dirty:
         print("At least one run activated a floor: those orders are meaningless.")
         print("Raise --amplitude headroom or shorten --t-end.")
+    elif not resolved:
+        print(
+            "The stiffest conduction mode is UNRESOLVED at the coarsest dt: the "
+            "orders above are\nnot meaningful. Raise --base-steps (the default "
+            "derives one that resolves it)."
+        )
     else:
-        print("Floors stayed inert in every run: the orders above are meaningful.")
+        print(
+            "Floors stayed inert in every run AND the stiffest conduction mode "
+            "is resolved at\nevery dt of the triplet: the orders above are "
+            "meaningful."
+        )
     print("-" * 76)
     return 0
 
