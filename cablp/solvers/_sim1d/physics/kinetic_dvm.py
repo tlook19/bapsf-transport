@@ -2084,10 +2084,14 @@ class TransientDVM:
         misses its moments RAISES rather than returning an approximate
         spectrum; both statements hold here unchanged, against the anode
         energy book's ``backscatter`` row instead of the cathode surface's.
-        The ways out this side's message names are the same three read
+        The ways out this side's message names are the same four read
         against the anode's own coefficients -- a larger extent, that extent
-        left unset, or a smaller ``R_E`` -- with the same non-way, a finer
-        ``nvz``, called out for the same reason.
+        left unset, a smaller ``R_E``, or
+        ``neutral_kinetic_dvm_jet_launch_width`` named -- and a finer ``nvz``
+        is the same regime-dependent statement, called out for the same
+        reason: with the width unset it narrows the grid-tied smear and makes
+        the miss worse, and with the width set it moves only the floor under
+        ``beta e_launch``.
         """
         e_launch = float(e_launch)
         if not np.isfinite(e_launch) or e_launch <= 0.0:
