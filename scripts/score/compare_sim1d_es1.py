@@ -226,7 +226,7 @@ PARAM_OVERRIDES = {
     # recombination and radiation-only cooling, consistent with the separate
     # ionization-cost term. The rate channels carry no scale factor: the b_*
     # scalars were removed at commit 3e7d386 and unit scaling is now
-    # structural.
+    # structural rather than scaled.
     "atomic_rate_model": "adas",
     # Beam-driven neutral excitation: 1.0 books the 2^1P channel alone, the
     # rest approximates the remainder of the singlet manifold. Radiates ~21 eV

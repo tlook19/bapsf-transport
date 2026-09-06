@@ -139,8 +139,10 @@ validator accepts it, correctly: it stays far under the open-area cap and the
 profile is still monotone, so nothing here is violated. It is recorded because
 it is a property of the regularization meeting a staircase vessel rather than
 a measurement, and any per-cell quantity read across those two cells inherits
-it. Outside the corrected sample span
-``B_hat`` is HELD at the nearer end sample: below ``z_model = -210.63`` cm,
+it.
+
+Outside the corrected sample span ``B_hat`` is HELD at the nearer end
+sample: below ``z_model = -210.63`` cm,
 where the flat rule already fixes ``r = RP_CM`` so the hold cannot be
 observable, and beyond ``z_model = 2114.67`` cm. The report states how many
 mesh cells fall outside the span at each end and whether the cap binds there,

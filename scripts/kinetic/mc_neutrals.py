@@ -106,10 +106,10 @@ RAY_EPS_CM = 1e-7
 
 # Every ``rhs_terms`` row a plasma-terminating boundary has ever been booked
 # under. There is ONE such operator: the legacy volumetric absorber was
-# retired (see commit 1fc05c9), so a run this package can now produce
-# books its boundary physics under ``characteristic_boundary`` alone and
-# ``boundary_absorption``
-# is identically zero. The retired name is kept because this tuple is read as a
+# retired (see commit 1fc05c9), so a run this package can now produce books
+# its boundary physics under ``characteristic_boundary`` alone and
+# ``boundary_absorption`` is identically zero. The retired name is kept
+# because this tuple is read as a
 # UNION over rows, never as a selector: summing the plasma removal booked by
 # EITHER row gives a nonzero reference on a historical artifact that books
 # under the retired name as well as on a current one, which is what lets an

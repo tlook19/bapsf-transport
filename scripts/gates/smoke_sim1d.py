@@ -7096,8 +7096,7 @@ def _case_ionization_birth_energy_model(csda_params, csda_sim, csda_terms):
     # pressure), so the reflecting-wall pressure that used to cancel here is
     # gone. That is the retirement of the legacy closed-wall alternative
     # (see commit 1fc05c9), not a loss of well-balancedness: the interior
-    # still
-    # cancels bit-for-bit, which is what the assertions below pin.
+    # still cancels bit-for-bit, which is what the assertions below pin.
     _ib_absorbing = np.asarray(geom.plasma_absorbing, dtype=bool)
     _ib_live = np.asarray(geom.plasma_face_live_cell)
     _ib_term = sorted(
@@ -9085,8 +9084,7 @@ def _case_cathode_power_balance_warming(
     # deposited the sheath fall phi_c into the plasma electron store and ran
     # +2.56e-05 W/cm^3 POSITIVE. With the A16 thermal-only routing
     # unconditional (see commit 1fc05c9) phi is the ELECTRODE's, the cathode
-    # row
-    # is a pure sink, and the sum is <= 0 everywhere. So the surviving --
+    # row is a pure sink, and the sum is <= 0 everywhere. So the surviving --
     # and strictly stronger -- statement is asserted instead: the channels are
     # LIVE, and they never deposit net positive electron power into the plasma.
     _pb_sum = sum(

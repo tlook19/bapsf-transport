@@ -326,8 +326,7 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     # --- surface sources: recycled plasma leaves the surface at T_wall ---
     # ``boundary_absorption`` is a permanently-zero row kept for saved-ledger
     # schema stability (retired; see commit 1fc05c9); its entry stays so the
-    # table
-    # still covers every row the ledger emits.
+    # table still covers every row the ledger emits.
     "boundary_absorption": "wall",
     "characteristic_boundary": "wall",
     "anode_collection": "wall",
@@ -5517,9 +5516,8 @@ class LAPDSim1D:
             # retired; see commit 1fc05c9. The ROW is kept because it is
             # part of the saved ledger schema that existing artifacts and
             # the committed phase-3 RHS provenance enumerate; dropping it
-            # would
-            # move the saved term set, which this change deliberately does
-            # not. Nothing can write it: read the live boundary from
+            # would move the saved term set, which this change deliberately
+            # does not. Nothing can write it: read the live boundary from
             # "characteristic_boundary" below.
             "boundary_absorption": self._zero_rhs_state(),
             "characteristic_boundary": self.characteristic_boundary_rhs(
@@ -9675,11 +9673,10 @@ class LAPDSim1D:
 
         THE plasma-terminating boundary operator, and the only one since the
         legacy volumetric absorber was retired (see commit 1fc05c9): a
-        one-sided ghost-cell KEP/Rusanov flux against the Bohm outflow
-        state at each
-        absorbing face. Reads the surface kwargs and cathode jet, and follows
-        the interior's momentum-flux form and wave speed so the boundary and
-        the interior stay consistent.
+        one-sided ghost-cell KEP/Rusanov flux against the Bohm outflow state
+        at each absorbing face. Reads the surface kwargs and cathode jet, and
+        follows the interior's momentum-flux form and wave speed so the
+        boundary and the interior stay consistent.
 
         ``carrier_out`` is the directed hot surface carrier's launch channel;
         ``None`` is the historical call and is unchanged bit for bit.
@@ -14577,11 +14574,10 @@ class LAPDSim1D:
             raise ValueError(
                 "gas_type='H' is not available: the hydrogen arm of "
                 "_gas_constants was retired as dead code; see commit "
-                "0195a02. It returned proton constants that no "
-                "construction could ever "
-                "carry into physics -- the solver is helium-only and "
-                "refuses gas_type != 'He' a few lines later "
-                "in __init__, at the Phelps He+/He sigma_in_model gate. "
+                "0195a02. It returned proton constants that no construction "
+                "could ever carry into physics -- the solver is helium-only "
+                "and refuses gas_type != 'He' a few lines later in "
+                "__init__, at the Phelps He+/He sigma_in_model gate. "
                 "Accepted: 'He'."
             )
         raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")

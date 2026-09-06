@@ -178,9 +178,8 @@ nodes, against the 2^3S term energy 19.820 eV, where 2^1S would require
 at 19.776 below 1e11 cm^-3, a 19.389 minimum at 2e13, back to 19.758 at the
 top of the grid — and it does not touch the identification, since every node
 is an order of magnitude nearer 19.820 than 20.616. The singlet metastable
-2^1S is not an independent
-population in this dataset; it sits inside the collisional-radiative bundle
-built on the ground state.
+2^1S is not an independent population in this dataset; it sits inside the
+collisional-radiative bundle built on the ground state.
 
 | file | class | blocks (z1 = 1) | quantity |
 |---|---|---|---|
