@@ -280,9 +280,10 @@ def resolve_energy_exchange_rate_fraction(input_dict):
     that bounds the explicit electron-ion energy exchange by its RELAXATION
     RATE (``core.timestep.energy_exchange_rate_timestep``). ``None`` leaves
     the bound withdrawn. Anything else must be a real, finite number in
-    ``(0, 2]``: zero or negative would stop the run dead, and above 2 puts the
-    difference variable's ``z = -2 c`` outside SSPRK2's real-axis stability
-    interval, which is the opposite of what arming this bound is for.
+    ``(0, 1]``: zero or negative would stop the run dead, and above 1 puts the
+    difference variable's ``z = -2 c`` below -2, outside SSPRK2's real-axis
+    stability interval -- a fraction that arms this bound and is unstable at
+    its own limit is the opposite of what arming it is for.
     """
     raw = input_dict.get("energy_exchange_rate_fraction", None)
     if raw is None:
@@ -294,11 +295,13 @@ def resolve_energy_exchange_rate_fraction(input_dict):
             f"(got {raw!r})"
         )
     fraction = float(raw)
-    if not np.isfinite(fraction) or fraction <= 0.0 or fraction > 2.0:
+    if not np.isfinite(fraction) or fraction <= 0.0 or fraction > 1.0:
         raise ValueError(
             "energy_exchange_rate_fraction (the electron-ion exchange rate "
-            f"bound's fraction of 1/nu_eq) must be finite and in (0, 2] "
-            f"(got {raw!r}); use None to leave the rate bound withdrawn"
+            f"bound's fraction of 1/nu_eq) must be finite and in (0, 1] "
+            f"(got {raw!r}); above 1 the difference variable's z = -2 c falls "
+            "outside SSPRK2's real-axis stability interval. Use None to leave "
+            "the rate bound withdrawn"
         )
     return fraction
 

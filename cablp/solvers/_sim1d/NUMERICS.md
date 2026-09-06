@@ -239,9 +239,12 @@ read back out of the same $Q_{ie}$ the term itself calls
 bound and the term cannot drift apart. With equal electron and ion heat
 capacities the DIFFERENCE $T_e-T_i$ relaxes at $2\nu_\text{eq}$, so the explicit
 advance of that difference sits at $z=-2c$ and $c\le1$ keeps it inside SSPRK2's
-real-axis stability interval $z\ge-2$. The key defaults to `None`, which
-withdraws the candidate before any state is read; a value outside $(0,2]$, or a
-non-numeric one, is refused at construction.
+real-axis stability interval $z\ge-2$, which is exactly the condition $c\le1$.
+The admissible range is therefore $(0,1]$: the key defaults to `None`, which
+withdraws the candidate before any state is read, and a value outside $(0,1]$,
+or a non-numeric one, is refused at construction — a fraction that arms this
+bound while placing its own limiting step outside the stability interval would
+defeat the bound's purpose.
 
 **A bound must describe something the step applies.** The kinetic neutral arm
 zeroes whole contributions of the fluid terms and carries them in its own

@@ -155,6 +155,9 @@ from cablp.solvers._sim1d.physics.energy import (
     electron_ion_relaxation_rate,
     ion_charge_exchange_rhs,
 )
+from cablp.solvers._sim1d.core.validation import (
+    resolve_energy_exchange_rate_fraction,
+)
 from cablp.plasma.params import LN_LAMBDA_MIN, c_log, time_elec_coll
 from cablp.constants import He_e_mass_ratio
 from cablp.solvers._sim1d.solver import _timestep_limiters
@@ -7812,8 +7815,15 @@ def _case_energy_exchange_rate_bound():
         _timestep_limiters(unarmed_dt, count=len(dataclasses.fields(unarmed_dt)))
     )
 
-    # (c) The refusals, at construction.
-    for bad_fraction in (0, 3, "x"):
+    # An int is a real number and is accepted, resolved to its float; the
+    # upper end of the admissible range is exactly c = 1, where z = -2.
+    assert resolve_energy_exchange_rate_fraction(
+        {"energy_exchange_rate_fraction": 1}
+    ) == 1.0
+
+    # (c) The refusals, at construction. 1.5 is refused because z = -2 c = -3
+    # falls outside SSPRK2's real-axis stability interval.
+    for bad_fraction in (0, 1.5, "x"):
         try:
             LAPDSim1D(
                 {**params, "energy_exchange_rate_fraction": bad_fraction},

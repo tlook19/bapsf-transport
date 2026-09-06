@@ -3056,14 +3056,15 @@ def timestep_defaults():
         toward the other (``physics.energy.electron_ion_relaxation_rate``,
         read back out of the same ``Q_ie`` the term calls); the DIFFERENCE
         ``Te - Ti`` relaxes at ``2 nu_eq``, so the explicit SSPRK2 advance of
-        that difference has ``z = -2 c`` and ``c <= 1`` keeps it inside the
-        scheme's real-axis stability interval. Stability, not accuracy: the
+        that difference has ``z = -2 c``, which stays inside the scheme's
+        real-axis stability interval ``z >= -2`` exactly for ``c <= 1``.
+        Stability, not accuracy: the
         fractional-change bound alone vanishes as ``Te -> Ti`` and stops
         bounding the exchange exactly where it is stiffest. ``None`` -- the
         default -- withdraws the bound entirely, so an unarmed run's dt
         arithmetic is bit-identical to one predating this key. Anything else
-        must be a real, finite number in ``(0, 2]``; zero, negative, above
-        two, non-finite or non-numeric raises ValueError at construction. The
+        must be a real, finite number in ``(0, 1]``; zero, negative, above
+        one, non-finite or non-numeric raises ValueError at construction. The
         bound rides the timestep diagnostics as ``dt_energy_exchange_rate``
         and names itself ``energy_exchange_rate`` when it binds.
     dt_min:
