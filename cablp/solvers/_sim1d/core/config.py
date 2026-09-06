@@ -3649,7 +3649,7 @@ def parallel_momentum_sink_defaults():
     The term is a linear damping of the evolved parallel momentum density
     on the column cells at or beyond ``parallel_momentum_sink_z_start_cm``,
 
-        S_M = -nu_add * M = -nu_add * m_i n u   [g cm^-2 s^-2],
+        F = -nu_add * M = -nu_add * m_i n u   [g cm^-2 s^-2],
 
     booked as its own RHS row ``parallel_momentum_sink``, with the
     frictional work it does,
