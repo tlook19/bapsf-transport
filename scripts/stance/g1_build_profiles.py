@@ -16,8 +16,7 @@ was actually in, and under the corrected MSI registration (2026-09-01) the
 measured fall-off tracks this script's ``off`` axial field to a few cm all the
 way down. The ~156 cm "coil-location disagreement" reported against
 ``droop_min`` earlier that day was an artifact of a mirror-imaged coordinate
-assumption in the MSI build and is retired; see
-``scripts/stance/production_stance_provenance.md``.
+assumption in the MSI build and is retired.
 
 G1 adopts the measured CAD machine geometry at the l2a7b operating point.
 The solver takes the geometry as RADII, one entry per mesh cell, under the

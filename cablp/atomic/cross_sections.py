@@ -1022,10 +1022,7 @@ def phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"):
 # that collisionally damps a Langmuir wave, and it is read only by the
 # `ql_relaxation` beam-anomalous closure's onset gate.
 #
-# The table is two nodes and nothing is smuggled in between them: the shipped
-# values, their classes and their honest bars live in
-# `solvers/_sim1d/core/config_defaults_provenance.md` under "QL relaxation
-# closure".
+# The table is two nodes and nothing is smuggled in between them.
 #
 # Both nodes are DERIVED from the same three published He elastic
 # momentum-transfer sets -- Biagi, IST-Lisbon and Morgan (LXCat, retrieved

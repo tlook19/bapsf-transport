@@ -44,10 +44,12 @@
 # ``default_config()`` reproduces, key for key, the config the g1atrim arm of
 # record ran.
 #
-# PROVENANCE IS NOT HERE. What each value is, how it was measured, derived,
-# fitted or assumed, and what may be claimed from it live in
-# scripts/stance/production_stance_provenance.md. This file carries values
-# and the functional notes needed to read them.
+# PROVENANCE IS NOT HERE. How each value was measured, derived, fitted or
+# assumed, the honest bar it carries, and what may be claimed from it are
+# recorded OUTSIDE this repository, because that record rests on measurement
+# memos and run artifacts a reader of this public repository cannot obtain.
+# This file carries the values themselves and the functional notes needed to
+# read them.
 #
 # input_dict and input_flags are SEPARATE namespaces and each rejects a key it
 # does not own, so a key in the wrong table raises at construction rather than
@@ -102,8 +104,7 @@
 # -- the end-pair supply channel reads 0 A in every recorded shot -- so the far
 # end simply falls off with no mirror, and the source-coil structure the
 # mirrored build painted onto the far column belongs on the cathode side,
-# inside the flat hold. See that script's docstring and
-# production_stance_provenance.md.
+# inside the flat hold. See that script's docstring.
 #
 # machine_radius_profile_cm is UNCHANGED: still the measured CAD bore
 # staircase built by scripts/stance/g1_build_profiles.py, which also remains
@@ -276,7 +277,6 @@ nx = 268
 # It is still the ONE drive-side fit knob: cathode_Ts_base_K is NOT co-trimmed
 # and stays at the measured config default 1910.0, because the two are the same
 # flat direction and only one member of a flat pair may carry a calibration.
-# See production_stance_provenance.md.
 C_R = 9.3
 # V_bank is DELETED from this stance (2026-08-25; the 23b R4 deletion, executed
 # for this half only). It was never a stance decision: V_bank is a PER-RUNG
@@ -301,8 +301,7 @@ cathode_emission_profile = "uniform"
 # by exactly one key and moves no value ON THIS STANCE'S OWN ROUTE. The row
 # was NOT inert on the ladder's --warming none route, which this file also
 # reaches: there it superseded the rung's standby, and dropping it hands
-# that route back to the rung. See scripts/gates/golden_baseline_provenance.md
-# for both disclosures.
+# that route back to the rung.
 
 # FUELING. The puff window that arms with the equilibrate route is a member of
 # [models.initial_neutral_state] and is stated there.
@@ -348,7 +347,8 @@ neutral_kinetic_dvm_cadence_s = 3.125e-6
 # same count on a cosine spectrum whose temperature is solved so the discrete
 # mean energy equals the retained share's own incident mean, so the surface
 # randomizes direction while exchanging no energy and returning no net axial
-# momentum. See production_stance_provenance.md for the bracket alpha_E sits in.
+# momentum. The shipped 0.40 sits inside a declared bracket rather than being
+# a pinned number, so a result states the arm it ran.
 neutral_kinetic_dvm_accommodation = 0.40
 neutral_kinetic_dvm_wall_reflection = "diffuse_elastic"
 
@@ -575,8 +575,7 @@ use_cached_neutral_seed = false
 # everything this stance absorbed after that date -- the CAD-span gap
 # re-anchor most visibly (its z grid is shifted 3.25 cm), the sccm changeover
 # to the flow meter's 20 C / 1013 mbar standard, and the physics events its
-# equilibrated base predates. scripts/stance/production_stance_provenance.md
-# separates that staleness from the row change, at both measured scopes.
+# equilibrated base predates.
 # The profile flag stays stance-side because the per-cell nn0_profile it
 # requires is sized to this mesh.
 neutral_initial_profile = true

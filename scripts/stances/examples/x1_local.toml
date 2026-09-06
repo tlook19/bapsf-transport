@@ -32,8 +32,7 @@
 # earlier than the reference does, asks 159.1 eV of its first armed DVM tick,
 # and the velocity grid of the day could not represent a drift that fast. That
 # is the defect `neutral_kinetic_dvm_vmax_cm_s` was declared to remove, and
-# this file is the configuration that exhibits it. See
-# `scripts/stance/production_stance_provenance.md`.
+# this file is the configuration that exhibits it.
 base = "g1atrim"
 
 

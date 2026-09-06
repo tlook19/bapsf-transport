@@ -607,9 +607,7 @@ _OMEGA_PE_COEFF = 5.64e4  # omega_pe = 5.64e4 sqrt(n_e) [rad/s] (NRL)
 # --- ql_relaxation closure: the two literature-boxed coefficients -----------
 # Neither is a knob and neither is exposed as config. The closure's ONE
 # description-class constant is `ql_relaxation_coeff`, which is; both of these
-# are cited values, and their classes and honest bars live in
-# `solvers/_sim1d/core/config_defaults_provenance.md` under "QL relaxation
-# closure".
+# are cited values taken from the literature at the form written beside them.
 #
 # Cold-beam growth rate coefficient, gamma_r = 0.687 w_pe (n_b/n_e)^(1/3).
 QL_GROWTH_COEFF = 0.687
