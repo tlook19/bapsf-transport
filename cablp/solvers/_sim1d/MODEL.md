@@ -53,9 +53,12 @@ section below:
 every conservation law below, $S$ denotes a particle-density rate
 (cm<sup>-3</sup> s<sup>-1</sup>), $F$ a momentum-density rate — a force density
 (dyn cm<sup>-3</sup> = g cm<sup>-2</sup> s<sup>-2</sup>) — and $Q$ an
-energy-density rate (erg cm<sup>-3</sup> s<sup>-1</sup>). $\Gamma$ is a flux,
-never a source. The calligraphic $\mathcal S$ of the kinetic equation is the
-phase-space counterpart of $S$, per unit $dv_\parallel dc_\perp$.
+energy-density rate (erg cm<sup>-3</sup> s<sup>-1</sup>). The one exception is
+$S_\text{pump}$, which is a volumetric pumping SPEED
+(cm<sup>3</sup> s<sup>-1</sup>) in the vacuum-engineering sense, not a density
+rate. $\Gamma$ is a flux, never a source. The calligraphic $\mathcal S$ of the
+kinetic equation is the phase-space counterpart of $S$, per unit
+$dv_\parallel dc_\perp$.
 
 **The two velocity coordinates are not the same kind of quantity:**
 $v_\parallel$ is a SIGNED component along $\hat z$, so the discrete grid spans
@@ -140,11 +143,11 @@ ionization birth contributes NOTHING — the new electron is born cold, so its
 birth energy is identically zero and $T_e$ falls by dilution alone. Their
 decomposition is
 
-$$F^n=m_iu_n\left(S_{iz}+S_{iz}^\text{beam}\right)-m_iu\,S_\text{rec}+F_\parallel^{in},$$
+$$F^n=m_iu_n\left(S_{iz}+S_{iz}^\text{beam}\right)-m_iu\,S_\text{rec}+F_\parallel^{cx},$$
 
-$$Q_i^n=\left[\tfrac32T_n+\tfrac12m_i\left(u_i-u_n\right)^2\right]\left(S_{iz}+S_{iz}^\text{beam}\right)-\tfrac32T_i\,S_\text{rec}+Q_i^{in},$$
+$$Q_i^n=\left[\tfrac32T_n+\tfrac12m_i\left(u_i-u_n\right)^2\right]\left(S_{iz}+S_{iz}^\text{beam}\right)-\tfrac32T_i\,S_\text{rec}+Q_i^{cx},$$
 
-$F_\parallel^{in}$ and $Q_i^{in}$ the charge-exchange/elastic friction and
+$F_\parallel^{cx}$ and $Q_i^{cx}$ the charge-exchange/elastic friction and
 heating of the relaxation described later. Ionization is velocity-blind, which
 is why the births carry the column gas's own $u_n$ and $T_n$; recombination
 hands the ion's directed momentum and thermal energy back to the gas at the
@@ -157,11 +160,11 @@ In primitive variables $(n,u,T_e,T_i)$ along the material derivative:
 
 $$\frac{Dn}{Dt}=-n\,\nabla_\parallel\!\cdot u+S_{iz}+S_{iz}^\text{beam}-S_\text{rec}-S_\text{an}+S_n^\text{out}$$
 
-$$m_in\frac{Du}{Dt}=-\partial_zp_i+enE_\parallel+m_i\left(u_n-u\right)\left(S_{iz}+S_{iz}^\text{beam}\right)+F_\parallel^{in}+F^\text{geom}+F^\text{out}-m_iu\,S_n^\text{out}$$
+$$m_in\frac{Du}{Dt}=-\partial_zp_i+enE_\parallel+m_i\left(u_n-u\right)\left(S_{iz}+S_{iz}^\text{beam}\right)+F_\parallel^{cx}+F^\text{geom}+F^\text{out}-m_iu\,S_n^\text{out}$$
 
 $$\tfrac32n\frac{DT_e}{Dt}=-p_e\,\nabla_\parallel\!\cdot u-\nabla_\parallel\!\cdot q_{\parallel e}-Q_{ie}-C_e+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_e\left(S_{iz}+S_{iz}^\text{beam}\right)+T_eS_\text{an}+Q_e^\text{elec}+Q_e^\text{out}-\tfrac32T_eS_n^\text{out}$$
 
-$$\tfrac32n\frac{DT_i}{Dt}=-p_i\,\nabla_\parallel\!\cdot u-\nabla_\parallel\!\cdot q_{\parallel i}+Q_{ie}+Q_i^{in}+\left[\tfrac32\left(T_n-T_i\right)+\tfrac12m_i\left(u_i-u_n\right)^2\right]\left(S_{iz}+S_{iz}^\text{beam}\right)-T_iS_\text{an}+Q_\text{diss}+Q_i^\text{out}-\tfrac32T_iS_n^\text{out}$$
+$$\tfrac32n\frac{DT_i}{Dt}=-p_i\,\nabla_\parallel\!\cdot u-\nabla_\parallel\!\cdot q_{\parallel i}+Q_{ie}+Q_i^{cx}+\left[\tfrac32\left(T_n-T_i\right)+\tfrac12m_i\left(u_i-u_n\right)^2\right]\left(S_{iz}+S_{iz}^\text{beam}\right)-T_iS_\text{an}+Q_\text{diss}+Q_i^\text{out}-\tfrac32T_iS_n^\text{out}$$
 
 with the parallel heat fluxes and the electron-momentum (ambipolar) closure
 
@@ -258,16 +261,17 @@ the expansion twice. Dropped relative to full 3D Braginskii: ion viscous stress
 $\partial_z\pi_\parallel$, the perpendicular $\mathbf E\times\mathbf B$ drift,
 diamagnetic and drift heat fluxes, and perpendicular conduction.
 
-**Neutral kinetic equation.** Let $F(\mathbf r,\mathbf v,t)$ be the full
-six-dimensional neutral distribution, $\mathbf v_\perp=\mathbf v-v_\parallel\hat z$
-its perpendicular velocity VECTOR, $c_\perp=\lvert\mathbf v_\perp\rvert$ that
-vector's SPEED, and $\varphi_v$ the azimuth of $\mathbf v_\perp$ about $\hat z$.
-The evolved object is $F$ averaged over the zone's cross-section and integrated
-over $\varphi_v$; the polar Jacobian $c_\perp$ folds into $f$, so the surviving
-perpendicular coordinate is the SPEED $c_\perp\in[0,\infty)$ and no signed
-perpendicular component is carried anywhere:
+**Neutral kinetic equation.** Let $\mathcal F(\mathbf r,\mathbf v,t)$ be the
+full six-dimensional neutral distribution,
+$\mathbf v_\perp=\mathbf v-v_\parallel\hat z$ its perpendicular velocity
+VECTOR, $c_\perp=\lvert\mathbf v_\perp\rvert$ that vector's SPEED, and
+$\varphi_v$ the azimuth of $\mathbf v_\perp$ about $\hat z$.
+The evolved object is $\mathcal F$ averaged over the zone's cross-section and
+integrated over $\varphi_v$; the polar Jacobian $c_\perp$ folds into $f$, so
+the surviving perpendicular coordinate is the SPEED $c_\perp\in[0,\infty)$ and
+no signed perpendicular component is carried anywhere:
 
-$$f_\text{col}(z,v_\parallel,c_\perp,t)=\frac{1}{A_\text{col}(z)}\int_{A_\text{col}(z)}\!\!d^2r_\perp\int_0^{2\pi}\!\!d\varphi_v\;c_\perp\,F\!\left(\mathbf r,\left(v_\parallel,c_\perp\cos\varphi_v,c_\perp\sin\varphi_v\right),t\right)$$
+$$f_\text{col}(z,v_\parallel,c_\perp,t)=\frac{1}{A_\text{col}(z)}\int_{A_\text{col}(z)}\!\!d^2r_\perp\int_0^{2\pi}\!\!d\varphi_v\;c_\perp\,\mathcal F\!\left(\mathbf r,\left(v_\parallel,c_\perp\cos\varphi_v,c_\perp\sin\varphi_v\right),t\right)$$
 
 normalised so moments are taken against the plain measure
 $dv_\parallel dc_\perp$:
@@ -788,11 +792,11 @@ intercepted at the annulus transparency
 $$t_f=\min\!\left(\frac{A_\text{open}}{A^{\,f}_\text{ann}},1\right),\qquad A^{\,f}_\text{ann}=\min\!\left(A_{\text{ann},f-1},A_{\text{ann},f}\right)$$
 
 the throat being the smaller of the two flanking CELLS' annulus areas, so the
-transmitted throughput $t_fF|v_\parallel|A^{\,f}_\text{ann}$ is exactly
-$F|v_\parallel|A_\text{open}$ — the open area is what passes, which is the
-whole content of a free-molecular orifice. Intercepted atoms are re-emitted at
-$T_\text{wall}$ in the cell they were intercepted from, conserving particles
-exactly; the column flux is untouched.
+transmitted throughput $t_f\mathcal F|v_\parallel|A^{\,f}_\text{ann}$ is
+exactly $\mathcal F|v_\parallel|A_\text{open}$ — the open area is what passes,
+which is the whole content of a free-molecular orifice. Intercepted atoms are
+re-emitted at $T_\text{wall}$ in the cell they were intercepted from,
+conserving particles exactly; the column flux is untouched.
 
 ### Fueling and pumping
 
