@@ -63,6 +63,7 @@
       "neutral_kinetic_dvm_baffles",
       "neutral_kinetic_dvm_cadence_s",
       "neutral_kinetic_dvm_cathode_jet",
+      "neutral_kinetic_dvm_jet_launch_width",
       "neutral_kinetic_dvm_nvp",
       "neutral_kinetic_dvm_nvz",
       "neutral_kinetic_dvm_wall_reflection",
@@ -85,9 +86,9 @@
       "use_cached_neutral_seed"
     ],
     "file_sha256": [
-      "3bc6aa5c8bca1958da927a000db53c87b900bd9b61886207de1d904465f51862"
+      "34bfaf94aded03265ad12a35074fa9b2c7c7d6c83d9e1e99baddbd9d791c54e3"
     ],
-    "identity": "21c6c43278131b21ef465adf06745e4b348fec09b12c6ef5d91880c247ac953b",
+    "identity": "c92e6ef9bfacac9bfe20b262e9032a587f9ae0d889e399a9c6800ac601a89ecd",
     "name": "g1atrim"
   },
   "description": "Golden baseline at the stance of record, re-cut to the gate mesh: default_config() plus the committed stance file scripts/stances/g1atrim.toml, minus that stance's mesh-sized package, plus the run-shape overrides in baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60).",
@@ -342,9 +343,9 @@
     "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple": null,
     "neutral_kinetic_dvm_elastic": "phelps_iso",
     "neutral_kinetic_dvm_exchange": "cauchy_chord",
-    "neutral_kinetic_dvm_jet_launch_width": null,
-    "neutral_kinetic_dvm_nvp": 24,
-    "neutral_kinetic_dvm_nvz": 64,
+    "neutral_kinetic_dvm_jet_launch_width": 0.13,
+    "neutral_kinetic_dvm_nvp": 36,
+    "neutral_kinetic_dvm_nvz": 128,
     "neutral_kinetic_dvm_transfer_hold": null,
     "neutral_kinetic_dvm_transfer_relax_fraction": 0.5,
     "neutral_kinetic_dvm_vmax_cm_s": null,
@@ -427,21 +428,21 @@
   "result_format": "sim1d packed conservative trajectory y[saves, fields*cells]",
   "saves": 2620,
   "summary": {
-    "Te_max": 26.519140507962316,
+    "Te_max": 26.519273483938694,
     "Te_min": 0.1,
-    "Ti_max": 7.2959756213212605,
+    "Ti_max": 7.300913923328672,
     "Ti_min": 0.02585,
-    "final_time": 0.026187544246300813,
+    "final_time": 0.026187567924143985,
     "finite": true,
-    "n_max": 32751736654930.652,
-    "n_min": 851849139.6422901,
-    "neutral_inventory_relative_drift": 1.1056324439301277,
-    "nn_max": 134563376855846.31,
-    "nn_min": 235488745098.592,
-    "plasma_inventory_relative_drift": 4576.227212650526,
+    "n_max": 32932274212188.65,
+    "n_min": 851867382.0568187,
+    "neutral_inventory_relative_drift": 1.1048951617256926,
+    "nn_max": 134775373329105.28,
+    "nn_min": 234229705970.4254,
+    "plasma_inventory_relative_drift": 4583.923500668004,
     "samples": 2620,
-    "steps": 56232,
-    "thermal_energy_relative_drift": 4637.305697805382,
-    "total_particle_inventory_relative_drift": 1.1943471190898987
+    "steps": 55300,
+    "thermal_energy_relative_drift": 4726.13056110458,
+    "total_particle_inventory_relative_drift": 1.1937590873670492
   }
 }

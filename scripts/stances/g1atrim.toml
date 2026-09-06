@@ -324,15 +324,31 @@ gas_puff_orifice_length_cm = 22.0
 # VELOCITY MESH AND NEUTRAL CLOCK. Numerical choices, not physics. The kinetic
 # state advances on its own clock rather than on the plasma step, and between
 # ticks the plasma consumes a zero-order hold of it -- a Lie-type splitting
-# whose error is first order in the cadence by construction. 64 x 24 velocity
-# nodes at a 3.125 us tick is the resolution the production program ran and
-# gated; the package defaults (48 x 12 at 25 us) are the cheap development
+# whose error is first order in the cadence by construction. 128 x 36 velocity
+# nodes at a 3.125 us tick is the resolution the production program runs and
+# gates; the package defaults (48 x 12 at 25 us) are the cheap development
 # setting and their own docstring calls the cadence provisional. nvz must be
 # EVEN -- an odd count places a node at exactly v_z = 0, which neither
 # transports nor mirrors.
-neutral_kinetic_dvm_nvz = 64
-neutral_kinetic_dvm_nvp = 24
+neutral_kinetic_dvm_nvz = 128
+neutral_kinetic_dvm_nvp = 36
 neutral_kinetic_dvm_cadence_s = 3.125e-6
+
+# SURFACE-JET LAUNCH WIDTH. One dimensionless width shared by every armed
+# surface jet, tying each launch spectrum's smear to the launch ENERGY instead
+# of to the velocity grid: T_launch = max(beta * e_launch, grid width), where
+# the grid width is the axial bin containing the launch speed expressed as a
+# temperature and remains a FLOOR, because a smear narrower than the local bin
+# collapses onto one bin and cannot be projected. The fractional energy width a
+# launch is spread over is therefore (3/2) beta at every launch energy and
+# every velocity resolution wherever beta clears that floor, rather than a
+# quantity that halves with each doubling of nvz. Unset, each jet stays on the
+# grid-tied width alone. It is not a gas temperature -- the launch spectrum's
+# drift is solved from the energy, so the discrete mean energy is the launch
+# energy whatever this is. Must lie in (0, 2/3); it is refused with every
+# surface jet off and refused alongside any per-jet _T_launch_eV. Each armed
+# tick reports how often the floor bound, in the engine's per-tick ledger.
+neutral_kinetic_dvm_jet_launch_width = 0.13
 
 # WALL INTERACTION. Both keys equal their config default and are stated anyway,
 # as class-1 declarations: the closure IS this pair of choices, and a stance

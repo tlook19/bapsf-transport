@@ -8530,6 +8530,16 @@ class LAPDSim1D:
         params["neutral_kinetic_dvm_collector_jet_R_E"] = None
         params["neutral_kinetic_dvm_collector_jet_T_launch_eV"] = None
         params["neutral_kinetic_dvm_collector_jet_sheath_Te_multiple"] = None
+        # The SHARED launch width goes with them, for the same reason again:
+        # it smears the surface jets' launch spectra, all three are now off,
+        # and a width nothing reads is refused outright rather than ignored --
+        # so leaving it set would turn a legal outer configuration into an
+        # inner refusal, which is precisely what clearing the collector's four
+        # numbers above prevents. Every configuration this line touches is one
+        # that raised here, so the equilibrated seed, its cache signature and
+        # every existing trajectory are bit-identical; a configuration that
+        # never named a width already carried None.
+        params["neutral_kinetic_dvm_jet_launch_width"] = None
         # The equilibration OWNS its neutral start; it must not inherit the
         # outer run's nn0. nn0 is the direct-run fill (a realistic pre-shot
         # background), whereas this inner sim accumulates the fill from

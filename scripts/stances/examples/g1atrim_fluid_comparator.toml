@@ -65,8 +65,8 @@ base = "g1atrim"
 # restated at the value they already have. A delta states what it changes; a
 # line that repeats its base is refused, and would be a line that reads as a
 # decision, changes nothing, and stops agreeing with the reference silently the
-# first time the reference moves. Three more rows below the closure itself put
-# the reference's kinetic-only machinery away, for a delta of ten.
+# first time the reference moves. Four more rows below the closure itself put
+# the reference's kinetic-only machinery away, for a delta of eleven.
 #
 # Not restated, and inherited from the reference: neutral_hot_birth_drift
 # (false), neutral_momentum_radial ("uniform"), neutral_knudsen_temperature
@@ -113,3 +113,14 @@ neutral_hot_internal_wall = true
 # The fluid baffles are the separate neutral_baffles flag, which the reference
 # arms and this file inherits untouched.
 neutral_kinetic_dvm_baffles = false
+
+
+[none_valued]
+# The reference's shared surface-jet launch width, put away with the jets it
+# smears. It ties a launch spectrum's width to that launch's energy, and this
+# closure launches no such spectrum, so the solver refuses it here rather than
+# ignoring it -- unlike the velocity mesh and the neutral clock, which are
+# merely INERT under this selection and are therefore inherited untouched. It
+# is unset rather than given a value because "no width" is None, and TOML has
+# no null literal, which is what this table is for.
+input_dict = ["neutral_kinetic_dvm_jet_launch_width"]

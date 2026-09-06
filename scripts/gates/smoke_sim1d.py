@@ -23733,6 +23733,11 @@ def _case_configuration_fluid_comparator_example():
         "cathode_jet_energy_convention": "total_reflected",
         "neutral_kinetic_dvm_cathode_jet": False,
         "neutral_kinetic_dvm_anode_jet": False,
+        # The shared surface-jet launch width goes away with the jets: this
+        # closure launches no such spectrum, so a set width is refused rather
+        # than ignored. None is its unset value, which the derived file states
+        # through [none_valued] because TOML has no null literal.
+        "neutral_kinetic_dvm_jet_launch_width": None,
     }
     _fc_extra_flags = {
         "neutral_momentum": True,
