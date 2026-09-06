@@ -14,10 +14,20 @@ metastable-resolved '96 helium set. The resolved siblings fetched alongside it
 (`scd96r/acd96r/qcd96r/plt96r/prb96r_he.dat`, same producer, same code, same
 04/11/99 date) resolve He0 into TWO metastables, not three -- their
 metastable-count line reads `2 1 1`, and every block header runs IGRD = 1, 2
-for z1 = 1. The second metastable is 1s2s 3S: fitting the low-Te slope of
-ln(QCD_1->2 / QCD_2->1) = ln(g2/g1) - dE/Te over the 1-15 eV nodes returns
-dE = 19.67-19.78 eV against the 2^3S term energy 19.820 eV, where 2^1S would
-require 20.616 eV. The singlet metastable 2^1S is NOT an independent
+for z1 = 1. Of those five files this instrument READS three --
+`scd96r/acd96r/qcd96r`, the set named in RESOLVED_FILES; `plt96r/prb96r`
+are held alongside them for the record and no path here opens them.
+
+The second metastable is 1s2s 3S: fitting the low-Te slope of
+ln(QCD_1->2 / QCD_2->1) = ln(g2/g1) - dE/Te over the 1-15 eV nodes, at each
+tabulated density in turn, returns dE = 19.39-19.78 eV over all 24 density
+nodes, against the 2^3S term energy 19.820 eV, where 2^1S would require
+20.616 eV. That spread is a DENSITY DEPENDENCE and not fit scatter: dE is
+flat at 19.776 below 1e11 cm^-3, falls to its 19.389 minimum at 2e13, and
+climbs back to 19.758 at the top of the grid. A narrower range quoted from
+a few sampled densities understates it, and the identification is
+unaffected -- every node is nearer 19.820 than 20.616 by an order of
+magnitude in the residual. The singlet metastable 2^1S is NOT an independent
 population in this dataset; it sits inside the collisional-radiative bundle
 built on the ground state, which is also why no `xcd96r_he.dat` exists (parent
 cross-coupling needs two parent metastables and He+ has one).
@@ -61,7 +71,13 @@ recombination). That ordering is the gate:
        density-proportional term vanishes and the three closures must
        coincide, so SCD_thin must reproduce the table there.
   (ii) CONTAINMENT. At every node of the LAPD box the applied table must lie
-       inside [SCD_thin, SCD_ionbal], within a small slack.
+       inside [SCD_thin, SCD_ionbal], within CONTAINMENT_SLACK. THAT SLACK
+       IS LOAD-BEARING, not decoration: along the 1 eV row the table sits
+       ABOVE SCD_ionbal at the five lowest densities of the box, by up to
+       0.51 %, and it is the slack that carries the leg there. Tightening
+       it below that margin turns leg (ii) red at those nodes, so the
+       margin is the quantity to watch and a change that moves it changes
+       what this gate asserts.
 
 SCD_ionbal is deliberately NOT a single comparand: it overshoots the table by
 20-49 % above 5 eV inside the box, which is the point -- it is a bracket end,
@@ -75,8 +91,13 @@ WHAT IS NOT COMPUTED
 58.4 nm resonance trapping is NOT applied and cannot be at this level: 2^1P is
 not a resolved population of the adf11 set, so a Holstein escape factor has no
 coefficient to multiply. Reaching it needs a level-resolved (adf04)
-collisional-radiative solve. The 584 nm line-centre optical depth tau_0 is
-reported per port so the size of that omission is on the record.
+collisional-radiative solve. The 584 A line-centre optical depth tau_0 is
+reported per port and over the column so the size of that omission is on
+the record, and it is not small. The ports run 0.9-16, but both column ends
+are optically THICK: tau_0 reaches about 1205 in the last cell at the far
+end and about 77 in the first at the cathode end. Anything this instrument
+says about the ends carries the omission at that size; the port rows are
+where it is mildest.
 
 Usage:
     python scripts/atomic/metastable_bracket.py --calibration-only
@@ -124,8 +145,18 @@ CONTAINMENT_SLACK = 0.02
 # He I 1^1S - 2^1P resonance line. The repository carries no archived
 # resonance cross-section (`scripts/score/pec_band_fractions.md` names the
 # wavelength for a band split and nothing else), so sigma_0 is derived below
-# from the oscillator strength. f = 0.2762 is the value the registration
-# supplies; the wavelength is the standard vacuum value for the line.
+# from the oscillator strength.
+#
+# BOTH constants are the NIST Atomic Spectra Database values for the He I
+# 1s2 1S0 - 1s2p 1P*1 transition: f_ik = 2.7625e-01, A_ki = 1.7989e+09
+# s^-1, Ritz vacuum wavelength 584.334366 A. NIST grades that line AAA,
+# which its accuracy table defines as an uncertainty of 0.3 % or better;
+# no per-line numeric sigma is published for it. CLASS MEASURED -- a
+# critically compiled atomic constant, never a fitted quantity.
+#
+# The 0.2762 carried below is that f truncated to four figures. It is
+# 0.018 % below the compiled value, some seventeen times inside the AAA
+# band, so no number this instrument reports turns on the difference.
 HE_RESONANCE_LAMBDA_CM = 584.334e-8
 HE_RESONANCE_F = 0.2762
 
@@ -625,7 +656,7 @@ def main(argv=None):
     print(f"  transport correction      : "
           f"{table['transport_over_thin'].min():.5f} .. "
           f"{table['transport_over_thin'].max():.5f}")
-    print(f"  tau0(584 nm)              : {table['tau0_584'].min():.3f} .. "
+    print(f"  tau0(584 A)               : {table['tau0_584'].min():.3f} .. "
           f"{table['tau0_584'].max():.3f}")
 
     print()
