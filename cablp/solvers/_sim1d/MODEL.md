@@ -22,8 +22,9 @@ erg cm<sup>-3</sup>, cm<sup>-3</sup> s<sup>-1</sup>, A, V.
 | $a=\sqrt{\tfrac53(T_e+T_i)/m_i}$ | the Rusanov signal speed, a scheme quantity ([`NUMERICS.md`](NUMERICS.md)) |
 | $\mathbf r$, $\mathbf v$ | position and velocity vector of a neutral |
 | $z=\mathbf r\!\cdot\!\hat z$ | axial coordinate; $\hat z$ along the axis and $\mathbf B$ |
-| $v_\parallel=\mathbf v\!\cdot\!\hat z$ | velocity parallel to $\mathbf B$ |
-| $v_\perp=\lvert\mathbf v-v_\parallel\hat z\rvert$ | perpendicular SPEED (a magnitude, not a component) |
+| $v_\parallel=\mathbf v\!\cdot\!\hat z$ | parallel velocity — a SIGNED component, $-\infty<v_\parallel<\infty$ |
+| $\mathbf v_\perp=\mathbf v-v_\parallel\hat z$ | perpendicular velocity VECTOR |
+| $c_\perp=\lvert\mathbf v_\perp\rvert$ | perpendicular SPEED — a magnitude, $c_\perp\ge0$ |
 | $f_\text{col}$, $f_\text{ann}$ | neutral distribution, column and annulus zone |
 | $n_n$, $E_n$, $T_n$, $u_n$ | neutral density, thermal energy density, temperature, drift — moments of $f_\text{col}$ |
 | $\phi_c$, $\phi_a$ | cathode and anode sheath falls |
@@ -40,12 +41,29 @@ section below:
 |---|---|
 | $S_{iz}$, $S_{iz}^\text{beam}$, $S_\text{rec}$ | thermal ionization, beam-impact ionization, recombination |
 | $S_\text{an}$ | anode-mesh Bohm collection rate |
-| $S^\text{bnd}_\bullet$ | the plasma-terminating (absorbing) face rows, one per field |
-| $S^\text{elec}_{E_e}$ | the electrode electron-sheath energy rows |
-| $S_M^n$, $Q_i^n$ | the ion–neutral momentum and ion-energy coupling — minus the measured moments of the kinetic collision operator |
+| $S_n^\text{out}$, $S_M^\text{out}$, $S_{E_e}^\text{out}$, $S_{E_i}^\text{out}$ | the plasma-terminating (absorbing) face terms — the outflow, one per evolved field |
+| $S^\text{elec}_{E_e}$ | the electrode electron-sheath energy term |
+| $S_M^n$, $Q_i^n$ | the kinetic coupling terms — minus the measured moments of the ionization, charge-exchange, elastic AND recombination operators, so they carry the ionization birth and the recombination sink on $M$ and $E_i$ |
 | $Q_\text{beam}$, $Q_\text{ohm}$ | beam power deposited in the plasma, and the ohmic gap heating booked with it |
-| $Q_\text{hyp}$ | the scheme's numerical kinetic-energy dissipation, deposited into $E_i$ |
+| $Q_\text{diss}$ | the ion kinetic energy the Rusanov face flux dissipates numerically, returned to $E_i$ |
 | $S_M^\text{geom}$ | the quasi-1D geometric pressure force |
+
+**The two velocity coordinates are not the same kind of quantity:**
+$v_\parallel$ is a SIGNED component along $\hat z$, so the discrete grid spans
+$-v_\text{max}\ldots+v_\text{max}$ and a launch directed toward $-z$ has drift
+$u<0$; $c_\perp$ is a SPEED, non-negative by construction, with the polar
+Jacobian folded into the bin masses so no signed perpendicular component is
+ever carried.
+
+**Derivatives.** The model is ONE-DIMENSIONAL along $\mathbf B$: $z$ is the
+only spatial coordinate and $\partial_z$ the only spatial derivative. A
+parallel gradient is written $\partial_z$; the divergence of a parallel flux
+$F$ on a tube of area $A(z)$ is written
+$\nabla_\parallel\!\cdot F\equiv A^{-1}\partial_z(AF)$, which is the
+$\Delta(AF)/V$ the code forms and reduces to $\partial_zF$ at constant area.
+The material derivative along the flow is
+$D/Dt\equiv\partial_t+u\,\partial_z$. No perpendicular derivative appears
+anywhere in the model.
 
 $+z$ runs from the cathode end toward the collector end; a flux is positive
 toward $+z$; a source is positive into the field it is written on; $Q_{ie}$ is
@@ -80,9 +98,9 @@ passes through untouched and the discs restrict the annulus through the open
 ring $A_\text{open}=\pi(R_b^2-R_\text{col}^2)$, $R_\text{col}$ the
 face-averaged column radius.
 
-The plasma carries the conservative rows $(n,M,E_e,E_i)$, with $T_e$, $T_i$,
+The plasma carries the conservative fields $(n,M,E_e,E_i)$, with $T_e$, $T_i$,
 $u$ recovered from them; the packed vector also carries the $n_n$ (and annulus
-$n_{n,a}$) rows, which on the kinetic path are the republished moments of the
+$n_{n,a}$) fields, which on the kinetic path are the republished moments of the
 distribution rather than independently evolved fields. The neutral gas itself
 is $f_\text{col}$ on a discrete velocity grid, $f_\text{ann}$ its annulus
 counterpart. (A fluid neutral closure exists in the code under the
@@ -92,37 +110,118 @@ counterpart. (A fluid neutral closure exists in the code under the
 small standing current, a main discharge held for its own duration, and an
 afterglow with the cathode floating. The kinetic neutral arm engages at the
 first accepted plasma step, seeded from the fluid neutral fill; the fluid
-neutral operators run up to that point and their rows are stripped afterwards,
+neutral operators run up to that point and their terms are stripped afterwards,
 the coupling term below carrying them instead.
 
 ## Conservation laws
 
-The plasma is written conservatively, $\partial_tU+\nabla\!\cdot\mathbf F(U)=S$.
+### The kinetic closure owns two of the four equations
+
+One asymmetry has to be stated before the equations: it decides where several
+terms are written. Once the kinetic neutral arm is engaged it TAKES OVER the
+momentum and ion-energy contributions of the fluid ionization, recombination
+and ion–neutral terms — those are zeroed and the coupling terms $S_M^n$,
+$Q_i^n$ carry them instead, built from the measured moments of
+the ionization, charge-exchange, elastic and recombination operators together.
+The DENSITY and ELECTRON-ENERGY contributions of the same terms are NOT taken
+over and stay explicit. So the ionization birth and the recombination sink appear
+inside $S_M^n$ and $Q_i^n$ on $M$ and $E_i$, and explicitly on $n$ and $E_e$.
+Their decomposition is
+
+$$S_M^n=m_iu_n\left(S_{iz}+S_{iz}^\text{beam}\right)-m_iu\,S_\text{rec}+R_\parallel^{in},$$
+
+$$Q_i^n=\left[\tfrac32T_n+\tfrac12m_i\left(u_i-u_n\right)^2\right]\left(S_{iz}+S_{iz}^\text{beam}\right)-\tfrac32T_i\,S_\text{rec}+Q^{in},$$
+
+$R_\parallel^{in}$ and $Q^{in}$ the charge-exchange/elastic friction and heating
+of the relaxation described later. Ionization is velocity-blind, which is why
+the births carry the column gas's own $u_n$ and $T_n$; recombination hands the
+ion's directed momentum and thermal energy back to the gas at the local $u$ and
+$T_i$.
+
+### Braginskii form
+
+The model is a two-fluid Braginskii plasma reduced to the parallel direction.
+In primitive variables $(n,u,T_e,T_i)$ along the material derivative:
+
+$$\frac{Dn}{Dt}=-n\,\nabla_\parallel\!\cdot u+S_{iz}+S_{iz}^\text{beam}-S_\text{rec}-S_\text{an}+S_n^\text{out}$$
+
+$$m_in\frac{Du}{Dt}=-\partial_zp_i+enE_\parallel+m_i\left(u_n-u\right)\left(S_{iz}+S_{iz}^\text{beam}\right)+R_\parallel^{in}+S_M^\text{geom}+S_M^\text{out}-m_iu\,S_n^\text{out}$$
+
+$$\tfrac32n\frac{DT_e}{Dt}=-p_e\,\nabla_\parallel\!\cdot u-\nabla_\parallel\!\cdot q_{\parallel e}-Q_{ie}-C_e+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_e\left(S_{iz}+S_{iz}^\text{beam}\right)+T_eS_\text{an}+S_{E_e}^\text{elec}+S_{E_e}^\text{out}-\tfrac32T_eS_n^\text{out}$$
+
+$$\tfrac32n\frac{DT_i}{Dt}=-p_i\,\nabla_\parallel\!\cdot u-\nabla_\parallel\!\cdot q_{\parallel i}+Q_{ie}+Q^{in}+\left[\tfrac32\left(T_n-T_i\right)+\tfrac12m_i\left(u_i-u_n\right)^2\right]\left(S_{iz}+S_{iz}^\text{beam}\right)-T_iS_\text{an}+Q_\text{diss}+S_{E_i}^\text{out}-\tfrac32T_iS_n^\text{out}$$
+
+with the parallel heat fluxes and the electron-momentum (ambipolar) closure
+
+$$q_{\parallel s}=-\kappa_{\parallel s}\,\partial_zT_s,\qquad 0=-\partial_zp_e-enE_\parallel\ \Longrightarrow\ enE_\parallel=-\partial_zp_e.$$
+
+**The electric field is not an independent field.** The electrons are taken
+massless and carry no separately retained parallel friction, so their momentum
+balance is the statement above; substituting it into the ion momentum equation
+replaces $-\partial_zp_i+enE_\parallel$ by the TOTAL pressure gradient
+$-\partial_zp$, which is the only form that appears below. That substitution
+is why one velocity $u$ suffices: the two species move together, the ions
+carrying the inertia.
+
+Three features read off this form. Recombination and anode-mesh collection
+remove particles at the LOCAL mean velocity and temperature, so their momentum
+sinks cancel identically against their continuity contributions and neither
+exerts a force. Ionization does not cancel: the new ions arrive at the neutral
+drift, leaving the mass-loading drag
+$m_i(u_n-u)(S_{iz}+S_{iz}^\text{beam})$ and, on the ion temperature, the birth
+term $\tfrac32(T_n-T_i)$ plus the mixing energy per event. And the two
+anode-collection debits change SIGN relative to the conservative terms, neither
+of them removing energy at the mean the fluid carries: the electron energy is
+debited $\tfrac12T_e$ per collected ION, BELOW the $\tfrac32T_e$ a mean
+electron would take, so the collection RAISES $T_e$ by $T_eS_\text{an}$, while
+the ions leave at the enthalpy $\tfrac52T_i$, ABOVE their $\tfrac32T_i$ mean,
+so it LOWERS $T_i$ by $T_iS_\text{an}$.
+
+### Conservative form
+
+**The conservative form below is what the solver integrates**, in the variables
+$n$, $M=m_inu$, $E_e=\tfrac32nT_e$ and $E_i=\tfrac32nT_i$; the primitive
+equations above are that same system rewritten, and every term corresponds one
+for one. Each equation is $\partial_tU+\nabla_\parallel\!\cdot\mathbf F(U)=S$.
 The convective derivative is never discretized alone: each is fused with its
 compression partner inside one face flux through
-$\nabla\!\cdot(U\mathbf u)=\mathbf u\!\cdot\!\nabla U+U\nabla\!\cdot\mathbf u$,
-giving $F_n=nu$, $F_M=Mu+p$, $F_{E_e}=E_eu$, $F_{E_i}=E_iu$. The advected
-energy flux is the internal-energy flux $E_su$, not the enthalpy flux
+$\nabla_\parallel\!\cdot(Uu)=u\,\partial_zU+U\,\nabla_\parallel\!\cdot u$,
+giving $F_n=nu$, $F_M=Mu+p$, $F_{E_e}=E_eu$, $F_{E_i}=E_iu$ — the momentum flux
+carrying the total pressure $p=p_e+p_i$ the ambipolar closure produced. The
+advected energy flux is the internal-energy flux $E_su$, not the enthalpy flux
 $(E_s+p_s)u$; the missing $p_su$ returns as the explicit pressure work below.
 
-$$\partial_tn+\nabla\!\cdot(n\mathbf u)=S_{iz}+S_{iz}^\text{beam}-S_\text{rec}-S_\text{an}+S_n^\text{bnd}$$
+$$\partial_tn+\nabla_\parallel\!\cdot(nu)=S_{iz}+S_{iz}^\text{beam}-S_\text{rec}-S_\text{an}+S_n^\text{out}$$
 
-$$\partial_tM+\nabla\!\cdot(M\mathbf u+p)=m_i\mathbf u_nS_{iz}-m_i\mathbf u\left(S_\text{rec}+S_\text{an}\right)+S_M^{n}+S_M^\text{geom}+S_M^\text{bnd}$$
+$$\partial_tM+\nabla_\parallel\!\cdot(Mu+p)=S_M^{n}-m_iu\,S_\text{an}+S_M^\text{geom}+S_M^\text{out}$$
 
-$$\partial_tE_e+\nabla\!\cdot(E_e\mathbf u)=-\mathbf u\!\cdot\!\nabla p_e+\nabla\!\cdot\!\left(\kappa_{\parallel e}\nabla T_e\right)-Q_{ie}-C_e+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_eS_\text{rec}-\tfrac12T_eS_\text{an}+S_{E_e}^\text{elec}+S_{E_e}^\text{bnd}$$
+$$\partial_tE_e+\nabla_\parallel\!\cdot(E_eu)=-u\,\partial_zp_e+\nabla_\parallel\!\cdot\!\left(\kappa_{\parallel e}\partial_zT_e\right)-Q_{ie}-C_e+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_eS_\text{rec}-\tfrac12T_eS_\text{an}+S_{E_e}^\text{elec}+S_{E_e}^\text{out}$$
 
-$$\partial_tE_i+\nabla\!\cdot(E_i\mathbf u)=-\mathbf u\!\cdot\!\nabla p_i+\nabla\!\cdot\!\left(\kappa_{\parallel i}\nabla T_i\right)+Q_{ie}+Q_i^{n}+Q_\text{hyp}-\tfrac32T_iS_\text{rec}-\tfrac52T_iS_\text{an}+S_{E_i}^\text{bnd}$$
+$$\partial_tE_i+\nabla_\parallel\!\cdot(E_iu)=-u\,\partial_zp_i+\nabla_\parallel\!\cdot\!\left(\kappa_{\parallel i}\partial_zT_i\right)+Q_{ie}+Q_i^{n}+Q_\text{diss}-\tfrac52T_iS_\text{an}+S_{E_i}^\text{out}$$
 
-**The pressure work is the kinetic-energy-preserving form
-$-\mathbf u\!\cdot\!\nabla p_s$**, not $-p_s\nabla\!\cdot\mathbf u$. The two
-differ by $\nabla\!\cdot(p_s\mathbf u)$; `hyperbolic_energy_consistent` selects
-the first by adding $p_s\nabla\!\cdot\mathbf u-u\,\partial_z p_s$ to the
-uncorrected row, and the same correction deposits the Rusanov $(n,M)$ numerical
-kinetic-energy dissipation into $E_i$ as $Q_\text{hyp}$ — a scheme viscosity,
-distinct from the physical ion–neutral friction. Setting it `False` selects
-$-p_s\nabla\!\cdot\mathbf u$ with
+The ionization birth and the recombination sink are absent from the $M$ and
+$E_i$ equations for the reason given above — they are inside $S_M^n$ and
+$Q_i^n$ — and present on $n$ and $E_e$, where the fluid terms survive.
 
-$$\left.\nabla\!\cdot\mathbf u\right|_i=\frac{A_{i+1/2}u_{i+1/2}-A_{i-1/2}u_{i-1/2}}{V_{\text{col},i}}.$$
+**The pressure work is the one term whose discretisation is not the literal
+transcription of the primitive one.** The Braginskii form carries
+$-p_s\,\nabla_\parallel\!\cdot u$; under `hyperbolic_energy_consistent` the
+solver applies the kinetic-energy-preserving $-u\,\partial_zp_s$ instead,
+reached by adding $p_s\,\nabla_\parallel\!\cdot u-u\,\partial_zp_s$ to the
+uncorrected term, so the two differ by exactly that increment. The choice is a
+discrete one: it puts the internal energy and the kinetic energy on the SAME
+face pressure the momentum flux uses, so the two close against each other
+rather than against two different discretisations of one term. The same
+correction supplies $Q_\text{diss}$: the ion kinetic energy that the Rusanov
+face flux's numerical dissipation removes from the momentum equation, measured
+each step and returned to the ion internal energy so that total kinetic plus
+thermal energy is conserved to roundoff. **It is a property of the
+discretisation, not a physical process** — no collision, no viscosity of the
+plasma itself — and it is distinct from the physical ion–neutral friction.
+Clearing the selector restores
+$-p_s\,\nabla_\parallel\!\cdot u$ literally, with
+
+$$\left.\nabla_\parallel\!\cdot u\right|_i=\frac{A_{i+1/2}u_{i+1/2}-A_{i-1/2}u_{i-1/2}}{V_{\text{col},i}}.$$
 
 Either way expansion cooling through a flare is carried by the same term that
 carries compression heating in a straight tube; there is no separate
@@ -132,56 +231,61 @@ With a varying area the momentum law is quasi-1D,
 $\partial_t(A\rho u)+\partial_z[A(\rho u^2+p)]=p\,\partial_zA+AS_M$, and the
 geometric source is
 
-$$S_M^\text{geom}=\frac{p_iA_{i+1/2}-p_iA_{i-1/2}}{V_{\text{col},i}},\qquad p=p_e+p_i.$$
+$$S_M^\text{geom}=\frac{p\,A_{i+1/2}-p\,A_{i-1/2}}{V_{\text{col},i}},\qquad p=p_e+p_i,$$
+
+the TOTAL pressure, the same $p$ the momentum flux carries.
 
 It **is** the Maxwellian average of $-\mu\nabla_\parallel B$ at $A\propto1/B$ —
 a derivation about the closure, not a second term the code carries — so no
 separate mirror force appears anywhere in the RHS, and adding one would count
 the expansion twice. Dropped relative to full 3D Braginskii: ion viscous stress
-$\nabla\!\cdot\pi$, the $\mathbf E$ and $\mathbf u\times\mathbf B$ forces,
+$\partial_z\pi_\parallel$, the perpendicular $\mathbf E\times\mathbf B$ drift,
 diamagnetic and drift heat fluxes, and perpendicular conduction.
 
 **Neutral kinetic equation.** Let $F(\mathbf r,\mathbf v,t)$ be the full
-six-dimensional neutral distribution and $\varphi_v$ the azimuth of
-$\mathbf v-v_\parallel\hat z$ about $\hat z$. The evolved object is $F$
-averaged over the zone's cross-section and integrated over $\varphi_v$, with
-the polar Jacobian folded in:
+six-dimensional neutral distribution, $\mathbf v_\perp=\mathbf v-v_\parallel\hat z$
+its perpendicular velocity VECTOR, $c_\perp=\lvert\mathbf v_\perp\rvert$ that
+vector's SPEED, and $\varphi_v$ the azimuth of $\mathbf v_\perp$ about $\hat z$.
+The evolved object is $F$ averaged over the zone's cross-section and integrated
+over $\varphi_v$; the polar Jacobian $c_\perp$ folds into $f$, so the surviving
+perpendicular coordinate is the SPEED $c_\perp\in[0,\infty)$ and no signed
+perpendicular component is carried anywhere:
 
-$$f_\text{col}(z,v_\parallel,v_\perp,t)=\frac{1}{A_\text{col}(z)}\int_{A_\text{col}(z)}\!\!d^2r_\perp\int_0^{2\pi}\!\!d\varphi_v\;v_\perp\,F\!\left(\mathbf r,\left(v_\parallel,v_\perp\cos\varphi_v,v_\perp\sin\varphi_v\right),t\right)$$
+$$f_\text{col}(z,v_\parallel,c_\perp,t)=\frac{1}{A_\text{col}(z)}\int_{A_\text{col}(z)}\!\!d^2r_\perp\int_0^{2\pi}\!\!d\varphi_v\;c_\perp\,F\!\left(\mathbf r,\left(v_\parallel,c_\perp\cos\varphi_v,c_\perp\sin\varphi_v\right),t\right)$$
 
 normalised so moments are taken against the plain measure
-$dv_\parallel dv_\perp$:
+$dv_\parallel dc_\perp$:
 
-$$\int f_\text{col}\,dv_\parallel dv_\perp=n_\text{col}(z,t),\qquad E_n=\int\tfrac12m\left(v_\parallel^2+v_\perp^2\right)f_\text{col}\,dv_\parallel dv_\perp$$
+$$\int f_\text{col}\,dv_\parallel dc_\perp=n_\text{col}(z,t),\qquad E_n=\int\tfrac12m\left(v_\parallel^2+c_\perp^2\right)f_\text{col}\,dv_\parallel dc_\perp$$
 
 $f_\text{ann}$ is the same construction with $A_\text{ann}(z)$. On the discrete
 grid the arrays hold each bin's integral of $f$ — its particle content — so a
 density is an unweighted sum over the two velocity axes and an energy the same
-sum weighted by $\tfrac12m(v_\parallel^2+v_\perp^2)$ at bin centres. The code's
+sum weighted by $\tfrac12m(v_\parallel^2+c_\perp^2)$ at bin centres. The code's
 `v_z` is $v_\parallel$.
 
-$v_\perp$ is a speed and is conserved in free flight; nothing forces a neutral,
+$c_\perp$ is a speed and is conserved in free flight; nothing forces a neutral,
 so there is no $\partial/\partial\mathbf v$ term, and the cross-section average
 turns perpendicular streaming into a boundary flux, leaving
 $v_\parallel\partial_zf$ the only spatial derivative:
 
-$$\partial_tf_\text{col}+v_\parallel\partial_zf_\text{col}=\nu_x(v_\perp)\left(f_\text{ann}-f_\text{col}\right)+\mathcal C[f_\text{col}]+\mathcal S_\text{col}$$
+$$\partial_tf_\text{col}+v_\parallel\partial_zf_\text{col}=\nu_x(c_\perp)\left(f_\text{ann}-f_\text{col}\right)+\mathcal C[f_\text{col}]+\mathcal S_\text{col}$$
 
-$$\partial_tf_\text{ann}+v_\parallel\partial_zf_\text{ann}=\nu_x'(v_\perp)\left(f_\text{col}-f_\text{ann}\right)-\nu_w(v_\perp)f_\text{ann}+\mathcal S_\text{ann}$$
+$$\partial_tf_\text{ann}+v_\parallel\partial_zf_\text{ann}=\nu_x'(c_\perp)\left(f_\text{col}-f_\text{ann}\right)-\nu_w(c_\perp)f_\text{ann}+\mathcal S_\text{ann}$$
 
 **Both terms of the column pair carry $\nu_x$, and both of the annulus pair
 carry $\nu_x'$**; the exchange conserves
 $n_\text{col}V_\text{col}+n_\text{ann}V_\text{ann}$ exactly through
 $V_\text{col}\nu_x=V_\text{ann}\nu_x'$. These are azimuth-averaged
-boundary-crossing rates of an atom of perpendicular speed $v_\perp$, each
-$\propto v_\perp$ per bin, with a Cauchy chord across the annular cavity
+boundary-crossing rates of an atom of perpendicular speed $c_\perp$, each
+$\propto c_\perp$ per bin, with a Cauchy chord across the annular cavity
 supplying the geometry and the $R_p/R_m$ split setting which surface a crossing
 reaches; $\nu_w$ is the annulus's own vessel-wall rate. $\mathcal C$ is the
 collision operator below; $\mathcal S$ carries wall and sheath rebirth, the
 surface jets, fueling and pumping. Both velocity coordinates are needed:
-$\nu_x\propto v_\perp$ selects fast-perpendicular atoms out of the column, the
-collision rates use $(v_\parallel-u_i)^2+v_\perp^2$ per bin, and every rebirth
-channel enters with a definite $(v_\parallel,v_\perp)$ spectrum. What the
+$\nu_x\propto c_\perp$ selects fast-perpendicular atoms out of the column, the
+collision rates use $(v_\parallel-u_i)^2+c_\perp^2$ per bin, and every rebirth
+channel enters with a definite $(v_\parallel,c_\perp)$ spectrum. What the
 azimuth integral costs is radial structure INSIDE the column — an atom entering
 from the annulus is spread over the whole cross-section at once — and the
 two-zone split is this model's radial description.
@@ -202,7 +306,7 @@ class is read by the line-radiation instrument, not by the solver.
 **There is no separate three-body sink.** `acd` already contains three-body
 recombination at the tabulated density, so the whole recombination loss is the
 quadratic term above and the cubic channel is identically zero; the
-`recombination_3b_loss` row a result carries reads zero throughout. The
+`recombination_3b_loss` term a result carries reads zero throughout. The
 `atomic_rate_model = "janev"` arm instead uses the analytic fits and does split
 the two, $\alpha_r(T_e)n^2$ radiative plus $\alpha_3(T_e)n^3$ three-body. The
 BULK coefficients carry no scale factor; the beam excitation channel is the one
@@ -210,7 +314,7 @@ exception and carries `b_beam_excitation`. Each result records an
 `atomic_rate_domain` ledger of where the run sampled below the tabulated $T_e$
 edge.
 
-**Recombination is a sink on every row**, at the local plasma moments: it
+**Recombination is a sink on every field**, at the local plasma moments: it
 removes $S_\text{rec}$ particles, $m_i u S_\text{rec}$ of momentum, and
 $\tfrac32T_eS_\text{rec}$, $\tfrac32T_iS_\text{rec}$ of electron and ion
 energy, returning the particle to the gas.
@@ -237,14 +341,14 @@ atoms are removed from the distribution itself, so they carry their own
 moments — the column gas's drift $u_n$ and temperature $T_n$ — and the coupling
 term below books exactly $\left(\tfrac32kT_n+\tfrac12m_i(u_i-u_n)^2\right)S_{iz}$
 onto $E_i$. `Ti_birth_ionization` and `Te_birth_ionization` govern the fluid
-path; the `ionization_birth_thermal_deficit_*_W_cm3` rows report what a fluid
+path; the `ionization_birth_thermal_deficit_*_W_cm3` diagnostics report what a fluid
 birth temperature other than the gas temperature would leave unbooked.
 
 ### The neutral collision operator and its plasma coupling
 
 $\mathcal C[f]$ carries ionization, resonant charge exchange, elastic
 scattering and recombination, evaluated per velocity bin at the relative speed
-$g_\text{eff}^2=(v_\parallel-u_i)^2+v_\perp^2+8kT_i/\pi m$. Charge exchange and
+$g_\text{eff}^2=(v_\parallel-u_i)^2+c_\perp^2+8kT_i/\pi m$. Charge exchange and
 elastic scattering use the Phelps He<sup>+</sup>/He backscatter and isotropic
 cross sections; the per-bin loss frequencies are
 
@@ -258,7 +362,7 @@ the tick, at the ion Maxwellian; ionization removes them.
 **The neutral clock tick.** The neutral gas is advanced on its own clock, whose
 interval $\Delta t_\text{tick}$ is generally many plasma steps long. The plasma
 side receives **minus the measured moments** of those operators on its momentum
-and ion-energy rows, booked once per tick; the electron-side costs — ionization
+and ion-energy equations, booked once per tick; the electron-side costs — ionization
 potential, radiation, excitation — stay on the plasma book. The ionization and
 recombination moments are held CONSTANT across the plasma steps inside a tick;
 the charge-exchange/elastic pair is applied as the relaxation below, at the
@@ -299,7 +403,7 @@ $$Q_{ie}=\frac{3n\left(T_e-T_i\right)}{\tau_e}\frac{m_e}{m_i}$$
 the Braginskii collisional exchange at the electron collision time $\tau_e$
 built in `plasma/params.py`, so $Q_{ie}\propto n^2\ln\Lambda\,T_e^{-3/2}$.
 
-Parallel Braginskii conduction is $\mathbf q_s=-\kappa_{\parallel s}\nabla T_s$
+Parallel Braginskii conduction is $q_{\parallel s}=-\kappa_{\parallel s}\,\partial_zT_s$
 with $\kappa_{\parallel e}=3.16\,n\tau_ev_{te}^2\propto T_e^{5/2}$ and
 $\kappa_{\parallel i}=3.9\,n\tau_iv_{ti}^2$; perpendicular conduction is not
 carried. The face conductivity is the arithmetic mean of its two cells, and
@@ -308,7 +412,7 @@ the anode mesh — **parallel conduction is throttled by the mesh's open
 fraction** — and one on an ordinary interior face. The electron conductivity is
 scaled per cell by the harmonic limiter
 
-$$\lambda=\frac{q_\text{sat}}{q_\text{sat}+q_{SH}},\qquad q_\text{sat}=f\,n\,T_e\,v_{th,e},\qquad q_{SH}=\kappa_e\left|\nabla T_e\right|$$
+$$\lambda=\frac{q_\text{sat}}{q_\text{sat}+q_{SH}},\qquad q_\text{sat}=f\,n\,T_e\,v_{th,e},\qquad q_{SH}=\kappa_e\left|\partial_zT_e\right|$$
 
 $f$ = `heat_flux_limiter_f` the free-streaming fraction,
 `heat_flux_limiter_exponent` its blending exponent (a value other than 1 gives
@@ -326,8 +430,9 @@ $$S_\text{an}=\eta\,\alpha_\text{ps}\,n\,c_s\,\frac{A}{V_\text{col}},$$
 
 removing $S_\text{an}$ particles and $m_iuS_\text{an}$ of momentum. Under
 `anode_sheath_full_debit` the energy debits are the SHEATH-EDGE moments,
-$\tfrac12T_e$ per collected electron and $\tfrac52T_i$ per collected ion — the
-ion enthalpy, not its thermal energy alone; clearing that selector books
+both per COLLECTED ION: $\tfrac12T_e$ from the electrons (the presheath work
+the collected pair has already done) and $\tfrac52T_i$ from the ions — the
+ion enthalpy, not its thermal energy alone. Clearing that selector books
 $\tfrac32T_e$ and $\tfrac32T_i$ instead. The neutralized atoms are returned to
 the annulus, falling back to the column where a cell has no annulus.
 
@@ -347,9 +452,11 @@ $$L_\text{tot}=\underbrace{n_n\sigma_\text{iz}I_\text{ion}}_\text{potential}+\un
 $\sigma_\text{iz}$ the He electron-impact ionization cross section,
 $\langle W_\text{sec}\rangle$ the mean secondary energy, and
 $\sigma_\text{exc}E_\text{rad}$ the excitation-manifold channel, which carries
-the `b_beam_excitation` scale. Each cell banks $Q_\text{beam}$, its potential
-cost and excitation radiation, and the beam ionization birth as the RATE the
-surviving flux drives,
+the `b_beam_excitation` scale. Each cell banks the GROSS beam power $Q_\text{beam}$ — the deposition term
+carries heating, radiation and ionization cost together, and the separate
+cost and excitation-radiation terms subtract from the electron energy, so the
+net electron gain is the difference — together with the beam ionization birth
+as the RATE the surviving flux drives,
 $S_{iz}^\text{beam}\,dV=\Gamma\,n_n\sigma_\text{iz}(E)\,dz$ integrated over the
 cell's path; those births cost the primary its potential term but do not remove
 it from the beam.
@@ -368,14 +475,14 @@ mesh carries out of it — with $\Gamma_\text{exit}$ equal to $\Gamma_0$, or
 $(1-\eta)\Gamma_0$ past the anode, and the whole term zero for a ray that
 stopped inside.
 
-**Two bookings ride the same row.** The per-cell deposition densities are
+**Two bookings ride the same term.** The per-cell deposition densities are
 smoothed by a conservative Gaussian of width `beam_deposition_smoothing_cm`
 before they are written, which spreads the beam-range deposition without moving
 its total; and the OHMIC GAP HEATING $Q_\text{ohm}$ — the circuit's
 $I_\text{tot}V_p$ — is added afterwards, distributed over the cathode–anode gap
 cells by Spitzer weights $\propto\Delta z/\sigma_\parallel(T_e,n)$ built from
 the same conductivity the gap resistance uses. Both live inside the
-`beam_power_deposition` row.
+`beam_power_deposition` term.
 
 The selectors below choose among equations for the two remaining stopping terms
 and for where the anomalous bank is deposited; all are CSDA controls, inert
@@ -399,7 +506,7 @@ $E_1$ is solved per extraction from the launch cell's own Maxwellian against the
 emitted flux, $F_M(v_1)=m\,j_b/((E_b-E_1)\,\text{erg})$, and clamped at
 $E_\text{stop}$ when the edge the equation asks for falls inside the bulk.
 **The walkers are not passive.** Under the walking selectors they IONIZE the gas
-they cross (`heating_anomalous_tail_ionization`), adding their own birth row,
+they cross (`heating_anomalous_tail_ionization`), adding their own birth term,
 and their treatment at the cathode face is a selector of its own
 (`heating_anomalous_tail_cathode_boundary`) — reflecting them back into the
 column rather than absorbing them.
@@ -448,7 +555,7 @@ enhancement is exactly eaten by space charge.
 **The surface is not a constant.** Under `cathode_warming_model = "power_balance"`
 its temperature obeys
 
-$$C_\text{th}\frac{dT_s}{dt}=P_\text{heater}+P_\text{ion}-P_\text{rad}-P_\text{emis}-P_\text{cond},$$
+$$C_\text{th}\frac{dT_s}{dt}=P_\text{heater}+P_\text{ion}-P_\text{rad}-P_\text{emis}-P_\text{cond}-P_\text{back},$$
 
 with $P_\text{heater}$ pinned by the standby equilibrium (at the base
 temperature the heater exactly balances radiation, so it is not free),
@@ -456,8 +563,10 @@ $P_\text{ion}$ the accepted solve's ion bombardment power,
 $P_\text{rad}=\varepsilon\sigma_{SB}A_c(T_s^4-T_\text{env}^4)$ gray-body
 radiation, $P_\text{emis}=I_\text{eth}^\star(\phi_\text{wf}+2k_BT_s)$
 evaporative emission cooling — each emitted electron removing the barrier plus
-its mean thermal energy over it — and $P_\text{cond}=G(T_s-T_\text{base})$
-conduction into the heater-held substrate.
+its mean thermal energy over it — $P_\text{cond}=G(T_s-T_\text{base})$
+conduction into the heater-held substrate, and $P_\text{back}$ the energy the
+backscattered atoms of the cathode jet carry away, the $R_E$ share of the
+incident ion energy that the gas receives and the surface therefore loses.
 
 Under `cathode_surface_model = "ads_des"` the work function is not a constant
 either: an adsorbate coverage $\theta\in[0,1]$ obeys
@@ -535,7 +644,7 @@ electrode, never through the plasma thermal store); the **plasma-thermal**
 book, $2T_e$ per collected electron and $T_e/2$ per ion through the boxed
 transmission coefficients $\gamma_e=2+\phi/T_e$ and
 $\gamma_i=\tfrac12+\phi/T_e$; and **plasma heating**, the beam and the gap
-ohmic. $S^\text{elec}_{E_e}$ is the plasma-thermal electron row of that split.
+ohmic. $S^\text{elec}_{E_e}$ is the plasma-thermal electron term of that split.
 
 **What the plasma pays is not the same at the two electrodes.** At the cathode
 it pays the thermal part alone. At the anode, under `anode_sheath_full_debit`
@@ -544,7 +653,7 @@ and the plasma pays $\phi_a$ per electron on top of the thermal $2T_e$; at an
 ATTRACTING sheath ($\phi_a\le0$) the field does work ON the electrons, the bank
 is the payer, and the thermal debit stands alone. A non-finite $\phi_a$ belongs
 to neither regime and raises. The collected IONS leave with the enthalpy
-$\tfrac52T_i$, not $\tfrac32T_i$ — the $S_\text{an}$ rows above.
+$\tfrac52T_i$, not $\tfrac32T_i$ — the $S_\text{an}$ terms above.
 
 **Prescribed drive.** `cathode_solver_model = "prescribed_measured"` imposes
 both loop quantities — $I(t)$ and $V_\text{dis}(t)$ interpolated from a
@@ -567,7 +676,8 @@ that runs before it.
 the Bohm outflow — $n_\text{se}=\alpha_\text{se}n$, $u=c_s=\sqrt{T_e/m_i}$ into
 the wall, the live cell's $T_e$ and $T_i$ — and the face flux between the
 interior cell and that ghost is applied one-sidedly to the live cell. Those
-rows are the $S^\text{bnd}_\bullet$ of the conservation laws. The sheath-edge
+terms are the $S_n^\text{out}$, $S_M^\text{out}$, $S_{E_e}^\text{out}$ and
+$S_{E_i}^\text{out}$ of the conservation laws. The sheath-edge
 factor is
 
 $$\alpha_\text{se}=\alpha_\text{ps}^{\,d/L_\text{ps}},\qquad \alpha_\text{ps}=e^{-1/2},\qquad L_\text{ps}\sim c_s/\nu_{in}$$
@@ -585,7 +695,7 @@ flux: no flux through the wall, but the wall still pushes back.
 floating rather than a driven sheath. No circuit branch owns the electron
 energy there, so the boundary term itself books the floating electron sheath at
 $2T_e$ per collected ion, electron flux equalling ion flux at a floating
-surface; at the cathode that row is owned by the circuit.
+surface; at the cathode that term is owned by the circuit.
 `end_recycle_to_annulus` routes the collector faces' neutralized flux into that
 cell's annulus, $\partial_tn_{n,a}|_\text{recycle}=\dot N_\text{loss}/V_\text{ann}$,
 as thermal diffuse gas carrying no directed momentum.
@@ -593,11 +703,13 @@ as thermal diffuse gas carrying no directed momentum.
 ### Wall return and jet rebirth spectra
 
 Flux reaching a surface is neutralized and reborn as gas. The thermal rebirth
-is the cosine half-flux at that surface's own temperature — the live $T_s$ at
-the cathode face, the wall temperature at the collector face and at every other
-surface — entered on the velocity grid as $v_\perp\exp(-v_\perp^2/2s^2)$, the
-azimuthally integrated 2D Maxwellian, with one further power of $v_\perp$ from
-the cosine flux law. At the cylindrical wall a landing splits into an
+is the cosine half-flux at that surface's own temperature, and which
+temperature that is follows the surface: the LOW-$z$ end plane and the closed
+faces flanking a cathode cell re-emit at the live cathode temperature $T_s$,
+while the collector face, the cylindrical wall, the anode wires and the
+baffles re-emit at the wall temperature. The spectrum is entered on the
+velocity grid as $c_\perp\exp(-c_\perp^2/2s^2)$, the azimuthally integrated 2D
+Maxwellian, with one further power of $c_\perp$ from the cosine flux law. At the cylindrical wall a landing splits into an
 accommodated share $\alpha_\text{acc}$ re-emitted on that spectrum and a
 non-accommodated share $1-\alpha_\text{acc}$;
 `neutral_kinetic_dvm_wall_reflection` selects the second's treatment —
@@ -621,7 +733,7 @@ incident energy differently**: the anode and collector jets launch nothing from
 such a cell, while the cathode jet is governed by its arming latch and its
 launch builder REFUSES a counted launch at or below zero energy rather than
 silently dropping it. The remaining $1-R_N$ keeps the thermal re-emission.
-Each surface's energy book carries the reflected energy as a named loss row
+Each surface's energy book carries the reflected energy as a named loss term
 formed from the same counted (particles, incident energy) pair the birth is
 formed from, so what the surface gives up is what the gas receives.
 
@@ -632,9 +744,9 @@ $\varepsilon_\text{back}$ rather than that plus the smear's own thermal
 content, and the placed spectrum's moments are checked against their targets
 (the construction is [`NUMERICS.md`](NUMERICS.md)).
 
-Anode launches are DIRECTED away from the wires on the collection side ($-z$
-below the mesh face, $+z$ at or above it) and their thermal remainder is a
-volume rebirth, a wire having no half-space to emit into; wire-intercepted
+Anode launches are DIRECTED away from the wires on the collection side — drift
+$u<0$ in the cell below the mesh face, $u>0$ at or above it, $v_\parallel$ being
+a signed coordinate — and their thermal remainder is a volume rebirth, a wire having no half-space to emit into; wire-intercepted
 *neutrals* are a different population and keep their at-rest
 `mesh_blocked`/`mesh_reemit` pair. The cathode jets launch only while ARMED — a
 hysteresis latch on the ion current the accepted step's cathode solve booked,
@@ -658,7 +770,7 @@ exactly; the column flux is untouched.
 
 ### Fueling and pumping
 
-$$\mathcal S_\text{gp}=\dot N_\text{gp}(t)\,g(z)\,\chi(v_\parallel,v_\perp)$$
+$$\mathcal S_\text{gp}=\dot N_\text{gp}(t)\,g(z)\,\chi(v_\parallel,c_\perp)$$
 
 $\dot N_\text{gp}$ the measured inflow waveform — a square with erf rise and
 close — $g$ the axial placement profile, normalized so every distributed form
@@ -668,7 +780,7 @@ the ANNULUS cells**, reaching the column through the zone exchange.
 `gas_puff_profile` selects $g$: `"cell"` puts the whole flow in the role-tagged
 cell; `"gaussian"` uses $\exp[-(z-z_0)^2/2\sigma^2]$ weighted by cell length;
 `"cosine_pipe"` uses a Lambertian outlet's first-flight illumination
-$[1+((z-z_0)/d)^2]^{-2}$ at throw $d$; `"orifice"` derives the row by ray optics
+$[1+((z-z_0)/d)^2]^{-2}$ at throw $d$; `"orifice"` derives the profile by ray optics
 on a long tube's exit distribution — emit over the pipe-exit disc at the vessel
 wall, weight directions by the transparent-regime long-tube angular intensity,
 fly straight, and record where each ray first reaches the column radius, or its
@@ -687,7 +799,7 @@ pump-elbow conductance folds into the speed in series first.
 ### Instruments
 
 Measurement constructs, not model physics, named so a result carrying them can
-be read: $-\nu_\text{add}m_inu$ on the momentum row with its frictional work
+be read: $-\nu_\text{add}m_inu$ on the momentum equation with its frictional work
 $\nu_\text{add}m_inu^2$ into $E_i$ — **diagnostic probe, not a physical term.**
 No collision process in this model supplies $\nu_\text{add}$; what it measures
 is the parallel momentum loss, and the loss length $L=u/\nu_\text{add}$ going
@@ -709,7 +821,7 @@ Momenta are not clipped: $u$ is recovered with the floored density and $M$
 rebuilt from it, leaving $M$ unchanged. Densities are floored before the
 energies, so the neutral energy floor is taken against the already-floored
 $n_n$ and the implied neutral temperature cannot fall below the wall's. On the
-kinetic path the published $n_n$ and $n_{n,a}$ rows are a one-sided
+kinetic path the published $n_n$ and $n_{n,a}$ fields are a one-sided
 $\max(\text{moment},\text{floor})$ rather than a ledgered clip. Clipping up to
 a floor injects mass or energy; every accepted repair records its exact
 extensive debit — plasma and neutral particles added, electron and ion energy
@@ -718,9 +830,9 @@ zero ledger.
 
 ## Where each term is implemented
 
-Rows a result carries in `rhs_terms`, for the model above.
+Terms a result carries in `rhs_terms`, for the model above.
 
-| RHS row | implementation |
+| term | function |
 |---|---|
 | `plasma_advective_flux` | `physics/flux.py:plasma_flux_rhs_terms` |
 | `plasma_front_flux` | `physics/flux.py:front_filling_fluxes` |
@@ -738,7 +850,7 @@ Rows a result carries in `rhs_terms`, for the model above.
 | `recombination_3b_loss` | `physics/reactions.py:reaction_rhs_terms` |
 | `recombination_energy_return` | `physics/reactions.py:recombination_energy_return_rhs` |
 | `cathode_surface_loss` | `physics/cathode.py:cathode_source_terms` |
-| `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode row) |
+| `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode part) |
 | `anode_collection` | `physics/sources.py:anode_collection_rhs` |
 | `beam_ionization_birth` | `physics/cathode.py:beam_ionization_rhs_terms` |
 | `beam_power_deposition` | `physics/cathode.py:beam_ionization_rhs_terms` (beam banks, smoothing, and the ohmic gap booking) |
@@ -749,12 +861,12 @@ Rows a result carries in `rhs_terms`, for the model above.
 | `parallel_momentum_sink` | `physics/sources.py:parallel_momentum_sink_rhs` |
 | `parallel_momentum_sink_heating` | `physics/sources.py:parallel_momentum_sink_heating_rhs` |
 
-`boundary_absorption` and `surface_loss` are permanently zero rows kept for
+`boundary_absorption` and `surface_loss` are permanently zero terms kept for
 saved-ledger schema stability, as is `recombination_3b_loss` under the ADAS
 coefficients.
 
 The model presented here is the equation set the reference configuration
-integrates. A result may carry further rows that are not part of it: those of
+integrates. A result may carry further terms that are not part of it: those of
 the alternative fluid neutral closure, and the additional terms
 `electron_drift_transport` and `neutral_probe_source`, all available in the
 code and none described by this document.
