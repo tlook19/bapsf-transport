@@ -32,6 +32,7 @@
       "cathode_jet_hot_carrier",
       "cathode_jet_surface_debit",
       "cathode_neutral_jet",
+      "energy_exchange_rate_fraction",
       "equilibration_gas_puff_on_s",
       "gas_puff_orifice_id_cm",
       "gas_puff_orifice_length_cm",
@@ -86,9 +87,9 @@
       "use_cached_neutral_seed"
     ],
     "file_sha256": [
-      "34bfaf94aded03265ad12a35074fa9b2c7c7d6c83d9e1e99baddbd9d791c54e3"
+      "3acd42357faab77375cfdd7bb4838fe8cd7daf696a4aae93c7f2d2feaad04e19"
     ],
-    "identity": "c92e6ef9bfacac9bfe20b262e9032a587f9ae0d889e399a9c6800ac601a89ecd",
+    "identity": "b6c94082515c543e8f4523346020adecde720796f723ddf5c013cb18cc8cdc8d",
     "name": "g1atrim"
   },
   "description": "Golden baseline at the stance of record, re-cut to the gate mesh: default_config() plus the committed stance file scripts/stances/g1atrim.toml, minus that stance's mesh-sized package, plus the run-shape overrides in baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60).",
@@ -264,6 +265,7 @@
     "end_expansion_machine_radius_cm": null,
     "end_expansion_plasma_radius_cm": null,
     "end_mode": "collector",
+    "energy_exchange_rate_fraction": 0.5,
     "equilibration_gas_puff_on_s": 0.025,
     "eta": 0.358,
     "front_flux_model": "sonic_relaxation",
@@ -436,13 +438,13 @@
     "finite": true,
     "n_max": 32932274212188.65,
     "n_min": 851867382.0568187,
-    "neutral_inventory_relative_drift": 1.1048951617256926,
+    "neutral_inventory_relative_drift": 1.1050316740971529,
     "nn_max": 134775373329105.28,
     "nn_min": 234229705970.4254,
-    "plasma_inventory_relative_drift": 4583.923500668004,
+    "plasma_inventory_relative_drift": 4580.676971504302,
     "samples": 2620,
-    "steps": 55300,
-    "thermal_energy_relative_drift": 4726.13056110458,
-    "total_particle_inventory_relative_drift": 1.1937590873670492
+    "steps": 60135,
+    "thermal_energy_relative_drift": 4564.821049047724,
+    "total_particle_inventory_relative_drift": 1.1938326447140895
   }
 }
