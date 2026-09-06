@@ -347,14 +347,16 @@ range,
 $$\frac{1}{l_b}=\frac{1}{l_{bi}}+\frac{1}{l_{bn}},\qquad l_{bi}=v_b\,\tau_{ei}(T_e,n_e),\qquad l_{bn}=\frac{1}{\sigma_b n_n},$$
 
 $v_b=\sqrt{2e\phi_c/m_e}$ the launch speed, reducing to $l_{bi}$ where there is
-no neutral term and returning zero for $\phi_c\le0$. **Where it is evaluated
-differs by form.** The voltage-driven solve holds the bypass fraction FROZEN as
-a parameter inside its residual and recomputes $l_b$ BETWEEN `brentq` solves,
-cycling the $(\psi_+,\,l_b,\,\beta_\text{bypass})$ triple to $10^{-4}$ in the
-bypass fraction over at most four passes. The current-driven and prescribed
-forms evaluate $l_b$ INSIDE the residual instead, so their single root already
-carries it and no outer cycle runs. The one BISECTED
-quantity in the deposition module is the plateau-edge energy $E_1$: a fixed
+no neutral term and returning zero for $\phi_c\le0$. Where it is evaluated
+differs by form:
+
+| form | where $l_b$ is evaluated | iterated with |
+|---|---|---|
+| voltage-driven | between successive `brentq` solves, the bypass fraction held frozen as a parameter inside the residual | the $(\psi_+,\,l_b,\,\beta_\text{bypass})$ triple, to $10^{-4}$ in the bypass fraction over at most four passes |
+| current-driven | after the root: the residual is $J_\text{tot}(\psi_+)-J_\text{target}$ and never reads $l_b$ | nothing — one root, then $l_b$ once. (The separate, conditionally-run ceiling root over the device voltage does evaluate $l_b$ inside its own residual.) |
+| prescribed | inside the residual, through the anode state the root passes | nothing beyond the single bracketed root |
+
+The one BISECTED quantity in the deposition module is the plateau-edge energy $E_1$: a fixed
 bisection budget on a monotone residual between $E_\text{stop}$ and the beam
 energy, exiting early when the midpoint reaches a bracket endpoint, and clamped
 to the floor and COUNTED when the edge the equation asks for falls inside the

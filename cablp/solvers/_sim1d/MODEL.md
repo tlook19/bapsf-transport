@@ -44,7 +44,8 @@ section below:
 | $S_n^\text{out}$, $S_M^\text{out}$, $S_{E_e}^\text{out}$, $S_{E_i}^\text{out}$ | the plasma-terminating (absorbing) face terms — the outflow, one per evolved field |
 | $S^\text{elec}_{E_e}$ | the electrode electron-sheath energy term |
 | $S_M^n$, $Q_i^n$ | the kinetic coupling terms — minus the measured moments of the ionization, charge-exchange, elastic AND recombination operators, so they carry the ionization birth and the recombination sink on $M$ and $E_i$ |
-| $Q_\text{beam}$, $Q_\text{ohm}$ | beam power deposited in the plasma, and the ohmic gap heating booked with it |
+| $Q_\text{beam}$ | the NET electron gain from the beam: the gross deposition less the beam's OWN ionization cost and excitation radiation |
+| $Q_\text{ohm}$ | the ohmic gap heating, booked with the beam deposition |
 | $Q_\text{diss}$ | the ion kinetic energy the Rusanov face flux dissipates numerically, returned to $E_i$ |
 | $S_M^\text{geom}$ | the quasi-1D geometric pressure force |
 
@@ -124,9 +125,12 @@ and ion–neutral terms — those are zeroed and the coupling terms $S_M^n$,
 $Q_i^n$ carry them instead, built from the measured moments of
 the ionization, charge-exchange, elastic and recombination operators together.
 The DENSITY and ELECTRON-ENERGY contributions of the same terms are NOT taken
-over and stay explicit. So the ionization birth and the recombination sink appear
-inside $S_M^n$ and $Q_i^n$ on $M$ and $E_i$, and explicitly on $n$ and $E_e$.
-Their decomposition is
+over and stay explicit. So on $M$ and $E_i$ the ionization birth and the
+recombination sink sit inside $S_M^n$ and $Q_i^n$; on $n$ both appear
+explicitly; and on $E_e$ the recombination sink appears explicitly while the
+ionization birth contributes NOTHING — the new electron is born cold, so its
+birth energy is identically zero and $T_e$ falls by dilution alone. Their
+decomposition is
 
 $$S_M^n=m_iu_n\left(S_{iz}+S_{iz}^\text{beam}\right)-m_iu\,S_\text{rec}+R_\parallel^{in},$$
 
@@ -201,7 +205,9 @@ $$\partial_tE_i+\nabla_\parallel\!\cdot(E_iu)=-u\,\partial_zp_i+\nabla_\parallel
 
 The ionization birth and the recombination sink are absent from the $M$ and
 $E_i$ equations for the reason given above — they are inside $S_M^n$ and
-$Q_i^n$ — and present on $n$ and $E_e$, where the fluid terms survive.
+$Q_i^n$. On $n$ both are explicit, and on $E_e$ the recombination sink is
+explicit while the ionization birth adds nothing at all, the electron being
+born cold.
 
 **The pressure work is the one term whose discretisation is not the literal
 transcription of the primitive one.** The Braginskii form carries
@@ -347,10 +353,16 @@ birth temperature other than the gas temperature would leave unbooked.
 ### The neutral collision operator and its plasma coupling
 
 $\mathcal C[f]$ carries ionization, resonant charge exchange, elastic
-scattering and recombination, evaluated per velocity bin at the relative speed
-$g_\text{eff}^2=(v_\parallel-u_i)^2+c_\perp^2+8kT_i/\pi m$. Charge exchange and
-elastic scattering use the Phelps He<sup>+</sup>/He backscatter and isotropic
-cross sections; the per-bin loss frequencies are
+scattering and recombination, and the four are not all resolved the same way.
+**Ionization is VELOCITY-BLIND**: one frequency per cell, attenuating the whole
+distribution uniformly, which is why its births carry the gas's own moments.
+Charge exchange and elastic scattering ARE resolved per velocity bin, at the
+relative speed
+
+$$g_\text{eff}^2=(v_\parallel-u_i)^2+c_\perp^2+\frac{8kT_i}{\pi m},$$
+
+on the Phelps He<sup>+</sup>/He backscatter and isotropic cross sections; their
+per-bin loss frequencies are
 
 $$\nu_{cx}=n\,Q_b\,g_\text{eff},\qquad \nu_{el}=\tfrac12\,n\,Q_i\,g_\text{eff},$$
 
@@ -452,11 +464,15 @@ $$L_\text{tot}=\underbrace{n_n\sigma_\text{iz}I_\text{ion}}_\text{potential}+\un
 $\sigma_\text{iz}$ the He electron-impact ionization cross section,
 $\langle W_\text{sec}\rangle$ the mean secondary energy, and
 $\sigma_\text{exc}E_\text{rad}$ the excitation-manifold channel, which carries
-the `b_beam_excitation` scale. Each cell banks the GROSS beam power $Q_\text{beam}$ — the deposition term
-carries heating, radiation and ionization cost together, and the separate
-cost and excitation-radiation terms subtract from the electron energy, so the
-net electron gain is the difference — together with the beam ionization birth
-as the RATE the surviving flux drives,
+the `b_beam_excitation` scale. The `beam_power_deposition` term a cell banks is
+GROSS — heating, radiation and ionization cost together — and two further terms
+take the last two back out of the electron energy: `beam_ionization_cost`
+removes $I_\text{ion}S_{iz}^\text{beam}$ and `beam_excitation_radiation` removes
+the excitation channel's energy, which leaves the plasma as He I light. Their
+sum is the $Q_\text{beam}$ of the equations above, the NET electron gain.
+$C_e$ does not cover either: its ionization cost is the BULK $I_\text{ion}S_{iz}$
+alone, so the beam's own cost has to be, and is, booked separately. Each cell
+also banks the beam ionization birth as the RATE the surviving flux drives,
 $S_{iz}^\text{beam}\,dV=\Gamma\,n_n\sigma_\text{iz}(E)\,dz$ integrated over the
 cell's path; those births cost the primary its potential term but do not remove
 it from the beam.
