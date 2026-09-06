@@ -7,8 +7,10 @@ adopting one changes no value and moves no trajectory.
 
 Read this alongside `core/config.py` (which owns the keys and their defaults),
 `core/model_families.py` (which owns the family data) and
-`core/model_declarations.py` (which owns the form and its refusals). Values and
-their provenance live in the `*_provenance.md` notes, never here.
+`core/model_declarations.py` (which owns the form and its refusals). Values
+themselves live in `core/config.py` and in the configuration files under
+`scripts/stances/`; a value's class and the measurement behind it are recorded
+outside this repository. Neither belongs here.
 
 ## Why the form exists
 

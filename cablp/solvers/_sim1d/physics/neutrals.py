@@ -1149,7 +1149,7 @@ GAS_PUFF_DIAGNOSTIC_FIELDS = (
 # METER-CLASS (a meter reading, carried verbatim), FITTED-FLUX-CLASS (a level
 # fitted under the old constant, rescaled by 1.0734834 so the physical flux it
 # encodes is preserved), or IDENTITY-CLASS (a restatement of the constant or
-# of a rescaled default). See ``config_defaults_provenance.md``.
+# of a rescaled default).
 SCCM_TO_PARTICLES_PER_S = 4.171431e17
 
 

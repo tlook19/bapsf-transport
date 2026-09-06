@@ -39,8 +39,7 @@ pin the configuration surface, with `audit_sim1d_configs_delta.py` as the
 rotation record that says which snapshot case moved and in which resolved
 values; `preflight_diffcfg.py` is the no-solve config
 diff every campaign arm runs before spending compute. A file belongs here when
-a merge is blocked by its verdict. `golden_baseline_provenance.md` lives here
-with the golden it documents.
+a merge is blocked by its verdict.
 
 **`run/`** — the drivers that build a `LAPDSim1D` and run it.
 `run_m6_point.py` is the config-complete campaign driver, `run_sim1d.py` the
@@ -59,8 +58,7 @@ it. A file belongs here when it *consumes* an h5 and says how the model did.
 `stance_config.py` loads the committed stance; `g1_build_profiles.py`,
 `build_msi_field_profile.py`, `sp3_build_nn0.py`, `puff_orifice.py` and the
 coil-field solvers build the per-cell profiles and rows the stance names; the
-circuit fits pin the drive constants. `production_stance_provenance.md` is
-here: the stance's values and their honest bars. A file belongs here when
+circuit fits pin the drive constants. A file belongs here when
 changing it would change what the production configuration means.
 
 **`atomic/`** — cross sections, rate tables and the ADAS comparisons. Table
@@ -118,3 +116,19 @@ accepted steps" — rather than by file name. A committed fixture under
 `data/` or `baselines/` is obtainable and is still named directly; so is any
 committed script. The point is not to hide the artifact but to make the note
 survive without it.
+
+**The same holds for where a configured VALUE came from (2026-09-05).** Each
+scalar's class -- MEASURED, DERIVED, FITTED or ASSUMED -- its honest bar and
+the measurement or fit behind it are recorded outside this repository, for the
+same reason: that record rests on measurement memos and run artifacts a reader
+of this PUBLIC repo cannot obtain, so a pointer to it states nothing that
+reader can follow. What stays here is what a reader can check. The docstrings
+in `cablp/solvers/_sim1d/core/config.py` say what each key MEANS -- its units,
+sign convention, valid range, which term consumes it, what it raises and which
+flag gates it -- and say it without reference to which number we picked; the
+configuration files under `stances/` carry the values themselves; the committed
+fixtures under `data/` and `baselines/` carry the arithmetic and the
+trajectories a gate compares against; and `baselines/production_discharge.json`,
+regenerated at every recapture, is the in-repo authority for what the golden
+was captured at. Where a docstring or comment would only have pointed at the
+outside record, it now says nothing further rather than pointing.

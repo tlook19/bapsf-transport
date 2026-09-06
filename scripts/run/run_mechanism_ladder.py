@@ -43,8 +43,9 @@ from cablp.solvers._sim1d.results.io import save_result_hdf5
 # shot and its heater-current data channel is invalid-flagged. What is set is
 # the operator's heater current, carried through the source paper's Fig-10
 # heater-current -> surface-temperature map (slope ~0.45 K/A, bracket
-# [0.43, 0.50] K/A; these rungs sit at the 0.43 K/A edge). Class, bars and the
-# C_R sensitivities: scripts/run/ladder_operating_provenance.md.
+# [0.43, 0.50] K/A; these rungs sit at the 0.43 K/A edge). Each rung's value
+# class, its honest bar and the C_R sensitivities measured against it are
+# recorded outside this repository, as every configured value's class is.
 #
 # V_bank provenance, corrected 2026-08-03: all four are MEASURED pre-shot
 # open-circuit readings on the same probe channel as V_dis (+-0.03 V SEM, with

@@ -1022,10 +1022,7 @@ def phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"):
 # that collisionally damps a Langmuir wave, and it is read only by the
 # `ql_relaxation` beam-anomalous closure's onset gate.
 #
-# The table is two nodes and nothing is smuggled in between them: the shipped
-# values, their classes and their honest bars live in
-# `solvers/_sim1d/core/config_defaults_provenance.md` under "QL relaxation
-# closure".
+# The table is two nodes and nothing is smuggled in between them.
 #
 # Both nodes are DERIVED from the same three published He elastic
 # momentum-transfer sets -- Biagi, IST-Lisbon and Morgan (LXCat, retrieved
@@ -1079,8 +1076,8 @@ def he_electron_momentum_transfer_rate_cm3_s(Te_eV):
     ``<v> = sqrt(8 kTe / (pi m_e))``. This is the ``<sigma v> ~ sigma(<E>)<v>``
     estimate, not a quadrature: the underlying table is two nodes wide, so a
     Maxwellian average over it would report a precision the data does not have.
-    The order-of-magnitude standing is stated with the values in the provenance
-    note and travels with every number this gate produces.
+    This coefficient therefore carries an ORDER-OF-MAGNITUDE standing, and that
+    standing travels with every number this gate produces.
 
     Accepts a scalar or an array and returns the same shape.
     """

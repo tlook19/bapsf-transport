@@ -66,10 +66,9 @@ from cablp.solvers._sim1d import LAPDSim1D, config_manifest, default_config
 # two checkouts carried the same trajectory.
 #
 # The values are kept here verbatim, exactly the way EXTRA below already is.
-# The provenance commentary for each one lives with the live dicts in
-# scripts/score/compare_sim1d_es1.py and in scripts/stance/production_stance_provenance.md;
-# it is deliberately NOT duplicated here, because this block is a dated
-# snapshot and that commentary is not.
+# The commentary on each one lives with the live dicts in
+# scripts/score/compare_sim1d_es1.py; it is deliberately NOT duplicated here,
+# because this block is a dated snapshot and that commentary is not.
 PARAM_OVERRIDES = {
     "V_bank": 177.843,
     "R_comp": 0.0072244,

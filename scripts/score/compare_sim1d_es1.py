@@ -125,8 +125,8 @@ OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
 # directly, because the golden is now captured at the stance of record. So the
 # standing warning runs the other way from the R1 era: editing
 # scripts/stances/g1atrim.toml changes the scorer's runs AND breaks the golden
-# until the fixture is recaptured. That is deliberate -- see
-# scripts/gates/golden_baseline_provenance.md -- and a recapture is a reviewed event.
+# until the fixture is recaptured. That is deliberate, and a recapture is a
+# reviewed event.
 PRODUCTION_STANCE = "g1atrim"
 _STANCE = load_stance(PRODUCTION_STANCE).params
 
@@ -235,8 +235,7 @@ PARAM_OVERRIDES = {
     # the fitted 15.0 the two radii previously shared. Caliper: a 15.0 in LaB6
     # disc behind a graphite front panel whose 14.5 in opening is the exposed
     # emitting/collecting/conducting face -> r = 18.415 cm. Field mapping from
-    # the aperture to the plasma column is assumed 1:1. Provenance:
-    # scripts/stance/production_stance_provenance.md.
+    # the aperture to the plasma column is assumed 1:1.
     "Rp": 18.415,
     "R_cath": 18.415,
     "implicit_heat_scheme": "tr_bdf2",
@@ -270,9 +269,9 @@ PARAM_OVERRIDES = {
     # code's J = C_R T^2 exp(-e phi / (kB T)), not the Richardson-Dushman
     # universal. It is calibrated once at ES1 against the measured drive band
     # and transferred frozen; cathode_Ts_base_K carries none of it (only one
-    # member of that flat direction may). Value from the stance; the value
-    # chain, including the superseded 14.25 derivation, is in
-    # scripts/stance/production_stance_provenance.md.
+    # member of that flat direction may). Value from the stance; its class and
+    # the calibration chain behind it are recorded outside this repository,
+    # which is where every configured value's class and honest bar are kept.
     "C_R": _STANCE["C_R"],
     # Beam deposition smoothing. The CSDA range profile is sharp on the mesh
     # scale; this spreads it over the physical straggling width so the

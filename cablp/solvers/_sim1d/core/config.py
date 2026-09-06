@@ -1,3 +1,19 @@
+"""The ``LAPDSim1D`` configuration surface: the ``input_dict`` and
+``input_flags`` templates, TOML loading, and the lineage and identity a run
+records.
+
+Each ``*_defaults()`` function below returns one group of the template, and its
+docstring is the authoritative statement of what every key in that group MEANS
+-- the quantity, its units, sign convention, valid range, which term consumes
+it, which flag gates it and what it raises. That is deliberately all a
+docstring here says. A configured value's CLASS (measured, derived, fitted or
+assumed), its honest bar, and the measurement or fit standing behind it are
+recorded OUTSIDE this repository, because that record rests on measurement
+memos and run artifacts a reader of this public repository cannot obtain. What
+can be read here is the shipped value itself, in this file, and the value a
+configuration adopts, in its own file under ``scripts/stances/``.
+"""
+
 import dataclasses
 import hashlib
 import json
@@ -27,8 +43,6 @@ def initial_condition_defaults():
         ships ON, the uniform value is a PLACEHOLDER that no shipped
         configuration reads -- equilibration is the convention for the fill a
         run starts from.
-
-        Provenance of the shipped value: ``config_defaults_provenance.md``.
     nn0_profile:
         PER-CELL initial neutral density [cm^-3]: a sequence of length ``nx``
         (the grid's cell count), every entry finite and ``> 0``. Read ONLY
@@ -241,8 +255,7 @@ def geometry_defaults():
         surface]; the region runs from the anode face at ``cathode_anode_gap_cm``
         to here and must lie strictly between the anode face and the collector
         block (``Lm - collector_length_cm``). ``None`` when off. Requires the
-        ``source_fixed_grid`` flag, and is required by it. For the value's
-        provenance see ``scripts/stance/production_stance_provenance.md``.
+        ``source_fixed_grid`` flag, and is required by it.
     source_region_dz_cm:
         Cell size [cm] inside that source region, held fixed independently of
         ``nx``; the region length minus the anode gap must be an integer
@@ -305,8 +318,6 @@ def floor_defaults():
         toward the neutral-gas temperature is only meaningful together with the
         sub-edge ADAS extension -- see the RETIRED recipe in the module note
         below, which must not be run.
-
-    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         "ne_floor": 1e8,
@@ -499,8 +510,6 @@ def neutral_source_defaults():
         Because ``S_pump_L``/``S_pump_R`` are lumped per-end speeds that
         already carry their own ducting, setting this alongside them applies
         the same restriction twice on the source side.
-
-    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         # --- ACTIVE (square waveform + pump) ---
@@ -598,9 +607,6 @@ def timing_defaults():
         The ``neutral_prebreakdown`` flag stays on by default and gates the
         machinery, so setting this duration alone is enough to get the phase
         back.
-
-        For why the default is what it is, see
-        ``config_defaults_provenance.md``.
     tau_breakdown:
         Scheduled breakdown duration before main discharge when not using
         current-triggered transitions [s].
@@ -619,8 +625,7 @@ def timing_defaults():
         That inheritance is a double duty with no physical basis: the
         equilibration's puff window is the machine's total gas-puff pulse
         width, an independent hardware quantity. Set it explicitly to decouple
-        the two (see ``scripts/stance/production_stance_provenance.md`` for the value
-        the campaign stance uses).
+        the two.
 
         Read ONLY by the ``Plasma=False`` equilibration inner sim; the main
         run's puff is closed by its own waveform envelope, never by this
@@ -685,8 +690,6 @@ def timing_defaults():
 
         Checked only while the run has not yet broken down. Must be a
         non-negative integer; anything else raises at construction.
-
-    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         "tau_prebreakdown": 0.05,
@@ -1381,8 +1384,6 @@ def model_mode_defaults():
         second-order *and* L-stable, so it rings far less than Crank-Nicolson
         at twice the solve cost, though it is not monotone like backward
         Euler). Ignored when the operator-split path is disabled.
-
-    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         # --- ACTIVE ---
@@ -1618,8 +1619,6 @@ def fudge_factor_defaults():
         were removed at D3 (2026-08-21) and raise.
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
-
-    Values and their provenance: ``config_defaults_provenance.md``.
     """
     # The atomic-rate / cooling / conduction scale factors that used to live
     # here were REMOVED (2026-08-28): ADAS and the Phelps collision operator
@@ -1711,16 +1710,13 @@ def cathode_defaults():
         ``C_R`` and ``cathode_Ts_base_K`` are DEGENERATE in this expression --
         a change in the prefactor trades against a change in surface
         temperature along one flat direction -- so a configuration must not
-        move both to represent the same emission. Values and their provenance:
-        ``config_defaults_provenance.md`` and, for the campaign stance,
-        ``scripts/stance/production_stance_provenance.md``.
+        move both to represent the same emission.
     R_comp:
         External/compliance resistance [Ohm]. The full loop series resistance.
         It does NOT set the discharge current -- the emission ceiling does;
         ``R_comp`` sets the voltage headroom, and the loop current is only
         weakly sensitive to it. ``R_comp`` and ``C_bank_F`` are jointly
-        determined and must move together; see
-        ``config_defaults_provenance.md``.
+        determined and must move together.
     R_comp_partition:
         Voltage-probe partition fraction ``x`` of ``R_comp``. ``R_comp`` is
         split into an external part ``x*R_comp`` (bank side of the probe) and
@@ -1764,8 +1760,7 @@ def cathode_defaults():
         internal resistance is bounded independently.
 
         Default ``1.0`` (all external, internal part 0) is bit-exact with the
-        historical behaviour. Must be in ``[0, 1]``. Adopted values:
-        ``scripts/stance/production_stance_provenance.md``.
+        historical behaviour. Must be in ``[0, 1]``.
     R_mesh_ohm:
         Anode-mesh series resistance [Ohm], separate from ``R_comp`` and on the
         internal (plasma) side of the probe, so it is invisible to the V_dis
@@ -1774,15 +1769,13 @@ def cathode_defaults():
         ``R_mesh(T_anode)`` dependence must be approximated by that constant.
         Unlike ``R_comp_partition`` this is a real series resistance and does
         reach the loop current. Default ``0.0`` is bit-exact. Must be ``>= 0``.
-        Measured bounds: ``config_defaults_provenance.md``.
     eta:
         Anode-mesh solid fraction (opacity) [dimensionless]: the share of the
         anode face its wires occupy, so ``1 - eta`` transmits. ``eta`` sets the
         anode's Bohm ion collection area (``2*eta*I_i``, both mesh faces) and
         the share of the gap-surviving thermionic beam the mesh intercepts;
         ``1 - eta`` is the face's neutral transparency and the beam's geometric
-        survival. Must lie in ``[0, 1]``. Value and class:
-        ``config_defaults_provenance.md``.
+        survival. Must lie in ``[0, 1]``.
     anode_radius_cm:
         Radius of the anode mesh disc [cm]. ``None`` (default) spans the
         chamber, giving the historical neutral transparency ``1 - eta``. A
@@ -1805,8 +1798,7 @@ def cathode_defaults():
         inert.
 
         Moves jointly with ``R_comp``: the two are determined together, so a
-        configuration must not change one alone. Value, hardware bounds and
-        provenance: ``config_defaults_provenance.md``.
+        configuration must not change one alone.
     L_parasitic_H:
         Parasitic series inductance in the current-driven discharge circuit
         [H], in series with ``R_comp``. The loop current is advanced once per
@@ -1814,8 +1806,7 @@ def cathode_defaults():
         enabled.
 
         L is inert for the sigma-scored discharge quantities and shows up in
-        the current-rise shape and the ignition time. Value, bracket and
-        provenance: ``config_defaults_provenance.md``.
+        the current-rise shape and the ignition time.
     circuit_picard_tol_rel:
         Relative convergence tolerance on the loop current for the
         fluid<->circuit Picard iteration. A step is re-run when
@@ -1902,9 +1893,7 @@ def cathode_defaults():
         Physical scale: quasi-static ``kappa*A/delta`` for LaB6 is ~10 kW/K at
         a 0.4 mm skin depth; the effective value over a ~20 ms transient is
         lower. This term sets the plateau surface-temperature rise, and the
-        plateau *current* then follows from the balance. Adopted values:
-        ``config_defaults_provenance.md`` and
-        ``scripts/stance/production_stance_provenance.md``.
+        plateau *current* then follows from the balance.
     cathode_emission_profile:
         Radial structure of the thermionic emitter. ``"uniform"``
         (default) is a single-temperature disc, whose emission ceiling is a
@@ -1917,8 +1906,7 @@ def cathode_defaults():
         ceiling into a stable ramp. Use with the physical cathode ``R_cath``
         and keep ``Rp`` at the plasma-channel value.
     cathode_Ts_fwhm_cm:
-        Emission-footprint FWHM [cm] for the gaussian profile. Value and
-        measured range: ``config_defaults_provenance.md``.
+        Emission-footprint FWHM [cm] for the gaussian profile.
     cathode_emission_annuli:
         Number of annuli discretizing the profile.
     cathode_surface_model:
@@ -2232,9 +2220,8 @@ def cathode_defaults():
         power is spread over. Read ONLY under
         ``beam_anomalous_model="ql_relaxation"`` and inert under every other
         value. Must be finite and > 0 or construction raises. It is a
-        REGISTERED BRACKET rather than a tuned number — see the provenance
-        note — and results under this closure are quoted at the bracket
-        endpoints, not at the default alone.
+        REGISTERED BRACKET rather than a tuned number, and results under this
+        closure are quoted at the bracket endpoints, not at the default alone.
     beam_product_transport:
         Where the CSDA ray's event PRODUCTS deposit (inert under
         ``"beer_lambert"``, which never launches the module; selecting the
@@ -2385,8 +2372,7 @@ def cathode_defaults():
         the equivalent tail flux is ``P_QL / E_tail``, so the power carried is
         independent of it. The plateau energy is a kinetic quantity a fluid
         model cannot pin, so this is an ASSUMED value and a run that uses it
-        must report a bracket rather than a single number. Arms and values:
-        ``config_defaults_provenance.md``.
+        must report a bracket rather than a single number.
     heating_anomalous_tail_energy_keying:
         How the tail birth energy ``E_tail`` is set. **Read ONLY when the QL
         tail is WALKED** (``heating_anomalous_transport="tail_walk"`` or
@@ -2427,8 +2413,7 @@ def cathode_defaults():
         arm to be stated and raises on ``None``. The only
         accepted values are the DECLARED BRACKET ``{0.25, 0.5, 1.0}`` -- any
         other value raises, because ``f`` is a bracket the campaign reports
-        across and never a fitted number. Values and class:
-        ``config_defaults_provenance.md``.
+        across and never a fitted number.
     heating_anomalous_tail_cathode_boundary:
         What the CATHODE end does to a tail walker that reaches it. **Read
         ONLY when the QL tail is WALKED** (``heating_anomalous_transport=
@@ -2778,8 +2763,6 @@ def cathode_defaults():
         is a fixed ``tau`` [s] and must be positive; ``None`` disables the
         smoothing bit-exactly, passing the raw state through. Any other
         string, or a non-positive float, raises at construction.
-
-    Values and their provenance: ``config_defaults_provenance.md``.
     """
     # These defaults ship the full cathode stack: power_balance warming, CSDA
     # beam + quasilinear anomalous drag, gaussian emission profile, ads_des
@@ -2788,8 +2771,7 @@ def cathode_defaults():
     # The circuit values here are mirrored EXACTLY by the campaign stance in
     # ``scripts/score/compare_sim1d_es1.PARAM_OVERRIDES``; the duplication is
     # deliberate (that dict is the campaign stance record, and removing the
-    # pins would change resolution order for the other run drivers). Values,
-    # provenance classes and bars: config_defaults_provenance.md.
+    # pins would change resolution order for the other run drivers).
     return {
         # --- ACTIVE: circuit hardware ---
         # V_bank here is the SUPPLY SETPOINT, which is a DIFFERENT QUANTITY
@@ -2847,7 +2829,7 @@ def cathode_defaults():
         # A2a reversed-walker rider on the anode tail cull: DEFAULT OFF
         # (bit-exact). Both are read only under beam_tail_anode_interception.
         # The declared box the campaign brackets these across is NOT here --
-        # the arms state their own values and the note carries the provenance.
+        # the arms state their own values.
         "beam_tail_anode_reflected_particles": 0.0,
         "beam_tail_anode_reflected_energy": 0.0,
         "beam_clump_fraction": 0.0,
@@ -2909,8 +2891,7 @@ def cathode_defaults():
         # is not booked (neutrals have no energy field; standing M2
         # convention). (R_N, R_E) are the particle and energy reflection
         # coefficients of the surface -- literature quantities, not fit knobs
-        # (cathode = He->LaB6, anode = He->Mo; see
-        # config_defaults_provenance.md for the values and their brackets).
+        # (cathode = He->LaB6, anode = He->Mo).
         # The cathode channel splits R_N fast backscatter at
         # sqrt(2 R_E (phi_c + Ti)/m) + (1-R_N) directed effusion at the
         # surface T_s; the anode channel is backscatter-only, per collected
@@ -2954,9 +2935,7 @@ def cathode_defaults():
         # (fluid and DVM). Ships INERT: arm = 0 declares no criterion, so the
         # jets are live whenever their own selectors are on and the shipped
         # stance is bit-identical to the behaviour that predates these keys.
-        # A run that wants the criterion sets both explicitly; the registered
-        # arm/disarm pair and its calibration are in
-        # config_defaults_provenance.md, not here.
+        # A run that wants the criterion sets both explicitly.
         "neutral_jet_arm_current_A": 0.0,
         "neutral_jet_disarm_current_A": 0.0,
         # Mesh momentum accommodation for the evolved wind: the momentum
@@ -3027,8 +3006,6 @@ def physics_fit_defaults():
         Constant neutral exchange coefficient for the constant model [cm^3/s].
     neutral_clausing_scale:
         Scale factor applied to the Knudsen tube and orifice conductances.
-
-    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         # --- ACTIVE ---
@@ -3208,8 +3185,6 @@ def timestep_defaults():
         is 1.12 ms -- the wall, not the loop's bulk time constant, is the
         stiff feature. Accuracy, not stability: the TR-BDF2 advance is
         L-stable. See ``cathode.circuit_relaxation_timestep``.
-
-    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         "cfl": 0.4,
@@ -3300,8 +3275,6 @@ def coverage_closure_defaults():
         hook: the solver contains no randomness, and an ensemble is generated
         by building profiles externally and passing them here, one run per
         realization.
-
-    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         "coverage_growth_rate_per_s": 1390.0,
@@ -3329,9 +3302,8 @@ def emitting_area_defaults():
         and in ``(0, 1]``; with the flag off it must sit at its shipped value,
         so a run that sets a seed and forgets the flag raises rather than
         running mean-field. This is an initial condition AND a physical
-        estimate of the machine's window-start emitting fraction: its shipped
-        value carries a bracket, recorded with its class in
-        ``config_defaults_provenance.md``.
+        estimate of the machine's window-start emitting fraction, so its
+        shipped value carries a bracket rather than a single pinned number.
 
     The growth law is the logistic ``df_em/dt = r*f_em*(1 - f_em)``, advanced
     on ACCEPTED steps only in the exactly-integrated form, so ``f_em`` is
@@ -3340,8 +3312,6 @@ def emitting_area_defaults():
     ``coverage_growth_rate_per_s``, the SAME disclosed percolation constant the
     column coverage closure uses, read here so the two surfaces share one clock
     with one owner and one fit.
-
-    Values and their provenance: ``config_defaults_provenance.md``.
     """
     return {
         "cathode_emitting_area_initial_fraction": 0.0075,
@@ -3511,8 +3481,7 @@ def regime_tracer_defaults():
     ionization birth. ``Te`` on those cells is the root of a quasi-static local
     electron energy balance rather than an integrated field. The method, the
     passive/active interface, and the neglect bounds are
-    ``_sim1d/physics/tracer.py``. Values and their
-    provenance classes are ``config_defaults_provenance.md``.
+    ``_sim1d/physics/tracer.py``.
 
     A cell is PASSIVE while all three criteria below hold; it activates (and
     the fluid takes it over) when any of them fails AND its density has reached
@@ -3608,9 +3577,7 @@ def regime_vessel_node_defaults():
     ``C_total dV_cm/dt = I_wall_net`` with ``I_wall_net`` the electron current
     landing on wall-connected surfaces minus the ion wall flux from the column
     minus the leak. Method of record: ``_sim1d/physics/cathode.py``
-    (``vessel_node_advance``, the closed-form step and its charge ledger);
-    hardware provenance and its class are
-    ``config_defaults_provenance.md``.
+    (``vessel_node_advance``, the closed-form step and its charge ledger).
 
     vessel_capacitance_F:
         ``C_total`` [F]: the total capacitance bridging the floating
@@ -3620,8 +3587,8 @@ def regime_vessel_node_defaults():
         referenced to it only through four feedthrough capacitors across the
         ceramic gap insulators, so ``C_total`` is their parallel sum. Must be
         finite and positive; construction raises otherwise. This value is
-        ESTIMATED and the BRACKET is the claim, not the shipped number — see
-        the provenance note, and sweep it rather than quoting it.
+        ESTIMATED and the BRACKET is the claim, not the shipped number: sweep
+        it rather than quoting it.
     vessel_leak_resistance_ohm:
         ``R_leak`` [Ohm]: the resistive tie from the same node to the wall,
         draining ``V_cm/R_leak``. Must be positive and finite; construction
@@ -3632,8 +3599,8 @@ def regime_vessel_node_defaults():
         over a bracket spanning both readings (2.5e7 Ohm, the aged-electrolytic
         low edge, to 1e11 Ohm, the polypropylene-film insulation class); the
         shipped default takes the second-look FILM reading. The bench
-        measurement resolves it. See the provenance note, and sweep it rather
-        than quoting it.
+        measurement resolves it; until it does, sweep this value rather than
+        quoting it.
 
         **The structural fact the model rests on does not depend on the type.**
         ``R_leak*C_total`` is at least ~10 s at BOTH bracket edges, against a
@@ -3737,8 +3704,6 @@ def parallel_momentum_sink_defaults():
         column the term is not a statement about a region at all, and above
         it the term reaches no cell and would be silently inert, which is
         the one thing a presence gate exists to prevent.
-
-    The value class and the honest bar: ``config_defaults_provenance.md``.
     """
     return {
         "parallel_momentum_sink": False,
@@ -3787,9 +3752,8 @@ def build_input_dict_template_1d():
 input_dict_template_1d = build_input_dict_template_1d()
 
 
-# Flag defaults. Which flags a specific committed configuration pins, and why,
-# is recorded in config_defaults_provenance.md and the per-config notes under
-# scripts/.
+# Flag defaults. Which flags a specific committed configuration pins is stated
+# by that configuration file itself, under scripts/stances/.
 input_flags_template_1d = {
     # The plasma solve itself. OFF puts the run on the neutral-only implicit
     # stepper: the plasma RHS returns a zero state, the kinetic and DVM refresh
