@@ -128,7 +128,18 @@ an annulus, cap-bound cells included and ``V_ann == 0`` cells excluded -- the
 same per-cell quantity the solver's ``neutral_annulus_volume_fraction_min``
 guard refuses on, NOT a column-integrated share. Wherever the cap binds that
 minimum is pinned at ``1 - AREA_CAP_FRACTION`` by construction, so it reports
-the regularization rather than the measured field. Outside the corrected sample span
+the regularization rather than the measured field.
+
+DISCLOSED: the largest single-cell step the emitted profile carries is the cap
+RELEASE, not any feature of the field. Cells 259 -> 260 cross the vessel's
+50 -> 76.2 cm bore step, where 259 is still clamped at
+``sqrt(AREA_CAP_FRACTION) * 50 = 48.734`` cm and 260 comes out from under the
+cap at 62.302 cm -- a +63.4 % jump in plasma AREA across one cell face. Every
+validator accepts it, correctly: it stays far under the open-area cap and the
+profile is still monotone, so nothing here is violated. It is recorded because
+it is a property of the regularization meeting a staircase vessel rather than
+a measurement, and any per-cell quantity read across those two cells inherits
+it. Outside the corrected sample span
 ``B_hat`` is HELD at the nearer end sample: below ``z_model = -210.63`` cm,
 where the flat rule already fixes ``r = RP_CM`` so the hold cannot be
 observable, and beyond ``z_model = 2114.67`` cm. The report states how many
