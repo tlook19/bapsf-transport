@@ -2220,9 +2220,8 @@ def cathode_defaults():
         power is spread over. Read ONLY under
         ``beam_anomalous_model="ql_relaxation"`` and inert under every other
         value. Must be finite and > 0 or construction raises. It is a
-        REGISTERED BRACKET rather than a tuned number — see the provenance
-        note — and results under this closure are quoted at the bracket
-        endpoints, not at the default alone.
+        REGISTERED BRACKET rather than a tuned number, and results under this
+        closure are quoted at the bracket endpoints, not at the default alone.
     beam_product_transport:
         Where the CSDA ray's event PRODUCTS deposit (inert under
         ``"beer_lambert"``, which never launches the module; selecting the
@@ -2830,7 +2829,7 @@ def cathode_defaults():
         # A2a reversed-walker rider on the anode tail cull: DEFAULT OFF
         # (bit-exact). Both are read only under beam_tail_anode_interception.
         # The declared box the campaign brackets these across is NOT here --
-        # the arms state their own values and the note carries the provenance.
+        # the arms state their own values.
         "beam_tail_anode_reflected_particles": 0.0,
         "beam_tail_anode_reflected_energy": 0.0,
         "beam_clump_fraction": 0.0,

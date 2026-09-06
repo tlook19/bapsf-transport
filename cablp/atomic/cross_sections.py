@@ -1076,8 +1076,8 @@ def he_electron_momentum_transfer_rate_cm3_s(Te_eV):
     ``<v> = sqrt(8 kTe / (pi m_e))``. This is the ``<sigma v> ~ sigma(<E>)<v>``
     estimate, not a quadrature: the underlying table is two nodes wide, so a
     Maxwellian average over it would report a precision the data does not have.
-    The order-of-magnitude standing is stated with the values in the provenance
-    note and travels with every number this gate produces.
+    This coefficient therefore carries an ORDER-OF-MAGNITUDE standing, and that
+    standing travels with every number this gate produces.
 
     Accepts a scalar or an array and returns the same shape.
     """
