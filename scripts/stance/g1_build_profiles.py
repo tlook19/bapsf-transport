@@ -45,10 +45,11 @@ Inputs
     until the 2026-08-24 CAD-span gap adoption moved
     ``cathode_anode_gap_cm`` 50.0 -> 53.25, which moves the anode face and
     with it every cell downstream of the cathode face. The grid of record
-    (2026-08-18rrr) is ``Lm = 2117.8, collector_length_cm = 7.8, nx = 268``,
-    and the terminal cell is the 7.8 cm collector at the flange. BEHIND the
-    cathode face the mesh deliberately changes (the 2026-08-18sss fidelity
-    package): the
+    is ``Lm = 2117.8, collector_length_cm = 7.8, nx = 268``, and the
+    terminal cell is the 7.8 cm collector at the flange. BEHIND the
+    cathode face the mesh deliberately changes, under the fidelity
+    package that replaced the guessed cathode box with the measured
+    source chamber: the
     guessed ``Rcs 40 / Lcs 25`` obstruction is RETIRED (the obstruction cell
     is omitted at ``Lcs = 0``) and the plenum is the measured source chamber,
     ``plenum_length_cm = 166`` at machine radius 40 cm (reservoir volume
@@ -100,8 +101,8 @@ from cablp.solvers._sim1d.core.geometry import build_geometry  # noqa: E402
 CENSUS_NPZ = os.path.join(HERE, "lapd_end_field_1400G_rp18p415_census2026.npz")
 REFERENCE_H5 = os.path.join(HERE, "l2a7b_foot45_cr6p94.h5")
 
-#: The G1 grid of record (2026-08-18rrr ruling, supersedes the qqq
-#: collector-217.8 draft): the end flange is the wall, the outer column runs
+#: The G1 grid of record, superseding an earlier draft that put the
+#: collector at 217.8: the end flange is the wall, the outer column runs
 #: at a uniform dz through z = 2110 cm, and the terminal cell is the 7.8 cm
 #: collector at the flange where the 0.95 cap binds flat. That far-column dz
 #: is (Lm - gap - collector - source span)/nx, so the CAD-span gap adoption
@@ -110,8 +111,8 @@ REFERENCE_H5 = os.path.join(HERE, "l2a7b_foot45_cr6p94.h5")
 LM_CM = 2117.8
 COLLECTOR_LENGTH_CM = 7.8
 NX = 268
-#: The 2026-08-18sss fidelity package: the guessed Rcs 40 / Lcs 25 cathode
-#: box is RETIRED (Lcs = 0 omits the obstruction cell); the plenum is the
+#: The fidelity package: the guessed Rcs 40 / Lcs 25 cathode box is
+#: RETIRED (Lcs = 0 omits the obstruction cell); the plenum is the
 #: measured CAD source chamber (166 cm at bore 40 -> 8.34e5 cm^3 exactly).
 RCS_CM = 0.0
 LCS_CM = 0.0

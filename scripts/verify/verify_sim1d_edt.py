@@ -19,9 +19,9 @@ Run from the checkout root::
 from the artifacts root rather than from beside this script. ``--registration``
 prints the registry below and exits without one.
 
-**The fixture named throughout the registry below, ``mgcr1_confirm``, was
-RETIRED 2026-09-03.** It was a fluid-closure arm, and the readings recorded
-against it are dated records of what it measured, not readings of the stance
+**The fixture named throughout the registry below, ``mgcr1_confirm``, is
+RETIRED.** It was a fluid-closure arm, and the readings recorded
+against it are records of what it measured, not readings of the stance
 of record. The gates themselves are properties of whatever saved run ``--h5``
 names, so they stay runnable against a current artifact; only the recorded
 numbers belong to that retired one.
@@ -286,8 +286,8 @@ GOLDEN_STEPS = 200
 #: The identity's bar, as registered.
 IDENTITY_TOLERANCE = 1e-10
 
-#: G4's pins, per charge-death arm, and the shared bar. G3's +14.8 kW pin was
-#: RETIRED 2026-08-31 as measured-wrong and has no successor number: its
+#: G4's pins, per charge-death arm, and the shared bar. G3's +14.8 kW pin is
+#: RETIRED as measured-wrong and has no successor number: its
 #: quantity is now zero by construction.
 G4_TARGETS_KW = (13.6, 8.2)
 PIN_TOLERANCE = 0.15

@@ -26,7 +26,8 @@ Two closure caveats, printed in every header because they are the only ways
 the two can legitimately differ:
 
   * the solver applied cooling scale factors (``b_Qei`` / ``b_Qen`` and an
-    optional ``b_Q*_Te_exp`` shape) until they were removed on 2026-08-28.
+    optional ``b_Q*_Te_exp`` shape) until they were removed at commit
+    3e7d386.
     They were locked at unit scale throughout, so the solver's rows and this
     instrument's unscaled radiated power coincide exactly on every artifact,
     before and after the removal.
