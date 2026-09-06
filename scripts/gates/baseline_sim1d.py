@@ -34,9 +34,7 @@ committed stance artifact.
 
 The retired fixture -- the ~30-pin table holding the 2026-07-22 operating
 point -- is reproducible only at the tag ``pre-refactor-2026-08-20`` with its
-environment lockfile; its pin table is in this file's git history. The pre-D1
-legacy fixture under ``baselines/legacy-final-2026-07-22/`` is likewise a
-pinned historical scaffold whose tag is retired.
+environment lockfile; its pin table is in this file's git history.
 
 Usage::
 

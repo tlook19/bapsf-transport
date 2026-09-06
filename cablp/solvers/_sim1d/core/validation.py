@@ -137,8 +137,9 @@ def validate_r1_configuration_presence(
             "ion_neutral_drag_model, b_ion_neutral_thermalization, and the "
             "Tn_fit collision temperature) is DEPRECATED: the Phelps "
             "moment-closed operator (ion_neutral_moment_closure) is the "
-            "production drag baseline. Still runnable as an A/B arm and for "
-            "reproducing old results at tag legacy-final-2026-07-22.",
+            "production drag baseline. Still runnable as an A/B arm; the "
+            "results it once reproduced are not reproducible from this "
+            "repository, their anchor having been retired.",
             DeprecationWarning,
             stacklevel=2,
         )
