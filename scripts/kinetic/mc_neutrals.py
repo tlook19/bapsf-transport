@@ -197,7 +197,7 @@ def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_m
         f"  stance recorded by the artifact: characteristic_boundary={stance} "
         f"(a provenance label, not a row selector)\n"
         f"  row read: rhs_terms/{row} -- always, since the legacy volumetric "
-        f"absorber was retired (Tom, 2026-08-31) and is no longer read\n"
+        f"absorber was retired (see commit 1fc05c9) and is no longer read\n"
         "  likely cause: this artifact predates that retirement and books its "
         "boundary physics -- including the neutral return nn -- under the "
         "retired boundary_absorption row. On a run made after it, an empty "
@@ -2219,7 +2219,7 @@ def main(argv=None):
     # peak location, width, and magnitude of the far-end neutral
     # accumulation. Peak location is reported as an observation, not a
     # gate (an off-wall peak was an impression from earlier runs, not a
-    # requirement -- Tom, 2026-07-21). The physics content is detachment:
+    # requirement). The physics content is detachment:
     # the NBL is the layer through which the incoming column plasma cools
     # and recombines, so only a fraction of the column flux reaches the
     # wall as ions (divertor-like physics on LAPD); the vol_rec /

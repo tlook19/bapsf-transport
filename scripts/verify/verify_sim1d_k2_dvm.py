@@ -3512,7 +3512,7 @@ def gate_wr1():
     WHAT THE PIN IS. A wall facing a gas already at its own temperature
     exchanges no net energy in the continuum, and that zero-net statement was
     this member's original pin. It is NOT the behaviour of a discretized
-    wall and is retired as a pin (re-registered 2026-08-31, Tom): the
+    wall and is retired as a pin, having been re-registered: the
     accommodated share re-emits on the discrete ``wall_emission_spectrum``
     while the wall absorbs at ``nu_w ~ vp`` times the volume Maxwellian, and
     those two agree bin-by-bin only in the continuum limit. The residue is

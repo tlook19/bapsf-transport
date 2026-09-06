@@ -1,6 +1,6 @@
 """Opt-in selection of compiled scalar kernels, with loud provenance.
 
-Decision D3/D4 (Tom, 2026-08-02), extended the same day to the Tier A cathode
+Decision D3/D4, extended to the Tier A cathode
 unit. The compiled path answers whether a Cython transcription of the cathode
 scalar kernels -- and of the sheath root find built on them -- reproduces the
 golden bit-exactly. It is therefore off by default and stays off unless a

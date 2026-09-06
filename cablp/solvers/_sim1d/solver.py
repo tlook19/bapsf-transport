@@ -325,7 +325,8 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "gas_puff_local_ionization": "local",
     # --- surface sources: recycled plasma leaves the surface at T_wall ---
     # ``boundary_absorption`` is a permanently-zero row kept for saved-ledger
-    # schema stability (retired; Tom, 2026-08-31); its entry stays so the table
+    # schema stability (retired; see commit 1fc05c9); its entry stays so the
+    # table
     # still covers every row the ledger emits.
     "boundary_absorption": "wall",
     "characteristic_boundary": "wall",
@@ -1984,8 +1985,8 @@ class LAPDSim1D:
             )
         # This flag COMPLETES the thermal-only electrode routing by adding the
         # sheath-fall share back onto the plasma electron store. That routing
-        # is now unconditional (the stance that switched it off was retired
-        # 2026-08-31, Tom), so the pairing this used to police -- arming the
+        # is now unconditional (the stance that switched it off was retired;
+        # see commit 1fc05c9), so the pairing this used to police -- arming the
         # debit against the full-P_anode_e routing, which would have debited
         # phi_a twice -- is no longer constructible and needs no refusal.
         self._anode_sheath_full_debit = _anode_sheath_full_debit
@@ -2641,7 +2642,7 @@ class LAPDSim1D:
         # backscatter row added just below is not -- see its own note). The net
         # (heater + ion - rad - emis - cond) is the shot's unreturned
         # energy into the emitting skin; cond is what the heater-held
-        # substrate absorbed -- the quantity Tom's open-loop-heater drift
+        # substrate absorbed -- the quantity the open-loop-heater drift
         # hypothesis makes checkable against the ES1 trim cadence
         # (a ~sub-kW net imbalance corresponds to ±8 K per 20-30 min).
         self._cathode_energy_ledger_J = {
@@ -7192,7 +7193,7 @@ class LAPDSim1D:
                 self._input_dict.get("cathode_cleaning_sigma_cm2")
             )
             # Energy-dependent ion-stimulated desorption yield (M5a',
-            # Tom-approved with literature backing 2026-07-21): the
+            # adopted with literature backing): the
             # near-threshold Bohdansky factor
             #   f(E) = (1 - (E_th/E)^(2/3)) * (1 - E_th/E)^2
             # (Bohdansky 1984; Garcia-Rosales 1995 revised formulae) with
@@ -11062,7 +11063,7 @@ class LAPDSim1D:
             return S_gp, Twin_S_gp
         mode = self._input_dict.get("gas_puff_mode")
         if mode == "square":
-            # Measured valve behaviour (Tom, 2026-07-21): the piezo is driven
+            # Measured valve behaviour: the piezo is driven
             # by a SQUARE voltage pulse fired by the SAME trigger that closes
             # the cathode circuit, held for the discharge duration. The
             # supply side is hydraulically stiff (1/4" line at 45 PSI has

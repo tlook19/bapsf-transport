@@ -55,7 +55,7 @@ Inputs
     ``plenum_length_cm = 166`` at machine radius 40 cm (reservoir volume
     8.34e5 cm^3 exactly). The measured cathode box enters solely as the
     machine-radius stages at the cathode/gap cells (annulus areas
-    1350.1 / 1847.6 cm^2 exact) -- Tom's abstracted faithful conductance.
+    1350.1 / 1847.6 cm^2 exact) -- the abstracted faithful conductance.
 
 Plasma profile (per case)
 -------------------------

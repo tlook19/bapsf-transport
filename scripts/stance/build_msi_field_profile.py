@@ -61,8 +61,8 @@ the registration is a reflection:
 ladder: port 2 at 182.67 cm from the cathode face, and exactly 53 regular
 stations at a 32.00 cm pitch, so ``182.67 + 32.00 * (53 - 2) = 1814.67``.
 
-THE PORT PITCH IS THE CAD's 32.00 cm, NOT the 31.95 cm nominal (Tom's
-ruling). The nominal map ``182.5 + 31.95 * (port - 2)`` puts port 53 at
+THE PORT PITCH IS THE CAD's 32.00 cm, NOT the 31.95 cm nominal, by
+ruling. The nominal map ``182.5 + 31.95 * (port - 2)`` puts port 53 at
 1811.95 cm instead; the two anchors differ by 2.72 cm, well inside one 7.49 cm
 mesh cell, so nothing in the emitted profile turns on the choice. Both values
 are stated wherever the anchor is quoted, and the report locates every port on
@@ -205,7 +205,7 @@ MSI_GROUP = "MSI/Magnetic field"
 #: port 2 at 182.67 cm and 53 regular stations at the CAD 32.00 cm pitch.
 PORT53_Z_MODEL_CM = 1814.67
 #: The CAD port ladder, in model coordinates: port 2's station and the pitch.
-#: Tom's ruling keeps the CAD 32.00 cm pitch over the 31.95 cm nominal.
+#: The ruling keeps the CAD 32.00 cm pitch over the 31.95 cm nominal.
 PORT2_Z_MODEL_CM = 182.67
 PORT_PITCH_CM = 32.00
 #: The nominal (31.95 cm) map, retained only so the report can quote both
@@ -659,7 +659,7 @@ def main():
         f"53 regular stations). The {PORT_PITCH_NOMINAL_CM} cm nominal map "
         f"({PORT_Z0_NOMINAL_CM} + {PORT_PITCH_NOMINAL_CM}*(port-2)) would put "
         f"it at {port_z_nominal_cm(53):.2f} cm instead; the CAD pitch is kept "
-        f"(Tom's ruling) and the {PORT53_Z_MODEL_CM - port_z_nominal_cm(53):.2f} cm "
+        f"(by ruling) and the {PORT53_Z_MODEL_CM - port_z_nominal_cm(53):.2f} cm "
         "difference is sub-cell on this mesh."
     )
     say()

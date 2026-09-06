@@ -8,7 +8,7 @@ stay at the fresh IC). That equilibration is deterministic given the neutral-flo
 configuration and costs ~1 minute every run, so its result can be cached and
 reused until the neutral-flow configuration changes.
 
-Tom's rule (2026-07-26): re-equilibrate when — and only when — puffing, pumping,
+The rule: re-equilibrate when — and only when — puffing, pumping,
 or any machine geometry that affects neutral flow changes; also when switching to
 a mode with neutral momentum, kinetic neutrals, or two zones. Circuit, cathode
 power-balance, atomic-rate, and plasma-numerics changes must NOT invalidate the

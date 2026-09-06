@@ -1,6 +1,6 @@
 """Read-only afterglow ion-channel ledger audit (warm-ion hypothesis).
 
-Tom's hypothesis (2026-07-29): in the MACHINE, mid-column neutral depletion
+The warm-ion hypothesis: in the MACHINE, mid-column neutral depletion
 starves charge exchange, ions stay warm, the e->i drain stalls, and the
 mid-machine electron decay slows relative to the model.  This audit reads the
 MODEL side of that chain from a saved production artifact — no reruns:
