@@ -58,7 +58,9 @@ $S_\text{pump}$, which is a volumetric pumping SPEED
 (cm<sup>3</sup> s<sup>-1</sup>) in the vacuum-engineering sense, not a density
 rate. $\Gamma$ is a flux, never a source. The calligraphic $\mathcal S$ of the
 kinetic equation is the phase-space counterpart of $S$, per unit
-$dv_\parallel dc_\perp$.
+$dv_\parallel dc_\perp$, and the calligraphic $\mathcal F$ there is the
+six-dimensional neutral distribution — upright $F$ is a force density and
+nothing else.
 
 **The two velocity coordinates are not the same kind of quantity:**
 $v_\parallel$ is a SIGNED component along $\hat z$, so the discrete grid spans
@@ -792,11 +794,13 @@ intercepted at the annulus transparency
 $$t_f=\min\!\left(\frac{A_\text{open}}{A^{\,f}_\text{ann}},1\right),\qquad A^{\,f}_\text{ann}=\min\!\left(A_{\text{ann},f-1},A_{\text{ann},f}\right)$$
 
 the throat being the smaller of the two flanking CELLS' annulus areas, so the
-transmitted throughput $t_f\mathcal F|v_\parallel|A^{\,f}_\text{ann}$ is
-exactly $\mathcal F|v_\parallel|A_\text{open}$ — the open area is what passes,
-which is the whole content of a free-molecular orifice. Intercepted atoms are
-re-emitted at $T_\text{wall}$ in the cell they were intercepted from,
-conserving particles exactly; the column flux is untouched.
+transmitted throughput per bin,
+$t_f\,f_\text{ann}|v_\parallel|A^{\,f}_\text{ann}$, is exactly
+$f_\text{ann}|v_\parallel|A_\text{open}$ — the bin content of the annulus
+distribution times the open area is what passes, which is the whole content of
+a free-molecular orifice. Intercepted atoms are re-emitted at $T_\text{wall}$
+in the cell they were intercepted from, conserving particles exactly; the
+column flux is untouched.
 
 ### Fueling and pumping
 
