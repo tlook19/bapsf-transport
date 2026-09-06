@@ -11,7 +11,7 @@ Because the mirror force is ALREADY IN the model, and has been since
 ``prescribed_area_geometry`` shipped. The quasi-1D momentum equation the
 solver integrates under that flag is
 
-    d_t(A rho u) + d_z[A(rho u^2 + p)] = p dA/dz + A S_M,
+    d_t(A rho u) + d_z[A(rho u^2 + p)] = p dA/dz + A F,
 
 and the ``p dA/dz`` source (``physics.sources.flux_tube_geometry_rhs``) IS the
 fluid mirror force. Flux conservation along a field line gives ``A B =

@@ -472,9 +472,9 @@ them:
 Their sizes follow from the flat plateau alone, with nothing fitted. Matching
 the plateau level to the launch cell's own Maxwellian at the edge --
 
-    F_M(v_1) = m * j_b / ((E_b - E_1) * erg),    j_b = I_eth* / (e * A_cell)
+    f_M(v_1) = m * j_b / ((E_b - E_1) * erg),    j_b = I_eth* / (e * A_cell)
 
-with ``F_M`` the 1D-reduced Maxwellian of the launch cell and ``j_b`` the
+with ``f_M`` the 1D-reduced Maxwellian of the launch cell and ``j_b`` the
 emitted beam number flux -- fixes ``E_1`` as a STATE-DEPENDENT quantity,
 solved by bisection at every extraction solve (see
 :func:`plateau_edge_energy_eV`; it is monotone, so the root is unique). The
@@ -1648,9 +1648,9 @@ def plateau_edge_energy_eV(
     the edge, and the flat band must carry the emitted beam's number flux.
     Those two statements are one equation,
 
-        F_M(v_1) = m * j_b / ((E_b - E_1) * erg)
+        f_M(v_1) = m * j_b / ((E_b - E_1) * erg)
 
-    with ``F_M(v) = ne sqrt(m / (2 pi Te)) exp(-m v^2 / 2 Te)`` the 1D-reduced
+    with ``f_M(v) = ne sqrt(m / (2 pi Te)) exp(-m v^2 / 2 Te)`` the 1D-reduced
     Maxwellian (``Te`` in erg), ``v_1 = sqrt(2 E_1 / m)``, ``E_b = e*phi_c``
     the beam energy and ``j_b`` the emitted beam NUMBER flux
     ``I_eth* / (e A_cell)`` [1/cm^2/s]. The left side falls monotonically in
@@ -1693,7 +1693,7 @@ def plateau_edge_energy_eV(
             "plateau_edge_energy_eV needs a finite beam flux > 0 (got "
             f"{beam_flux_per_cm2_s!r})"
         )
-    # Both sides in LOGS: F_M underflows to 0.0 for any edge more than a few
+    # Both sides in LOGS: f_M underflows to 0.0 for any edge more than a few
     # hundred Te above the bulk, which is the whole interesting range, and a
     # residual formed on the underflowed value would be flat and the bisection
     # would return the bracket midpoint rather than the root.
@@ -1704,7 +1704,7 @@ def plateau_edge_energy_eV(
     ln_demand = math.log(_ME_CGS * j_b / _ERG_PER_EV)
 
     def _residual(E1):
-        # ln F_M(v_1) - ln[ m j_b / ((E_b - E_1) erg) ], strictly decreasing.
+        # ln f_M(v_1) - ln[ m j_b / ((E_b - E_1) erg) ], strictly decreasing.
         gap = E_b - E1
         if gap <= 0.0:
             return -math.inf

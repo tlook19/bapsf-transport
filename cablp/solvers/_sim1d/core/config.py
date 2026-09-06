@@ -1979,9 +1979,15 @@ def cathode_defaults():
         reduces to ``phi_c = V_dis + phi_a − V_p``). The emitted electron
         current is ``max(I − I_i, 0)`` against the plasma's own Bohm ion
         current at the cathode cell. Richardson emission, the surface
-        temperature and the bank loop are therefore NOT consulted while the
-        prescribed drive is in force, and the cathode-warming ledger rows
-        accumulate nothing over those steps. Requires all three
+        temperature and the bank loop are therefore NOT consulted BY THE
+        DRIVE while the prescribed drive is in force, and the
+        cathode-warming ledger rows accumulate nothing over those steps.
+        The surface temperature is FROZEN rather than retired: it holds the
+        value it carried into the hand-off (the configured standby under
+        ``cathode_warming_model = "none"``, the last warmed value under
+        ``"power_balance"``) and stays load-bearing on the NEUTRALS, since
+        an engaged kinetic neutral closure reads it as the cathode-end wall
+        re-emission temperature. Requires all three
         ``cathode_prescribed_*`` keys below, and refuses
         ``cathode_circuit_voltage_bound`` (a bound on what the loop can supply
         is meaningless where the device voltage is measured rather than
@@ -3649,7 +3655,7 @@ def parallel_momentum_sink_defaults():
     The term is a linear damping of the evolved parallel momentum density
     on the column cells at or beyond ``parallel_momentum_sink_z_start_cm``,
 
-        S_M = -nu_add * M = -nu_add * m_i n u   [g cm^-2 s^-2],
+        F = -nu_add * M = -nu_add * m_i n u   [g cm^-2 s^-2],
 
     booked as its own RHS row ``parallel_momentum_sink``, with the
     frictional work it does,

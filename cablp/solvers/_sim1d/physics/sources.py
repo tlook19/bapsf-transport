@@ -546,7 +546,7 @@ def flux_tube_geometry_rhs(state, floors, ion_mass_g, geometry):
 
     The conservative momentum equation is
 
-        d(A rho u)/dt + d[A(rho u^2 + p)]/dz = p dA/dz + A S_M.
+        d(A rho u)/dt + d[A(rho u^2 + p)]/dz = p dA/dz + A F.
 
     ``physics.flux`` already carries the area-weighted flux divergence. This
     source supplies the matching ``p dA/dz`` term. Its discrete form exactly
@@ -1595,7 +1595,7 @@ def ion_neutral_drag_rhs(
 def parallel_momentum_sink_rhs(state, rate_s, cells):
     """Return the imposed parallel momentum sink [g cm^-2 s^-2].
 
-    ``S_M = -nu_add * M`` on the cells of the boolean mask ``cells`` and
+    ``F = -nu_add * M`` on the cells of the boolean mask ``cells`` and
     exactly zero everywhere else. ``M`` is the parallel momentum density the
     solver evolves, so the rate acts on the parallel drift relative to zero:
     the force density is ``-nu_add * m_i n u``.

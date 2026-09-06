@@ -403,7 +403,7 @@ def kep_rusanov_face_scalar(
     wave_speed="isothermal",
     energy_consistent=False,
 ):
-    """Return the R2 KEP/Rusanov face flux (F_n, F_M, F_Ee, F_Ei) for one face.
+    """Return the R2 KEP/Rusanov face flux (Γ_n, Γ_M, Γ_Ee, Γ_Ei) for one face.
 
     ``left`` and ``right`` are dicts with the conservative and derived scalars of
     the two states bracketing the face (``n, M, Ee, Ei, u, p, Te, Ti``), the L

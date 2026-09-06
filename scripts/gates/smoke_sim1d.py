@@ -6091,10 +6091,10 @@ def _case_beam_plateau_multigroup(
     assert _beam_deposition_mod.HE_E_STOP_EV < _mg_E1 < _mg_Eb, _mg_E1
 
     def _mg_residual(E1):
-        # F_M(v_1) - m j_b / ((E_b - E_1) erg); the solve's own equation,
+        # f_M(v_1) - m j_b / ((E_b - E_1) erg); the solve's own equation,
         # written out here so the root is checked against the STATEMENT and
         # not against the solver that produced it.
-        F_M = _mg_ne * math.sqrt(
+        f_M = _mg_ne * math.sqrt(
             _beam_deposition_mod._ME_CGS
             / (2.0 * math.pi * _mg_Te * _beam_deposition_mod._ERG_PER_EV)
         ) * math.exp(-E1 / _mg_Te)
@@ -6102,7 +6102,7 @@ def _case_beam_plateau_multigroup(
             _beam_deposition_mod._ME_CGS * 1.17e19
             / ((_mg_Eb - E1) * _beam_deposition_mod._ERG_PER_EV)
         )
-        return F_M - demand
+        return f_M - demand
 
     assert _mg_residual(_mg_E1 - 1.0e-6) > 0.0 > _mg_residual(_mg_E1 + 1.0e-6)
     # The clamp is REACHABLE and REPORTED, never silent: a beam flux the bulk
