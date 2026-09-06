@@ -195,6 +195,7 @@ over every cell.**
 | `reactions` | fractional on $n$ (floor $n_\text{floor}$) AND on $n_n$ (floor 0) against the bulk reaction term |
 | `surface_loss` | negative-margin — $\Delta t\le\varepsilon\min(\text{margin}/\lvert\dot X\rvert)$ over DRAINING cells only ($\varepsilon$ = `density_dt_fraction`), margins $n-n_\text{floor}$ and the exact conservative $E_s-\tfrac32nT_{s,\text{floor}}$ whose rates include the change in floor energy when $n$ changes, $d(E-\tfrac32nT_\text{floor})/dt=\dot E-\tfrac32T_\text{floor}\dot n$; a non-positive margin returns 0. Bundles the cathode/sheath, anode-collection and plasma-terminating boundary terms plus an engaged kinetic arm's coupling term, and is assembled only under `raw_stage_validation` or an engaged kinetic arm |
 | `energy_exchange` | fractional on $E_e$, $E_i$ against $Q_{ie}$ (floor 0) |
+| `energy_exchange_rate` | rate, $\Delta t\le c/\max\nu_\text{eq}$ at $c$ = `energy_exchange_rate_fraction`; withdrawn to infinity at that key's default `None` |
 | `electron_cooling` | fractional on $E_e$ against the inelastic and radiative terms |
 | `ion_charge_exchange` | fractional on $E_i$ against the charge-exchange term |
 | `ion_neutral_drag` | rate, $\Delta t\max\nu_{in}\le$ `DRAG_DT_FRACTION`, $\nu$ scaled by $\lvert b_\text{ion\_neutral\_drag}\rvert$ |
@@ -217,6 +218,30 @@ exemption a persistent drain re-trips the bound forever and pins $\Delta t$ at
 $\Delta t_\text{min}$ while the floor holds the cell. The density channel is
 never exempted, every other bound still governs an exempted cell, and an
 exempted cell is never the reported active constraint.
+
+**Two bounds on the electron-ion exchange, and why the fractional one is not
+enough.** The exchange sits in the explicit operator, and `energy_exchange`
+bounds it by the FRACTIONAL change in $E_e$ and $E_i$ — a bound proportional to
+$\lvert T_e-T_i\rvert^{-1}$, which diverges as $T_e\to T_i$ while the relaxation
+rate does not. A cold dense column at $T_e\approx T_i$ is therefore bounded by
+nothing on this channel exactly where the exchange is stiffest, and the
+explicit SSPRK2 advance of the difference variable can amplify $T_e-T_i$ instead
+of relaxing it. `energy_exchange_rate` is the stability complement, a rate bound
+$\Delta t\le c/\max\nu_\text{eq}$ over the plasma-active cells at $c$ =
+`energy_exchange_rate_fraction`, taken as the min with the fractional bound.
+$\nu_\text{eq}$ is the rate at which the exchange term relaxes one species'
+temperature toward the other,
+
+$$\frac{dT_e}{dt}=-\nu_\text{eq}(T_e-T_i),\qquad \frac{dT_i}{dt}=+\nu_\text{eq}(T_e-T_i),\qquad \nu_\text{eq}=\frac{2}{\tau_e\,(m_i/m_e)}$$
+
+read back out of the same $Q_{ie}$ the term itself calls
+(`physics/energy.py:electron_ion_relaxation_rate`) rather than restated, so the
+bound and the term cannot drift apart. With equal electron and ion heat
+capacities the DIFFERENCE $T_e-T_i$ relaxes at $2\nu_\text{eq}$, so the explicit
+advance of that difference sits at $z=-2c$ and $c\le1$ keeps it inside SSPRK2's
+real-axis stability interval $z\ge-2$. The key defaults to `None`, which
+withdraws the candidate before any state is read; a value outside $(0,2]$, or a
+non-numeric one, is refused at construction.
 
 **A bound must describe something the step applies.** The kinetic neutral arm
 zeroes whole contributions of the fluid terms and carries them in its own

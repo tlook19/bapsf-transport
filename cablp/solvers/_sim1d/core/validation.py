@@ -273,6 +273,36 @@ def validate_equilibration_gas_puff_on(input_dict):
         )
 
 
+def resolve_energy_exchange_rate_fraction(input_dict):
+    """Return the exchange RATE bound's fraction, or None when unarmed.
+
+    ``energy_exchange_rate_fraction`` is the ``c`` in ``dt <= c / nu_eq,max``
+    that bounds the explicit electron-ion energy exchange by its RELAXATION
+    RATE (``core.timestep.energy_exchange_rate_timestep``). ``None`` leaves
+    the bound withdrawn. Anything else must be a real, finite number in
+    ``(0, 2]``: zero or negative would stop the run dead, and above 2 puts the
+    difference variable's ``z = -2 c`` outside SSPRK2's real-axis stability
+    interval, which is the opposite of what arming this bound is for.
+    """
+    raw = input_dict.get("energy_exchange_rate_fraction", None)
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError(
+            "energy_exchange_rate_fraction (the electron-ion exchange rate "
+            f"bound's fraction of 1/nu_eq) must be a real number or None "
+            f"(got {raw!r})"
+        )
+    fraction = float(raw)
+    if not np.isfinite(fraction) or fraction <= 0.0 or fraction > 2.0:
+        raise ValueError(
+            "energy_exchange_rate_fraction (the electron-ion exchange rate "
+            f"bound's fraction of 1/nu_eq) must be finite and in (0, 2] "
+            f"(got {raw!r}); use None to leave the rate bound withdrawn"
+        )
+    return fraction
+
+
 def validate_neutral_seed_cache_config(input_dict, flags):
     """Reject an incoherent cached-neutral-seed configuration (loud, at build).
 

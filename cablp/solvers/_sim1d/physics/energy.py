@@ -47,6 +47,46 @@ def electron_ion_exchange_rhs(
     )
 
 
+def electron_ion_relaxation_rate(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+):
+    """Return the per-cell electron-ion thermal relaxation rate [s^-1].
+
+    ``nu_eq`` is the rate at which ``electron_ion_exchange_rhs`` above relaxes
+    ONE species' temperature toward the other: with ``Ee = 3/2 n k Te`` the
+    exchange term gives ``dTe/dt = -nu_eq (Te - Ti)`` and, with equal electron
+    and ion heat capacities, ``dTi/dt = +nu_eq (Te - Ti)``, so the DIFFERENCE
+    ``Te - Ti`` relaxes at ``2 nu_eq``.
+
+    The rate is read back out of ``plasma.heat.Q_ie`` -- the same expression
+    the exchange term itself calls -- rather than restated here, so the two
+    cannot drift apart. ``Q_ie`` is linear in ``Te - Ti`` with a collision
+    time that depends on ``Te`` and ``n`` only, so evaluating it at ``Ti = 0``
+    returns ``3/2 n nu_eq Te`` volumetrically and the division below recovers
+    ``nu_eq``. The derived temperatures, the floored density and the Coulomb
+    logarithm are formed exactly as ``electron_ion_exchange_rhs`` forms them,
+    so the rate describes the term as applied and not an idealization of it.
+
+    Returns a positive array in ``s^-1``: ``Te`` and ``n`` are floored, so no
+    cell can divide by zero and no cell can return a negative rate.
+    """
+    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
+    n = np.maximum(state.n, floors["n"])
+    ln_lambda = np.maximum(c_log(derived.Te, n, kind="ei"), LN_LAMBDA_MIN)
+    unit_difference = Q_ie(
+        derived.Te,
+        0.0,
+        n,
+        mu,
+        ln_lambda,
+        per_particle=False,
+    )
+    return unit_difference / (1.5 * n * derived.Te)
+
+
 def electron_cooling_rhs(
     state,
     floors,
