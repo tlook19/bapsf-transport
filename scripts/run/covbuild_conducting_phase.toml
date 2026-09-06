@@ -31,7 +31,7 @@
 #
 # It sits just ABOVE ne_floor rather than ON it, and that is not a tuning
 # choice -- it is the edge of a documented singularity, located by
-# scripts/covbuild_window_probe.py (at commit 48be9a4, retired 2026-09-03),
+# scripts/covbuild_window_probe.py (retired; see commit 48be9a4),
 # whose three seed rows are reproduced verbatim here:
 #
 #   ne0=1.000e+08  dt=1.000e-10 s  constraint=surface_loss  dt_raw=0.000e+00

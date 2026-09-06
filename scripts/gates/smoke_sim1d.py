@@ -1412,7 +1412,7 @@ def _case_variable_area_well_balancedness(
     # term and the Rusanov dissipation both vanish at every interior face, so
     # only the collector ghost can be nonzero.) The legacy reflecting-wall
     # alternative, under which the collector cancelled like the interior, was
-    # retired 2026-08-31 (Tom).
+    # retired; see commit 1fc05c9.
     resolved_params, resolved_flags = _resolved_config()
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
@@ -7095,8 +7095,8 @@ def _case_ionization_birth_energy_model(csda_params, csda_sim, csda_terms):
     # boundary supplies the complete face condition (including its own
     # pressure), so the reflecting-wall pressure that used to cancel here is
     # gone. That is the retirement of the legacy closed-wall alternative
-    # (2026-08-31, Tom), not a loss of well-balancedness: the interior still
-    # cancels bit-for-bit, which is what the assertions below pin.
+    # (see commit 1fc05c9), not a loss of well-balancedness: the interior
+    # still cancels bit-for-bit, which is what the assertions below pin.
     _ib_absorbing = np.asarray(geom.plasma_absorbing, dtype=bool)
     _ib_live = np.asarray(geom.plasma_face_live_cell)
     _ib_term = sorted(
@@ -7735,7 +7735,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     provides=("expected_rhs_terms", "no_source_params"),
 )
 def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
-    # Hydrogen coverage removed 2026-07-20: the thesis scope is He-only (all
+    # Hydrogen coverage was removed: the thesis scope is He-only (all
     # experimental data is helium) and the adas rate default is wired for He.
     # gas_type = "H" remains selectable with atomic_rate_model = "janev" but
     # is no longer exercised here.
@@ -9083,8 +9083,8 @@ def _case_cathode_power_balance_warming(
     # pinned the legacy full-P_*_e electrode routing: the cathode row then
     # deposited the sheath fall phi_c into the plasma electron store and ran
     # +2.56e-05 W/cm^3 POSITIVE. With the A16 thermal-only routing
-    # unconditional (2026-08-31, Tom) phi is the ELECTRODE's, the cathode row
-    # is a pure sink, and the sum is <= 0 everywhere. So the surviving --
+    # unconditional (see commit 1fc05c9) phi is the ELECTRODE's, the cathode
+    # row is a pure sink, and the sum is <= 0 everywhere. So the surviving --
     # and strictly stronger -- statement is asserted instead: the channels are
     # LIVE, and they never deposit net positive electron power into the plasma.
     _pb_sum = sum(
@@ -9108,7 +9108,7 @@ def _case_cathode_power_balance_warming(
     # no cell receives both -- which is what makes the pair's sum bit-exactly
     # the single row it replaced. (Which of the two is LARGER is a property of
     # the routing, not of the split: under the thermal-only electrode routing
-    # -- unconditional since 2026-08-31 (Tom) -- the anode dominates by orders
+    # -- unconditional since commit 1fc05c9 -- the anode dominates by orders
     # of magnitude.)
     _cathode_Ee = np.asarray(
         cathode_run_result.electron_energy_terms_W_cm3["cathode_surface_loss"],
@@ -12505,7 +12505,7 @@ def _case_end_recycle_routing(p2z_flags, p2z_params):
 
     # The end-recycle routing is checked against THE plasma-terminating
     # operator; the sweep over the retired second discretization went with
-    # it on 2026-08-31 (Tom).
+    # it; see commit 1fc05c9.
     er_row = "characteristic_boundary"
     er_off = LAPDSim1D(dict(er_base_p), dict(er_base_f))
     er_on = LAPDSim1D(
@@ -12737,8 +12737,8 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
         # Arming ``neutral_momentum`` back on is no longer a refusal and
         # cannot be one: the flag is a MEMBER of the
         # ``neutral_model='kinetic_dvm'`` family and True is its config
-        # default, so the model-preset resolver (2026-08-23h/aj/ak) cannot
-        # tell "I chose True" from "I left it alone" and clears it instead.
+        # default, so the model-preset resolver cannot tell "I chose True"
+        # from "I left it alone" and clears it instead.
         # The reachable refusal is an EXPLICIT family conflict -- a member
         # whose default is already compatible, set to something the
         # selection refuses -- and the one collected error names the
@@ -12968,7 +12968,7 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
     # whenever the arm is on and consumed by nothing. Its one consumer -- the
     # presheath collisionality behind the legacy volumetric absorber, reached
     # only through neutral_kinetic_dvm_tn_feedback -- was retired with that
-    # absorber on 2026-08-31 (Tom), so the consumption A/B that used to sit
+    # absorber (see commit 1fc05c9), so the consumption A/B that used to sit
     # here has no operand left. The moment itself is still asserted finite
     # and positive by the census block above.
     return locals()
@@ -15169,7 +15169,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     # POSITIVE ion-sheath, which does not by itself imply zero ion current;
     # deriving whether the anode collects ions here needs the ion-sheath
     # physics. The M_n directed-jet module may be rewritten from the ES1
-    # baseline findings (Tom), so its anode-channel physics assertions are
+    # baseline findings, so its anode-channel physics assertions are
     # deferred rather than re-derived now. The deferral retires once one of
     # two things settles what the anode channel should assert: the anode
     # ion-sheath current is derived properly, or the directed-jet module is
@@ -17016,7 +17016,7 @@ def _case_compiled_kernel_equivalence():
         # and it is the pre-R2a 5-field cold-neutral stance -- the child spells
         # _pin_pre_r2a_neutral_stance out itself, since a subprocess cannot
         # import the parent's helper (the TOML block in the
-        # cli-run-and-plot-end-to-end case, retired 2026-09-03, spelled the
+        # cli-run-and-plot-end-to-end case, since retired, spelled the
         # same pin out for the same reason). This block asks a KERNEL
         # EQUIVALENCE question, not a closure question: the compiled kernels
         # are the tier-A sheath solve and the CSDA march, neither of which
@@ -19460,7 +19460,7 @@ def _case_tracer_fluid_n_row_identity(_r2):
     # The four n-row channels gamma is built from. Both boundary spellings are
     # summed because exactly one of them is live: boundary_absorption is
     # identically zero everywhere since the legacy absorber was retired
-    # 2026-08-31 (Tom), and the row is kept only for saved-ledger schema
+    # (see commit 1fc05c9), and the row is kept only for saved-ledger schema
     # stability. Summing both is what keeps this identity readable against
     # artifacts written on either side of that retirement.
     _r2_id_fluid = sum(

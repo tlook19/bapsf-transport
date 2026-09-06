@@ -71,8 +71,8 @@ ES_OPERATING = {
 # core/config.py's default and the g1atrim stance line; before that it was
 # "floor", which every --stance run silently superseded and every --no-stance
 # run silently kept. The retired "floor" was an explicit campaign choice
-# carried over from the production notebook; retiring it is Tom's ruling of
-# 2026-08-26, taken for run_m6_point.py first and applied here for the same
+# carried over from the production notebook; retiring it was ruled on,
+# taken for run_m6_point.py first and applied here for the same
 # reason -- the two drivers must not disagree about which birth policy an
 # unstanced rung runs.
 ELECTRON_BIRTH_POLICY = "local"

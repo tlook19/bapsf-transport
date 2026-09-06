@@ -26,7 +26,8 @@ Two closure caveats, printed in every header because they are the only ways
 the two can legitimately differ:
 
   * the solver applied cooling scale factors (``b_Qei`` / ``b_Qen`` and an
-    optional ``b_Q*_Te_exp`` shape) until they were removed on 2026-08-28.
+    optional ``b_Q*_Te_exp`` shape) until they were removed at commit
+    3e7d386.
     They were locked at unit scale throughout, so the solver's rows and this
     instrument's unscaled radiated power coincide exactly on every artifact,
     before and after the removal.
@@ -82,7 +83,7 @@ centre exactly as at ``compare_sim1d_es1.py:669``.  The five overlay ports lie
 on a single exact linear law (pitch 31.95 cm, the LAPD port spacing), which is
 verified against every anchor at load and then used to place ports the overlay
 does not carry -- port 27 among them, at z = 981.25 cm, matching the in-repo
-value at ``scripts/fab_choke.py:47`` (at commit 48be9a4, retired 2026-09-03).
+value at ``scripts/fab_choke.py:47`` (retired; see commit 48be9a4).
 
 WINDOWS.  The two registered windows of ``power_ledger_sim1d.py`` (DRIVE
 plateau 15.25-19.75 ms, AFTERGLOW 20.5-24.5 ms, both RUN-CLOCK) are reused
@@ -612,7 +613,8 @@ def markdown_report(rep):
     )
     L.append(
         "* the solver's cooling rows carry no scale factor (the b_Q* scalars "
-        "were removed 2026-08-28, having been unit-valued throughout), so "
+        "were removed at commit 3e7d386, having been unit-valued "
+        "throughout), so "
         "this instrument's unscaled radiated power is directly comparable."
     )
     L.append(

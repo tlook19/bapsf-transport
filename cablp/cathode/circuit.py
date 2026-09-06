@@ -302,13 +302,13 @@ class SolverResult:
     P_anode_e_phi: float = 0.0
     P_anode_i_thermal: float = 0.0
     P_anode_i_phi: float = 0.0
-    # Closed surface-resolved audit [W] (Tom 2026-07-24, replaces P_net/P_net2):
+    # Closed surface-resolved audit [W], replacing P_net/P_net2:
     # net power heating the plasma vs power onto each electrode surface.
     P_plasma_thermal_loss: float = 0.0   # total plasma-thermal loss to electrodes
     P_into_plasma: float = 0.0           # P_prim + P_ohmic - plasma-thermal loss
     P_cathode_surface: float = 0.0       # plasma power onto the cathode (thermal+phi)
     P_anode_surface: float = 0.0         # plasma power onto the anode (thermal+phi)
-    # Measurement-plane bookkeeping aliases (Tom 2026-07-24). The Poulos names
+    # Measurement-plane bookkeeping aliases. The Poulos names
     # I_tot / V_b are the MODEL LOAD quantities and are kept as-is; these alias to
     # the three-plane convention so a future effective-load change diverges
     # predictably without renaming. All divergences are identically zero until
@@ -328,7 +328,7 @@ class SolverResult:
     V_dis: float = 0.0         # measured terminal voltage [V] = V_b + V_series
     I_plasma: float = 0.0      # plasma-conducted current [A] = I_tot now
     I_bank: float = 0.0        # measured bank current [A] = I_plasma + I_parallel
-    # Load-power closure diagnostic (Tom 2026-07-24). The circuit does I_tot*V_b
+    # Load-power closure diagnostic. The circuit does I_tot*V_b
     # of NET field work across the load; by the potential ladder V_b = phi_c + V_p
     # - phi_a and Kirchhoff (the same net loop current threads each region), that
     # is the per-region field work, and each region decomposes per species with

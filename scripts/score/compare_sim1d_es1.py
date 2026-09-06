@@ -137,7 +137,7 @@ _STANCE = load_stance(PRODUCTION_STANCE).params
 # both campaign drivers and this file's own run route apply a named
 # configuration over it, and none of them has a bare mode any more.
 PARAM_OVERRIDES = {
-    # DISCHARGE CIRCUIT -- corrected stance, 2026-08-03 (Tom's call). These
+    # DISCHARGE CIRCUIT -- the corrected stance. These
     # mirror the config defaults EXACTLY (core/config.py active_defaults); the
     # duplication is deliberate -- this dict is the campaign stance record, and
     # dropping the pins would change resolution order for the other drivers.
@@ -192,13 +192,13 @@ PARAM_OVERRIDES = {
     "R_comp": 7.2244e-3,
     "L_parasitic_H": 8.1e-6,
     "C_bank_F": 9.5,
-    # NB the constant-surface-temperature era ended here (f=0.1 stance
-    # promotion, 2026-07-27): the pin that held the surface at 273.15 + 1725 K
-    # is gone, and so is the key it was written on (T_s, retired 2026-09-03).
+    # NB the constant-surface-temperature era ended at the f=0.1 stance
+    # promotion: the pin that held the surface at 273.15 + 1725 K is gone,
+    # and so is the key it was written on (T_s, since retired).
     # cathode_warming_model="power_balance" (a config default) evolves the
     # surface from cathode_Ts_base_K, which this block leaves at its config
     # default, so there is nothing to pin here.
-    # Neutral-equilibration puff width, MEASURED (Tom, 2026-07-29, boxed).
+    # Neutral-equilibration puff width, MEASURED and boxed.
     # The ES1-4 total gas-puff pulse width was ~25 ms: operator practice is to
     # fire the valve, wait out the machine breakdown delay (~4-6 ms), hold
     # 20 ms from 1 kA, and round up. Refinable from the V_dis traces, not
@@ -225,7 +225,8 @@ PARAM_OVERRIDES = {
     # ADAS GCR rates (see cablp/atomic/data/adas/README.md): effective ionization/
     # recombination and radiation-only cooling, consistent with the separate
     # ionization-cost term. The rate channels carry no scale factor: the b_*
-    # scalars were removed 2026-08-28 and unit scaling is now structural.
+    # scalars were removed at commit 3e7d386 and unit scaling is now
+    # structural rather than scaled.
     "atomic_rate_model": "adas",
     # Beam-driven neutral excitation: 1.0 books the 2^1P channel alone, the
     # rest approximates the remainder of the singlet manifold. Radiates ~21 eV
@@ -477,8 +478,8 @@ def _main_discharge_origin(result):
 # resolves nx = 268 whether or not --nx was typed (the driver prints the
 # supersession, "240 -> 268"). This value is therefore only the fallback for the
 # paths with no stance layer: compare_sim1d_es1's own CLI, run_m6_point
-# --no-stance, profile_sim1d, sp3_build_nn0, run_kn2z_promoted (at commit
-# 48be9a4, retired 2026-09-03), and the "m6"
+# --no-stance, profile_sim1d, sp3_build_nn0, run_kn2z_promoted (retired;
+# see commit 48be9a4), and the "m6"
 # snapshot case in audit_sim1d_configs (whose resolved-config hash pins it).
 #
 # It stays a DRIVER-level default and not a config.py default: the golden
@@ -578,8 +579,8 @@ def run_model(
     return sim.get_results(), sim.geometry, params, flags
 
 
-# --- Measurement error model (adopted 2026-07-22, conservative per Tom:
-# "assume experimental errors can be on the large side").  Shot-to-shot SEM
+# --- Measurement error model, adopted deliberately conservative:
+# assume experimental errors can be on the large side.  Shot-to-shot SEM
 # measures precision only; the sweep systematics dominate:
 #   sigma_Te,sys = 0.25*Te + 0.20 eV   (fit-window, EEDF tail, sheath
 #       expansion, magnetization, fluctuation smearing, surface drift --
@@ -613,11 +614,11 @@ N_CAL_FRAC = 0.10
 # the ES3 port-50 refit failed and ES4 has no refit product at all, and port
 # 50 is the worst-scoring row in the file.
 #
-# REGISTERED (Tom, 2026-08-04). 0.50 is read off the measured separation
+# REGISTERED. 0.50 is read off the measured separation
 # rather than fitted: the stable ports sit at 10-25 % and the unstable ones at
 # 70-167 %, with nothing in between, so any threshold in the gap selects the
 # same set.
-TE_SPREAD_SEMIQUANT_FRAC = 0.50  # registered (Tom, 2026-08-04)
+TE_SPREAD_SEMIQUANT_FRAC = 0.50  # registered; see the note above
 TE_SPREAD_FIELD = "te_window_spread_frac"
 
 # Half-strength propagation of the Te spread onto the n rows, against the SAME
@@ -1024,7 +1025,7 @@ def _decay_observability(tau_exp_ms, span_ms):
 # the afterglow decay figure published from these runs. The two windows are
 # kept deliberately identical so the scored number and the plotted number
 # are the same number; changing one without the other silently desyncs them. Moved here from the historical (20.5, 25.0)
-# (Tom, 2026-07-29): that band started 0.5 ms late and ran 5 ms out, so it
+# band: that one started 0.5 ms late and ran 5 ms out, so it
 # scored tail structure rather than the decay the figure is about.
 DECAY_WINDOW_MS = (20.0, 21.5)
 

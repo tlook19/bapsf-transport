@@ -88,7 +88,7 @@ CASES = (
         dt_max=1.0e-8,
         cathode=True,
     ),
-    # twin_cathode_midrange retired 2026-09-03: it cannot be constructed on
+    # twin_cathode_midrange is retired: it cannot be constructed on
     # the single-cathode source_fixed_grid layout (see RETIRED_CASES).
 )
 

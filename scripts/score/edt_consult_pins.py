@@ -5,7 +5,7 @@ EMF-work operator from a SAVED sim1d trajectory. It reads only the HDF5 file --
 no solver construction, no new solver code -- so it can be run against an
 artifact captured at any commit, including one that predates the operator's
 implementation. That is what makes it usable as the base-side measurement of
-the pre-registered pins (the standing rule adopted 2026-08-30 (Tom): measure
+the pre-registered pins (the standing rule: measure
 pre-registered pins at BASE before gating on them, because a pin that is
 already false at the unmodified base gates nothing): the pins are properties
 of a saved state and of the consult's
@@ -66,14 +66,14 @@ are retained as disclosed INSTRUMENT arms bounding that double count.
     # every arm, both anode instrument arms, and the afterglow clause
     python scripts/score/edt_consult_pins.py --h5 <saved sim1d run>.h5 --all-arms
 
-**Provenance of the pins.** The 2026-08-26 consult measured the first set on
+**Provenance of the pins.** The consult measured the first set on
 ``mgcr1_confirm`` over 0.1-20.1 ms at a mean loop current of 2772 A. That was a
-fluid-closure arm and its artifact was RETIRED 2026-09-03, so every pin below is
-a dated record of that measurement rather than a reading of the stance of record;
+fluid-closure arm and its artifact is RETIRED, so every pin below is
+a record of that measurement rather than a reading of the stance of record;
 run artifacts live outside the repo under the artifacts root (see
 ``scripts/README.md``).
 Two of its readings did not survive measurement and were retired by the
-advisor adjudication of 2026-08-31: the ``+14.8 kW`` cathode-face handshake
+advisor adjudication that followed: the ``+14.8 kW`` cathode-face handshake
 (it rode the circuit's ion current at a face whose electron channel carries
 0.3 mA, and its stated rationale was a stale read of a legacy row inert on the
 shipped stance since R3.2), and the ``robust +13.6 kW`` compression piece (over
@@ -156,8 +156,8 @@ PINS = {
     "afterglow_instant_26ms_kW_RETIRED": -0.017,
 }
 
-#: Q2 -- the cathode-face pins of the 2026-08-31 amendment, measured on
-#: ``mgcr1_confirm`` (artifact retired 2026-09-03) and reported by the Q2
+#: Q2 -- the cathode-face pins of the amendment, measured on
+#: ``mgcr1_confirm`` (artifact since retired) and reported by the Q2
 #: section of this evaluator. They exist because the amendment's clause (iii)
 #: rests on them:
 #: the cathode-face enthalpy-ZERO premise is a drive-phase statement, and the

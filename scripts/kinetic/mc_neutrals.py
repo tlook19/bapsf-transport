@@ -105,10 +105,11 @@ T_WALL_K = 300.0
 RAY_EPS_CM = 1e-7
 
 # Every ``rhs_terms`` row a plasma-terminating boundary has ever been booked
-# under. There is ONE such operator: the legacy volumetric absorber was retired
-# 2026-08-31 (Tom), so a run this package can now produce books its boundary
-# physics under ``characteristic_boundary`` alone and ``boundary_absorption``
-# is identically zero. The retired name is kept because this tuple is read as a
+# under. There is ONE such operator: the legacy volumetric absorber was
+# retired (see commit 1fc05c9), so a run this package can now produce books
+# its boundary physics under ``characteristic_boundary`` alone and
+# ``boundary_absorption`` is identically zero. The retired name is kept
+# because this tuple is read as a
 # UNION over rows, never as a selector: summing the plasma removal booked by
 # EITHER row gives a nonzero reference on a historical artifact that books
 # under the retired name as well as on a current one, which is what lets an
@@ -158,9 +159,10 @@ def boundary_recycle_row(f):
     """Name the ``rhs_terms`` row carrying this run's boundary recycle.
 
     Returns ``(row_name, stance)``. The row is ALWAYS
-    ``characteristic_boundary``: the legacy volumetric absorber was retired
-    2026-08-31 (Tom), so ``boundary_absorption`` is identically zero on every
-    run this package can now produce, and it was already identically zero on
+    ``characteristic_boundary``: the legacy volumetric absorber was
+    retired (see commit 1fc05c9), so ``boundary_absorption`` is
+    identically zero on every run this package can now produce, and it was
+    already identically zero on
     every run made at the shipped stance before that. An offline reader that
     selected the legacy row would get a zero channel and silently drop the
     end-wall return from its source menu.
@@ -195,7 +197,7 @@ def assert_recycle_channel_live(recycle, removal, *, row, stance, path, window_m
         f"  stance recorded by the artifact: characteristic_boundary={stance} "
         f"(a provenance label, not a row selector)\n"
         f"  row read: rhs_terms/{row} -- always, since the legacy volumetric "
-        f"absorber was retired (Tom, 2026-08-31) and is no longer read\n"
+        f"absorber was retired (see commit 1fc05c9) and is no longer read\n"
         "  likely cause: this artifact predates that retirement and books its "
         "boundary physics -- including the neutral return nn -- under the "
         "retired boundary_absorption row. On a run made after it, an empty "
@@ -2217,7 +2219,7 @@ def main(argv=None):
     # peak location, width, and magnitude of the far-end neutral
     # accumulation. Peak location is reported as an observation, not a
     # gate (an off-wall peak was an impression from earlier runs, not a
-    # requirement -- Tom, 2026-07-21). The physics content is detachment:
+    # requirement). The physics content is detachment:
     # the NBL is the layer through which the incoming column plasma cools
     # and recombines, so only a fraction of the column flux reaches the
     # wall as ions (divertor-like physics on LAPD); the vol_rec /

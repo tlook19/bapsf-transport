@@ -340,9 +340,9 @@ EXCHANGE_MODEL = "cauchy_chord"
 # Maxwellian average is that same constant, at any temperature.
 CLOSED_ISO_RATE_CM3_S = 2.0 * 7.63e-16 * np.sqrt(EV / M_HE)
 
-# Registered bracket on the kinetic/fluid RATE-COEFFICIENT ratio gated by C6
-# (re-registered 2026-08-23e; supersedes the 2026-08-05 [1.0, 1.7]). Both
-# sides approximate the SAME two-Maxwellian average, so the bracket is a
+# Registered bracket on the kinetic/fluid RATE-COEFFICIENT ratio gated by C6.
+# It is a RE-REGISTRATION and supersedes an earlier, factor-wide [1.0, 1.7].
+# Both sides approximate the SAME two-Maxwellian average, so the bracket is a
 # DERIVED residual budget rather than a factor-wide tripwire: the lower edge
 # is exact (every residual is sign-definite >= 0) and the upper edge is the
 # worst-case residual sum with headroom. See gate_c6's docstring for the
@@ -928,7 +928,7 @@ def recycle_identity(geometry_keys, steps=40):
     cell cannot satisfy both sides at once.
 
     The stance sweep this used to run (both values of the retired
-    ``characteristic_boundary`` flag) went with that flag on 2026-08-31 (Tom);
+    ``characteristic_boundary`` flag) went with that flag;
     the invariant itself is unchanged and is now asserted against the single
     surviving operator, still across all three geometries.
     """
@@ -1711,8 +1711,8 @@ def gate_c6():
     return (
         "C6 kinetic/fluid rate-coefficient ratio inside its bracket",
         ok,
-        f"bracket [{lo:.2f}, {hi:.2f}] (re-registered 2026-08-23e as a "
-        f"DERIVED residual budget; number-weighted rate coefficient against "
+        f"bracket [{lo:.2f}, {hi:.2f}] (a DERIVED residual budget, not a "
+        f"factor-wide tripwire; number-weighted rate coefficient against "
         f"a stationary 300 K Maxwellian, NOT a total drag); "
         + "; ".join(
             f"Ti={Ti[i]:g}: {ratios[i]:.4f} "
@@ -2306,8 +2306,8 @@ REFUSALS = (
     ),
     # The single-key refusal this gate used to arm -- ``neutral_momentum``
     # set back to True on the cleared base -- is unreachable BY CONSTRUCTION
-    # since the model-preset resolver landed (2026-08-23h/aj/ak): the flag is
-    # a MEMBER of the ``neutral_model='kinetic_dvm'`` family and True is its
+    # since the model-preset resolver landed: the flag is a MEMBER of the
+    # ``neutral_model='kinetic_dvm'`` family and True is its
     # config default, so a caller cannot distinguish "I chose True" from "I
     # left it alone" and the resolver clears it rather than refusing. X1
     # below pins that resolution. What is still reachable, and what this gate
@@ -3512,7 +3512,7 @@ def gate_wr1():
     WHAT THE PIN IS. A wall facing a gas already at its own temperature
     exchanges no net energy in the continuum, and that zero-net statement was
     this member's original pin. It is NOT the behaviour of a discretized
-    wall and is retired as a pin (re-registered 2026-08-31, Tom): the
+    wall and is retired as a pin, having been re-registered: the
     accommodated share re-emits on the discrete ``wall_emission_spectrum``
     while the wall absorbs at ``nu_w ~ vp`` times the volume Maxwellian, and
     those two agree bin-by-bin only in the continuum limit. The residue is
@@ -3526,8 +3526,8 @@ def gate_wr1():
         arms. The fixture is deterministic, so this is a per-alpha NUMBER and
         not a band. The offset is a property of the DISCRETIZATION: it is
         present unchanged at the base commit (reproduce with
-        ``k2_dvm_wall_detailed_balance_base_probe.py`` (at commit 48be9a4,
-        retired 2026-09-03)), it scales with alpha
+        ``k2_dvm_wall_detailed_balance_base_probe.py`` (retired; see
+        commit 48be9a4)), it scales with alpha
         exactly, it falls with refinement, and it moves with the exchange
         closure -- so the pins are keyed by ``EXCHANGE_MODEL`` as well as by
         alpha, covering the closure the suite re-runs this member under, and
@@ -5981,7 +5981,7 @@ AJ_R_E = 0.41
 #: the engine's guard says so and RAISES. Measured on the shipped ``(48, 12)``
 #: axis the grid-tied smear leaves the margin ``e / (3/2 k T_launch)`` between
 #: 3.1 and 5.4 over ``0.005-100 eV`` (``scripts/b4aj_smear_margin_probe.py``
-#: (at commit 48be9a4, retired 2026-09-03))
+#: (retired; see commit 48be9a4))
 #: -- the stretched axis makes it scale-free -- so the projection lands at
 #: machine precision at every launch energy this channel can reach.
 AJ_NVZ = 48

@@ -406,8 +406,8 @@ for _spec in (
     ArmSpec(_GRID_COND_NAME, 2.5e-5, 128, 48, ("grid",), conditional=True,
             note="CONDITIONAL: only if (32,12)->(64,24) fails R10"),
     ArmSpec(_GRID_COND2_NAME, 2.5e-5, 256, 96, ("grid",), conditional=True,
-            note="CONDITIONAL: R10 ladder extension, Tom-ratified "
-                 "2026-08-26 -- only if (64,24)->(128,48) fails R10"),
+            note="CONDITIONAL: R10 ladder extension, ratified "
+                 "-- only if (64,24)->(128,48) fails R10"),
     ArmSpec(_CROSS_NAME, 6.25e-6, 32, 12, ("cross",),
             note="R6 cross arm: REPORTED, NOT GATED"),
 ):
@@ -924,9 +924,10 @@ def run_arm(spec, n_updates, verbose=True):
         "burn_through_max": max(tick_burn) if tick_burn else 0.0,
         "puff_ticks_active": int(sum(1 for v in tick_birth_puff if v > 0.0)),
         "puff_births_total": float(sum(tick_birth_puff)),
-        # neutral_kinetic_dvm_tn_feedback was RETIRED 2026-08-31 (Tom) with
-        # its only consumer. The DVM's Tn moment stays an in-process
-        # diagnostic that nothing consumes, which is what this row now records.
+        # neutral_kinetic_dvm_tn_feedback was RETIRED with its only
+        # consumer; see commit 1fc05c9. The DVM's Tn moment stays an
+        # in-process diagnostic that nothing consumes, which is what this
+        # row now records.
         "tn_feedback": False,
     }
     record.update(floors)
@@ -1033,7 +1034,7 @@ def plan_lines(t_star_ms):
                "(only if (32,12)->(64,24) fails R10)")
     out.append(f"     conditional 5th rung: {_GRID_COND2_NAME} "
                "(only if (64,24)->(128,48) fails R10; R10 ladder extension, "
-               "Tom-ratified 2026-08-26)")
+               "ratified)")
     out.append(f"[R6] cross arm (REPORTED, NOT GATED): {_CROSS_NAME}")
     out.append(f"     NB {_BASE_NAME} is ONE arm shared by both ladders; it "
                "is run once and read by both.")
@@ -1913,7 +1914,8 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
     lines.append(
         f"| Tn feedback | none ({sorted(tn_fb)}) -- O6 (column Tn) is "
         "DIAGNOSTIC-ONLY: the `neutral_kinetic_dvm_tn_feedback` switch and "
-        "its consumer were retired (Tom, 2026-08-31), so Tn is never fed back |"
+        "its consumer were retired (see commit 1fc05c9), so Tn is never fed "
+        "back |"
     )
     lines.append("")
 
@@ -2389,7 +2391,7 @@ def evaluate(arm_records, out_path=None, sampling=SAMPLING_REGISTERED,
                 next_rung = (
                     f"{_GRID_COND_NAME} is already banked, so the actionable "
                     f"next rung is {_GRID_COND2_NAME} -- the R10 ladder "
-                    "extension, Tom-ratified 2026-08-26 -- run it"
+                    "extension, ratified -- run it"
                 )
             else:
                 next_rung = (

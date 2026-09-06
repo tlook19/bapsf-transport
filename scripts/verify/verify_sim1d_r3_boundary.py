@@ -20,7 +20,7 @@ Gates:
      energy sink (electron internal + ion internal + reconstructed kinetic < 0),
      i.e. NOT the A1 +18.5 kW kinetic source.
 
-RETIRED 2026-08-31 (Tom), with the legacy volumetric absorber they compared
+RETIRED with the legacy volumetric absorber they compared
 against: G5 (off-path presence and flag perturbation) in full, and G3's
 "reconstructed-kinetic source smaller than the old volumetric sink's" half.
 Neither is constructible now that the absorber and its flag are gone -- G3's
@@ -180,8 +180,8 @@ def main():
     print(f"G4 Bohm-outflow state [W]: e {P['electron']:+.3e}  i {P['ion']:+.3e}"
           f"  kinetic {P_kin:+.3e}  NET {net:+.3e}  (sink: {g4})")
 
-    # G5 (off-path presence + flag perturbation) was RETIRED 2026-08-31 (Tom)
-    # with the flag it switched: there is no off path to be present, and no
+    # G5 (off-path presence + flag perturbation) was RETIRED with the flag
+    # it switched: there is no off path to be present, and no
     # second operator to perturb away from.
 
     ok = g1 and g1_plenum and g2 and g3 and g4

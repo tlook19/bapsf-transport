@@ -19,9 +19,9 @@ Run from the checkout root::
 from the artifacts root rather than from beside this script. ``--registration``
 prints the registry below and exits without one.
 
-**The fixture named throughout the registry below, ``mgcr1_confirm``, was
-RETIRED 2026-09-03.** It was a fluid-closure arm, and the readings recorded
-against it are dated records of what it measured, not readings of the stance
+**The fixture named throughout the registry below, ``mgcr1_confirm``, is
+RETIRED.** It was a fluid-closure arm, and the readings recorded
+against it are records of what it measured, not readings of the stance
 of record. The gates themselves are properties of whatever saved run ``--h5``
 names, so they stay runnable against a current artifact; only the recorded
 numbers belong to that retired one.
@@ -38,8 +38,8 @@ GATE REGISTRY
   QUANTITY: the accepted-step trajectory, the golden config identity, and the
   RHS term rows.
   SITE: ``scripts/gates/golden_digest_gate.py`` (4,000-step chain digest, all five
-  checkpoints and the final digest) and ``scripts/edt_bitinert_ab.py`` (at
-  commit 48be9a4, retired 2026-09-03).
+  checkpoints and the final digest) and ``scripts/edt_bitinert_ab.py``
+  (retired; see commit 48be9a4).
   FIXTURE: the golden config at nx=60 for the digest; ``default_config()``
   for the moment and kinetic-DVM A/B routes.
   PASS: every checkpoint and the final digest unchanged from the committed
@@ -81,8 +81,8 @@ GATE REGISTRY
 **G4 -- the compression piece (RE-FORMED 2026-08-31).**
   QUANTITY: the pressure-drift work summed over the cells STRICTLY DOWNSTREAM
   of the death cell, window-mean over 0.1-20.1 ms, reported ROW-RELATIVE and
-  throughput-normalized (the standing rule adopted 2026-08-30 (Tom): negative
-  controls gate on the ROW-RELATIVE normalization, because a misbooking that
+  throughput-normalized (the standing rule: negative controls gate on the
+  ROW-RELATIVE normalization, because a misbooking that
   moves its own row by O(1) can read as O(1e-2) throughput-normalized).
   SITE: ``edt_pressure_drift_work_W``, on the REGISTERED closure (the shipped
   default, and the headline) and on the ``export_counts`` instrument arm --
@@ -121,7 +121,7 @@ GATE REGISTRY
   current, so the guard is cutting out a real residue; pinning its size is
   what stops a future change to that channel moving it silently.
 
-  WHAT THE RESIDUE IS (wording corrected 2026-08-31 (Tom)). It is a
+  WHAT THE RESIDUE IS. It is a
   discontinuity in the CLOSURE FAMILY, not in the physics. The GUARDED zero
   IS the continuum limit -- at J = 0 the two species leave together, the
   plasma is ambipolar and the ion-velocity pressure work is already exact --
@@ -197,7 +197,7 @@ GATE REGISTRY
 Companion gates that are NOT this suite's to run, and where they live: smoke
 (``scripts/gates/smoke_sim1d.py``), the DVM suite (``verify_sim1d_k2_dvm.py``), the
 digest gate (``scripts/gates/golden_digest_gate.py``), the snapshot delta
-(``scripts/edt_snapshot_delta.py`` (at commit 48be9a4, retired 2026-09-03)) and
+(``scripts/edt_snapshot_delta.py`` (retired; see commit 48be9a4)) and
 the A/B bit-inertness reader
 (``scripts/edt_bitinert_ab.py``).
 """
@@ -247,8 +247,9 @@ WINDOW = (1.0e-4, 2.01e-2)
 #: control computed through the other expression matches neither.
 #:
 #: ROTATED with the golden references when [legacy-boundary-retirement] removed
-#: `characteristic_boundary` and `neutral_kinetic_dvm_tn_feedback` (retired
-#: 2026-08-31 (Tom)). The previous value, 21a9b476..., was this same quantity
+#: `characteristic_boundary` and `neutral_kinetic_dvm_tn_feedback`
+#: (retired; see commit 1fc05c9). The previous value, 21a9b476..., was
+#: this same quantity
 #: while those two keys still existed; stripping the three edt keys AND
 #: restoring those two reproduces it bit-for-bit, which is the proof that the
 #: move is those two keys and nothing else.
@@ -285,8 +286,8 @@ GOLDEN_STEPS = 200
 #: The identity's bar, as registered.
 IDENTITY_TOLERANCE = 1e-10
 
-#: G4's pins, per charge-death arm, and the shared bar. G3's +14.8 kW pin was
-#: RETIRED 2026-08-31 as measured-wrong and has no successor number: its
+#: G4's pins, per charge-death arm, and the shared bar. G3's +14.8 kW pin is
+#: RETIRED as measured-wrong and has no successor number: its
 #: quantity is now zero by construction.
 G4_TARGETS_KW = (13.6, 8.2)
 PIN_TOLERANCE = 0.15

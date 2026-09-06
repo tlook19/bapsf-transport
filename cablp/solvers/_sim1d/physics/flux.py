@@ -194,8 +194,8 @@ def _apply_plasma_walls(
     # pressure term ``M_g u_g + p_g``. So the advective flux must carry NOTHING
     # here -- keeping the reflecting closed-wall pressure ``pressure[live]`` on
     # top would double-count the wall momentum. Unconditional since the legacy
-    # volumetric absorber and its reflecting-wall alternative were retired
-    # 2026-08-31 (Tom).
+    # volumetric absorber and its reflecting-wall alternative were retired;
+    # see commit 1fc05c9.
     absorbing = np.asarray(
         getattr(geometry, "plasma_absorbing", np.zeros(0)), dtype=bool
     )

@@ -56,7 +56,7 @@ from cablp.solvers._sim1d.results.health import summarize_result
 # say: the retired "floor" was an explicit campaign choice carried over from
 # the production notebook, and the comment that used to sit at the use site
 # ("never inherit the shared 'local' default here again") is RETIRED, not
-# overlooked -- Tom's ruling, 2026-08-26.
+# overlooked -- it was ruled on, not dropped.
 ELECTRON_BIRTH_POLICY = "local"
 
 

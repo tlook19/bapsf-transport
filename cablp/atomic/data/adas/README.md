@@ -171,11 +171,15 @@ Two format differences make them unreadable by `read_adf11`, and
 line follows the header, and every data block is introduced by a header
 naming its metastable indices. For helium that count line reads `2 1 1` —
 **He0 carries TWO metastables, not three.** The second is 1s2s 3S: the
-low-T_e slope of `ln(QCD_1->2 / QCD_2->1)` over the 1–15 eV nodes returns
-19.75–19.78 eV against the 2^3S term energy 19.820 eV, where 2^1S would
-require 20.616 eV. The singlet metastable 2^1S is not an independent
-population in this dataset; it sits inside the collisional-radiative bundle
-built on the ground state.
+low-T_e slope of `ln(QCD_1->2 / QCD_2->1)` over the 1–15 eV nodes, taken at
+each tabulated density in turn, returns 19.39–19.78 eV over all 24 density
+nodes, against the 2^3S term energy 19.820 eV, where 2^1S would require
+20.616 eV. That spread is a density dependence rather than fit scatter — flat
+at 19.776 below 1e11 cm^-3, a 19.389 minimum at 2e13, back to 19.758 at the
+top of the grid — and it does not touch the identification, since every node
+is an order of magnitude nearer 19.820 than 20.616. The singlet metastable
+2^1S is not an independent population in this dataset; it sits inside the
+collisional-radiative bundle built on the ground state.
 
 | file | class | blocks (z1 = 1) | quantity |
 |---|---|---|---|

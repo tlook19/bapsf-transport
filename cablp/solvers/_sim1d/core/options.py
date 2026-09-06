@@ -239,8 +239,9 @@ def build_solver_options(
             input_dict, flags, gas_type=gas_type
         ),
         # The electron-ion exchange term has no configuration surface left
-        # (b_Qie was removed 2026-08-28); the bundle stays as the PRESENCE
-        # signal the timestep candidate keys off -- None withdraws it.
+        # (b_Qie was removed at commit 3e7d386); the bundle stays as the
+        # PRESENCE signal the timestep candidate keys off, and None is
+        # what withdraws it.
         energy_exchange={},
         surface_loss=surface_loss_kwargs(input_dict),
         ion_neutral_drag=ion_neutral_drag_kwargs(

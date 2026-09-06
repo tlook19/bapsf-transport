@@ -11,15 +11,15 @@ main discharge) and checks that the boundary:
   (b) is a net ENERGY SINK over the main-discharge window (electron internal +
       ion internal + reconstructed kinetic < 0).
 
-RETIRED 2026-08-31 (Tom): gate (c) -- "the reconstructed kinetic is no longer
+RETIRED: gate (c) -- "the reconstructed kinetic is no longer
 the A1 source the historical boundary_absorption books at the same stance" --
 and with it the second, characteristic-OFF run this script used to make. That
 comparison arm is not constructible now that the legacy volumetric absorber and
 its flag are gone. The last measurement of record on this fixture, at base
 commit 967ff0c, was new -16.01 kW vs old +0.20 kW.
 
-A short startup run is a diagnostic, NOT an ES campaign point; longer runs need
-Tom's go-ahead. This is minutes-long (one partial production run).
+A short startup run is a diagnostic, NOT an ES campaign point; longer runs
+need a go-ahead. This is minutes-long (one partial production run).
 
 Usage:  python scripts/verify/verify_sim1d_r3_boundary_startup.py [--t-end-ms 6]
 """
@@ -131,7 +131,7 @@ def main(argv=None):
     print(f"(b) characteristic boundary is a net sink      : {b} ({net_on/1e3:+.2f} kW)")
     print(f"    reconstructed kinetic = {kin_on/1e3:+.2f} kW "
           f"(base-commit reference: -16.01 kW; the old absorber booked +0.20 kW "
-          f"before it was retired (Tom, 2026-08-31))")
+          f"before it was retired (see commit 1fc05c9))")
     ok = a and b and st_on == "completed"
     print("startup run:", "OK" if ok else "FAILED / NULL (deliverable)")
     return 0 if ok else 1

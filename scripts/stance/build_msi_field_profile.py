@@ -7,7 +7,7 @@ of that profile with the machine's own record of the field it actually ran --
 the ``MSI/Magnetic field`` group every ES1 shot file carries -- and leaves the
 census build in place as the independent cross-check.
 
-Adopted 2026-09-01 (Tom).
+This is the adopted profile builder.
 
 THE DATA
 --------
@@ -61,8 +61,8 @@ the registration is a reflection:
 ladder: port 2 at 182.67 cm from the cathode face, and exactly 53 regular
 stations at a 32.00 cm pitch, so ``182.67 + 32.00 * (53 - 2) = 1814.67``.
 
-THE PORT PITCH IS THE CAD's 32.00 cm, NOT the 31.95 cm nominal (Tom's
-ruling). The nominal map ``182.5 + 31.95 * (port - 2)`` puts port 53 at
+THE PORT PITCH IS THE CAD's 32.00 cm, NOT the 31.95 cm nominal, by
+ruling. The nominal map ``182.5 + 31.95 * (port - 2)`` puts port 53 at
 1811.95 cm instead; the two anchors differ by 2.72 cm, well inside one 7.49 cm
 mesh cell, so nothing in the emitted profile turns on the choice. Both values
 are stated wherever the anchor is quoted, and the report locates every port on
@@ -128,8 +128,21 @@ an annulus, cap-bound cells included and ``V_ann == 0`` cells excluded -- the
 same per-cell quantity the solver's ``neutral_annulus_volume_fraction_min``
 guard refuses on, NOT a column-integrated share. Wherever the cap binds that
 minimum is pinned at ``1 - AREA_CAP_FRACTION`` by construction, so it reports
-the regularization rather than the measured field. Outside the corrected sample span
-``B_hat`` is HELD at the nearer end sample: below ``z_model = -210.63`` cm,
+the regularization rather than the measured field.
+
+DISCLOSED: the largest single-cell step the emitted profile carries is the cap
+RELEASE, not any feature of the field. Cells 259 -> 260 cross the vessel's
+50 -> 76.2 cm bore step, where 259 is still clamped at
+``sqrt(AREA_CAP_FRACTION) * 50 = 48.734`` cm and 260 comes out from under the
+cap at 62.302 cm -- a +63.4 % jump in plasma AREA across one cell face. Every
+validator accepts it, correctly: it stays far under the open-area cap and the
+profile is still monotone, so nothing here is violated. It is recorded because
+it is a property of the regularization meeting a staircase vessel rather than
+a measurement, and any per-cell quantity read across those two cells inherits
+it.
+
+Outside the corrected sample span ``B_hat`` is HELD at the nearer end
+sample: below ``z_model = -210.63`` cm,
 where the flat rule already fixes ``r = RP_CM`` so the hold cannot be
 observable, and beyond ``z_model = 2114.67`` cm. The report states how many
 mesh cells fall outside the span at each end and whether the cap binds there,
@@ -194,7 +207,7 @@ MSI_GROUP = "MSI/Magnetic field"
 #: port 2 at 182.67 cm and 53 regular stations at the CAD 32.00 cm pitch.
 PORT53_Z_MODEL_CM = 1814.67
 #: The CAD port ladder, in model coordinates: port 2's station and the pitch.
-#: Tom's ruling keeps the CAD 32.00 cm pitch over the 31.95 cm nominal.
+#: The ruling keeps the CAD 32.00 cm pitch over the 31.95 cm nominal.
 PORT2_Z_MODEL_CM = 182.67
 PORT_PITCH_CM = 32.00
 #: The nominal (31.95 cm) map, retained only so the report can quote both
@@ -237,9 +250,18 @@ REPORTED_PORTS = (11, 21, 29, 41, 50)
 
 #: The measured p50/p41 flux-tube area ratio, and its uncertainty. The gate:
 #: the ratio the EMITTED profile implies between those two stations must agree
-#: with this measurement to within its stated sigma. Class MEASURED; the
-#: instrument behind it and the face bracket it carries are recorded outside
-#: this repository, as every configured value's class and bar are.
+#: with this measurement to within its stated sigma.
+#:
+#: INSTRUMENT: the geometric-mean face-reconciled effective-radius estimator,
+#: run on the ES1 radial scans. An effective radius is estimated at each of
+#: the two faces and the pair reconciled by their geometric mean, which is
+#: what makes the quantity a flux-tube AREA ratio between the two stations
+#: rather than a single-face profile width. Its face bracket is recorded with
+#: the configuration's provenance, not here.
+#:
+#: CLASS MEASURED -- a probe-scan product. It is never fitted to the profile
+#: this script emits: it is the comparand the emitted profile is gated
+#: against, so tuning it to the profile would retire the gate.
 MEASURED_P50_P41_FLUX_RATIO = 0.9905
 MEASURED_P50_P41_FLUX_RATIO_SIGMA = 0.0114
 
@@ -637,7 +659,7 @@ def main():
         f"53 regular stations). The {PORT_PITCH_NOMINAL_CM} cm nominal map "
         f"({PORT_Z0_NOMINAL_CM} + {PORT_PITCH_NOMINAL_CM}*(port-2)) would put "
         f"it at {port_z_nominal_cm(53):.2f} cm instead; the CAD pitch is kept "
-        f"(Tom's ruling) and the {PORT53_Z_MODEL_CM - port_z_nominal_cm(53):.2f} cm "
+        f"(by ruling) and the {PORT53_Z_MODEL_CM - port_z_nominal_cm(53):.2f} cm "
         "difference is sub-cell on this mesh."
     )
     say()

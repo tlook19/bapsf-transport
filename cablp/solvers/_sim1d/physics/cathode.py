@@ -287,8 +287,9 @@ def cathode_circuit_alpha_sheath(
     ``sources.electrode_sheath_alpha`` on the same cathode-adjacent cell (verified
     identical: ``beam_launch(geometry)[0]`` == the source cathode's live cell).
     Unconditional since the legacy volumetric-absorber stance, which sampled a
-    flat ``exp(-1/2)`` here instead, was retired 2026-08-31 (Tom). The anode
-    is not sampled here -- its geometric mesh presheath stays flat ``exp(-1/2)``.
+    flat ``exp(-1/2)`` here instead, was retired; see commit 1fc05c9. The
+    anode is not sampled here -- its geometric mesh presheath stays flat
+    ``exp(-1/2)``.
     """
     return electrode_sheath_alpha(
         nn=float(state.nn[cathode_index]),
@@ -3695,7 +3696,7 @@ def _deposit_electrode_power(
     configuration in which the two rows share a cell.
 
     THERMAL-ONLY ROUTING (A16), unconditional since the legacy
-    volumetric-absorber stance was retired 2026-08-31 (Tom): only the
+    volumetric-absorber stance was retired (see commit 1fc05c9): only the
     PLASMA-THERMAL part (2Te per electron) is deposited, leaving the
     sheath-fall ``phi`` on the electrode/circuit surface instead of removing it
     from the plasma thermal store.
