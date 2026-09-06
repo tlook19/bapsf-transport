@@ -164,7 +164,7 @@ def main():
                        * Vp[live] * ERG_TO_W)
         restoring = f_M < 0.5 * p_live  # far below the reflecting wall it replaces
         g3 &= restoring
-        print(f"G3 face {face:3d}: anomaly F_M {f_M:.3e} vs p_live {p_live:.3e} "
+        print(f"G3 face {face:3d}: anomaly Γ_M {f_M:.3e} vs p_live {p_live:.3e} "
               f"(ratio {f_M/p_live:.3f}<0.5); reconstructed KE {dK_new:+.2e} W")
 
     # --- G4: net energy sink at the physical Bohm outflow state -----------
