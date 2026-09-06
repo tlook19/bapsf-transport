@@ -26,24 +26,36 @@ solution:
 A reference-based estimate against a much finer run is reported alongside it as
 a cross-check; the two should agree.
 
-Measured at 62 cells with t_end = 1e-6 s, dt from 1.25e-7 down to 3.13e-8:
+Measured at 72 cells with t_end = 1e-6 s, dt from 1.25e-7 down to 3.13e-8, as
+the reference-free triplet order:
 
     picard  splitting   backward_euler  shifted  crank_nicolson  tr_bdf2
     ------  ---------   --------------  -------  --------------  -------
-      0       lie            0.97         1.01        1.01         1.02
-      4       lie            0.97         1.00        1.01         1.02
-      0       strang         0.98         0.98        1.04         0.98
-      4       strang         0.99         0.96        1.99         2.00
+      0       lie            1.05         0.98        1.00         1.07
+      4       lie            1.04         0.99        0.99         1.07
+      0       strang         1.09         1.58        1.77         1.11
+      4       strang         1.10         1.65        1.89         1.11
 
 Second order needs all three of a second-order substep scheme, a non-frozen
 conductivity, and Strang splitting. Each of the first-order terms caps the step
 on its own, so knocking out only one changes nothing: --picard alone is still
-capped by Lie splitting, and --splitting strang alone is still capped by the
-frozen conductivity. Only the last row has none of them.
+capped by Lie splitting, which is why every Lie row sits at ~1.0 whatever the
+substep scheme is.
 
-backward_euler and shifted staying at ~1.0 in every row is the negative
-control. Neither can be second-order at any dt, so if either reaches 2.0, the
-harness or the scheme is wrong rather than good.
+backward_euler staying at ~1.0 in every row is the negative control: theta = 1
+cannot be second-order at any dt, so if it reaches 2.0 the harness is wrong
+rather than good. shifted is theta = 0.6 and is first-order for the same
+reason, but its leading first-order coefficient is (theta - 1/2) = 0.1 of
+backward Euler's, so on the Strang rows the second-order term still dominates
+at these dt and the observed order reads pre-asymptotically high; it falls back
+toward 1.0 as dt shrinks. Read shifted as a scale check, not as an order claim.
+
+crank_nicolson at picard 4 + strang is the row that reaches second order:
+triplet 1.89, and 1.91 -> 1.99 against the reference. tr_bdf2 -- second-order
+AND L-stable, and the shipped substep scheme -- does NOT reach it in that same
+row (triplet 1.11; 1.25 -> 1.57 against the reference). Two schemes that are
+both formally second order separating by that much in one row is a measurement
+this harness reports; it does not diagnose it.
 
 Usage:
     python scripts/gates/verify_sim1d_order.py
@@ -59,11 +71,27 @@ import numpy as np
 
 import cablp.solvers._sim1d.core.state as state_mod
 from cablp.solvers._sim1d import LAPDSim1D, default_config
-from cablp.solvers._sim1d.core.state import conservative_from_primitives, pack_state
+from cablp.solvers._sim1d.core.state import (
+    NEUTRAL_ENERGY_FLOOR_T_K,
+    conservative_from_primitives,
+    neutral_energy_floor,
+    pack_state,
+)
 from cablp.solvers._sim1d.physics.conduction import IMPLICIT_HEAT_SCHEMES
 from cablp.constants import ev_to_erg
 
 FLOOR_RTOL = 1e-9
+
+#: Neutral temperature [K] the seed puts the optional ``En`` row at. The ``En``
+#: floor clips up to the vessel wall, so a seed AT the wall would sit on its own
+#: floor from the first step and any cooling would clip; this leaves the same
+#: order-of-magnitude headroom the other fields have.
+SEED_TN_K = 4.0 * NEUTRAL_ENERGY_FLOOR_T_K
+
+#: Amplitude of the seeded neutral drift [cm/s], subsonic against the neutral
+#: thermal speed at :data:`SEED_TN_K` so the optional momentum row carries a
+#: gradient without putting the neutral fluxes in an unrepresentative regime.
+SEED_UN_CM_S = 1.0e4
 
 # A state sitting on a floor round-trips to within a few ULP, so only deficits
 # deeper than FLOOR_RTOL count as a floor actually doing work.
@@ -120,18 +148,36 @@ class FloorWatch:
 
         def probe(state, floors, ion_mass_g):
             n_safe = np.maximum(np.asarray(state.n, dtype=float), floors["n"])
+            nn_safe = np.maximum(np.asarray(state.nn, dtype=float), floors["nn"])
             raw_Te = (2.0 / 3.0) * np.asarray(state.Ee, dtype=float) / (
                 n_safe * ev_to_erg
             )
             raw_Ti = (2.0 / 3.0) * np.asarray(state.Ei, dtype=float) / (
                 n_safe * ev_to_erg
             )
-            for value, floor in (
+            watched = [
                 (raw_Te, floors["Te"]),
                 (raw_Ti, floors["Ti"]),
                 (np.asarray(state.n, dtype=float), floors["n"]),
                 (np.asarray(state.nn, dtype=float), floors["nn"]),
-            ):
+            ]
+            # The optional rows carry floors of their own wherever the layout
+            # includes them: nn_a takes the nn floor, and En takes the wall
+            # floor evaluated against the FLOORED nn, exactly as
+            # apply_state_floors does. An unwatched floor would let a clipped
+            # run report a meaningless order as a meaningful one.
+            if state.nn_a is not None:
+                watched.append(
+                    (np.asarray(state.nn_a, dtype=float), floors["nn"])
+                )
+            if state.En is not None:
+                watched.append(
+                    (
+                        np.asarray(state.En, dtype=float),
+                        neutral_energy_floor(nn_safe),
+                    )
+                )
+            for value, floor in watched:
                 self.clips += int(
                     np.count_nonzero(value < floor * (1.0 - FLOOR_RTOL))
                 )
@@ -146,11 +192,21 @@ class FloorWatch:
 
 
 def seeded_state(sim, amplitude):
-    """Return a smooth non-uniform state.
+    """Return a smooth non-uniform state in the solver's own packed layout.
 
     A uniform state is the null mode of the conduction operator (K*1 = 0) and
     carries no gradients for the fluxes either, so it would make convergence
     trivially perfect and measure nothing.
+
+    The packed state is FIVE base rows plus whichever optional neutral rows the
+    construction declares (``M_n``, ``nn_a``, ``M_n_a``, ``En``), so a seed that
+    supplies only the base rows is rejected by the solver as a width mismatch.
+    The seed is therefore presence-gated on the rows the solver's OWN initial
+    state carries -- never hand-packed -- and each optional row is built by the
+    same constructor the solver builds its initial state with. The optional
+    conventions follow that initial state: both neutral zones at one density,
+    and a uniform neutral temperature, raised off the wall floor here so the
+    ``En`` clip stays inert (see :data:`SEED_TN_K`).
     """
     z = np.asarray(sim._geometry.z_cm, dtype=float)
     span = z[-1] - z[0]
@@ -161,7 +217,19 @@ def seeded_state(sim, amplitude):
     Te = 5.0 * (1.0 + amplitude * np.sin(phase))
     Ti = 2.0 * (1.0 + amplitude * np.sin(phase + 0.7))
     u = 1.0e5 * np.sin(phase)  # subsonic; c_s ~ 1e6 cm/s at these temperatures
-    return conservative_from_primitives(n, nn, u, Te, Ti, sim._ion_mass_g)
+    un = SEED_UN_CM_S * np.sin(phase + 1.3)
+    return conservative_from_primitives(
+        n,
+        nn,
+        u,
+        Te,
+        Ti,
+        sim._ion_mass_g,
+        un=None if base.M_n is None else un,
+        nn_a=None if base.nn_a is None else nn.copy(),
+        un_a=None if base.M_n_a is None else un.copy(),
+        Tn_K=None if base.En is None else SEED_TN_K,
+    )
 
 
 def run_fixed_dt(scheme, nsteps, t_end, amplitude, picard=0, splitting="lie"):
