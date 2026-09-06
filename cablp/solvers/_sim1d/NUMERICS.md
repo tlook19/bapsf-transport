@@ -292,7 +292,11 @@ floored density and $M$ rebuilt from it, which leaves $M$ unchanged to roundoff
 and bit-identical on every state probed, though $(m n)(M/(m n))$ carries no IEEE
 guarantee of exactness. Each accepted repair books its exact extensive debit in
 `floor_ledger`; `scripts/gates/audit_sim1d_floor_activation.py` instruments the
-clip sites at run time, which cannot be done post-hoc.
+clip sites at run time, which cannot be done post-hoc. Beyond roughly 22 ms
+of the discharge cycle the far third of the column sits AT the
+electron-temperature floor and develops a grid-scale odd–even pattern there,
+so the comparison to data quotes nothing from the afterglow beyond the
+20–21.5 ms decay window.
 
 ## The cathode solve
 
