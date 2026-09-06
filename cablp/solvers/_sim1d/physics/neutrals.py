@@ -1140,9 +1140,10 @@ GAS_PUFF_DIAGNOSTIC_FIELDS = (
 #                   = 2.5028583e19 cm^-3
 #     per second     = n / 60 = 4.171431e17 s^-1 per sccm
 #
-# Citation: Sensirion SFC5500/SFM5500 Datasheet V6 (Feb 2024), section 5
-# "Flow units", Table 7. (PDF banked in the docs repo at
-# zotero_pdf_cache/Sensirion_SFC5500_SFM5500_Datasheet_V6_2024.pdf.)
+# Citation: Sensirion, "SFC5500/SFM5500 Mass Flow Controller and Meter",
+# datasheet version 6, section 5 "Flow units", Table 7. Published by the
+# manufacturer; cited by title and version so the reader can obtain it from
+# the manufacturer rather than from any one reader's local copy.
 #
 # Superseded: 4.477962e17, the same expression at 0 C / 101325 Pa. Every
 # sccm-dimensioned quantity in the repo was reclassified at the changeover as
