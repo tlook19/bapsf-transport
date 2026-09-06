@@ -26,7 +26,7 @@ refuses unknown keys, so they are added only when this checkout HAS them
 a checkout.
 
 Otherwise this mirrors ``k7bbuild_frozen_bitexact.py`` and
-``k6_frozen_bitexact.py`` (both at commit 48be9a4, retired 2026-09-03):
+``k6_frozen_bitexact.py`` (both retired; see commit 48be9a4):
 the frozen K5a shot-1 calibration arm, a bounded
 number of steps, SHA-256 over the raw little-endian float64 bytes of every
 piece of state the arm carries.

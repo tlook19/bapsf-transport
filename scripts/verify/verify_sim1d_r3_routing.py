@@ -24,8 +24,8 @@ Gates:
   G5 no electron double-book + collector sheath present: the characteristic
      boundary contributes ZERO electron energy at the (driven) cathode and the
      2Te floating-sheath loss at the collector. (The pure-ghost comparison arm
-     -- sheath_energy_routing=False -- was retired with that parameter on
-     2026-08-31 (Tom); the routing it selected is now the only one, so G5
+     -- sheath_energy_routing=False -- was retired with that parameter;
+     the routing it selected is now the only one, so G5
      asserts its two values directly.)
 
 Usage:  python scripts/verify/verify_sim1d_r3_routing.py

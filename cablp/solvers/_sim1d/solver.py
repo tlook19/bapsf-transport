@@ -4066,8 +4066,8 @@ class LAPDSim1D:
         The tracer must consume the SAME boundary operator the fluid does, or
         ``gamma`` disagrees with the fluid's own ``n`` row -- which is exactly
         what the smoke's identity assertion catches. Since the legacy
-        volumetric absorber was retired 2026-08-31 (Tom) there is one operator,
-        so there is nothing left to select between.
+        volumetric absorber was retired (see commit 1fc05c9) there is one
+        operator, so there is nothing left to select between.
         """
         surface_kwargs = self._tracer_surface_kwargs()
 
@@ -5350,8 +5350,8 @@ class LAPDSim1D:
                 "plasma_advective_flux": self._zero_rhs_state(),
                 "plasma_front_flux": self._zero_rhs_state(),
                 # boundary_absorption is permanently zero everywhere since the
-                # legacy absorber was retired 2026-08-31 (Tom); kept for saved-
-                # ledger schema stability.
+                # legacy absorber was retired (see commit 1fc05c9); kept for
+                # saved-ledger schema stability.
                 "boundary_absorption": self._zero_rhs_state(),
                 "characteristic_boundary": self._zero_rhs_state(),
                 "pressure_work": self._zero_rhs_state(),
@@ -5513,9 +5513,10 @@ class LAPDSim1D:
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
             "plasma_front_flux": plasma_terms["plasma_front_flux"],
             # Permanently zero since the legacy volumetric absorber was
-            # retired 2026-08-31 (Tom). The ROW is kept because it is part of
-            # the saved ledger schema that existing artifacts and the
-            # committed phase-3 RHS provenance enumerate; dropping it would
+            # retired; see commit 1fc05c9. The ROW is kept because it is
+            # part of the saved ledger schema that existing artifacts and
+            # the committed phase-3 RHS provenance enumerate; dropping it
+            # would
             # move the saved term set, which this change deliberately does
             # not. Nothing can write it: read the live boundary from
             # "characteristic_boundary" below.
@@ -8544,7 +8545,7 @@ class LAPDSim1D:
         # outer run's nn0. nn0 is the direct-run fill (a realistic pre-shot
         # background), whereas this inner sim accumulates the fill from
         # near-vacuum over `cycles` puff/off cycles. The 1e8 is inherited from
-        # the generator of the frozen gas-puff nn0 table (retired 2026-08-27),
+        # the generator of the frozen gas-puff nn0 table, since retired,
         # which accumulated its equilibrated values the same way from the same
         # start. Pinning it here decouples the two paths, so the direct-run
         # default can move
@@ -8985,9 +8986,9 @@ class LAPDSim1D:
         The bundle is exactly the set of non-flux terms that can drive a cell
         into a floor within one step, and it must be the set THIS STANCE
         RUNS -- the characteristic ghost-cell flux, the only plasma-terminating
-        operator since the legacy volumetric absorber was retired 2026-08-31
-        (Tom). Reading the wrong operator would bound a term the step never
-        applies while leaving the applied one unbounded (the same
+        operator since the legacy volumetric absorber was retired (see
+        commit 1fc05c9). Reading the wrong operator would bound a term the
+        step never applies while leaving the applied one unbounded (the same
         wrong-operator class the recycle channel was fixed for).
 
         The engaged DVM arm's coupling term joins the bundle for the same
@@ -9672,8 +9673,9 @@ class LAPDSim1D:
         """Return the characteristic ghost-cell Bohm outflow (audit A1/A16).
 
         THE plasma-terminating boundary operator, and the only one since the
-        legacy volumetric absorber was retired 2026-08-31 (Tom): a one-sided
-        ghost-cell KEP/Rusanov flux against the Bohm outflow state at each
+        legacy volumetric absorber was retired (see commit 1fc05c9): a
+        one-sided ghost-cell KEP/Rusanov flux against the Bohm outflow
+        state at each
         absorbing face. Reads the surface kwargs and cathode jet, and follows
         the interior's momentum-flux form and wave speed so the boundary and
         the interior stay consistent.
@@ -14568,15 +14570,16 @@ class LAPDSim1D:
     def _gas_constants(gas_type):
         if gas_type == "He":
             return m_He_cgs, 4, 4, I_ion
-        # Ruled 2026-08-27, the [gas-constants-h-arm] successor row of the
-        # h-quarantine: this arm was the last m_p_cgs consumer in cablp/.
+        # The h-quarantine's successor row: this arm was the last m_p_cgs
+        # consumer in cablp/.
         if gas_type == "H":
             raise ValueError(
                 "gas_type='H' is not available: the hydrogen arm of "
-                "_gas_constants was retired 2026-08-27 as dead code. It "
-                "returned proton constants that no construction could ever "
-                "carry into physics -- the solver is helium-only (D3, "
-                "2026-08-21) and refuses gas_type != 'He' a few lines later "
+                "_gas_constants was retired as dead code; see commit "
+                "0195a02. It returned proton constants that no "
+                "construction could ever "
+                "carry into physics -- the solver is helium-only and "
+                "refuses gas_type != 'He' a few lines later "
                 "in __init__, at the Phelps He+/He sigma_in_model gate. "
                 "Accepted: 'He'."
             )

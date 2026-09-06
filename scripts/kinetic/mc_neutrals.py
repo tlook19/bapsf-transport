@@ -105,9 +105,10 @@ T_WALL_K = 300.0
 RAY_EPS_CM = 1e-7
 
 # Every ``rhs_terms`` row a plasma-terminating boundary has ever been booked
-# under. There is ONE such operator: the legacy volumetric absorber was retired
-# 2026-08-31 (Tom), so a run this package can now produce books its boundary
-# physics under ``characteristic_boundary`` alone and ``boundary_absorption``
+# under. There is ONE such operator: the legacy volumetric absorber was
+# retired (see commit 1fc05c9), so a run this package can now produce
+# books its boundary physics under ``characteristic_boundary`` alone and
+# ``boundary_absorption``
 # is identically zero. The retired name is kept because this tuple is read as a
 # UNION over rows, never as a selector: summing the plasma removal booked by
 # EITHER row gives a nonzero reference on a historical artifact that books
@@ -158,9 +159,10 @@ def boundary_recycle_row(f):
     """Name the ``rhs_terms`` row carrying this run's boundary recycle.
 
     Returns ``(row_name, stance)``. The row is ALWAYS
-    ``characteristic_boundary``: the legacy volumetric absorber was retired
-    2026-08-31 (Tom), so ``boundary_absorption`` is identically zero on every
-    run this package can now produce, and it was already identically zero on
+    ``characteristic_boundary``: the legacy volumetric absorber was
+    retired (see commit 1fc05c9), so ``boundary_absorption`` is
+    identically zero on every run this package can now produce, and it was
+    already identically zero on
     every run made at the shipped stance before that. An offline reader that
     selected the legacy row would get a zero channel and silently drop the
     end-wall return from its source menu.

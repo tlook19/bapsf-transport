@@ -510,7 +510,7 @@ def gate_refusals():
     # closure that gives them a reading. The refusal must collect BOTH members
     # in one message and name the selection that would make them readable --
     # the whole decision, not the first guard hit. Until this check, only
-    # scripts/preset_resolver_demo.py (at commit 48be9a4, retired 2026-09-03)
+    # scripts/preset_resolver_demo.py (retired; see commit 48be9a4)
     # (unregistered, so nothing runs it in a
     # gate) reached this branch.
     def _two_moment_members_armed():

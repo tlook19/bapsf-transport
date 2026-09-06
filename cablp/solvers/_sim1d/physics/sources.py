@@ -836,8 +836,9 @@ def characteristic_boundary_rhs(
     """Return the characteristic ghost-cell Bohm outflow at absorbing faces.
 
     THE plasma-terminating boundary operator: since the legacy volumetric
-    absorber was retired 2026-08-31 (Tom) this is the only discretization of
-    the cathode/collector surfaces, and it always runs. At each
+    absorber was retired (see commit 1fc05c9) this is the only
+    discretization of the cathode/collector surfaces, and it always runs.
+    At each
     plasma-terminating (absorbing) face a ghost state is set to the Bohm
     outflow condition
 
@@ -1023,8 +1024,9 @@ def characteristic_boundary_rhs(
         d_M[live] += scale * f_M
         d_Ei[live] += scale * f_Ei
         # Electron energy row -- the sheath-transmission routing (A16), the
-        # only routing since the pure-ghost enthalpy alternative was retired
-        # 2026-08-31 (Tom). See the module docstring's ELECTRON ENERGY ROW.
+        # only routing since the pure-ghost enthalpy alternative was
+        # retired; see commit 1fc05c9. See the module docstring's
+        # ELECTRON ENERGY ROW.
         if roles[live] == "collector":
             d_Ee[live] += 2.0 * Te_l * ev_to_erg * (scale * f_n)
         # cathode / other driven electrode: electron energy owned by circuit.

@@ -192,9 +192,9 @@ PARAM_OVERRIDES = {
     "R_comp": 7.2244e-3,
     "L_parasitic_H": 8.1e-6,
     "C_bank_F": 9.5,
-    # NB the constant-surface-temperature era ended here (f=0.1 stance
-    # promotion, 2026-07-27): the pin that held the surface at 273.15 + 1725 K
-    # is gone, and so is the key it was written on (T_s, retired 2026-09-03).
+    # NB the constant-surface-temperature era ended at the f=0.1 stance
+    # promotion: the pin that held the surface at 273.15 + 1725 K is gone,
+    # and so is the key it was written on (T_s, since retired).
     # cathode_warming_model="power_balance" (a config default) evolves the
     # surface from cathode_Ts_base_K, which this block leaves at its config
     # default, so there is nothing to pin here.
@@ -225,7 +225,8 @@ PARAM_OVERRIDES = {
     # ADAS GCR rates (see cablp/atomic/data/adas/README.md): effective ionization/
     # recombination and radiation-only cooling, consistent with the separate
     # ionization-cost term. The rate channels carry no scale factor: the b_*
-    # scalars were removed 2026-08-28 and unit scaling is now structural.
+    # scalars were removed at commit 3e7d386 and unit scaling is now
+    # structural.
     "atomic_rate_model": "adas",
     # Beam-driven neutral excitation: 1.0 books the 2^1P channel alone, the
     # rest approximates the remainder of the singlet manifold. Radiates ~21 eV
@@ -477,8 +478,8 @@ def _main_discharge_origin(result):
 # resolves nx = 268 whether or not --nx was typed (the driver prints the
 # supersession, "240 -> 268"). This value is therefore only the fallback for the
 # paths with no stance layer: compare_sim1d_es1's own CLI, run_m6_point
-# --no-stance, profile_sim1d, sp3_build_nn0, run_kn2z_promoted (at commit
-# 48be9a4, retired 2026-09-03), and the "m6"
+# --no-stance, profile_sim1d, sp3_build_nn0, run_kn2z_promoted (retired;
+# see commit 48be9a4), and the "m6"
 # snapshot case in audit_sim1d_configs (whose resolved-config hash pins it).
 #
 # It stays a DRIVER-level default and not a config.py default: the golden

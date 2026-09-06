@@ -3567,8 +3567,8 @@ class TransientDVM:
         state is REACHED, not hypothetical: the anode sheath is
         electron-attracting before breakdown, so ``max(phi_a + Ti, 0)`` is
         exactly zero over the discharge's first accepted steps while the mesh
-        still collects (`scripts/b4aj_phi_a_probe.py` (at commit 48be9a4,
-        retired 2026-09-03)).
+        still collects (`scripts/b4aj_phi_a_probe.py` (retired; see
+        commit 48be9a4)).
 
         **The split is PER CELL, not per tick**: cells that carry a positive
         incident energy in the same tick launch normally beside cells that

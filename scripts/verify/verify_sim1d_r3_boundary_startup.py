@@ -11,7 +11,7 @@ main discharge) and checks that the boundary:
   (b) is a net ENERGY SINK over the main-discharge window (electron internal +
       ion internal + reconstructed kinetic < 0).
 
-RETIRED 2026-08-31 (Tom): gate (c) -- "the reconstructed kinetic is no longer
+RETIRED: gate (c) -- "the reconstructed kinetic is no longer
 the A1 source the historical boundary_absorption books at the same stance" --
 and with it the second, characteristic-OFF run this script used to make. That
 comparison arm is not constructible now that the legacy volumetric absorber and

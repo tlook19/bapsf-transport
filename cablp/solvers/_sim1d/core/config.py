@@ -4399,7 +4399,7 @@ input_flags_template_1d = {
     # in place of 3/2 Te, and 5/2 Ti on Ei (the enthalpy flux) in place of
     # 3/2 Ti. It completes the thermal-only electrode routing, which is
     # unconditional since the stance that switched it off was retired
-    # 2026-08-31 (Tom). TWO
+    # (see commit 1fc05c9). TWO
     # REGIMES, both booked: the increment above is the electron-REPELLING
     # anode (phi_a > 0), where the collected electrons climbed the fall and
     # the plasma paid; at an electron-ATTRACTING anode (phi_a <= 0 -- an

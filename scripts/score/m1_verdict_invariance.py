@@ -43,8 +43,8 @@ and ``compare`` emits one row per (field, port) carrying that port number as a
 string; the three mid-ports are therefore the ``field == "n"`` rows whose
 ``port`` is "11", "21" or "29", at z = 470.05, 789.55 and 1045.15 cm.
 
-Bins, evaluated per cadence against the fluid comparator (REGISTERED
-2026-08-31 (Tom); these REPLACE the ``RESOLVED_RATIO = 0.85`` /
+Bins, evaluated per cadence against the fluid comparator (REGISTERED;
+these REPLACE the ``RESOLVED_RATIO = 0.85`` /
 mean-Isat form this module shipped with, which was stale against the
 registration):
 
@@ -131,7 +131,7 @@ MID_PORTS = ("11", "21", "29")
 CADENCE_DIVISOR = 3.0
 
 #: RESOLVED: the model sits within this many ``sigma_tot`` of the measurement
-#: at EVERY mid port. The bins were re-registered 2026-08-31 (Tom) and this is
+#: at EVERY mid port. The bins were re-registered and this is
 #: the registered form; the ``RESOLVED_RATIO = 0.85`` mean-ratio test this
 #: replaces was a DIFFERENT statement -- a mean over the three ports, which a
 #: pair of compensating over- and under-shoots can satisfy while no individual
@@ -220,7 +220,7 @@ def gate_table(rows_fluid, rows_h, rows_h2):
         else:
             threshold = np.nan
             status = "UNGATED"
-        # VERDICT-BEARING (2026-08-31 (Tom)): the gate BINDS only on the rows
+        # VERDICT-BEARING: the gate BINDS only on the rows
         # a verdict rests on -- the mid-port n rows and the Isat rows. A
         # cadence excursion anywhere else is still measured and printed, but
         # it cannot move a verdict, so failing the gate on it would stop an
@@ -290,7 +290,7 @@ def isat_rows_by_port(rows):
 def isat_degrades(rows, rows_comparator):
     """Return ``(degrades, worst_port, worst_increase)`` for the Isat rows.
 
-    THE REGISTERED NON-DEGRADATION TEST (2026-08-31 (Tom)), stated precisely:
+    THE REGISTERED NON-DEGRADATION TEST, stated precisely:
     the Isat rows degrade if ANY single row's ``|dev|/sigma_tot`` INCREASES
     against the comparator. Not the mean, and not a tolerance -- a strict
     per-row increase on one port is a degradation even where the mean falls.
@@ -343,7 +343,7 @@ def mid_port_within_sigma(rows):
 def verdict_bin(rows, rows_comparator):
     """Return the verdict bin for one cadence against the fluid comparator.
 
-    THE REGISTERED BINS (2026-08-31 (Tom)):
+    THE REGISTERED BINS:
 
     * RESOLVED -- the model is within ``RESOLVED_SIGMA`` sigma_tot at ALL
       THREE mid ports (the p11/p21/p29 ``n`` rows), per port;

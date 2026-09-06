@@ -924,9 +924,10 @@ def run_arm(spec, n_updates, verbose=True):
         "burn_through_max": max(tick_burn) if tick_burn else 0.0,
         "puff_ticks_active": int(sum(1 for v in tick_birth_puff if v > 0.0)),
         "puff_births_total": float(sum(tick_birth_puff)),
-        # neutral_kinetic_dvm_tn_feedback was RETIRED 2026-08-31 (Tom) with
-        # its only consumer. The DVM's Tn moment stays an in-process
-        # diagnostic that nothing consumes, which is what this row now records.
+        # neutral_kinetic_dvm_tn_feedback was RETIRED with its only
+        # consumer; see commit 1fc05c9. The DVM's Tn moment stays an
+        # in-process diagnostic that nothing consumes, which is what this
+        # row now records.
         "tn_feedback": False,
     }
     record.update(floors)

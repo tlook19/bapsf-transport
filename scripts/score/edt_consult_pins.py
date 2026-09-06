@@ -5,7 +5,7 @@ EMF-work operator from a SAVED sim1d trajectory. It reads only the HDF5 file --
 no solver construction, no new solver code -- so it can be run against an
 artifact captured at any commit, including one that predates the operator's
 implementation. That is what makes it usable as the base-side measurement of
-the pre-registered pins (the standing rule adopted 2026-08-30 (Tom): measure
+the pre-registered pins (the standing rule: measure
 pre-registered pins at BASE before gating on them, because a pin that is
 already false at the unmodified base gates nothing): the pins are properties
 of a saved state and of the consult's
@@ -156,8 +156,8 @@ PINS = {
     "afterglow_instant_26ms_kW_RETIRED": -0.017,
 }
 
-#: Q2 -- the cathode-face pins of the 2026-08-31 amendment, measured on
-#: ``mgcr1_confirm`` (artifact retired 2026-09-03) and reported by the Q2
+#: Q2 -- the cathode-face pins of the amendment, measured on
+#: ``mgcr1_confirm`` (artifact since retired) and reported by the Q2
 #: section of this evaluator. They exist because the amendment's clause (iii)
 #: rests on them:
 #: the cathode-face enthalpy-ZERO premise is a drive-phase statement, and the

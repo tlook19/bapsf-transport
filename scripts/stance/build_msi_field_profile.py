@@ -7,7 +7,7 @@ of that profile with the machine's own record of the field it actually ran --
 the ``MSI/Magnetic field`` group every ES1 shot file carries -- and leaves the
 census build in place as the independent cross-check.
 
-Adopted 2026-09-01 (Tom).
+This is the adopted profile builder.
 
 THE DATA
 --------
