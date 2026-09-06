@@ -58,8 +58,14 @@ with the local velocity, so non-negative only in the volume-weighted total. The
 operator is CONSTRUCTED so that the semi-discrete flux and pressure-work pair
 conserves $\sum V(K+E_e+E_i)$ on a closed domain, the explicit integration
 leaving a time-integration drift of the nonlinear kinetic energy; the size of
-that drift is a property of the step, not of this operator, and the suite that
-exercises the claim is `scripts/verify/verify_sim1d_r2_hyperbolic.py`.
+that drift is a property of the step, not of this operator. What exercises the
+claim is the smoke suite: the `helium-only-reaction-rates` case pins
+`pressure_work` and `hyperbolic_dissipation_heating` as required rows of the
+term enumeration and asserts the terms sum back to the full RHS, and the
+`variable-area-well-balancedness` case covers the stationary-uniform limit in
+which the KEP convective term and the Rusanov dissipation vanish at every
+interior face. Over a saved trajectory the rows are read by
+`scripts/score/power_ledger_sim1d.py`.
 
 **Geometry source and conduction.** With a varying area the momentum ledger
 carries
