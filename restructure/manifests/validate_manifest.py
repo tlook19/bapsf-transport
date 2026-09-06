@@ -3,8 +3,9 @@
 manifest-schema constraints.
 
 Those constraints are enforced here and nowhere else -- this module is their
-executable statement.  ``RENAME_MAP.md`` section 8 (Q1) carries the same set
-in prose for a reader who wants the rationale rather than the mechanism.
+executable statement.  The R2 rename record is the revision history together
+with the JSON manifests beside this file, ``cumulative_r2tip.json`` being the
+cumulative map.
 
 Six checks, in the order the schema numbers them:
 
