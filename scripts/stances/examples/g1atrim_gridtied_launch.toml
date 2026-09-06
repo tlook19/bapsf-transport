@@ -1,0 +1,52 @@
+# THE GRID-TIED LAUNCH SMEAR: the reference configuration with the surface
+# jets' launch spectra smeared at the local velocity-grid bin, as they were
+# before the reference tied the width to the launch energy.
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: the measured machine, the operating point, the drive
+# calibration, the velocity mesh, the neutral closure and the initial neutral
+# state are all inherited, so this file cannot drift from the reference and a
+# reader can see the whole difference between the two arms at a glance.
+#
+# WHAT IT IS FOR. The reference states one dimensionless width shared by every
+# armed surface jet and smears each launch at T_launch = beta * e_launch,
+# floored at the local bin, so the fractional energy width a launch is spread
+# over is (3/2) beta at every launch energy and every velocity resolution.
+# Unset -- which is what this file does -- each jet falls back on the grid-tied
+# width alone: the axial bin containing the launch speed, expressed as a
+# temperature, whose fractional width instead halves with every doubling of
+# `neutral_kinetic_dvm_nvz`. The launched SHAPE is then a property of the
+# velocity resolution rather than of the surface, and because the
+# column-to-annulus escape is taken per velocity bin the source-region density
+# follows the shape. This arm is therefore the comparator that isolates what
+# the energy-tied width changed, at the reference's own velocity mesh.
+#
+# READ THE FLOOR BEFORE READING THE DIFFERENCE. On the reference side the
+# grid-tied width remains a FLOOR -- a smear narrower than the local bin
+# collapses onto a single bin and cannot be projected at all -- so launches
+# that fell back on it carry the same width this file gives them and are not
+# part of the difference. Each run's `dvm_transfer_ledger` census carries
+# `launch_floor_fraction`: the share of the run's launches that were on the
+# floor, i.e. how often the reference's stated width was NOT in force.
+#
+# HOW TO RUN IT. The campaign drivers resolve `--stance <name>` against
+# `scripts/stances/`, so copy this file there first; `run_sim1d.py` takes the
+# path directly and needs no copy:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/g1atrim_gridtied_launch.toml \
+#         --output g1atrim_gridtied_launch.h5
+#
+# The saved trajectory records the lineage -- this file's name, "g1atrim" as
+# its base, both files' sha256, the delta key below, and the resolved
+# configuration's identity -- so the arm is identifiable from its artifact
+# alone.
+base = "g1atrim"
+
+
+[none_valued]
+# The selection: unset the shared launch width, returning every armed surface
+# jet to the grid-tied smear. TOML has no null literal, so a key whose value is
+# None is named here rather than given one in [input_dict]. Both DVM jets the
+# reference arms -- cathode and anode -- read this one key.
+input_dict = ["neutral_kinetic_dvm_jet_launch_width"]
