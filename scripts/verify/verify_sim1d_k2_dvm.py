@@ -340,9 +340,9 @@ EXCHANGE_MODEL = "cauchy_chord"
 # Maxwellian average is that same constant, at any temperature.
 CLOSED_ISO_RATE_CM3_S = 2.0 * 7.63e-16 * np.sqrt(EV / M_HE)
 
-# Registered bracket on the kinetic/fluid RATE-COEFFICIENT ratio gated by C6
-# (re-registered 2026-08-23e; supersedes the 2026-08-05 [1.0, 1.7]). Both
-# sides approximate the SAME two-Maxwellian average, so the bracket is a
+# Registered bracket on the kinetic/fluid RATE-COEFFICIENT ratio gated by C6.
+# It is a RE-REGISTRATION and supersedes an earlier, factor-wide [1.0, 1.7].
+# Both sides approximate the SAME two-Maxwellian average, so the bracket is a
 # DERIVED residual budget rather than a factor-wide tripwire: the lower edge
 # is exact (every residual is sign-definite >= 0) and the upper edge is the
 # worst-case residual sum with headroom. See gate_c6's docstring for the
@@ -1711,8 +1711,8 @@ def gate_c6():
     return (
         "C6 kinetic/fluid rate-coefficient ratio inside its bracket",
         ok,
-        f"bracket [{lo:.2f}, {hi:.2f}] (re-registered 2026-08-23e as a "
-        f"DERIVED residual budget; number-weighted rate coefficient against "
+        f"bracket [{lo:.2f}, {hi:.2f}] (a DERIVED residual budget, not a "
+        f"factor-wide tripwire; number-weighted rate coefficient against "
         f"a stationary 300 K Maxwellian, NOT a total drag); "
         + "; ".join(
             f"Ti={Ti[i]:g}: {ratios[i]:.4f} "
@@ -2306,8 +2306,8 @@ REFUSALS = (
     ),
     # The single-key refusal this gate used to arm -- ``neutral_momentum``
     # set back to True on the cleared base -- is unreachable BY CONSTRUCTION
-    # since the model-preset resolver landed (2026-08-23h/aj/ak): the flag is
-    # a MEMBER of the ``neutral_model='kinetic_dvm'`` family and True is its
+    # since the model-preset resolver landed: the flag is a MEMBER of the
+    # ``neutral_model='kinetic_dvm'`` family and True is its
     # config default, so a caller cannot distinguish "I chose True" from "I
     # left it alone" and the resolver clears it rather than refusing. X1
     # below pins that resolution. What is still reachable, and what this gate

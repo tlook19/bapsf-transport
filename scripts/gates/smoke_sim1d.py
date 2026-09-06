@@ -12737,8 +12737,8 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
         # Arming ``neutral_momentum`` back on is no longer a refusal and
         # cannot be one: the flag is a MEMBER of the
         # ``neutral_model='kinetic_dvm'`` family and True is its config
-        # default, so the model-preset resolver (2026-08-23h/aj/ak) cannot
-        # tell "I chose True" from "I left it alone" and clears it instead.
+        # default, so the model-preset resolver cannot tell "I chose True"
+        # from "I left it alone" and clears it instead.
         # The reachable refusal is an EXPLICIT family conflict -- a member
         # whose default is already compatible, set to something the
         # selection refuses -- and the one collected error names the
