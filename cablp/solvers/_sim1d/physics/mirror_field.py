@@ -26,8 +26,8 @@ principle -- they are the same field, the same surface, the same numbers.
 
 A ``-mu grad B`` term added alongside it would therefore double-count the
 mirror force by 100 %, exactly. That is not a modelling preference; it is an
-identity. ``MODEL.md`` states it under "Prescribed flux-tube and vessel
-geometry -> Mirror force", together with the matching statement for the energy
+identity. ``MODEL.md`` states it under "Conservation laws", at the quasi-1D
+momentum law, together with the matching statement for the energy
 side: expansion cooling through the flare is carried by
 ``sources.velocity_divergence`` inside the existing pressure work, so there is
 no separate mirror-cooling source either.

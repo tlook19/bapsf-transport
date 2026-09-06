@@ -4,8 +4,9 @@ The payload written here is NOT a trajectory: it carries one instant, at full
 precision, including every continuation cache, latch, accumulator and run-loop
 controller value a bit-identical continuation needs. The inventory, with the
 mutation site of each member and the justification for every deliberate
-omission, is ``_sim1d/RESTART.md``; this module is that document in executable
-form and the two are meant to be read together.
+omission, is THIS module together with the restart state carried in
+``solver.py``. The resume contract it implements is stated in
+``_sim1d/NUMERICS.md``, section "Restart".
 
 The format string is independent of the trajectory format: a restart payload
 and a run result answer different questions and version separately.

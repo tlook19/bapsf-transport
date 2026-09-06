@@ -25,9 +25,8 @@ disagreement cannot hide by moving a cell out of the window.
 
 A third outcome, BLOCKED, exists and is not a pass: the tracer can refuse to
 produce a number at all (``TracerBalanceError`` -- the quasi-static electron
-energy balance having no root, or being multi-valued, at the operating point;
-see NUMERICS.md, "MEASURED: the local balance has no root at the production
-stance"). That is reported as BLOCKED with the refusal verbatim, because a gate
+energy balance having no root, or being multi-valued, at the operating
+point). That is reported as BLOCKED with the refusal verbatim, because a gate
 that cannot run has not passed.
 
 MATCHED-CLOSURE READING (registered before the ql_relaxation run)

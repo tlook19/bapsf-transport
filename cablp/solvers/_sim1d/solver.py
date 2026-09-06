@@ -3596,8 +3596,8 @@ class LAPDSim1D:
 
     # ------------------------------------------------------------------
     # Regime-R2 pre-breakdown passive-tracer bridge (default off).
-    # Method of record: NUMERICS.md, "Regime-R2 pre-breakdown passive-tracer
-    # bridge". Every method below returns immediately unless ``self._tracer``
+    # Method of record: ``physics/tracer.py``, which states the method beside
+    # the code. Every method below returns immediately unless ``self._tracer``
     # is not None, which happens only under the ``regime_tracer`` flag: that is
     # the presence gate, and it is why the off path is bit-exact.
     # ------------------------------------------------------------------
@@ -3917,9 +3917,9 @@ class LAPDSim1D:
         ``plasma_face_live_cell`` from the composed mask. A closed face carries
         no particle, advective-momentum or thermal-energy flux and no
         conduction, with the active cell's pressure acting on it -- which is
-        the interface treatment NUMERICS.md defines, reached by reusing the
-        operator that already implements it rather than by adding a branch to
-        the flux.
+        the closed-face interface a passive cell gets, reached by reusing the
+        operator that already implements it rather than by adding a branch
+        to the flux.
         """
         if not self._tracer_engaged:
             return self._geometry
@@ -4145,9 +4145,8 @@ class LAPDSim1D:
         nothing else. No density threshold is introduced: the tracer-to-fluid
         handoff and the onset of fiat quasilinear absorption are made the same
         event by construction, so a cell that has become active books the
-        anomalous channel in full, unchanged. NUMERICS.md, "Corrected beam
-        power booking on passive cells" and "The anomalous closure bracket",
-        are the statements of record, and
+        anomalous channel in full, unchanged. The booking described here is
+        the statement of record, and
         :meth:`tracer_passive_anomalous_leak` is the auditable invariant.
         """
         zeros = np.zeros(self._geometry.cells, dtype=float)
@@ -4533,7 +4532,7 @@ class LAPDSim1D:
             f"cells); {int(np.count_nonzero(census['passive']))} cells still "
             f"passive; {first_text}; refreshes={int(census['refreshes'])}; "
             f"worst dropped-transport ratio c_s/(L_n gamma)={transport_text} "
-            "(NUMERICS.md tabulates where that stops being small)"
+            "(tracer.transport_ratio states where that stops being small)"
         )
 
     @property
@@ -7445,9 +7444,9 @@ class LAPDSim1D:
 
     # ---- restart: export and resume -------------------------------------
     #
-    # The inventory below is the executable form of _sim1d/RESTART.md, which
-    # gives the mutation site of every member and the justification for each
-    # deliberate omission. Members NOT here are either derivable from config
+    # The inventory below IS the restart inventory: each member sits at its
+    # own mutation site, and every deliberate omission is justified where it
+    # is dropped. Members NOT here are either derivable from config
     # and geometry at construction, per-attempt scratch that is None at any
     # instant a restart can be taken, or dropped with a reason recorded there.
 
@@ -8171,7 +8170,10 @@ class LAPDSim1D:
         # must come across for the resumed steps to be the same steps.
         # ``saved_frames_before``/``steps_before`` carry the counts the
         # max_output_steps and accepted-step budgets are measured against; the
-        # WALL-CLOCK budget deliberately restarts (RESTART.md records why).
+        # WALL-CLOCK budget deliberately restarts: wall clock is a property
+        # of the process, not of the trajectory, so a two-stage run genuinely
+        # gets two budgets. The accepted-STEP cap is carried as an offset, so
+        # the work-done budget does transfer.
         if resume is not None:
             previous_accepted_dt = resume["previous_accepted_dt"]
             if resume["t_last_save"] is not None:

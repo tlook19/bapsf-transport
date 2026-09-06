@@ -18,7 +18,7 @@ what the fluid model then spreads is the injection footprint rather than an
 end-state envelope. The substitution is deliberate -- it puts the foot fill,
 the equilibrated seed and the in-solver puff on ONE shape at one geometry --
 and the difference against `"cosine_pipe"` is a registered finding, not an
-error. `MODEL.md` carries the same disclosure at the fueling section.
+error. This module is where that disclosure is stated.
 
 GEOMETRY (all CAD unless marked). Gas enters at the anode-stack station through
 two azimuthally opposed mid-plane ports. It arrives there through a feed line

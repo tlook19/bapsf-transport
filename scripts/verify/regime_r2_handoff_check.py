@@ -28,8 +28,8 @@ I4  THE INTERFACE FLUX IS ZERO BY CONSTRUCTION, NOT BY OVERSIGHT. Every
     exactly zero particle and thermal-energy flux, while the same state on the
     BASE geometry -- interface open -- drives a nonzero particle flux through
     those same faces. This is the term the design DROPS (it is the
-    seed-transport neglect, NUMERICS.md), and the check exists so a reader can
-    see it is zero deliberately.
+    seed-transport neglect; see ``physics/tracer.py``), and the check exists
+    so a reader can see it is zero deliberately.
 
     Asserted at the FACE, not on a cell RHS row: ``_mask_inactive_rhs`` writes
     literal zeros onto every cell the tracer owns, so a cell-row assertion
@@ -47,8 +47,7 @@ that the tracer is usable at this stance.** The per-cell quasi-static electron
 energy balance has NO ROOT at the production pre-breakdown stance -- parallel
 heat conduction and the boundary losses are each an order of magnitude larger
 than every local radiative channel, and a per-cell object cannot see conduction
-at all. The measurement is in ``_sim1d/NUMERICS.md``, section "MEASURED: the
-local balance has no root at the production stance".
+at all. That measurement is not restated in this repository.
 
 This script nevertheless reaches a PASS because ``gamma`` and ``Te`` are
 refreshed on a tolerance, not every step: on this run's save lattice the
@@ -129,12 +128,12 @@ def print_cadence_caveat(sim):
     """Print, next to the refresh count, what a PASS from this script does not mean.
 
     The caveat has to travel WITH the result: a printed PASS that a reader
-    cannot reconcile against what NUMERICS.md says about the Te closure is
-    worse than no output at all, and a gate log outside the repository is not
-    a substitute.
+    cannot reconcile against what ``physics/tracer.py`` says about the Te
+    closure is worse than no output at all, and a gate log outside the
+    repository is not a substitute.
 
     What it says was rewritten when the passive-cell beam power booking was
-    corrected (NUMERICS.md, "Corrected beam power booking on passive cells").
+    corrected (``physics/tracer.py``, the passive-cell beam power booking).
     The balance now HAS a root at this stance, so the old wording -- no root
     here, overlap gate BLOCKED -- became false the moment that landed. The
     reasons a PASS is still conditional are different ones, and they are the

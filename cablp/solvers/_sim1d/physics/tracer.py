@@ -3,9 +3,9 @@
 On a cell the tracer owns, the plasma density is the EXACT integral of the
 affine scalar ODE ``dn/dt = gamma(z)*n + S(z, t)`` while the background
 (circuit ramp, cathode thermal state, coverage, neutrals) owns the timestep.
-``_sim1d/NUMERICS.md`` section "Regime-R2 pre-breakdown passive-tracer bridge"
-is the method of record; this module is that section in executable form and the
-two are meant to be read together.
+THIS MODULE is the method of record: the derivation, the passive/active
+interface and the quantified neglect bounds are stated in the docstrings
+below, beside the code each one describes.
 
 Nothing here re-derives physics the solver already owns. ``gamma``, the beam
 birth ``S``, and the quasi-static electron energy balance are all assembled by
@@ -36,7 +36,8 @@ from .reactions import reaction_rates
 #: number, ``transport_ratio``, which is NOT here because it never decides
 #: passivity: it is the parallel-advection term the description DROPS, and a
 #: run in which it is not small is a run whose tracer leg should not be trusted
-#: (the quantified bound is the table in NUMERICS.md).
+#: (the quantified bound is :func:`transport_ratio`, reported every step in
+#: the census as ``transport``).
 CRITERION_NAMES = ("current", "thinness", "depletion")
 
 #: Series-switch point for :func:`phi2`. ``eps**(1/3)`` is the standard optimum
@@ -183,7 +184,8 @@ def growth_rate(
     recovers the frequency from it.
 
     Parallel advection is NOT in ``gamma``: a passive cell exchanges nothing
-    across its interface (NUMERICS.md, "Flux at the interface"), and that
+    across its interface -- the closed-face treatment
+    ``LAPDSim1D._plasma_geometry`` installs -- and that
     omission is the seed-transport neglect whose bound the census reports as
     ``transport``.
     """
@@ -236,8 +238,7 @@ def electron_loss_coefficients(
     face), the tracer already consumes that term for the particle channel, and
     taking its particle row without its energy row would be an inconsistency in
     the tracer rather than a modelling choice. It is not, and must not be read
-    as, a repair for the non-local sink the local balance is missing -- see
-    NUMERICS.md.
+    as, a repair for the non-local sink the local balance is missing.
 
     The Coulomb logarithm inside the exchange term carries a weak logarithmic
     density dependence that the degree split treats as part of the coefficient
@@ -293,8 +294,8 @@ def passive_anomalous_leak(
       subtracting it would delete the closure's content.
     * ``"none"`` -- there is no anomalous share, and full and net coincide.
 
-    NUMERICS.md, "Corrected beam power booking on passive cells" and "The
-    anomalous closure bracket", are the statements of record.
+    The booking above is the statement of record; which equation each
+    anomalous selector chooses is ``MODEL.md``, "Beam deposition".
 
     The check is deliberately built the long way round rather than by asking
     the subtraction whether it subtracted:
@@ -623,7 +624,7 @@ def transport_ratio(*, gamma, Te_eV, mu, L_n_cm):
     Not a passivity criterion -- it never gates activation -- but reported in
     the census on every step, because it is the honest statement of the tracer's
     accuracy. The quantified bound and the ``Te`` at which it stops being small
-    are tabulated in NUMERICS.md ("Seed transport: the quantified neglect").
+    are reported every step in the census as ``transport``.
     ``inf`` where ``gamma <= 0``: a decaying cell has no growth for transport to
     be small against.
     """

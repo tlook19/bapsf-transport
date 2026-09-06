@@ -688,7 +688,7 @@ def observables(sim):
         # collision frequency the tick booked, times the neutral cadence.
         # Above ~2 the superseded zero-order hold is unstable, so this is the
         # number that says whether a cadence rung was resolving the coupling
-        # or fighting it (NUMERICS.md, "The DVM transfer hold").
+        # or fighting it (NUMERICS.md, "The kinetic neutral solver").
         "nu_E_cadence": (
             np.asarray(dvm.nu_pair, dtype=float) * float(sim._dvm_cadence_s)
         ).copy(),
