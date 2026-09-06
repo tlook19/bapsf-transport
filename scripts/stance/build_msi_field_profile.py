@@ -256,10 +256,8 @@ REPORTED_PORTS = (11, 21, 29, 41, 50)
 #: run on the ES1 radial scans. An effective radius is estimated at each of
 #: the two faces and the pair reconciled by their geometric mean, which is
 #: what makes the quantity a flux-tube AREA ratio between the two stations
-#: rather than a single-face profile width. Taken face by face the ratio
-#: brackets at 0.987-1.022; the value below is the reconciled figure and the
-#: sigma is its own bar, so the face bracket and the sigma are two different
-#: statements and neither is derived from the other.
+#: rather than a single-face profile width. Its face bracket is recorded with
+#: the configuration's provenance, not here.
 #:
 #: CLASS MEASURED -- a probe-scan product. It is never fitted to the profile
 #: this script emits: it is the comparand the emitted profile is gated
