@@ -1278,9 +1278,13 @@ class TransientDVM:
                     "neutral_kinetic_dvm_vmax_cm_s (leave it unset to have it "
                     f"sized to the band), {energy_lever}, or a "
                     f"smaller neutral_kinetic_dvm_{surface}_jet_R_E / larger "
-                    f"_R_N -- a FINER neutral_kinetic_dvm_nvz does not help "
-                    "and makes it worse, since it narrows the grid-tied "
-                    f"launch smear. Underlying refusal: {exc}"
+                    f"_R_N. Naming neutral_kinetic_dvm_jet_launch_width is a "
+                    "fourth, and what a FINER neutral_kinetic_dvm_nvz does "
+                    "depends on it: with the width unset the launch smear is "
+                    "grid-tied, so a finer nvz narrows it and makes this "
+                    "worse rather than better; with it set the smear is "
+                    "beta * e_launch above the grid-tied FLOOR, so a finer "
+                    f"nvz only lowers that floor. Underlying refusal: {exc}"
                 ) from exc
 
     # ---------------------------------------------------- annular baffles
@@ -1982,10 +1986,14 @@ class TransientDVM:
         already been debited ``R_E`` of the incident energy and this
         spectrum is what receives it -- so the achieved moments are checked
         against their targets and a miss names the cell, the shortfall, the
-        three ways out -- a larger velocity-grid extent, that extent left
-        unset so it is sized to the launch band, or a lower sheath cap -- and
-        the one that LOOKS like a fourth and is not: a finer ``nvz`` narrows
-        the grid-tied smear and lowers the ceiling instead of raising it.
+        four ways out -- a larger velocity-grid extent, that extent left
+        unset so it is sized to the launch band, a lower sheath cap, or
+        ``neutral_kinetic_dvm_jet_launch_width`` named -- and what a finer
+        ``nvz`` does, which is the last one's business: with the width unset
+        the smear is grid-tied, so a finer ``nvz`` narrows it and lowers the
+        ceiling instead of raising it; with the width set the smear is
+        ``beta e_launch`` above the grid-tied FLOOR, so a finer ``nvz`` moves
+        only that floor and lifts the launch off it.
         """
         e_launch = float(e_launch)
         if not np.isfinite(e_launch) or e_launch <= 0.0:
@@ -2050,12 +2058,16 @@ class TransientDVM:
                 "it left standing would hand the gas an energy the cathode "
                 "surface was not debited. Accepted: a LARGER velocity-grid "
                 "extent (neutral_kinetic_dvm_vmax_cm_s; unset it to have the "
-                "extent sized to the launch band), or a smaller "
-                "cathode_phi_c_cap_V. A finer neutral_kinetic_dvm_nvz does "
-                "NOT help and makes it worse: the grid-tied smear is the "
-                "local bin width, so narrowing the bins narrows the spectrum "
-                "and pushes its drift further out, and nvp does not enter "
-                "the axial drift at all"
+                "extent sized to the launch band), a smaller "
+                "cathode_phi_c_cap_V, or naming "
+                "neutral_kinetic_dvm_jet_launch_width. What a finer "
+                "neutral_kinetic_dvm_nvz does depends on that width: with it "
+                "unset the smear IS the local bin width, so narrowing the "
+                "bins narrows the spectrum and pushes its drift further out, "
+                "which makes this worse rather than better; with it set the "
+                "smear is beta * e_launch and the bin width is only a FLOOR, "
+                "so narrowing the bins lowers that floor and lifts the launch "
+                "off it. Either way nvp does not enter the axial drift at all"
             )
         return spec
 
@@ -2138,12 +2150,16 @@ class TransientDVM:
                 "it left standing would hand the gas an energy the anode "
                 "book did not record as leaving. Accepted: a LARGER "
                 "velocity-grid extent (neutral_kinetic_dvm_vmax_cm_s; unset "
-                "it to have the extent sized to the launch band), or a "
-                "smaller neutral_kinetic_dvm_anode_jet_R_E. A finer "
-                "neutral_kinetic_dvm_nvz does NOT help and makes it worse: "
-                "the grid-tied smear is the local bin width, so narrowing "
-                "the bins narrows the spectrum and pushes its drift further "
-                "out, and nvp does not enter the axial drift at all"
+                "it to have the extent sized to the launch band), a "
+                "smaller neutral_kinetic_dvm_anode_jet_R_E, or naming "
+                "neutral_kinetic_dvm_jet_launch_width. What a finer "
+                "neutral_kinetic_dvm_nvz does depends on that width: with it "
+                "unset the smear IS the local bin width, so narrowing the "
+                "bins narrows the spectrum and pushes its drift further out, "
+                "which makes this worse rather than better; with it set the "
+                "smear is beta * e_launch and the bin width is only a FLOOR, "
+                "so narrowing the bins lowers that floor and lifts the launch "
+                "off it. Either way nvp does not enter the axial drift at all"
             )
         return spec
 
@@ -2256,13 +2272,17 @@ class TransientDVM:
                 "the configuration prescribed. Accepted: a LARGER "
                 "velocity-grid extent (neutral_kinetic_dvm_vmax_cm_s; unset "
                 "it to have the extent sized to the launch band), a smaller "
-                "neutral_kinetic_dvm_collector_jet_R_E / larger _R_N, or a "
+                "neutral_kinetic_dvm_collector_jet_R_E / larger _R_N, a "
                 "smaller neutral_kinetic_dvm_collector_jet_sheath_Te_"
-                "multiple. A finer neutral_kinetic_dvm_nvz does NOT help and "
-                "makes it worse: the grid-tied smear is the local bin width, "
-                "so narrowing the bins narrows the spectrum and pushes its "
-                "drift further out, and nvp does not enter the axial drift "
-                "at all"
+                "multiple, or naming neutral_kinetic_dvm_jet_launch_width. "
+                "What a finer neutral_kinetic_dvm_nvz does depends on that "
+                "width: with it unset the smear IS the local bin width, so "
+                "narrowing the bins narrows the spectrum and pushes its "
+                "drift further out, which makes this worse rather than "
+                "better; with it set the smear is beta * e_launch and the "
+                "bin width is only a FLOOR, so narrowing the bins lowers "
+                "that floor and lifts the launch off it. Either way nvp does "
+                "not enter the axial drift at all"
             )
         return spec
 
