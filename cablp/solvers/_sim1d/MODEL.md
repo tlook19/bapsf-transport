@@ -689,8 +689,11 @@ $\tfrac52T_i$, not $\tfrac32T_i$ — the $S_\text{an}$ terms above.
 
 **Prescribed drive.** `cathode_solver_model = "prescribed_measured"` imposes
 both loop quantities — $I(t)$ and $V_\text{dis}(t)$ interpolated from a
-supplied trace onto the model clock — and consults nothing about the surface.
-The same bookkeeping is solved for the cathode fall instead of the voltage,
+supplied trace onto the model clock — and consults nothing about the surface
+for the DRIVE, though the surface temperature is frozen rather than retired and
+an engaged kinetic neutral closure still reads it as the cathode-end wall
+re-emission temperature. The same bookkeeping is solved for the cathode fall
+instead of the voltage,
 
 $$\phi_c=\left(V_\text{dis}-V_\text{series}\right)+\phi_a(\phi_c)-V_p,$$
 

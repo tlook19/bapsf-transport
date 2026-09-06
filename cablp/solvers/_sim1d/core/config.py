@@ -1979,9 +1979,15 @@ def cathode_defaults():
         reduces to ``phi_c = V_dis + phi_a − V_p``). The emitted electron
         current is ``max(I − I_i, 0)`` against the plasma's own Bohm ion
         current at the cathode cell. Richardson emission, the surface
-        temperature and the bank loop are therefore NOT consulted while the
-        prescribed drive is in force, and the cathode-warming ledger rows
-        accumulate nothing over those steps. Requires all three
+        temperature and the bank loop are therefore NOT consulted BY THE
+        DRIVE while the prescribed drive is in force, and the
+        cathode-warming ledger rows accumulate nothing over those steps.
+        The surface temperature is FROZEN rather than retired: it holds the
+        value it carried into the hand-off (the configured standby under
+        ``cathode_warming_model = "none"``, the last warmed value under
+        ``"power_balance"``) and stays load-bearing on the NEUTRALS, since
+        an engaged kinetic neutral closure reads it as the cathode-end wall
+        re-emission temperature. Requires all three
         ``cathode_prescribed_*`` keys below, and refuses
         ``cathode_circuit_voltage_bound`` (a bound on what the loop can supply
         is meaningless where the device voltage is measured rather than
