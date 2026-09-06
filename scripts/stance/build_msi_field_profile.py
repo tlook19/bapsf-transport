@@ -237,9 +237,20 @@ REPORTED_PORTS = (11, 21, 29, 41, 50)
 
 #: The measured p50/p41 flux-tube area ratio, and its uncertainty. The gate:
 #: the ratio the EMITTED profile implies between those two stations must agree
-#: with this measurement to within its stated sigma. Class MEASURED; the
-#: instrument behind it and the face bracket it carries are recorded outside
-#: this repository, as every configured value's class and bar are.
+#: with this measurement to within its stated sigma.
+#:
+#: INSTRUMENT: the geometric-mean face-reconciled effective-radius estimator,
+#: run on the ES1 radial scans. An effective radius is estimated at each of
+#: the two faces and the pair reconciled by their geometric mean, which is
+#: what makes the quantity a flux-tube AREA ratio between the two stations
+#: rather than a single-face profile width. Taken face by face the ratio
+#: brackets at 0.987-1.022; the value below is the reconciled figure and the
+#: sigma is its own bar, so the face bracket and the sigma are two different
+#: statements and neither is derived from the other.
+#:
+#: CLASS MEASURED -- a probe-scan product. It is never fitted to the profile
+#: this script emits: it is the comparand the emitted profile is gated
+#: against, so tuning it to the profile would retire the gate.
 MEASURED_P50_P41_FLUX_RATIO = 0.9905
 MEASURED_P50_P41_FLUX_RATIO_SIGMA = 0.0114
 
