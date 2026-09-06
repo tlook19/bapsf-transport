@@ -41,13 +41,26 @@ section below:
 |---|---|
 | $S_{iz}$, $S_{iz}^\text{beam}$, $S_\text{rec}$ | thermal ionization, beam-impact ionization, recombination |
 | $S_\text{an}$ | anode-mesh Bohm collection rate |
-| $S_n^\text{out}$, $S_M^\text{out}$, $S_{E_e}^\text{out}$, $S_{E_i}^\text{out}$ | the plasma-terminating (absorbing) face terms — the outflow, one per evolved field |
-| $S^\text{elec}_{E_e}$ | the electrode electron-sheath energy term |
-| $S_M^n$, $Q_i^n$ | the kinetic coupling terms — minus the measured moments of the ionization, charge-exchange, elastic AND recombination operators, so they carry the ionization birth and the recombination sink on $M$ and $E_i$ |
+| $S_n^\text{out}$, $F^\text{out}$, $Q_e^\text{out}$, $Q_i^\text{out}$ | the plasma-terminating (absorbing) face terms — the outflow, one per evolved field |
+| $Q_e^\text{elec}$ | the electrode electron-sheath energy term |
+| $F^n$, $Q_i^n$ | the kinetic coupling terms — minus the measured moments of the ionization, charge-exchange, elastic AND recombination operators, so they carry the ionization birth and the recombination sink on $M$ and $E_i$ |
 | $Q_\text{beam}$ | the NET electron gain from the beam: the gross deposition less the beam's OWN ionization cost and excitation radiation |
 | $Q_\text{ohm}$ | the ohmic gap heating, booked with the beam deposition |
 | $Q_\text{diss}$ | the ion kinetic energy the Rusanov face flux dissipates numerically, returned to $E_i$ |
-| $S_M^\text{geom}$ | the quasi-1D geometric pressure force |
+| $F^\text{geom}$ | the quasi-1D geometric pressure force |
+
+**A source symbol's letter is its dimension.** In the aggregates above and in
+every conservation law below, $S$ denotes a particle-density rate
+(cm<sup>-3</sup> s<sup>-1</sup>), $F$ a momentum-density rate — a force density
+(dyn cm<sup>-3</sup> = g cm<sup>-2</sup> s<sup>-2</sup>) — and $Q$ an
+energy-density rate (erg cm<sup>-3</sup> s<sup>-1</sup>). The one exception is
+$S_\text{pump}$, which is a volumetric pumping SPEED
+(cm<sup>3</sup> s<sup>-1</sup>) in the vacuum-engineering sense, not a density
+rate. $\Gamma$ is a flux, never a source. The calligraphic $\mathcal S$ of the
+kinetic equation is the phase-space counterpart of $S$, per unit
+$dv_\parallel dc_\perp$, and the calligraphic $\mathcal F$ there is the
+six-dimensional neutral distribution — upright $F$ is a force density and
+nothing else.
 
 **The two velocity coordinates are not the same kind of quantity:**
 $v_\parallel$ is a SIGNED component along $\hat z$, so the discrete grid spans
@@ -59,10 +72,10 @@ ever carried.
 **Derivatives.** The model is ONE-DIMENSIONAL along $\mathbf B$: $z$ is the
 only spatial coordinate and $\partial_z$ the only spatial derivative. A
 parallel gradient is written $\partial_z$; the divergence of a parallel flux
-$F$ on a tube of area $A(z)$ is written
-$\nabla_\parallel\!\cdot F\equiv A^{-1}\partial_z(AF)$, which is the
-$\Delta(AF)/V$ the code forms and reduces to $\partial_zF$ at constant area.
-The material derivative along the flow is
+$\Gamma$ on a tube of area $A(z)$ is written
+$\nabla_\parallel\!\cdot \Gamma\equiv A^{-1}\partial_z(A\Gamma)$, which is the
+$\Delta(A\Gamma)/V$ the code forms and reduces to $\partial_z\Gamma$ at constant
+area. The material derivative along the flow is
 $D/Dt\equiv\partial_t+u\,\partial_z$. No perpendicular derivative appears
 anywhere in the model.
 
@@ -121,26 +134,26 @@ the coupling term below carrying them instead.
 One asymmetry has to be stated before the equations: it decides where several
 terms are written. Once the kinetic neutral arm is engaged it TAKES OVER the
 momentum and ion-energy contributions of the fluid ionization, recombination
-and ion–neutral terms — those are zeroed and the coupling terms $S_M^n$,
+and ion–neutral terms — those are zeroed and the coupling terms $F^n$,
 $Q_i^n$ carry them instead, built from the measured moments of
 the ionization, charge-exchange, elastic and recombination operators together.
 The DENSITY and ELECTRON-ENERGY contributions of the same terms are NOT taken
 over and stay explicit. So on $M$ and $E_i$ the ionization birth and the
-recombination sink sit inside $S_M^n$ and $Q_i^n$; on $n$ both appear
+recombination sink sit inside $F^n$ and $Q_i^n$; on $n$ both appear
 explicitly; and on $E_e$ the recombination sink appears explicitly while the
 ionization birth contributes NOTHING — the new electron is born cold, so its
 birth energy is identically zero and $T_e$ falls by dilution alone. Their
 decomposition is
 
-$$S_M^n=m_iu_n\left(S_{iz}+S_{iz}^\text{beam}\right)-m_iu\,S_\text{rec}+R_\parallel^{in},$$
+$$F^n=m_iu_n\left(S_{iz}+S_{iz}^\text{beam}\right)-m_iu\,S_\text{rec}+F_\parallel^{cx},$$
 
-$$Q_i^n=\left[\tfrac32T_n+\tfrac12m_i\left(u_i-u_n\right)^2\right]\left(S_{iz}+S_{iz}^\text{beam}\right)-\tfrac32T_i\,S_\text{rec}+Q^{in},$$
+$$Q_i^n=\left[\tfrac32T_n+\tfrac12m_i\left(u_i-u_n\right)^2\right]\left(S_{iz}+S_{iz}^\text{beam}\right)-\tfrac32T_i\,S_\text{rec}+Q_i^{cx},$$
 
-$R_\parallel^{in}$ and $Q^{in}$ the charge-exchange/elastic friction and heating
-of the relaxation described later. Ionization is velocity-blind, which is why
-the births carry the column gas's own $u_n$ and $T_n$; recombination hands the
-ion's directed momentum and thermal energy back to the gas at the local $u$ and
-$T_i$.
+$F_\parallel^{cx}$ and $Q_i^{cx}$ the charge-exchange/elastic friction and
+heating of the relaxation described later. Ionization is velocity-blind, which
+is why the births carry the column gas's own $u_n$ and $T_n$; recombination
+hands the ion's directed momentum and thermal energy back to the gas at the
+local $u$ and $T_i$.
 
 ### Braginskii form
 
@@ -149,11 +162,11 @@ In primitive variables $(n,u,T_e,T_i)$ along the material derivative:
 
 $$\frac{Dn}{Dt}=-n\,\nabla_\parallel\!\cdot u+S_{iz}+S_{iz}^\text{beam}-S_\text{rec}-S_\text{an}+S_n^\text{out}$$
 
-$$m_in\frac{Du}{Dt}=-\partial_zp_i+enE_\parallel+m_i\left(u_n-u\right)\left(S_{iz}+S_{iz}^\text{beam}\right)+R_\parallel^{in}+S_M^\text{geom}+S_M^\text{out}-m_iu\,S_n^\text{out}$$
+$$m_in\frac{Du}{Dt}=-\partial_zp_i+enE_\parallel+m_i\left(u_n-u\right)\left(S_{iz}+S_{iz}^\text{beam}\right)+F_\parallel^{cx}+F^\text{geom}+F^\text{out}-m_iu\,S_n^\text{out}$$
 
-$$\tfrac32n\frac{DT_e}{Dt}=-p_e\,\nabla_\parallel\!\cdot u-\nabla_\parallel\!\cdot q_{\parallel e}-Q_{ie}-C_e+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_e\left(S_{iz}+S_{iz}^\text{beam}\right)+T_eS_\text{an}+S_{E_e}^\text{elec}+S_{E_e}^\text{out}-\tfrac32T_eS_n^\text{out}$$
+$$\tfrac32n\frac{DT_e}{Dt}=-p_e\,\nabla_\parallel\!\cdot u-\nabla_\parallel\!\cdot q_{\parallel e}-Q_{ie}-C_e+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_e\left(S_{iz}+S_{iz}^\text{beam}\right)+T_eS_\text{an}+Q_e^\text{elec}+Q_e^\text{out}-\tfrac32T_eS_n^\text{out}$$
 
-$$\tfrac32n\frac{DT_i}{Dt}=-p_i\,\nabla_\parallel\!\cdot u-\nabla_\parallel\!\cdot q_{\parallel i}+Q_{ie}+Q^{in}+\left[\tfrac32\left(T_n-T_i\right)+\tfrac12m_i\left(u_i-u_n\right)^2\right]\left(S_{iz}+S_{iz}^\text{beam}\right)-T_iS_\text{an}+Q_\text{diss}+S_{E_i}^\text{out}-\tfrac32T_iS_n^\text{out}$$
+$$\tfrac32n\frac{DT_i}{Dt}=-p_i\,\nabla_\parallel\!\cdot u-\nabla_\parallel\!\cdot q_{\parallel i}+Q_{ie}+Q_i^{cx}+\left[\tfrac32\left(T_n-T_i\right)+\tfrac12m_i\left(u_i-u_n\right)^2\right]\left(S_{iz}+S_{iz}^\text{beam}\right)-T_iS_\text{an}+Q_\text{diss}+Q_i^\text{out}-\tfrac32T_iS_n^\text{out}$$
 
 with the parallel heat fluxes and the electron-momentum (ambipolar) closure
 
@@ -186,25 +199,27 @@ so it LOWERS $T_i$ by $T_iS_\text{an}$.
 **The conservative form below is what the solver integrates**, in the variables
 $n$, $M=m_inu$, $E_e=\tfrac32nT_e$ and $E_i=\tfrac32nT_i$; the primitive
 equations above are that same system rewritten, and every term corresponds one
-for one. Each equation is $\partial_tU+\nabla_\parallel\!\cdot\mathbf F(U)=S$.
-The convective derivative is never discretized alone: each is fused with its
-compression partner inside one face flux through
+for one. Each equation is
+$\partial_tU+\nabla_\parallel\!\cdot\boldsymbol\Gamma(U)=S$. The convective
+derivative is never discretized alone: each is fused with its compression
+partner inside one face flux through
 $\nabla_\parallel\!\cdot(Uu)=u\,\partial_zU+U\,\nabla_\parallel\!\cdot u$,
-giving $F_n=nu$, $F_M=Mu+p$, $F_{E_e}=E_eu$, $F_{E_i}=E_iu$ — the momentum flux
-carrying the total pressure $p=p_e+p_i$ the ambipolar closure produced. The
-advected energy flux is the internal-energy flux $E_su$, not the enthalpy flux
-$(E_s+p_s)u$; the missing $p_su$ returns as the explicit pressure work below.
+giving $\Gamma_n=nu$, $\Gamma_M=Mu+p$, $\Gamma_{E_e}=E_eu$,
+$\Gamma_{E_i}=E_iu$ — the momentum flux carrying the total pressure
+$p=p_e+p_i$ the ambipolar closure produced. The advected energy flux is the
+internal-energy flux $E_su$, not the enthalpy flux $(E_s+p_s)u$; the missing
+$p_su$ returns as the explicit pressure work below.
 
 $$\partial_tn+\nabla_\parallel\!\cdot(nu)=S_{iz}+S_{iz}^\text{beam}-S_\text{rec}-S_\text{an}+S_n^\text{out}$$
 
-$$\partial_tM+\nabla_\parallel\!\cdot(Mu+p)=S_M^{n}-m_iu\,S_\text{an}+S_M^\text{geom}+S_M^\text{out}$$
+$$\partial_tM+\nabla_\parallel\!\cdot(Mu+p)=F^{n}-m_iu\,S_\text{an}+F^\text{geom}+F^\text{out}$$
 
-$$\partial_tE_e+\nabla_\parallel\!\cdot(E_eu)=-u\,\partial_zp_e+\nabla_\parallel\!\cdot\!\left(\kappa_{\parallel e}\partial_zT_e\right)-Q_{ie}-C_e+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_eS_\text{rec}-\tfrac12T_eS_\text{an}+S_{E_e}^\text{elec}+S_{E_e}^\text{out}$$
+$$\partial_tE_e+\nabla_\parallel\!\cdot(E_eu)=-u\,\partial_zp_e+\nabla_\parallel\!\cdot\!\left(\kappa_{\parallel e}\partial_zT_e\right)-Q_{ie}-C_e+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_eS_\text{rec}-\tfrac12T_eS_\text{an}+Q_e^\text{elec}+Q_e^\text{out}$$
 
-$$\partial_tE_i+\nabla_\parallel\!\cdot(E_iu)=-u\,\partial_zp_i+\nabla_\parallel\!\cdot\!\left(\kappa_{\parallel i}\partial_zT_i\right)+Q_{ie}+Q_i^{n}+Q_\text{diss}-\tfrac52T_iS_\text{an}+S_{E_i}^\text{out}$$
+$$\partial_tE_i+\nabla_\parallel\!\cdot(E_iu)=-u\,\partial_zp_i+\nabla_\parallel\!\cdot\!\left(\kappa_{\parallel i}\partial_zT_i\right)+Q_{ie}+Q_i^{n}+Q_\text{diss}-\tfrac52T_iS_\text{an}+Q_i^\text{out}$$
 
 The ionization birth and the recombination sink are absent from the $M$ and
-$E_i$ equations for the reason given above — they are inside $S_M^n$ and
+$E_i$ equations for the reason given above — they are inside $F^n$ and
 $Q_i^n$. On $n$ both are explicit, and on $E_e$ the recombination sink is
 explicit while the ionization birth adds nothing at all, the electron being
 born cold.
@@ -234,10 +249,10 @@ carries compression heating in a straight tube; there is no separate
 mirror-cooling source.
 
 With a varying area the momentum law is quasi-1D,
-$\partial_t(A\rho u)+\partial_z[A(\rho u^2+p)]=p\,\partial_zA+AS_M$, and the
+$\partial_t(A\rho u)+\partial_z[A(\rho u^2+p)]=p\,\partial_zA+AF$, and the
 geometric source is
 
-$$S_M^\text{geom}=\frac{p\,A_{i+1/2}-p\,A_{i-1/2}}{V_{\text{col},i}},\qquad p=p_e+p_i,$$
+$$F^\text{geom}=\frac{p\,A_{i+1/2}-p\,A_{i-1/2}}{V_{\text{col},i}},\qquad p=p_e+p_i,$$
 
 the TOTAL pressure, the same $p$ the momentum flux carries.
 
@@ -248,16 +263,17 @@ the expansion twice. Dropped relative to full 3D Braginskii: ion viscous stress
 $\partial_z\pi_\parallel$, the perpendicular $\mathbf E\times\mathbf B$ drift,
 diamagnetic and drift heat fluxes, and perpendicular conduction.
 
-**Neutral kinetic equation.** Let $F(\mathbf r,\mathbf v,t)$ be the full
-six-dimensional neutral distribution, $\mathbf v_\perp=\mathbf v-v_\parallel\hat z$
-its perpendicular velocity VECTOR, $c_\perp=\lvert\mathbf v_\perp\rvert$ that
-vector's SPEED, and $\varphi_v$ the azimuth of $\mathbf v_\perp$ about $\hat z$.
-The evolved object is $F$ averaged over the zone's cross-section and integrated
-over $\varphi_v$; the polar Jacobian $c_\perp$ folds into $f$, so the surviving
-perpendicular coordinate is the SPEED $c_\perp\in[0,\infty)$ and no signed
-perpendicular component is carried anywhere:
+**Neutral kinetic equation.** Let $\mathcal F(\mathbf r,\mathbf v,t)$ be the
+full six-dimensional neutral distribution,
+$\mathbf v_\perp=\mathbf v-v_\parallel\hat z$ its perpendicular velocity
+VECTOR, $c_\perp=\lvert\mathbf v_\perp\rvert$ that vector's SPEED, and
+$\varphi_v$ the azimuth of $\mathbf v_\perp$ about $\hat z$.
+The evolved object is $\mathcal F$ averaged over the zone's cross-section and
+integrated over $\varphi_v$; the polar Jacobian $c_\perp$ folds into $f$, so
+the surviving perpendicular coordinate is the SPEED $c_\perp\in[0,\infty)$ and
+no signed perpendicular component is carried anywhere:
 
-$$f_\text{col}(z,v_\parallel,c_\perp,t)=\frac{1}{A_\text{col}(z)}\int_{A_\text{col}(z)}\!\!d^2r_\perp\int_0^{2\pi}\!\!d\varphi_v\;c_\perp\,F\!\left(\mathbf r,\left(v_\parallel,c_\perp\cos\varphi_v,c_\perp\sin\varphi_v\right),t\right)$$
+$$f_\text{col}(z,v_\parallel,c_\perp,t)=\frac{1}{A_\text{col}(z)}\int_{A_\text{col}(z)}\!\!d^2r_\perp\int_0^{2\pi}\!\!d\varphi_v\;c_\perp\,\mathcal F\!\left(\mathbf r,\left(v_\parallel,c_\perp\cos\varphi_v,c_\perp\sin\varphi_v\right),t\right)$$
 
 normalised so moments are taken against the plain measure
 $dv_\parallel dc_\perp$:
@@ -406,7 +422,7 @@ and recombination are sources, not part of this target: **ionization is
 velocity-blind**, drawing uniformly from the cell's distribution, so its births
 carry the COLUMN gas's own drift $u_n$ and temperature $T_n$ — which is the
 $m_i\mathbf u_nS_{iz}$ of the momentum equation and the birth energy above.
-$S_M^n$ and $Q_i^n$ are the momentum and ion-energy totals of this booking.
+$F^n$ and $Q_i^n$ are the momentum and ion-energy totals of this booking.
 
 ### Electron–ion exchange, conduction and pressure work
 
@@ -519,7 +535,7 @@ under `"beer_lambert"`.
 | | `"terminal_nonlocal"` | ONLY the terminal residual walks; every along-ray product stays banked in its birth cell |
 
 $E_1$ is solved per extraction from the launch cell's own Maxwellian against the
-emitted flux, $F_M(v_1)=m\,j_b/((E_b-E_1)\,\text{erg})$, and clamped at
+emitted flux, $f_\text{M}(v_1)=m\,j_b/((E_b-E_1)\,\text{erg})$, and clamped at
 $E_\text{stop}$ when the edge the equation asks for falls inside the bulk.
 **The walkers are not passive.** Under the walking selectors they IONIZE the gas
 they cross (`heating_anomalous_tail_ionization`), adding their own birth term,
@@ -660,7 +676,7 @@ electrode, never through the plasma thermal store); the **plasma-thermal**
 book, $2T_e$ per collected electron and $T_e/2$ per ion through the boxed
 transmission coefficients $\gamma_e=2+\phi/T_e$ and
 $\gamma_i=\tfrac12+\phi/T_e$; and **plasma heating**, the beam and the gap
-ohmic. $S^\text{elec}_{E_e}$ is the plasma-thermal electron term of that split.
+ohmic. $Q_e^\text{elec}$ is the plasma-thermal electron term of that split.
 
 **What the plasma pays is not the same at the two electrodes.** At the cathode
 it pays the thermal part alone. At the anode, under `anode_sheath_full_debit`
@@ -692,8 +708,8 @@ that runs before it.
 the Bohm outflow — $n_\text{se}=\alpha_\text{se}n$, $u=c_s=\sqrt{T_e/m_i}$ into
 the wall, the live cell's $T_e$ and $T_i$ — and the face flux between the
 interior cell and that ghost is applied one-sidedly to the live cell. Those
-terms are the $S_n^\text{out}$, $S_M^\text{out}$, $S_{E_e}^\text{out}$ and
-$S_{E_i}^\text{out}$ of the conservation laws. The sheath-edge
+terms are the $S_n^\text{out}$, $F^\text{out}$, $Q_e^\text{out}$ and
+$Q_i^\text{out}$ of the conservation laws. The sheath-edge
 factor is
 
 $$\alpha_\text{se}=\alpha_\text{ps}^{\,d/L_\text{ps}},\qquad \alpha_\text{ps}=e^{-1/2},\qquad L_\text{ps}\sim c_s/\nu_{in}$$
@@ -778,11 +794,13 @@ intercepted at the annulus transparency
 $$t_f=\min\!\left(\frac{A_\text{open}}{A^{\,f}_\text{ann}},1\right),\qquad A^{\,f}_\text{ann}=\min\!\left(A_{\text{ann},f-1},A_{\text{ann},f}\right)$$
 
 the throat being the smaller of the two flanking CELLS' annulus areas, so the
-transmitted throughput $t_fF|v_\parallel|A^{\,f}_\text{ann}$ is exactly
-$F|v_\parallel|A_\text{open}$ — the open area is what passes, which is the
-whole content of a free-molecular orifice. Intercepted atoms are re-emitted at
-$T_\text{wall}$ in the cell they were intercepted from, conserving particles
-exactly; the column flux is untouched.
+transmitted throughput per bin,
+$t_f\,f_\text{ann}|v_\parallel|A^{\,f}_\text{ann}$, is exactly
+$f_\text{ann}|v_\parallel|A_\text{open}$ — the bin content of the annulus
+distribution times the open area is what passes, which is the whole content of
+a free-molecular orifice. Intercepted atoms are re-emitted at $T_\text{wall}$
+in the cell they were intercepted from, conserving particles exactly; the
+column flux is untouched.
 
 ### Fueling and pumping
 

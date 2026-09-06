@@ -20,18 +20,18 @@ from the distribution each tick rather than independently evolved.
 **Rusanov / local Lax–Friedrichs flux** at each interior face
 (`physics/flux.py`):
 
-$$F=\tfrac12\left(F_L+F_R\right)-\tfrac12\,a_\text{max}\left(U_R-U_L\right),\qquad a_\text{max}=\max\left(\lvert u_L\rvert+c_L,\ \lvert u_R\rvert+c_R\right)$$
+$$\Gamma=\tfrac12\left(\Gamma_L+\Gamma_R\right)-\tfrac12\,a_\text{max}\left(U_R-U_L\right),\qquad a_\text{max}=\max\left(\lvert u_L\rvert+c_L,\ \lvert u_R\rvert+c_R\right)$$
 
 `hyperbolic_wave_speed` selects the sound speed in that pair: `"adiabatic"`
 uses $\sqrt{\tfrac53(T_e+T_i)/m_i}$, the exact spectral radius of the
 $\gamma=5/3$ two-species system, `"isothermal"` uses $\sqrt{T_e/m_i}$, which
 under-bounds it. It sets the dissipation strength and the CFL, not the physical
 wave speed, which the pressure flux carries. RHS terms are formed as
-$-\Delta(\text{area}\cdot F)/\text{volume}$ per cell, each
+$-\Delta(\text{area}\cdot\Gamma)/\text{volume}$ per cell, each
 $u\,\partial_z$ derivative fused with its compression partner inside one face
 flux rather than discretized separately. As in [`MODEL.md`](MODEL.md),
 $\partial_z$ is the only spatial derivative and
-$\nabla_\parallel\!\cdot F\equiv A^{-1}\partial_z(AF)$.
+$\nabla_\parallel\!\cdot \Gamma\equiv A^{-1}\partial_z(A\Gamma)$.
 
 **`front_flux` selects a second face-flux operator** beside the Rusanov one: a
 sonic-relaxation front flux that fills unfilled cells, capped by `alpha_front`
@@ -45,7 +45,8 @@ advective flux carries nothing: the ghost-cell Bohm flux
 (`sources.characteristic_boundary_rhs`) supplies particle, momentum and energy
 flux with its own pressure term, using the same face kernel as the interior
 (`flux.kep_rusanov_face_scalar`) between the interior cell and the ghost state,
-applied as a one-sided divergence $\pm\,\text{area}\cdot F/V$ on the live cell.
+applied as a one-sided divergence $\pm\,\text{area}\cdot\Gamma/V$ on the live
+cell.
 
 **Energy-consistent hyperbolic core** (`hyperbolic_energy_consistent`). The
 convective momentum flux becomes the kinetic-energy-preserving $\{u\}\{M\}$
