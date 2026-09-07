@@ -11,10 +11,16 @@ the candidate and comparing raw ``uint64`` digests.
 
 Two arms, because the diff must be inert on two different paths:
 
-* ``moment`` -- the shipped default and the stance the golden runs. No DVM
-  object exists there, so this is the statement that the plumbing added to
-  ``_attempt_step`` / ``_accept_step_attempt`` / ``rhs_terms`` costs the
-  golden nothing.
+* ``moment`` -- the ``neutral_model`` the ``default_config()`` TEMPLATE
+  carries, and the historical A/B configuration this file was written against.
+  It is NOT what the golden runs: the committed sidecar
+  ``scripts/baselines/production_discharge.json`` is the authority for that and
+  records ``neutral_model = "kinetic_dvm"``. Because this arm layers only a
+  step-cap pin over ``build_baseline_config()``, it INHERITS that selection and
+  no longer reaches the moment closure it is named for. The statement it was
+  built to make is that the plumbing added to ``_attempt_step`` /
+  ``_accept_step_attempt`` / ``rhs_terms`` costs a run with no DVM object
+  nothing.
 * ``kinetic_dvm`` -- the arm the member is FOR, walked with the channel at
   its default (off). This is the statement that matters: the split, the
   accumulator and the debit are all reachable code on this path, and with
