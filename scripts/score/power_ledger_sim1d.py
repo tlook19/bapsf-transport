@@ -366,6 +366,22 @@ def diagnostic_mean(dg, key, mask):
     return float(np.mean(dg[key][:][mask]))
 
 
+def dvm_flow_power(f, key, i0, i1, dt_s):
+    """Window-mean power [W] of a per-frame DVM ledger FLOW row [erg].
+
+    The rows of ``dvm_particle_ledger`` are per-tick quantities summed over
+    the ticks each save frame covers, so the energy delivered BETWEEN frames
+    ``i0`` and ``i1`` is the sum over frames ``i0 + 1 .. i1`` -- frame
+    ``i0``'s own row covers ticks before the window opened and is excluded.
+    ``nan`` where the artifact carries no such row, which on a moment run is
+    every one of them.
+    """
+    path = f"dvm_particle_ledger/{key}"
+    if path not in f:
+        return float("nan")
+    return float(np.sum(f[path][i0 + 1:i1 + 1])) / ERG_PER_J / dt_s
+
+
 def counter_slope(dg, key, i0, i1, dt_s):
     """Endpoint slope [W] of a cumulative energy counter over the window."""
     if dg is None or key not in dg:
@@ -471,6 +487,25 @@ def report_window(f, label, lo, hi, geom, port_top):
             print(f"{'  ' + key:<44}"
                   f"{counter_slope(dg, key, i0, i1, dt_s) / 1e3:>16.5f}  kW")
 
+    print("\n--- KINETIC JET INJECTION over the window ---")
+    if "dvm_particle_ledger" not in f:
+        print("  dvm_particle_ledger ABSENT from this artifact -- a moment "
+              "run launches no kinetic jet")
+    else:
+        # The energy the collector jet put INTO the gas: the atoms it launched
+        # times the launch energy each carried, as the engine booked it at the
+        # birth site. It is not an rhs_terms channel -- the jet is a neutral
+        # birth, not a fluid source row -- so it is invisible in the channel
+        # table above and has to be read from the jet's own ledger.
+        for jet_key, jet_label in (
+            ("energy_birth_collector_jet", "collector jet injected"),
+            ("energy_birth_cathode_jet", "cathode jet injected"),
+            ("energy_birth_anode_jet", "anode jet injected"),
+        ):
+            print(f"{'  ' + jet_label:<44}"
+                  f"{dvm_flow_power(f, jet_key, i0, i1, dt_s) / 1e3:>16.5f}"
+                  "  kW")
+
     print("\n--- STORED ENERGY AND tau_E ---")
     W_J = stored_energy_J(f, i0, i1, Vp)
     # P_coupled is the beam deposition row ALONE. That row already carries the
@@ -569,6 +604,14 @@ def print_header(f, path, geom, drive, afterglow):
           f"{flags.get('neutral_hot_internal_wall')}, "
           f"cathode_neutral_jet={params.get('cathode_neutral_jet')}, "
           f"C_R={params.get('C_R')}")
+    # The kinetic arm's own jet selectors, which the stance line above does
+    # not carry: two arms can share every fluid setting and differ only in
+    # which surfaces launch an energetic recycle stream, and the injection
+    # rows below are meaningless without knowing which ones were armed.
+    print(f"dvm jets : neutral_model={params.get('neutral_model')}, "
+          f"cathode={params.get('neutral_kinetic_dvm_cathode_jet')}, "
+          f"anode={params.get('neutral_kinetic_dvm_anode_jet')}, "
+          f"collector={params.get('neutral_kinetic_dvm_collector_jet')}")
     print(f"grid     : {Vp.size} cells, V_p total {Vp.sum():.6e} cm^3, "
           f"V_m total {Vm.sum():.6e} cm^3, "
           f"V_ann total {np.maximum(Vm - Vp, 0.0).sum():.6e} cm^3")
