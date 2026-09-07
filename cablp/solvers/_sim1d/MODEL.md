@@ -673,7 +673,13 @@ The anode term SUBTRACTS, the same sign the device relation carries.
 **Switch-off, the tail, and the open circuit.** Opening the bank does not open
 the loop: the parasitic inductance keeps the same loop equation running at
 $V_\text{src}=0$, and the current freewheels against the device and the series
-resistance. The loop returns to OPEN CIRCUIT below $1$ A.
+resistance. The loop returns to OPEN CIRCUIT when it would need its load to
+drive it — when the last accepted step's current has fallen to $1$ A or below,
+or that step's discharge voltage has turned non-positive, a diode blocking the
+reversal a negative device voltage would otherwise drive. Neither an electrode
+contact potential nor a diode forward drop is carried anywhere in this system,
+so near zero current the device relation is the sheath asymmetry alone; the
+criterion, not that relation's own small-current root, is what ends the tail.
 An open circuit is the same current-driven solve read at $I_\text{tot}=0$: the
 surface sits where its space-charge-limited release plus the ion current is
 exactly returned by collected plasma electrons, which at a hot emitter is an

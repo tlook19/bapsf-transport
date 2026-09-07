@@ -10892,13 +10892,40 @@ class LAPDSim1D:
         # Inductive tail: after the bank transistors open (the "floating"
         # afterglow phase), a nonzero parasitic inductance keeps the loop
         # driven at zero bank volts until its current has decayed -- the
-        # measured ~0.5 ms discharge-current tail. Below 1 A (~0.03% of
-        # peak, negligible stored energy) the OPEN-CIRCUIT solve resumes.
+        # measured discharge-current tail, which is physics and is
+        # integrated, not switched off.
+        #
+        # TWO END CONDITIONS, either of which returns the loop to open
+        # circuit. Both are read off the LAST ACCEPTED step, which is the
+        # only circuit state a phase decision may consult:
+        #
+        #   I_prev <= 1 A          -- the current has decayed to ~0.03% of
+        #                             peak, carrying negligible stored energy.
+        #   V_dis_step <= 0        -- the device voltage the loop integrated
+        #                             has turned non-positive, i.e. the load
+        #                             would have to DRIVE the loop to keep the
+        #                             current up. The bank is already open, a
+        #                             freewheel loop has no source, and the
+        #                             diode blocks the reversal a negative
+        #                             device voltage would otherwise drive, so
+        #                             there is nothing left to integrate.
+        #
+        # The second condition is what ends the tail at a hot emitter. An
+        # emitting surface at sub-eV Te sits above the plasma potential while
+        # the anode sits below it, so the device relation V_b(I) is negative
+        # at small current: without this condition the loop finds a stable
+        # fixed point at the current where V_dis = -I*R_comp and the tail
+        # never ends. That fixed point rests on a sheath asymmetry of order
+        # 0.1-1 V in a model carrying neither the electrode contact potential
+        # nor the freewheel diode's forward drop, each of which is larger and
+        # of the opposite sign, so it is an artifact of what the loop model
+        # omits rather than a prediction.
         inductive_tail = (
             configured
             and floating
             and float(self._input_dict.get("L_parasitic_H")) > 0.0
             and self._circuit_I_prev > 1.0
+            and self._circuit_V_dis_step > 0.0
         )
         if inductive_tail:
             floating = False

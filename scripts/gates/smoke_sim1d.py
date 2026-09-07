@@ -25978,6 +25978,89 @@ def _case_floating_open_circuit_current_balance():
 
 
 # ----------------------------------------------------------------------
+# afterglow-tail-handoff-criterion
+# ----------------------------------------------------------------------
+@_case("afterglow-tail-handoff-criterion", historical_stance=True)
+def _case_afterglow_tail_handoff_criterion():
+    """The freewheel tail ends when the loop would need the load to drive it.
+
+    The inductive tail is integrated at zero source voltage while the loop
+    still has current AND the device voltage it integrated is positive. Two
+    end conditions return it to open circuit, and both are checked here
+    against the accept path itself (one step, and the loop current it leaves):
+
+      HAND-OFF BY VOLTAGE  V_dis_step <= 0 at I = 800 A. The bank is open, a
+        freewheel loop has no source, and a diode blocks the reversal a
+        negative device voltage would drive. ``floating`` flips and the loop
+        current goes to exactly zero.
+      HAND-OFF BY CURRENT  I_prev <= 1 A at a positive device voltage. Same
+        outcome; this is the condition that already existed.
+      NEGATIVE CONTROL  I_prev = 800 A at V_dis_step = +10 V: no hand-off.
+        ``inductive_tail`` stands, ``floating`` stays False, and the accept
+        path integrates the loop rather than dropping it -- the measured
+        freewheel is physics and is not switched off.
+    """
+    _th_p, _th_f = _cathode_unit_config()
+    _th_p.update({
+        "V_bank": 173.6,
+        "R_comp": 5.72e-3,
+        "L_parasitic_H": 6.6e-6,
+        "cathode_solver_model": "current_driven",
+        "dt_save": 0.0,
+    })
+    _th_f = dict(
+        _th_f,
+        cathode_coupling=True,
+        neutral_prebreakdown=False,
+        # This case steps the solver directly, so the equilibration seed is
+        # not being asked for; clearing the flag keeps run() from warning
+        # that it did not run one.
+        neutral_equilibration=False,
+    )
+
+    def _th_build(V_dis_step, I_prev):
+        sim = LAPDSim1D(dict(_th_p), dict(_th_f))
+        # Put the clock in the afterglow: this stance runs the current-mode
+        # phase schedule, so the afterglow opens tau_discharge after the
+        # breakdown trigger.
+        sim._t_breakdown_trigger = 1.0e-3
+        sim._time = 1.0e-3 + float(_th_p["tau_discharge"]) + 1.0e-6
+        sim._circuit_I_prev = float(I_prev)
+        sim._circuit_I_loop = float(I_prev)
+        sim._circuit_V_dis_step = float(V_dis_step)
+        assert sim.phase_switches_at_time(sim._time)["floating"], sim._time
+        return sim
+
+    # NEGATIVE CONTROL: the driven freewheel tail.
+    _th_sim = _th_build(10.0, 800.0)
+    _th_phase = _th_sim._cathode_phase_options()
+    assert _th_phase["inductive_tail"] is True, _th_phase
+    assert _th_phase["floating"] is False, _th_phase
+    _th_sim.run(t_end=_th_sim._time + 2.0e-9, max_steps=1)
+    assert _th_sim._circuit_I_loop > 0.0, _th_sim._circuit_I_loop
+
+    # HAND-OFF, by either condition: floating, and the loop current is zero.
+    for _th_V, _th_I in ((-0.05, 800.0), (10.0, 0.5)):
+        _th_sim = _th_build(_th_V, _th_I)
+        _th_phase = _th_sim._cathode_phase_options()
+        assert _th_phase["floating"] is True, (_th_V, _th_I, _th_phase)
+        assert _th_phase["inductive_tail"] is False, (_th_V, _th_I, _th_phase)
+        assert _th_phase["solve_enabled"] is True, (_th_V, _th_I, _th_phase)
+        # The RHS gate keeps the cathode ACTIVE across the hand-off, so the
+        # electrode rows continue at I = 0 instead of dropping to zero.
+        assert _th_sim._effective_cathode_flags(
+            active_only=True
+        )["cathode_coupling"] is True
+        _th_solve = _th_sim.solve_cathode_boundary(update_cache=False)
+        assert _th_solve.metadata["floating"] is True
+        _th_res = _th_solve.beam_result.result
+        assert abs(_th_res.I_tot) <= 1.0e-12 * max(_th_res.I_eth_star, 1.0)
+        assert abs(_th_res.I_cathode_kirchhoff_residual) <= 1.0e-12
+        _th_sim.run(t_end=_th_sim._time + 2.0e-9, max_steps=1)
+        assert _th_sim._circuit_I_loop == 0.0, _th_sim._circuit_I_loop
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -25986,7 +26069,7 @@ def _case_floating_open_circuit_current_balance():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 144, "historical_stance": 60}
+_CASE_CENSUS = {"total": 145, "historical_stance": 61}
 
 
 def _assert_case_census():

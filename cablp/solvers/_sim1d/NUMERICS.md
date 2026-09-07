@@ -414,9 +414,14 @@ produces matches the one it ran at to `circuit_picard_tol_rel` relative to
 $\max(\lvert I\rvert,1\ \mathrm{A})$, a snapshot/restore pair restoring every
 step-mutated attribute exactly so a rejected iteration leaves no trace.
 
-**The open circuit.** Once the source is switched off the loop is integrated by
-that same advance at $V_\text{src}=0$ while it still has current to carry, and
-returns to OPEN CIRCUIT below $1$ A. An open circuit is solved as the CURRENT-DRIVEN
+**The tail and the open circuit.** Once the source is switched off the loop is
+integrated by that same advance at $V_\text{src}=0$ while it still has current
+to carry. It returns to OPEN CIRCUIT on the first accepted step at which either
+the previous accepted step's loop current has fallen to $1$ A or below, or that
+step's step-integrated $V_\text{dis}$ is non-positive. Both readings are of the
+last ACCEPTED step, so the phase a step runs under is fixed before the step is
+attempted and no rejected attempt can move it; the loop current is set to
+exactly zero at the hand-off. An open circuit is solved as the CURRENT-DRIVEN
 form at $I_\text{tot}=0$ — the same monotone root at the same tolerances,
 returning the same electrode power split — so no discretization changes across
 the hand-off and the electrode terms are the same formulas evaluated at zero
