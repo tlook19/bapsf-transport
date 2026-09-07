@@ -31,7 +31,17 @@ the frozen K5a shot-1 calibration arm, a bounded
 number of steps, SHA-256 over the raw little-endian float64 bytes of every
 piece of state the arm carries.
 
-Usage (from <checkout>/cablp, with PYTHONPATH set to that same cablp):
+**THE CONFIGURATION THIS FILE RUNS IS A FROZEN PROBE CONFIGURATION, AND IT
+DOES NOT TRACK THE REFERENCE STANCE.** That is the point of the file rather
+than a gap in it: the question it answers is whether TWO CHECKOUTS carry the
+same trajectory, which only has an answer if both run the same configuration.
+Every value the probe stands on is therefore written out below and moves only
+when someone edits this file. It names no committed stance, so it takes no
+``--stance``; what it stands on is instead reported as a
+:func:`config_identity` at the top of every run, so a reader can see that two
+transcripts were taken on one configuration rather than assume it.
+
+Usage (from the checkout root, with PYTHONPATH set to it):
     python scripts/verify/k7cbuild_frozen_bitexact.py --steps 400 --arm twion_phic
 """
 
@@ -51,25 +61,32 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 
 from run_mechanism_ladder import ES_OPERATING
 
-from cablp.solvers._sim1d import LAPDSim1D, config_manifest, default_config
+from cablp.solvers._sim1d import (
+    LAPDSim1D,
+    config_identity,
+    config_manifest,
+    default_config,
+)
 
 
 # --------------------------------------------------------------------------
-# FROZEN SNAPSHOT of compare_sim1d_es1.PARAM_OVERRIDES / FLAG_OVERRIDES, taken
-# 2026-08-26 at the tip that froze it. This file used to IMPORT those two
-# dicts LIVE, which is not a freeze at all: several PARAM_OVERRIDES entries
-# mirror scripts/stances/g1atrim.toml (S_gp, C_R, b_beam_excitation, the two
-# cathode power-balance areals, equilibration_gas_puff_on_s), so every stance
-# re-point silently rebased this bank -- demonstrated by the arm's cell count
-# moving 262 -> 252 across the L2 geometry rebaseline with no edit to this
-# file. A bank whose configuration drifts underneath it cannot certify that
-# two checkouts carried the same trajectory.
+# THE FROZEN PROBE CONFIGURATION. These are values this file OWNS, held still
+# on purpose; they are not a view of any live configuration and nothing keeps
+# them in step with one. Several of them happen to carry a number the
+# reference stance also carries -- S_gp, C_R, b_beam_excitation, the two
+# cathode power-balance areals, equilibration_gas_puff_on_s -- and that
+# coincidence is exactly what must NOT become a live read: this file once
+# imported the scorer's override dicts, so every re-point of the reference
+# silently rebased the probe underneath it, which showed up as the arm's cell
+# count moving 262 -> 252 with no edit to this file. A probe whose
+# configuration drifts underneath it cannot certify that two checkouts carried
+# the same trajectory, which is the only thing this file exists to say.
 #
 # The values are kept here verbatim, exactly the way EXTRA below already is.
-# The commentary on each one lives with the live dicts in
-# scripts/score/compare_sim1d_es1.py; it is deliberately NOT duplicated here,
-# because this block is a dated snapshot and that commentary is not.
-PARAM_OVERRIDES = {
+# Per-value commentary is deliberately not duplicated here: this block is a
+# frozen transcription, and commentary about why a live configuration chose a
+# number is a statement about that configuration, not about this probe.
+K7C_PROBE_PARAMS = {
     "V_bank": 177.843,
     "R_comp": 0.0072244,
     "L_parasitic_H": 8.1e-06,
@@ -92,7 +109,7 @@ PARAM_OVERRIDES = {
     "C_R": 8.76,
     "beam_deposition_smoothing_cm": 50.0,
 }
-FLAG_OVERRIDES = {
+K7C_PROBE_FLAGS = {
     "ion_neutral_drag_cx_only": False,
 }
 # --------------------------------------------------------------------------
@@ -158,9 +175,16 @@ LEGACY_PINS = {
 
 
 def build(arm):
+    """Return ``(sim, pinned, identity)`` for one arm of the frozen probe.
+
+    ``identity`` is the :func:`config_identity` of the assembled pair. It is
+    reported rather than assumed because this probe names no committed
+    configuration: the identity is the only way a reader of two transcripts
+    can see that they were taken on the same one.
+    """
     params, flags = default_config()
-    params.update(PARAM_OVERRIDES)
-    flags.update(FLAG_OVERRIDES)
+    params.update(K7C_PROBE_PARAMS)
+    flags.update(K7C_PROBE_FLAGS)
     flags["neutral_two_zone"] = True
     params["neutral_exchange_model"] = "knudsen"
     op = ES_OPERATING[1]
@@ -178,7 +202,7 @@ def build(arm):
         )
     params.update(ARMS[arm])
     params.update(pinned)
-    return LAPDSim1D(params, flags), pinned
+    return LAPDSim1D(params, flags), pinned, config_identity(params, flags)
 
 
 def digest(*arrays):
@@ -196,7 +220,11 @@ def main(argv=None):
     p.add_argument("--arm", choices=sorted(ARMS), default="tw")
     args = p.parse_args(argv)
 
-    sim, pinned = build(args.arm)
+    sim, pinned, identity = build(args.arm)
+    print(
+        "frozen probe configuration (names no stance; does not track one)\n"
+        f"config_identity={identity}"
+    )
     print(
         f"arm={args.arm} cells={sim.geometry.cells} dvm={sim._dvm is not None} "
         f"anom_transport="
