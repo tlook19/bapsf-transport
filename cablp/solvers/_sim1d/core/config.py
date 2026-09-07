@@ -4462,6 +4462,22 @@ input_flags_template_1d = {
     # cannot describe different sheath edges. Neither number is written here;
     # both are read from the code that already owns them.
     #
+    # LAMBDA_EFF IS A STATE-DEPENDENT BARRIER, NOT A CONSTANT, and its range
+    # is [Lambda, Lambda + 1/2]. The two limits are the two limits of the same
+    # alpha. When the collisional presheath is SHORTER than the sampling cell
+    # the cell sits at the sheath edge, alpha -> exp(-1/2) carries the whole
+    # Boltzmann drop, and Lambda_eff -> Lambda + 1/2. When the presheath is
+    # LONGER than the cell -- which is the pre-breakdown state, where a cold
+    # thin end cell puts L_ps at tens to hundreds of cm against a cell of a
+    # few cm -- the cell is INSIDE the presheath, its density has already
+    # dropped part of the way from the reservoir, and the electrons collected
+    # from it climb only the remaining ln(1/alpha) of presheath on top of the
+    # Lambda of sheath; the rest of the drop is resolved by the interior
+    # cells. alpha -> 1 there and Lambda_eff -> Lambda. A reading below
+    # Lambda + 1/2 in the early phases is that regime and is correct; a
+    # reading outside the bracket is not, and the smoke suite asserts the
+    # bracket rather than a value.
+    #
     # WHAT IT RAISES. Must be a real bool. Arming it refuses at construction
     # unless the configuration supplies a plasma-absorbing face of the
     # COLLECTOR role -- the face whose collected electrons are charged the

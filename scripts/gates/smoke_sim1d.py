@@ -26474,6 +26474,89 @@ def _case_cathode_emitted_fall_beam_row_non_overlap(
         nonzero_points += 1
     assert nonzero_points == 3, nonzero_points
 
+
+# --------------------------------------------------------------------
+# collector-lambda-eff-barrier-bracket
+# --------------------------------------------------------------------
+@_case("collector-lambda-eff-barrier-bracket", historical_stance=True)
+def _case_collector_lambda_eff_barrier_bracket():
+    # LAMBDA_EFF IS A STATE-DEPENDENT BARRIER AND ITS RANGE IS [Lambda,
+    # Lambda + 1/2]. The collector row books -Lambda_eff Te Gamma_coll beside
+    # the boundary term's unconditional 2 Te on the same face and the same
+    # flux, so the run's own two rows read the barrier back exactly:
+    #
+    #     Lambda_eff = 2 * collector_e_sheath_climb / characteristic_boundary
+    #
+    # at the collector cell. Lambda_eff = Lambda + ln(1/alpha_se), and
+    # alpha_se runs between exp(-1/2) (the presheath fits inside the sampling
+    # cell: the cell is at the sheath edge and carries the whole Boltzmann
+    # drop) and 1 (the presheath is longer than the cell: the cell sits inside
+    # it, has already dropped part of the way from the reservoir, and its
+    # electrons climb only the remainder). So the barrier moves with the
+    # state, and a reading below Lambda + 1/2 in a cold thin end cell is the
+    # second regime rather than a defect.
+    #
+    # The bracket is what is asserted here, not a value -- pinning a value
+    # would pin a state.
+    _le_params, _le_flags = _base_config()
+    _le_flags = dict(_le_flags)
+    _le_flags["cathode_coupling"] = True
+    _le_flags["collector_sheath_full_debit"] = True
+    # This case reads a barrier off two RHS rows, not a neutral profile, and
+    # ``run()`` performs no equilibration -- so the equilibration flag is
+    # cleared rather than left on to warn that it did nothing.
+    _le_flags["neutral_equilibration"] = False
+    _le_sim = LAPDSim1D(dict(_le_params), _le_flags)
+    _le_result = _le_sim.run(t_end=4.0e-10, dt=1.0e-10)
+
+    _le_lambda = sheath_lift_lambda(_le_sim.mu)
+    _le_geom = _le_sim.geometry
+    _le_roles = np.asarray(_le_geom.cell_role)
+    _le_coll = int(np.flatnonzero(_le_roles == "collector")[0])
+    _le_climb = np.asarray(
+        _le_result.rhs_terms["collector_e_sheath_climb"]["Ee"], dtype=float
+    )[:, _le_coll]
+    _le_char = np.asarray(
+        _le_result.rhs_terms["characteristic_boundary"]["Ee"], dtype=float
+    )[:, _le_coll]
+    _le_nn = np.asarray(_le_result.nn, dtype=float)[:, _le_coll]
+    _le_Te = np.asarray(_le_result.Te, dtype=float)[:, _le_coll]
+    _le_Ti = np.asarray(_le_result.Ti, dtype=float)[:, _le_coll]
+    _le_len = float(_le_geom.length_cm[_le_coll])
+    assert _le_climb.size >= 2, _le_climb.size
+
+    # Both rows must be live on every save, or the ratio would be reading
+    # nothing: the boundary row carries the 2 Te of the same collected flux.
+    assert np.all(_le_char < 0.0), _le_char
+    assert np.all(_le_climb < 0.0), _le_climb
+
+    _le_read = 2.0 * _le_climb / _le_char
+    for _le_i in range(_le_read.size):
+        # (i) THE BRACKET, on every save.
+        assert _le_lambda <= _le_read[_le_i] <= _le_lambda + 0.5, (
+            _le_i, _le_read[_le_i], _le_lambda
+        )
+        # (ii) ... and it is the code's own alpha that puts it there, read
+        # off the same saved state the boundary operator sampled its flux at.
+        _le_alpha = electrode_sheath_alpha(
+            nn=float(_le_nn[_le_i]),
+            Te=float(_le_Te[_le_i]),
+            Ti=float(_le_Ti[_le_i]),
+            cell_length_cm=_le_len,
+            mu=_le_sim.mu,
+            ion_mass_g=_le_sim.ion_mass_g,
+            alpha_isat=float(_le_params["alpha_isat"]),
+            b_presheath_length=float(_le_params["b_presheath_length"]),
+            gas_type=_le_params.get("gas_type"),
+        )
+        assert math.exp(-0.5) <= _le_alpha <= 1.0, (_le_i, _le_alpha)
+        assert np.isclose(
+            _le_read[_le_i],
+            _le_lambda - math.log(_le_alpha),
+            rtol=1e-11,
+            atol=0.0,
+        ), (_le_i, _le_read[_le_i], _le_alpha)
+
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
@@ -26483,7 +26566,7 @@ def _case_cathode_emitted_fall_beam_row_non_overlap(
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 148, "historical_stance": 62}
+_CASE_CENSUS = {"total": 149, "historical_stance": 63}
 
 
 def _assert_case_census():
