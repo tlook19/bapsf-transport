@@ -1814,6 +1814,92 @@ def _case_variable_area_well_balancedness(
 
 
 # --------------------------------------------------------------------
+# twin-cathode-plateau-multigroup
+# --------------------------------------------------------------------
+@_case(
+    "twin-cathode-plateau-multigroup",
+    historical_stance=True,
+)
+def _case_twin_cathode_plateau_multigroup(
+    srcgrid_off_flags, srcgrid_off_params
+):
+    # PRESENCE GATE for the plateau-edge pair, BOTH DIRECTIONS, on the twin
+    # layout. The twin fixture in variable-area-well-balancedness resolves
+    # heating_anomalous_transport="local", so the equivalence it asserts there
+    # can only ever exercise the ABSENT branch: a build that stopped emitting
+    # the pair entirely would still satisfy it. This case arms the closure and
+    # asserts the pair is PRESENT under BOTH cathode prefixes, then clears it
+    # and asserts it is present under NEITHER -- the same two rows, the same
+    # two prefixes, one fixture apart.
+    #
+    # The selector's accepted values are stated by the solver's own validator:
+    # "heating_anomalous_transport must be 'local', 'tail_walk' or
+    # 'plateau_multigroup'", and the multi-group arm is the last of those.
+    # Every other dial the armed arm requires is already a config default
+    # (beam_deposition_model="csda", beam_anomalous_model="quasilinear",
+    # heating_anomalous_tail_energy_eV=75.0, keying="phi_c", the phi_c
+    # fraction None) -- the exception is the cathode boundary, which the
+    # twin's own refusal decides and which is asserted below rather than
+    # assumed.
+    twin_flags = dict(srcgrid_off_flags)
+    twin_flags["TwinCathode"] = True
+    twin_flags["cathode_coupling"] = False
+    _mg_rows = ("beam_plateau_edge_eV", "beam_plateau_edge_clamped")
+
+    # 'reflect' -- the shipped default -- is REFUSED with two cathodes, so the
+    # armed fixture states 'escape'. Asserted, not assumed: if that refusal
+    # ever moved, the fixture below would be selecting a boundary for a reason
+    # that no longer exists.
+    mg_reflect_params = dict(
+        srcgrid_off_params,
+        heating_anomalous_transport="plateau_multigroup",
+        heating_anomalous_tail_cathode_boundary="reflect",
+    )
+    try:
+        LAPDSim1D(mg_reflect_params, twin_flags)
+    except ValueError as exc:
+        assert "does not support TwinCathode" in str(exc)
+    else:
+        raise AssertionError(
+            "a reflecting cathode boundary constructed on the twin layout"
+        )
+
+    mg_params = dict(
+        srcgrid_off_params,
+        heating_anomalous_transport="plateau_multigroup",
+        heating_anomalous_tail_cathode_boundary="escape",
+    )
+    mg_sim = LAPDSim1D(mg_params, twin_flags)
+    assert mg_sim._plateau_multigroup
+    mg_diag = mg_sim._cathode_diagnostic_snapshot()
+    for _mg_prefix in ("source", "end"):
+        for _mg_row in _mg_rows:
+            assert f"{_mg_prefix}_{_mg_row}" in mg_diag, (_mg_prefix, _mg_row)
+
+    # The OFF arm of the same fixture: identical geometry and identical flags,
+    # the selector alone cleared, and the pair is gone from both prefixes.
+    local_params = dict(
+        srcgrid_off_params,
+        heating_anomalous_transport="local",
+        heating_anomalous_tail_cathode_boundary="escape",
+    )
+    local_sim = LAPDSim1D(local_params, twin_flags)
+    assert not local_sim._plateau_multigroup
+    local_diag = local_sim._cathode_diagnostic_snapshot()
+    for _mg_prefix in ("source", "end"):
+        for _mg_row in _mg_rows:
+            assert f"{_mg_prefix}_{_mg_row}" not in local_diag, (
+                _mg_prefix, _mg_row
+            )
+    # The rest of the per-end cathode block is present either way, so the
+    # absence just asserted is the multi-group pair's own and not a twin whose
+    # end block failed to be seeded at all.
+    for _mg_prefix in ("source", "end"):
+        assert f"{_mg_prefix}_regime" in local_diag
+        assert f"{_mg_prefix}_regime" in mg_diag
+
+
+# --------------------------------------------------------------------
 # cathode-resolved-gap-resistance
 # --------------------------------------------------------------------
 @_case(
@@ -2990,6 +3076,130 @@ def _case_cathode_circuit_voltage_bound_r1(
         assert float(_r1_off_diag["source_phi_c_ceiling_V"]) == 1000.0
     assert any(code == 0.0 for code in _r1_codes), _r1_codes
     return locals()
+
+
+# --------------------------------------------------------------------
+# cathode-clamp-census
+# --------------------------------------------------------------------
+@_case(
+    "cathode-clamp-census",
+)
+def _case_cathode_clamp_census(_r1_sim_config):
+    # THE CLAMP IS COUNTED. A cathode solve whose root sits above the composed
+    # ceiling returns the ceiling value tagged ``capability_limited`` and
+    # raises nothing, so a run that spent solves there is indistinguishable
+    # from one that did not unless the count exists. The solver counts the
+    # clamped and the total accepted cathode solves; these are the two
+    # directions of that counter.
+    #
+    # ARMED: an imposed loop current far above what this tiny cathode can
+    # emit at the ceiling. The solve clamps, so the clamped count moves and
+    # the first-clamp time is stamped.
+    _clamp_hi = LAPDSim1D(*_r1_sim_config())
+    assert _clamp_hi._cathode_total_solves == 0
+    assert _clamp_hi._cathode_clamped_solves == 0
+    assert math.isnan(_clamp_hi._cathode_clamp_first_t_s)
+    _clamp_hi._circuit_I_loop = 1.0e3
+    _clamp_hi_solve = _clamp_hi.solve_cathode_boundary(
+        floating=False, update_cache=True
+    )
+    assert (
+        str(_clamp_hi_solve.beam_result.result.regime) == "capability_limited"
+    ), _clamp_hi_solve.beam_result.result.regime
+    assert _clamp_hi._cathode_total_solves == 1
+    assert _clamp_hi._cathode_clamped_solves >= 1
+    assert math.isfinite(_clamp_hi._cathode_clamp_first_t_s)
+    assert math.isfinite(_clamp_hi._cathode_clamp_last_t_s)
+
+    # NEGATIVE CONTROL: the same fixture and the same call at a current the
+    # cathode carries below the ceiling. The solve is counted and the clamped
+    # count stays at zero -- so the counter is measuring the clamp and not
+    # merely the solve.
+    _clamp_lo = LAPDSim1D(*_r1_sim_config())
+    _clamp_lo._circuit_I_loop = 1.0
+    _clamp_lo_solve = _clamp_lo.solve_cathode_boundary(
+        floating=False, update_cache=True
+    )
+    assert (
+        str(_clamp_lo_solve.beam_result.result.regime) != "capability_limited"
+    ), _clamp_lo_solve.beam_result.result.regime
+    assert _clamp_lo._cathode_total_solves == 1
+    assert _clamp_lo._cathode_clamped_solves == 0
+    assert math.isnan(_clamp_lo._cathode_clamp_first_t_s)
+    assert math.isnan(_clamp_lo._cathode_clamp_last_t_s)
+
+    # A READ-ONLY solve is not a solve this run performed: it does not write
+    # the cathode caches and it must not move the census either, or the
+    # denominator would count the dt bound's probe solves alongside the
+    # accepted ones.
+    _clamp_lo.solve_cathode_boundary(floating=False, update_cache=False)
+    assert _clamp_lo._cathode_total_solves == 1
+
+    # The four counters ride the Picard snapshot, so a re-run of one step
+    # restores them rather than counting its solve twice.
+    for _clamp_attr in (
+        "_cathode_total_solves",
+        "_cathode_clamped_solves",
+        "_cathode_clamp_first_t_s",
+        "_cathode_clamp_last_t_s",
+    ):
+        assert _clamp_attr in LAPDSim1D._PICARD_DIRECT_ATTRS, _clamp_attr
+
+    # RESTART. The counters are CARRIED, so a resumed run continues the
+    # producing run's census instead of restarting it -- losing a count is a
+    # lost measurement, which is the reason the jet-arming counts are carried
+    # and it is the same reason here. Both directions: a payload that has the
+    # keys continues, and one that predates them restores the seed rather than
+    # raising.
+    _clamp_params, _clamp_flags = _r1_sim_config()
+    _clamp_run = LAPDSim1D(dict(_clamp_params), dict(_clamp_flags))
+    for _ in range(6):
+        _clamp_run.advance_one_step(dt=2.0e-9)
+    _clamp_pre = int(_clamp_run._cathode_total_solves)
+    assert _clamp_pre >= 1, _clamp_pre
+    with tempfile.TemporaryDirectory() as _clamp_tmp:
+        _clamp_payload = Path(_clamp_tmp) / "clamp_census.restart.h5"
+        _restart_mod.save_restart_state(_clamp_payload, _clamp_run)
+        _clamp_resumed = LAPDSim1D(
+            {**_clamp_params, "restart_from": str(_clamp_payload)},
+            dict(_clamp_flags),
+        )
+        assert _clamp_resumed._cathode_total_solves == _clamp_pre, (
+            _clamp_resumed._cathode_total_solves, _clamp_pre
+        )
+        assert (
+            _clamp_resumed._cathode_clamped_solves
+            == _clamp_run._cathode_clamped_solves
+        )
+        _clamp_resumed.advance_one_step(dt=2.0e-9)
+        assert _clamp_resumed._cathode_total_solves >= _clamp_pre + 1, (
+            _clamp_resumed._cathode_total_solves, _clamp_pre
+        )
+
+        # A payload written before the keys existed. The counters are stored
+        # as attributes of the ``cathode`` group, the two integers under the
+        # writer's ``__int`` type tag, so a legacy payload is exactly this
+        # file with those four attributes gone.
+        _clamp_legacy = Path(_clamp_tmp) / "clamp_census_legacy.restart.h5"
+        _clamp_legacy.write_bytes(_clamp_payload.read_bytes())
+        with h5py.File(_clamp_legacy, "r+") as _clamp_h5:
+            _clamp_grp = _clamp_h5["cathode"]
+            for _clamp_key in (
+                "_cathode_total_solves__int",
+                "_cathode_clamped_solves__int",
+                "_cathode_clamp_first_t_s",
+                "_cathode_clamp_last_t_s",
+            ):
+                assert _clamp_key in _clamp_grp.attrs, _clamp_key
+                del _clamp_grp.attrs[_clamp_key]
+        _clamp_old = LAPDSim1D(
+            {**_clamp_params, "restart_from": str(_clamp_legacy)},
+            dict(_clamp_flags),
+        )
+        assert _clamp_old._cathode_total_solves == 0
+        assert _clamp_old._cathode_clamped_solves == 0
+        assert math.isnan(_clamp_old._cathode_clamp_first_t_s)
+        assert math.isnan(_clamp_old._cathode_clamp_last_t_s)
 
 
 # --------------------------------------------------------------------
@@ -25523,7 +25733,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 140, "historical_stance": 59}
+_CASE_CENSUS = {"total": 142, "historical_stance": 60}
 
 
 def _assert_case_census():

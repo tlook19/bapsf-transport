@@ -192,6 +192,23 @@ def save_result_hdf5(path, result, params=None, flags=None):
         compiled_kernels = getattr(result, "compiled_kernels", None)
         if compiled_kernels is not None:
             h5.attrs["compiled_kernels"] = str(compiled_kernels)
+        # CATHODE CLAMP CENSUS. How many of the run's accepted cathode solves
+        # were clamped to the composed ceiling (tagged
+        # ``regime = "capability_limited"``), out of how many were performed,
+        # and when the first one fired. The clamp raises nothing, so without
+        # this a reader can only infer it from the per-save ``bound_active``
+        # channel, which sees only the saved frames. PRESENCE-GATED: a result
+        # that carries no census -- every file written before this existed --
+        # gets none of the three attributes, and a reader must default them.
+        clamp_census = getattr(result, "cathode_clamp_census", None)
+        if clamp_census is not None:
+            h5.attrs["cathode_clamped_solves"] = int(
+                clamp_census["clamped_solves"]
+            )
+            h5.attrs["cathode_total_solves"] = int(clamp_census["total_solves"])
+            h5.attrs["cathode_clamp_first_t_s"] = float(
+                clamp_census["first_t_s"]
+            )
         # Presence-gated execution identity. Ordinary runs and their files do
         # not acquire an identity implicitly; qualified Phase 3 runs supply it
         # before solver construction and preserve it here.

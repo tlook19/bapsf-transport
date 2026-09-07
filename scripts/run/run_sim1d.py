@@ -132,6 +132,22 @@ def main(argv=None):
         f"max_consecutive={summary.max_consecutive_dt_min_clamped_steps}, "
         f"hard_zero_steps={summary.dt_min_hard_zero_step_count}"
     )
+    # Cathode clamp census. A cathode solve whose root sits above the composed
+    # ceiling is clamped to the ceiling and tagged capability_limited, and
+    # nothing raises -- so a run that spent frames there reads exactly like one
+    # that did not unless the count is printed. Absent on a result that carries
+    # no census (anything loaded from a file written before it existed).
+    clamp_census = getattr(result, "cathode_clamp_census", None)
+    if clamp_census is not None:
+        clamped = int(clamp_census["clamped_solves"])
+        total = int(clamp_census["total_solves"])
+        print(
+            "sim1d cathode clamp census: "
+            f"clamped={clamped} of {total} solves "
+            f"({(clamped / total if total else float('nan')):.4f}), "
+            f"first_t={clamp_census['first_t_s']:.6e} s, "
+            f"last_t={clamp_census['last_t_s']:.6e} s"
+        )
     if hasattr(result, "neutral_equilibration_summary"):
         neutral_summary = result.neutral_equilibration_summary
         print(

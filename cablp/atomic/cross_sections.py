@@ -385,10 +385,10 @@ def He_beam_excitation_channel(E_eV, n_max=20):
     return sigma_tot, sigma_E_tot / sigma_tot
 
 
-# Lookup-table front end for the summed singlet channel. Profiling
-# (2026-07-21, nx=120 csda_ql production config) put the scalar manifold
-# sums at ~80% of total step time via deposit_beam's per-substep calls
-# (~240 channel calls x 73 scalar level evaluations per step). The table
+# Lookup-table front end for the summed singlet channel. The exact function
+# above re-evaluates every singlet level on every call, and deposit_beam
+# calls it once per beam channel per substep, so that inner sum is the
+# dominant cost of the deposition march; the table replaces it. The table
 # is built lazily ONCE from the exact function above, so its nodes are
 # exactly the reference values; between nodes it is linear interpolation
 # on (sigma, sigma*E) -- interpolating the pair keeps the recovered
@@ -564,15 +564,14 @@ def integrate_kern(cross_sec_func, a, T, I):
 # check against the Springer coefficients would report spurious mismatches, so
 # every re-verification must cite HYDHEL.
 #
-# CORRUPTION AND FIX. Row e=1 carried a single INSERTED DUPLICATE of
-# 9.536923957409e-03 (present once in the source, at T-Index 2), giving that
-# row 10 entries where every other row here and every A_R531 row has 9;
-# heavy_reaction iterates range(len(A[i])), so the ragged row silently
-# contributed an extra polynomial term to _cx_H rather than failing. The
-# duplicate was deleted 2026-08-27 and the table is now 9x9 = 81. All 81
-# coefficients were verified digit for digit against the re-fetched PDF in the
-# same change ([sbq:L295]); the source's max/mean relative fit errors are
-# 1.1026 % / 0.3105 %.
+# SHAPE IS LOAD-BEARING. The table is 9 x 9 = 81 coefficients -- nine rows,
+# one per source E-Index column, with nine T-Index entries each, the same
+# shape as A_R531. heavy_reaction iterates range(len(A[i])), so a row of any
+# other length contributes a wrong number of polynomial terms to _cx_H
+# silently rather than failing: a ragged row is a transcription error that
+# only a digit-for-digit re-check catches. All 81 coefficients are verified
+# digit for digit against the source PDF; the source's max/mean relative fit
+# errors are 1.1026 % / 0.3105 %.
 A_R318 = [
     [
         -1.831670498376e01,
@@ -1024,8 +1023,11 @@ def phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"):
 # The table is two nodes and nothing is smuggled in between them.
 #
 # Both nodes are DERIVED from the same three published He elastic
-# momentum-transfer sets -- Biagi, IST-Lisbon and Morgan (LXCat, retrieved
-# 2026-08-13) -- read at the node energy by linear interpolation, which is the
+# momentum-transfer sets -- Biagi, IST-Lisbon and Morgan -- taken from the
+# LXCat TXT pull of record, the file `lxcat_He_mt_threeset_2026-08-13.txt`
+# (the sets are not redistributable in this public repository, so the pull
+# itself lives outside it and is identified by that filename). Each set is
+# read at the node energy by linear interpolation, which is the
 # convention those tables state for themselves. The NODE is the three-set
 # arithmetic centre and the BRACKET is [min, max] over the three sets, so the
 # bracket is the measured set-to-set disagreement rather than an assumed bar.

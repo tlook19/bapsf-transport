@@ -990,6 +990,56 @@ def _efold_time_ms(t_ms, y, floor=0.0):
     return -1.0 / slope if slope < 0.0 else np.nan
 
 
+def _efold_time_sigma_ms(t_ms, y, sem, floor=0.0):
+    """Return the 1-sigma measurement uncertainty [ms] of ``_efold_time_ms``.
+
+    ESTIMATOR. The measured side of stage (iii) is an ENSEMBLE-MEAN trace and
+    its per-sample SEM; the overlay carries no per-shot decay traces, so there
+    is no per-shot spread of e-fold times to take. The per-sample SEM is
+    therefore propagated through the very fit ``_efold_time_ms`` performs.
+
+    That fit is an unweighted least-squares line through ``log(y)`` over the
+    same positivity/noise-floor mask, so the fitted slope is a fixed linear
+    combination of the fitted samples::
+
+        slope = sum_i c_i log(y_i),   c_i = (t_i - tbar) / sum_j (t_j - tbar)^2
+
+    each ``log(y_i)`` carries ``sem_i / y_i`` by the delta method, and
+    ``tau = -1 / slope`` carries::
+
+        sigma_tau = tau^2 * sqrt( sum_i c_i^2 (sem_i / y_i)^2 )
+
+    Samples are treated as INDEPENDENT, which is what a per-sample SEM states
+    on its own; any sample-to-sample correlation left by the trace's
+    anti-alias filter would make this an UNDER-estimate, so the returned sigma
+    is a lower bound on the measurement uncertainty in that sense.
+
+    NaN under exactly the conditions that make ``_efold_time_ms`` NaN (fewer
+    than 8 samples survive the mask, or the fitted slope is not a decay), and
+    additionally when a fitted sample carries a non-finite or non-positive
+    SEM -- an uncertainty is not invented where the overlay states none.
+    """
+    t_ms = np.asarray(t_ms, dtype=float)
+    y = np.asarray(y, dtype=float)
+    sem = np.asarray(sem, dtype=float)
+    good = np.isfinite(t_ms) & np.isfinite(y) & (y > max(floor, 0.0))
+    if np.count_nonzero(good) < 8:
+        return np.nan
+    t_fit, y_fit, sem_fit = t_ms[good], y[good], sem[good]
+    if not np.all(np.isfinite(sem_fit)) or np.any(sem_fit <= 0.0):
+        return np.nan
+    slope = np.polyfit(t_fit, np.log(y_fit), 1)[0]
+    if not slope < 0.0:
+        return np.nan
+    dt = t_fit - t_fit.mean()
+    s_tt = float(np.sum(dt * dt))
+    if not s_tt > 0.0:
+        return np.nan
+    var_slope = float(np.sum((dt / s_tt) ** 2 * (sem_fit / y_fit) ** 2))
+    tau = -1.0 / slope
+    return float(tau * tau * np.sqrt(var_slope))
+
+
 def _decay_observability(tau_exp_ms, span_ms):
     """Return ``(extrapolated, decay_frac)`` for a measured e-fold time.
 
@@ -1017,6 +1067,21 @@ def _decay_observability(tau_exp_ms, span_ms):
         return False, np.nan
     return bool(tau > span), float(1.0 - np.exp(-span / tau))
 
+
+# Stage (iii) ports whose model density is ADVECTIVELY REFILLED across the fit
+# window, so their e-fold time is not a clean decay measurement: over the
+# window the far port's model density falls by far less than the others (on
+# some closures it barely falls at all, and on the fluid closure the trace is
+# floor-truncated inside the window), because parallel transport from upstream
+# keeps resupplying that cell while the plasma decays. The fitted tau there is
+# a refill/decay COMPETITION, not the decay, and the difference is a property
+# of the port's position in the machine rather than of any one closure.
+#
+# The tag exists so a reader can see which row it is and so the stage's mean
+# ratio is published both ways; the row is still fitted, still printed and
+# still in the all-port mean. This is the same port the per-face block already
+# separates out in `_mean_ratio_line`.
+REFILLED_PORTS = (50,)
 
 # Stage (iii) fit window on the main-discharge clock [ms]. The discharge ends
 # at trigger + tau_discharge = 20 ms, so this is the first 1.5 ms OF THE
@@ -1091,6 +1156,28 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
     log-linear fit over the same window. The experimental noise floor is
     estimated from the final 5 ms of each decay trace (5x its robust sigma).
 
+    Each row also carries the measured e-fold time's own 1-sigma STATISTICAL
+    uncertainty ``tau_exp_sigma_stat_ms`` and the deviation
+    ``dev_sigma_stat = (tau_model - tau_exp) / tau_exp_sigma_stat_ms`` in
+    units of it, so a per-row sigma bar can be evaluated on stage (iii) the
+    way it already can on the scored rows. Both names carry ``stat`` because
+    this payload ALSO exports ``scored[*].sigma``, which is |deviation| over
+    ``sigma_tot`` and reads order 1-3, while these read order 100 on the same
+    run: two quantities called "sigma" with different denominators, one of
+    which would otherwise travel into a plot or a downstream record alone and
+    unqualified.
+    The sigma is the overlay's per-sample SEM propagated through the fit --
+    see ``_efold_time_sigma_ms`` for the estimator and its independence
+    assumption. An overlay vintage that carries no ``isat_decay_sem_a`` gets
+    NaN in both, and every other column is unaffected. Each row also carries
+    ``refilled``, True for a port whose model density is advectively refilled
+    across the window (see ``REFILLED_PORTS``); such a row is still fitted and
+    still scored, and the stage's mean ratio is published both with and
+    without it. That sigma is the
+    STATISTICAL uncertainty of the measured fit alone and carries no
+    sweep-systematic term, so it is not the ``sigma_tot`` the scored rows are
+    quoted against; a bar written in it is the tighter of the two.
+
     Raises ``RuntimeError`` when the model trace ends before the window closes
     -- see ``short_afterglow_message``. The window is never silently shortened
     to fit the run.
@@ -1104,6 +1191,11 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
 
     t_exp = np.asarray(overlay["isat_decay_time_ms"], dtype=float)
     isat = np.asarray(overlay["isat_decay_mean_a"], dtype=float)
+    isat_sem = (
+        np.asarray(overlay["isat_decay_sem_a"], dtype=float)
+        if "isat_decay_sem_a" in overlay
+        else None
+    )
     ports = np.asarray(overlay["isat_decay_port"])
     z_ports = {
         int(p): float(z)
@@ -1131,6 +1223,21 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
         tau_model = _efold_time_ms(t_model_ms[model_window], proxy)
 
         extrapolated, decay_frac_exp = _decay_observability(tau_exp, t1 - t0)
+        tau_exp_sigma = (
+            np.nan
+            if isat_sem is None
+            else _efold_time_sigma_ms(
+                t_exp[exp_window], isat[p, exp_window], isat_sem[p, exp_window], noise
+            )
+        )
+        dev_sigma_stat = (
+            (tau_model - tau_exp) / tau_exp_sigma
+            if np.isfinite(tau_exp_sigma)
+            and tau_exp_sigma > 0.0
+            and np.isfinite(tau_model)
+            and np.isfinite(tau_exp)
+            else np.nan
+        )
         rows.append(
             {
                 "port": int(ports[p]),
@@ -1140,6 +1247,9 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
                 "ratio": tau_model / tau_exp if np.isfinite(tau_exp) else np.nan,
                 "extrapolated": extrapolated,
                 "decay_frac_exp": decay_frac_exp,
+                "tau_exp_sigma_stat_ms": tau_exp_sigma,
+                "dev_sigma_stat": dev_sigma_stat,
+                "refilled": bool(int(ports[p]) in REFILLED_PORTS),
             }
         )
     return rows, (t0, t1)
@@ -2136,6 +2246,28 @@ def _report_peak_current(peak):
     )
 
 
+def tau_ratio_means(rows):
+    """Return the stage (iii) mean tau ratio with and without refilled ports.
+
+    ``(mean_all, n_all, mean_ex_refilled, n_ex_refilled)``, over the rows with
+    a finite ratio. The means are NaN when no such row survives. The printed
+    lines and the JSON fields both read this one function, so the exported
+    number is the printed number.
+    """
+    every = [r["ratio"] for r in rows if np.isfinite(r["ratio"])]
+    inner = [
+        r["ratio"]
+        for r in rows
+        if np.isfinite(r["ratio"]) and not r.get("refilled", False)
+    ]
+    return (
+        float(np.mean(every)) if every else float("nan"),
+        len(every),
+        float(np.mean(inner)) if inner else float("nan"),
+        len(inner),
+    )
+
+
 def _report_decay(rows, window):
     span = float(window[1]) - float(window[0])
     print(
@@ -2156,9 +2288,32 @@ def _report_decay(rows, window):
     print("   isat_decay_mean_a, the 'i_sweep' channel.  The downstream face and")
     print("   the flow-cancelled geomean are reported below this table and do not")
     print("   enter it.")
+    print("   sig_stat is tau_exp's own 1-sigma STATISTICAL uncertainty and dev")
+    print("   [stat] is (tau_model - tau_exp)/sig_stat, so a per-row sigma bar can")
+    print("   be read off these rows.  Both are named 'stat' because the scored")
+    print("   rows above are quoted against sigma_tot and read order 1-3, while")
+    print("   these read order 100 on the same run: two different denominators,")
+    print("   and the qualifier travels with the number.")
+    print("   ESTIMATOR: the overlay carries the ensemble-MEAN decay")
+    print("   trace and its per-sample SEM (isat_decay_sem_a), NOT per-shot traces,")
+    print("   so there is no per-shot spread of e-fold times to take; the SEM is")
+    print("   propagated through the same log-linear fit -- sig_tau = tau^2 *")
+    print("   sqrt(sum_i c_i^2 (sem_i/y_i)^2) with c_i the least-squares slope")
+    print("   weights, samples treated as independent (residual correlation left by")
+    print("   the trace's anti-alias filter would make it an under-estimate).")
+    print("   sig_stat is the uncertainty of the measured FIT alone: it carries no")
+    print("   sweep-systematic term, so it is NOT the sigma_tot the scored rows are")
+    print("   quoted against, and a per-row bar written in sig_stat is a far tighter")
+    print("   bar than one written in sigma_tot.")
+    print("   A row marked 'refilled' is one whose MODEL density is advectively")
+    print("   refilled across the window -- parallel transport resupplies that cell")
+    print("   while the plasma decays, so its fitted tau is a refill/decay")
+    print("   competition rather than the decay.  It is still fitted and still in")
+    print("   the all-port mean; the mean is simply published both ways below.")
     header = (
         f"{'port':>6} {'z [cm]':>8} {'tau_model':>10} {'tau_exp':>9} "
         f"{'ratio':>7} {'D_exp [%]':>10}"
+        f" {'sig_stat':>10} {'dev [stat]':>10} {'refilled':>9}"
     )
     print(header)
     print("-" * len(header))
@@ -2170,11 +2325,27 @@ def _report_decay(rows, window):
             f"{r['port']:>6} {r['z']:8.0f} {r['tau_model_ms']:9.2f}ms "
             f"{r['tau_exp_ms']:8.2f}ms {r['ratio']:7.2f} "
             f"{100.0 * r['decay_frac_exp']:9.2f}{mark:<1}"
+            f" {r['tau_exp_sigma_stat_ms']:8.3f}ms {r['dev_sigma_stat']:10.1f}"
+            f" {'refilled' if r['refilled'] else '':>9}"
         )
     ratios = [r["ratio"] for r in rows if np.isfinite(r["ratio"])]
+    mean_all, n_all, mean_ex, n_ex = tau_ratio_means(rows)
     if ratios:
         print(f"  mean tau_model/tau_exp: {np.mean(ratios):.2f}")
         print(f"    all-port mean, over {len(ratios)} scored port(s)")
+        print("  (the same all-port mean, beside its refilled-port-free counterpart:)")
+        print(f"  mean tau_model/tau_exp (all ports): {mean_all:.2f}")
+        if n_ex:
+            print(f"  mean tau_model/tau_exp (ex p50): {mean_ex:.2f}")
+            print(
+                f"    over {n_ex} of {n_all} scored port(s); "
+                f"{n_all - n_ex} excluded as 'refilled'"
+            )
+        else:
+            print(
+                "  mean tau_model/tau_exp (ex p50): none -- every scored port "
+                "is marked 'refilled'"
+            )
     observed = [
         r["ratio"] for r in rows
         if np.isfinite(r["ratio"]) and not r["extrapolated"]
@@ -2476,8 +2647,12 @@ def json_payload(
     The same three stages the table prints, keyed by stage, with the rows
     carried as the ``compare``/``compare_decay`` dicts build them -- including
     ``sigma_tot``, which the table has no column for. This is a SERIALIZATION
-    of the scored rows and computes nothing: any number here is the number the
-    table rendered, at full precision rather than the table's field widths.
+    of the scored rows: any number here is the number the table rendered, at
+    full precision rather than the table's field widths. The two stage (iii)
+    summary fields ``tau_ratio_mean`` and ``tau_ratio_mean_ex_p50`` are read
+    from the same ``tau_ratio_means`` the table prints, for the same reason --
+    an exported summary that recomputed its own mean could drift from the
+    printed one.
 
     The report-only per-face and chord rows land under their OWN
     ``decay_faces`` key, never inside ``decay``: the scored block has to
@@ -2490,6 +2665,7 @@ def json_payload(
     Python reads back as ``float('nan')``; a strict JSON reader will reject it,
     which is the honest outcome for a row whose fit returned no value.
     """
+    tau_ratio_mean, _, tau_ratio_mean_ex_p50, _ = tau_ratio_means(decay_rows)
     return {
         "label": label,
         "es": int(es),
@@ -2499,6 +2675,8 @@ def json_payload(
         "decay": {
             "window_ms": [float(decay_window[0]), float(decay_window[1])],
             "rows": decay_rows,
+            "tau_ratio_mean": tau_ratio_mean,
+            "tau_ratio_mean_ex_p50": tau_ratio_mean_ex_p50,
         },
         "decay_faces": {
             "window_ms": [float(decay_window[0]), float(decay_window[1])],

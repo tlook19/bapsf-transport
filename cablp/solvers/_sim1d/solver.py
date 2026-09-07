@@ -3291,6 +3291,24 @@ class LAPDSim1D:
     def _init_run_machinery(self):
         """Initialize the run-loop bookkeeping and apply any restart payload."""
         self._cathode_solve = None
+        # CLAMP CENSUS. A cathode solve whose root sits above the composed
+        # ceiling is clamped to the ceiling and tagged
+        # ``regime = "capability_limited"``, and nothing raises -- the clamp is
+        # a numerical regime guard, not an error. Counting it makes the guard
+        # MEASURED rather than remembered: a run can then say what share of its
+        # cathode solves rode the ceiling, and when the first one did, instead
+        # of leaving a reader to infer it from the per-save census.
+        #
+        # Counted on the ACCEPTANCE-COMMITTED write in
+        # ``solve_cathode_boundary`` (the ``update_cache`` branch), so these
+        # count accepted solves and rejected attempts never move them; they
+        # ride ``_PICARD_DIRECT_ATTRS`` for the same reason the jet-arming
+        # census does. Diagnostic only -- no exported value is a function of
+        # them and no trajectory moves.
+        self._cathode_total_solves = 0
+        self._cathode_clamped_solves = 0
+        self._cathode_clamp_first_t_s = float("nan")
+        self._cathode_clamp_last_t_s = float("nan")
         # Single-entry memo for READ-ONLY (``update_cache=False``) cathode
         # solves: ``(key, result)`` or None. See ``solve_cathode_boundary``.
         self._cathode_solve_memo = None
@@ -7467,6 +7485,13 @@ class LAPDSim1D:
         # A2a lag: a float, mutated only on the accepted-solve write, so a
         # Picard re-run must start from the value the step started from.
         "_cathode_tail_anode_I",
+        # Clamp census: four counters written on that same accepted-solve
+        # write, so a Picard re-run must start from the values the step
+        # started from -- otherwise the re-run's solve would be counted twice.
+        "_cathode_total_solves",
+        "_cathode_clamped_solves",
+        "_cathode_clamp_first_t_s",
+        "_cathode_clamp_last_t_s",
         # Vessel node: the potential is a float, and the ledger/current
         # records are copied below because they are mutable containers.
         "_vessel_V_cm",
@@ -7569,6 +7594,22 @@ class LAPDSim1D:
         "_jet_arming_launched_atoms",
         "_jet_arming_censored_atoms",
     )
+    #: The cathode CLAMP census, carried exactly the way the atom counts above
+    #: are: written unconditionally on their own keys, restored WITH A DEFAULT,
+    #: and outside any presence check. Same reason -- losing a count is a lost
+    #: measurement, and the clamp census is the only record that a run rode the
+    #: composed ceiling at all (the clamp raises nothing and a save frame
+    #: between two clamped solves shows nothing). A payload written before
+    #: these keys existed restores them to their seed and the resumed run's
+    #: census then covers its own steps only, which is the honest reading of a
+    #: payload that never carried them. They are counters: no exported value is
+    #: a function of them and restoring them moves no trajectory.
+    _RESTART_CATHODE_CLAMP_COUNT_ATTRS = (
+        "_cathode_total_solves",
+        "_cathode_clamped_solves",
+        "_cathode_clamp_first_t_s",
+        "_cathode_clamp_last_t_s",
+    )
     _RESTART_CIRCUIT_ATTRS = (
         "_circuit_I_loop",
         "_circuit_I_prev",
@@ -7637,6 +7678,13 @@ class LAPDSim1D:
                 + self._RESTART_JET_ARMING_COUNT_ATTRS
             ):
                 cathode[name] = getattr(self, name)
+        # Cathode clamp census, written UNCONDITIONALLY on its own keys: every
+        # run performs cathode solves or performs none, and zero-of-zero is a
+        # true statement about the producing run that the resumed run should
+        # continue rather than restart. Own keys, not the strict inventory
+        # loop, so a payload taken before they existed still loads.
+        for name in self._RESTART_CATHODE_CLAMP_COUNT_ATTRS:
+            cathode[name] = getattr(self, name)
         circuit = {
             name: getattr(self, name) for name in self._RESTART_CIRCUIT_ATTRS
         }
@@ -7846,6 +7894,18 @@ class LAPDSim1D:
                     "armed.",
                     stacklevel=2,
                 )
+        # Cathode clamp census: DEFAULTED, not required, and outside every
+        # presence check above. A payload from before these keys were carried
+        # restores the constructor's seed, so the resumed run's census covers
+        # its own steps and says nothing false about the producing run's.
+        for name in self._RESTART_CATHODE_CLAMP_COUNT_ATTRS:
+            stored = cathode.get(name)
+            seed = getattr(self, name)
+            if stored is None:
+                continue
+            setattr(
+                self, name, int(stored) if isinstance(seed, int) else float(stored)
+            )
         circuit = payload["circuit"]
         for name in self._RESTART_CIRCUIT_ATTRS:
             setattr(self, name, circuit[name])
@@ -10415,7 +10475,49 @@ class LAPDSim1D:
             # A2a: the lag advances on the SAME acceptance-committed write as
             # sigma_b above. Rejected attempts never reach this branch.
             self._cathode_tail_anode_I = float(result.tail_anode_current_A)
+            # Clamp census (see _init_run_machinery). Same branch, same
+            # reason: a rejected attempt is not a solve this run performed.
+            self._update_cathode_clamp_census(result)
         return result
+
+    def _update_cathode_clamp_census(self, solve):
+        """Count one accepted cathode solve, and whether it was clamped.
+
+        A solve is CLAMPED when its circuit result carries
+        ``regime = "capability_limited"`` -- the demand past the composed
+        ceiling that returns the ceiling value and raises nothing. On a twin
+        layout the accepted step performs ONE cathode solve carrying two
+        circuit results, so it counts once and counts as clamped when EITHER
+        end rode its ceiling: the census answers "how many of this run's
+        cathode solves were regime-guarded", not "how many cathode faces
+        were".
+
+        A step whose cathode solve produced no circuit result at all (the
+        solve is disabled in this phase) is not counted in either total: it is
+        not a solve that could have clamped, and putting it in the denominator
+        would understate the share of the solves that did.
+        """
+        beam_result = getattr(solve, "beam_result", None)
+        if beam_result is None:
+            return
+        circuit_results = [
+            r
+            for r in (
+                beam_result.result,
+                getattr(beam_result, "result_twin", None),
+            )
+            if r is not None
+        ]
+        if not circuit_results:
+            return
+        self._cathode_total_solves += 1
+        if any(
+            str(r.regime) == "capability_limited" for r in circuit_results
+        ):
+            self._cathode_clamped_solves += 1
+            if not math.isfinite(self._cathode_clamp_first_t_s):
+                self._cathode_clamp_first_t_s = float(self._time)
+            self._cathode_clamp_last_t_s = float(self._time)
 
     def _warn_beam_gap_ledger(self, cathode_solve):
         """Warn ONCE per run if the CSDA beam gap ledger stops closing.
@@ -12184,6 +12286,23 @@ class LAPDSim1D:
                 self._dvm_particle_ledger_frames(saved)
             )
             result.dvm_tick_count = int(self._dvm_tick_count)
+        # Cathode clamp census: how many accepted cathode solves were clamped
+        # to the composed ceiling, and when the first and last of them were.
+        # Carried on every result, because zero-of-N is itself the statement a
+        # reader wants (the clamp did not fire) and is not the same as "this
+        # run never asked". A RESUMED run CONTINUES the producing run's
+        # counts: the four counters ride the restart payload
+        # (``_RESTART_CATHODE_CLAMP_COUNT_ATTRS``), carried with a default so a
+        # payload predating those keys restores the seed and the resumed run's
+        # census then covers its own steps only. This is the jet-arming
+        # counts' contract, for the jet-arming counts' reason -- losing a count
+        # is a lost measurement.
+        result.cathode_clamp_census = {
+            "clamped_solves": int(self._cathode_clamped_solves),
+            "total_solves": int(self._cathode_total_solves),
+            "first_t_s": float(self._cathode_clamp_first_t_s),
+            "last_t_s": float(self._cathode_clamp_last_t_s),
+        }
         # Cathode-jet arming census, presence-gated on the CRITERION rather
         # than on either jet channel: a run that declared no criterion carries
         # no such attribute and its saved file no such group, so an
