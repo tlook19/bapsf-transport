@@ -25112,6 +25112,78 @@ def _case_prescribed_drive_handoff():
 
 
 # --------------------------------------------------------------------
+# dvm-jet-rn-interval-refusals
+# --------------------------------------------------------------------
+@_case("dvm-jet-rn-interval-refusals")
+def _case_dvm_jet_rn_interval_refusals():
+    # THE THREE SURFACE JETS REFUSE R_N = 0 THE SAME WAY. Each jet's launch
+    # band is formed by dividing R_E by R_N, and the solver forms all three
+    # bands before the engine exists. The collector spec was already put
+    # through the engine's validator at that point; the cathode and anode
+    # specs were not, so their R_N = 0 reached the division and answered with
+    # a ZeroDivisionError -- a Python arithmetic failure where the validators
+    # promise an interval statement naming the key. All three now validate
+    # before the band is formed, so the message a reader gets is the same
+    # message whichever surface was misconfigured.
+    for _jr_label, _jr_params, _jr_flags, _jr_says in (
+        (
+            "cathode",
+            {
+                "neutral_kinetic_dvm_cathode_jet": True,
+                "neutral_kinetic_dvm_cathode_jet_R_N": 0.0,
+                "neutral_kinetic_dvm_cathode_jet_R_E": 0.0,
+                "cathode_neutral_jet": False,
+            },
+            {"cathode_coupling": True},
+            "0 < R_E <= R_N < 1",
+        ),
+        (
+            "anode",
+            {
+                "neutral_kinetic_dvm_anode_jet": True,
+                "neutral_kinetic_dvm_anode_jet_R_N": 0.0,
+                "neutral_kinetic_dvm_anode_jet_R_E": 0.0,
+                "anode_neutral_jet": False,
+            },
+            {"cathode_coupling": True},
+            "0 < R_E <= R_N < 1",
+        ),
+        (
+            "collector",
+            {
+                "neutral_kinetic_dvm_collector_jet": True,
+                "neutral_kinetic_dvm_collector_jet_R_N": 0.0,
+                "neutral_kinetic_dvm_collector_jet_R_E": 0.0,
+                "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple": 3.0,
+            },
+            {},
+            "0 < R_N <= 1",
+        ),
+    ):
+        _jr_p, _jr_f = default_config()
+        _jr_p["neutral_model"] = "kinetic_dvm"
+        _jr_p.update(_jr_params)
+        _jr_f.update(_jr_flags)
+        try:
+            LAPDSim1D(_jr_p, _jr_f)
+        except ZeroDivisionError as _jr_zero:
+            raise AssertionError(
+                f"the DVM {_jr_label} jet answered R_N = 0 with a "
+                f"ZeroDivisionError ({_jr_zero}) instead of the interval "
+                "statement its validator promises"
+            )
+        except ValueError as _jr_error:
+            assert _jr_says in str(_jr_error), (_jr_label, str(_jr_error))
+            assert _jr_label in str(_jr_error).lower(), (
+                _jr_label, str(_jr_error)
+            )
+        else:
+            raise AssertionError(
+                f"the DVM {_jr_label} jet accepted R_N = 0"
+            )
+
+
+# --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
 @_case("smoke-summary")
@@ -25135,7 +25207,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 138, "historical_stance": 58}
+_CASE_CENSUS = {"total": 139, "historical_stance": 58}
 
 
 def _assert_case_census():
