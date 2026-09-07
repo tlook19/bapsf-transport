@@ -63,6 +63,25 @@ be able to tell a sheath the emission model produced from one the trace did.
 There is no virtual cathode: ``phi_c_minus`` is zero because the space-charge
 barrier is a property of the emission solve, so ``phi_c_plus == phi_c``.
 
+**What ``P_load_residual`` measures here.** On the current-driven solve that
+row is a closure CHECK and is ~0 by construction. It is not that here, and a
+reader who carries the current-driven reading across will misread it. This
+mode books the emitted current with no returning-electron term, so the
+current-resolved ledger it is checked against is short exactly that term and
+the row is the size of what was left out. Exactly, and on every frame,
+
+    P_load_residual = -phi_c * I_cathode_kirchhoff_residual
+
+Where the emitted-current floor is INACTIVE (``I > I_i``, the operating
+regime of a rung whose measured current exceeds the Bohm ion current) that
+equals ``P_cathode_e_phi``: the residual IS the returning plasma electrons'
+field work, the quantity the deep-sheath limit dropped. Where the floor
+BINDS (``I <= I_i``, so ``I_eth* = 0``) it is not: the Kirchhoff residual
+then carries the whole shortfall between the measured current and what the
+ions supply, and the row runs orders above the field work with the opposite
+sign. Nothing is re-booked on either branch -- the ledger is left as it is
+and this is the statement of what it is measuring.
+
 **The one ceiling that remains.** ``phi_c_cap_V`` still bounds the net sheath
 drop, because it is a DOMAIN GUARD on the tabulated He ionization cross section
 the beam is deposited with, not a statement about the circuit. A measured
