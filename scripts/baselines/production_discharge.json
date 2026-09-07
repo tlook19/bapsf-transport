@@ -89,7 +89,7 @@
     "file_sha256": [
       "3acd42357faab77375cfdd7bb4838fe8cd7daf696a4aae93c7f2d2feaad04e19"
     ],
-    "identity": "b6c94082515c543e8f4523346020adecde720796f723ddf5c013cb18cc8cdc8d",
+    "identity": "856dee4254c67a84fe73a3b2d6c21e861f068c02a35bd5f91f09e97ee6fdb7c5",
     "name": "g1atrim"
   },
   "description": "Golden baseline at the stance of record, re-cut to the gate mesh: default_config() plus the committed stance file scripts/stances/g1atrim.toml, minus that stance's mesh-sized package, plus the run-shape overrides in baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60).",
@@ -116,6 +116,7 @@
     "electron_heat_flux_limit": true,
     "end_expansion_geometry": false,
     "end_recycle_to_annulus": false,
+    "end_sheath_full_debit": false,
     "front_flux": false,
     "heat_conduction": true,
     "hyperbolic_energy_consistent": true,
