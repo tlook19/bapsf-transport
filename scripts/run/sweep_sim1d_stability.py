@@ -295,6 +295,10 @@ def check_case(case, result, summary):
         # keys -- NaN-filled on frames with no solve, exactly as the keys
         # themselves are seeded, so nanmax reads the same numbers here.
         assert np.nanmax(result.cathode_diagnostics["source_I_tot"]) > 0.0
+        # ``end_I_tot`` is read only under ``case.twin``, which is the same
+        # flag its dataset is presence-gated on: a single-cathode case has
+        # no ``end_*`` cathode-result block at all, so this must not move
+        # out of the branch.
         if case.twin:
             assert cathode_fractions.get("has_twin_solution", 0.0) > 0.0
             assert np.nanmax(result.cathode_diagnostics["end_I_tot"]) > 0.0

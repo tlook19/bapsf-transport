@@ -485,6 +485,21 @@ _CATHODE_RESULT_KEYS = (
     "I_cathode_kirchhoff_residual",
 )
 
+
+def _cathode_result_prefixes(flags):
+    """Return the cathode-result diagnostic prefixes this run exports.
+
+    ``("source",)`` on a single cathode and ``("source", "end")`` under
+    ``TwinCathode``. The ``end`` block is filled from
+    ``BeamResult.result_twin``, which every solve leaves ``None`` unless the
+    twin is configured, so on a single-cathode run every one of its columns
+    is NaN in every frame. One function answers "which prefixes exist" for
+    the seeding and for the write guard alike, so the two cannot drift into
+    seeding a block nothing fills or filling one nothing seeded.
+    """
+    return ("source", "end") if flags.get("TwinCathode") else ("source",)
+
+
 #: The members of :data:`_CATHODE_RESULT_KEYS` that only the CURRENT-DRIVEN
 #: circuit solve populates. The voltage-driven (floating) solve in
 #: ``cablp.cathode.circuit`` never assigns them, so they sit at their
@@ -12739,7 +12754,19 @@ class LAPDSim1D:
                 # ray ran. Presence-gated with the closure.
                 diag[f"{prefix}_beam_plateau_edge_eV"] = np.nan
                 diag[f"{prefix}_beam_plateau_edge_clamped"] = np.nan
-        for prefix in ("source", "end"):
+        # The ``end`` prefix is PRESENCE-GATED on the twin cathode. Only
+        # ``beam_result.result_twin`` ever fills these, and that object is
+        # non-``None`` only under ``TwinCathode`` (the voltage-driven solve
+        # builds it inside ``if config.Twin``; the current-driven and
+        # prescribed solves leave it ``None`` unconditionally). A
+        # single-cathode file therefore carried a full second copy of the
+        # cathode-result block that was all-NaN in every frame of every run
+        # -- a column a reader has to know to ignore. Gating the SEED on the
+        # same flag the WRITE is gated on keeps seed and write inseparable,
+        # so the row structure still cannot move between saves of one run.
+        # Readers must default the whole ``end_*`` block on absence, exactly
+        # as they already defaulted the NaN.
+        for prefix in _cathode_result_prefixes(self._flags):
             diag[f"{prefix}_regime"] = "none"
             for key in _CATHODE_RESULT_KEYS:
                 diag[f"{prefix}_{key}"] = np.nan
@@ -12802,6 +12829,17 @@ class LAPDSim1D:
             current_driven=current_driven,
         )
         if beam_result.result_twin is not None:
+            if "end" not in _cathode_result_prefixes(self._flags):
+                # A twin result on a run whose ``end`` block was never seeded
+                # would ADD 50 datasets partway through a trajectory, which is
+                # exactly the moving row structure the seeding block forbids.
+                # Refused loudly rather than papered over: it means a solve
+                # produced a twin the configuration did not declare.
+                raise ValueError(
+                    "the cathode solve returned a twin result on a run "
+                    "without TwinCathode, so the end_* cathode diagnostics "
+                    "have no seeded block to be written into"
+                )
             diag["has_twin_solution"] = 1.0
             self._copy_cathode_result_diagnostics(
                 diag=diag,

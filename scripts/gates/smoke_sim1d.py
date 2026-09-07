@@ -1471,9 +1471,17 @@ def _case_variable_area_well_balancedness(
     twin_resolved_flags = dict(srcgrid_off_flags)
     twin_resolved_flags["TwinCathode"] = True
     twin_resolved_flags["cathode_coupling"] = False
-    twin_resolved_geom = LAPDSim1D(
-        srcgrid_off_params, twin_resolved_flags
-    ).get_initial_snapshot().geometry
+    twin_resolved_sim = LAPDSim1D(srcgrid_off_params, twin_resolved_flags)
+    twin_resolved_geom = twin_resolved_sim.get_initial_snapshot().geometry
+    # PRESENCE GATE, armed side. The ``end_*`` cathode-result block exists
+    # exactly where a twin solve can fill it; the single-cathode cases assert
+    # its absence. Both directions, so a gate that silently stopped seeding
+    # the block cannot pass.
+    twin_cathode_diag = twin_resolved_sim._cathode_diagnostic_snapshot()
+    assert "end_regime" in twin_cathode_diag
+    assert "end_phi_c" in twin_cathode_diag
+    assert "end_long_mfp" in twin_cathode_diag
+    assert "end_phi_c_at_cap" in twin_cathode_diag
     assert list(twin_resolved_geom.cell_role[:2]) == ["plenum", "cathode"]
     assert list(twin_resolved_geom.cell_role[-2:]) == ["cathode", "plenum"]
     assert "collector" not in set(twin_resolved_geom.cell_role)
@@ -8209,7 +8217,10 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.allclose(run_result.cathode_diagnostics["beam_cross"], 0.0)
     assert np.all(np.isnan(run_result.cathode_diagnostics["source_phi_c"]))
     assert np.all(run_result.cathode_diagnostics["source_regime"] == "none")
-    assert np.all(run_result.cathode_diagnostics["end_regime"] == "none")
+    # The ``end_*`` cathode-result block is presence-gated on TwinCathode:
+    # ABSENT here, not NaN. Only the twin solve fills it, so on a single
+    # cathode it was a second copy of the block that never carried a number.
+    assert "end_regime" not in run_result.cathode_diagnostics
     saved_term_sum = np.zeros_like(run_result.y)
     for term_name in expected_rhs_terms:
         term_fields = run_result.rhs_terms[term_name]
@@ -9021,14 +9032,18 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     # export; its successors are the closed audit rows.
     assert np.all(np.isfinite(cathode_diag["source_P_plasma_thermal_loss"]))
     assert np.all(np.isfinite(cathode_diag["source_P_into_plasma"]))
-    assert np.all(np.isnan(cathode_diag["end_phi_c"]))
+    # Single cathode: the whole ``end_*`` cathode-result block is ABSENT
+    # (presence-gated on TwinCathode), not present-and-NaN.
+    assert "end_phi_c" not in cathode_diag
+    assert not [k for k in cathode_diag if k.startswith("end_")
+                and not k.startswith("end_beam_")]
     assert np.all(
         np.isin(
             cathode_diag["source_regime"],
             ["classical", "virtual_cathode", "capability_limited"],
         )
     )
-    assert np.all(cathode_diag["end_regime"] == "none")
+    assert "end_regime" not in cathode_diag
     assert cathode_diag["beam_cross"].shape == (4, geom.cells)
     # The static surface temperature is reported as the configured value.
     assert np.allclose(
@@ -22953,19 +22968,16 @@ def _case_cathode_closed_audit_export():
         ce_loaded = load_result_hdf5(ce_path)
         ce_dg = ce_loaded.cathode_diagnostics
 
-        # (a) PRESENT AND FINITE. Both ends carry the datasets; the solved
-        # end carries numbers. The unsolved twin end is NaN by the same
-        # discipline every other cathode row uses, so only `source_` is
-        # asserted finite.
+        # (a) PRESENT AND FINITE. This run has one cathode, so it carries
+        # the `source_` datasets and NONE of the `end_` ones: the twin block
+        # is presence-gated on TwinCathode, and on a single cathode it would
+        # have been NaN in every frame. Absence, not NaN, is the statement.
         for ce_key in ce_closed:
-            for ce_prefix in ("source", "end"):
-                assert f"{ce_prefix}_{ce_key}" in ce_dg, ce_key
+            assert f"source_{ce_key}" in ce_dg, ce_key
+            assert f"end_{ce_key}" not in ce_dg, ce_key
             ce_vals = np.asarray(ce_dg[f"source_{ce_key}"], dtype=float)
             assert ce_vals.shape == ce_loaded.time.shape, ce_key
             assert np.all(np.isfinite(ce_vals)), ce_key
-            assert np.all(
-                np.isnan(np.asarray(ce_dg[f"end_{ce_key}"], dtype=float))
-            ), ce_key
 
         # (b) THE RESIDUALS ARE THE CLOSURE NUMBERS. Row-relative against the
         # row each one is a residual OF, and both rows are asserted physical
