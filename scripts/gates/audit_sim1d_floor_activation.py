@@ -19,9 +19,23 @@ Two distinct clip sites are tracked:
     is the clip that would launder Crank-Nicolson ringing into an energy source,
     so it is the one that decides whether a non-backward-Euler theta is safe.
 
-Usage:
-    python scripts/gates/audit_sim1d_floor_activation.py                 # stance-of-record config
-    python scripts/gates/audit_sim1d_floor_activation.py --t-end 2e-3    # short shakedown
+**This audit names the configuration it measures.** How often a floor binds is
+a property OF a configuration, so there is no bare mode: the command line
+carries ``--stance <name>`` or an explicit ``--no-stance``, and the header
+prints the name, the base chain and the resolved ``config_identity`` so a
+reading can be compared with another one. ``default_config()`` is the template
+of keys, never an implied plasma.
+
+Usage::
+
+    # the golden gate's own configuration (the reference stance at nx = 60)
+    python scripts/gates/audit_sim1d_floor_activation.py --stance g1atrim \
+        --golden-route
+    # the named configuration at ITS OWN mesh, short shakedown
+    python scripts/gates/audit_sim1d_floor_activation.py --stance g1atrim \
+        --t-end 2e-3
+    # no configuration: default_config() alone, recorded as unnamed
+    python scripts/gates/audit_sim1d_floor_activation.py --no-stance
 """
 
 import argparse
@@ -29,38 +43,38 @@ import sys
 
 import numpy as np
 
-import cablp.solvers._sim1d.core.state as state_mod
-import cablp.solvers._sim1d.physics.conduction as conduction_mod
-from cablp.solvers._sim1d import LAPDSim1D, ProgressPrinter1D, default_config
-from cablp.solvers._sim1d.physics.conduction import IMPLICIT_HEAT_SCHEMES
-from cablp.constants import ev_to_erg
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+import sys as _sys
+from pathlib import Path as _Path
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in _sys.path:
+        _sys.path.insert(0, _dir)
 
-# Re-cut onto the STANCE OF RECORD (scripts/stances/g1atrim.toml) on
-# 2026-08-24. This block previously described itself as mirroring the old
-# production notebook; that lineage ended at the L2 geometry flip and the
-# sccm changeover, so the claim has been dropped along with the stale values.
-PARAM_OVERRIDES = {
-    "V_bank": 177.843,
-    "S_gp": 9010,
-    # The pulse/decay puff-waveform family is deliberately ABSENT: the stance
-    # runs the "square" waveform, which reads none of those keys, and
-    # b_ion_neutral_drag is deprecated. The b_* rate scalars are absent
-    # because b = 1 is campaign policy, not a knob -- the 0.5 values this
-    # block used to carry predate that policy.
-    "Rp": 18.415,
-    "R_cath": 18.415,
-    "R_comp": 7.2244e-3,
-    # Time-integration block, spelled out because this audit reasons about it.
-    "operator_splitting": "strang",
-    "heat_picard_iterations": 2,
-    "heat_picard_tol": 1e-10,
-}
-FLAG_OVERRIDES = {
-    # Empty on purpose: every flag this audit needs is already the shipped
-    # default. NB ion_neutral_drag_cx_only is an input_flags key -- filing it
-    # here as a parameter is now a construction-time ValueError, not the
-    # silent no-op it was when this comment was first written.
-}
+import cablp.solvers._sim1d.core.state as state_mod  # noqa: E402
+import cablp.solvers._sim1d.physics.conduction as conduction_mod  # noqa: E402
+from cablp.solvers._sim1d import (  # noqa: E402
+    LAPDSim1D,
+    ProgressPrinter1D,
+    config_identity,
+    default_config,
+)
+from cablp.solvers._sim1d.physics.conduction import (  # noqa: E402
+    IMPLICIT_HEAT_SCHEMES,
+)
+from cablp.constants import ev_to_erg  # noqa: E402
+
+# The golden gate's own layering, imported rather than restated: the reference
+# configuration minus its mesh-sized package, plus the gate's run-shape pins.
+# Re-deriving that treatment here would be a second copy of it, free to drift
+# from the one the golden actually runs.
+from baseline_sim1d import (  # noqa: E402
+    PRODUCTION_STANCE,
+    baseline_lineage,
+    build_baseline_config,
+)
+from stance_config import available_stances, load_configuration  # noqa: E402
 
 
 # A value sitting exactly on its floor round-trips through
@@ -331,6 +345,81 @@ def report(recorder, sim, result):
     print("-" * 78)
 
 
+def build_audit_config(args):
+    """Return ``(params, flags, lineage)`` for the configuration to audit.
+
+    Three routes, one of which the caller has already been required to name:
+
+    ``--stance NAME --golden-route``
+        :func:`baseline_sim1d.build_baseline_config` verbatim -- the golden
+        gate's own layering, which is the named configuration minus its
+        mesh-sized package plus the gate's run-shape pins. This is what lets
+        the audit measure the configuration the golden actually runs, and it
+        is imported rather than restated so the two cannot diverge. ``--nx``
+        layers a different mesh on that same treatment; without it the gate's
+        own ``nx`` stands and the lineage identity is the golden's.
+    ``--stance NAME``
+        the named configuration resolved by the stance loader, at ITS OWN
+        mesh -- the mesh-sized package travels with it.
+    ``--no-stance``
+        ``default_config()`` alone. The template of keys is not a plasma, so
+        the lineage is ``None``: this run records itself as unnamed rather
+        than borrowing a name it did not use.
+
+    ``lineage`` is ``None`` only on the ``--no-stance`` route.
+    """
+    if args.golden_route:
+        overrides = {"nx": int(args.nx)} if args.nx is not None else None
+        params, flags = build_baseline_config(overrides)
+        return params, flags, baseline_lineage(params, flags)
+    if args.no_stance:
+        params, flags = default_config()
+        return params, flags, None
+    params, flags, lineage = load_configuration(args.stance)
+    return params, flags, lineage
+
+
+def print_header(params, flags, lineage, scheme_override):
+    """Print WHICH configuration this reading is about, before the run starts.
+
+    A floor-activation count is only comparable against another count taken on
+    the same configuration, so the identity is printed at the top rather than
+    left to the command line to remember.
+
+    The name and the base chain are facts about the FILE and come from the
+    lineage; the identity is restated over the pair this process actually
+    constructs, so a ``--scheme``, ``--resolved`` or ``--nx`` on the command
+    line moves it. With none of those on the golden route it is the golden's
+    own. ``lineage`` is ``None`` for a run that named no configuration; the
+    identity is printed either way, because it is a fact about the resolved
+    pair and not about a name.
+    """
+    identity = config_identity(params, flags)
+    if lineage is None:
+        name, chain = "(none named)", ""
+    else:
+        name = lineage.name
+        chain = " <- ".join(lineage.base_chain)
+    print("=" * 78)
+    print("FLOOR ACTIVATION AUDIT -- configuration")
+    print("=" * 78)
+    print(f"configuration    : {name}")
+    print(f"base chain       : {chain or '(none -- base configuration)'}")
+    print(f"config_identity  : {identity}")
+    print(f"nx               : {params['nx']}")
+    print(f"neutral_model    : {params['neutral_model']!r}")
+    print(
+        f"implicit_heat_scheme : {params['implicit_heat_scheme']!r}"
+        + (
+            f"  (OVERRIDDEN on the command line: --scheme {scheme_override})"
+            if scheme_override is not None
+            else "  (the configuration's own)"
+        )
+    )
+    print(f"operator_splitting   : {params['operator_splitting']!r}")
+    print(f"resolved_boundaries  : {bool(flags['resolved_boundaries'])}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--t-end", type=float, default=None, help="final time [s]")
@@ -338,9 +427,28 @@ def main(argv=None):
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument(
         "--scheme",
-        default="backward_euler",
+        default=None,
         choices=sorted(IMPLICIT_HEAT_SCHEMES),
-        help="implicit_heat_scheme for the conduction substep",
+        help="override implicit_heat_scheme for the conduction substep. "
+             "Default: the configuration's own value, whatever it names. An "
+             "explicit value is announced as an override in the header.",
+    )
+    parser.add_argument(
+        "--golden-route",
+        action="store_true",
+        help="apply the golden gate's own mesh treatment to the named "
+             "configuration (its mesh-sized package dropped whole, plus the "
+             "gate's run-shape pins), so this audit measures the "
+             f"configuration the golden runs. Requires --stance "
+             f"{PRODUCTION_STANCE}.",
+    )
+    parser.add_argument(
+        "--nx",
+        type=int,
+        default=None,
+        help="axial cell count, layered on the --golden-route treatment. "
+             "Without --golden-route there is no mesh treatment to layer it "
+             "on, so it is refused there rather than half-applied.",
     )
     parser.add_argument(
         "--resolved",
@@ -352,17 +460,58 @@ def main(argv=None):
             "reflecting cathode face is leaking."
         ),
     )
+    stance_group = parser.add_mutually_exclusive_group()
+    stance_group.add_argument(
+        "--stance", metavar="NAME", default=None,
+        help="committed configuration file (scripts/stances/NAME.toml) this "
+             "audit measures. Available: "
+             + (", ".join(available_stances()) or "(none committed)"),
+    )
+    stance_group.add_argument(
+        "--no-stance", action="store_true",
+        help="acknowledge that this audit names no configuration and measures "
+             "default_config() plus the overrides on this command line",
+    )
     args = parser.parse_args(argv)
 
-    params, flags = default_config()
-    params.update(PARAM_OVERRIDES)
-    flags.update(FLAG_OVERRIDES)
+    # Every run entry point names its configuration: default_config() is the
+    # template of keys and never an implied plasma, so a floor reading taken
+    # against it must say so instead of being reported as "the" answer.
+    if args.stance is None and not args.no_stance:
+        parser.error(
+            "name the configuration package. Pass --stance <name> to measure "
+            "a committed configuration (available: "
+            f"{', '.join(available_stances()) or '(none committed)'}), or "
+            "--no-stance to acknowledge that this audit names none and "
+            "measures default_config() plus the overrides on this command "
+            "line. default_config() is the template of keys, not a plasma."
+        )
+    if args.golden_route and args.stance != PRODUCTION_STANCE:
+        parser.error(
+            "--golden-route is the golden gate's layering of "
+            f"{PRODUCTION_STANCE!r} and is defined for no other "
+            f"configuration. Pass --stance {PRODUCTION_STANCE} with it, or "
+            "drop --golden-route to measure the configuration you named at "
+            "its own mesh."
+        )
+    if args.nx is not None and not args.golden_route:
+        parser.error(
+            "--nx layers a mesh on the --golden-route treatment. Without that "
+            "treatment the named configuration's mesh-sized package is still "
+            "in place and a different nx would half-apply it, which the "
+            "solver refuses; pass --golden-route, or drop --nx."
+        )
+
+    params, flags, lineage = build_audit_config(args)
     if args.resolved:
         flags["resolved_boundaries"] = True
-    params["implicit_heat_scheme"] = args.scheme
+    if args.scheme is not None:
+        params["implicit_heat_scheme"] = args.scheme
+    scheme = params["implicit_heat_scheme"]
+    print_header(params, flags, lineage, args.scheme)
 
     sim = LAPDSim1D(params, flags)
-    recorder = FloorRecorder(cells=sim._geometry.cells, scheme=args.scheme)
+    recorder = FloorRecorder(cells=sim._geometry.cells, scheme=scheme)
     recorder.time_getter = lambda: sim._time
     restore = install_probes(recorder)
     try:

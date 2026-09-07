@@ -25514,6 +25514,94 @@ def _case_smoke_summary():
     )
 
 
+# --------------------------------------------------------------------
+# floor-audit-names-its-configuration
+# --------------------------------------------------------------------
+@_case("floor-audit-names-its-configuration")
+def _case_floor_audit_names_its_configuration():
+    # The floor-activation audit is a run entry point, so it names the
+    # configuration it measures: no bare mode, and the golden route resolves
+    # to the golden's OWN configuration rather than to a hand-kept copy of it.
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    import audit_sim1d_floor_activation as _fa
+
+    # REFUSALS. argparse exits 2 on each; the message names what to pass.
+    _fa_refused = (
+        ([], "an unnamed configuration", "template of keys, not a plasma"),
+        (["--max-steps", "5"], "an unnamed configuration with a step cap",
+         "name the configuration package"),
+        (["--no-stance", "--golden-route"], "the golden route without a name",
+         "--golden-route is the golden gate's layering"),
+        (["--stance", "g1atrim", "--nx", "40"], "--nx without the golden route",
+         "--nx layers a mesh on the --golden-route treatment"),
+    )
+    for _fa_argv, _fa_what, _fa_says in _fa_refused:
+        _fa_err = StringIO()
+        try:
+            with contextlib.redirect_stderr(_fa_err):
+                _fa.main(_fa_argv)
+        except SystemExit as _fa_exit:
+            assert _fa_exit.code == 2, (_fa_what, _fa_exit.code)
+            assert _fa_says in _fa_err.getvalue(), (
+                _fa_what, _fa_err.getvalue()
+            )
+        else:
+            raise AssertionError(f"the floor audit accepted {_fa_what}")
+
+    # THE GOLDEN ROUTE, no solve: the configuration it assembles must be the
+    # one the committed sidecar records, identity for identity. A drifting
+    # hand-kept copy is exactly what this case exists to catch, so the
+    # comparison is against the sidecar and not against a literal here.
+    _fa_args = argparse.Namespace(
+        stance="g1atrim", no_stance=False, golden_route=True, nx=None
+    )
+    _fa_params, _fa_flags, _fa_lineage = _fa.build_audit_config(_fa_args)
+    _fa_sidecar = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "baselines"
+            / "production_discharge.json"
+        ).read_text()
+    )["configuration"]
+    assert _fa_lineage.name == _fa_sidecar["name"], _fa_lineage.name
+    assert (
+        _fa.config_identity(_fa_params, _fa_flags) == _fa_sidecar["identity"]
+    ), (_fa.config_identity(_fa_params, _fa_flags), _fa_sidecar["identity"])
+
+    # ...and the header says so, so a transcript carries the identity.
+    _fa_out = StringIO()
+    with contextlib.redirect_stdout(_fa_out):
+        _fa.print_header(_fa_params, _fa_flags, _fa_lineage, None)
+    _fa_header = _fa_out.getvalue()
+    assert _fa_sidecar["identity"] in _fa_header, _fa_header
+    assert "g1atrim" in _fa_header, _fa_header
+
+    # --scheme defaults to the configuration's own value and announces an
+    # explicit one as an override, so a verdict line cannot claim a scheme
+    # the run did not use.
+    assert "(the configuration's own)" in _fa_header, _fa_header
+    _fa_out = StringIO()
+    with contextlib.redirect_stdout(_fa_out):
+        _fa.print_header(_fa_params, _fa_flags, _fa_lineage, "crank_nicolson")
+    assert "OVERRIDDEN on the command line" in _fa_out.getvalue()
+
+    # The unnamed route records itself as unnamed rather than borrowing a name.
+    _fa_args = argparse.Namespace(
+        stance=None, no_stance=True, golden_route=False, nx=None
+    )
+    _fa_params, _fa_flags, _fa_lineage = _fa.build_audit_config(_fa_args)
+    assert _fa_lineage is None
+    assert not hasattr(_fa, "PARAM_OVERRIDES")
+    assert not hasattr(_fa, "FLAG_OVERRIDES")
+
+
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
@@ -25523,7 +25611,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 140, "historical_stance": 59}
+_CASE_CENSUS = {"total": 141, "historical_stance": 59}
 
 
 def _assert_case_census():
