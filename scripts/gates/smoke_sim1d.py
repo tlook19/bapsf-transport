@@ -142,6 +142,7 @@ from cablp.solvers._sim1d.physics.cathode import (
     beam_gap_ledger_mismatch,
     beam_ionization_rhs_terms,
     beam_launch,
+    cathode_emission_sheath_power_W,
     cathode_sample_indices,
 )
 from cablp.solvers._sim1d.physics.kinetic_dvm import (
@@ -26399,6 +26400,80 @@ def _case_end_face_full_debit_split():
     assert "cathode_face_full_debit" in _es_default_flags
 
 
+
+# --------------------------------------------------------------------
+# cathode-emitted-fall-beam-row-non-overlap
+# --------------------------------------------------------------------
+@_case("cathode-emitted-fall-beam-row-non-overlap")
+def _case_cathode_emitted_fall_beam_row_non_overlap(
+    id_plasmas, plasma_probe, solve_idriven, uni_cfg
+):
+    # THE IDENTITY THE BEAM-ROW NON-OVERLAP RESTS ON.
+    # `cathode_e_emitted_fall` books e (phi_c_plus - max(phi_c, 0)) Gamma_em:
+    # the part of the cathode fall the released electrons drop through that
+    # the beam deposition row does not already carry. The beam row carries the
+    # NET phi_c, so the two rows may not overlap -- and the whole reason they
+    # do not is that the circuit defines phi_c = phi_c_plus - phi_c_minus, so
+    # with no virtual cathode (phi_c_minus = 0) the two potentials are the
+    # same number and the fall row is EXACTLY zero, not small.
+    #
+    # Checked over a DRIVEN DISCHARGE state of the same circuit the solver's
+    # cathode solve calls, on both sides of the threshold: a hot, dense plasma
+    # is released-classical at every drive current (the emitter delivers its
+    # full space-charge-released current and the sheath never inverts), and a
+    # cold, thin one is a deep virtual cathode at the same currents. The
+    # second is the NEGATIVE CONTROL: it is what says the zero above is the
+    # identity holding and not the row being dead.
+    # The fall row does not read T_s at all -- it is
+    # (phi_c_plus - max(phi_c, 0)) I_eth_star -- so this only has to be the
+    # surface temperature the fixture's own device is at, which is what makes
+    # the enthalpy row a live comparator beside it.
+    T_s_K = float(uni_cfg.T_s)
+    assert T_s_K > 0.0, T_s_K
+
+    # (i) DRIVEN, NO VIRTUAL CATHODE -> the fall row is exactly zero.
+    zero_points = 0
+    for _fb_I in (20.0, 100.0, 300.0, 600.0, 1000.0, 2000.0):
+        _fb_r = solve_idriven(uni_cfg, plasma_probe, I_tot_A=_fb_I)
+        # The circuit's own definition, first: everything below reads off it.
+        assert _fb_r.phi_c == _fb_r.phi_c_plus - _fb_r.phi_c_minus, _fb_I
+        assert _fb_r.phi_c_minus == 0.0, (_fb_I, _fb_r.phi_c_minus)
+        assert _fb_r.phi_c == _fb_r.phi_c_plus, _fb_I
+        assert _fb_r.phi_c > 0.0, (_fb_I, _fb_r.phi_c)
+        assert _fb_r.I_eth_star > 0.0, (_fb_I, _fb_r.I_eth_star)
+        _fb_enth, _fb_fall, _fb_climb = cathode_emission_sheath_power_W(
+            _fb_r, T_s_K
+        )
+        assert _fb_fall == 0.0, (_fb_I, _fb_fall)
+        # ... while the OTHER two rows are live at the same point, so the zero
+        # is this row's own property and not a dead solve.
+        assert _fb_enth > 0.0, (_fb_I, _fb_enth)
+        assert _fb_climb <= 0.0, (_fb_I, _fb_climb)
+        zero_points += 1
+    assert zero_points == 6, zero_points
+
+    # (ii) NEGATIVE CONTROL -- a virtual cathode has formed, so the row is
+    # nonzero and is exactly the inverted part of the drop times the released
+    # current, which is the whole of what the beam row does not carry.
+    nonzero_points = 0
+    for _fb_I in (20.0, 100.0, 300.0):
+        _fb_r = solve_idriven(uni_cfg, id_plasmas[1], I_tot_A=_fb_I)
+        assert _fb_r.phi_c == _fb_r.phi_c_plus - _fb_r.phi_c_minus, _fb_I
+        assert _fb_r.phi_c_minus > 0.0, (_fb_I, _fb_r.phi_c_minus)
+        assert _fb_r.phi_c > 0.0, (_fb_I, _fb_r.phi_c)
+        _fb_enth, _fb_fall, _fb_climb = cathode_emission_sheath_power_W(
+            _fb_r, T_s_K
+        )
+        assert _fb_fall > 0.0, (_fb_I, _fb_fall)
+        assert np.isclose(
+            _fb_fall,
+            _fb_r.phi_c_minus * _fb_r.I_eth_star,
+            rtol=1e-12,
+            atol=0.0,
+        ), (_fb_I, _fb_fall, _fb_r.phi_c_minus * _fb_r.I_eth_star)
+        nonzero_points += 1
+    assert nonzero_points == 3, nonzero_points
+
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
@@ -26408,7 +26483,7 @@ def _case_end_face_full_debit_split():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 147, "historical_stance": 62}
+_CASE_CENSUS = {"total": 148, "historical_stance": 62}
 
 
 def _assert_case_census():
