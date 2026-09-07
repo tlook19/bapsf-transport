@@ -3145,6 +3145,62 @@ def _case_cathode_clamp_census(_r1_sim_config):
     ):
         assert _clamp_attr in LAPDSim1D._PICARD_DIRECT_ATTRS, _clamp_attr
 
+    # RESTART. The counters are CARRIED, so a resumed run continues the
+    # producing run's census instead of restarting it -- losing a count is a
+    # lost measurement, which is the reason the jet-arming counts are carried
+    # and it is the same reason here. Both directions: a payload that has the
+    # keys continues, and one that predates them restores the seed rather than
+    # raising.
+    _clamp_params, _clamp_flags = _r1_sim_config()
+    _clamp_run = LAPDSim1D(dict(_clamp_params), dict(_clamp_flags))
+    for _ in range(6):
+        _clamp_run.advance_one_step(dt=2.0e-9)
+    _clamp_pre = int(_clamp_run._cathode_total_solves)
+    assert _clamp_pre >= 1, _clamp_pre
+    with tempfile.TemporaryDirectory() as _clamp_tmp:
+        _clamp_payload = Path(_clamp_tmp) / "clamp_census.restart.h5"
+        _restart_mod.save_restart_state(_clamp_payload, _clamp_run)
+        _clamp_resumed = LAPDSim1D(
+            {**_clamp_params, "restart_from": str(_clamp_payload)},
+            dict(_clamp_flags),
+        )
+        assert _clamp_resumed._cathode_total_solves == _clamp_pre, (
+            _clamp_resumed._cathode_total_solves, _clamp_pre
+        )
+        assert (
+            _clamp_resumed._cathode_clamped_solves
+            == _clamp_run._cathode_clamped_solves
+        )
+        _clamp_resumed.advance_one_step(dt=2.0e-9)
+        assert _clamp_resumed._cathode_total_solves >= _clamp_pre + 1, (
+            _clamp_resumed._cathode_total_solves, _clamp_pre
+        )
+
+        # A payload written before the keys existed. The counters are stored
+        # as attributes of the ``cathode`` group, the two integers under the
+        # writer's ``__int`` type tag, so a legacy payload is exactly this
+        # file with those four attributes gone.
+        _clamp_legacy = Path(_clamp_tmp) / "clamp_census_legacy.restart.h5"
+        _clamp_legacy.write_bytes(_clamp_payload.read_bytes())
+        with h5py.File(_clamp_legacy, "r+") as _clamp_h5:
+            _clamp_grp = _clamp_h5["cathode"]
+            for _clamp_key in (
+                "_cathode_total_solves__int",
+                "_cathode_clamped_solves__int",
+                "_cathode_clamp_first_t_s",
+                "_cathode_clamp_last_t_s",
+            ):
+                assert _clamp_key in _clamp_grp.attrs, _clamp_key
+                del _clamp_grp.attrs[_clamp_key]
+        _clamp_old = LAPDSim1D(
+            {**_clamp_params, "restart_from": str(_clamp_legacy)},
+            dict(_clamp_flags),
+        )
+        assert _clamp_old._cathode_total_solves == 0
+        assert _clamp_old._cathode_clamped_solves == 0
+        assert math.isnan(_clamp_old._cathode_clamp_first_t_s)
+        assert math.isnan(_clamp_old._cathode_clamp_last_t_s)
+
 
 # --------------------------------------------------------------------
 # cathode-phi-a-aware-object
