@@ -176,9 +176,47 @@ Second order in the whole split step requires **all three** of a second-order
 are independent first-order error terms, so each caps the step on its own.
 `scripts/gates/verify_sim1d_order.py` is the harness that measures the observed
 order by fixed-$\Delta t$ Richardson refinement, in a regime with floors inert
-and watched, a single phase, an autonomous RHS and no cathode. A discharge does
-not show that order: floors bind and phase transitions are threshold-triggered,
-so the step degrades to first order wherever those engage.
+and watched, a single phase, an autonomous RHS and no cathode.
+
+**Measured order.** At 72 cells and $t_\text{end}=10^{-6}$ s, with the triplet
+$(128,256,512)$ base-steps chosen so the stiffest conduction mode is resolved at
+every member — $\Delta t\,\lambda_\text{max}=1.15,\ 0.58,\ 0.29$, floors inert
+in every run — the reference-free triplet order is
+
+| `heat_picard_iterations` | `operator_splitting` | `backward_euler` | `shifted` | `crank_nicolson` | `tr_bdf2` |
+|---|---|---|---|---|---|
+| 0 | `lie` | 0.99 | 1.00 | 1.00 | 0.95 |
+| 4 | `lie` | 0.99 | 1.00 | 1.00 | 0.95 |
+| 0 | `strang` | 0.82 | 1.45 | 1.79 | 1.74 |
+| 4 | `strang` | 0.81 | 1.45 | 2.00 | 1.98 |
+
+Only the last row carries all three second-order ingredients, and both
+second-order substeps reach second order there. Knocking out one ingredient is
+enough to cap the step: every `lie` row sits at ~1 whatever the substep scheme
+is, and the 1.74–1.79 of the picard-0 `strang` row is the frozen conductivity
+capping it alone. `backward_euler` is the negative control — $\theta=1$ cannot
+be second-order at any $\Delta t$, so a 2.0 there would indict the harness
+rather than commend the scheme. `shifted` is $\theta=0.6$ and first-order for
+the same reason; its 1.45 is a band effect, not an order claim, because its
+leading first-order coefficient is $(\theta-\tfrac12)=0.1$ of backward Euler's
+and the second-order term still contributes at these $\Delta t$. Read it as a
+scale check.
+
+**The triplet must be resolved to read an order at all.** Above
+$\Delta t\,\lambda_\text{max}\approx4$ a Richardson triplet measures each
+substep's stability function at large $|z|$ rather than its truncation error,
+and there every L-stable substep reads first order because the Strang
+composition's stiff-mode equilibrium error saturates. Crank–Nicolson is the
+trap: its Strang equilibrium error is exactly $-z^2/16$, a clean power law that
+returns 2.00 at every $|z|$ however unresolved, so an unresolved table ranks it
+above `tr_bdf2` as an artefact of the sampling. The harness therefore derives
+its base-steps from the seed's own conduction operator, prints
+$\Delta t\,\lambda_\text{max}$ beside every reading, flags a coarser triplet
+PRE-ASYMPTOTIC, and closes on both preconditions — floors inert AND the stiff
+mode resolved.
+
+A discharge does not show that order: floors bind and phase transitions are
+threshold-triggered, so the step degrades to first order wherever those engage.
 
 ## Adaptive timestep control
 
