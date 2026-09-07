@@ -1482,6 +1482,36 @@ def _case_variable_area_well_balancedness(
     assert "end_phi_c" in twin_cathode_diag
     assert "end_long_mfp" in twin_cathode_diag
     assert "end_phi_c_at_cap" in twin_cathode_diag
+    # PRESENCE GATE, armed side, for the BEAM END-FACE rows -- the second
+    # per-end block keyed on the same helper. The twin marches the ``-1``
+    # ray, so every one of these has a filler here; the single-cathode cases
+    # assert their absence. Named one by one rather than derived from the
+    # ``source_`` set, because that set also carries the cathode-result key
+    # ``beam_bypass_fraction``, which is not a beam end-face row.
+    for _twin_beam_row in (
+        "beam_anode_intercepted_W",
+        "beam_transmitted_W",
+        "beam_transmitted_flux_per_s",
+        "beam_end_loss_low_W",
+        "beam_end_loss_high_W",
+        "beam_end_loss_tail_low_W",
+        "beam_end_loss_tail_high_W",
+        "beam_gap_survival_probe",
+        "beam_gap_survival_ray",
+        "beam_gap_survival_circuit",
+    ):
+        assert f"source_{_twin_beam_row}" in twin_cathode_diag, _twin_beam_row
+        assert f"end_{_twin_beam_row}" in twin_cathode_diag, _twin_beam_row
+    # The plateau-edge pair rides the multi-group closure, so it is present
+    # per end exactly when that closure is armed -- both gates at once.
+    for _twin_mg_row in (
+        "beam_plateau_edge_eV", "beam_plateau_edge_clamped",
+    ):
+        for _twin_prefix in ("source", "end"):
+            assert (
+                (f"{_twin_prefix}_{_twin_mg_row}" in twin_cathode_diag)
+                is bool(twin_resolved_sim._plateau_multigroup)
+            ), (_twin_prefix, _twin_mg_row)
     assert list(twin_resolved_geom.cell_role[:2]) == ["plenum", "cathode"]
     assert list(twin_resolved_geom.cell_role[-2:]) == ["cathode", "plenum"]
     assert "collector" not in set(twin_resolved_geom.cell_role)
@@ -4683,7 +4713,10 @@ def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, exc_params):
     assert csda_diag["source_beam_gap_survival_probe"] == csda_probe
     assert csda_diag["source_beam_gap_survival_ray"] == csda_ray
     assert csda_diag["source_beam_gap_survival_circuit"] == csda_booked
-    assert np.isnan(csda_diag["end_beam_gap_survival_ray"])
+    # Single cathode: the ``end_`` gap-survival views are ABSENT, not NaN.
+    # Only the ``-1`` ray fills them and that ray is marched only under
+    # ``TwinCathode``; the armed side is asserted at the twin fixture.
+    assert "end_beam_gap_survival_ray" not in csda_diag
     bl_diag = LAPDSim1D(
         dict(exc_params), dict(cathode_flags)
     )._cathode_diagnostic_snapshot()
@@ -4989,7 +5022,8 @@ def _case_beam_product_transport_wpd(
     assert wpd_on_diag["source_beam_end_loss_high_W"] == (
         wpd_on_dep.end_loss_high_erg_s * 1.0e-7
     )
-    assert wpd_on_diag["end_beam_end_loss_low_W"] == 0.0
+    # Single cathode: the ``end_`` WP-D rows are ABSENT, not zero-seeded.
+    assert "end_beam_end_loss_low_W" not in wpd_on_diag
     for _bl_key in ("low", "high"):
         assert bl_diag[f"source_beam_end_loss_{_bl_key}_W"] == 0.0
     return locals()
@@ -5401,7 +5435,8 @@ def _case_beam_anomalous_transport_wpe(
     assert wpe_on_diag["source_beam_end_loss_tail_high_W"] == (
         wpe_on_dep.end_loss_tail_high_erg_s * 1.0e-7
     )
-    assert wpe_on_diag["end_beam_end_loss_tail_low_W"] == 0.0
+    # Single cathode: the ``end_`` WP-E tail rows are ABSENT, not zero-seeded.
+    assert "end_beam_end_loss_tail_low_W" not in wpe_on_diag
     for _bl_key in ("low", "high"):
         assert bl_diag[f"source_beam_end_loss_tail_{_bl_key}_W"] == 0.0
     # The two closures COMPOSE: with both on, each ledger books its own
@@ -9032,11 +9067,13 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     # export; its successors are the closed audit rows.
     assert np.all(np.isfinite(cathode_diag["source_P_plasma_thermal_loss"]))
     assert np.all(np.isfinite(cathode_diag["source_P_into_plasma"]))
-    # Single cathode: the whole ``end_*`` cathode-result block is ABSENT
-    # (presence-gated on TwinCathode), not present-and-NaN.
+    # Single cathode: EVERY ``end_*`` dataset is ABSENT (presence-gated on
+    # TwinCathode), not present-and-seeded. The carve-out that used to stand
+    # here exempted ``end_beam_*``, which was seeded from a literal tuple and
+    # so shipped on single-cathode runs as five NaN and seven 0.0 columns
+    # nothing could fill. There is no carve-out now: no prefix, no rows.
     assert "end_phi_c" not in cathode_diag
-    assert not [k for k in cathode_diag if k.startswith("end_")
-                and not k.startswith("end_beam_")]
+    assert not [k for k in cathode_diag if k.startswith("end_")]
     assert np.all(
         np.isin(
             cathode_diag["source_regime"],
