@@ -507,12 +507,17 @@ def _cathode_result_prefixes(flags):
     """Return the cathode-result diagnostic prefixes this run exports.
 
     ``("source",)`` on a single cathode and ``("source", "end")`` under
-    ``TwinCathode``. The ``end`` block is filled from
-    ``BeamResult.result_twin``, which every solve leaves ``None`` unless the
-    twin is configured, so on a single-cathode run every one of its columns
-    is NaN in every frame. One function answers "which prefixes exist" for
-    the seeding and for the write guard alike, so the two cannot drift into
-    seeding a block nothing fills or filling one nothing seeded.
+    ``TwinCathode``. TWO per-end blocks are keyed on this: the cathode-result
+    block, filled from ``BeamResult.result_twin``; and the beam end-face
+    block, filled from the ``-1`` entries of the cathode solve's
+    ``beam_deposition`` / ``beam_gap_ledger`` / ``beam_plateau_edge`` maps.
+    Both sources exist only under the twin -- ``result_twin`` is ``None``
+    unless the twin is configured, and ``_csda_beam_deposition`` marches
+    ``ends = (0, -1) if twin else (0,)`` off the same flag -- so on a
+    single-cathode run every column of either block would be a seed nothing
+    fills. One function answers "which prefixes exist" for the seeding and
+    for the write guard alike, so they cannot drift into seeding a block
+    nothing fills or filling one nothing seeded.
     """
     return ("source", "end") if flags.get("TwinCathode") else ("source",)
 
@@ -12787,7 +12792,18 @@ class LAPDSim1D:
             diag["plateau_edge_clamped_last_time_s"] = float(
                 self._plateau_edge_clamped_last_time_s
             )
-        for prefix in ("source", "end"):
+        # Same PRESENCE GATE as the cathode-result block below, through the
+        # same helper: these rows are per-RAY, and ``_csda_beam_deposition``
+        # runs the ``-1`` ray only under ``TwinCathode`` (``ends = (0, -1) if
+        # twin else (0,)``, keyed off the very flag this helper reads). Seeded
+        # from a literal ``("source", "end")`` they were written on every
+        # single-cathode run as seeds nothing ever filled -- and the ``-1``
+        # end is the TWIN CATHODE's identity, never the far end of the source
+        # ray, so a reader who took the block for the source ray's other end
+        # read a column that could not mean that. Readers must default the
+        # whole ``end_beam_*`` block on absence, exactly as they already
+        # defaulted its NaN and its zero.
+        for prefix in _cathode_result_prefixes(self._flags):
             # Per-ray exit ledger [W]: power the anode mesh intercepts at the
             # anode-face crossing, and power streaming out of the far end.
             # Both are computed by the CSDA ray today and had no consumer and
