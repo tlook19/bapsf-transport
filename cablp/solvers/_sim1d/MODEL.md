@@ -708,6 +708,27 @@ is the payer, and the thermal debit stands alone. A non-finite $\phi_a$ belongs
 to neither regime and raises. The collected IONS leave with the enthalpy
 $\tfrac52T_i$, not $\tfrac32T_i$ — the $S_\text{an}$ terms above.
 
+**End-face sheath debit at the cathode.** `end_sheath_full_debit` extends that
+convention to the emitting face and adds what an emitter does that a collector
+does not. Armed, three further electron-energy rows are booked at the cathode
+cell, kept apart because they are three channels with two signs:
+$+2k_BT_s\Gamma_\text{em}$, the enthalpy the released electrons carry in off a
+half-Maxwellian at the surface temperature; $+e(\phi_c^+-\max(\phi_c,0))\Gamma_\text{em}$,
+the remainder of the fall those electrons drop through, which is identically
+zero until a virtual cathode forms ($\phi_c^-=0\Rightarrow\phi_c=\phi_c^+$)
+because the beam row already distributes the NET $\phi_c$; and
+$-e\phi_c^+\Gamma_\text{ec}$, the barrier the returning plasma electrons
+climbed, charged to their own store exactly as the anode's repelling branch
+charges $\phi_a$. The fluxes are the solve's own,
+$\Gamma_\text{em}=I_\text{eth}^\star/e$ (the space-charge-released current, not
+the Richardson ceiling) and $\Gamma_\text{ec}=I_{e,\text{ret}}/e$. The beam
+deposition row is untouched, and the debit is NOT of the form
+$2(T_e-T_s)\Gamma_\text{em}$: emission and collection are two fluxes, not one
+flux with a temperature difference. Because the emitted enthalpy is a heating
+term and the collected climb a cooling one, the face's net sign is a property
+of the state — an emitter releasing a large current into a sub-$T_s$ plasma
+heats it. The rows are absent entirely when the flag is off.
+
 **Prescribed drive.** `cathode_solver_model = "prescribed_measured"` imposes
 both loop quantities — $I(t)$ and $V_\text{dis}(t)$ interpolated from a
 supplied trace onto the model clock — and consults nothing about the surface
@@ -755,6 +776,23 @@ surface; at the cathode that term is owned by the circuit.
 `end_recycle_to_annulus` routes the collector faces' neutralized flux into that
 cell's annulus, $\partial_tn_{n,a}|_\text{recycle}=\dot N_\text{loss}/V_\text{ann}$,
 as thermal diffuse gas carrying no directed momentum.
+
+**End-face sheath debit at the collector.** `end_sheath_full_debit` completes
+that booking the way `anode_sheath_full_debit` completes the anode's. A
+floating surface draws no net current, so the electrons that reach it climbed a
+barrier $\Lambda_\text{eff}T_e$ — and with no circuit branch behind the
+collector there is nothing but the electron thermal store to supply it: the
+fall comes out of that store and is handed to the ions, which deposit it on the
+surface. Armed, a separate electron-energy row
+$-\Lambda_\text{eff}T_e\Gamma_\text{coll}$ is booked at each collector cell,
+making the face debit the sheath-edge $\gamma_e=2+\Lambda_\text{eff}$ per
+collected electron rather than the thermal $2T_e$ alone. The barrier is
+$\Lambda_\text{eff}=\Lambda+\ln(1/\alpha_\text{se})$: the sheath lift
+$\Lambda=\ln\sqrt{\mu m_p/2\pi m_e}$ for the configured gas, plus the presheath
+drop implied by the same $\alpha_\text{se}$ that face samples its Bohm flux at,
+so the flux and the barrier describe one sheath edge. Cathode faces are
+untouched — the accelerated species there is the ion. The row is absent
+entirely when the flag is off.
 
 ### Wall return and jet rebirth spectra
 
@@ -909,6 +947,10 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `recombination_energy_return` | `physics/reactions.py:recombination_energy_return_rhs` |
 | `cathode_surface_loss` | `physics/cathode.py:cathode_source_terms` |
 | `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode part) |
+| `collector_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (`end_sheath_full_debit` only) |
+| `cathode_e_emitted_enthalpy` | `physics/cathode.py:cathode_emission_sheath_power_W` (`end_sheath_full_debit` only) |
+| `cathode_e_emitted_fall` | `physics/cathode.py:cathode_emission_sheath_power_W` (`end_sheath_full_debit` only) |
+| `cathode_e_collected_climb` | `physics/cathode.py:cathode_emission_sheath_power_W` (`end_sheath_full_debit` only) |
 | `anode_collection` | `physics/sources.py:anode_collection_rhs` |
 | `beam_ionization_birth` | `physics/cathode.py:beam_ionization_rhs_terms` |
 | `beam_power_deposition` | `physics/cathode.py:beam_ionization_rhs_terms` (beam banks, smoothing, and the ohmic gap booking) |

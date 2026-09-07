@@ -114,7 +114,7 @@ from cablp.atomic.adas import he_rate_temperature_range_eV
 # main() re-imports deposit_beam locally further down (B1 block), which makes
 # the bare name local to the whole function -- alias it for the item-35 block.
 from cablp.cathode.beam_deposition import deposit_beam as _deposit_beam_ray
-from cablp.cathode.circuit import _compute_l_b
+from cablp.cathode.circuit import _compute_l_b, sheath_lift_lambda
 from cablp.solvers._sim1d import (
     BreakdownError,
     KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
@@ -160,7 +160,7 @@ from cablp.solvers._sim1d.core.validation import (
 )
 from cablp.plasma.params import LN_LAMBDA_MIN, c_log, time_elec_coll
 from cablp.constants import He_e_mass_ratio
-from cablp.solvers._sim1d.solver import _timestep_limiters
+from cablp.solvers._sim1d.solver import END_SHEATH_DEBIT_ROWS, _timestep_limiters
 from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
 from cablp.solvers._sim1d.core.integrator import ssprk2_step
 from cablp.solvers._sim1d.core.geometry import (
@@ -205,6 +205,7 @@ from cablp.solvers._sim1d.physics.sources import (
     IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS,
     add_state_rhs,
     cathode_jet_backscatter_speed,
+    electrode_sheath_alpha,
     neutral_energy_transfer_row,
     neutral_energy_volume_ratio,
     neutral_temperature_eV,
@@ -26163,6 +26164,160 @@ def _case_tail_handoff_surface_continuity():
     assert _sc_P0 - _sc_P_old > 100.0, _sc_P0 - _sc_P_old
 
 
+# --------------------------------------------------------------------
+# end-sheath-full-debit
+# --------------------------------------------------------------------
+@_case("end-sheath-full-debit", historical_stance=True)
+def _case_end_sheath_full_debit():
+    # The END-FACE SHEATH CLOSURE: four electron-energy rows at the two axial
+    # ends, default off. Four things have to hold and each is checked here.
+    _es_params, _es_flags = _base_config()
+    _es_flags = dict(_es_flags)
+    _es_flags["cathode_coupling"] = True
+
+    # (i) OFF IS THE UNARMED RUN, structurally and bit for bit. Stating the
+    # flag False must not add a row, must not move the packed RHS, and must
+    # leave the term set exactly what a construction that never named the flag
+    # produces -- the rows are ABSENT, which is a different statement from
+    # present-and-zero and is what keeps an unarmed saved ledger unchanged.
+    _es_unnamed = LAPDSim1D(dict(_es_params), dict(_es_flags))
+    _es_off_flags = dict(_es_flags)
+    _es_off_flags["end_sheath_full_debit"] = False
+    _es_off = LAPDSim1D(dict(_es_params), _es_off_flags)
+    _es_unnamed_terms = _es_unnamed.rhs_terms()
+    _es_off_terms = _es_off.rhs_terms()
+    assert set(_es_off_terms) == set(_es_unnamed_terms)
+    assert not (set(_es_off_terms) & set(END_SHEATH_DEBIT_ROWS))
+    assert _es_off.rhs().tobytes() == _es_unnamed.rhs().tobytes()
+
+    # (ii) ARMED, the four rows exist, are ELECTRON ENERGY ONLY, and land on
+    # the faces they name.
+    _es_on_flags = dict(_es_flags)
+    _es_on_flags["end_sheath_full_debit"] = True
+    _es_on = LAPDSim1D(dict(_es_params), _es_on_flags)
+    _es_on_terms = _es_on.rhs_terms()
+    assert set(_es_on_terms) == set(_es_off_terms) | set(END_SHEATH_DEBIT_ROWS)
+    _es_geom = _es_on.geometry
+    _es_roles = np.asarray(_es_geom.cell_role)
+    _es_coll = int(np.flatnonzero(_es_roles == "collector")[0])
+    _es_cath = int(np.flatnonzero(_es_roles == "cathode")[0])
+    _es_rows = {}
+    for _es_name in END_SHEATH_DEBIT_ROWS:
+        _es_term = _es_on_terms[_es_name]
+        for _es_field in ("n", "nn", "M", "Ei"):
+            assert np.all(np.asarray(getattr(_es_term, _es_field)) == 0.0), (
+                _es_name, _es_field
+            )
+        _es_row = np.asarray(_es_term.Ee, dtype=float)
+        assert np.all(np.isfinite(_es_row)), _es_name
+        _es_rows[_es_name] = _es_row
+    _es_cell = {
+        "collector_e_sheath_climb": _es_coll,
+        "cathode_e_emitted_enthalpy": _es_cath,
+        "cathode_e_emitted_fall": _es_cath,
+        "cathode_e_collected_climb": _es_cath,
+    }
+    for _es_name, _es_row in _es_rows.items():
+        _es_support = set(np.flatnonzero(_es_row).tolist())
+        assert _es_support <= {_es_cell[_es_name]}, (_es_name, _es_support)
+
+    # (iii) SIGNS, which are the physics and are not free. The collector debit
+    # comes OUT of the electron store; the emitted electrons' enthalpy and the
+    # part of the fall the beam row does not carry go INTO it; the returning
+    # electrons' barrier climb comes out. All four are nonzero on this stance
+    # at its initial state -- a virtual cathode has formed there, so the fall
+    # row is exercised rather than sitting at its zero branch.
+    assert _es_rows["collector_e_sheath_climb"][_es_coll] < 0.0
+    assert _es_rows["cathode_e_emitted_enthalpy"][_es_cath] > 0.0
+    assert _es_rows["cathode_e_emitted_fall"][_es_cath] > 0.0
+    assert _es_rows["cathode_e_collected_climb"][_es_cath] < 0.0
+
+    # (iv) THE CLOSED FORMS, against the solve and the boundary flux this very
+    # evaluation used. The collector face must debit the sheath-edge
+    # (2 + Lambda_eff) Te per collected electron once the new row is added to
+    # the 2 Te that characteristic_boundary always books, with Lambda_eff read
+    # off the SAME alpha the boundary sampled its flux at.
+    _es_state = _es_on.state
+    _es_derived = derive_state(
+        _es_state, floors=_es_on.floors, ion_mass_g=_es_on.ion_mass_g
+    )
+    _es_alpha = electrode_sheath_alpha(
+        nn=float(_es_state.nn[_es_coll]),
+        Te=float(_es_derived.Te[_es_coll]),
+        Ti=float(_es_derived.Ti[_es_coll]),
+        cell_length_cm=float(_es_geom.length_cm[_es_coll]),
+        mu=_es_on.mu,
+        ion_mass_g=_es_on.ion_mass_g,
+        alpha_isat=float(_es_params["alpha_isat"]),
+        b_presheath_length=float(_es_params["b_presheath_length"]),
+        gas_type=_es_params.get("gas_type"),
+    )
+    _es_lambda_eff = sheath_lift_lambda(_es_on.mu) - math.log(_es_alpha)
+    _es_gamma = float(_es_on_terms["characteristic_boundary"].n[_es_coll])
+    _es_booked = (
+        float(_es_on_terms["characteristic_boundary"].Ee[_es_coll])
+        + _es_rows["collector_e_sheath_climb"][_es_coll]
+    )
+    _es_closed = (
+        (2.0 + _es_lambda_eff)
+        * float(_es_derived.Te[_es_coll])
+        * ev_to_erg
+        * _es_gamma
+    )
+    assert np.isclose(_es_booked, _es_closed, rtol=1e-12, atol=0.0), (
+        _es_booked, _es_closed
+    )
+    # ... and the three cathode rows are their closed forms in watts, built
+    # from the solve's own released and returning currents.
+    _es_result = _es_on._cathode_solve.beam_result.result
+    _es_Ts = float(_es_params["cathode_Ts_base_K"])
+    _es_Vp = float(_es_geom.plasma_volume_cm3[_es_cath])
+    _es_phi_plus = float(_es_result.phi_c_plus)
+    _es_phi = float(_es_result.phi_c)
+    assert float(_es_result.phi_c_minus) > 0.0, "expected a virtual cathode"
+    for _es_name, _es_expect_W in (
+        (
+            "cathode_e_emitted_enthalpy",
+            2.0 * 8.617333262e-5 * _es_Ts * float(_es_result.I_eth_star),
+        ),
+        (
+            "cathode_e_emitted_fall",
+            (_es_phi_plus - max(_es_phi, 0.0)) * float(_es_result.I_eth_star),
+        ),
+        (
+            "cathode_e_collected_climb",
+            -_es_phi_plus * float(_es_result.I_e_ret),
+        ),
+    ):
+        _es_booked_W = _es_rows[_es_name][_es_cath] * _es_Vp / 1.0e7
+        assert np.isclose(
+            _es_booked_W, _es_expect_W, rtol=1e-12, atol=0.0
+        ), (_es_name, _es_booked_W, _es_expect_W)
+
+    # (v) MISCONFIGURATION REFUSES AT CONSTRUCTION, naming what is missing.
+    # A non-bool reads like a value and is refused; arming the closure without
+    # the cathode circuit solve leaves three of its four rows with no honest
+    # input, and it says so rather than booking zeros.
+    _es_bad_flags = dict(_es_flags)
+    _es_bad_flags["end_sheath_full_debit"] = 1
+    try:
+        LAPDSim1D(dict(_es_params), _es_bad_flags)
+    except ValueError as _es_exc:
+        assert "must be a bool" in str(_es_exc), _es_exc
+    else:
+        raise AssertionError("end_sheath_full_debit accepted a non-bool")
+    _es_nocath_flags = dict(_es_on_flags)
+    _es_nocath_flags["cathode_coupling"] = False
+    try:
+        LAPDSim1D(dict(_es_params), _es_nocath_flags)
+    except ValueError as _es_exc:
+        assert "cathode_coupling" in str(_es_exc), _es_exc
+    else:
+        raise AssertionError(
+            "end_sheath_full_debit armed without the cathode circuit solve"
+        )
+
+
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
@@ -26172,7 +26327,7 @@ def _case_tail_handoff_surface_continuity():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 146, "historical_stance": 61}
+_CASE_CENSUS = {"total": 147, "historical_stance": 62}
 
 
 def _assert_case_census():

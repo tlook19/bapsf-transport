@@ -3760,6 +3760,86 @@ def _deposit_electrode_power(
     anode_power_loss_W[column_side] += weights[1] * p_anode_e
 
 
+#: The names of the three cathode-face electron-energy rows
+#: :func:`cathode_emission_sheath_power_W` returns, in the order it returns
+#: them. Bound to a constant because the solver has to name the same three in
+#: three places -- the term dict it seeds, the term dict it fills, and the
+#: neutral-energy booking table -- and a typo in any one of them would be a
+#: silently missing row rather than an error.
+END_SHEATH_CATHODE_ROWS = (
+    "cathode_e_emitted_enthalpy",
+    "cathode_e_emitted_fall",
+    "cathode_e_collected_climb",
+)
+
+
+def cathode_emission_sheath_power_W(result, T_s_K):
+    """Return the emitting face's three electron-energy powers [W].
+
+    The ``end_sheath_full_debit`` closure's cathode member: what the plasma
+    ELECTRON store gains and loses at an emitting surface, over and above the
+    ``2 Te`` per collected electron ``P_cathode_e_thermal`` already books and
+    the net-``phi_c`` beam energy the deposition march already distributes.
+    Returned in the order of :data:`END_SHEATH_CATHODE_ROWS`, each signed as
+    a contribution to the plasma electron store (positive = heating):
+
+    ``+2 k_B T_s Gamma_em``
+        The enthalpy the released electrons carry into the plasma. They leave
+        a half-Maxwellian at the surface temperature ``T_s`` [K], so the
+        flux-weighted mean energy of the population that clears the virtual
+        cathode is ``2 k_B T_s`` at the barrier peak. ``Gamma_em =
+        I_eth_star / e`` is the SPACE-CHARGE-RELEASED flux, not the Richardson
+        ceiling. Always >= 0.
+
+    ``+e (phi_c_plus - max(phi_c, 0)) Gamma_em``
+        The remainder of the fall those same electrons drop through on their
+        way from the barrier peak into the plasma. The beam row already
+        carries the NET ``phi_c`` and is untouched here, so what is left is
+        the part the virtual cathode adds: identically zero while
+        ``phi_c_minus = 0`` (there ``phi_c == phi_c_plus``), positive once a
+        virtual cathode has formed. Always >= 0.
+
+    ``-e phi_c_plus Gamma_ec``
+        The barrier the COLLECTED plasma electrons climbed, taken from their
+        own thermal store -- the plasma-pays convention the anode adopted
+        under ``anode_sheath_full_debit``, applied to the identical physics at
+        the cathode. ``Gamma_ec = I_e_ret / e`` is the returning
+        plasma-electron flux. Always <= 0 for a repelling face.
+
+    ``result`` is a cathode circuit ``SolverResult`` and ``T_s_K`` the
+    emitter surface temperature [K] the solve was run at (the evolving value
+    under ``cathode_warming_model = "power_balance"``, the configured standby
+    otherwise). A non-finite potential or current here has no booking either
+    way and raises rather than planting a NaN in an energy row.
+    """
+    I_em = float(result.I_eth_star)
+    I_ec = float(result.I_e_ret)
+    phi_c_plus = float(result.phi_c_plus)
+    phi_c = float(result.phi_c)
+    T_s = float(T_s_K)
+    for name, value in (
+        ("I_eth_star", I_em),
+        ("I_e_ret", I_ec),
+        ("phi_c_plus", phi_c_plus),
+        ("phi_c", phi_c),
+        ("T_s_K", T_s),
+    ):
+        if not np.isfinite(value):
+            raise RuntimeError(
+                "end_sheath_full_debit: the cathode solve returned a "
+                f"non-finite {name} ({value!r}); the emitting face's "
+                "electron-energy booking is undefined there"
+            )
+    # k_B T_s as a voltage, so all three rows are one current times one
+    # potential and share the elementary charge exactly.
+    kT_s_V = _KB_EV_PER_K * T_s
+    return (
+        2.0 * kT_s_V * I_em,
+        (phi_c_plus - max(phi_c, 0.0)) * I_em,
+        -phi_c_plus * I_ec,
+    )
+
+
 def _beam_event_profile(state, geometry, beam_result, event_cross, end=0):
     """Per-cell rate density of one beam collision channel [cm^-3 s^-1].
 

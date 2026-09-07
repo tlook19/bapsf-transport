@@ -4435,6 +4435,54 @@ input_flags_template_1d = {
     # A non-finite phi_a belongs to neither regime and raises RuntimeError.
     # Must be a real bool. Bit-exact when off.
     "anode_sheath_full_debit": False,
+    # End-face sheath electron-energy booking, default OFF. The anode flag
+    # above applied to the machine's two AXIAL ends, where the same
+    # thermal-only routing leaves the same energy unbooked. Armed, four
+    # electron-energy-only RHS rows are added ([erg cm^-3 s^-1] on the plasma
+    # cell volume, positive = into the electron store); unarmed, none of them
+    # exists and the term structure is what it was before the closure.
+    #
+    # COLLECTOR -- ``collector_e_sheath_climb``, negative. The collector is a
+    # floating exhaust with no circuit branch, so the fall its collected
+    # electrons climb comes out of the plasma electron store and is handed to
+    # the ions, which deposit it on the surface. The row is
+    # -Lambda_eff Te Gamma_coll, which with the unconditional 2 Te of
+    # ``characteristic_boundary`` makes the face debit the sheath-edge
+    # (2 + Lambda_eff) Te per collected electron. Lambda_eff = Lambda +
+    # ln(1/alpha) is the barrier at a surface drawing no net current: the
+    # circuit's sheath lift for the configured gas plus the presheath drop
+    # implied by the very alpha that face samples its Bohm flux at, so the two
+    # cannot describe different sheath edges. Neither number is written here;
+    # both are read from the code that already owns them.
+    #
+    # CATHODE -- three rows at the emitting face, kept apart because they are
+    # three different physical channels with two different signs:
+    #   ``cathode_e_emitted_enthalpy``  +2 k_B T_s Gamma_em, positive. The
+    #       enthalpy the released electrons carry in, off a half-Maxwellian at
+    #       the emitter surface temperature. Gamma_em = I_eth_star/e is the
+    #       SPACE-CHARGE-RELEASED flux, not the Richardson ceiling.
+    #   ``cathode_e_emitted_fall``      +e (phi_c_plus - max(phi_c, 0))
+    #       Gamma_em, positive. The part of the fall those same electrons drop
+    #       through that the beam row does not already carry: the beam row
+    #       distributes the NET phi_c, so this is identically zero while no
+    #       virtual cathode has formed (phi_c_minus = 0) and positive once one
+    #       has.
+    #   ``cathode_e_collected_climb``   -e phi_c_plus Gamma_ec, negative. The
+    #       barrier the returning plasma electrons climbed, charged to their
+    #       own store -- the anode flag's plasma-pays convention at the
+    #       cathode. Gamma_ec = I_e_ret/e.
+    # The beam deposition row is UNTOUCHED: it already distributes the net-phi_c
+    # energy of the emitted electrons and nothing here re-books it. The
+    # 2 (Te - T_s) Gamma_em form is NOT what this books.
+    #
+    # WHAT IT RAISES. Must be a real bool. Arming it refuses at construction
+    # unless the configuration supplies the cathode circuit solve
+    # (``cathode_coupling``, the source of I_eth_star, I_e_ret and the sheath
+    # potentials) and a plasma-absorbing face of each role, collector and
+    # cathode -- the refusal names whichever is missing. A non-finite current
+    # or potential from the solve raises RuntimeError rather than planting a
+    # NaN in an energy row. Bit-exact when off.
+    "end_sheath_full_debit": False,
     # The electron drift-transport and EMF-work operator, default OFF. The
     # electron energy equation books its pressure work with the ION velocity,
     # which is exact where J = 0 but not in the current-carrying source region:
