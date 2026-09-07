@@ -47,10 +47,16 @@ notes:
   still ramps down rather than freezing. See ``circuit_V_avail_V`` in
   ``solve_idriven`` and ``cathode.idriven_vdis_evaluator``.
 
-Floating (open-circuit) solves keep using ``_cathode_solver.solve`` -- its
-floating branch models Boltzmann-suppressed emission over the virtual
-barrier, which is not the same limit as ``I_tot = 0`` through the hard
-space-charge clamp here; routing is the M3 dispatcher's job.
+Floating (open-circuit) solves come HERE, at ``I_tot_A = 0``. An open
+circuit is the zero-current member of this same family: the surface finds
+the potential at which its space-charge-limited emission plus the ion
+current is exactly returned by collected plasma electrons, which at a hot
+emitter is an electron-COLLECTING sheath a couple of ``T_e`` deep, not the
+non-emitting floating drop. The reported ``I_tot`` is RECONSTRUCTED from
+the sheath at the root, so it recovers the imposed zero only to root-finder
+roundoff at the scale of the currents it is built from (order 1e-12 of
+``I_eth_star``), not to an exact literal zero;
+``I_cathode_kirchhoff_residual`` is the quantity to assert on.
 
 Schottky barrier lowering (opt-in): the extracting sheath
 field lowers the effective work function,

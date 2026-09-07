@@ -874,9 +874,12 @@ def solve(
         is solved after this, so the coupling is lagged one step rather than
         iterated. 0.0 (the default) is an exact identity on every float here.
     floating : bool
-        If True, override V_bank = 0, forcing the floating-potential solution
-        where I_tot = V_b = 0 and phi_c = phi_a = T_e * Lambda (in the absence
-        of thermionic emission).
+        RETIRED. True raises: the separate open-circuit root this used to
+        select did not satisfy its own current balance at an emitting
+        surface. The open-circuit point is the current-driven solve at
+        ``I_tot = 0`` (``circuit_idriven.solve_idriven``). False -- the
+        default and the only accepted value -- is the voltage-driven solve,
+        unchanged.
 
     Returns
     -------
@@ -1017,62 +1020,31 @@ def solve(
     # ------------------------------------------------------------------
 
     if floating:
-        # ------------------------------------------------------------------
-        # Floating (open-circuit) solution: I_tot = V_b = 0
+        # RETIRED open-circuit root. This branch imposed
+        # ``psi_c_plus - psi_c_minus = Lambda`` (the NON-emitting floating
+        # drop) together with ``J_i*(1 - exp(Lambda - psi_c_plus)) = J*``,
+        # which counts the released emission with the sign of the ion
+        # current: at an emitting surface it therefore lands MORE repelling
+        # than Lambda and its own Kirchhoff sum ``I_eth* + I_i - I_e,ret``
+        # closes at ``2*I_i`` instead of the zero it claims to solve. It also
+        # left every ``P_*_thermal``/``P_*_phi`` electrode field at its
+        # dataclass default of 0.0, so an open-circuit phase booked no
+        # electrode power at all.
         #
-        # Two constraints must hold simultaneously:
-        #   (1) psi_c_plus - psi_c_minus = Lambda  (net sheath = floating potential)
-        #   (2) J_i*(1 - exp(Lambda - psi_c_plus)) = J_eth*exp(-psi_c_minus/delta)
-        #       (current balance at cathode, I_tot = 0)
-        #
-        # Substituting (1) into (2) gives a single residual in psi_c_plus:
-        #   f(x) = J_i*(1 - exp(Lambda-x)) - J_eth*exp(-(x-Lambda)/delta) = 0
-        #
-        # For J_eth = 0: f(Lambda) = 0 directly.
-        # For J_eth > 0: virtual cathode always forms; f(Lambda) = -J_eth < 0,
-        #   f(inf) → J_i > 0, so root exists in (Lambda, inf).
-        # ------------------------------------------------------------------
-        if J_eth <= 0.0:
-            psi_c_plus = Lambda
-            psi_c_minus = 0.0
-            J_star = 0.0
-            regime: Literal["classical", "virtual_cathode"] = "classical"
-        else:
-            regime = "virtual_cathode"
-
-            def f_float(x: float) -> float:
-                return J_i * (1.0 - _exp_clamped(Lambda - x)) - J_eth * _exp_clamped(
-                    -(x - Lambda) / delta
-                )
-
-            a_f = Lambda
-            b_f = Lambda + 10
-            a_f, b_f = _find_bracket(f_float, a_f, b_f)
-            psi_c_plus = brentq(
-                f_float, a_f, b_f, xtol=1.0e-8, rtol=1.0e-6, full_output=False
-            )
-            psi_c_minus = psi_c_plus - Lambda
-            J_star = J_eth * math.exp(-psi_c_minus / delta)
-
-        J_tot = 0.0
-        psi_a = Lambda  # J_tot = 0  →  psi_a = Lambda - ln(1) = Lambda
-
-        phi_c_plus = psi_c_plus * T_e
-        phi_c_minus = psi_c_minus * T_e
-        phi_c = phi_c_plus - phi_c_minus  # = T_e * Lambda by construction
-        phi_a = psi_a * T_e_anode  # = T_e_anode * Lambda
-
-        I_tot = 0.0
-        I_eth_star = J_star * T_e / R_p
-
-        V_p = 0.0
-        V_b = 0.0
-
-        P_wall = 0.0
-        P_load = 0.0
-        l_b = 0.0
-        long_mfp = False
-        beam_bypass_fraction = 0.0
+        # The open-circuit point is the CURRENT-DRIVEN solve at ``I_tot = 0``
+        # (``cablp.cathode.circuit_idriven.solve_idriven``): Kirchhoff-exact
+        # by construction, it keeps the emission and virtual-cathode physics,
+        # it returns the space-charge-limited emissive floating point
+        # (``phi_c_plus`` of order one to two ``T_e``), and it populates every
+        # electrode power field. Nothing dispatches here any more; the refusal
+        # is loud so no caller can pick the retired root up again.
+        raise ValueError(
+            "circuit.solve(floating=True) is retired: its open-circuit root "
+            "closed Kirchhoff at 2*I_i rather than 0 and assigned no "
+            "electrode power fields. Solve the open-circuit point as the "
+            "current-driven solve at I_tot = 0 "
+            "(cablp.cathode.circuit_idriven.solve_idriven)."
+        )
 
     else:
 
@@ -1310,6 +1282,13 @@ def solve_beam_system(
 ) -> BeamResult:
     """Solve cathode sheath(s) and compute beam quantities for all cells.
 
+    OFF THE DISPATCH PATH. The solver's per-step cathode dispatch reaches
+    ``circuit_idriven.solve_beam_system_idriven`` for every phase, including
+    the open-circuit one (solved at ``I_tot = 0``); the only route that used
+    to arrive here was ``floating=True``, which now raises. The function is
+    kept as the voltage-driven reference assembly, and the twin-cathode
+    branch below with it.
+
     Calls solve() for the primary cathode at ``cathode_index`` and, when
     config.Twin is True, also for the twin at ``twin_index``. Those default to
     0 and -1, the end cells, which is where a lumped source/end geometry puts the
@@ -1329,7 +1308,7 @@ def solve_beam_system(
     I_ion         : ionization potential [eV]
     gas_type      : "He" or "H"
     x0, x0_twin   : warm-start sheath drop hints [V]
-    floating      : override V_bank=0 (open-circuit)
+    floating      : RETIRED; True raises through ``solve`` (see its docstring)
 
     Returns
     -------

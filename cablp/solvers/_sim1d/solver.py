@@ -10893,8 +10893,7 @@ class LAPDSim1D:
         # afterglow phase), a nonzero parasitic inductance keeps the loop
         # driven at zero bank volts until its current has decayed -- the
         # measured ~0.5 ms discharge-current tail. Below 1 A (~0.03% of
-        # peak, negligible stored energy) the historical floating solution
-        # resumes so the late-afterglow sheath physics is unchanged.
+        # peak, negligible stored energy) the OPEN-CIRCUIT solve resumes.
         inductive_tail = (
             configured
             and floating
@@ -11070,16 +11069,33 @@ class LAPDSim1D:
         }
 
     def _effective_cathode_flags(self, time=None, active_only=True, floating=None):
+        """Return ``self._flags`` with ``cathode_coupling`` set for this phase.
+
+        Every configured phase in which a cathode solve exists counts as
+        enabled -- the driven discharge, the inductive tail (a driven circuit
+        at zero bank volts) and the OPEN-CIRCUIT afterglow, whose solve is the
+        same current-driven solve read at ``I_tot = 0``. The electrode rows
+        are therefore CONTINUOUS across the hand-off out of the tail: the same
+        formulas, evaluated at zero loop current, instead of dropping to zero
+        because the phase changed name.
+
+        ``active_only`` no longer selects WHICH phases are enabled; it selects
+        whether the caller may override the phase's own ``floating`` reading.
+        The circuit advance and its device-relation evaluator pass
+        ``active_only=False, floating=False`` to ask for the DRIVEN flags
+        regardless of phase, which is what the loop they integrate needs.
+        """
         options = self._cathode_phase_options(time=time)
-        # The inductive tail keeps the loop electrically active after the bank
-        # opens: its solve is a driven (V=0) circuit, so it counts as enabled
-        # for both the solve and the source terms it feeds.
-        enabled = options["cathode_enabled"] or options.get(
-            "inductive_tail", False
+        use_floating = (
+            options["floating"]
+            if (active_only or floating is None)
+            else bool(floating)
         )
-        if not active_only:
-            use_floating = options["floating"] if floating is None else bool(floating)
-            enabled = enabled or (options["configured"] and use_floating)
+        enabled = (
+            options["cathode_enabled"]
+            or options.get("inductive_tail", False)
+            or (options["configured"] and use_floating)
+        )
         flags = dict(self._flags)
         flags["cathode_coupling"] = bool(enabled)
         return flags
@@ -13051,13 +13067,12 @@ class LAPDSim1D:
             "l_b_profile_twin",
         ):
             diag[name] = np.asarray(getattr(beam_result, name), dtype=float).copy()
-        # Which circuit solve produced these results. The dispatch in
-        # ``physics/cathode.py`` keys on exactly this flag: a floating phase
-        # takes the voltage-driven ``circuit.solve``, everything else the
-        # current-driven one, and the R3.2 audit set is populated only by the
-        # latter. Indexed, not ``.get``-defaulted: a snapshot that reaches
-        # here has run a solve, so a missing key is a bug to hear about.
-        current_driven = not bool(cathode_solve.metadata["floating"])
+        # Which circuit solve produced these results. EVERY phase now takes
+        # the current-driven solve -- the open-circuit one is that same solve
+        # read at ``I_tot = 0`` -- so the R3.2 audit set is populated on all
+        # of them and none of its members is exported as the
+        # "this path does not compute the quantity" NaN.
+        current_driven = True
         self._copy_cathode_result_diagnostics(
             diag=diag,
             prefix="source",
@@ -13193,12 +13208,15 @@ class LAPDSim1D:
     ):
         """Copy one ``SolverResult`` onto the cathode-diagnostics snapshot.
 
-        ``current_driven`` says which solve produced ``result``. On the
-        voltage-driven (floating) solve the members of
-        :data:`_CURRENT_DRIVEN_ONLY_CATHODE_KEYS` are never assigned, so they
-        are exported as NaN rather than as the dataclass default zero: a
-        reader must be able to tell "this path does not compute the quantity"
-        from "the quantity is zero here".
+        ``current_driven`` says whether the solve that produced ``result``
+        assigns the members of :data:`_CURRENT_DRIVEN_ONLY_CATHODE_KEYS`.
+        False exports them as NaN rather than as the dataclass default zero:
+        a reader must be able to tell "this path does not compute the
+        quantity" from "the quantity is zero here". Every phase of the
+        solver's own dispatch now takes the current-driven solve -- the
+        open-circuit one is that solve read at ``I_tot = 0`` -- so the caller
+        passes True there and the NaN branch stands as the contract for any
+        result assembled without those fields.
         """
         if result is None:
             return

@@ -670,6 +670,17 @@ $$P_\text{load}=I_\text{tot}V_b=\underbrace{I_\text{eth}^\star\phi_c+P_{c,i,\phi
 
 The anode term SUBTRACTS, the same sign the device relation carries.
 
+**Switch-off, the tail, and the open circuit.** Opening the bank does not open
+the loop: the parasitic inductance keeps the same loop equation running at
+$V_\text{src}=0$, and the current freewheels against the device and the series
+resistance. The loop returns to OPEN CIRCUIT below $1$ A.
+An open circuit is the same current-driven solve read at $I_\text{tot}=0$: the
+surface sits where its space-charge-limited release plus the ion current is
+exactly returned by collected plasma electrons, which at a hot emitter is an
+electron-COLLECTING sheath of order one to two $T_e$ rather than the
+non-emitting floating drop $\Lambda T_e$. Every electrode booking below is
+evaluated there unchanged, at zero loop current.
+
 Electrode energy is booked to three distinct sources: **circuit field work**
 (sheath fall and work function, sourced from the bank and deposited on the
 electrode, never through the plasma thermal store); the **plasma-thermal**
