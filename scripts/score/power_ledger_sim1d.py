@@ -67,11 +67,12 @@ PORTS_Z_CM = {11: 470.05, 21: 789.55, 29: 1045.15, 41: 1428.55, 50: 1716.1}
 #: Energy rows read from each rhs_terms channel.
 ENERGY_ROWS = ("Ee", "Ei", "En", "En_a")
 
-#: The four rhs_terms channels the `end_sheath_full_debit` closure adds, in
-#: the order the per-window block reports them: the collector member first,
-#: then the emitting cathode face's three.  They are PRESENCE-GATED on the
-#: flag, so a run that did not arm it carries none of them and the block
-#: reads `n/a` -- absence here means "never booked", never "booked zero".
+#: The four rhs_terms channels the two END-FACE keys add, in the order the
+#: per-window block reports them: `collector_sheath_full_debit`'s one row
+#: first, then `cathode_face_full_debit`'s emitting-face three.  Each row is
+#: PRESENCE-GATED on ITS OWN key, so a run may carry the collector row alone,
+#: the three cathode rows alone, all four, or none -- absence here means
+#: "never booked", never "booked zero".
 END_SHEATH_ROWS = (
     "collector_e_sheath_climb",
     "cathode_e_emitted_enthalpy",
@@ -144,26 +145,35 @@ CHANNEL_PHASE = {
          "handed to the ions. With the 2 Te of characteristic_boundary the "
          "collector debit is the sheath-edge (2 + Lambda_eff) Te per "
          "collected electron. Present only on a run with "
-         "end_sheath_full_debit armed"),
+         "collector_sheath_full_debit armed"),
     "cathode_e_emitted_enthalpy":
-        ("DRIVE-ONLY",
+        ("BOTH",
          "END-FACE SHEATH CLOSURE (Ee only), HEATING: the 2 k_B T_s the "
          "released electrons carry into the plasma off the emitting surface, "
-         "at the space-charge-released current. Present only on a run with "
-         "end_sheath_full_debit armed"),
+         "at the space-charge-released current. BOTH, not DRIVE-ONLY: the "
+         "emitting surface is still hot and still releasing current into the "
+         "floating afterglow, so this row runs in both windows by "
+         "construction. Present only on a run with cathode_face_full_debit "
+         "armed"),
     "cathode_e_emitted_fall":
-        ("DRIVE-ONLY",
+        ("AFTERGLOW-ACTIVE",
          "END-FACE SHEATH CLOSURE (Ee only), HEATING: the part of the "
          "cathode fall the released electrons drop through that the beam "
-         "row does not already carry -- exactly zero until a virtual cathode "
-         "forms. Present only on a run with end_sheath_full_debit armed"),
+         "row does not already carry. AFTERGLOW-ACTIVE BY CONSTRUCTION: it "
+         "is identically zero while phi_c_minus = 0, so it is exactly zero "
+         "through the drive and nonzero only in the virtual-cathode regime "
+         "the afterglow reaches. Present only on a run with "
+         "cathode_face_full_debit armed"),
     "cathode_e_collected_climb":
-        ("DRIVE-ONLY",
+        ("AFTERGLOW-ACTIVE",
          "END-FACE SHEATH CLOSURE (Ee only), COOLING: the barrier the "
          "returning plasma electrons climbed at the cathode, charged to "
          "their own store -- the anode's plasma-pays convention at the other "
-         "electrode. Present only on a run with end_sheath_full_debit "
-         "armed"),
+         "electrode. AFTERGLOW-ACTIVE: the discharge-phase cathode sheath "
+         "repels plasma electrons, so the returning current is microamps "
+         "there and the row is negligible against the drive-phase terms; it "
+         "carries real power only once the barrier collapses. Present only "
+         "on a run with cathode_face_full_debit armed"),
     "ei_exchange":
         ("BOTH",
          "collisional electron-ion temperature equilibration at the local "
@@ -592,15 +602,15 @@ def report_window(f, label, lo, hi, geom, port_top):
                       "channels in this window; move the window past the "
                       "tail or discount them explicitly.")
 
-    print("\n--- END-FACE SHEATH CLOSURE (end_sheath_full_debit) [kW], "
-          "window mean ---")
+    print("\n--- END-FACE SHEATH CLOSURE (collector_sheath_full_debit, "
+          "cathode_face_full_debit) [kW], window mean ---")
     if not table:
         print("  n/a -- rhs_terms ABSENT from this artifact")
     else:
         present = [r for r in END_SHEATH_ROWS if (r, "Ee") in table]
         if not present:
-            print("  n/a -- this run did not arm end_sheath_full_debit "
-                  "(the four rows are absent, which is not the same as zero)")
+            print("  n/a -- this run armed neither end-face key (the four "
+                  "rows are absent, which is not the same as zero)")
         else:
             missing = [r for r in END_SHEATH_ROWS if r not in present]
             total = 0.0
@@ -611,7 +621,10 @@ def report_window(f, label, lo, hi, geom, port_top):
             print(f"{'  NET (all four rows)':<44}{total:>16.5f}  kW")
             if missing:
                 print(f"  NB rows absent from this artifact: {missing} -- the "
-                      "net above is over the rows present, not the closure")
+                      "net above is over the rows present, not the closure "
+                      "(the two end-face keys arm independently, so a "
+                      "one-key run is missing the other key's rows by "
+                      "construction)")
             print("  the collector row is the sheath fall its collected "
                   "electrons climbed; read it WITH characteristic_boundary,\n"
                   "  which carries the same face's 2 Te. The three cathode "

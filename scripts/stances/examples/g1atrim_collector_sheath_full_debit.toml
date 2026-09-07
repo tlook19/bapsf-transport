@@ -1,0 +1,59 @@
+# THE COLLECTOR END-FACE SHEATH DEBIT PROBE: the reference configuration with
+# the machine's FAR end face booking the sheath fall its collected electrons
+# climbed, and nothing else moved.
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: the measured machine, the operating point, the drive
+# calibration, the velocity mesh, the neutral closure and the initial neutral
+# state are all inherited, so this file cannot drift from the reference and a
+# reader can see the whole difference between the two arms at a glance.
+#
+# A PROBE, NOT A STANCE. The reference does not adopt this closure and this
+# file is not a candidate for it: it exists so the A/B against the reference
+# can be run at all. Nothing scored here transfers to the reference.
+#
+# WHAT IT IS FOR. The reference books the electrode electron sheath
+# THERMAL-ONLY at both ends -- 2 Te per collected electron -- and leaves the
+# fall on the electrode. That is right where a circuit supplies the field, and
+# the anode already completes it under `anode_sheath_full_debit`; at the
+# COLLECTOR there is no circuit branch at all, so the barrier its collected
+# electrons climb is paid by the electron store itself and handed to the ions
+# that deposit it on the surface. Armed, the face debit is the sheath-edge
+# (2 + Lambda_eff) Te per electron rather than 2 Te alone.
+#
+# WHY THE COLLECTOR ALONE. The two end faces carry different fluxes in
+# different regimes -- this row is live in every phase, while the emitting
+# face's three are a virtual-cathode-regime channel -- and nothing couples
+# them except the column. An arm that moves both cannot say which end a
+# column-wide response came from; this file moves one.
+#
+# WHAT IT DOES NOT CHANGE. No particle, momentum or ion-energy booking moves;
+# the row is electron energy only. The emitting cathode face is untouched --
+# that is `cathode_face_full_debit`, a separate key. The circuit and the load
+# ledger are untouched: the potential those electrons ride is field energy the
+# ions already deposit on the surface.
+#
+# HOW TO RUN IT. The campaign drivers resolve `--stance <name>` against
+# `scripts/stances/`, so copy this file there first; `run_sim1d.py` takes the
+# path directly and needs no copy:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/g1atrim_collector_sheath_full_debit.toml \
+#         --output g1atrim_collector_sheath_full_debit.h5
+#
+# The saved trajectory records the lineage -- this file's name, "g1atrim" as
+# its base, both files' sha256, the delta key below, and the resolved
+# configuration's identity -- so the arm is identifiable from its artifact
+# alone. Its `rhs_terms` carries the one row this file arms, which the
+# reference's does not carry at all; `scripts/score/power_ledger_sim1d.py`
+# reports it per window and notes the three cathode rows as absent, which on
+# this arm is by construction rather than an omission.
+base = "g1atrim"
+
+
+[input_flags]
+# The selection, and the whole of it. Arming refuses at construction unless
+# the configuration supplies a collector-role plasma-absorbing face; the
+# reference supplies one. It does NOT require the cathode circuit solve: this
+# row rides the boundary operator's own flux.
+collector_sheath_full_debit = true
