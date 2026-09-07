@@ -406,9 +406,20 @@ def clamped_counts(dg, mask):
     A cathode solve whose root sits above the composed ceiling is clamped to
     the ceiling and tagged ``regime = "capability_limited"``, and nothing
     raises -- so a window that spent frames on the ceiling looks exactly like
-    one that did not unless the frames are counted. Read off ``source_regime``,
-    which is the SAME predicate the run-level census counts, so the windowed
-    share and the run total cannot drift apart.
+    one that did not unless the frames are counted. Read off ``source_regime``.
+
+    THIS ROW AND THE RUN-LEVEL CENSUS COUNT DIFFERENT POPULATIONS. The
+    predicate is the same tag, but this row counts SAVES whose saved
+    ``source_regime`` reads ``capability_limited``, while the run-level census
+    (the ``cathode_clamped_solves`` / ``cathode_total_solves`` root
+    attributes) counts accepted SOLVES. A run performs many solves between two
+    saves, so a clamp that lasts microseconds falls between save frames and is
+    invisible here while the census sees it: measured on a reference probe
+    run, the census counts tens of clamped solves out of thousands while this
+    row reads ZERO clamped saves. That is why both are reported, and it is why
+    a 0-of-N row is NOT evidence that the run never clamped -- the root
+    attributes are the evidence for that, and this row is only about the
+    frames a reader can actually inspect.
 
     ``(None, None)`` where the artifact carries no such row: a file written
     before the census existed still loads and still reports every other row,
@@ -494,6 +505,11 @@ def report_window(f, label, lo, hi, geom, port_top):
         print(f"  cathode clamp frames: {n_clamped} of {n_clamp_frames} "
               f"saves ({share:.4f}) at the composed ceiling "
               "(source_regime == capability_limited)")
+        if not n_clamped:
+            print("    SAVES, not solves: a clamp between two save frames is "
+                  "invisible here -- the run-level count is the file's")
+            print("    cathode_clamped_solves / cathode_total_solves root "
+                  "attributes, and a zero here is not evidence of none")
     print("=" * 88)
 
     table, channels = integrate_rows(f, i0, i1, geom["vols"])
