@@ -398,8 +398,10 @@ def main(argv=None):
     )
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)
     # Standing condition for a DVM-arm run: every report quotes the limited
-    # step count and the outstanding debt, and any limited > 0 gets a
-    # dedicated look. A moment run has no ledger and prints nothing.
+    # step count and the outstanding debt, and any limited > 0 is LOCATED
+    # before the run is read -- which the census now carries, so the look is
+    # a read of the artifact rather than a re-run.
+    # A moment run has no ledger and prints nothing.
     census = summarize_result(result).dvm_transfer_ledger_census
     if census is not None:
         print(
@@ -429,8 +431,15 @@ def main(argv=None):
             )
         if census["relax_limited_steps"] > 0:
             print(
-                "dvm transfer ledger: LIMITED STEPS PRESENT -- the standing "
-                "condition calls for a dedicated look at this run"
+                "dvm transfer ledger: LIMITED STEPS PRESENT -- locate them "
+                "in the saved census (limited_step_index, "
+                "limited_step_time_s, limited_step_clamped_fraction_cells, "
+                "limited_clamped_fraction_max) before reading this run. A "
+                "source-cell event while the column is conducting is the "
+                "alarm: the drain the limiter held back is the cathode "
+                "book's. An afterglow far-column event is the electron-ion "
+                "exchange regime, which is bounded, and the clamped "
+                "fraction says by how much"
             )
     print(f"saved {args.save_h5}")
 

@@ -13320,8 +13320,10 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
     assert np.all(np.isfinite(np.asarray(kd_lim_bundle.Ei, dtype=float)))
 
     # K2d transfer-ledger census, PERSISTED: the standing DVM report condition
-    # ("quote relax_limited_steps and the outstanding debt; any limited > 0
-    # gets a dedicated look") has to be answerable from the saved artifact,
+    # ("quote relax_limited_steps and the outstanding debt; locate any
+    # limited > 0 in the record -- a conducting-phase source-cell event is
+    # the alarm, an afterglow far-column event is the bounded electron-ion
+    # exchange regime") has to be answerable from the saved artifact,
     # not only from a live solver object. Four statements: the moment path
     # writes no such group at all, a DVM run round-trips its census through
     # save/load, the forced-limiter scenario persists NONZERO counts, and the

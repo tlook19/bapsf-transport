@@ -14142,7 +14142,16 @@ class LAPDSim1D:
 
         The ``limited_*`` block is the limiter's own per-event record: what
         the counts alone could never say is HOW MUCH was withheld, and these
-        rows carry it -- see :meth:`_dvm_limited_step_census`.
+        rows carry it -- see :meth:`_dvm_limited_step_census`. It is what the
+        standing DVM report condition reads. A run with limited steps is
+        LOCATED from these rows rather than re-run: the step index and time
+        say when, the per-cell clamped fractions say where and by how much,
+        and the two readings differ in kind. A SOURCE-CELL event while the
+        column is conducting is the alarm -- the drain the limiter held back
+        there is the cathode book's, and a held-back cathode drain is a
+        misbooking until shown otherwise. A FAR-COLUMN event in the afterglow
+        is the electron-ion exchange regime, which is bounded, so the
+        clamped fraction is the whole of what it costs.
 
         One block is PRESENCE-GATED and absent from every run that does not
         arm it: with ``neutral_kinetic_dvm_jet_launch_width`` set, the four
