@@ -23,13 +23,22 @@ aHI = [0.1247e3, 0.2111, 0.5982, 0.4063, 0.9640e-3, 1.4523]
 # is the caller's responsibility.
 aHII = [0.3180e-3, 0.2332, -0.9388e-2, 0.8617, 0.9663e-02, 0.8537]
 
-# fitting parameters for ionization cross sections a_i
+# --- He I ground-state single ionization (electron impact) ---
+# Fit coefficients A_1..A_6 for the DIRECT electron-impact SINGLE ionization
+# of ground-state helium. Ralchenko, Janev, Kato, Fursa, Bray, de Heer, At.
+# Data Nucl. Data Tables 94 (2008) 603-622,
+# doi:10.1016/j.adt.2007.11.003, Table 4 row 1^1S (the same values appear in
+# the report form, NIFS-DATA-59 Table IV).
+#
+# Consumed by ``atomic.cross_sections.He_EII_cross`` as the paper's Eq. (9):
+#   sigma = 1e-13/(I*E) [ A_1 ln(E/I) + sum_{i=2..6} A_i (1 - I/E)^(i-1) ] cm^2
+# with I the ionization energy and E the electron energy, both in eV, so the
+# list is ordered A_1 first and the row's trailing 0.0 IS A_6.
+#
+# The recommended ground-state data carry a 5-10% uncertainty. The fit is
+# anchored on the Shah et al. (1988) measurements together with the paper's
+# own CCC-89 calculations, and spans threshold to ~2e4 eV.
 a_11s = [5.857e-1, -4.457e-1, 7.680e-1, -2.521e0, 3.317e0, 0.000e0]
-# DEAD IN THE TRACKED TREE: the double-ionization row has no importer in this
-# repository. It is RETAINED rather than deleted because the gitignored
-# exploratory notebook `scripts/cross_sections.ipynb` imports and uses it on
-# the working machine. Delete it with that notebook's disposition, not before.
-a_11s_double = [1.323e-6, 8.208e-3, -6.676e-2, 2.978e-1, -1.925e-1, 0.000e0]
 
 # fitting parameters for dipole-allowed excitation cross sections b_i_f
 b_11s_21p = [7.087e-1, -9.347e-2, -1.598e0, 2.986e0, -1.293e0, 3.086e-1]
