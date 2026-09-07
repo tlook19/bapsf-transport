@@ -390,7 +390,13 @@ Uniqueness rests on each residual's monotonicity.
 **A demand past the composed ceiling is CLAMPED, not raised — in the
 current-driven and prescribed forms.** There the solve returns the ceiling value
 and TAGS itself `capability_limited`, `bound_active` recording which member of
-the ceiling bound; no error is raised and the run continues. The voltage-driven
+the ceiling bound; no error is raised and the run continues. Because nothing
+raises, the clamp is COUNTED: the solver censuses how many of a run's accepted
+cathode solves were tagged that way out of how many it performed and when the
+first one fired, prints that census at run end, and saves it in the result file
+as the root attributes `cathode_clamped_solves`, `cathode_total_solves` and
+`cathode_clamp_first_t_s`; the windowed share is read per save from
+`source_regime`. The voltage-driven
 form does not share that contract: on a convergence failure it re-brackets
 UNCONSTRAINED, so a root it returns is not bounded by the ceiling.
 

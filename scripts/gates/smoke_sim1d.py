@@ -3079,6 +3079,74 @@ def _case_cathode_circuit_voltage_bound_r1(
 
 
 # --------------------------------------------------------------------
+# cathode-clamp-census
+# --------------------------------------------------------------------
+@_case(
+    "cathode-clamp-census",
+)
+def _case_cathode_clamp_census(_r1_sim_config):
+    # THE CLAMP IS COUNTED. A cathode solve whose root sits above the composed
+    # ceiling returns the ceiling value tagged ``capability_limited`` and
+    # raises nothing, so a run that spent solves there is indistinguishable
+    # from one that did not unless the count exists. The solver counts the
+    # clamped and the total accepted cathode solves; these are the two
+    # directions of that counter.
+    #
+    # ARMED: an imposed loop current far above what this tiny cathode can
+    # emit at the ceiling. The solve clamps, so the clamped count moves and
+    # the first-clamp time is stamped.
+    _clamp_hi = LAPDSim1D(*_r1_sim_config())
+    assert _clamp_hi._cathode_total_solves == 0
+    assert _clamp_hi._cathode_clamped_solves == 0
+    assert math.isnan(_clamp_hi._cathode_clamp_first_t_s)
+    _clamp_hi._circuit_I_loop = 1.0e3
+    _clamp_hi_solve = _clamp_hi.solve_cathode_boundary(
+        floating=False, update_cache=True
+    )
+    assert (
+        str(_clamp_hi_solve.beam_result.result.regime) == "capability_limited"
+    ), _clamp_hi_solve.beam_result.result.regime
+    assert _clamp_hi._cathode_total_solves == 1
+    assert _clamp_hi._cathode_clamped_solves >= 1
+    assert math.isfinite(_clamp_hi._cathode_clamp_first_t_s)
+    assert math.isfinite(_clamp_hi._cathode_clamp_last_t_s)
+
+    # NEGATIVE CONTROL: the same fixture and the same call at a current the
+    # cathode carries below the ceiling. The solve is counted and the clamped
+    # count stays at zero -- so the counter is measuring the clamp and not
+    # merely the solve.
+    _clamp_lo = LAPDSim1D(*_r1_sim_config())
+    _clamp_lo._circuit_I_loop = 1.0
+    _clamp_lo_solve = _clamp_lo.solve_cathode_boundary(
+        floating=False, update_cache=True
+    )
+    assert (
+        str(_clamp_lo_solve.beam_result.result.regime) != "capability_limited"
+    ), _clamp_lo_solve.beam_result.result.regime
+    assert _clamp_lo._cathode_total_solves == 1
+    assert _clamp_lo._cathode_clamped_solves == 0
+    assert math.isnan(_clamp_lo._cathode_clamp_first_t_s)
+    assert math.isnan(_clamp_lo._cathode_clamp_last_t_s)
+
+    # A READ-ONLY solve is not a solve this run performed: it does not write
+    # the cathode caches and it must not move the census either, or the
+    # denominator would count the dt bound's probe solves alongside the
+    # accepted ones.
+    _clamp_lo.solve_cathode_boundary(floating=False, update_cache=False)
+    assert _clamp_lo._cathode_total_solves == 1
+
+    # The four counters ride the Picard snapshot, so a re-run of one step
+    # restores them rather than counting its solve twice.
+    for _clamp_attr in (
+        "_cathode_total_solves",
+        "_cathode_clamped_solves",
+        "_cathode_clamp_first_t_s",
+        "_cathode_clamp_last_t_s",
+    ):
+        assert _clamp_attr in LAPDSim1D._PICARD_DIRECT_ATTRS, _clamp_attr
+
+
+# --------------------------------------------------------------------
 # cathode-phi-a-aware-object
 # --------------------------------------------------------------------
 @_case(
@@ -25609,7 +25677,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 141, "historical_stance": 60}
+_CASE_CENSUS = {"total": 142, "historical_stance": 60}
 
 
 def _assert_case_census():

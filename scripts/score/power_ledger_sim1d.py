@@ -400,6 +400,29 @@ def regime_counts(dg, mask):
     return prescribed, len(tags) - prescribed, len(tags)
 
 
+def clamped_counts(dg, mask):
+    """Return ``(clamped, total)`` cathode-clamped save counts in the window.
+
+    A cathode solve whose root sits above the composed ceiling is clamped to
+    the ceiling and tagged ``regime = "capability_limited"``, and nothing
+    raises -- so a window that spent frames on the ceiling looks exactly like
+    one that did not unless the frames are counted. Read off ``source_regime``,
+    which is the SAME predicate the run-level census counts, so the windowed
+    share and the run total cannot drift apart.
+
+    ``(None, None)`` where the artifact carries no such row: a file written
+    before the census existed still loads and still reports every other row,
+    and the caller prints "n/a" rather than a zero that would read as "the
+    clamp never fired here".
+    """
+    if dg is None or "source_regime" not in dg:
+        return None, None
+    tags = dg["source_regime"][:][mask]
+    tags = [t.decode() if isinstance(t, bytes) else str(t) for t in tags]
+    clamped = sum(1 for t in tags if t == "capability_limited")
+    return clamped, len(tags)
+
+
 def dvm_flow_power(f, key, i0, i1, dt_s):
     """Window-mean power [W] of a per-frame DVM ledger FLOW row [erg].
 
@@ -462,6 +485,15 @@ def report_window(f, label, lo, hi, geom, port_top):
     if n_regime:
         print(f"  regime frames: {n_prescribed} prescribed / "
               f"{n_floating} floating (from source_regime)")
+    n_clamped, n_clamp_frames = clamped_counts(dg, mask)
+    if n_clamped is None:
+        print("  cathode clamp frames: n/a -- this artifact carries no "
+              "source_regime row")
+    else:
+        share = n_clamped / n_clamp_frames if n_clamp_frames else float("nan")
+        print(f"  cathode clamp frames: {n_clamped} of {n_clamp_frames} "
+              f"saves ({share:.4f}) at the composed ceiling "
+              "(source_regime == capability_limited)")
     print("=" * 88)
 
     table, channels = integrate_rows(f, i0, i1, geom["vols"])
