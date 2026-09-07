@@ -2127,6 +2127,13 @@ def ion_neutral_collision_rhs(
     equal-mass frictional split. The operator is then PAIRWISE conservative in
     energy: ``dEi Vp + dEn V_En == -dM u_rel Vp`` per cell, the full dissipated
     drift power, to roundoff.
+
+    ``nu_mt`` is formed on the COLD neutral field ``nn`` alone, so where the
+    ``neutral_energy`` hot channel exists its standing population ``nn_hot``
+    (:mod:`~..physics.hot_neutrals`) exerts no drag by construction, and a
+    comparison of this closure's neutral density against a kinetic closure's
+    must add the hot field to the cold one before the two are the same
+    quantity.
     """
     zeros = np.zeros_like(state.n, dtype=float)
     if b_ion_neutral_drag == 0.0:
