@@ -1156,10 +1156,16 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
     log-linear fit over the same window. The experimental noise floor is
     estimated from the final 5 ms of each decay trace (5x its robust sigma).
 
-    Each row also carries the measured e-fold time's own 1-sigma uncertainty
-    ``tau_exp_sigma_ms`` and the deviation ``dev_sigma = (tau_model -
-    tau_exp) / tau_exp_sigma_ms`` in units of it, so a per-row sigma bar can
-    be evaluated on stage (iii) the way it already can on the scored rows.
+    Each row also carries the measured e-fold time's own 1-sigma STATISTICAL
+    uncertainty ``tau_exp_sigma_stat_ms`` and the deviation
+    ``dev_sigma_stat = (tau_model - tau_exp) / tau_exp_sigma_stat_ms`` in
+    units of it, so a per-row sigma bar can be evaluated on stage (iii) the
+    way it already can on the scored rows. Both names carry ``stat`` because
+    this payload ALSO exports ``scored[*].sigma``, which is |deviation| over
+    ``sigma_tot`` and reads order 1-3, while these read order 100 on the same
+    run: two quantities called "sigma" with different denominators, one of
+    which would otherwise travel into a plot or a downstream record alone and
+    unqualified.
     The sigma is the overlay's per-sample SEM propagated through the fit --
     see ``_efold_time_sigma_ms`` for the estimator and its independence
     assumption. An overlay vintage that carries no ``isat_decay_sem_a`` gets
@@ -1224,7 +1230,7 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
                 t_exp[exp_window], isat[p, exp_window], isat_sem[p, exp_window], noise
             )
         )
-        dev_sigma = (
+        dev_sigma_stat = (
             (tau_model - tau_exp) / tau_exp_sigma
             if np.isfinite(tau_exp_sigma)
             and tau_exp_sigma > 0.0
@@ -1241,8 +1247,8 @@ def compare_decay(result, overlay, window_ms=DECAY_WINDOW_MS):
                 "ratio": tau_model / tau_exp if np.isfinite(tau_exp) else np.nan,
                 "extrapolated": extrapolated,
                 "decay_frac_exp": decay_frac_exp,
-                "tau_exp_sigma_ms": tau_exp_sigma,
-                "dev_sigma": dev_sigma,
+                "tau_exp_sigma_stat_ms": tau_exp_sigma,
+                "dev_sigma_stat": dev_sigma_stat,
                 "refilled": bool(int(ports[p]) in REFILLED_PORTS),
             }
         )
@@ -2282,19 +2288,23 @@ def _report_decay(rows, window):
     print("   isat_decay_mean_a, the 'i_sweep' channel.  The downstream face and")
     print("   the flow-cancelled geomean are reported below this table and do not")
     print("   enter it.")
-    print("   sig_exp is tau_exp's own 1-sigma measurement uncertainty and dev is")
-    print("   (tau_model - tau_exp)/sig_exp, so a per-row sigma bar can be read off")
-    print("   these rows.  ESTIMATOR: the overlay carries the ensemble-MEAN decay")
+    print("   sig_stat is tau_exp's own 1-sigma STATISTICAL uncertainty and dev")
+    print("   [stat] is (tau_model - tau_exp)/sig_stat, so a per-row sigma bar can")
+    print("   be read off these rows.  Both are named 'stat' because the scored")
+    print("   rows above are quoted against sigma_tot and read order 1-3, while")
+    print("   these read order 100 on the same run: two different denominators,")
+    print("   and the qualifier travels with the number.")
+    print("   ESTIMATOR: the overlay carries the ensemble-MEAN decay")
     print("   trace and its per-sample SEM (isat_decay_sem_a), NOT per-shot traces,")
     print("   so there is no per-shot spread of e-fold times to take; the SEM is")
     print("   propagated through the same log-linear fit -- sig_tau = tau^2 *")
     print("   sqrt(sum_i c_i^2 (sem_i/y_i)^2) with c_i the least-squares slope")
     print("   weights, samples treated as independent (residual correlation left by")
     print("   the trace's anti-alias filter would make it an under-estimate).")
-    print("   sig_exp is therefore the STATISTICAL uncertainty of the measured fit")
-    print("   alone: it carries no sweep-systematic term, so it is NOT the sigma_tot")
-    print("   the scored rows above are quoted against, and a per-row bar written in")
-    print("   sig_exp is a far tighter bar than one written in sigma_tot.")
+    print("   sig_stat is the uncertainty of the measured FIT alone: it carries no")
+    print("   sweep-systematic term, so it is NOT the sigma_tot the scored rows are")
+    print("   quoted against, and a per-row bar written in sig_stat is a far tighter")
+    print("   bar than one written in sigma_tot.")
     print("   A row marked 'refilled' is one whose MODEL density is advectively")
     print("   refilled across the window -- parallel transport resupplies that cell")
     print("   while the plasma decays, so its fitted tau is a refill/decay")
@@ -2303,7 +2313,7 @@ def _report_decay(rows, window):
     header = (
         f"{'port':>6} {'z [cm]':>8} {'tau_model':>10} {'tau_exp':>9} "
         f"{'ratio':>7} {'D_exp [%]':>10}"
-        f" {'sig_exp':>10} {'dev [sig]':>10} {'refilled':>9}"
+        f" {'sig_stat':>10} {'dev [stat]':>10} {'refilled':>9}"
     )
     print(header)
     print("-" * len(header))
@@ -2315,7 +2325,7 @@ def _report_decay(rows, window):
             f"{r['port']:>6} {r['z']:8.0f} {r['tau_model_ms']:9.2f}ms "
             f"{r['tau_exp_ms']:8.2f}ms {r['ratio']:7.2f} "
             f"{100.0 * r['decay_frac_exp']:9.2f}{mark:<1}"
-            f" {r['tau_exp_sigma_ms']:8.3f}ms {r['dev_sigma']:10.1f}"
+            f" {r['tau_exp_sigma_stat_ms']:8.3f}ms {r['dev_sigma_stat']:10.1f}"
             f" {'refilled' if r['refilled'] else '':>9}"
         )
     ratios = [r["ratio"] for r in rows if np.isfinite(r["ratio"])]
