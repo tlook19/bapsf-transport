@@ -13489,6 +13489,23 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
             <= kd_cen["relax_limited_steps"]
         )
         assert kd_cen_back["sample_relax_limited_steps"][-1] > 0.0
+        # The CX/elastic pair's two targets and the rate they were formed
+        # with, per cell at every frame: nothing else records them and the
+        # trajectory cannot recover them. Read AT the frame, so the last one
+        # is the live solver's own array.
+        for kd_cen_pc, kd_cen_live in (
+            ("T_eff_eV", kd_cen_sim._dvm.T_eff_eV),
+            ("u_n_eff", kd_cen_sim._dvm.u_n_eff),
+            ("Ei_transfer_pair", kd_cen_sim._dvm.Ei_transfer_pair),
+        ):
+            kd_cen_rows = kd_cen_back[f"sample_{kd_cen_pc}"]
+            assert kd_cen_rows.shape == (kd_cen_frames, kd_cen_cells), kd_cen_pc
+            assert np.all(np.isfinite(kd_cen_rows)), kd_cen_pc
+            assert np.array_equal(kd_cen_rows[-1], kd_cen_live), kd_cen_pc
+        # A temperature is non-negative by construction (a second moment
+        # about the ion drift); the pair rate is signed.
+        assert np.all(kd_cen_back["sample_T_eff_eV"] >= 0.0)
+        assert np.any(kd_cen_back["sample_T_eff_eV"] > 0.0)
         # Surfaced, and the arm's presence is readable from the file.
         kd_cen_summary = summarize_result(kd_cen_loaded)
         assert kd_cen_summary.dvm_arm_configured is True

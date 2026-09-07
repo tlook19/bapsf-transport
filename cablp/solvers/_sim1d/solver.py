@@ -14039,8 +14039,20 @@ class LAPDSim1D:
 
         Three cumulative counters and the frame time -- enough to place WHEN
         the limiter engaged (difference consecutive frames) without carrying
-        the per-cell arrays at every save. ``limited_cells`` counts cells
-        limited at least once so far, not cells limited at this frame.
+        the CUMULATIVE per-cell arrays at every save. ``limited_cells``
+        counts cells limited at least once so far, not cells limited at this
+        frame.
+
+        Three per-cell rows ARE carried, because nothing else records them
+        and they are not recoverable from the trajectory: the CX/elastic
+        pair's effective drift ``u_n_eff`` [cm/s] and ion-frame temperature
+        ``T_eff_eV`` [eV] -- the two targets the pair relaxes the fluid
+        towards, ``T_eff_eV`` carrying the frictional term by construction
+        because it is the second moment about the ION drift -- and the pair's
+        own ion-energy transfer rate ``Ei_transfer_pair`` [erg/(cm^3 s)],
+        the rate those targets were formed with. All three are the TICK's
+        frozen values, read at the frame, so consecutive frames sample them
+        rather than partitioning anything.
 
         The three ``ion_*`` totals are the particle handshake's running
         domain sums [particles]. They are the per-frame record of the
@@ -14064,6 +14076,11 @@ class LAPDSim1D:
             "ion_removed_total": float(np.sum(dvm.ion_removed_cum)),
             "ion_debt_total": float(np.sum(dvm.ion_debt)),
             "ion_shortfall_updates": float(dvm.ion_shortfall_updates),
+            "T_eff_eV": np.asarray(dvm.T_eff_eV, dtype=float).copy(),
+            "u_n_eff": np.asarray(dvm.u_n_eff, dtype=float).copy(),
+            "Ei_transfer_pair": np.asarray(
+                dvm.Ei_transfer_pair, dtype=float
+            ).copy(),
         }
 
     def _dvm_flight_cell_row_armed(self):
@@ -14296,6 +14313,11 @@ class LAPDSim1D:
             "ion_removed_total",
             "ion_debt_total",
             "ion_shortfall_updates",
+            # The three PER-CELL rows, which stack to (frames, cells) here
+            # rather than to (frames,) -- see :meth:`_dvm_ledger_sample`.
+            "T_eff_eV",
+            "u_n_eff",
+            "Ei_transfer_pair",
         ):
             census[f"sample_{field}"] = np.asarray(
                 [snapshot["dvm_ledger"][field] for snapshot in saved],
