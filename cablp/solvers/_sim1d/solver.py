@@ -12917,6 +12917,18 @@ class LAPDSim1D:
         plasma Bohm-outflow loss -- regime-dependent (small in the high-density/
         detached ES runs, significant in low-puff/attached runs), independent of
         whether any beam survives downstream.
+
+        ``collector_e_sheath_climb`` IS PART OF THE SURFACE LOAD and is summed
+        here on the same convention, whenever ``collector_sheath_full_debit``
+        put it in the ledger. That row takes the sheath fall out of the plasma
+        ELECTRON store and hands it to the ions, which carry it to the plate:
+        it is a removal from the plasma exactly as the boundary rows are, so
+        the same negation turns it into surface power and the plate reads the
+        full ``(2 + Lambda_eff) Te`` per collected electron. Omitting it made
+        this line report LESS surface power on precisely the arm that raised
+        the physical surface load -- a diagnostic contradicting its own
+        closure. The row is presence-gated, so an unarmed run reaches
+        ``rhs_terms.get`` on an absent key and this line is what it always was.
         """
         roles = np.asarray(self._geometry.cell_role)
         collector = roles == "collector"
@@ -12926,7 +12938,11 @@ class LAPDSim1D:
         u = np.asarray(derived.u, dtype=float)
         m = self._ion_mass_g
         total = 0.0
-        for name in ("characteristic_boundary", "boundary_absorption"):
+        for name in (
+            "characteristic_boundary",
+            "boundary_absorption",
+            "collector_e_sheath_climb",
+        ):
             term = rhs_terms.get(name)
             if term is None:
                 continue
