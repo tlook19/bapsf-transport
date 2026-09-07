@@ -12445,9 +12445,20 @@ class LAPDSim1D:
             term_name: term_fields["Ee"] * 1.0e-7
             for term_name, term_fields in rhs_terms.items()
         }
+        # The end-face rows are ELECTRON-ONLY BY CONSTRUCTION -- their Ei is
+        # exactly zero on every cell of every step, because the ion-thermal
+        # booking at both faces is already complete in the boundary and
+        # electrode rows. Registering them on the ion table as well would put
+        # four identically-zero members there, changing the artifact's shape
+        # and the ledger's channel count to say nothing. They are written to
+        # the electron table alone; a reader of the ion table defaults their
+        # absence exactly as it already defaults the absence of the rows
+        # themselves on an unarmed run. The packed `rhs_terms` group still
+        # carries the full state per row, so nothing is lost.
         ion_energy_terms_W_cm3 = {
             term_name: term_fields["Ei"] * 1.0e-7
             for term_name, term_fields in rhs_terms.items()
+            if term_name not in END_SHEATH_DEBIT_ROWS
         }
 
         result = SimpleNamespace(
