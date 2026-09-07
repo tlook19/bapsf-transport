@@ -13349,6 +13349,20 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
         kd_cen_sim.advance_one_step(dt=1.0e-9)
     assert kd_cen_sim._dvm_engaged
     kd_cen_cells = kd_cen_sim.geometry.cells
+    # NEVER LIMITED so far: the limiter's per-event rows are PRESENT and
+    # EMPTY, so a reader never has to tell "the limiter never fired" from
+    # "the amount was not recorded".
+    assert kd_cen_sim._dvm.relax_limited_steps == 0
+    kd_cen_empty = kd_cen_sim._dvm_limited_step_census()
+    assert kd_cen_empty["limited_step_index"].shape == (0,)
+    assert kd_cen_empty["limited_step_time_s"].shape == (0,)
+    assert kd_cen_empty["limited_step_clamped_fraction_max"].shape == (0,)
+    assert kd_cen_empty["limited_step_clamped_fraction_cells"].shape == (
+        0, kd_cen_cells
+    )
+    assert kd_cen_empty["limited_clamped_fraction_max"] == 0.0
+    assert kd_cen_empty["limited_clamped_fraction_mean"] == 0.0
+    assert kd_cen_empty["limited_steps_dropped"] == 0
     kd_cen_sim._dvm.Ei_transfer = np.full(kd_cen_cells, -1.0e12)
     kd_cen_sim._dvm.M_transfer = np.full(kd_cen_cells, -1.0e3)
     kd_cen_result = kd_cen_sim.run(
@@ -13358,6 +13372,42 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
     assert kd_cen["engaged"] == 1
     assert kd_cen["relax_limited_steps"] > 0
     assert kd_cen["limited_cells"] > 0
+    # THE AMOUNT, beside the count. One entry per limited step: where in the
+    # ledger it fell, when, the largest share of the desired transfer any
+    # cell had withheld, and the per-cell profile of that share.
+    assert kd_cen["limited_steps_dropped"] == 0
+    assert (
+        kd_cen["limited_steps_recorded"] == kd_cen["relax_limited_steps"]
+    )
+    assert (
+        kd_cen["limited_steps_recorded"] < kd_cen["limited_steps_record_cap"]
+    )
+    kd_cen_frac = kd_cen["limited_step_clamped_fraction_cells"]
+    assert kd_cen_frac.shape == (kd_cen["limited_steps_recorded"], kd_cen_cells)
+    assert np.all(kd_cen_frac >= 0.0)
+    assert np.all(kd_cen_frac <= 1.0)
+    kd_cen_peak = kd_cen["limited_step_clamped_fraction_max"]
+    assert np.array_equal(kd_cen_peak, kd_cen_frac.max(axis=1))
+    assert np.all(kd_cen_peak > 0.0)
+    # The cells the entry names are exactly the cells the limiter bound in,
+    # so a look can go straight to them.
+    assert np.all(kd_cen_frac.max(axis=0) > 0.0) == np.all(
+        kd_cen["relax_cell_steps"] > 0.0
+    )
+    # Placed in the ledger and on the clock, both monotone.
+    assert np.all(np.diff(kd_cen["limited_step_index"]) > 0.0)
+    assert np.all(np.diff(kd_cen["limited_step_time_s"]) >= 0.0)
+    # The quotable summary, over EVERY limited step.
+    assert kd_cen["limited_clamped_fraction_max"] == float(np.max(kd_cen_peak))
+    # The running sum accumulates in step order; ``np.mean`` sums pairwise,
+    # so the two agree to rounding rather than to the bit.
+    assert np.isclose(
+        kd_cen["limited_clamped_fraction_mean"],
+        float(np.mean(kd_cen_peak)),
+        rtol=1.0e-12,
+        atol=0.0,
+    )
+    assert 0.0 < kd_cen["limited_clamped_fraction_mean"] <= 1.0
 
     with tempfile.TemporaryDirectory() as kd_cen_dir:
         kd_cen_mom_path = Path(kd_cen_dir) / "dvm_census_moment.h5"

@@ -486,6 +486,17 @@ _CATHODE_RESULT_KEYS = (
 )
 
 
+#: Entry cap on the DVM floor-relax limiter's per-event record
+#: (``LAPDSim1D._dvm_limited_records``). The record is one row of ``cells``
+#: floats per LIMITED step, so an arm that limits on most of its steps would
+#: otherwise grow a second trajectory-sized array in memory. Eviction policy:
+#: NONE -- the first ``DVM_LIMITED_STEP_RECORD_CAP`` limited steps are kept
+#: and every later one is counted in ``limited_steps_dropped`` and dropped,
+#: because the onset is what a dedicated look is placing and the summary
+#: max/mean (which run over ALL limited steps) carry the amount regardless.
+DVM_LIMITED_STEP_RECORD_CAP = 4096
+
+
 def _cathode_result_prefixes(flags):
     """Return the cathode-result diagnostic prefixes this run exports.
 
@@ -1345,6 +1356,23 @@ class LAPDSim1D:
         self._dvm_transfer_relax_fraction = 1.0
         self._dvm_transfer_hold = KINETIC_DVM_TRANSFER_HOLDS[0]
         self._dvm_step_transfer = None
+        # The floor-aware relax limiter's per-event record. The census used
+        # to carry only COUNTS -- how many steps were limited and how many
+        # cells were ever limited -- which says that the limiter engaged but
+        # not by how much, and "by how much" is the whole question a
+        # dedicated look asks. Each entry is one limited step: the ledger
+        # step index, the solver time at the START of that step (the book
+        # runs before the state advances), the largest clamped fraction
+        # ``1 - scale`` any cell took, and that step's per-cell clamped
+        # fractions. BOUNDED at
+        # :data:`DVM_LIMITED_STEP_RECORD_CAP` entries with the overflow
+        # COUNTED, and the max/mean summary below runs over every limited
+        # step whether or not its entry was kept, so a truncated record
+        # still quotes the run's true worst case.
+        self._dvm_limited_records = []
+        self._dvm_limited_records_dropped = 0
+        self._dvm_limited_fraction_max = 0.0
+        self._dvm_limited_fraction_sum = 0.0
         # Exponential-hold tick state: the fluid momentum and ion energy the
         # tick's booked pair rate was measured against, and the constant
         # repayment rate the outstanding hold debt is retired at over this
@@ -13695,6 +13723,12 @@ class LAPDSim1D:
         scale = np.where(limited, budget / np.where(limited, drain, 1.0), 1.0)
         applied_M = np.where(apply_mask, scale * desired_M, 0.0)
         applied_Ei = np.where(apply_mask, scale * desired_Ei, 0.0)
+        # The AMOUNT the limiter took off this step, per cell: 0 where the
+        # step was not limited there, ``1 - scale`` where it was. Carried on
+        # the scope so the accept-time record quotes the same number the
+        # application used rather than reconstructing it from the ledger.
+        # Read-only downstream -- nothing below multiplies by it.
+        clamped_fraction = np.where(limited, 1.0 - scale, 0.0)
         self._dvm_step_transfer = SimpleNamespace(
             dt=float(dt),
             apply_mask=apply_mask,
@@ -13707,6 +13741,7 @@ class LAPDSim1D:
             applied_M=applied_M,
             applied_Ei=applied_Ei,
             limited=limited,
+            clamped_fraction=clamped_fraction,
         )
         return self._dvm_step_transfer
 
@@ -13852,11 +13887,93 @@ class LAPDSim1D:
         if np.any(scope.limited):
             dvm.relax_limited_steps += 1
             dvm.relax_cell_steps = dvm.relax_cell_steps + scope.limited
+            self._record_dvm_limited_step(scope)
         # The scope belonged to the step just booked. Dropping it here keeps
         # "outside a step" a single well-defined reading of the coupling term
         # -- the tick's booked transfer -- rather than the last step's
         # application surviving across a neutral tick that already replaced it.
         self._dvm_step_transfer = None
+
+    def _record_dvm_limited_step(self, scope):
+        """Record HOW MUCH the floor relax took off one limited step.
+
+        Called from :meth:`_dvm_book_step_transfer` only, and only on an
+        ACCEPTED step that some cell was limited on, so a rejected attempt
+        leaves no entry. Pure bookkeeping: it reads the scope the step was
+        already applied with and writes nothing back to it, to the state or
+        to the engine.
+
+        The step is placed by the ledger's OWN step index -- ``relax_steps``,
+        the count of steps this ledger has booked, already incremented for
+        this one -- and by ``self._time``, which at this point is the time at
+        the START of the step being booked. The ledger index is not the run's
+        accepted-step number: the two differ by every step taken before the
+        arm engaged.
+
+        The summary max and the running sum cover EVERY limited step; only
+        the per-step entries are capped (see
+        :data:`DVM_LIMITED_STEP_RECORD_CAP`).
+        """
+        fraction = np.asarray(scope.clamped_fraction, dtype=float)
+        peak = float(np.max(fraction))
+        if peak > self._dvm_limited_fraction_max:
+            self._dvm_limited_fraction_max = peak
+        self._dvm_limited_fraction_sum += peak
+        if len(self._dvm_limited_records) < DVM_LIMITED_STEP_RECORD_CAP:
+            self._dvm_limited_records.append(
+                (
+                    float(self._dvm.relax_steps),
+                    float(self._time),
+                    peak,
+                    fraction.copy(),
+                )
+            )
+        else:
+            self._dvm_limited_records_dropped += 1
+
+    def _dvm_limited_step_census(self):
+        """Return the limiter's per-event record as census rows.
+
+        Four aligned rows over the kept limited steps -- ledger step index,
+        step-start time [s], that step's largest clamped fraction, and its
+        per-cell clamped fractions -- plus the scalars a report quotes. Empty
+        rows (shaped ``(0,)`` and ``(0, cells)``) on a run that never
+        limited, so the census carries the same names either way and a reader
+        never has to distinguish "no limiter" from "not recorded".
+
+        The clamped fraction is dimensionless: ``1 - scale``, the share of
+        the step's DESIRED transfer the floor relax withheld in that cell.
+        Its ``max``/``mean`` run over every limited step of the run,
+        including any beyond the record cap.
+        """
+        records = self._dvm_limited_records
+        cells = int(self._geometry.cells)
+        limited_steps = int(self._dvm.relax_limited_steps)
+        return {
+            "limited_step_index": np.asarray(
+                [row[0] for row in records], dtype=float
+            ),
+            "limited_step_time_s": np.asarray(
+                [row[1] for row in records], dtype=float
+            ),
+            "limited_step_clamped_fraction_max": np.asarray(
+                [row[2] for row in records], dtype=float
+            ),
+            "limited_step_clamped_fraction_cells": np.asarray(
+                [row[3] for row in records], dtype=float
+            ).reshape(len(records), cells),
+            "limited_clamped_fraction_max": float(
+                self._dvm_limited_fraction_max
+            ),
+            "limited_clamped_fraction_mean": (
+                self._dvm_limited_fraction_sum / limited_steps
+                if limited_steps
+                else 0.0
+            ),
+            "limited_steps_recorded": int(len(records)),
+            "limited_steps_record_cap": int(DVM_LIMITED_STEP_RECORD_CAP),
+            "limited_steps_dropped": int(self._dvm_limited_records_dropped),
+        }
 
     def dvm_transfer_ledger(self):
         """Return the deferred-transfer ledger's closure, or None when off.
@@ -14023,6 +14140,10 @@ class LAPDSim1D:
         system's particle-conservation residual and is the number a report
         quotes to say the handshake creates nothing.
 
+        The ``limited_*`` block is the limiter's own per-event record: what
+        the counts alone could never say is HOW MUCH was withheld, and these
+        rows carry it -- see :meth:`_dvm_limited_step_census`.
+
         One block is PRESENCE-GATED and absent from every run that does not
         arm it: with ``neutral_kinetic_dvm_jet_launch_width`` set, the four
         ``launch_*`` scalars carry the run's own launch-projection totals and
@@ -14039,6 +14160,9 @@ class LAPDSim1D:
             "relax_limited_steps": int(dvm.relax_limited_steps),
             "limited_cells": int(np.count_nonzero(dvm.relax_cell_steps)),
             "relax_cell_steps": dvm.relax_cell_steps.copy(),
+            # The AMOUNT, beside the counts: see
+            # :meth:`_dvm_limited_step_census`.
+            **self._dvm_limited_step_census(),
         }
         for name in ("Ei", "M"):
             debt = np.asarray(getattr(dvm, f"{name}_debt"), dtype=float)
