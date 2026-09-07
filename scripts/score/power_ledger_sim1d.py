@@ -67,6 +67,18 @@ PORTS_Z_CM = {11: 470.05, 21: 789.55, 29: 1045.15, 41: 1428.55, 50: 1716.1}
 #: Energy rows read from each rhs_terms channel.
 ENERGY_ROWS = ("Ee", "Ei", "En", "En_a")
 
+#: The four rhs_terms channels the `end_sheath_full_debit` closure adds, in
+#: the order the per-window block reports them: the collector member first,
+#: then the emitting cathode face's three.  They are PRESENCE-GATED on the
+#: flag, so a run that did not arm it carries none of them and the block
+#: reads `n/a` -- absence here means "never booked", never "booked zero".
+END_SHEATH_ROWS = (
+    "collector_e_sheath_climb",
+    "cathode_e_emitted_enthalpy",
+    "cathode_e_emitted_fall",
+    "cathode_e_collected_climb",
+)
+
 #: Static phase tag per rhs_terms channel, keyed by channel name, valued
 #: (tag, one-line statement of what the channel is).  Tags:
 #:   DRIVE-ONLY       the channel's driver is the discharge itself (primary
@@ -125,6 +137,33 @@ CHANNEL_PHASE = {
         ("BOTH",
          "energy leaving through the characteristic ghost-cell boundary at "
          "the local Bohm flux"),
+    "collector_e_sheath_climb":
+        ("BOTH",
+         "END-FACE SHEATH CLOSURE (Ee only): the sheath fall the collector's "
+         "collected electrons climbed, taken from the electron store and "
+         "handed to the ions. With the 2 Te of characteristic_boundary the "
+         "collector debit is the sheath-edge (2 + Lambda_eff) Te per "
+         "collected electron. Present only on a run with "
+         "end_sheath_full_debit armed"),
+    "cathode_e_emitted_enthalpy":
+        ("DRIVE-ONLY",
+         "END-FACE SHEATH CLOSURE (Ee only), HEATING: the 2 k_B T_s the "
+         "released electrons carry into the plasma off the emitting surface, "
+         "at the space-charge-released current. Present only on a run with "
+         "end_sheath_full_debit armed"),
+    "cathode_e_emitted_fall":
+        ("DRIVE-ONLY",
+         "END-FACE SHEATH CLOSURE (Ee only), HEATING: the part of the "
+         "cathode fall the released electrons drop through that the beam "
+         "row does not already carry -- exactly zero until a virtual cathode "
+         "forms. Present only on a run with end_sheath_full_debit armed"),
+    "cathode_e_collected_climb":
+        ("DRIVE-ONLY",
+         "END-FACE SHEATH CLOSURE (Ee only), COOLING: the barrier the "
+         "returning plasma electrons climbed at the cathode, charged to "
+         "their own store -- the anode's plasma-pays convention at the other "
+         "electrode. Present only on a run with end_sheath_full_debit "
+         "armed"),
     "ei_exchange":
         ("BOTH",
          "collisional electron-ion temperature equilibration at the local "
@@ -552,6 +591,32 @@ def report_window(f, label, lo, hi, geom, port_top):
                 print("    an afterglow dichotomy read is NOT clean on these "
                       "channels in this window; move the window past the "
                       "tail or discount them explicitly.")
+
+    print("\n--- END-FACE SHEATH CLOSURE (end_sheath_full_debit) [kW], "
+          "window mean ---")
+    if not table:
+        print("  n/a -- rhs_terms ABSENT from this artifact")
+    else:
+        present = [r for r in END_SHEATH_ROWS if (r, "Ee") in table]
+        if not present:
+            print("  n/a -- this run did not arm end_sheath_full_debit "
+                  "(the four rows are absent, which is not the same as zero)")
+        else:
+            missing = [r for r in END_SHEATH_ROWS if r not in present]
+            total = 0.0
+            for row in present:
+                value = table[(row, "Ee")]
+                total += value
+                print(f"{'  ' + row:<44}{value:>16.5f}  kW")
+            print(f"{'  NET (all four rows)':<44}{total:>16.5f}  kW")
+            if missing:
+                print(f"  NB rows absent from this artifact: {missing} -- the "
+                      "net above is over the rows present, not the closure")
+            print("  the collector row is the sheath fall its collected "
+                  "electrons climbed; read it WITH characteristic_boundary,\n"
+                  "  which carries the same face's 2 Te. The three cathode "
+                  "rows are the emitting face's own channels and are\n"
+                  "  additional to cathode_surface_loss, not a re-cut of it.")
 
     print("\n--- CIRCUIT AND SOURCE DIAGNOSTICS, window mean ---")
     if dg is None:

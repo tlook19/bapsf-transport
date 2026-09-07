@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 from scipy.special import expn
 
@@ -6,6 +8,7 @@ from cablp.atomic.cross_sections import (
     phelps_cx_rate_cm3_s,
     phelps_momentum_transfer_rate_cm3_s,
 )
+from cablp.cathode.circuit import sheath_lift_lambda
 from cablp.constants import ev_to_erg, kb_cgs, qe_SI
 
 from .flux import (
@@ -832,6 +835,7 @@ def characteristic_boundary_rhs(
     energy_consistent=False,
     end_recycle_annulus_volume_cm3=None,
     cathode_carrier_out=None,
+    collector_sheath_climb_out=None,
 ):
     """Return the characteristic ghost-cell Bohm outflow at absorbing faces.
 
@@ -864,6 +868,26 @@ def characteristic_boundary_rhs(
     COLLECTOR (a floating zero-net-current exhaust with no circuit branch)
     this term IS the electron sheath: ``2 Te`` per electron at the Bohm flux
     (electron flux = ion flux).
+
+    ``collector_sheath_climb_out``: when given (a dict), the COLLECTOR's
+    sheath-fall electron debit is computed and written back into it under the
+    key ``"Ee"`` as a per-cell electron-energy row [erg cm^-3 s^-1], negative
+    where it acts. It is the ``end_sheath_full_debit`` closure's collector
+    member and is NOT added to the returned state: the caller books it as its
+    own named RHS row, so the two rows together are the sheath-edge
+    ``(2 + Lambda_eff) Te`` per collected electron while this function's own
+    row keeps its unconditional ``2 Te`` meaning. ``Lambda_eff = Lambda +
+    ln(1/alpha)`` is the barrier those electrons climb at a surface drawing
+    no net current: ``Lambda`` (:func:`~cablp.cathode.circuit.sheath_lift_lambda`
+    at this call's ``mu``, the same lift the circuit's sheath currents ride)
+    plus the presheath drop implied by the very ``alpha`` this face samples
+    its Bohm flux at, so the two cannot describe different sheath edges. The
+    fall is taken from the plasma electron store and handed to the ions,
+    which deposit it on the floating surface -- there is no circuit branch
+    here to supply it, which is what makes the collector different from the
+    driven electrodes above. CATHODE faces are untouched: the accelerated
+    species there is the ion. ``None`` -- the default -- computes nothing and
+    is the historical call, bit for bit.
 
     ``end_recycle_annulus_volume_cm3``: when given (the per-cell annulus
     volume [cm^3], supplied only under the ``end_recycle_to_annulus``
@@ -920,6 +944,11 @@ def characteristic_boundary_rhs(
         getattr(geometry, "plasma_absorbing", np.zeros(0)), dtype=bool
     )
     if not np.any(absorbing) or b_surface_loss == 0.0:
+        if collector_sheath_climb_out is not None:
+            # The write-back happens on EVERY path a dict is passed on, so
+            # the caller reads one key and never has to decide what an absent
+            # one meant. There is no collected flux to charge here.
+            collector_sheath_climb_out["Ee"] = zeros.copy()
         return ConservativeState1D(
             n=zeros,
             nn=zeros.copy(),
@@ -945,6 +974,12 @@ def characteristic_boundary_rhs(
     jet_M_n = np.zeros(cells, dtype=float) if jet_active else None
     carrier_active = jet_active and cathode_carrier_out is not None
     withheld_abs = np.zeros(cells, dtype=float) if carrier_active else None
+    climb_active = collector_sheath_climb_out is not None
+    climb_Ee = np.zeros(cells, dtype=float) if climb_active else None
+    # The sheath lift is a property of the ion mass alone, so it is read once
+    # here rather than per face -- and read from the circuit, which is where
+    # the same barrier sets the sheath currents.
+    lambda_lift = sheath_lift_lambda(mu) if climb_active else None
     if jet_active:
         v_eff = np.sqrt(
             np.pi * kb_cgs * max(float(cathode_jet["T_s_K"]), 0.0)
@@ -1029,6 +1064,14 @@ def characteristic_boundary_rhs(
         # ELECTRON ENERGY ROW.
         if roles[live] == "collector":
             d_Ee[live] += 2.0 * Te_l * ev_to_erg * (scale * f_n)
+            if climb_active:
+                # end_sheath_full_debit, collector member. The fall those
+                # electrons climbed, at the sheath edge THIS face sampled its
+                # Bohm flux at: alpha_eff is the same factor, so the density
+                # drop the flux was taken across and the drop the barrier is
+                # measured across are one number.
+                lambda_eff = lambda_lift - math.log(alpha_eff)
+                climb_Ee[live] += lambda_eff * Te_l * ev_to_erg * (scale * f_n)
         # cathode / other driven electrode: electron energy owned by circuit.
 
         # Particles/s leaving through this face (density sink-rate x cell volume).
@@ -1066,6 +1109,11 @@ def characteristic_boundary_rhs(
     d_Ee *= scale_b
     d_Ei *= scale_b
     loss_abs *= scale_b
+    if climb_active:
+        # Scaled with the row it rides: the climb charges the flux this
+        # function actually books, so a scaled surface loss scales both.
+        climb_Ee *= scale_b
+        collector_sheath_climb_out["Ee"] = climb_Ee
     if route_active:
         routed_abs *= scale_b
     if jet_active:

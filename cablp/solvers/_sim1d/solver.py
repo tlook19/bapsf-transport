@@ -27,6 +27,7 @@ from .core.geometry import (
     _anode_neutral_transparency,
     absorbing_live_cells_by_role,
     build_geometry,
+    cathode_adjacent_cells,
     is_plenum_cell,
     puff_cell_indices,
     pump_cell_indices,
@@ -131,7 +132,9 @@ from .physics.kinetic_neutrals import (
 from .physics.cathode import (
     BEAM_DEPOSITION_MODELS,
     BEAM_GAP_LEDGER_POWER_ATOL,
+    END_SHEATH_CATHODE_ROWS,
     CoverageView1D,
+    cathode_emission_sheath_power_W,
     beam_anomalous_power_density,
     beam_gap_ledger_mismatch,
     beam_ionization_rhs,
@@ -341,6 +344,14 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     # The anode electron sheath row is energy only -- it moves no particles,
     # so it has no neutrals to carry a birth temperature for.
     "anode_e_sheath_loss": "none",
+    # The end_sheath_full_debit closure's four rows are energy only, for the
+    # same reason: they re-book electron energy at surfaces whose particle
+    # and recycle bookings are already complete in the rows above, and they
+    # move no particles of any species.
+    "collector_e_sheath_climb": "none",
+    "cathode_e_emitted_enthalpy": "none",
+    "cathode_e_emitted_fall": "none",
+    "cathode_e_collected_climb": "none",
     "surface_loss": "wall",
     "neutral_probe_source": "wall",
     # --- recombination: born at the ion temperature ----------------------
@@ -387,6 +398,17 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "recombination_energy_return": "none",
     "heat_conduction": "none",
 }
+
+
+#: The RHS rows the ``end_sheath_full_debit`` closure adds, in the order they
+#: are built. PRESENCE-GATED on the flag: unarmed, none of them exists, so an
+#: unarmed run's saved term structure -- the golden included -- is what it was
+#: before the closure existed. The first is the COLLECTOR member (the
+#: sheath fall its collected electrons climbed); the rest are the emitting
+#: CATHODE face's three, in the order
+#: :func:`~.physics.cathode.cathode_emission_sheath_power_W` returns them.
+#: Every reader defaults their absence.
+END_SHEATH_DEBIT_ROWS = ("collector_e_sheath_climb",) + END_SHEATH_CATHODE_ROWS
 
 
 #: Name of the RHS row carrying the beam's electron-energy deposition. Bound
@@ -2057,6 +2079,56 @@ class LAPDSim1D:
         # debit against the full-P_anode_e routing, which would have debited
         # phi_a twice -- is no longer constructible and needs no refusal.
         self._anode_sheath_full_debit = _anode_sheath_full_debit
+        # End-face sheath electron debit, the anode flag's twin at the two
+        # ends of the machine. A real bool for the same reason: it arms a
+        # multi-kilowatt re-booking of the electron store, and an int or a
+        # string there would read like a value.
+        _end_sheath_full_debit = self._flags.get("end_sheath_full_debit")
+        if not isinstance(_end_sheath_full_debit, bool):
+            raise ValueError(
+                "end_sheath_full_debit must be a bool (got "
+                f"{_end_sheath_full_debit!r})"
+            )
+        if _end_sheath_full_debit:
+            # THE CLOSURE'S INPUTS, refused at construction where the
+            # configuration is still the thing being talked about. Each of the
+            # two faces contributes rows that cannot be built without them,
+            # and a face the mesh does not carry would book nothing at all --
+            # a half-armed closure that reads like an armed one.
+            missing = []
+            if not self._flags.get("cathode_coupling"):
+                missing.append(
+                    "the cathode circuit solve (input_flags "
+                    "cathode_coupling), which is where the released current "
+                    "I_eth_star, the returning current I_e_ret and the sheath "
+                    "potentials phi_c_plus/phi_c come from"
+                )
+            # Each face is looked up through the SAME helper its own booking
+            # reads: the collector row is written by the boundary operator,
+            # which resolves its faces by role, and the three cathode rows are
+            # deposited at ``cathode_adjacent_cells`` exactly as the electrode
+            # rows are. A guard on a second view of the topology could pass
+            # while the booking still found nowhere to land.
+            if not absorbing_live_cells_by_role(self._geometry).get(
+                "collector"
+            ):
+                missing.append(
+                    "a collector-role plasma-absorbing face, which is the "
+                    "face whose collected electrons are charged the "
+                    "sheath fall"
+                )
+            if not cathode_adjacent_cells(self._geometry):
+                missing.append(
+                    "a cathode-adjacent plasma cell, which is where the "
+                    "emitted enthalpy and the collected barrier climb are "
+                    "booked"
+                )
+            if missing:
+                raise ValueError(
+                    "end_sheath_full_debit cannot arm: this configuration "
+                    "does not supply " + "; ".join(missing) + "."
+                )
+        self._end_sheath_full_debit = _end_sheath_full_debit
         # Beam electron-energy deposition re-homed into the implicit heat
         # substep. A real bool for the same reason as the two flags above: the
         # flag MOVES a ~10^5 W source between operators, and an int or a string
@@ -5443,6 +5515,18 @@ class LAPDSim1D:
                 momentum_sink_terms["parallel_momentum_sink_heating"] = (
                     self._zero_rhs_state()
                 )
+            # The end-face sheath closure's four rows, present and identically
+            # zero in this branch: there is no plasma reaching either end face
+            # and no cathode solve to read a released or returning current
+            # from. Recording the zeros rather than dropping the keys keeps
+            # the saved term structure stable across the phase change, exactly
+            # as the drift and dissipation rows below do.
+            end_sheath_terms = {}
+            if self._end_sheath_full_debit:
+                end_sheath_terms = {
+                    name: self._zero_rhs_state()
+                    for name in END_SHEATH_DEBIT_ROWS
+                }
             terms = {
                 **zone_terms,
                 **probe_terms,
@@ -5450,6 +5534,7 @@ class LAPDSim1D:
                 **energy_wall_terms,
                 **geometry_terms,
                 **kinetic_terms,
+                **end_sheath_terms,
                 "plasma_advective_flux": self._zero_rhs_state(),
                 "plasma_front_flux": self._zero_rhs_state(),
                 # boundary_absorption is permanently zero everywhere since the
@@ -5584,6 +5669,13 @@ class LAPDSim1D:
         # and the launch are one number; ``None`` leaves the boundary term on
         # its historical path, keyword for keyword.
         carrier_out = {} if self._cathode_jet_carrier else None
+        # The end-face sheath closure's collector member travels the same way,
+        # and for the same reason: the fall it charges rides the very flux the
+        # boundary operator books, so it is computed there and carried back
+        # rather than rebuilt from a second sampling of the sheath edge.
+        # ``None`` leaves the boundary term on its historical path, keyword
+        # for keyword.
+        collector_climb_out = {} if self._end_sheath_full_debit else None
         # The sheath-resolved electrode solve produces BOTH electrode rows in
         # one call. Bound here rather than inline in the dict so the solve
         # happens exactly once: calling it twice would pay for a second sheath
@@ -5628,6 +5720,7 @@ class LAPDSim1D:
                 cathode_solve=cathode_solve,
                 time=time,
                 carrier_out=carrier_out,
+                collector_climb_out=collector_climb_out,
             ),
             "pressure_work": pressure_work,
             # The electron-velocity correction to the row above: pressure_work
@@ -5750,6 +5843,18 @@ class LAPDSim1D:
                     cathode_solve=cathode_solve,
                     launch_per_s=carrier_out.get("launch_per_s"),
                     ionization_rate=ionization_rate_per_neutral,
+                )
+            )
+        if self._end_sheath_full_debit:
+            # The end-face sheath closure's four rows. The collector member
+            # travels here through ``collector_climb_out``, filled by the
+            # boundary operator's own evaluation above, so the fall charged
+            # and the flux it is charged on are one number rather than two
+            # readings of it.
+            terms.update(
+                self._end_sheath_debit_terms(
+                    collector_climb_row=collector_climb_out["Ee"],
+                    cathode_solve=cathode_solve,
                 )
             )
         if self._kinetic is not None:
@@ -8705,6 +8810,18 @@ class LAPDSim1D:
         # control flags are inert to the seed signature, so clearing this here
         # cannot change the stored entry's key or content.
         flags["use_cached_neutral_seed"] = False
+        # The end-face sheath closure, cleared for the SAME reason as
+        # cathode_coupling above and read the same way: it books the emitting
+        # face's currents and the collected electrons' sheath fall, and this
+        # pre-solve has no plasma reaching either end face and no cathode
+        # solve to read a current from, so the closure is inert here. Left
+        # armed, its construction guard -- which requires exactly the cathode
+        # solve the line above has just switched off -- refuses the INNER sim,
+        # a guard firing on a state where the thing it protects cannot happen.
+        # Clearing it changes no configuration that constructed before: every
+        # config this touches is one that raised, so the equilibrated seed,
+        # its cache signature and every existing trajectory are bit-identical.
+        flags["end_sheath_full_debit"] = False
         # The two DVM directed-recycle jets, cleared for the SAME reason as
         # cathode_coupling above: this pre-solve has no plasma and no cathode
         # solve, so there is no collected ion flux for either jet to split and
@@ -9871,7 +9988,7 @@ class LAPDSim1D:
 
     def characteristic_boundary_rhs(
         self, y=None, state=None, cathode_solve=None, time=None,
-        carrier_out=None,
+        carrier_out=None, collector_climb_out=None,
     ):
         """Return the characteristic ghost-cell Bohm outflow (audit A1/A16).
 
@@ -9884,6 +10001,12 @@ class LAPDSim1D:
 
         ``carrier_out`` is the directed hot surface carrier's launch channel;
         ``None`` is the historical call and is unchanged bit for bit.
+
+        ``collector_climb_out`` is the ``end_sheath_full_debit`` closure's
+        collector channel: given a dict, the operator writes the collector
+        faces' sheath-fall electron row into it under ``"Ee"`` for the caller
+        to book as its own named term. ``None`` -- the default and every
+        diagnostic caller -- computes nothing.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
@@ -9910,6 +10033,7 @@ class LAPDSim1D:
                 self._end_recycle_annulus_volume()
             ),
             cathode_carrier_out=carrier_out,
+            collector_sheath_climb_out=collector_climb_out,
         )
 
     def anode_collection_rhs(
@@ -10265,6 +10389,74 @@ class LAPDSim1D:
             input_flags=cathode_flags,
             cathode_solve=cathode_solve,
         )
+
+    def _end_sheath_debit_terms(self, collector_climb_row, cathode_solve):
+        """Return the ``end_sheath_full_debit`` closure's four RHS terms.
+
+        Keyed by :data:`END_SHEATH_DEBIT_ROWS`; every row is ELECTRON ENERGY
+        ONLY (``n``, ``nn``, ``M`` and ``Ei`` are exactly zero), because the
+        particle, momentum and ion-thermal bookings at both faces are already
+        complete in the boundary and electrode rows and this closure only
+        moves electron energy that those rows leave on the surface.
+
+        ``collector_climb_row`` is the per-cell electron-energy row
+        [erg cm^-3 s^-1] the boundary operator wrote back for the collector
+        faces on THIS evaluation. The three cathode rows are built from
+        ``cathode_solve``'s own circuit result at the emitter surface
+        temperature the solve ran at, converted from watts to the same
+        density units on the plasma cell volume -- the conversion
+        ``cathode_source_terms`` uses for the electrode rows, so the four
+        rows and the two they complete are on one book.
+
+        WITH NO SOLVE THIS STEP (the pre-drive phases, and any step whose
+        cathode phase runs none) the three cathode rows are exactly zero: the
+        released and returning currents are quantities of a solve, and there
+        is no honest value for them without one. The collector row is
+        independent of the circuit and is booked whenever the boundary
+        operator found a collector face.
+
+        THE TWIN CATHODE is booked at its own cell from its own circuit
+        result, the way ``_deposit_electrode_power`` books the electrode
+        rows: one emitting face, one set of currents, one cell.
+        """
+        zeros = np.zeros(self._geometry.cells, dtype=float)
+        rows = {name: zeros.copy() for name in END_SHEATH_DEBIT_ROWS}
+        rows["collector_e_sheath_climb"] = np.asarray(
+            collector_climb_row, dtype=float
+        )
+        beam_result = (
+            None if cathode_solve is None else cathode_solve.beam_result
+        )
+        if beam_result is not None:
+            T_s_K = float(
+                self._cathode_Ts_K
+                if self._cathode_Ts_K is not None
+                else float(self._input_dict.get("cathode_Ts_base_K"))
+            )
+            Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+            cathode_cells = cathode_adjacent_cells(self._geometry)
+            pairs = [(int(cathode_cells[0]), beam_result.result)]
+            if (
+                self._flags.get("TwinCathode")
+                and beam_result.result_twin is not None
+            ):
+                pairs.append(
+                    (int(cathode_cells[-1]), beam_result.result_twin)
+                )
+            for cell, result in pairs:
+                powers_W = cathode_emission_sheath_power_W(result, T_s_K)
+                for name, power_W in zip(END_SHEATH_CATHODE_ROWS, powers_W):
+                    rows[name][cell] += power_W * 1.0e7 / Vp[cell]
+        return {
+            name: ConservativeState1D(
+                n=zeros.copy(),
+                nn=zeros.copy(),
+                M=zeros.copy(),
+                Ee=row,
+                Ei=zeros.copy(),
+            )
+            for name, row in rows.items()
+        }
 
     def beam_ionization_rhs(self, y=None, state=None, cathode_solve=None, time=None):
         """Return conservative beam ionization birth terms."""

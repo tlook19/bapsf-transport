@@ -54,6 +54,24 @@ _mp_cgs: float = 1.67262192369e-24  # Proton mass [g]
 _pemr: float = _mp_cgs / _me_cgs  # Proton-to-electron mass ratio ≈ 1836.15
 _erg_per_eV: float = _e_SI * 1.0e7  # eV → erg conversion
 
+
+def sheath_lift_lambda(mu: float) -> float:
+    """Return the sheath lift ``Lambda`` [dimensionless] for ion mass ``mu``.
+
+    ``Lambda = ln(sqrt(mu m_p / (2 pi m_e)))`` is the floating-potential
+    parameter in units of ``T_e``: the barrier a Maxwellian electron
+    population must climb for its one-sided random flux to be throttled to
+    the ion flux at a surface drawing no net current. ``mu`` is the ion mass
+    in proton masses and must be positive; helium gives 3.53.
+
+    THE ONE SPEC. :class:`DeviceConfig` stores this as its ``Lambda`` and
+    every sheath current in this module rides that value, so a consumer
+    outside the circuit that needs the same barrier calls this instead of
+    restating the expression.
+    """
+    return -math.log(math.sqrt(2.0 * math.pi / (mu * _pemr)))
+
+
 #: Accepted values of ``DeviceConfig.lnL_model``, which fixes how the parallel
 #: Spitzer conductivity's Coulomb logarithm is obtained. ``"nrl_ei"`` uses the
 #: state-dependent electron-ion log ``_c_log_ei(T_e, n_e)``; ``"fixed_14p6"``
@@ -146,9 +164,10 @@ class DeviceConfig:
     I_eth: float = field(init=False)
 
     def __post_init__(self) -> None:
-        # Lambda = sheath floating-potential parameter
-        # Lambda = -ln( sqrt(2*pi / (mu * _pemr)) )
-        lam = -math.log(math.sqrt(2.0 * math.pi / (self.mu * _pemr)))
+        # Lambda = sheath floating-potential parameter, from the module's
+        # one spec (`sheath_lift_lambda`) so an outside consumer of the same
+        # barrier reads the same expression rather than a copy of it.
+        lam = sheath_lift_lambda(self.mu)
         object.__setattr__(self, "Lambda", lam)
 
         # I_eth = thermionic emission current [A] (static; depends only on T_s)
