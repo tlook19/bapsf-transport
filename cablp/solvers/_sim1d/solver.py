@@ -2386,6 +2386,18 @@ class LAPDSim1D:
         self._jet_arming_censored_steps = 0
         self._jet_arming_transitions = 0
         self._jet_arming_last_transition_s = float("nan")
+        # And the SIZE of what the latch censored, in atoms rather than in
+        # steps. A step count cannot say what share of the run's recycle
+        # stream never became a jet, because steps carry wildly different
+        # recycle counts: the censored steps are the low-current ones, which
+        # is exactly why the share is small and exactly why quoting it needs
+        # the counts. Both are the COUNTED cathode-face recycle the DVM arm
+        # booked -- the stream the jet splits -- summed over the accepted
+        # steps the latch let through and over those it censored, so
+        # censored / (launched + censored) is the share and it is readable
+        # from the artifact instead of asserted.
+        self._jet_arming_launched_atoms = 0.0
+        self._jet_arming_censored_atoms = 0.0
 
     def _init_atomic_package_refusals(self):
         """Refuse atomic-package combinations that would double-book photons."""
@@ -6858,6 +6870,18 @@ class LAPDSim1D:
                     name: self._dvm_source_booked[name] + row
                     for name, row in source_booking.items()
                 }
+                if self._jet_arming_active:
+                    # The recycle stream the cathode jet splits, in ATOMS,
+                    # sorted by what the latch did with this step. Read off
+                    # the SAME booking the split below draws from and on the
+                    # SAME latch reading, so the two halves partition the
+                    # run's counted cathode recycle exactly. Census only --
+                    # neither number is read back by anything that steps.
+                    _recycled = float(np.sum(source_booking["cathode_face"]))
+                    if self._cathode_jet_censored():
+                        self._jet_arming_censored_atoms += _recycled
+                    else:
+                        self._jet_arming_launched_atoms += _recycled
             jet_energy_booking = getattr(
                 attempt, "cathode_jet_energy_booking", None
             )
@@ -7528,6 +7552,15 @@ class LAPDSim1D:
         "_jet_arming_transitions",
         "_jet_arming_last_transition_s",
     )
+    #: The atom-counted half of that census, carried the same way but NOT in
+    #: the presence check above: a payload that predates it still resumes an
+    #: ARMED latch, because losing a count is a lost measurement while losing
+    #: the latch relocates the channel. Defaulted to their seed on such a
+    #: payload, so the resumed run's share is over its own steps only.
+    _RESTART_JET_ARMING_COUNT_ATTRS = (
+        "_jet_arming_launched_atoms",
+        "_jet_arming_censored_atoms",
+    )
     _RESTART_CIRCUIT_ATTRS = (
         "_circuit_I_loop",
         "_circuit_I_prev",
@@ -7591,7 +7624,10 @@ class LAPDSim1D:
         # rather than joining the strict inventory loop above, so a payload
         # taken before the latch was carried still loads.
         if self._jet_arming_active:
-            for name in self._RESTART_JET_ARMING_ATTRS:
+            for name in (
+                self._RESTART_JET_ARMING_ATTRS
+                + self._RESTART_JET_ARMING_COUNT_ATTRS
+            ):
                 cathode[name] = getattr(self, name)
         circuit = {
             name: getattr(self, name) for name in self._RESTART_CIRCUIT_ATTRS
@@ -7782,6 +7818,11 @@ class LAPDSim1D:
                 self._jet_arming_last_transition_s = float(
                     cathode["_jet_arming_last_transition_s"]
                 )
+                # Defaulted, not required: a payload from before these were
+                # carried resumes an armed latch and simply reports the
+                # censored share over its own steps.
+                for name in self._RESTART_JET_ARMING_COUNT_ATTRS:
+                    setattr(self, name, float(cathode.get(name, 0.0)))
             else:
                 warnings.warn(
                     "restart payload carries no cathode-jet arming latch "
@@ -12153,6 +12194,27 @@ class LAPDSim1D:
                 ),
                 "armed_at_end": bool(self._jet_armed),
             }
+            if self._dvm is not None:
+                # The censored SHARE, in atoms, PRESENCE-GATED on the arm
+                # that counts the recycle stream: a run with no counted
+                # stream to split has no share to report, and absent says
+                # that where a zero would have read as "nothing censored".
+                # A step count cannot stand in for this -- the censored steps
+                # are the low-current ones and carry far less recycle each --
+                # so the claim that the censored share is negligible is
+                # pinned here rather than asserted.
+                launched = float(self._jet_arming_launched_atoms)
+                censored = float(self._jet_arming_censored_atoms)
+                total = launched + censored
+                result.jet_arming.update(
+                    {
+                        "recycle_launched_atoms": launched,
+                        "recycle_censored_atoms": censored,
+                        "recycle_censored_fraction": (
+                            censored / total if total > 0.0 else 0.0
+                        ),
+                    }
+                )
         result.atomic_rate_domain = _atomic_rate_domain(result)
         return result
 

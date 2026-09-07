@@ -24481,6 +24481,88 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
             pl_fl_row,
         )
 
+    # The ARMING criterion's censored share, in ATOMS. A step COUNT cannot
+    # stand in for it -- the censored steps are the low-current ones and
+    # carry far less recycle each -- so the split is counted off the same
+    # booking the jet is split from, on the same latch reading. The jet needs
+    # a cathode solve for its launch energy, so this rides its own minimal
+    # armed build rather than the coupling-free one above.
+    pl_ja_params, pl_ja_flags = default_config()
+    pl_ja_flags["neutral_two_zone"] = True
+    for pl_ja_space, pl_ja_key, pl_ja_value, _pl_ja_why in (
+        KINETIC_DVM_INCOMPATIBLE_DEFAULTS
+    ):
+        (pl_ja_flags if pl_ja_space == "flags" else pl_ja_params)[
+            pl_ja_key
+        ] = pl_ja_value
+    pl_ja_flags["neutral_equilibration"] = False
+    pl_ja_flags["neutral_prebreakdown"] = False
+    pl_ja_params.update({
+        "neutral_model": "kinetic_dvm",
+        # Smoke-scale clock, and a velocity grid PINNED wide enough to carry
+        # the launch band this jet's coefficients can produce -- the shipped
+        # nvz/nvp are kept, because narrowing them narrows the grid-tied
+        # launch smear and the band's low end stops projecting.
+        "neutral_kinetic_dvm_cadence_s": 2.0e-9,
+        "neutral_kinetic_dvm_vmax_cm_s": 3.0e7,
+        "neutral_kinetic_dvm_cathode_jet": True,
+        "neutral_jet_disarm_current_A": 0.0,
+    })
+    # Two runs that differ ONLY in the arm threshold: one that can never arm
+    # and one that arms at once.
+    pl_ja_split = {}
+    for pl_ja_name, pl_ja_arm in (("censored", 1.0e30), ("launched", 1.0e-30)):
+        pl_ja_sim = LAPDSim1D(
+            dict(pl_ja_params, neutral_jet_arm_current_A=pl_ja_arm),
+            dict(pl_ja_flags),
+        )
+        assert pl_ja_sim._jet_arming_active
+        pl_ja_split[pl_ja_name] = pl_ja_sim.run(
+            t_end=2.0e-8, dt=1.0e-9
+        ).jet_arming
+    for pl_ja_name, pl_ja in pl_ja_split.items():
+        pl_ja_total = (
+            pl_ja["recycle_launched_atoms"] + pl_ja["recycle_censored_atoms"]
+        )
+        # NON-VACUOUS: there was a recycle stream to split in the first place.
+        assert pl_ja_total > 0.0, pl_ja_name
+        assert np.isclose(
+            pl_ja["recycle_censored_fraction"],
+            pl_ja["recycle_censored_atoms"] / pl_ja_total,
+            rtol=1.0e-12, atol=0.0,
+        ), pl_ja_name
+    # The share follows the LATCH, not the step count: an unreachable arm
+    # threshold censors the whole stream, an immediate one censors none of
+    # it -- and both runs book the SAME recycle, which is what makes the two
+    # halves a partition of one quantity rather than two measurements.
+    assert pl_ja_split["censored"]["recycle_launched_atoms"] == 0.0
+    assert pl_ja_split["censored"]["recycle_censored_fraction"] == 1.0
+    assert pl_ja_split["launched"]["recycle_censored_atoms"] == 0.0
+    assert pl_ja_split["launched"]["recycle_censored_fraction"] == 0.0
+    assert np.isclose(
+        pl_ja_split["launched"]["recycle_launched_atoms"],
+        pl_ja_split["censored"]["recycle_censored_atoms"],
+        rtol=1.0e-9, atol=0.0,
+    )
+    # And the step count is NOT the share: the immediate-arm run censors a
+    # step that carried no recycle at all, which is exactly the substitution
+    # the atom counts exist to refuse.
+    assert pl_ja_split["launched"]["censored_steps"] > 0
+    # PRESENCE GATE: no counted recycle stream, no share to report. A moment
+    # run with the same criterion carries the latch census and none of the
+    # three atom rows, so absence says "nothing counted this" rather than a
+    # zero saying "nothing was censored".
+    pl_ja_mom_params = dict(pl_ja_params)
+    pl_ja_mom_params["neutral_model"] = "moment"
+    pl_ja_mom_params["neutral_jet_arm_current_A"] = 1.0e30
+    pl_ja_mom_params["neutral_kinetic_dvm_cathode_jet"] = False
+    pl_ja_mom = LAPDSim1D(pl_ja_mom_params, dict(pl_ja_flags)).run(
+        t_end=1.0e-8, dt=1.0e-9
+    ).jet_arming
+    assert "censored_steps" in pl_ja_mom
+    assert "recycle_censored_fraction" not in pl_ja_mom
+    assert "recycle_launched_atoms" not in pl_ja_mom
+
 
 # --------------------------------------------------------------------
 # parallel-momentum-sink-refusals
