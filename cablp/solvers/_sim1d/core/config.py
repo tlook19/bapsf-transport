@@ -862,8 +862,8 @@ def model_mode_defaults():
         and the pressure-drift WORK ``1.00 T_e I / e`` that the volume
         identity's ``3.21`` boundary coefficient is completed by.
 
-        ``"sheath_row_closes_all"`` (the DEFAULT, and the registered closure,
-        ruled 2026-08-31) closes BOTH — the full ``3.21``. The kinetic anode
+        ``"sheath_row_closes_all"`` (the DEFAULT, and the registered
+        closure) closes BOTH — the full ``3.21``. The kinetic anode
         sheath row ``(2 T_e + phi_a) Gamma`` IS the total electron energy flux
         at the sheath edge for the THERMAL population, so any fluid export
         there double-counts it. The beam electrons that reach the mesh

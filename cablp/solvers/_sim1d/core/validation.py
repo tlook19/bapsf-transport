@@ -1125,7 +1125,7 @@ def resolve_coverage_config(input_dict, flags, *, geometry, neutral_model):
 ELECTRON_DRIFT_CHARGE_DEATHS = ("cell_1", "cell_2")
 
 #: The anode-handshake readings. ``"sheath_row_closes_all"`` is the DEFAULT and
-#: the registered closure (ruled 2026-08-31): the kinetic anode sheath row is
+#: the registered closure: the kinetic anode sheath row is
 #: the total thermal-electron energy flux at the sheath edge, so every fluid
 #: channel closes at that face. The other two are RETAINED as disclosed
 #: INSTRUMENT arms bounding the double count, and are not claim-bearing.
