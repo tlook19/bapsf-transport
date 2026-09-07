@@ -428,6 +428,23 @@ max_steps_action = "stop"
 # stance takes from the config defaults.
 anode_sheath_full_debit = true
 
+# END-WALL SHEATH ELECTRON-ENERGY BOOKING. The plasma electron store is
+# debited, per electron the chamber's far end wall collects, the barrier those
+# electrons climbed -- Lambda_eff Te, the floating-sheath lift for the
+# configured gas plus the presheath drop implied by the same sheath-edge
+# factor that face samples its Bohm flux at -- on top of the unconditional
+# sheath-edge 2 Te, so the face debit is (2 + Lambda_eff) Te per collected
+# electron. The end wall carries no circuit branch, so nothing but the
+# electron thermal store can supply that fall; the ions carry it to the
+# surface and the collector surface-power diagnostic includes it. The row is
+# ELECTRON ENERGY ONLY -- no particle, momentum or ion-thermal booking at the
+# face moves -- and it is booked whenever plasma reaches the face, independent
+# of the cathode circuit solve. It requires a
+# plasma-absorbing face of the COLLECTOR role, which this stance's geometry
+# supplies. The emitting cathode face's own three rows are the separate
+# cathode_face_full_debit key, which this stance leaves at its config default.
+collector_sheath_full_debit = true
+
 # OPERATOR HOME OF THE BEAM'S ELECTRON-ENERGY DEPOSITION. Armed 2026-08-25. The
 # beam_power_deposition Ee row leaves the explicit operator A and is applied by
 # the implicit heat substep B, held constant over each substep and solved with
