@@ -436,9 +436,12 @@ _CATHODE_RESULT_KEYS = (
     # was solved against, ``circuit_V_avail_V`` the circuit-available device
     # voltage the optional bound was formed from (NaN when the bound is not in
     # force), ``bound_active`` which member of the composition the solve sat on
-    # (0 none / 1 data cap / 2 circuit). All three are NaN on the voltage-driven
-    # (floating) solve, which has no ceiling. Runs saved before this build lack
-    # the datasets and readers must default them.
+    # (0 none / 1 data cap / 2 circuit). Every phase now takes the
+    # current-driven solve, so all three carry values on every save; the
+    # open-circuit phase withdraws only the CIRCUIT member of the composition,
+    # which reads as NaN in ``circuit_V_avail_V`` exactly as an unarmed bound
+    # does. Runs saved before this build lack the datasets and readers must
+    # default them.
     "phi_c_ceiling_V",
     "circuit_V_avail_V",
     "bound_active",
@@ -523,12 +526,15 @@ def _cathode_result_prefixes(flags):
 
 
 #: The members of :data:`_CATHODE_RESULT_KEYS` that only the CURRENT-DRIVEN
-#: circuit solve populates. The voltage-driven (floating) solve in
-#: ``cablp.cathode.circuit`` never assigns them, so they sit at their
-#: ``SolverResult`` dataclass defaults there -- which are zeros, and a zero in
-#: a power column is indistinguishable from a computed zero. They are exported
-#: as NaN on a floating save instead, so absence of a value is visible in the
-#: file rather than inferred. ``I_i_a`` is NOT here: both solves compute it.
+#: circuit solve populates. The voltage-driven solve in ``cablp.cathode.circuit``
+#: never assigns them, so they sit at their ``SolverResult`` dataclass defaults
+#: there -- which are zeros, and a zero in a power column is indistinguishable
+#: from a computed zero. A result assembled without them is exported as NaN
+#: instead, so absence of a value is visible in the file rather than inferred.
+#: The solver's own dispatch no longer produces such a result -- every phase,
+#: the open circuit included, takes the current-driven solve -- so on a live
+#: run these columns carry values throughout. ``I_i_a`` is NOT here: both
+#: solves compute it.
 _CURRENT_DRIVEN_ONLY_CATHODE_KEYS = frozenset(
     {
         "P_cathode_e_thermal",
@@ -7118,7 +7124,6 @@ class LAPDSim1D:
         if (
             solve is not None
             and solve.beam_result is not None
-            and not bool(solve.metadata.get("floating", False))
             # PRESCRIBED MEASURED DRIVE: the surface updates below are the
             # calibrated cathode's, and past the hand-off there is no
             # calibrated cathode -- the emission that would be cooling the
@@ -7134,6 +7139,25 @@ class LAPDSim1D:
                 or self._cathode_theta is not None
             )
         ):
+            # AT THE CURRENT THE STEP'S OWN SOLVE RAN AT. Driven phases: the
+            # frozen loop current, the same float object as before. Open
+            # circuit: exactly zero, which is what the dispatched solve
+            # imposed -- NOT the stale ``_circuit_I_loop``, which on the FIRST
+            # open-circuit step still holds the tail's last integrated value
+            # because the circuit advance that zeroes it runs later in this
+            # same accept.
+            #
+            # The flags stay the DRIVEN ones in both phases. This evaluator
+            # reads ``TwinCathode``, ``cathode_schottky``,
+            # ``cathode_emission_bridge`` and the ``cathode_Rp_model``
+            # validator from them and never reads ``cathode_coupling``, so the
+            # one expression serves both phases and the driven path is
+            # untouched.
+            honest_I_A = (
+                0.0
+                if bool(solve.metadata.get("floating", False))
+                else self._circuit_I_loop
+            )
             honest_result = idriven_result_evaluator(
                 state=self._smoothed_sample_state(self.state),
                 floors=self._floors,
@@ -7148,7 +7172,7 @@ class LAPDSim1D:
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
                 f_em_override=self._cathode_f_em,
-            )(self._circuit_I_loop)
+            )(honest_I_A)
         # B5: the backscatter row of the surface energy ledger, booked on
         # EVERY accepted step the channel counted on -- not only on the ones
         # whose warming branch runs. What the row measures is what left WITH
@@ -7194,13 +7218,20 @@ class LAPDSim1D:
         ):
             if self._cathode_warming_model == "power_balance":
                 result = solve.beam_result.result
-                # Floating phases: emitted electrons return to the surface,
-                # so net evaporative cooling vanishes with the net current.
-                floating = bool(solve.metadata.get("floating", False))
                 # Honest accepted-state inputs (see the shared result above).
                 if honest_result is not None:
                     result = honest_result
-                I_emis = 0.0 if floating else float(result.I_eth_star)
+                # EVAPORATIVE COOLING RUNS IN EVERY PHASE, at the released
+                # current the solve returns. An open circuit is zero NET
+                # current, not zero emission: at I_tot = 0 the surface still
+                # releases its space-charge-limited I_eth_star, and those
+                # electrons do leave -- the balance closes because the plasma
+                # returns a LARGER collected current I_e,ret = I_eth_star +
+                # I_i over the barrier, which is a separate flux arriving at
+                # the surface and not the emitted one turned back. So the
+                # cooling is continuous across the hand-off: the same
+                # expression, evaluated at zero loop current.
+                I_emis = float(result.I_eth_star)
                 # Emission cooling books the EVOLVING work function when
                 # the surface model is on (one shared constant).
                 # The surface keeps (1 - R_E) of the ion power when the jet's
@@ -7277,8 +7308,9 @@ class LAPDSim1D:
                 ledger["emis"] += float(attempt.dt) * P_emis
                 ledger["cond"] += float(attempt.dt) * P_cond
         # Surface-state coverage, accepted steps only. Ion flux from the
-        # honest accepted-state solve where available (drive phases); the
-        # cached solve's I_i otherwise (floating/afterglow -- low stakes).
+        # honest accepted-state solve, which is now built in every phase; the
+        # cached solve's I_i is the fallback for the phases that build none
+        # (the prescribed drive past its hand-off).
         # Backward-Euler is exact-form for this linear ODE: theta stays in
         # [0, 1] and cannot overshoot the ads/des equilibrium.
         if (

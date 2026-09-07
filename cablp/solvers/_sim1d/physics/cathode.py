@@ -473,8 +473,13 @@ def cathode_power_balance_terms_W(T_s_K, P_ion_W, I_eth_star_A, input_dict):
       electron removes ``phi_wf + 2 k_B T_s`` (work function plus the mean
       thermal energy over the barrier). Pass the accepted solve's
       ``I_eth_star`` -- the space-charge-released current, not the
-      Richardson ceiling -- and 0 for floating phases, where emitted
-      electrons return to the surface and the net cooling vanishes.
+      Richardson ceiling -- in EVERY phase, the open circuit included: zero
+      NET current is not zero emission, and the electrons that clear the
+      virtual cathode leave whether or not the loop carries their charge
+      away. What the surface does NOT get back here is the energy of the
+      plasma electrons it collects in return; that deposit is not modelled,
+      and while it is off the books this term is the whole of the face's
+      electron-channel budget.
     - ``P_cond`` is conduction from the emitting skin layer into the
       heater-held substrate, ``G_cond * (T_s - T_base)`` -- the
       "heater maintains the lower end" restoring term. It vanishes at

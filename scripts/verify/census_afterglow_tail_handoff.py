@@ -11,9 +11,11 @@ step:
                            already open and the diode blocks the reversal
 
 This instrument reports WHEN that happened and asserts it did not happen too
-early. The assertion is the point: the hand-off is a late-afterglow event, and
-a run whose tail ends inside a scored window is reporting a different physics
-question than the one that was asked.
+early, and prints the emitter surface temperature either side of the firing --
+the surface ledger crosses the hand-off too, and a kink in ``T_s`` there would
+mean it does not. The assertion is the point: the hand-off is a late-afterglow
+event, and a run whose tail ends inside a scored window is reporting a
+different physics question than the one that was asked.
 
 TWO ROUTES
 ----------
@@ -92,9 +94,15 @@ class _StepCensus:
         I_prev = float(self.sim._circuit_I_prev)
         V_dis_step = float(self.sim._circuit_V_dis_step)
         phase = self.sim._cathode_phase_options(time=t0)
+        # T_s is recorded because the SURFACE ledger crosses the hand-off too:
+        # the emitting face keeps cooling at its released current on both
+        # sides of it, so the temperature trace should show no kink there.
+        # ``None`` whenever no warming model is evolving it.
+        T_s = self.sim._cathode_Ts_K
         self.rows.append(
             (t0, I_prev, V_dis_step, bool(phase["floating"]),
-             bool(phase["inductive_tail"]), bool(phase["cathode_enabled"]))
+             bool(phase["inductive_tail"]), bool(phase["cathode_enabled"]),
+             float("nan") if T_s is None else float(T_s))
         )
         return self._inner(generate_attempt)
 
@@ -103,7 +111,7 @@ class _StepCensus:
 
 
 def _report(times_s, floating, driven_tail, I_loop, V_dis, resolution,
-            assert_before_ms):
+            assert_before_ms, T_s=None):
     """Print the census and return the exit status.
 
     ``floating`` and ``driven_tail`` are boolean arrays over the same lattice
@@ -146,6 +154,20 @@ def _report(times_s, floating, driven_tail, I_loop, V_dis, resolution,
             f"I={float(I_loop[k]):.4f} A, V_dis={float(V_dis[k]):.6f} V, "
             f"criterion={which}"
         )
+        if T_s is not None:
+            # The surface temperature either side of the firing, and the
+            # per-entry increments beside it: a discontinuity in the surface
+            # ledger shows up as a step in dT, not in T_s itself.
+            T_s = np.asarray(T_s, dtype=float)
+            lo, hi = max(k - 4, 0), min(k + 5, T_s.size)
+            print("tail census: T_s across the hand-off "
+                  "(index, t [ms], phase, T_s [K], dT from previous [K])")
+            for j in range(lo, hi):
+                dT = (T_s[j] - T_s[j - 1]) if j > 0 else float("nan")
+                mark = "open" if floating[j] else "driven"
+                star = " <- first open-circuit entry" if j == k else ""
+                print(f"    {j:6d}  {times_ms[j]:9.5f}  {mark:6s}  "
+                      f"{T_s[j]:12.7f}  {dT:+.3e}{star}")
     if assert_before_ms is None:
         print("tail census: no earliest-firing assertion requested")
         return 0
@@ -178,6 +200,11 @@ def _run_from_h5(args):
         floating = np.asarray(diag["floating"][:], dtype=float) > 0.5
         I_loop = np.asarray(diag["circuit_I_loop"][:], dtype=float)
         V_dis = np.asarray(diag["circuit_V_dis_step"][:], dtype=float)
+        T_s_surface = (
+            np.asarray(diag["T_s_surface"][:], dtype=float)
+            if "T_s_surface" in diag
+            else None
+        )
         # phase_floating is the SCHEDULE's afterglow flag; the driven tail is
         # the afterglow with the loop still integrated.
         if "phase_floating" in h:
@@ -194,7 +221,7 @@ def _run_from_h5(args):
     )
     return _report(
         time_s, floating, afterglow & ~floating, I_loop, V_dis,
-        "save", args.assert_no_handoff_before_ms,
+        "save", args.assert_no_handoff_before_ms, T_s=T_s_surface,
     )
 
 
@@ -233,9 +260,11 @@ def _run_live(args):
     V_dis = np.array([r[2] for r in rows], dtype=float)
     floating = np.array([r[3] for r in rows], dtype=bool)
     tail = np.array([r[4] for r in rows], dtype=bool)
+    T_s = np.array([r[6] for r in rows], dtype=float)
     return _report(
         times, floating, tail, I_prev, V_dis,
         "accepted step", args.assert_no_handoff_before_ms,
+        T_s=None if np.all(np.isnan(T_s)) else T_s,
     )
 
 

@@ -26061,6 +26061,109 @@ def _case_afterglow_tail_handoff_criterion():
 
 
 # ----------------------------------------------------------------------
+# tail-handoff-surface-continuity
+# ----------------------------------------------------------------------
+@_case("tail-handoff-surface-continuity")
+def _case_tail_handoff_surface_continuity():
+    """Evaporative emission cooling is continuous across the hand-off.
+
+    An open circuit is zero NET current, not zero emission. At ``I_tot = 0``
+    the emitter still releases its space-charge-limited ``I_eth_star`` and
+    those electrons leave; the balance closes because the plasma returns a
+    LARGER collected current over the barrier, which is a different flux
+    arriving at the surface, not the emitted one turned back. So the surface's
+    ``P_emis`` at ``I_tot = 0`` must be the limit of its value from the driven
+    side, and the surface ledger takes no step at the hand-off.
+
+    Checked on the late-afterglow state of the reference machine, where the
+    emission is largest relative to the loop current:
+
+      CONTINUITY   ``P_emis`` at ``I_tot = 0`` equals its value at
+        ``I_tot = 1e-12`` and ``1e-9`` A to better than 1e-6 relative, and the
+        approach from 1e-3 A is monotone and small. The formula is the shipped
+        ``cathode_power_balance_terms_W``, driven by the shipped
+        ``solve_idriven``, so this is the solver's own arithmetic.
+      NEGATIVE CONTROL  the retired ``0.0 if floating`` form is discontinuous
+        by the whole term: ``I_eth_star`` (61.895109 A here) times
+        ``phi_wf + 2 k_B T_s`` (3.198777 eV) = 197.988671 W, dropped in one
+        step. That is the defect this case exists to keep out.
+
+    NOT ASSERTED, and deliberately not built: the energy the COLLECTED
+    electrons deposit back on the surface. See the module the term would live
+    in; at this state it is the larger number and the reviewer's item.
+    """
+    from cablp.cathode.circuit import (
+        DeviceConfig as _sc_DeviceConfig,
+        PlasmaState as _sc_PlasmaState,
+    )
+    from cablp.cathode.circuit_idriven import solve_idriven as _sc_solve
+    from cablp.solvers._sim1d.physics.cathode import (
+        cathode_power_balance_terms_W as _sc_terms,
+    )
+
+    _sc_cfg_kw = dict(
+        A_c=math.pi * 18.415 ** 2,
+        mu=4.0026,
+        V_bank=177.843,
+        phi_wf=2.869,
+        C_R=9.3,
+        R_comp=0.0072244,
+        eta=0.358,
+        L_cath=53.25,
+        R_cath=18.415,
+    )
+    _sc_Ts = 1913.453373340071
+    _sc_cfg = _sc_DeviceConfig(T_s=_sc_Ts, **_sc_cfg_kw)
+    _sc_pl = _sc_PlasmaState(
+        T_e=0.1, n_e=3.424966858999728e11, n_n=4.701649450942045e13
+    )
+    _sc_alpha = math.exp(-0.5)
+    # The surface-side input_dict the warming update passes: only these four
+    # keys are read by the term.
+    _sc_idict = {
+        "R_cath": 18.415,
+        "cathode_emissivity": 0.7,
+        "cathode_Ts_base_K": 1910.0,
+        "phi_wf": 2.869,
+        "cathode_conduction_W_per_K": 0.0,
+    }
+
+    def _sc_P_emis(I_A, force_zero=False):
+        r = _sc_solve(
+            _sc_cfg, _sc_pl, I_A, anode_T_e=0.1, alpha_sheath=_sc_alpha,
+            alpha_sheath_anode=_sc_alpha, phi_c_cap_V=1000.0,
+        )
+        I_emis = 0.0 if force_zero else float(r.I_eth_star)
+        return _sc_terms(
+            T_s_K=_sc_Ts,
+            P_ion_W=float(r.P_cathode_i),
+            I_eth_star_A=I_emis,
+            input_dict=_sc_idict,
+        )[3], float(r.I_eth_star)
+
+    _sc_P0, _sc_I0 = _sc_P_emis(0.0)
+    # The term is live and of the expected size at zero net current.
+    assert _sc_P0 > 100.0, _sc_P0
+    assert _sc_I0 > 10.0, _sc_I0
+    # CONTINUITY from the driven side.
+    for _sc_I, _sc_rtol in ((1.0e-12, 1.0e-12), (1.0e-9, 1.0e-9),
+                            (1.0e-6, 1.0e-6), (1.0e-3, 1.0e-4)):
+        _sc_P, _ = _sc_P_emis(_sc_I)
+        assert abs(_sc_P - _sc_P0) <= _sc_rtol * _sc_P0, (
+            _sc_I, _sc_P, _sc_P0
+        )
+    # NEGATIVE CONTROL: the retired form drops the whole term at the hand-off.
+    _sc_P_old, _ = _sc_P_emis(0.0, force_zero=True)
+    assert _sc_P_old == 0.0, _sc_P_old
+    # ...and the size of that step is I_eth_star * (phi_wf + 2 k_B T_s).
+    _sc_per_electron = 2.869 + 2.0 * 8.617333262e-5 * _sc_Ts
+    assert np.isclose(
+        _sc_P0 - _sc_P_old, _sc_I0 * _sc_per_electron, rtol=1e-12, atol=0.0
+    ), (_sc_P0, _sc_I0, _sc_per_electron)
+    assert _sc_P0 - _sc_P_old > 100.0, _sc_P0 - _sc_P_old
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -26069,7 +26172,7 @@ def _case_afterglow_tail_handoff_criterion():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 145, "historical_stance": 61}
+_CASE_CENSUS = {"total": 146, "historical_stance": 61}
 
 
 def _assert_case_census():
