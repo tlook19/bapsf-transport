@@ -137,8 +137,9 @@ def validate_r1_configuration_presence(
             "ion_neutral_drag_model, b_ion_neutral_thermalization, and the "
             "Tn_fit collision temperature) is DEPRECATED: the Phelps "
             "moment-closed operator (ion_neutral_moment_closure) is the "
-            "production drag baseline. Still runnable as an A/B arm and for "
-            "reproducing old results at tag legacy-final-2026-07-22.",
+            "production drag baseline. Still runnable as an A/B arm; the "
+            "results it once reproduced are not reproducible from this "
+            "repository, their anchor having been retired.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -271,6 +272,39 @@ def validate_equilibration_gas_puff_on(input_dict):
             f"[s]) must fit inside one puff/off cycle: got {puff_on!r} > "
             f"tau_cycle={tau_cycle!r}"
         )
+
+
+def resolve_energy_exchange_rate_fraction(input_dict):
+    """Return the exchange RATE bound's fraction, or None when unarmed.
+
+    ``energy_exchange_rate_fraction`` is the ``c`` in ``dt <= c / nu_eq,max``
+    that bounds the explicit electron-ion energy exchange by its RELAXATION
+    RATE (``core.timestep.energy_exchange_rate_timestep``). ``None`` leaves
+    the bound withdrawn. Anything else must be a real, finite number in
+    ``(0, 1]``: zero or negative would stop the run dead, and above 1 puts the
+    difference variable's ``z = -2 c`` below -2, outside SSPRK2's real-axis
+    stability interval -- a fraction that arms this bound and is unstable at
+    its own limit is the opposite of what arming it is for.
+    """
+    raw = input_dict.get("energy_exchange_rate_fraction", None)
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError(
+            "energy_exchange_rate_fraction (the electron-ion exchange rate "
+            f"bound's fraction of 1/nu_eq) must be a real number or None "
+            f"(got {raw!r})"
+        )
+    fraction = float(raw)
+    if not np.isfinite(fraction) or fraction <= 0.0 or fraction > 1.0:
+        raise ValueError(
+            "energy_exchange_rate_fraction (the electron-ion exchange rate "
+            f"bound's fraction of 1/nu_eq) must be finite and in (0, 1] "
+            f"(got {raw!r}); above 1 the difference variable's z = -2 c falls "
+            "outside SSPRK2's real-axis stability interval. Use None to leave "
+            "the rate bound withdrawn"
+        )
+    return fraction
 
 
 def validate_neutral_seed_cache_config(input_dict, flags):

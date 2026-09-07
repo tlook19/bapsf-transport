@@ -75,6 +75,7 @@ from .core.validation import (
     resolve_coverage_config,
     resolve_electron_drift_transport_config,
     resolve_emitting_area_config,
+    resolve_energy_exchange_rate_fraction,
     resolve_jet_arming_criterion,
     resolve_neutral_jet_config,
     resolve_neutral_probe_config,
@@ -862,6 +863,7 @@ def _timestep_limiters(diag, count=3):
         ("neutral_sources", diag.dt_neutral_sources),
         ("reactions", diag.dt_reactions),
         ("energy_exchange", diag.dt_energy_exchange),
+        ("energy_exchange_rate", diag.dt_energy_exchange_rate),
         ("electron_cooling", diag.dt_electron_cooling),
         ("ion_charge_exchange", diag.dt_ion_charge_exchange),
         ("heat_conduction", diag.dt_heat_conduction),
@@ -1958,6 +1960,12 @@ class LAPDSim1D:
                 "a bound"
             )
         self._dt_global_scale = _dt_global_scale_value
+        # The electron-ion exchange's RATE bound. Resolved (and refused) here
+        # so a nonsense fraction is loud before any compute, and read once so
+        # the unarmed None never reaches the candidate arithmetic.
+        self._energy_exchange_rate_fraction = resolve_energy_exchange_rate_fraction(
+            self._input_dict
+        )
         # Rate-freezing instrument (I3). A real bool is required: the flag
         # switches which STATE the explicit operator's reaction terms read,
         # and an int or a string smuggled in there would arm a first-order
@@ -8908,6 +8916,9 @@ class LAPDSim1D:
             circuit_dt_fraction=float(
                 self._input_dict.get("circuit_dt_fraction")
             ),
+            energy_exchange_rate_fraction=(
+                self._energy_exchange_rate_fraction
+            ),
             dt_min=dt_min,
             dt_max=dt_max,
             dt_global_scale=self._dt_global_scale,
@@ -8959,6 +8970,7 @@ class LAPDSim1D:
                 dt_surface_loss=np.inf,
                 dt_reactions=np.inf,
                 dt_energy_exchange=np.inf,
+                dt_energy_exchange_rate=np.inf,
                 dt_electron_cooling=np.inf,
                 dt_ion_charge_exchange=np.inf,
                 dt_heat_conduction=np.inf,

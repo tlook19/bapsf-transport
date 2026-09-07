@@ -395,6 +395,18 @@ Te_birth_ionization = "local"
 # the conserving partner of the En ionization sink.
 Ti_birth_ionization = "neutral"
 
+# EXPLICIT ELECTRON-ION EXCHANGE, RATE-BOUNDED. The exchange sits in the
+# explicit operator, and its other bound is a FRACTIONAL energy-change bound
+# that vanishes as Te -> Ti -- so a cold dense column sitting at Te ~= Ti is
+# bounded by nothing there while nu_eq is at its stiffest. This key adds the
+# stability bound dt <= c / nu_eq,max. The difference Te - Ti relaxes at
+# 2 nu_eq, so c = 0.5 puts the explicit SSPRK2 advance of that difference at
+# z = -2 c = -1: inside the scheme's real-axis stability interval and still
+# resolving the relaxation. It is the min with the fractional bound, so it can
+# only tighten the step, and it names itself energy_exchange_rate in a run's
+# dt census when it binds.
+energy_exchange_rate_fraction = 0.5
+
 # RUN COST. Not physics: the afterglow tail length and the max-steps
 # action the arm of record carried.
 tau_afterglow = 0.006

@@ -10,6 +10,7 @@ from ..physics.conduction import heat_conduction_timestep_bound
 from ..physics.energy import (
     electron_cooling_rhs,
     electron_ion_exchange_rhs,
+    electron_ion_relaxation_rate,
     ion_charge_exchange_rhs,
 )
 from ..physics.flux import ion_sound_speed, plasma_flux_rhs, plasma_wave_speed
@@ -73,6 +74,13 @@ class TimestepDiagnostics:
     # results written before the En field existed still load, and inf on every
     # run whose state carries no En.
     dt_neutral_energy: float = np.inf
+    # The electron-ion exchange's RATE bound, reported separately from
+    # dt_energy_exchange so a dt census can tell the stability bound from the
+    # fractional-change one. Defaulted (and inf) so results written before it
+    # existed still load, and inf on every run that leaves
+    # energy_exchange_rate_fraction at None -- the candidate is presence-gated
+    # on that key, so an unarmed run's dt sequence cannot move.
+    dt_energy_exchange_rate: float = np.inf
     accepted_dt: float = np.nan
     # The dt_min clamp as a fact about the ACCEPTED step, which is a different
     # statement from ``clamped_to_dt_min`` above. That flag is computed from
@@ -126,6 +134,7 @@ def suggest_timestep(
     density_dt_fraction=0.25,
     neutral_dt_fraction=0.25,
     circuit_dt_fraction=0.25,
+    energy_exchange_rate_fraction=None,
     dt_min=1e-12,
     dt_max=1e-6,
     dt_global_scale=1.0,
@@ -162,6 +171,12 @@ def suggest_timestep(
     ``None`` -- the default -- leaves that bound's floor exemption
     single-threshold and this call free of side effects; with the band armed
     the call ADVANCES the caller's latch, so it is no longer a pure query.
+
+    ``energy_exchange_rate_fraction`` arms the electron-ion exchange's RATE
+    bound as a candidate of its own, named ``energy_exchange_rate`` so a dt
+    census separates it from the fractional-change ``energy_exchange`` bound
+    it is the min with. ``None`` -- the default -- withdraws it to ``inf``.
+    See ``energy_exchange_rate_timestep``.
 
     ``dt_global_scale`` is a measurement instrument, not a bound: it
     multiplies the returned step AFTER every candidate and after the
@@ -253,6 +268,15 @@ def suggest_timestep(
             density_dt_fraction=density_dt_fraction,
             plasma_active=plasma_active,
         ),
+        "energy_exchange_rate": energy_exchange_rate_timestep(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            mu=mu,
+            energy_exchange_kwargs=energy_exchange_kwargs,
+            energy_exchange_rate_fraction=energy_exchange_rate_fraction,
+            plasma_active=plasma_active,
+        ),
         "electron_cooling": electron_cooling_timestep(
             state=state,
             floors=floors,
@@ -334,6 +358,7 @@ def suggest_timestep(
         clamped_to_dt_min=float(clamped_to_dt_min),
         dt_raw=float(raw_dt),
         dt_neutral_energy=float(dt_candidates["neutral_energy"]),
+        dt_energy_exchange_rate=float(dt_candidates["energy_exchange_rate"]),
         dt_global_scale=float(dt_global_scale),
     )
 
@@ -839,6 +864,57 @@ def energy_exchange_timestep(
             active_mask=plasma_active,
         ),
     )
+
+
+def energy_exchange_rate_timestep(
+    state,
+    floors,
+    ion_mass_g,
+    mu,
+    energy_exchange_kwargs=None,
+    energy_exchange_rate_fraction=None,
+    plasma_active=None,
+):
+    """Return a RATE bound on the explicit electron-ion energy exchange.
+
+    ``energy_exchange_timestep`` above bounds the same term by its FRACTIONAL
+    energy change, which vanishes as ``Te -> Ti`` and therefore stops bounding
+    the exchange exactly where the exchange is stiffest: a cold dense column
+    can sit at ``Te ~= Ti`` with ``nu_eq ~ 1e6 s^-1`` while the fractional
+    bound admits a step many relaxation times long. This bound is the
+    stability complement: the exchange relaxes ``Te - Ti`` at ``2 nu_eq``
+    (``physics.energy.electron_ion_relaxation_rate``), so the explicit
+    SSPRK2 advance of that difference has ``z = -2 nu_eq dt`` and stays inside
+    the scheme's real-axis stability interval ``z >= -2`` for ``dt <=
+    1 / nu_eq,max``.
+
+    ``energy_exchange_rate_fraction`` is that ``c`` in ``dt <= c / nu_eq,max``,
+    the maximum taken over the plasma-active cells. ``None`` -- the default --
+    withdraws the candidate to ``inf``, leaving the fractional bound alone and
+    the step arithmetic bit-identical to a run predating this bound. The bound
+    is presence-gated on ``energy_exchange_kwargs`` for the same reason every
+    other candidate here is: a bound on a term the step does not apply is a
+    phantom.
+
+    Returns seconds.
+    """
+    if energy_exchange_kwargs is None or energy_exchange_rate_fraction is None:
+        return np.inf
+    rate = _active_values(
+        electron_ion_relaxation_rate(
+            state=state,
+            floors=floors,
+            ion_mass_g=ion_mass_g,
+            mu=mu,
+        ),
+        plasma_active,
+    )
+    if rate.size == 0:
+        return np.inf
+    rate_max = float(np.max(rate))
+    if not rate_max > 0.0:
+        return np.inf
+    return float(energy_exchange_rate_fraction) / rate_max
 
 
 def electron_cooling_timestep(

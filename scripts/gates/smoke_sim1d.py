@@ -152,8 +152,15 @@ from cablp.solvers._sim1d.physics.energy import (
     electron_cooling_rhs,
     electron_cooling_rhs_terms,
     electron_ion_exchange_rhs,
+    electron_ion_relaxation_rate,
     ion_charge_exchange_rhs,
 )
+from cablp.solvers._sim1d.core.validation import (
+    resolve_energy_exchange_rate_fraction,
+)
+from cablp.plasma.params import LN_LAMBDA_MIN, c_log, time_elec_coll
+from cablp.constants import He_e_mass_ratio
+from cablp.solvers._sim1d.solver import _timestep_limiters
 from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
 from cablp.solvers._sim1d.core.integrator import ssprk2_step
 from cablp.solvers._sim1d.core.geometry import (
@@ -7725,6 +7732,111 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     assert np.allclose(disabled_cx.Ei, 0.0)
     return locals()
 
+
+# --------------------------------------------------------------------
+# energy-exchange-rate-bound
+# --------------------------------------------------------------------
+@_case(
+    "energy-exchange-rate-bound",
+    historical_stance=True,
+)
+def _case_energy_exchange_rate_bound():
+    # The electron-ion exchange's RATE bound (default off). The fractional
+    # bound above vanishes as Te -> Ti, so a cold dense column sitting at
+    # Te ~= Ti is bounded by nothing while nu_eq is at its stiffest; the rate
+    # bound is the stability complement. Built on an exchange-dominated state
+    # at that operating point: n ~ 8e12 cm^-3, Te = Ti ~ 0.1 eV.
+    params, flags = _base_config()
+    exchange_rate_sim, exchange_rate_snapshot = _base_sim()
+    geom = exchange_rate_snapshot.geometry
+    stiff_state = conservative_from_primitives(
+        n=np.full(geom.cells, 8.0e12),
+        nn=exchange_rate_snapshot.state.nn,
+        u=np.zeros(geom.cells),
+        Te=np.full(geom.cells, 0.11),
+        Ti=np.full(geom.cells, 0.11),
+        ion_mass_g=exchange_rate_sim.ion_mass_g,
+    )
+    stiff_y = pack_state(stiff_state)
+
+    # (a) The bound resolves to c / nu_eq,max, against nu_eq evaluated
+    # INDEPENDENTLY from the Braginskii collision time rather than from the
+    # helper the bound itself calls.
+    stiff_derived = derive_state(
+        stiff_state,
+        floors=exchange_rate_sim.floors,
+        ion_mass_g=exchange_rate_sim.ion_mass_g,
+    )
+    stiff_n = np.maximum(stiff_state.n, exchange_rate_sim.floors["n"])
+    stiff_ln_lambda = np.maximum(
+        c_log(stiff_derived.Te, stiff_n, kind="ei"), LN_LAMBDA_MIN
+    )
+    independent_nu_eq = 2.0 / (
+        time_elec_coll(stiff_derived.Te, stiff_n, stiff_ln_lambda)
+        * He_e_mass_ratio
+    )
+    helper_nu_eq = electron_ion_relaxation_rate(
+        state=stiff_state,
+        floors=exchange_rate_sim.floors,
+        ion_mass_g=exchange_rate_sim.ion_mass_g,
+        mu=exchange_rate_sim._mu,
+    )
+    assert np.all(np.abs(helper_nu_eq / independent_nu_eq - 1.0) < 1.0e-12)
+    # The regime this bound exists for: nu_eq is stiff on the ~1 us scale.
+    assert np.all(independent_nu_eq > 1.0e5)
+
+    for fraction in (0.5, 1.0):
+        armed_params = dict(params)
+        armed_params["energy_exchange_rate_fraction"] = fraction
+        armed_sim = LAPDSim1D(armed_params, flags)
+        armed_dt = armed_sim.suggest_timestep(y=stiff_y)
+        assert np.isclose(
+            armed_dt.dt_energy_exchange_rate,
+            fraction / np.max(independent_nu_eq),
+            rtol=1.0e-12,
+            atol=0.0,
+        )
+        # It is a candidate of its own, so it can only tighten the step and it
+        # names itself when it binds.
+        assert armed_dt.dt <= armed_dt.dt_energy_exchange_rate
+        assert armed_dt.active_constraint == "energy_exchange_rate"
+
+    # (b) With the key at None the bound is absent from the dt census: the
+    # candidate is withdrawn to inf, it cannot be the active constraint, and
+    # the step it would have set is left to the other bounds.
+    assert params["energy_exchange_rate_fraction"] is None
+    assert default_config()[0]["energy_exchange_rate_fraction"] is None
+    unarmed_sim = LAPDSim1D(params, flags)
+    unarmed_dt = unarmed_sim.suggest_timestep(y=stiff_y)
+    assert unarmed_dt.dt_energy_exchange_rate == np.inf
+    assert unarmed_dt.active_constraint != "energy_exchange_rate"
+    assert unarmed_dt.dt != armed_dt.dt
+    assert "energy_exchange_rate" not in dict(
+        _timestep_limiters(unarmed_dt, count=len(dataclasses.fields(unarmed_dt)))
+    )
+
+    # An int is a real number and is accepted, resolved to its float; the
+    # upper end of the admissible range is exactly c = 1, where z = -2.
+    assert resolve_energy_exchange_rate_fraction(
+        {"energy_exchange_rate_fraction": 1}
+    ) == 1.0
+
+    # (c) The refusals, at construction. 1.5 is refused because z = -2 c = -3
+    # falls outside SSPRK2's real-axis stability interval.
+    for bad_fraction in (0, 1.5, "x"):
+        try:
+            LAPDSim1D(
+                {**params, "energy_exchange_rate_fraction": bad_fraction},
+                flags,
+            )
+        except ValueError as exc:
+            assert "energy_exchange_rate_fraction" in str(exc)
+        else:
+            raise AssertionError(
+                "energy_exchange_rate_fraction="
+                f"{bad_fraction!r} was accepted at construction"
+            )
+    return locals()
 
 # --------------------------------------------------------------------
 # helium-only-reaction-rates
@@ -25023,7 +25135,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 137, "historical_stance": 57}
+_CASE_CENSUS = {"total": 138, "historical_stance": 58}
 
 
 def _assert_case_census():

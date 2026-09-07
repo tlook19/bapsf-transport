@@ -3047,6 +3047,26 @@ def timestep_defaults():
         Fractional density-change limit for source/reaction timestep estimates.
     neutral_dt_fraction:
         Fractional neutral-density change limit for neutral source estimates.
+    energy_exchange_rate_fraction:
+        Fraction ``c`` [dimensionless] of the electron-ion thermal relaxation
+        time ``1/nu_eq`` the accepted step may take, as a RATE bound
+        ``dt <= c / nu_eq,max`` over the plasma-active cells, taken as the min
+        with the fractional-change ``energy_exchange`` bound. ``nu_eq`` is the
+        rate at which the exchange term relaxes one species' temperature
+        toward the other (``physics.energy.electron_ion_relaxation_rate``,
+        read back out of the same ``Q_ie`` the term calls); the DIFFERENCE
+        ``Te - Ti`` relaxes at ``2 nu_eq``, so the explicit SSPRK2 advance of
+        that difference has ``z = -2 c``, which stays inside the scheme's
+        real-axis stability interval ``z >= -2`` exactly for ``c <= 1``.
+        Stability, not accuracy: the
+        fractional-change bound alone vanishes as ``Te -> Ti`` and stops
+        bounding the exchange exactly where it is stiffest. ``None`` -- the
+        default -- withdraws the bound entirely, so an unarmed run's dt
+        arithmetic is bit-identical to one predating this key. Anything else
+        must be a real, finite number in ``(0, 1]``; zero, negative, above
+        one, non-finite or non-numeric raises ValueError at construction. The
+        bound rides the timestep diagnostics as ``dt_energy_exchange_rate``
+        and names itself ``energy_exchange_rate`` when it binds.
     dt_min:
         Minimum allowed timestep [s].
     dt_min_lock_max_steps:
@@ -3196,6 +3216,9 @@ def timestep_defaults():
         "cfl": 0.4,
         "density_dt_fraction": 0.25,
         "neutral_dt_fraction": 0.25,
+        # Default-off stability bound: None withdraws the candidate before any
+        # state is read, so an unarmed run's dt sequence is untouched.
+        "energy_exchange_rate_fraction": None,
         "dt_min": 1e-10,
         "dt_min_lock_max_steps": 250000,
         "dt_max": 1e-4,
