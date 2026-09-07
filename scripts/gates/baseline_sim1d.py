@@ -90,7 +90,7 @@ from stance_config import (  # noqa: E402
 )
 
 # --- Baseline config: the stance of record, re-cut to the gate mesh --------
-# GOLDEN-AT-STANCE (ratified 2026-08-20). The config is
+# GOLDEN-AT-STANCE. The config is
 # ``default_config()`` + the committed stance file + ``nx = 60``.
 #
 # Why the stance and not the bare defaults: the shipped defaults are NOT the

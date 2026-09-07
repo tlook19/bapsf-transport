@@ -6733,7 +6733,7 @@ def gate_aj4():
 def gate_aj6():
     """Zero incident energy is a LEGAL, BOOKED state, and it is PER CELL.
 
-    The ruled fluid-parity closure (2026-08-30): an ion that arrives with zero
+    The fluid-parity closure: an ion that arrives with zero
     clamped incident energy backscatters nothing, so that cell's whole counted
     stream is born thermal. Under the fluid spec the same ion gives
     ``v_back = 0``, which makes the ``R_N`` share indistinguishable from
@@ -6939,8 +6939,8 @@ def gate_aj5():
 # B6 intercepts that flux at every baffle face and re-emits it on the side it
 # was intercepted from, particle-conserving, exactly as the anode-mesh channel
 # does -- the same full accommodation at ``T_wall`` on the wall spectrum, which
-# is the accommodation-scope correction ruled 2026-08-28 (the scalar alpha
-# covers the cylinder and the ends; mesh and closed faces run alpha = 1)
+# is the accommodation-scope correction (the scalar alpha covers the
+# cylinder and the ends; mesh and closed faces run alpha = 1)
 # extended to baffles.
 
 #: Relative tolerance of the B6 FLUX statements. The transparency enters the

@@ -20,7 +20,7 @@ from ..constants import (
     m_e_cgs,
 )
 
-# ── THE HYDROGEN QUARANTINE (ruled 2026-08-27) ───────────────────────────────
+# ── THE HYDROGEN QUARANTINE ──────────────────────────────────────────────────
 #
 # This module's hydrogen arms RAISE. They are quarantined, not removed: the
 # code and every coefficient table stay exactly where they are, so a validated
@@ -28,13 +28,13 @@ from ..constants import (
 #
 # Two independent reasons, and either alone is sufficient:
 #
-#   1. UNTESTED DOMAIN. The solver is hard helium-only (D3, 2026-08-21):
+#   1. UNTESTED DOMAIN. The solver is hard helium-only:
 #      LAPDSim1D refuses gas_type != "He" at construction, so no hydrogen arm
 #      here has a solver-path consumer and none is covered by the golden, the
 #      digest gate or the smoke suite. Every H result this module can produce
 #      is therefore unexercised by any gate in the repository.
 #
-#   2. ONE CORRUPT TABLE -- SINCE REPAIRED, 2026-08-27 ([sbq:L295]).
+#   2. ONE CORRUPT TABLE -- SINCE REPAIRED.
 #      ``A_R318`` -- the H + H+ charge-exchange fit -- CARRIED a DUPLICATED
 #      coefficient: row 1 repeated 9.536923957409e-03 and so had 10 entries
 #      where every other row of A_R318, and every row of the helium A_R531,
@@ -127,10 +127,10 @@ def H_EII_cross(E, A=a215):
     raise ValueError(
         "H_EII_cross is not available: the hydrogen arms of cablp.atomic are "
         "QUARANTINED (untested domain -- no solver-path consumer and no gate "
-        "coverage), ruled 2026-08-27. The quarantine's second ground, the "
-        "corrupt A_R318 table, was repaired the same day and no longer "
-        "applies; the untested domain alone is sufficient. The solver is "
-        "helium-only (D3, 2026-08-21). Accepted: He -- use He_EII_cross."
+        "coverage). The quarantine's second ground, the corrupt A_R318 table, "
+        "has since been repaired and no longer applies; the untested domain "
+        "alone is sufficient. The solver is helium-only. Accepted: He -- use "
+        "He_EII_cross."
     )
     # RETAINED, not removed: the quarantine is reversible by construction, so
     # a validated re-opening deletes the raise above and this line stands.
@@ -175,10 +175,10 @@ def H_EII_cross_lkup(E):
     raise ValueError(
         "H_EII_cross_lkup is not available: the hydrogen arms of cablp.atomic "
         "are QUARANTINED (untested domain -- no solver-path consumer and no "
-        "gate coverage), ruled 2026-08-27. The quarantine's second ground, "
-        "the corrupt A_R318 table, was repaired the same day and no longer "
-        "applies; the untested domain alone is sufficient. The solver is "
-        "helium-only (D3, 2026-08-21). Accepted: He -- use He_EII_cross_lkup."
+        "gate coverage). The quarantine's second ground, the corrupt A_R318 "
+        "table, has since been repaired and no longer applies; the untested "
+        "domain alone is sufficient. The solver is helium-only. Accepted: "
+        "He -- use He_EII_cross_lkup."
     )
     # RETAINED, not removed: the quarantine is reversible by construction, so
     # a validated re-opening deletes the raise above and this line stands.
@@ -847,14 +847,13 @@ def charge_ex_react(T, gas_type="He"):
         # validated re-opening deletes this raise and restores `table = _cx_H`.
         raise ValueError(
             "gas_type='H' is not available: the hydrogen arms of cablp.atomic "
-            "are QUARANTINED, ruled 2026-08-27, and this is the entry point "
-            "that reads A_R318 directly. That table's duplicated coefficient "
-            "was repaired the same day and all 81 entries digit-proofed "
-            "against IAEA HYDHEL 3.1.8, so the corruption ground no longer "
-            "applies; the quarantine stands on the untested domain alone -- "
-            "no hydrogen arm here has a solver-path consumer or any gate "
-            "coverage. The solver is helium-only (D3, 2026-08-21). Accepted: "
-            "'He' (A_R531, unaffected)."
+            "are QUARANTINED, and this is the entry point that reads A_R318 "
+            "directly. That table's duplicated coefficient has since been "
+            "repaired and all 81 entries digit-proofed against IAEA HYDHEL "
+            "3.1.8, so the corruption ground no longer applies; the "
+            "quarantine stands on the untested domain alone -- no hydrogen "
+            "arm here has a solver-path consumer or any gate coverage. The "
+            "solver is helium-only. Accepted: 'He' (A_R531, unaffected)."
         )
     else:
         raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")
