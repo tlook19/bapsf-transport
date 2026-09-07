@@ -147,24 +147,33 @@ CHANNEL_PHASE = {
          "collected electron. Present only on a run with "
          "collector_sheath_full_debit armed"),
     "cathode_e_emitted_enthalpy":
-        ("DRIVE-ONLY",
+        ("BOTH",
          "END-FACE SHEATH CLOSURE (Ee only), HEATING: the 2 k_B T_s the "
          "released electrons carry into the plasma off the emitting surface, "
-         "at the space-charge-released current. Present only on a run with "
-         "cathode_face_full_debit armed"),
+         "at the space-charge-released current. BOTH, not DRIVE-ONLY: the "
+         "emitting surface is still hot and still releasing current into the "
+         "floating afterglow, so this row runs in both windows by "
+         "construction. Present only on a run with cathode_face_full_debit "
+         "armed"),
     "cathode_e_emitted_fall":
-        ("DRIVE-ONLY",
+        ("AFTERGLOW-ACTIVE",
          "END-FACE SHEATH CLOSURE (Ee only), HEATING: the part of the "
          "cathode fall the released electrons drop through that the beam "
-         "row does not already carry -- exactly zero until a virtual cathode "
-         "forms. Present only on a run with cathode_face_full_debit armed"),
+         "row does not already carry. AFTERGLOW-ACTIVE BY CONSTRUCTION: it "
+         "is identically zero while phi_c_minus = 0, so it is exactly zero "
+         "through the drive and nonzero only in the virtual-cathode regime "
+         "the afterglow reaches. Present only on a run with "
+         "cathode_face_full_debit armed"),
     "cathode_e_collected_climb":
-        ("DRIVE-ONLY",
+        ("AFTERGLOW-ACTIVE",
          "END-FACE SHEATH CLOSURE (Ee only), COOLING: the barrier the "
          "returning plasma electrons climbed at the cathode, charged to "
          "their own store -- the anode's plasma-pays convention at the other "
-         "electrode. Present only on a run with cathode_face_full_debit "
-         "armed"),
+         "electrode. AFTERGLOW-ACTIVE: the discharge-phase cathode sheath "
+         "repels plasma electrons, so the returning current is microamps "
+         "there and the row is negligible against the drive-phase terms; it "
+         "carries real power only once the barrier collapses. Present only "
+         "on a run with cathode_face_full_debit armed"),
     "ei_exchange":
         ("BOTH",
          "collisional electron-ion temperature equilibration at the local "
