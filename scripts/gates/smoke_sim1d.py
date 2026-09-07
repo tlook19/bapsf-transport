@@ -1814,6 +1814,92 @@ def _case_variable_area_well_balancedness(
 
 
 # --------------------------------------------------------------------
+# twin-cathode-plateau-multigroup
+# --------------------------------------------------------------------
+@_case(
+    "twin-cathode-plateau-multigroup",
+    historical_stance=True,
+)
+def _case_twin_cathode_plateau_multigroup(
+    srcgrid_off_flags, srcgrid_off_params
+):
+    # PRESENCE GATE for the plateau-edge pair, BOTH DIRECTIONS, on the twin
+    # layout. The twin fixture in variable-area-well-balancedness resolves
+    # heating_anomalous_transport="local", so the equivalence it asserts there
+    # can only ever exercise the ABSENT branch: a build that stopped emitting
+    # the pair entirely would still satisfy it. This case arms the closure and
+    # asserts the pair is PRESENT under BOTH cathode prefixes, then clears it
+    # and asserts it is present under NEITHER -- the same two rows, the same
+    # two prefixes, one fixture apart.
+    #
+    # The selector's accepted values are stated by the solver's own validator:
+    # "heating_anomalous_transport must be 'local', 'tail_walk' or
+    # 'plateau_multigroup'", and the multi-group arm is the last of those.
+    # Every other dial the armed arm requires is already a config default
+    # (beam_deposition_model="csda", beam_anomalous_model="quasilinear",
+    # heating_anomalous_tail_energy_eV=75.0, keying="phi_c", the phi_c
+    # fraction None) -- the exception is the cathode boundary, which the
+    # twin's own refusal decides and which is asserted below rather than
+    # assumed.
+    twin_flags = dict(srcgrid_off_flags)
+    twin_flags["TwinCathode"] = True
+    twin_flags["cathode_coupling"] = False
+    _mg_rows = ("beam_plateau_edge_eV", "beam_plateau_edge_clamped")
+
+    # 'reflect' -- the shipped default -- is REFUSED with two cathodes, so the
+    # armed fixture states 'escape'. Asserted, not assumed: if that refusal
+    # ever moved, the fixture below would be selecting a boundary for a reason
+    # that no longer exists.
+    mg_reflect_params = dict(
+        srcgrid_off_params,
+        heating_anomalous_transport="plateau_multigroup",
+        heating_anomalous_tail_cathode_boundary="reflect",
+    )
+    try:
+        LAPDSim1D(mg_reflect_params, twin_flags)
+    except ValueError as exc:
+        assert "does not support TwinCathode" in str(exc)
+    else:
+        raise AssertionError(
+            "a reflecting cathode boundary constructed on the twin layout"
+        )
+
+    mg_params = dict(
+        srcgrid_off_params,
+        heating_anomalous_transport="plateau_multigroup",
+        heating_anomalous_tail_cathode_boundary="escape",
+    )
+    mg_sim = LAPDSim1D(mg_params, twin_flags)
+    assert mg_sim._plateau_multigroup
+    mg_diag = mg_sim._cathode_diagnostic_snapshot()
+    for _mg_prefix in ("source", "end"):
+        for _mg_row in _mg_rows:
+            assert f"{_mg_prefix}_{_mg_row}" in mg_diag, (_mg_prefix, _mg_row)
+
+    # The OFF arm of the same fixture: identical geometry and identical flags,
+    # the selector alone cleared, and the pair is gone from both prefixes.
+    local_params = dict(
+        srcgrid_off_params,
+        heating_anomalous_transport="local",
+        heating_anomalous_tail_cathode_boundary="escape",
+    )
+    local_sim = LAPDSim1D(local_params, twin_flags)
+    assert not local_sim._plateau_multigroup
+    local_diag = local_sim._cathode_diagnostic_snapshot()
+    for _mg_prefix in ("source", "end"):
+        for _mg_row in _mg_rows:
+            assert f"{_mg_prefix}_{_mg_row}" not in local_diag, (
+                _mg_prefix, _mg_row
+            )
+    # The rest of the per-end cathode block is present either way, so the
+    # absence just asserted is the multi-group pair's own and not a twin whose
+    # end block failed to be seeded at all.
+    for _mg_prefix in ("source", "end"):
+        assert f"{_mg_prefix}_regime" in local_diag
+        assert f"{_mg_prefix}_regime" in mg_diag
+
+
+# --------------------------------------------------------------------
 # cathode-resolved-gap-resistance
 # --------------------------------------------------------------------
 @_case(
@@ -25523,7 +25609,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 140, "historical_stance": 59}
+_CASE_CENSUS = {"total": 141, "historical_stance": 60}
 
 
 def _assert_case_census():
