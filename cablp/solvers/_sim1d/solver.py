@@ -98,8 +98,11 @@ from .physics.kinetic_dvm import (
     ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
     EXCHANGE_MODELS as KINETIC_DVM_EXCHANGE_MODELS,
     GRID_TI_CAP_EV,
+    LEDGER_ENERGY_BIRTH_CHANNELS as KINETIC_DVM_ENERGY_BIRTH_CHANNELS,
+    LEDGER_ENERGY_BIRTH_KEYS as KINETIC_DVM_ENERGY_BIRTH_KEYS,
+    LEDGER_FLIGHT_CELL_KEY as KINETIC_DVM_FLIGHT_CELL_KEY,
     LEDGER_PARTICLE_FLOW_KEYS as KINETIC_DVM_PARTICLE_FLOW_KEYS,
-    LEDGER_PARTICLE_FRAME_KEYS as KINETIC_DVM_PARTICLE_FRAME_KEYS,
+    LEDGER_SAVED_FRAME_KEYS as KINETIC_DVM_SAVED_FRAME_KEYS,
     TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
     WALL_REFLECTION_MODELS as KINETIC_DVM_WALL_REFLECTION_MODELS,
     TransientDVM,
@@ -487,6 +490,32 @@ _CATHODE_RESULT_KEYS = (
     "P_load_residual",
     "I_cathode_kirchhoff_residual",
 )
+
+
+#: Entry cap on the DVM floor-relax limiter's per-event record
+#: (``LAPDSim1D._dvm_limited_records``). The record is one row of ``cells``
+#: floats per LIMITED step, so an arm that limits on most of its steps would
+#: otherwise grow a second trajectory-sized array in memory. Eviction policy:
+#: NONE -- the first ``DVM_LIMITED_STEP_RECORD_CAP`` limited steps are kept
+#: and every later one is counted in ``limited_steps_dropped`` and dropped,
+#: because the onset is what a dedicated look is placing and the summary
+#: max/mean (which run over ALL limited steps) carry the amount regardless.
+DVM_LIMITED_STEP_RECORD_CAP = 4096
+
+
+def _cathode_result_prefixes(flags):
+    """Return the cathode-result diagnostic prefixes this run exports.
+
+    ``("source",)`` on a single cathode and ``("source", "end")`` under
+    ``TwinCathode``. The ``end`` block is filled from
+    ``BeamResult.result_twin``, which every solve leaves ``None`` unless the
+    twin is configured, so on a single-cathode run every one of its columns
+    is NaN in every frame. One function answers "which prefixes exist" for
+    the seeding and for the write guard alike, so the two cannot drift into
+    seeding a block nothing fills or filling one nothing seeded.
+    """
+    return ("source", "end") if flags.get("TwinCathode") else ("source",)
+
 
 #: The members of :data:`_CATHODE_RESULT_KEYS` that only the CURRENT-DRIVEN
 #: circuit solve populates. The voltage-driven (floating) solve in
@@ -1333,6 +1362,23 @@ class LAPDSim1D:
         self._dvm_transfer_relax_fraction = 1.0
         self._dvm_transfer_hold = KINETIC_DVM_TRANSFER_HOLDS[0]
         self._dvm_step_transfer = None
+        # The floor-aware relax limiter's per-event record. The census used
+        # to carry only COUNTS -- how many steps were limited and how many
+        # cells were ever limited -- which says that the limiter engaged but
+        # not by how much, and "by how much" is the whole question a
+        # dedicated look asks. Each entry is one limited step: the ledger
+        # step index, the solver time at the START of that step (the book
+        # runs before the state advances), the largest clamped fraction
+        # ``1 - scale`` any cell took, and that step's per-cell clamped
+        # fractions. BOUNDED at
+        # :data:`DVM_LIMITED_STEP_RECORD_CAP` entries with the overflow
+        # COUNTED, and the max/mean summary below runs over every limited
+        # step whether or not its entry was kept, so a truncated record
+        # still quotes the run's true worst case.
+        self._dvm_limited_records = []
+        self._dvm_limited_records_dropped = 0
+        self._dvm_limited_fraction_max = 0.0
+        self._dvm_limited_fraction_sum = 0.0
         # Exponential-hold tick state: the fluid momentum and ion energy the
         # tick's booked pair rate was measured against, and the constant
         # repayment rate the outstanding hold debt is retired at over this
@@ -2343,6 +2389,18 @@ class LAPDSim1D:
         self._jet_arming_censored_steps = 0
         self._jet_arming_transitions = 0
         self._jet_arming_last_transition_s = float("nan")
+        # And the SIZE of what the latch censored, in atoms rather than in
+        # steps. A step count cannot say what share of the run's recycle
+        # stream never became a jet, because steps carry wildly different
+        # recycle counts: the censored steps are the low-current ones, which
+        # is exactly why the share is small and exactly why quoting it needs
+        # the counts. Both are the COUNTED cathode-face recycle the DVM arm
+        # booked -- the stream the jet splits -- summed over the accepted
+        # steps the latch let through and over those it censored, so
+        # censored / (launched + censored) is the share and it is readable
+        # from the artifact instead of asserted.
+        self._jet_arming_launched_atoms = 0.0
+        self._jet_arming_censored_atoms = 0.0
 
     def _init_atomic_package_refusals(self):
         """Refuse atomic-package combinations that would double-book photons."""
@@ -4978,6 +5036,11 @@ class LAPDSim1D:
             s_L=self._dvm_end_sticking("S_pump_L"),
             s_R=self._dvm_end_sticking("S_pump_R"),
         )
+        # Re-seed the per-save ledger accumulator now that the engine exists.
+        # One of its rows is presence-gated on the engine's own transport
+        # closure, which cannot be read before this line; the accumulator
+        # built at construction saw no engine and so left that row out.
+        self._dvm_particle_accum = self._zero_dvm_particle_accum()
 
     def _resolve_dvm_velocity_extent(
         self, cathode_jet, anode_jet, collector_jet
@@ -6810,6 +6873,18 @@ class LAPDSim1D:
                     name: self._dvm_source_booked[name] + row
                     for name, row in source_booking.items()
                 }
+                if self._jet_arming_active:
+                    # The recycle stream the cathode jet splits, in ATOMS,
+                    # sorted by what the latch did with this step. Read off
+                    # the SAME booking the split below draws from and on the
+                    # SAME latch reading, so the two halves partition the
+                    # run's counted cathode recycle exactly. Census only --
+                    # neither number is read back by anything that steps.
+                    _recycled = float(np.sum(source_booking["cathode_face"]))
+                    if self._cathode_jet_censored():
+                        self._jet_arming_censored_atoms += _recycled
+                    else:
+                        self._jet_arming_launched_atoms += _recycled
             jet_energy_booking = getattr(
                 attempt, "cathode_jet_energy_booking", None
             )
@@ -7480,6 +7555,15 @@ class LAPDSim1D:
         "_jet_arming_transitions",
         "_jet_arming_last_transition_s",
     )
+    #: The atom-counted half of that census, carried the same way but NOT in
+    #: the presence check above: a payload that predates it still resumes an
+    #: ARMED latch, because losing a count is a lost measurement while losing
+    #: the latch relocates the channel. Defaulted to their seed on such a
+    #: payload, so the resumed run's share is over its own steps only.
+    _RESTART_JET_ARMING_COUNT_ATTRS = (
+        "_jet_arming_launched_atoms",
+        "_jet_arming_censored_atoms",
+    )
     _RESTART_CIRCUIT_ATTRS = (
         "_circuit_I_loop",
         "_circuit_I_prev",
@@ -7543,7 +7627,10 @@ class LAPDSim1D:
         # rather than joining the strict inventory loop above, so a payload
         # taken before the latch was carried still loads.
         if self._jet_arming_active:
-            for name in self._RESTART_JET_ARMING_ATTRS:
+            for name in (
+                self._RESTART_JET_ARMING_ATTRS
+                + self._RESTART_JET_ARMING_COUNT_ATTRS
+            ):
                 cathode[name] = getattr(self, name)
         circuit = {
             name: getattr(self, name) for name in self._RESTART_CIRCUIT_ATTRS
@@ -7734,6 +7821,11 @@ class LAPDSim1D:
                 self._jet_arming_last_transition_s = float(
                     cathode["_jet_arming_last_transition_s"]
                 )
+                # Defaulted, not required: a payload from before these were
+                # carried resumes an armed latch and simply reports the
+                # censored share over its own steps.
+                for name in self._RESTART_JET_ARMING_COUNT_ATTRS:
+                    setattr(self, name, float(cathode.get(name, 0.0)))
             else:
                 warnings.warn(
                     "restart payload carries no cathode-jet arming latch "
@@ -12105,6 +12197,27 @@ class LAPDSim1D:
                 ),
                 "armed_at_end": bool(self._jet_armed),
             }
+            if self._dvm is not None:
+                # The censored SHARE, in atoms, PRESENCE-GATED on the arm
+                # that counts the recycle stream: a run with no counted
+                # stream to split has no share to report, and absent says
+                # that where a zero would have read as "nothing censored".
+                # A step count cannot stand in for this -- the censored steps
+                # are the low-current ones and carry far less recycle each --
+                # so the claim that the censored share is negligible is
+                # pinned here rather than asserted.
+                launched = float(self._jet_arming_launched_atoms)
+                censored = float(self._jet_arming_censored_atoms)
+                total = launched + censored
+                result.jet_arming.update(
+                    {
+                        "recycle_launched_atoms": launched,
+                        "recycle_censored_atoms": censored,
+                        "recycle_censored_fraction": (
+                            censored / total if total > 0.0 else 0.0
+                        ),
+                    }
+                )
         result.atomic_rate_domain = _atomic_rate_domain(result)
         return result
 
@@ -12742,7 +12855,19 @@ class LAPDSim1D:
                 # ray ran. Presence-gated with the closure.
                 diag[f"{prefix}_beam_plateau_edge_eV"] = np.nan
                 diag[f"{prefix}_beam_plateau_edge_clamped"] = np.nan
-        for prefix in ("source", "end"):
+        # The ``end`` prefix is PRESENCE-GATED on the twin cathode. Only
+        # ``beam_result.result_twin`` ever fills these, and that object is
+        # non-``None`` only under ``TwinCathode`` (the voltage-driven solve
+        # builds it inside ``if config.Twin``; the current-driven and
+        # prescribed solves leave it ``None`` unconditionally). A
+        # single-cathode file therefore carried a full second copy of the
+        # cathode-result block that was all-NaN in every frame of every run
+        # -- a column a reader has to know to ignore. Gating the SEED on the
+        # same flag the WRITE is gated on keeps seed and write inseparable,
+        # so the row structure still cannot move between saves of one run.
+        # Readers must default the whole ``end_*`` block on absence, exactly
+        # as they already defaulted the NaN.
+        for prefix in _cathode_result_prefixes(self._flags):
             diag[f"{prefix}_regime"] = "none"
             for key in _CATHODE_RESULT_KEYS:
                 diag[f"{prefix}_{key}"] = np.nan
@@ -12805,6 +12930,17 @@ class LAPDSim1D:
             current_driven=current_driven,
         )
         if beam_result.result_twin is not None:
+            if "end" not in _cathode_result_prefixes(self._flags):
+                # A twin result on a run whose ``end`` block was never seeded
+                # would ADD 50 datasets partway through a trajectory, which is
+                # exactly the moving row structure the seeding block forbids.
+                # Refused loudly rather than papered over: it means a solve
+                # produced a twin the configuration did not declare.
+                raise ValueError(
+                    "the cathode solve returned a twin result on a run "
+                    "without TwinCathode, so the end_* cathode diagnostics "
+                    "have no seeded block to be written into"
+                )
             diag["has_twin_solution"] = 1.0
             self._copy_cathode_result_diagnostics(
                 diag=diag,
@@ -13660,6 +13796,12 @@ class LAPDSim1D:
         scale = np.where(limited, budget / np.where(limited, drain, 1.0), 1.0)
         applied_M = np.where(apply_mask, scale * desired_M, 0.0)
         applied_Ei = np.where(apply_mask, scale * desired_Ei, 0.0)
+        # The AMOUNT the limiter took off this step, per cell: 0 where the
+        # step was not limited there, ``1 - scale`` where it was. Carried on
+        # the scope so the accept-time record quotes the same number the
+        # application used rather than reconstructing it from the ledger.
+        # Read-only downstream -- nothing below multiplies by it.
+        clamped_fraction = np.where(limited, 1.0 - scale, 0.0)
         self._dvm_step_transfer = SimpleNamespace(
             dt=float(dt),
             apply_mask=apply_mask,
@@ -13672,6 +13814,7 @@ class LAPDSim1D:
             applied_M=applied_M,
             applied_Ei=applied_Ei,
             limited=limited,
+            clamped_fraction=clamped_fraction,
         )
         return self._dvm_step_transfer
 
@@ -13817,11 +13960,93 @@ class LAPDSim1D:
         if np.any(scope.limited):
             dvm.relax_limited_steps += 1
             dvm.relax_cell_steps = dvm.relax_cell_steps + scope.limited
+            self._record_dvm_limited_step(scope)
         # The scope belonged to the step just booked. Dropping it here keeps
         # "outside a step" a single well-defined reading of the coupling term
         # -- the tick's booked transfer -- rather than the last step's
         # application surviving across a neutral tick that already replaced it.
         self._dvm_step_transfer = None
+
+    def _record_dvm_limited_step(self, scope):
+        """Record HOW MUCH the floor relax took off one limited step.
+
+        Called from :meth:`_dvm_book_step_transfer` only, and only on an
+        ACCEPTED step that some cell was limited on, so a rejected attempt
+        leaves no entry. Pure bookkeeping: it reads the scope the step was
+        already applied with and writes nothing back to it, to the state or
+        to the engine.
+
+        The step is placed by the ledger's OWN step index -- ``relax_steps``,
+        the count of steps this ledger has booked, already incremented for
+        this one -- and by ``self._time``, which at this point is the time at
+        the START of the step being booked. The ledger index is not the run's
+        accepted-step number: the two differ by every step taken before the
+        arm engaged.
+
+        The summary max and the running sum cover EVERY limited step; only
+        the per-step entries are capped (see
+        :data:`DVM_LIMITED_STEP_RECORD_CAP`).
+        """
+        fraction = np.asarray(scope.clamped_fraction, dtype=float)
+        peak = float(np.max(fraction))
+        if peak > self._dvm_limited_fraction_max:
+            self._dvm_limited_fraction_max = peak
+        self._dvm_limited_fraction_sum += peak
+        if len(self._dvm_limited_records) < DVM_LIMITED_STEP_RECORD_CAP:
+            self._dvm_limited_records.append(
+                (
+                    float(self._dvm.relax_steps),
+                    float(self._time),
+                    peak,
+                    fraction.copy(),
+                )
+            )
+        else:
+            self._dvm_limited_records_dropped += 1
+
+    def _dvm_limited_step_census(self):
+        """Return the limiter's per-event record as census rows.
+
+        Four aligned rows over the kept limited steps -- ledger step index,
+        step-start time [s], that step's largest clamped fraction, and its
+        per-cell clamped fractions -- plus the scalars a report quotes. Empty
+        rows (shaped ``(0,)`` and ``(0, cells)``) on a run that never
+        limited, so the census carries the same names either way and a reader
+        never has to distinguish "no limiter" from "not recorded".
+
+        The clamped fraction is dimensionless: ``1 - scale``, the share of
+        the step's DESIRED transfer the floor relax withheld in that cell.
+        Its ``max``/``mean`` run over every limited step of the run,
+        including any beyond the record cap.
+        """
+        records = self._dvm_limited_records
+        cells = int(self._geometry.cells)
+        limited_steps = int(self._dvm.relax_limited_steps)
+        return {
+            "limited_step_index": np.asarray(
+                [row[0] for row in records], dtype=float
+            ),
+            "limited_step_time_s": np.asarray(
+                [row[1] for row in records], dtype=float
+            ),
+            "limited_step_clamped_fraction_max": np.asarray(
+                [row[2] for row in records], dtype=float
+            ),
+            "limited_step_clamped_fraction_cells": np.asarray(
+                [row[3] for row in records], dtype=float
+            ).reshape(len(records), cells),
+            "limited_clamped_fraction_max": float(
+                self._dvm_limited_fraction_max
+            ),
+            "limited_clamped_fraction_mean": (
+                self._dvm_limited_fraction_sum / limited_steps
+                if limited_steps
+                else 0.0
+            ),
+            "limited_steps_recorded": int(len(records)),
+            "limited_steps_record_cap": int(DVM_LIMITED_STEP_RECORD_CAP),
+            "limited_steps_dropped": int(self._dvm_limited_records_dropped),
+        }
 
     def dvm_transfer_ledger(self):
         """Return the deferred-transfer ledger's closure, or None when off.
@@ -13879,8 +14104,20 @@ class LAPDSim1D:
 
         Three cumulative counters and the frame time -- enough to place WHEN
         the limiter engaged (difference consecutive frames) without carrying
-        the per-cell arrays at every save. ``limited_cells`` counts cells
-        limited at least once so far, not cells limited at this frame.
+        the CUMULATIVE per-cell arrays at every save. ``limited_cells``
+        counts cells limited at least once so far, not cells limited at this
+        frame.
+
+        Three per-cell rows ARE carried, because nothing else records them
+        and they are not recoverable from the trajectory: the CX/elastic
+        pair's effective drift ``u_n_eff`` [cm/s] and ion-frame temperature
+        ``T_eff_eV`` [eV] -- the two targets the pair relaxes the fluid
+        towards, ``T_eff_eV`` carrying the frictional term by construction
+        because it is the second moment about the ION drift -- and the pair's
+        own ion-energy transfer rate ``Ei_transfer_pair`` [erg/(cm^3 s)],
+        the rate those targets were formed with. All three are the TICK's
+        frozen values, read at the frame, so consecutive frames sample them
+        rather than partitioning anything.
 
         The three ``ion_*`` totals are the particle handshake's running
         domain sums [particles]. They are the per-frame record of the
@@ -13904,33 +14141,83 @@ class LAPDSim1D:
             "ion_removed_total": float(np.sum(dvm.ion_removed_cum)),
             "ion_debt_total": float(np.sum(dvm.ion_debt)),
             "ion_shortfall_updates": float(dvm.ion_shortfall_updates),
+            "T_eff_eV": np.asarray(dvm.T_eff_eV, dtype=float).copy(),
+            "u_n_eff": np.asarray(dvm.u_n_eff, dtype=float).copy(),
+            "Ei_transfer_pair": np.asarray(
+                dvm.Ei_transfer_pair, dtype=float
+            ).copy(),
         }
 
+    def _dvm_flight_cell_row_armed(self):
+        """True where the per-cell annulus-to-column row has a source.
+
+        The bounded-chord flight transport is the only thing that computes
+        it, and it computes it on every one of its ticks. Read off the
+        engine's own ``flights`` object rather than off the selector string,
+        so the row is present exactly where a number exists to put in it.
+        """
+        return self._dvm is not None and self._dvm.flights is not None
+
     def _zero_dvm_particle_accum(self):
-        """Return a fresh zeroed per-save particle-ledger accumulator."""
+        """Return a fresh zeroed per-save particle-ledger accumulator.
+
+        Flow rows only: the counts, the ENERGY the births arrived with, and
+        -- where the flight transport computes it -- the per-cell radial
+        refill. All three are per-tick quantities and therefore additive over
+        the ticks a save frame covers.
+        """
         accum = {name: 0.0 for name in KINETIC_DVM_PARTICLE_FLOW_KEYS}
+        accum.update({name: 0.0 for name in KINETIC_DVM_ENERGY_BIRTH_KEYS})
         accum["ticks"] = 0.0
+        if self._dvm_flight_cell_row_armed():
+            accum[KINETIC_DVM_FLIGHT_CELL_KEY] = np.zeros(
+                self._geometry.cells, dtype=float
+            )
         return accum
 
     def _dvm_accumulate_particle_ledger(self, ledger):
-        """Add one tick's PARTICLE flow rows to the running per-save sums.
+        """Add one tick's flow rows to the running per-save sums.
 
-        Pure reading: every value is a float the engine has already computed
-        and returned, and nothing here is written back to the engine, to the
+        Three kinds of row, all of them per-tick and all of them summed the
+        same way: the particle COUNTS, the ENERGY each birth channel arrived
+        with (from the tick's nested energy ledger), and -- only under the
+        flight transport -- the per-cell atoms the annulus handed the column,
+        which the engine has computed on every flight tick since the closure
+        was built and nothing has ever read.
+
+        Pure reading: every value is one the engine has already computed and
+        returned, and nothing here is written back to the engine, to the
         state vector or to any cache, so a run that accumulates is bit-exact
         against one that does not.
         """
         accum = self._dvm_particle_accum
         for name in KINETIC_DVM_PARTICLE_FLOW_KEYS:
             accum[name] += float(ledger[name])
+        energy = ledger["energy"]
+        for channel, name in zip(
+            KINETIC_DVM_ENERGY_BIRTH_CHANNELS, KINETIC_DVM_ENERGY_BIRTH_KEYS
+        ):
+            accum[name] += float(energy[f"birth_{channel}"])
+        if KINETIC_DVM_FLIGHT_CELL_KEY in accum:
+            # Indexed, not ``.get``-defaulted: the flight transport writes
+            # ``last_flight`` on every tick it takes, so a missing reading on
+            # an armed run is a bug to hear about rather than a zero row.
+            accum[KINETIC_DVM_FLIGHT_CELL_KEY] = (
+                accum[KINETIC_DVM_FLIGHT_CELL_KEY]
+                + np.asarray(
+                    self._dvm.last_flight["annulus_to_column"], dtype=float
+                )
+            )
         accum["ticks"] += 1.0
 
     def _dvm_particle_ledger_sample(self, time):
         """Return this save frame's PARTICLE ledger record, draining the sums.
 
-        The flow rows are ATOMS summed over every neutral tick since the
-        previous save frame, so differencing is not needed and consecutive
-        frames partition the run's births and losses. The two state rows are
+        The flow rows are summed over every neutral tick since the previous
+        save frame, so differencing is not needed and consecutive frames
+        partition the run's births and losses: ATOMS for the counts, ERG for
+        the energy each birth channel arrived with, and atoms PER CELL for
+        the flight transport's radial refill. The two state rows are
         instantaneous ATOMS at the frame -- the domain inventory including the
         lagged end-return buffers, and the ionization the plasma has booked
         that the kinetic state has not yet surrendered -- and are read here
@@ -13957,13 +14244,20 @@ class LAPDSim1D:
         :meth:`_dvm_particle_ledger_sample` recorded at that frame, so a flow
         row sums over frames to the run's own total for that channel and a
         state row is read at the frame.
+
+        Every row is ``(frames,)`` except the presence-gated per-cell one,
+        which is ``(frames, cells)`` and is appended LAST so the row order an
+        unarmed run writes is unchanged by its existence.
         """
+        names = KINETIC_DVM_SAVED_FRAME_KEYS
+        if self._dvm_flight_cell_row_armed():
+            names = names + (KINETIC_DVM_FLIGHT_CELL_KEY,)
         return {
             name: np.asarray(
                 [snapshot["dvm_particle_ledger"][name] for snapshot in saved],
                 dtype=float,
             )
-            for name in KINETIC_DVM_PARTICLE_FRAME_KEYS
+            for name in names
         }
 
     def _dvm_ledger_census(self, saved):
@@ -13988,6 +14282,19 @@ class LAPDSim1D:
         system's particle-conservation residual and is the number a report
         quotes to say the handshake creates nothing.
 
+        The ``limited_*`` block is the limiter's own per-event record: what
+        the counts alone could never say is HOW MUCH was withheld, and these
+        rows carry it -- see :meth:`_dvm_limited_step_census`. It is what the
+        standing DVM report condition reads. A run with limited steps is
+        LOCATED from these rows rather than re-run: the step index and time
+        say when, the per-cell clamped fractions say where and by how much,
+        and the two readings differ in kind. A SOURCE-CELL event while the
+        column is conducting is the alarm -- the drain the limiter held back
+        there is the cathode book's, and a held-back cathode drain is a
+        misbooking until shown otherwise. A FAR-COLUMN event in the afterglow
+        is the electron-ion exchange regime, which is bounded, so the
+        clamped fraction is the whole of what it costs.
+
         One block is PRESENCE-GATED and absent from every run that does not
         arm it: with ``neutral_kinetic_dvm_jet_launch_width`` set, the four
         ``launch_*`` scalars carry the run's own launch-projection totals and
@@ -14004,6 +14311,9 @@ class LAPDSim1D:
             "relax_limited_steps": int(dvm.relax_limited_steps),
             "limited_cells": int(np.count_nonzero(dvm.relax_cell_steps)),
             "relax_cell_steps": dvm.relax_cell_steps.copy(),
+            # The AMOUNT, beside the counts: see
+            # :meth:`_dvm_limited_step_census`.
+            **self._dvm_limited_step_census(),
         }
         for name in ("Ei", "M"):
             debt = np.asarray(getattr(dvm, f"{name}_debt"), dtype=float)
@@ -14068,6 +14378,11 @@ class LAPDSim1D:
             "ion_removed_total",
             "ion_debt_total",
             "ion_shortfall_updates",
+            # The three PER-CELL rows, which stack to (frames, cells) here
+            # rather than to (frames,) -- see :meth:`_dvm_ledger_sample`.
+            "T_eff_eV",
+            "u_n_eff",
+            "Ei_transfer_pair",
         ):
             census[f"sample_{field}"] = np.asarray(
                 [snapshot["dvm_ledger"][field] for snapshot in saved],

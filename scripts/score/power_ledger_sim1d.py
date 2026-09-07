@@ -360,10 +360,60 @@ def channel_table(table, floor_kW):
 
 
 def diagnostic_mean(dg, key, mask):
-    """Window mean of a scalar cathode diagnostic, or nan when absent."""
+    """NaN-aware window mean of a scalar cathode diagnostic.
+
+    ``nan`` when the artifact carries no such row, and when every frame in
+    the window is ``nan`` -- both mean "not measured here" and neither is
+    zero. Otherwise the mean over the FINITE frames only.
+
+    NaN frames are not an anomaly in this export, they are the convention: a
+    frame with no cathode solve carries NaN across the whole block, and a
+    prescribed arm's frames carry NaN in the rows only the calibrated
+    emission model computes. A plain mean therefore returned ``nan`` for a
+    window that straddles a phase boundary or a drive hand-off, which is
+    every window worth reporting on such a run. The count of frames each
+    mean was taken over is in the regime line of the window header.
+    """
     if dg is None or key not in dg:
         return float("nan")
-    return float(np.mean(dg[key][:][mask]))
+    values = np.asarray(dg[key][:][mask], dtype=float)
+    finite = values[np.isfinite(values)]
+    return float(np.mean(finite)) if finite.size else float("nan")
+
+
+def regime_counts(dg, mask):
+    """Return ``(prescribed, floating, total)`` frame counts in the window.
+
+    Read off ``source_regime``, the tag the cathode solve itself returns:
+    ``"prescribed"`` is the measured-drive solve, and every other tag --
+    including ``"none"`` on a frame with no solve -- is counted as floating,
+    i.e. as a frame the model's own circuit set the drive on. A run that
+    hands off part-way carries both, which is exactly what makes a bare
+    window mean of a cathode row ambiguous. ``(0, 0, 0)`` where the artifact
+    has no such row.
+    """
+    if dg is None or "source_regime" not in dg:
+        return 0, 0, 0
+    tags = dg["source_regime"][:][mask]
+    tags = [t.decode() if isinstance(t, bytes) else str(t) for t in tags]
+    prescribed = sum(1 for t in tags if t == "prescribed")
+    return prescribed, len(tags) - prescribed, len(tags)
+
+
+def dvm_flow_power(f, key, i0, i1, dt_s):
+    """Window-mean power [W] of a per-frame DVM ledger FLOW row [erg].
+
+    The rows of ``dvm_particle_ledger`` are per-tick quantities summed over
+    the ticks each save frame covers, so the energy delivered BETWEEN frames
+    ``i0`` and ``i1`` is the sum over frames ``i0 + 1 .. i1`` -- frame
+    ``i0``'s own row covers ticks before the window opened and is excluded.
+    ``nan`` where the artifact carries no such row, which on a moment run is
+    every one of them.
+    """
+    path = f"dvm_particle_ledger/{key}"
+    if path not in f:
+        return float("nan")
+    return float(np.sum(f[path][i0 + 1:i1 + 1])) / ERG_PER_J / dt_s
 
 
 def counter_slope(dg, key, i0, i1, dt_s):
@@ -408,6 +458,10 @@ def report_window(f, label, lo, hi, geom, port_top):
     print(f"  frames {i0}..{i1}  ({int(mask.sum())} saves, "
           f"t {t_ms[i0]:.4f}..{t_ms[i1]:.4f} ms, span {dt_s * 1e3:.4f} ms)")
     print(f"  phases in window: {phases}")
+    n_prescribed, n_floating, n_regime = regime_counts(dg, mask)
+    if n_regime:
+        print(f"  regime frames: {n_prescribed} prescribed / "
+              f"{n_floating} floating (from source_regime)")
     print("=" * 88)
 
     table, channels = integrate_rows(f, i0, i1, geom["vols"])
@@ -464,12 +518,58 @@ def report_window(f, label, lo, hi, geom, port_top):
         for key in sorted(k for k in dg.keys() if k.startswith("source_P_")):
             print(f"{'  ' + key:<44}"
                   f"{diagnostic_mean(dg, key, mask) / 1e3:>16.5f}  kW")
+        if n_prescribed:
+            # WHAT THE RESIDUAL IS on a prescribed frame. Nothing is
+            # re-booked here: the row is what the circuit already computed
+            # and this only says what it measures, because on the
+            # current-driven solve the same row is a closure check that is
+            # ~0 by construction and a reader carries that reading across.
+            #
+            # The prescribed mode books the emitted current as
+            # I_eth* = max(I - I_i, 0) with no returning-electron term, so
+            # the ledger it is checked against is short exactly that term.
+            # ALWAYS: source_P_load_residual = -phi_c *
+            # source_I_cathode_kirchhoff_residual. WHERE THE FLOOR IS
+            # INACTIVE (I > I_i, the operating regime of a real rung) that
+            # is the returning-electron field work and equals
+            # source_P_cathode_e_phi above. Where the measured current sits
+            # BELOW the Bohm ion current the floor binds, the Kirchhoff
+            # residual carries the whole shortfall instead, and the row is
+            # orders larger than the field work -- so the two are printed
+            # together rather than one being called the other.
+            print("  NOTE prescribed frames in this window: "
+                  "source_P_load_residual is the returning-electron field "
+                  "work\n  (= source_P_cathode_e_phi above) wherever the "
+                  "emitted-current floor I_eth* = max(I - I_i, 0) is\n  "
+                  "inactive; in general it is -phi_c * "
+                  "source_I_cathode_kirchhoff_residual, which is how a "
+                  "floored\n  frame shows up. Compare the two rows above "
+                  "before reading it as the field work.")
 
         print("\n--- WARMING COUNTER SLOPES over the window ---")
         for key in sorted(k for k in dg.keys()
                           if k.startswith("warming_E_") and k.endswith("_J")):
             print(f"{'  ' + key:<44}"
                   f"{counter_slope(dg, key, i0, i1, dt_s) / 1e3:>16.5f}  kW")
+
+    print("\n--- KINETIC JET INJECTION over the window ---")
+    if "dvm_particle_ledger" not in f:
+        print("  dvm_particle_ledger ABSENT from this artifact -- a moment "
+              "run launches no kinetic jet")
+    else:
+        # The energy the collector jet put INTO the gas: the atoms it launched
+        # times the launch energy each carried, as the engine booked it at the
+        # birth site. It is not an rhs_terms channel -- the jet is a neutral
+        # birth, not a fluid source row -- so it is invisible in the channel
+        # table above and has to be read from the jet's own ledger.
+        for jet_key, jet_label in (
+            ("energy_birth_collector_jet", "collector jet injected"),
+            ("energy_birth_cathode_jet", "cathode jet injected"),
+            ("energy_birth_anode_jet", "anode jet injected"),
+        ):
+            print(f"{'  ' + jet_label:<44}"
+                  f"{dvm_flow_power(f, jet_key, i0, i1, dt_s) / 1e3:>16.5f}"
+                  "  kW")
 
     print("\n--- STORED ENERGY AND tau_E ---")
     W_J = stored_energy_J(f, i0, i1, Vp)
@@ -569,6 +669,14 @@ def print_header(f, path, geom, drive, afterglow):
           f"{flags.get('neutral_hot_internal_wall')}, "
           f"cathode_neutral_jet={params.get('cathode_neutral_jet')}, "
           f"C_R={params.get('C_R')}")
+    # The kinetic arm's own jet selectors, which the stance line above does
+    # not carry: two arms can share every fluid setting and differ only in
+    # which surfaces launch an energetic recycle stream, and the injection
+    # rows below are meaningless without knowing which ones were armed.
+    print(f"dvm jets : neutral_model={params.get('neutral_model')}, "
+          f"cathode={params.get('neutral_kinetic_dvm_cathode_jet')}, "
+          f"anode={params.get('neutral_kinetic_dvm_anode_jet')}, "
+          f"collector={params.get('neutral_kinetic_dvm_collector_jet')}")
     print(f"grid     : {Vp.size} cells, V_p total {Vp.sum():.6e} cm^3, "
           f"V_m total {Vm.sum():.6e} cm^3, "
           f"V_ann total {np.maximum(Vm - Vp, 0.0).sum():.6e} cm^3")

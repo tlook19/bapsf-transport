@@ -149,9 +149,11 @@ def save_result_hdf5(path, result, params=None, flags=None):
     ledgers the file carries PRESENCE-GATED groups, each written only by a run
     that produced it, so its absence means "never recorded" and never "zero":
     ``dvm_transfer_ledger`` (the DVM arm's deferred-transfer closure),
-    ``dvm_particle_ledger`` (that arm's per-save PARTICLE ledger -- births by
-    channel, losses, pump, end returns and inventory, one dataset per row and
-    the row documentation in the group's own attributes), ``jet_arming``,
+    ``dvm_particle_ledger`` (that arm's per-save ledger -- births by channel,
+    losses, pump, end returns and inventory, the ENERGY each birth channel
+    arrived with, and under the flight transport the per-cell radial refill;
+    one dataset per row and the row documentation in the group's own
+    attributes), ``jet_arming``,
     ``atomic_rate_domain``, ``floor_ledger`` and the diagnostics groups.
     """
     result_params = getattr(result, "params", None)
@@ -633,8 +635,10 @@ def _write_census(group, census):
 def _write_dvm_particle_ledger(group, ledger):
     """Write the DVM particle ledger: one dataset per row, plus its own docs.
 
-    Every row is one value per save frame, in trajectory order, so the group
-    is a rectangle aligned with the file's ``time`` dataset. The three string
+    Every row runs over save frames in trajectory order, so the group is
+    aligned with the file's ``time`` dataset. Rows are one value per frame,
+    with ONE exception: the presence-gated per-cell row (absent unless the
+    flight transport computed it) is ``(frames, cells)``. The three string
     attributes are aligned by index and make the artifact self-describing:
     ``channels`` names the rows in the group's own order, ``channel_units``
     gives each row's unit, and ``channel_meanings`` says what each row counts.

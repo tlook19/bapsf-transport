@@ -1471,9 +1471,17 @@ def _case_variable_area_well_balancedness(
     twin_resolved_flags = dict(srcgrid_off_flags)
     twin_resolved_flags["TwinCathode"] = True
     twin_resolved_flags["cathode_coupling"] = False
-    twin_resolved_geom = LAPDSim1D(
-        srcgrid_off_params, twin_resolved_flags
-    ).get_initial_snapshot().geometry
+    twin_resolved_sim = LAPDSim1D(srcgrid_off_params, twin_resolved_flags)
+    twin_resolved_geom = twin_resolved_sim.get_initial_snapshot().geometry
+    # PRESENCE GATE, armed side. The ``end_*`` cathode-result block exists
+    # exactly where a twin solve can fill it; the single-cathode cases assert
+    # its absence. Both directions, so a gate that silently stopped seeding
+    # the block cannot pass.
+    twin_cathode_diag = twin_resolved_sim._cathode_diagnostic_snapshot()
+    assert "end_regime" in twin_cathode_diag
+    assert "end_phi_c" in twin_cathode_diag
+    assert "end_long_mfp" in twin_cathode_diag
+    assert "end_phi_c_at_cap" in twin_cathode_diag
     assert list(twin_resolved_geom.cell_role[:2]) == ["plenum", "cathode"]
     assert list(twin_resolved_geom.cell_role[-2:]) == ["cathode", "plenum"]
     assert "collector" not in set(twin_resolved_geom.cell_role)
@@ -8209,7 +8217,10 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.allclose(run_result.cathode_diagnostics["beam_cross"], 0.0)
     assert np.all(np.isnan(run_result.cathode_diagnostics["source_phi_c"]))
     assert np.all(run_result.cathode_diagnostics["source_regime"] == "none")
-    assert np.all(run_result.cathode_diagnostics["end_regime"] == "none")
+    # The ``end_*`` cathode-result block is presence-gated on TwinCathode:
+    # ABSENT here, not NaN. Only the twin solve fills it, so on a single
+    # cathode it was a second copy of the block that never carried a number.
+    assert "end_regime" not in run_result.cathode_diagnostics
     saved_term_sum = np.zeros_like(run_result.y)
     for term_name in expected_rhs_terms:
         term_fields = run_result.rhs_terms[term_name]
@@ -9021,14 +9032,18 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     # export; its successors are the closed audit rows.
     assert np.all(np.isfinite(cathode_diag["source_P_plasma_thermal_loss"]))
     assert np.all(np.isfinite(cathode_diag["source_P_into_plasma"]))
-    assert np.all(np.isnan(cathode_diag["end_phi_c"]))
+    # Single cathode: the whole ``end_*`` cathode-result block is ABSENT
+    # (presence-gated on TwinCathode), not present-and-NaN.
+    assert "end_phi_c" not in cathode_diag
+    assert not [k for k in cathode_diag if k.startswith("end_")
+                and not k.startswith("end_beam_")]
     assert np.all(
         np.isin(
             cathode_diag["source_regime"],
             ["classical", "virtual_cathode", "capability_limited"],
         )
     )
-    assert np.all(cathode_diag["end_regime"] == "none")
+    assert "end_regime" not in cathode_diag
     assert cathode_diag["beam_cross"].shape == (4, geom.cells)
     # The static surface temperature is reported as the configured value.
     assert np.allclose(
@@ -13305,8 +13320,10 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
     assert np.all(np.isfinite(np.asarray(kd_lim_bundle.Ei, dtype=float)))
 
     # K2d transfer-ledger census, PERSISTED: the standing DVM report condition
-    # ("quote relax_limited_steps and the outstanding debt; any limited > 0
-    # gets a dedicated look") has to be answerable from the saved artifact,
+    # ("quote relax_limited_steps and the outstanding debt; locate any
+    # limited > 0 in the record -- a conducting-phase source-cell event is
+    # the alarm, an afterglow far-column event is the bounded electron-ion
+    # exchange regime") has to be answerable from the saved artifact,
     # not only from a live solver object. Four statements: the moment path
     # writes no such group at all, a DVM run round-trips its census through
     # save/load, the forced-limiter scenario persists NONZERO counts, and the
@@ -13334,6 +13351,20 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
         kd_cen_sim.advance_one_step(dt=1.0e-9)
     assert kd_cen_sim._dvm_engaged
     kd_cen_cells = kd_cen_sim.geometry.cells
+    # NEVER LIMITED so far: the limiter's per-event rows are PRESENT and
+    # EMPTY, so a reader never has to tell "the limiter never fired" from
+    # "the amount was not recorded".
+    assert kd_cen_sim._dvm.relax_limited_steps == 0
+    kd_cen_empty = kd_cen_sim._dvm_limited_step_census()
+    assert kd_cen_empty["limited_step_index"].shape == (0,)
+    assert kd_cen_empty["limited_step_time_s"].shape == (0,)
+    assert kd_cen_empty["limited_step_clamped_fraction_max"].shape == (0,)
+    assert kd_cen_empty["limited_step_clamped_fraction_cells"].shape == (
+        0, kd_cen_cells
+    )
+    assert kd_cen_empty["limited_clamped_fraction_max"] == 0.0
+    assert kd_cen_empty["limited_clamped_fraction_mean"] == 0.0
+    assert kd_cen_empty["limited_steps_dropped"] == 0
     kd_cen_sim._dvm.Ei_transfer = np.full(kd_cen_cells, -1.0e12)
     kd_cen_sim._dvm.M_transfer = np.full(kd_cen_cells, -1.0e3)
     kd_cen_result = kd_cen_sim.run(
@@ -13343,6 +13374,42 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
     assert kd_cen["engaged"] == 1
     assert kd_cen["relax_limited_steps"] > 0
     assert kd_cen["limited_cells"] > 0
+    # THE AMOUNT, beside the count. One entry per limited step: where in the
+    # ledger it fell, when, the largest share of the desired transfer any
+    # cell had withheld, and the per-cell profile of that share.
+    assert kd_cen["limited_steps_dropped"] == 0
+    assert (
+        kd_cen["limited_steps_recorded"] == kd_cen["relax_limited_steps"]
+    )
+    assert (
+        kd_cen["limited_steps_recorded"] < kd_cen["limited_steps_record_cap"]
+    )
+    kd_cen_frac = kd_cen["limited_step_clamped_fraction_cells"]
+    assert kd_cen_frac.shape == (kd_cen["limited_steps_recorded"], kd_cen_cells)
+    assert np.all(kd_cen_frac >= 0.0)
+    assert np.all(kd_cen_frac <= 1.0)
+    kd_cen_peak = kd_cen["limited_step_clamped_fraction_max"]
+    assert np.array_equal(kd_cen_peak, kd_cen_frac.max(axis=1))
+    assert np.all(kd_cen_peak > 0.0)
+    # The cells the entry names are exactly the cells the limiter bound in,
+    # so a look can go straight to them.
+    assert np.all(kd_cen_frac.max(axis=0) > 0.0) == np.all(
+        kd_cen["relax_cell_steps"] > 0.0
+    )
+    # Placed in the ledger and on the clock, both monotone.
+    assert np.all(np.diff(kd_cen["limited_step_index"]) > 0.0)
+    assert np.all(np.diff(kd_cen["limited_step_time_s"]) >= 0.0)
+    # The quotable summary, over EVERY limited step.
+    assert kd_cen["limited_clamped_fraction_max"] == float(np.max(kd_cen_peak))
+    # The running sum accumulates in step order; ``np.mean`` sums pairwise,
+    # so the two agree to rounding rather than to the bit.
+    assert np.isclose(
+        kd_cen["limited_clamped_fraction_mean"],
+        float(np.mean(kd_cen_peak)),
+        rtol=1.0e-12,
+        atol=0.0,
+    )
+    assert 0.0 < kd_cen["limited_clamped_fraction_mean"] <= 1.0
 
     with tempfile.TemporaryDirectory() as kd_cen_dir:
         kd_cen_mom_path = Path(kd_cen_dir) / "dvm_census_moment.h5"
@@ -13422,6 +13489,23 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
             <= kd_cen["relax_limited_steps"]
         )
         assert kd_cen_back["sample_relax_limited_steps"][-1] > 0.0
+        # The CX/elastic pair's two targets and the rate they were formed
+        # with, per cell at every frame: nothing else records them and the
+        # trajectory cannot recover them. Read AT the frame, so the last one
+        # is the live solver's own array.
+        for kd_cen_pc, kd_cen_live in (
+            ("T_eff_eV", kd_cen_sim._dvm.T_eff_eV),
+            ("u_n_eff", kd_cen_sim._dvm.u_n_eff),
+            ("Ei_transfer_pair", kd_cen_sim._dvm.Ei_transfer_pair),
+        ):
+            kd_cen_rows = kd_cen_back[f"sample_{kd_cen_pc}"]
+            assert kd_cen_rows.shape == (kd_cen_frames, kd_cen_cells), kd_cen_pc
+            assert np.all(np.isfinite(kd_cen_rows)), kd_cen_pc
+            assert np.array_equal(kd_cen_rows[-1], kd_cen_live), kd_cen_pc
+        # A temperature is non-negative by construction (a second moment
+        # about the ion drift); the pair rate is signed.
+        assert np.all(kd_cen_back["sample_T_eff_eV"] >= 0.0)
+        assert np.any(kd_cen_back["sample_T_eff_eV"] > 0.0)
         # Surfaced, and the arm's presence is readable from the file.
         kd_cen_summary = summarize_result(kd_cen_loaded)
         assert kd_cen_summary.dvm_arm_configured is True
@@ -22953,19 +23037,16 @@ def _case_cathode_closed_audit_export():
         ce_loaded = load_result_hdf5(ce_path)
         ce_dg = ce_loaded.cathode_diagnostics
 
-        # (a) PRESENT AND FINITE. Both ends carry the datasets; the solved
-        # end carries numbers. The unsolved twin end is NaN by the same
-        # discipline every other cathode row uses, so only `source_` is
-        # asserted finite.
+        # (a) PRESENT AND FINITE. This run has one cathode, so it carries
+        # the `source_` datasets and NONE of the `end_` ones: the twin block
+        # is presence-gated on TwinCathode, and on a single cathode it would
+        # have been NaN in every frame. Absence, not NaN, is the statement.
         for ce_key in ce_closed:
-            for ce_prefix in ("source", "end"):
-                assert f"{ce_prefix}_{ce_key}" in ce_dg, ce_key
+            assert f"source_{ce_key}" in ce_dg, ce_key
+            assert f"end_{ce_key}" not in ce_dg, ce_key
             ce_vals = np.asarray(ce_dg[f"source_{ce_key}"], dtype=float)
             assert ce_vals.shape == ce_loaded.time.shape, ce_key
             assert np.all(np.isfinite(ce_vals)), ce_key
-            assert np.all(
-                np.isnan(np.asarray(ce_dg[f"end_{ce_key}"], dtype=float))
-            ), ce_key
 
         # (b) THE RESIDUALS ARE THE CLOSURE NUMBERS. Row-relative against the
         # row each one is a residual OF, and both rows are asserted physical
@@ -24200,8 +24281,11 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
     # tick lands in exactly one frame), and the group round-trips through the
     # file carrying its own documentation.
     from cablp.solvers._sim1d.physics.kinetic_dvm import (
+        LEDGER_ENERGY_BIRTH_CHANNELS as _PL_E_BIRTH_CHANNELS,
+        LEDGER_ENERGY_BIRTH_KEYS as _PL_E_BIRTH_KEYS,
+        LEDGER_FLIGHT_CELL_KEY as _PL_FLIGHT_KEY,
         LEDGER_PARTICLE_FLOW_KEYS as _PL_FLOW_KEYS,
-        LEDGER_PARTICLE_FRAME_KEYS as _PL_FRAME_KEYS,
+        LEDGER_SAVED_FRAME_KEYS as _PL_FRAME_KEYS,
         LEDGER_PARTICLE_ROW_DOC as _PL_ROW_DOC,
     )
     from cablp.solvers._sim1d.results.io import (
@@ -24256,9 +24340,13 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
     pl_result = pl_sim.run(t_end=pl_sim.time + 4.0e-8, dt=1.0e-9)
     pl = pl_result.dvm_particle_ledger
 
-    # Every declared row, and nothing else.
+    # Every declared row, and nothing else. This arm runs the default
+    # ``rates`` annulus closure, which computes no flight landings, so the
+    # per-cell row is ABSENT here -- the armed direction is below.
     assert set(pl) == set(_PL_FRAME_KEYS)
-    assert set(_PL_ROW_DOC) == set(_PL_FRAME_KEYS)
+    assert set(_PL_ROW_DOC) == set(_PL_FRAME_KEYS) | {_PL_FLIGHT_KEY}
+    assert _PL_FLIGHT_KEY not in pl
+    assert set(_PL_E_BIRTH_KEYS) <= set(_PL_FRAME_KEYS)
     pl_saves = len(pl_result.time)
     assert pl_saves > 1
     for pl_name in _PL_FRAME_KEYS:
@@ -24286,6 +24374,28 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
     # The state rows are read AT the frame, not summed over it.
     assert pl["inventory"][-1] == pl_sim._dvm.total_inventory()
     assert pl["inventory"][-1] > 0.0
+    # THE ENERGY THE BIRTHS ARRIVED WITH, beside the counts. Two channels
+    # are a counted number times a FIXED spectrum's mean, so the energy row
+    # has to be that product -- which is the check that these are the
+    # engine's own ledger rows and not a re-derivation. Sums over ticks in
+    # the two orders agree to rounding, not to the bit.
+    for pl_e_name, pl_e_count, pl_e_mean in (
+        ("energy_birth_mesh_reemit", "birth_mesh_reemit",
+         pl_sim._dvm.E_wall_mean),
+        ("energy_birth_puff", "birth_puff", pl_sim._dvm.E_cold_mean),
+    ):
+        assert np.allclose(
+            pl[pl_e_name], pl_e_mean * pl[pl_e_count],
+            rtol=1.0e-12, atol=0.0,
+        ), pl_e_name
+    # An arriving stream carries energy exactly where it carries atoms.
+    for pl_e_channel in _PL_E_BIRTH_CHANNELS:
+        pl_e_row = pl[f"energy_birth_{pl_e_channel}"]
+        assert np.all(pl_e_row >= 0.0), pl_e_channel
+        assert np.all(
+            (pl_e_row > 0.0) <= (pl[f"birth_{pl_e_channel}"] > 0.0)
+        ), pl_e_channel
+    assert pl["energy_birth_wall_accommodated"].sum() > 0.0
 
     with tempfile.TemporaryDirectory() as pl_dir:
         pl_mom_path = Path(pl_dir) / "dvm_particle_moment.h5"
@@ -24322,6 +24432,9 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
             assert all(
                 pl_units[pl_name] == "atoms" for pl_name in _PL_FLOW_KEYS
             )
+            assert all(
+                pl_units[pl_name] == "erg" for pl_name in _PL_E_BIRTH_KEYS
+            )
             assert pl_units["time"] == "s"
             assert pl_units["ticks"] == "ticks"
 
@@ -24329,6 +24442,126 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
         assert set(pl_back) == set(pl)
         for pl_name, pl_row in pl.items():
             assert np.array_equal(pl_back[pl_name], pl_row), pl_name
+
+    # PRESENCE GATE, armed side: the bounded-chord flight transport is the
+    # only closure that lands annulus atoms in the column cell by cell, and
+    # it is the only one that carries the per-cell row. Same build otherwise.
+    pl_fl_params = dict(pl_params)
+    pl_fl_params["neutral_kinetic_dvm_annulus_flights"] = "bounded_chord"
+    pl_fl_sim = LAPDSim1D(pl_fl_params, dict(pl_flags))
+    assert pl_fl_sim._dvm.flights is not None
+    for _ in range(8):
+        pl_fl_sim.advance_one_step(dt=1.0e-9)
+    assert pl_fl_sim._dvm_engaged
+    pl_fl_result = pl_fl_sim.run(t_end=pl_fl_sim.time + 4.0e-8, dt=1.0e-9)
+    pl_fl = pl_fl_result.dvm_particle_ledger
+    assert set(pl_fl) == set(_PL_FRAME_KEYS) | {_PL_FLIGHT_KEY}
+    pl_fl_row = pl_fl[_PL_FLIGHT_KEY]
+    assert pl_fl_row.shape == (
+        len(pl_fl_result.time), pl_fl_sim.geometry.cells
+    )
+    assert np.all(np.isfinite(pl_fl_row))
+    assert np.all(pl_fl_row >= 0.0)
+    assert pl_fl_row.sum() > 0.0
+    with tempfile.TemporaryDirectory() as pl_fl_dir:
+        pl_fl_path = Path(pl_fl_dir) / "dvm_particle_flight.h5"
+        _save_result_hdf5_pl(
+            pl_fl_path, pl_fl_result, params=pl_fl_params, flags=pl_flags
+        )
+        with h5py.File(pl_fl_path, "r") as pl_fl_h5:
+            pl_fl_group = pl_fl_h5["dvm_particle_ledger"]
+            # Appended LAST, so the row order an unarmed run writes is a
+            # prefix of this one.
+            assert tuple(pl_fl_group.attrs["channels"]) == (
+                tuple(_PL_FRAME_KEYS) + (_PL_FLIGHT_KEY,)
+            )
+            assert pl_fl_group[_PL_FLIGHT_KEY].shape == pl_fl_row.shape
+        assert np.array_equal(
+            load_result_hdf5(pl_fl_path).dvm_particle_ledger[_PL_FLIGHT_KEY],
+            pl_fl_row,
+        )
+
+    # The ARMING criterion's censored share, in ATOMS. A step COUNT cannot
+    # stand in for it -- the censored steps are the low-current ones and
+    # carry far less recycle each -- so the split is counted off the same
+    # booking the jet is split from, on the same latch reading. The jet needs
+    # a cathode solve for its launch energy, so this rides its own minimal
+    # armed build rather than the coupling-free one above.
+    pl_ja_params, pl_ja_flags = default_config()
+    pl_ja_flags["neutral_two_zone"] = True
+    for pl_ja_space, pl_ja_key, pl_ja_value, _pl_ja_why in (
+        KINETIC_DVM_INCOMPATIBLE_DEFAULTS
+    ):
+        (pl_ja_flags if pl_ja_space == "flags" else pl_ja_params)[
+            pl_ja_key
+        ] = pl_ja_value
+    pl_ja_flags["neutral_equilibration"] = False
+    pl_ja_flags["neutral_prebreakdown"] = False
+    pl_ja_params.update({
+        "neutral_model": "kinetic_dvm",
+        # Smoke-scale clock, and a velocity grid PINNED wide enough to carry
+        # the launch band this jet's coefficients can produce -- the shipped
+        # nvz/nvp are kept, because narrowing them narrows the grid-tied
+        # launch smear and the band's low end stops projecting.
+        "neutral_kinetic_dvm_cadence_s": 2.0e-9,
+        "neutral_kinetic_dvm_vmax_cm_s": 3.0e7,
+        "neutral_kinetic_dvm_cathode_jet": True,
+        "neutral_jet_disarm_current_A": 0.0,
+    })
+    # Two runs that differ ONLY in the arm threshold: one that can never arm
+    # and one that arms at once.
+    pl_ja_split = {}
+    for pl_ja_name, pl_ja_arm in (("censored", 1.0e30), ("launched", 1.0e-30)):
+        pl_ja_sim = LAPDSim1D(
+            dict(pl_ja_params, neutral_jet_arm_current_A=pl_ja_arm),
+            dict(pl_ja_flags),
+        )
+        assert pl_ja_sim._jet_arming_active
+        pl_ja_split[pl_ja_name] = pl_ja_sim.run(
+            t_end=2.0e-8, dt=1.0e-9
+        ).jet_arming
+    for pl_ja_name, pl_ja in pl_ja_split.items():
+        pl_ja_total = (
+            pl_ja["recycle_launched_atoms"] + pl_ja["recycle_censored_atoms"]
+        )
+        # NON-VACUOUS: there was a recycle stream to split in the first place.
+        assert pl_ja_total > 0.0, pl_ja_name
+        assert np.isclose(
+            pl_ja["recycle_censored_fraction"],
+            pl_ja["recycle_censored_atoms"] / pl_ja_total,
+            rtol=1.0e-12, atol=0.0,
+        ), pl_ja_name
+    # The share follows the LATCH, not the step count: an unreachable arm
+    # threshold censors the whole stream, an immediate one censors none of
+    # it -- and both runs book the SAME recycle, which is what makes the two
+    # halves a partition of one quantity rather than two measurements.
+    assert pl_ja_split["censored"]["recycle_launched_atoms"] == 0.0
+    assert pl_ja_split["censored"]["recycle_censored_fraction"] == 1.0
+    assert pl_ja_split["launched"]["recycle_censored_atoms"] == 0.0
+    assert pl_ja_split["launched"]["recycle_censored_fraction"] == 0.0
+    assert np.isclose(
+        pl_ja_split["launched"]["recycle_launched_atoms"],
+        pl_ja_split["censored"]["recycle_censored_atoms"],
+        rtol=1.0e-9, atol=0.0,
+    )
+    # And the step count is NOT the share: the immediate-arm run censors a
+    # step that carried no recycle at all, which is exactly the substitution
+    # the atom counts exist to refuse.
+    assert pl_ja_split["launched"]["censored_steps"] > 0
+    # PRESENCE GATE: no counted recycle stream, no share to report. A moment
+    # run with the same criterion carries the latch census and none of the
+    # three atom rows, so absence says "nothing counted this" rather than a
+    # zero saying "nothing was censored".
+    pl_ja_mom_params = dict(pl_ja_params)
+    pl_ja_mom_params["neutral_model"] = "moment"
+    pl_ja_mom_params["neutral_jet_arm_current_A"] = 1.0e30
+    pl_ja_mom_params["neutral_kinetic_dvm_cathode_jet"] = False
+    pl_ja_mom = LAPDSim1D(pl_ja_mom_params, dict(pl_ja_flags)).run(
+        t_end=1.0e-8, dt=1.0e-9
+    ).jet_arming
+    assert "censored_steps" in pl_ja_mom
+    assert "recycle_censored_fraction" not in pl_ja_mom
+    assert "recycle_launched_atoms" not in pl_ja_mom
 
 
 # --------------------------------------------------------------------
