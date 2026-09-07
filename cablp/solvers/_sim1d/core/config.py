@@ -4435,14 +4435,21 @@ input_flags_template_1d = {
     # A non-finite phi_a belongs to neither regime and raises RuntimeError.
     # Must be a real bool. Bit-exact when off.
     "anode_sheath_full_debit": False,
-    # End-face sheath electron-energy booking, default OFF. The anode flag
-    # above applied to the machine's two AXIAL ends, where the same
-    # thermal-only routing leaves the same energy unbooked. Armed, four
-    # electron-energy-only RHS rows are added ([erg cm^-3 s^-1] on the plasma
-    # cell volume, positive = into the electron store); unarmed, none of them
-    # exists and the term structure is what it was before the closure.
+    # END-FACE SHEATH ELECTRON-ENERGY BOOKING -- TWO INDEPENDENT default-OFF
+    # keys, one per axial end. The anode flag above applied to the machine's
+    # two AXIAL ends, where the same thermal-only routing leaves the same
+    # energy unbooked. The two ends are separate faces carrying separate
+    # fluxes in separate regimes -- the collector row is live in every phase,
+    # the cathode fall row is identically zero until a virtual cathode forms
+    # -- and nothing couples them except the column, so each end is armed on
+    # its own: either key, both, or neither. Every row either key adds is
+    # ELECTRON ENERGY ONLY ([erg cm^-3 s^-1] on the plasma cell volume,
+    # positive = into the electron store) and is PRESENCE-GATED on its own
+    # key: unarmed, that key's rows do not exist at all and the saved term
+    # structure is what it was before the closure.
     #
-    # COLLECTOR -- ``collector_e_sheath_climb``, negative. The collector is a
+    # COLLECTOR -- ``collector_sheath_full_debit`` arms ONE row,
+    # ``collector_e_sheath_climb``, negative. The collector is a
     # floating exhaust with no circuit branch, so the fall its collected
     # electrons climb comes out of the plasma electron store and is handed to
     # the ions, which deposit it on the surface. The row is
@@ -4455,8 +4462,16 @@ input_flags_template_1d = {
     # cannot describe different sheath edges. Neither number is written here;
     # both are read from the code that already owns them.
     #
-    # CATHODE -- three rows at the emitting face, kept apart because they are
-    # three different physical channels with two different signs:
+    # WHAT IT RAISES. Must be a real bool. Arming it refuses at construction
+    # unless the configuration supplies a plasma-absorbing face of the
+    # COLLECTOR role -- the face whose collected electrons are charged the
+    # sheath fall. It does NOT require the cathode circuit solve: this row is
+    # a boundary-operator quantity, computed on the very flux that operator
+    # books, and is honest with or without a circuit. Bit-exact when off.
+    "collector_sheath_full_debit": False,
+    # CATHODE -- ``cathode_face_full_debit`` arms THREE rows at the emitting
+    # face, kept apart because they are three different physical channels
+    # with two different signs:
     #   ``cathode_e_emitted_enthalpy``  +2 k_B T_s Gamma_em, positive. The
     #       enthalpy the released electrons carry in, off a half-Maxwellian at
     #       the emitter surface temperature. Gamma_em = I_eth_star/e is the
@@ -4478,11 +4493,11 @@ input_flags_template_1d = {
     # WHAT IT RAISES. Must be a real bool. Arming it refuses at construction
     # unless the configuration supplies the cathode circuit solve
     # (``cathode_coupling``, the source of I_eth_star, I_e_ret and the sheath
-    # potentials) and a plasma-absorbing face of each role, collector and
-    # cathode -- the refusal names whichever is missing. A non-finite current
+    # potentials) and a cathode-adjacent plasma cell for the three rows to
+    # land on -- the refusal names whichever is missing. A non-finite current
     # or potential from the solve raises RuntimeError rather than planting a
     # NaN in an energy row. Bit-exact when off.
-    "end_sheath_full_debit": False,
+    "cathode_face_full_debit": False,
     # The electron drift-transport and EMF-work operator, default OFF. The
     # electron energy equation books its pressure work with the ION velocity,
     # which is exact where J = 0 but not in the current-carrying source region:
@@ -4658,14 +4673,32 @@ RETIRED_PARAM_KEYS = {
 }
 
 
+#: The same register for ``input_flags``. Separate because the two namespaces
+#: are separate: a retired flag name resurfacing in ``params`` is a misfiled
+#: key, not a retired one, and must keep reading as the plain unknown key it
+#: is.
+RETIRED_FLAG_KEYS = {
+    "end_sheath_full_debit": (
+        "collector_sheath_full_debit and cathode_face_full_debit, the two "
+        "independent end-face keys it was split into -- the first arms the "
+        "collector's sheath-climb row, the second the emitting cathode "
+        "face's three rows, and a configuration that armed the merged key "
+        "arms BOTH"
+    ),
+}
+
+
 def resolve_config(params=None, flags=None, models=None):
     """Resolve caller overrides against the one authoritative default registry.
 
     Unknown keys fail at this boundary so misspelled or retired campaign
     controls cannot survive as silent metadata-only settings. A key listed in
-    :data:`RETIRED_PARAM_KEYS` is refused with its successor named, so a
-    configuration file written before the removal reports where its value
-    should go rather than only that the key is gone.
+    :data:`RETIRED_PARAM_KEYS` or :data:`RETIRED_FLAG_KEYS` is refused with
+    its successor named, so a configuration file written before the removal
+    reports where its value should go rather than only that the key is gone.
+    The refusal fires on ANY use of a retired name, its old default included:
+    the key owns no read any more, so stating it would be exactly the silent,
+    inert control this boundary exists to forbid.
 
     ``models`` carries DECLARATION BLOCKS -- ``{family: {member: value}}`` --
     which are projected onto the two flat namespaces before the merge, so
@@ -4699,6 +4732,10 @@ def resolve_config(params=None, flags=None, models=None):
             f"{key} is RETIRED; use {successor}"
             for key, successor in sorted(RETIRED_PARAM_KEYS.items())
             if key in unknown_params
+        ] + [
+            f"{key} is RETIRED; use {successor}"
+            for key, successor in sorted(RETIRED_FLAG_KEYS.items())
+            if key in unknown_flags
         ]
         if retired:
             message = f"{message}. {'. '.join(retired)}"

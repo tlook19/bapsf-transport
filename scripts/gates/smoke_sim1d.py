@@ -160,7 +160,12 @@ from cablp.solvers._sim1d.core.validation import (
 )
 from cablp.plasma.params import LN_LAMBDA_MIN, c_log, time_elec_coll
 from cablp.constants import He_e_mass_ratio
-from cablp.solvers._sim1d.solver import END_SHEATH_DEBIT_ROWS, _timestep_limiters
+from cablp.solvers._sim1d.solver import (
+    END_SHEATH_CATHODE_ROWS,
+    END_SHEATH_COLLECTOR_ROWS,
+    END_SHEATH_DEBIT_ROWS,
+    _timestep_limiters,
+)
 from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
 from cablp.solvers._sim1d.core.integrator import ssprk2_step
 from cablp.solvers._sim1d.core.geometry import (
@@ -26165,24 +26170,27 @@ def _case_tail_handoff_surface_continuity():
 
 
 # --------------------------------------------------------------------
-# end-sheath-full-debit
+# end-face-full-debit-split
 # --------------------------------------------------------------------
-@_case("end-sheath-full-debit", historical_stance=True)
-def _case_end_sheath_full_debit():
-    # The END-FACE SHEATH CLOSURE: four electron-energy rows at the two axial
-    # ends, default off. Four things have to hold and each is checked here.
+@_case("end-face-full-debit-split", historical_stance=True)
+def _case_end_face_full_debit_split():
+    # THE TWO END-FACE KEYS, each default off and each arming ITS OWN rows.
+    # `collector_sheath_full_debit` books the collector's sheath-climb row;
+    # `cathode_face_full_debit` books the emitting face's three. They are
+    # independent: either, both or neither.
     _es_params, _es_flags = _base_config()
     _es_flags = dict(_es_flags)
     _es_flags["cathode_coupling"] = True
 
-    # (i) OFF IS THE UNARMED RUN, structurally and bit for bit. Stating the
+    # (i) OFF IS THE UNARMED RUN, structurally and bit for bit. Stating either
     # flag False must not add a row, must not move the packed RHS, and must
-    # leave the term set exactly what a construction that never named the flag
+    # leave the term set exactly what a construction that never named them
     # produces -- the rows are ABSENT, which is a different statement from
     # present-and-zero and is what keeps an unarmed saved ledger unchanged.
     _es_unnamed = LAPDSim1D(dict(_es_params), dict(_es_flags))
     _es_off_flags = dict(_es_flags)
-    _es_off_flags["end_sheath_full_debit"] = False
+    _es_off_flags["collector_sheath_full_debit"] = False
+    _es_off_flags["cathode_face_full_debit"] = False
     _es_off = LAPDSim1D(dict(_es_params), _es_off_flags)
     _es_unnamed_terms = _es_unnamed.rhs_terms()
     _es_off_terms = _es_off.rhs_terms()
@@ -26190,14 +26198,48 @@ def _case_end_sheath_full_debit():
     assert not (set(_es_off_terms) & set(END_SHEATH_DEBIT_ROWS))
     assert _es_off.rhs().tobytes() == _es_unnamed.rhs().tobytes()
 
-    # (ii) ARMED, the four rows exist, are ELECTRON ENERGY ONLY, and land on
-    # the faces they name.
-    _es_on_flags = dict(_es_flags)
-    _es_on_flags["end_sheath_full_debit"] = True
-    _es_on = LAPDSim1D(dict(_es_params), _es_on_flags)
-    _es_on_terms = _es_on.rhs_terms()
-    assert set(_es_on_terms) == set(_es_off_terms) | set(END_SHEATH_DEBIT_ROWS)
-    _es_geom = _es_on.geometry
+    # (ii) EACH KEY ARMS ITS OWN ROWS AND ONLY THOSE. The three arming
+    # combinations are checked against the same unarmed term set, so a row
+    # leaking across the split shows up as a set difference rather than as a
+    # number nobody looked at.
+    def _es_build(collector, cathode):
+        _flags = dict(_es_flags)
+        _flags["collector_sheath_full_debit"] = collector
+        _flags["cathode_face_full_debit"] = cathode
+        return LAPDSim1D(dict(_es_params), _flags)
+
+    _es_coll_only = _es_build(True, False)
+    _es_cath_only = _es_build(False, True)
+    _es_both = _es_build(True, True)
+    _es_coll_only_terms = _es_coll_only.rhs_terms()
+    _es_cath_only_terms = _es_cath_only.rhs_terms()
+    _es_on_terms = _es_both.rhs_terms()
+    assert set(_es_coll_only_terms) == (
+        set(_es_off_terms) | set(END_SHEATH_COLLECTOR_ROWS)
+    ), sorted(set(_es_coll_only_terms) ^ set(_es_off_terms))
+    assert set(_es_cath_only_terms) == (
+        set(_es_off_terms) | set(END_SHEATH_CATHODE_ROWS)
+    ), sorted(set(_es_cath_only_terms) ^ set(_es_off_terms))
+    assert set(_es_on_terms) == set(_es_off_terms) | set(
+        END_SHEATH_DEBIT_ROWS
+    ), sorted(set(_es_on_terms) ^ set(_es_off_terms))
+    # ... and each one-key run's rows are BIT-IDENTICAL to the same rows on
+    # the both-key run: the split changes which rows exist, never what any of
+    # them books.
+    for _es_name in END_SHEATH_COLLECTOR_ROWS:
+        assert (
+            _es_coll_only_terms[_es_name].Ee.tobytes()
+            == _es_on_terms[_es_name].Ee.tobytes()
+        ), _es_name
+    for _es_name in END_SHEATH_CATHODE_ROWS:
+        assert (
+            _es_cath_only_terms[_es_name].Ee.tobytes()
+            == _es_on_terms[_es_name].Ee.tobytes()
+        ), _es_name
+
+    # (iii) ARMED, the four rows are ELECTRON ENERGY ONLY and land on the
+    # faces they name.
+    _es_geom = _es_both.geometry
     _es_roles = np.asarray(_es_geom.cell_role)
     _es_coll = int(np.flatnonzero(_es_roles == "collector")[0])
     _es_cath = int(np.flatnonzero(_es_roles == "cathode")[0])
@@ -26221,7 +26263,7 @@ def _case_end_sheath_full_debit():
         _es_support = set(np.flatnonzero(_es_row).tolist())
         assert _es_support <= {_es_cell[_es_name]}, (_es_name, _es_support)
 
-    # (iii) SIGNS, which are the physics and are not free. The collector debit
+    # (iv) SIGNS, which are the physics and are not free. The collector debit
     # comes OUT of the electron store; the emitted electrons' enthalpy and the
     # part of the fall the beam row does not carry go INTO it; the returning
     # electrons' barrier climb comes out. All four are nonzero on this stance
@@ -26232,27 +26274,27 @@ def _case_end_sheath_full_debit():
     assert _es_rows["cathode_e_emitted_fall"][_es_cath] > 0.0
     assert _es_rows["cathode_e_collected_climb"][_es_cath] < 0.0
 
-    # (iv) THE CLOSED FORMS, against the solve and the boundary flux this very
+    # (v) THE CLOSED FORMS, against the solve and the boundary flux this very
     # evaluation used. The collector face must debit the sheath-edge
     # (2 + Lambda_eff) Te per collected electron once the new row is added to
     # the 2 Te that characteristic_boundary always books, with Lambda_eff read
     # off the SAME alpha the boundary sampled its flux at.
-    _es_state = _es_on.state
+    _es_state = _es_both.state
     _es_derived = derive_state(
-        _es_state, floors=_es_on.floors, ion_mass_g=_es_on.ion_mass_g
+        _es_state, floors=_es_both.floors, ion_mass_g=_es_both.ion_mass_g
     )
     _es_alpha = electrode_sheath_alpha(
         nn=float(_es_state.nn[_es_coll]),
         Te=float(_es_derived.Te[_es_coll]),
         Ti=float(_es_derived.Ti[_es_coll]),
         cell_length_cm=float(_es_geom.length_cm[_es_coll]),
-        mu=_es_on.mu,
-        ion_mass_g=_es_on.ion_mass_g,
+        mu=_es_both.mu,
+        ion_mass_g=_es_both.ion_mass_g,
         alpha_isat=float(_es_params["alpha_isat"]),
         b_presheath_length=float(_es_params["b_presheath_length"]),
         gas_type=_es_params.get("gas_type"),
     )
-    _es_lambda_eff = sheath_lift_lambda(_es_on.mu) - math.log(_es_alpha)
+    _es_lambda_eff = sheath_lift_lambda(_es_both.mu) - math.log(_es_alpha)
     _es_gamma = float(_es_on_terms["characteristic_boundary"].n[_es_coll])
     _es_booked = (
         float(_es_on_terms["characteristic_boundary"].Ee[_es_coll])
@@ -26269,7 +26311,7 @@ def _case_end_sheath_full_debit():
     )
     # ... and the three cathode rows are their closed forms in watts, built
     # from the solve's own released and returning currents.
-    _es_result = _es_on._cathode_solve.beam_result.result
+    _es_result = _es_both._cathode_solve.beam_result.result
     _es_Ts = float(_es_params["cathode_Ts_base_K"])
     _es_Vp = float(_es_geom.plasma_volume_cm3[_es_cath])
     _es_phi_plus = float(_es_result.phi_c_plus)
@@ -26294,28 +26336,67 @@ def _case_end_sheath_full_debit():
             _es_booked_W, _es_expect_W, rtol=1e-12, atol=0.0
         ), (_es_name, _es_booked_W, _es_expect_W)
 
-    # (v) MISCONFIGURATION REFUSES AT CONSTRUCTION, naming what is missing.
-    # A non-bool reads like a value and is refused; arming the closure without
-    # the cathode circuit solve leaves three of its four rows with no honest
-    # input, and it says so rather than booking zeros.
-    _es_bad_flags = dict(_es_flags)
-    _es_bad_flags["end_sheath_full_debit"] = 1
-    try:
-        LAPDSim1D(dict(_es_params), _es_bad_flags)
-    except ValueError as _es_exc:
-        assert "must be a bool" in str(_es_exc), _es_exc
-    else:
-        raise AssertionError("end_sheath_full_debit accepted a non-bool")
-    _es_nocath_flags = dict(_es_on_flags)
+    # (vi) MISCONFIGURATION REFUSES AT CONSTRUCTION, naming what is missing --
+    # and each key names ONLY its own input. A non-bool reads like a value and
+    # is refused. The cathode key without the circuit solve leaves its three
+    # rows with no honest input, and it says so rather than booking zeros; the
+    # collector key does NOT require that solve, because its row rides the
+    # boundary operator's own flux, so the same configuration constructs.
+    for _es_key in ("collector_sheath_full_debit", "cathode_face_full_debit"):
+        _es_bad_flags = dict(_es_flags)
+        _es_bad_flags[_es_key] = 1
+        try:
+            LAPDSim1D(dict(_es_params), _es_bad_flags)
+        except ValueError as _es_exc:
+            assert "must be a bool" in str(_es_exc), _es_exc
+            assert _es_key in str(_es_exc), _es_exc
+        else:
+            raise AssertionError(f"{_es_key} accepted a non-bool")
+    _es_nocath_flags = dict(_es_flags)
+    _es_nocath_flags["cathode_face_full_debit"] = True
     _es_nocath_flags["cathode_coupling"] = False
     try:
         LAPDSim1D(dict(_es_params), _es_nocath_flags)
     except ValueError as _es_exc:
+        assert "cathode_face_full_debit cannot arm" in str(_es_exc), _es_exc
         assert "cathode_coupling" in str(_es_exc), _es_exc
     else:
         raise AssertionError(
-            "end_sheath_full_debit armed without the cathode circuit solve"
+            "cathode_face_full_debit armed without the cathode circuit solve"
         )
+    _es_nocirc_flags = dict(_es_flags)
+    _es_nocirc_flags["collector_sheath_full_debit"] = True
+    _es_nocirc_flags["cathode_coupling"] = False
+    LAPDSim1D(dict(_es_params), _es_nocirc_flags)
+
+    # (vii) THE MERGED KEY IS RETIRED and refuses at the configuration
+    # boundary, naming BOTH replacements -- the case a stored file written
+    # before the split hits. Its old default value is refused too: the name
+    # owns no read any more, so stating it at all would be the silent inert
+    # control that boundary exists to forbid.
+    for _es_value in (True, False):
+        _es_retired_flags = dict(_es_flags)
+        _es_retired_flags["end_sheath_full_debit"] = _es_value
+        try:
+            LAPDSim1D(dict(_es_params), _es_retired_flags)
+        except ValueError as _es_exc:
+            assert "unknown LAPDSim1D configuration keys" in str(_es_exc), (
+                _es_exc
+            )
+            assert "end_sheath_full_debit is RETIRED" in str(_es_exc), _es_exc
+            assert "collector_sheath_full_debit" in str(_es_exc), _es_exc
+            assert "cathode_face_full_debit" in str(_es_exc), _es_exc
+        else:
+            raise AssertionError(
+                f"end_sheath_full_debit={_es_value} was accepted"
+            )
+    # ... and it is gone from the templates, so default_config() carries no
+    # dead key that a reader could take for a live control.
+    _es_default_params, _es_default_flags = default_config()
+    assert "end_sheath_full_debit" not in _es_default_flags
+    assert "end_sheath_full_debit" not in _es_default_params
+    assert "collector_sheath_full_debit" in _es_default_flags
+    assert "cathode_face_full_debit" in _es_default_flags
 
 
 # ----------------------------------------------------------------------

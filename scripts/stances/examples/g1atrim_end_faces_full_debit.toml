@@ -1,6 +1,5 @@
-# THE END-FACE SHEATH DEBIT PROBE: the reference configuration with the
-# machine's two axial end faces booking the electron energy their sheaths
-# leave on the plasma.
+# BOTH END FACES: the reference configuration with the machine's two axial end
+# faces booking the electron energy their sheaths leave on the plasma.
 #
 # A DERIVED configuration. It names its base and states what it moves, and
 # nothing else: the measured machine, the operating point, the drive
@@ -22,9 +21,14 @@
 # sheath-edge (2 + Lambda_eff) Te per electron, not 2 Te. At the CATHODE the
 # emitted electrons arrive carrying 2 k_B T_s plus whatever of the fall the
 # beam row does not already distribute, and the returning plasma electrons
-# climbed phi_c_plus to get there -- a heating channel and a cooling one whose
-# net sign is a property of the state rather than a constant. This arm books
-# all four and is the comparator that says what they are worth.
+# climbed phi_c_plus to get there. This arm books all four rows and is the
+# comparator that says what the two ends are worth TOGETHER.
+#
+# READ IT WITH THE ONE-KEY ARMS, NOT INSTEAD OF THEM. The two keys are
+# independent and the faces are uncoupled except through the column, so a
+# column-wide response on this arm is not attributable to either end on its
+# own. `g1atrim_collector_sheath_full_debit.toml` and
+# `g1atrim_cathode_face_full_debit.toml` are the arms that attribute it.
 #
 # WHAT IT DOES NOT CHANGE. No particle, momentum or ion-energy booking moves;
 # the four rows are electron energy only. The beam deposition row is untouched
@@ -37,11 +41,11 @@
 # path directly and needs no copy:
 #
 #     python scripts/run/run_sim1d.py \
-#         --config scripts/stances/examples/g1atrim_end_sheath_full_debit.toml \
-#         --output g1atrim_end_sheath_full_debit.h5
+#         --config scripts/stances/examples/g1atrim_end_faces_full_debit.toml \
+#         --output g1atrim_end_faces_full_debit.h5
 #
 # The saved trajectory records the lineage -- this file's name, "g1atrim" as
-# its base, both files' sha256, the delta key below, and the resolved
+# its base, both files' sha256, the delta keys below, and the resolved
 # configuration's identity -- so the arm is identifiable from its artifact
 # alone. Its `rhs_terms` carries the four rows this file arms, which the
 # reference's does not carry at all; `scripts/score/power_ledger_sim1d.py`
@@ -50,7 +54,10 @@ base = "g1atrim"
 
 
 [input_flags]
-# The selection, and the whole of it. Arming refuses at construction unless
-# the configuration supplies the cathode circuit solve and a plasma-absorbing
-# face of each role, collector and cathode; the reference supplies all three.
-end_sheath_full_debit = true
+# The selection, and the whole of it -- two keys, because the two faces arm
+# independently. Arming refuses at construction unless the configuration
+# supplies a collector-role plasma-absorbing face (the collector key), and the
+# cathode circuit solve plus a cathode-adjacent plasma cell (the cathode key);
+# the reference supplies all three.
+collector_sheath_full_debit = true
+cathode_face_full_debit = true

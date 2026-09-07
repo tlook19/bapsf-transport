@@ -3776,7 +3776,7 @@ END_SHEATH_CATHODE_ROWS = (
 def cathode_emission_sheath_power_W(result, T_s_K):
     """Return the emitting face's three electron-energy powers [W].
 
-    The ``end_sheath_full_debit`` closure's cathode member: what the plasma
+    The ``cathode_face_full_debit`` closure: what the plasma
     ELECTRON store gains and loses at an emitting surface, over and above the
     ``2 Te`` per collected electron ``P_cathode_e_thermal`` already books and
     the net-``phi_c`` beam energy the deposition march already distributes.
@@ -3826,7 +3826,7 @@ def cathode_emission_sheath_power_W(result, T_s_K):
     ):
         if not np.isfinite(value):
             raise RuntimeError(
-                "end_sheath_full_debit: the cathode solve returned a "
+                "cathode_face_full_debit: the cathode solve returned a "
                 f"non-finite {name} ({value!r}); the emitting face's "
                 "electron-energy booking is undefined there"
             )

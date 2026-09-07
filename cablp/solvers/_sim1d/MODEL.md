@@ -708,10 +708,10 @@ is the payer, and the thermal debit stands alone. A non-finite $\phi_a$ belongs
 to neither regime and raises. The collected IONS leave with the enthalpy
 $\tfrac52T_i$, not $\tfrac32T_i$ — the $S_\text{an}$ terms above.
 
-**End-face sheath debit at the cathode.** `end_sheath_full_debit` extends that
-convention to the emitting face and adds what an emitter does that a collector
-does not. Armed, three further electron-energy rows are booked at the cathode
-cell, kept apart because they are three channels with two signs:
+**End-face sheath debit at the cathode.** `cathode_face_full_debit` extends
+that convention to the emitting face and adds what an emitter does that a
+collector does not. Armed, three further electron-energy rows are booked at the
+cathode cell, kept apart because they are three channels with two signs:
 $+2k_BT_s\Gamma_\text{em}$, the enthalpy the released electrons carry in off a
 half-Maxwellian at the surface temperature; $+e(\phi_c^+-\max(\phi_c,0))\Gamma_\text{em}$,
 the remainder of the fall those electrons drop through, which is identically
@@ -777,8 +777,11 @@ surface; at the cathode that term is owned by the circuit.
 cell's annulus, $\partial_tn_{n,a}|_\text{recycle}=\dot N_\text{loss}/V_\text{ann}$,
 as thermal diffuse gas carrying no directed momentum.
 
-**End-face sheath debit at the collector.** `end_sheath_full_debit` completes
-that booking the way `anode_sheath_full_debit` completes the anode's. A
+**End-face sheath debit at the collector.** `collector_sheath_full_debit`
+completes that booking the way `anode_sheath_full_debit` completes the anode's.
+The two end-face keys are INDEPENDENT — different faces, different fluxes,
+different regimes — so either, both or neither may be armed and each refuses at
+construction on its own missing input alone. A
 floating surface draws no net current, so the electrons that reach it climbed a
 barrier $\Lambda_\text{eff}T_e$ — and with no circuit branch behind the
 collector there is nothing but the electron thermal store to supply it: the
@@ -947,10 +950,10 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `recombination_energy_return` | `physics/reactions.py:recombination_energy_return_rhs` |
 | `cathode_surface_loss` | `physics/cathode.py:cathode_source_terms` |
 | `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode part) |
-| `collector_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (`end_sheath_full_debit` only) |
-| `cathode_e_emitted_enthalpy` | `physics/cathode.py:cathode_emission_sheath_power_W` (`end_sheath_full_debit` only) |
-| `cathode_e_emitted_fall` | `physics/cathode.py:cathode_emission_sheath_power_W` (`end_sheath_full_debit` only) |
-| `cathode_e_collected_climb` | `physics/cathode.py:cathode_emission_sheath_power_W` (`end_sheath_full_debit` only) |
+| `collector_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (`collector_sheath_full_debit` only) |
+| `cathode_e_emitted_enthalpy` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
+| `cathode_e_emitted_fall` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
+| `cathode_e_collected_climb` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
 | `anode_collection` | `physics/sources.py:anode_collection_rhs` |
 | `beam_ionization_birth` | `physics/cathode.py:beam_ionization_rhs_terms` |
 | `beam_power_deposition` | `physics/cathode.py:beam_ionization_rhs_terms` (beam banks, smoothing, and the ohmic gap booking) |
