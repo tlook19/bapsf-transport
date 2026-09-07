@@ -607,6 +607,62 @@ LEDGER_ENERGY_BOOKKEEPING = (
     "pending_after_R",
 )
 
+#: The ENERGY ledger's BIRTH rows, carried in the saved particle-ledger group
+#: beside the counts. The saved group answered how MANY atoms each channel
+#: brought in and never how much energy they arrived with, so the influx
+#: identity -- the counts against the energy they carry, cold wall-spectrum
+#: streams against the energetic ones -- could not be closed from an artifact
+#: at all: it had to be assumed from the spectrum each channel is known to
+#: use. These rows close it.
+#:
+#: The FULL birth set is exported, not a hand-cut "cold" subset: which
+#: channels count as cold is a reading, not a declaration this module makes,
+#: and a reader who wants the cold influx alone can subtract the energetic
+#: channels by name. Membership is DERIVED from
+#: :data:`LEDGER_ENERGY_BIRTH_CHANNELS` for the same reason the particle flow
+#: keys are derived from the channel tuples: a birth channel added there is
+#: exported without a second edit. Prefixed ``energy_`` so a row can never be
+#: read as the count of the same channel. Erg per tick, and therefore
+#: additive over ticks exactly as the counts are.
+LEDGER_ENERGY_BIRTH_KEYS = tuple(
+    f"energy_birth_{name}" for name in LEDGER_ENERGY_BIRTH_CHANNELS
+)
+#: PRESENCE-GATED per-cell flow row, emitted only under the bounded-chord
+#: flight transport that computes it: ``TransientDVM.last_flight`` is
+#: ``None`` on every other arm, so the row is ABSENT rather than zero where
+#: nothing measured it. Atoms landing in the COLUMN out of the annulus in
+#: each cell, summed over the frame's ticks -- the radial refill that feeds
+#: the column, computed on every flight tick since the closure was built and
+#: never once consumed. Shaped ``(frames, cells)``, unlike every other row in
+#: the group.
+LEDGER_FLIGHT_CELL_KEY = "annulus_to_column_cells"
+#: Every row the saved group carries on an unarmed run, in its own order: the
+#: particle rows first, so a file's historical row order is a prefix of this
+#: one, then the energy birth rows. The presence-gated per-cell row above is
+#: appended after these where it is armed.
+LEDGER_SAVED_FRAME_KEYS = LEDGER_PARTICLE_FRAME_KEYS + LEDGER_ENERGY_BIRTH_KEYS
+
+# The saved group's row documentation is one table, and the energy rows are
+# declared here rather than beside the counts because the channels they are
+# derived from are declared here. Same derivation, one entry per channel, so
+# a birth channel added above documents itself.
+LEDGER_PARTICLE_ROW_DOC.update(
+    {
+        f"energy_birth_{name}": (
+            "erg",
+            f"kinetic energy the birth_{name} atoms were born carrying, "
+            "summed over this frame's ticks",
+        )
+        for name in LEDGER_ENERGY_BIRTH_CHANNELS
+    }
+)
+LEDGER_PARTICLE_ROW_DOC[LEDGER_FLIGHT_CELL_KEY] = (
+    "atoms",
+    "atoms landing in the column out of the annulus in each cell, summed "
+    "over this frame's ticks; one value PER CELL, unlike every other row "
+    "here, and present only under the bounded-chord flight transport",
+)
+
 
 class TransientDVM:
     """Live transient two-zone velocity-grid neutral state.

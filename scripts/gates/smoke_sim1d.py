@@ -24264,8 +24264,11 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
     # tick lands in exactly one frame), and the group round-trips through the
     # file carrying its own documentation.
     from cablp.solvers._sim1d.physics.kinetic_dvm import (
+        LEDGER_ENERGY_BIRTH_CHANNELS as _PL_E_BIRTH_CHANNELS,
+        LEDGER_ENERGY_BIRTH_KEYS as _PL_E_BIRTH_KEYS,
+        LEDGER_FLIGHT_CELL_KEY as _PL_FLIGHT_KEY,
         LEDGER_PARTICLE_FLOW_KEYS as _PL_FLOW_KEYS,
-        LEDGER_PARTICLE_FRAME_KEYS as _PL_FRAME_KEYS,
+        LEDGER_SAVED_FRAME_KEYS as _PL_FRAME_KEYS,
         LEDGER_PARTICLE_ROW_DOC as _PL_ROW_DOC,
     )
     from cablp.solvers._sim1d.results.io import (
@@ -24320,9 +24323,13 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
     pl_result = pl_sim.run(t_end=pl_sim.time + 4.0e-8, dt=1.0e-9)
     pl = pl_result.dvm_particle_ledger
 
-    # Every declared row, and nothing else.
+    # Every declared row, and nothing else. This arm runs the default
+    # ``rates`` annulus closure, which computes no flight landings, so the
+    # per-cell row is ABSENT here -- the armed direction is below.
     assert set(pl) == set(_PL_FRAME_KEYS)
-    assert set(_PL_ROW_DOC) == set(_PL_FRAME_KEYS)
+    assert set(_PL_ROW_DOC) == set(_PL_FRAME_KEYS) | {_PL_FLIGHT_KEY}
+    assert _PL_FLIGHT_KEY not in pl
+    assert set(_PL_E_BIRTH_KEYS) <= set(_PL_FRAME_KEYS)
     pl_saves = len(pl_result.time)
     assert pl_saves > 1
     for pl_name in _PL_FRAME_KEYS:
@@ -24350,6 +24357,28 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
     # The state rows are read AT the frame, not summed over it.
     assert pl["inventory"][-1] == pl_sim._dvm.total_inventory()
     assert pl["inventory"][-1] > 0.0
+    # THE ENERGY THE BIRTHS ARRIVED WITH, beside the counts. Two channels
+    # are a counted number times a FIXED spectrum's mean, so the energy row
+    # has to be that product -- which is the check that these are the
+    # engine's own ledger rows and not a re-derivation. Sums over ticks in
+    # the two orders agree to rounding, not to the bit.
+    for pl_e_name, pl_e_count, pl_e_mean in (
+        ("energy_birth_mesh_reemit", "birth_mesh_reemit",
+         pl_sim._dvm.E_wall_mean),
+        ("energy_birth_puff", "birth_puff", pl_sim._dvm.E_cold_mean),
+    ):
+        assert np.allclose(
+            pl[pl_e_name], pl_e_mean * pl[pl_e_count],
+            rtol=1.0e-12, atol=0.0,
+        ), pl_e_name
+    # An arriving stream carries energy exactly where it carries atoms.
+    for pl_e_channel in _PL_E_BIRTH_CHANNELS:
+        pl_e_row = pl[f"energy_birth_{pl_e_channel}"]
+        assert np.all(pl_e_row >= 0.0), pl_e_channel
+        assert np.all(
+            (pl_e_row > 0.0) <= (pl[f"birth_{pl_e_channel}"] > 0.0)
+        ), pl_e_channel
+    assert pl["energy_birth_wall_accommodated"].sum() > 0.0
 
     with tempfile.TemporaryDirectory() as pl_dir:
         pl_mom_path = Path(pl_dir) / "dvm_particle_moment.h5"
@@ -24386,6 +24415,9 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
             assert all(
                 pl_units[pl_name] == "atoms" for pl_name in _PL_FLOW_KEYS
             )
+            assert all(
+                pl_units[pl_name] == "erg" for pl_name in _PL_E_BIRTH_KEYS
+            )
             assert pl_units["time"] == "s"
             assert pl_units["ticks"] == "ticks"
 
@@ -24393,6 +24425,44 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
         assert set(pl_back) == set(pl)
         for pl_name, pl_row in pl.items():
             assert np.array_equal(pl_back[pl_name], pl_row), pl_name
+
+    # PRESENCE GATE, armed side: the bounded-chord flight transport is the
+    # only closure that lands annulus atoms in the column cell by cell, and
+    # it is the only one that carries the per-cell row. Same build otherwise.
+    pl_fl_params = dict(pl_params)
+    pl_fl_params["neutral_kinetic_dvm_annulus_flights"] = "bounded_chord"
+    pl_fl_sim = LAPDSim1D(pl_fl_params, dict(pl_flags))
+    assert pl_fl_sim._dvm.flights is not None
+    for _ in range(8):
+        pl_fl_sim.advance_one_step(dt=1.0e-9)
+    assert pl_fl_sim._dvm_engaged
+    pl_fl_result = pl_fl_sim.run(t_end=pl_fl_sim.time + 4.0e-8, dt=1.0e-9)
+    pl_fl = pl_fl_result.dvm_particle_ledger
+    assert set(pl_fl) == set(_PL_FRAME_KEYS) | {_PL_FLIGHT_KEY}
+    pl_fl_row = pl_fl[_PL_FLIGHT_KEY]
+    assert pl_fl_row.shape == (
+        len(pl_fl_result.time), pl_fl_sim.geometry.cells
+    )
+    assert np.all(np.isfinite(pl_fl_row))
+    assert np.all(pl_fl_row >= 0.0)
+    assert pl_fl_row.sum() > 0.0
+    with tempfile.TemporaryDirectory() as pl_fl_dir:
+        pl_fl_path = Path(pl_fl_dir) / "dvm_particle_flight.h5"
+        _save_result_hdf5_pl(
+            pl_fl_path, pl_fl_result, params=pl_fl_params, flags=pl_flags
+        )
+        with h5py.File(pl_fl_path, "r") as pl_fl_h5:
+            pl_fl_group = pl_fl_h5["dvm_particle_ledger"]
+            # Appended LAST, so the row order an unarmed run writes is a
+            # prefix of this one.
+            assert tuple(pl_fl_group.attrs["channels"]) == (
+                tuple(_PL_FRAME_KEYS) + (_PL_FLIGHT_KEY,)
+            )
+            assert pl_fl_group[_PL_FLIGHT_KEY].shape == pl_fl_row.shape
+        assert np.array_equal(
+            load_result_hdf5(pl_fl_path).dvm_particle_ledger[_PL_FLIGHT_KEY],
+            pl_fl_row,
+        )
 
 
 # --------------------------------------------------------------------

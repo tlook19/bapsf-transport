@@ -98,8 +98,11 @@ from .physics.kinetic_dvm import (
     ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
     EXCHANGE_MODELS as KINETIC_DVM_EXCHANGE_MODELS,
     GRID_TI_CAP_EV,
+    LEDGER_ENERGY_BIRTH_CHANNELS as KINETIC_DVM_ENERGY_BIRTH_CHANNELS,
+    LEDGER_ENERGY_BIRTH_KEYS as KINETIC_DVM_ENERGY_BIRTH_KEYS,
+    LEDGER_FLIGHT_CELL_KEY as KINETIC_DVM_FLIGHT_CELL_KEY,
     LEDGER_PARTICLE_FLOW_KEYS as KINETIC_DVM_PARTICLE_FLOW_KEYS,
-    LEDGER_PARTICLE_FRAME_KEYS as KINETIC_DVM_PARTICLE_FRAME_KEYS,
+    LEDGER_SAVED_FRAME_KEYS as KINETIC_DVM_SAVED_FRAME_KEYS,
     TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
     WALL_REFLECTION_MODELS as KINETIC_DVM_WALL_REFLECTION_MODELS,
     TransientDVM,
@@ -5018,6 +5021,11 @@ class LAPDSim1D:
             s_L=self._dvm_end_sticking("S_pump_L"),
             s_R=self._dvm_end_sticking("S_pump_R"),
         )
+        # Re-seed the per-save ledger accumulator now that the engine exists.
+        # One of its rows is presence-gated on the engine's own transport
+        # closure, which cannot be read before this line; the accumulator
+        # built at construction saw no engine and so left that row out.
+        self._dvm_particle_accum = self._zero_dvm_particle_accum()
 
     def _resolve_dvm_velocity_extent(
         self, cathode_jet, anode_jet, collector_jet
@@ -14058,31 +14066,76 @@ class LAPDSim1D:
             "ion_shortfall_updates": float(dvm.ion_shortfall_updates),
         }
 
+    def _dvm_flight_cell_row_armed(self):
+        """True where the per-cell annulus-to-column row has a source.
+
+        The bounded-chord flight transport is the only thing that computes
+        it, and it computes it on every one of its ticks. Read off the
+        engine's own ``flights`` object rather than off the selector string,
+        so the row is present exactly where a number exists to put in it.
+        """
+        return self._dvm is not None and self._dvm.flights is not None
+
     def _zero_dvm_particle_accum(self):
-        """Return a fresh zeroed per-save particle-ledger accumulator."""
+        """Return a fresh zeroed per-save particle-ledger accumulator.
+
+        Flow rows only: the counts, the ENERGY the births arrived with, and
+        -- where the flight transport computes it -- the per-cell radial
+        refill. All three are per-tick quantities and therefore additive over
+        the ticks a save frame covers.
+        """
         accum = {name: 0.0 for name in KINETIC_DVM_PARTICLE_FLOW_KEYS}
+        accum.update({name: 0.0 for name in KINETIC_DVM_ENERGY_BIRTH_KEYS})
         accum["ticks"] = 0.0
+        if self._dvm_flight_cell_row_armed():
+            accum[KINETIC_DVM_FLIGHT_CELL_KEY] = np.zeros(
+                self._geometry.cells, dtype=float
+            )
         return accum
 
     def _dvm_accumulate_particle_ledger(self, ledger):
-        """Add one tick's PARTICLE flow rows to the running per-save sums.
+        """Add one tick's flow rows to the running per-save sums.
 
-        Pure reading: every value is a float the engine has already computed
-        and returned, and nothing here is written back to the engine, to the
+        Three kinds of row, all of them per-tick and all of them summed the
+        same way: the particle COUNTS, the ENERGY each birth channel arrived
+        with (from the tick's nested energy ledger), and -- only under the
+        flight transport -- the per-cell atoms the annulus handed the column,
+        which the engine has computed on every flight tick since the closure
+        was built and nothing has ever read.
+
+        Pure reading: every value is one the engine has already computed and
+        returned, and nothing here is written back to the engine, to the
         state vector or to any cache, so a run that accumulates is bit-exact
         against one that does not.
         """
         accum = self._dvm_particle_accum
         for name in KINETIC_DVM_PARTICLE_FLOW_KEYS:
             accum[name] += float(ledger[name])
+        energy = ledger["energy"]
+        for channel, name in zip(
+            KINETIC_DVM_ENERGY_BIRTH_CHANNELS, KINETIC_DVM_ENERGY_BIRTH_KEYS
+        ):
+            accum[name] += float(energy[f"birth_{channel}"])
+        if KINETIC_DVM_FLIGHT_CELL_KEY in accum:
+            # Indexed, not ``.get``-defaulted: the flight transport writes
+            # ``last_flight`` on every tick it takes, so a missing reading on
+            # an armed run is a bug to hear about rather than a zero row.
+            accum[KINETIC_DVM_FLIGHT_CELL_KEY] = (
+                accum[KINETIC_DVM_FLIGHT_CELL_KEY]
+                + np.asarray(
+                    self._dvm.last_flight["annulus_to_column"], dtype=float
+                )
+            )
         accum["ticks"] += 1.0
 
     def _dvm_particle_ledger_sample(self, time):
         """Return this save frame's PARTICLE ledger record, draining the sums.
 
-        The flow rows are ATOMS summed over every neutral tick since the
-        previous save frame, so differencing is not needed and consecutive
-        frames partition the run's births and losses. The two state rows are
+        The flow rows are summed over every neutral tick since the previous
+        save frame, so differencing is not needed and consecutive frames
+        partition the run's births and losses: ATOMS for the counts, ERG for
+        the energy each birth channel arrived with, and atoms PER CELL for
+        the flight transport's radial refill. The two state rows are
         instantaneous ATOMS at the frame -- the domain inventory including the
         lagged end-return buffers, and the ionization the plasma has booked
         that the kinetic state has not yet surrendered -- and are read here
@@ -14109,13 +14162,20 @@ class LAPDSim1D:
         :meth:`_dvm_particle_ledger_sample` recorded at that frame, so a flow
         row sums over frames to the run's own total for that channel and a
         state row is read at the frame.
+
+        Every row is ``(frames,)`` except the presence-gated per-cell one,
+        which is ``(frames, cells)`` and is appended LAST so the row order an
+        unarmed run writes is unchanged by its existence.
         """
+        names = KINETIC_DVM_SAVED_FRAME_KEYS
+        if self._dvm_flight_cell_row_armed():
+            names = names + (KINETIC_DVM_FLIGHT_CELL_KEY,)
         return {
             name: np.asarray(
                 [snapshot["dvm_particle_ledger"][name] for snapshot in saved],
                 dtype=float,
             )
-            for name in KINETIC_DVM_PARTICLE_FRAME_KEYS
+            for name in names
         }
 
     def _dvm_ledger_census(self, saved):
