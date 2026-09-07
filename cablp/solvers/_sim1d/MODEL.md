@@ -595,7 +595,11 @@ $P_\text{ion}$ the accepted solve's ion bombardment power,
 $P_\text{rad}=\varepsilon\sigma_{SB}A_c(T_s^4-T_\text{env}^4)$ gray-body
 radiation, $P_\text{emis}=I_\text{eth}^\star(\phi_\text{wf}+2k_BT_s)$
 evaporative emission cooling — each emitted electron removing the barrier plus
-its mean thermal energy over it — $P_\text{cond}=G(T_s-T_\text{base})$
+its mean thermal energy over it, carried in every phase including the open
+circuit, where zero NET current is not zero emission; the energy the COLLECTED
+electrons deposit back on the surface is not carried at all, so this term is
+the whole of the face's electron-channel budget —
+$P_\text{cond}=G(T_s-T_\text{base})$
 conduction into the heater-held substrate, and $P_\text{back}$ the energy the
 backscattered atoms of the cathode jet carry away, the $R_E$ share of the
 incident ion energy that the gas receives and the surface therefore loses.
@@ -669,6 +673,23 @@ only the reported $V_\text{dis}$. The load power closes:
 $$P_\text{load}=I_\text{tot}V_b=\underbrace{I_\text{eth}^\star\phi_c+P_{c,i,\phi}-P_{c,e,\phi}}_\text{cathode field work}+\underbrace{I_\text{tot}V_p}_\text{gap ohmic}-\underbrace{I_\text{tot}\phi_a}_\text{anode field work}$$
 
 The anode term SUBTRACTS, the same sign the device relation carries.
+
+**Switch-off, the tail, and the open circuit.** Opening the bank does not open
+the loop: the parasitic inductance keeps the same loop equation running at
+$V_\text{src}=0$, and the current freewheels against the device and the series
+resistance. The loop returns to OPEN CIRCUIT when it would need its load to
+drive it — when the last accepted step's current has fallen to $1$ A or below,
+or that step's discharge voltage has turned non-positive, a diode blocking the
+reversal a negative device voltage would otherwise drive. Neither an electrode
+contact potential nor a diode forward drop is carried anywhere in this system,
+so near zero current the device relation is the sheath asymmetry alone; the
+criterion, not that relation's own small-current root, is what ends the tail.
+An open circuit is the same current-driven solve read at $I_\text{tot}=0$: the
+surface sits where its space-charge-limited release plus the ion current is
+exactly returned by collected plasma electrons, which at a hot emitter is an
+electron-COLLECTING sheath of order one to two $T_e$ rather than the
+non-emitting floating drop $\Lambda T_e$. Every electrode booking below is
+evaluated there unchanged, at zero loop current.
 
 Electrode energy is booked to three distinct sources: **circuit field work**
 (sheath fall and work function, sourced from the bank and deposited on the

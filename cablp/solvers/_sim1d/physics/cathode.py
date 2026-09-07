@@ -20,7 +20,6 @@ from cablp.cathode.circuit import (
     PlasmaState,
     _compute_beam_bypass_fraction,
     _compute_l_b,
-    solve_beam_system,
 )
 from cablp.plasma.params import LN_LAMBDA_MIN, c_log
 from cablp.cathode.circuit_idriven import (
@@ -474,8 +473,13 @@ def cathode_power_balance_terms_W(T_s_K, P_ion_W, I_eth_star_A, input_dict):
       electron removes ``phi_wf + 2 k_B T_s`` (work function plus the mean
       thermal energy over the barrier). Pass the accepted solve's
       ``I_eth_star`` -- the space-charge-released current, not the
-      Richardson ceiling -- and 0 for floating phases, where emitted
-      electrons return to the surface and the net cooling vanishes.
+      Richardson ceiling -- in EVERY phase, the open circuit included: zero
+      NET current is not zero emission, and the electrons that clear the
+      virtual cathode leave whether or not the loop carries their charge
+      away. What the surface does NOT get back here is the energy of the
+      plasma electrons it collects in return; that deposit is not modelled,
+      and while it is off the books this term is the whole of the face's
+      electron-channel budget.
     - ``P_cond`` is conduction from the emitting skin layer into the
       heater-held substrate, ``G_cond * (T_s - T_base)`` -- the
       "heater maintains the lower end" restoring term. It vanishes at
@@ -1310,9 +1314,6 @@ def solve_cathode_boundary(
     anode_source = anode_circuit_sample(
         state, derived, geometry, mu, input_dict, end=0
     )
-    anode_twin = anode_circuit_sample(
-        state, derived, geometry, mu, input_dict, end=-1
-    )
     if T_s_override_K is not None:
         # cathode_warming_model: substitute the evolving surface temperature
         # at the single point every emission path (uniform Richardson and the
@@ -1397,12 +1398,26 @@ def solve_cathode_boundary(
             beam_climb_V=beam_climb_V,
             tail_anode_current_A=float(tail_anode_current_prev_A),
         )
-    elif not floating:
+    else:
         # The circuit is explicit solver state: no inductive fold, no
         # warm start -- the solve is a well-posed evaluation at the frozen
-        # loop current. Floating phases fall through to the historical
-        # open-circuit solve below (its Boltzmann-suppressed emission
-        # branch is not the same limit as I_tot = 0 here).
+        # loop current.
+        #
+        # OPEN CIRCUIT (``floating``) is the SAME solve read at I_tot = 0.
+        # That is what an open circuit is: the loop carries no current, and
+        # the surface finds the potential at which its released emission plus
+        # the ion current is exactly returned by collected plasma electrons.
+        # Solving it here rather than through a separate open-circuit root
+        # keeps the current balance exact (the root is the same monotone
+        # device relation), keeps the emission and virtual-cathode physics,
+        # and populates every ``P_*_thermal``/``P_*_phi`` electrode field --
+        # so the electrode rows are CONTINUOUS across the hand-off, the same
+        # formulas evaluated at zero current.
+        #
+        # The circuit voltage bound is WITHDRAWN there: an open loop offers
+        # the device no voltage at all, so there is no ceiling to compose and
+        # the caller passes ``None``, the solve's own "no bound" convention.
+        I_tot_A = 0.0 if floating else max(float(circuit_I_loop_A), 0.0)
         beam_result = solve_beam_system_idriven(
             config=device_config,
             Te=derived.Te,
@@ -1412,7 +1427,7 @@ def solve_cathode_boundary(
             plasma_cross=geometry.plasma_area_cm2,
             I_ion=I_ion,
             gas_type=gas_type,
-            I_tot_A=max(float(circuit_I_loop_A), 0.0),
+            I_tot_A=I_tot_A,
             cathode_index=beam_launch(geometry, end=0)[0],
             anode_current_A=anode_source[0],
             anode_T_e=anode_source[1],
@@ -1432,48 +1447,18 @@ def solve_cathode_boundary(
             schottky=bool(input_flags.get("cathode_schottky", False)),
             bridge=bool(input_flags.get("cathode_emission_bridge", False)),
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
-            circuit_V_avail_V=circuit_available_voltage_V(
-                input_dict,
-                input_flags,
-                circuit_V_src_V,
-                max(float(circuit_I_loop_A), 0.0),
+            circuit_V_avail_V=(
+                None
+                if floating
+                else circuit_available_voltage_V(
+                    input_dict,
+                    input_flags,
+                    circuit_V_src_V,
+                    I_tot_A,
+                )
             ),
             circuit_bound_object=circuit_bound_object(input_dict),
             beam_climb_V=beam_climb_V,
-            tail_anode_current_A=float(tail_anode_current_prev_A),
-        )
-    else:
-        beam_result = solve_beam_system(
-            config=device_config,
-            Te=derived.Te,
-            ne=state.n,
-            nn=state.nn,
-            beam_cross_prev=beam_cross_prev,
-            plasma_cross=geometry.plasma_area_cm2,
-            I_ion=I_ion,
-            gas_type=gas_type,
-            x0=x0,
-            x0_twin=x0_twin,
-            floating=bool(floating),
-            # The solver samples the plasma at these cells *and* writes its
-            # beam quantities there, so they must be the same cells
-            # `beam_launch` reads from -- otherwise the beam arrays are all
-            # zero where the caller looks.
-            cathode_index=beam_launch(geometry, end=0)[0],
-            twin_index=beam_launch(geometry, end=-1)[0],
-            # Hand the circuit the same anode Bohm current the fluid
-            # removes, so the two cannot disagree.
-            anode_current_A=anode_source[0],
-            anode_T_e=anode_source[1],
-            anode_current_twin_A=anode_twin[0],
-            anode_T_e_twin=anode_twin[1],
-            b_beam_excitation=float(input_dict.get("b_beam_excitation", 0.0)),
-            beam_excitation_energy_eV=float(
-                input_dict.get("beam_excitation_energy_eV", 21.218)
-            ),
-            beam_excitation_model=str(
-                input_dict.get("beam_excitation_model", "2p_scalar")
-            ),
             tail_anode_current_A=float(tail_anode_current_prev_A),
         )
     beam_deposition = None

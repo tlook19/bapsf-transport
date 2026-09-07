@@ -2388,14 +2388,31 @@ def _case_cathode_boundary_beer_lambert(cathode_face):
         assert np.allclose(
             getattr(cathode_loss_terms.anode_rhs, _zero_field), 0.0
         )
+    # THE ELECTRODE ROWS ARE CONTINUOUS ACROSS THE HAND-OFF. The open-circuit
+    # afterglow is the current-driven solve read at I_tot = 0, so the same
+    # formulas are evaluated there rather than the rows dropping to zero
+    # because the phase changed name: the terms stay ENABLED, the face still
+    # loses its Bohm flux and still books the electron sheath it collects.
     afterglow_cathode_loss_terms = cathode_sim.cathode_source_terms(
         cathode_solve=floating_cathode_solve, time=afterglow_time
     )
-    assert not afterglow_cathode_loss_terms.enabled
-    assert np.allclose(pack_state(afterglow_cathode_loss_terms.rhs), 0.0)
-    assert np.allclose(
-        pack_state(afterglow_cathode_loss_terms.anode_rhs), 0.0
+    assert afterglow_cathode_loss_terms.enabled
+    assert np.all(np.isfinite(pack_state(afterglow_cathode_loss_terms.rhs)))
+    assert np.all(
+        np.isfinite(pack_state(afterglow_cathode_loss_terms.anode_rhs))
     )
+    assert not np.allclose(pack_state(afterglow_cathode_loss_terms.rhs), 0.0)
+    # Same row structure as the driven phase: disjoint Ee supports, and the
+    # anode row carries Ee alone.
+    _ag_cath_Ee = np.asarray(afterglow_cathode_loss_terms.rhs.Ee, dtype=float)
+    _ag_an_Ee = np.asarray(
+        afterglow_cathode_loss_terms.anode_rhs.Ee, dtype=float
+    )
+    assert not np.any((_ag_cath_Ee != 0.0) & (_ag_an_Ee != 0.0))
+    for _zero_field in ("n", "nn", "M", "Ei"):
+        assert np.allclose(
+            getattr(afterglow_cathode_loss_terms.anode_rhs, _zero_field), 0.0
+        )
     beam_birth_terms = cathode_sim.beam_ionization_rhs(
         cathode_solve=cathode_solve,
     )
@@ -4091,7 +4108,18 @@ def _case_circuit_current_driven_integration():
     ) or m3_solve.beam_result.result.regime == "capability_limited"
     assert m3_solve.beam_result.result_twin is None
     m3_float = m3_sim.solve_cathode_boundary(floating=True, update_cache=False)
-    assert m3_float.beam_result.result.I_tot == 0.0
+    # The open-circuit phase is the current-driven solve at I_tot = 0, so the
+    # reported I_tot is that solve's own RECONSTRUCTION of the imposed zero out
+    # of currents of order I_eth*: it carries root-finder roundoff at that
+    # scale rather than being the exact literal the retired open-circuit root
+    # assigned. Kirchhoff is the quantity that must close, and it does.
+    _m3_fr = m3_float.beam_result.result
+    assert abs(_m3_fr.I_tot) <= 1.0e-12 * max(_m3_fr.I_eth_star, 1.0), (
+        _m3_fr.I_tot, _m3_fr.I_eth_star
+    )
+    assert abs(_m3_fr.I_cathode_kirchhoff_residual) <= 1.0e-12, (
+        _m3_fr.I_cathode_kirchhoff_residual
+    )
     for m3_bad_params, m3_bad_flags in (
         (dict(m3_params, cathode_solver_model="bogus"), resolved_cathode_flags),
         (dict(m3_params, L_parasitic_H=0.0), resolved_cathode_flags),
@@ -25813,6 +25841,329 @@ def _case_floor_audit_names_its_configuration():
 
 
 # ----------------------------------------------------------------------
+# floating-open-circuit-current-balance
+# ----------------------------------------------------------------------
+@_case("floating-open-circuit-current-balance")
+def _case_floating_open_circuit_current_balance():
+    """The open-circuit cathode point is the current-driven solve at I = 0.
+
+    UNIT FIXTURE on three states of the reference machine -- the seed, the
+    discharge plateau, and the late afterglow -- with the circuit scalars
+    pinned here rather than read from a stance, so the fixture measures the
+    sheath physics and not a stance value.
+
+    WHAT IS ASSERTED
+      1. Kirchhoff. The solve's own residual (I_eth* + I_i - I_e,ret) - I_tot
+         is <= 1e-12 A on every state. An open circuit that does not conserve
+         current is not an open circuit.
+      2. The emissive floating point. At the late state the cathode sits
+         1-2 Te BELOW the plasma in the classical part of its sheath
+         (phi_c_plus / Te in [1, 2]) -- the space-charge-limited emissive
+         value -- with the emission current far above the ion current and the
+         collected electron current above both. That is the physical content:
+         a hot emitter at zero net current COLLECTS, it does not sit at the
+         non-emitting floating drop.
+      3. Every electrode power field is assigned. The retired branch left the
+         *_thermal / *_phi members at their dataclass default of 0.0, so an
+         open-circuit phase booked no electrode power at all; here they are
+         finite and the cathode thermal booking is strictly negative-going
+         work on the plasma store (a positive P_cathode_e_thermal, which the
+         RHS subtracts).
+      4. NEGATIVE CONTROL. ``circuit.solve(floating=True)`` -- the retired
+         separate open-circuit root -- refuses loudly. Before it was retired
+         it returned, on these same states, a sheath 12.4 (seed) and 12.6
+         (late) Te deep whose own current balance closed at 2*I_i rather than
+         at zero: 0.046409 A against I_i = 0.023209 A, and 10.968911 A
+         against I_i = 5.485271 A. Those numbers are banked with the run that
+         measured them; what stands here is that nothing can reach the root
+         that produced them.
+    """
+    from cablp.cathode.circuit import (
+        DeviceConfig as _fb_DeviceConfig,
+        PlasmaState as _fb_PlasmaState,
+        solve as _fb_solve_voltage,
+    )
+    from cablp.cathode.circuit_idriven import solve_idriven as _fb_solve_idriven
+
+    # Reference-machine circuit scalars (LaB6 disc, He, the production
+    # compliance/anode geometry). Pinned, not read from a stance file: this
+    # fixture is about the solve, and a stance edit must not move it.
+    _fb_cfg_kw = dict(
+        A_c=math.pi * 18.415 ** 2,
+        mu=4.0026,
+        V_bank=177.843,
+        phi_wf=2.869,
+        C_R=9.3,
+        R_comp=0.0072244,
+        eta=0.358,
+        L_cath=53.25,
+        R_cath=18.415,
+    )
+    # (label, n_e [cm^-3], T_e [eV], n_n [cm^-3], T_s [K], anode T_e [eV])
+    _fb_states = (
+        ("seed", 1.0e9, 0.21, 6.2901005643418e12, 1910.0, 0.21),
+        ("plateau", 5.13904847258451e12, 8.598381836576038,
+         4.662555042487933e13, 1914.9084700456249, 8.342168945781902),
+        ("late_afterglow", 3.424966858999728e11, 0.1,
+         4.701649450942045e13, 1913.453373340071, 0.1),
+    )
+    _fb_alpha = math.exp(-0.5)
+
+    for _fb_label, _fb_n, _fb_Te, _fb_nn, _fb_Ts, _fb_Te_a in _fb_states:
+        _fb_cfg = _fb_DeviceConfig(T_s=_fb_Ts, **_fb_cfg_kw)
+        _fb_pl = _fb_PlasmaState(T_e=_fb_Te, n_e=_fb_n, n_n=_fb_nn)
+        _fb_r = _fb_solve_idriven(
+            _fb_cfg, _fb_pl, 0.0,
+            anode_T_e=_fb_Te_a,
+            alpha_sheath=_fb_alpha,
+            alpha_sheath_anode=_fb_alpha,
+            phi_c_cap_V=1000.0,
+        )
+        # 1. Kirchhoff, on the solve's own exported residual.
+        # The reported I_tot is the sheath's own RECONSTRUCTION of the
+        # imposed zero out of currents of order I_eth*, so it carries
+        # root-finder roundoff at that scale, not at 1 A.
+        assert abs(_fb_r.I_tot) <= 1.0e-12 * max(_fb_r.I_eth_star, 1.0), (
+            _fb_label, _fb_r.I_tot, _fb_r.I_eth_star
+        )
+        assert abs(_fb_r.I_cathode_kirchhoff_residual) <= 1.0e-12, (
+            _fb_label, _fb_r.I_cathode_kirchhoff_residual
+        )
+        # 3. Every electrode field assigned and finite.
+        for _fb_key in (
+            "P_cathode_e_thermal", "P_cathode_e_phi",
+            "P_cathode_i_thermal", "P_cathode_i_phi",
+            "P_anode_e_thermal", "P_anode_e_phi",
+        ):
+            assert np.isfinite(getattr(_fb_r, _fb_key)), (_fb_label, _fb_key)
+        assert _fb_r.P_cathode_e_thermal > 0.0, (
+            _fb_label, _fb_r.P_cathode_e_thermal
+        )
+        assert _fb_r.P_anode_e_thermal > 0.0, (
+            _fb_label, _fb_r.P_anode_e_thermal
+        )
+        # 4. The retired root refuses.
+        try:
+            _fb_solve_voltage(_fb_cfg, _fb_pl, floating=True,
+                              anode_T_e=_fb_Te_a)
+        except ValueError as _fb_exc:
+            assert "retired" in str(_fb_exc), str(_fb_exc)
+        else:
+            raise AssertionError(
+                "circuit.solve(floating=True) returned a result on the "
+                f"{_fb_label} state; the retired open-circuit root must refuse"
+            )
+
+    # 2. The emissive floating point, at the late-afterglow state.
+    _fb_cfg = _fb_DeviceConfig(T_s=1913.453373340071, **_fb_cfg_kw)
+    _fb_late = _fb_solve_idriven(
+        _fb_cfg,
+        _fb_PlasmaState(T_e=0.1, n_e=3.424966858999728e11,
+                        n_n=4.701649450942045e13),
+        0.0,
+        anode_T_e=0.1,
+        alpha_sheath=_fb_alpha,
+        alpha_sheath_anode=_fb_alpha,
+        phi_c_cap_V=1000.0,
+    )
+    _fb_ratio = _fb_late.phi_c_plus / 0.1
+    assert 1.0 <= _fb_ratio <= 2.0, _fb_ratio
+    _fb_I_ret = _fb_late.I_eth_star + _fb_late.I_i - _fb_late.I_tot
+    assert _fb_late.I_eth_star > 10.0 * _fb_late.I_i, (
+        _fb_late.I_eth_star, _fb_late.I_i
+    )
+    assert _fb_I_ret > _fb_late.I_eth_star > 0.0, (
+        _fb_I_ret, _fb_late.I_eth_star
+    )
+
+
+# ----------------------------------------------------------------------
+# afterglow-tail-handoff-criterion
+# ----------------------------------------------------------------------
+@_case("afterglow-tail-handoff-criterion", historical_stance=True)
+def _case_afterglow_tail_handoff_criterion():
+    """The freewheel tail ends when the loop would need the load to drive it.
+
+    The inductive tail is integrated at zero source voltage while the loop
+    still has current AND the device voltage it integrated is positive. Two
+    end conditions return it to open circuit, and both are checked here
+    against the accept path itself (one step, and the loop current it leaves):
+
+      HAND-OFF BY VOLTAGE  V_dis_step <= 0 at I = 800 A. The bank is open, a
+        freewheel loop has no source, and a diode blocks the reversal a
+        negative device voltage would drive. ``floating`` flips and the loop
+        current goes to exactly zero.
+      HAND-OFF BY CURRENT  I_prev <= 1 A at a positive device voltage. Same
+        outcome; this is the condition that already existed.
+      NEGATIVE CONTROL  I_prev = 800 A at V_dis_step = +10 V: no hand-off.
+        ``inductive_tail`` stands, ``floating`` stays False, and the accept
+        path integrates the loop rather than dropping it -- the measured
+        freewheel is physics and is not switched off.
+    """
+    _th_p, _th_f = _cathode_unit_config()
+    _th_p.update({
+        "V_bank": 173.6,
+        "R_comp": 5.72e-3,
+        "L_parasitic_H": 6.6e-6,
+        "cathode_solver_model": "current_driven",
+        "dt_save": 0.0,
+    })
+    _th_f = dict(
+        _th_f,
+        cathode_coupling=True,
+        neutral_prebreakdown=False,
+        # This case steps the solver directly, so the equilibration seed is
+        # not being asked for; clearing the flag keeps run() from warning
+        # that it did not run one.
+        neutral_equilibration=False,
+    )
+
+    def _th_build(V_dis_step, I_prev):
+        sim = LAPDSim1D(dict(_th_p), dict(_th_f))
+        # Put the clock in the afterglow: this stance runs the current-mode
+        # phase schedule, so the afterglow opens tau_discharge after the
+        # breakdown trigger.
+        sim._t_breakdown_trigger = 1.0e-3
+        sim._time = 1.0e-3 + float(_th_p["tau_discharge"]) + 1.0e-6
+        sim._circuit_I_prev = float(I_prev)
+        sim._circuit_I_loop = float(I_prev)
+        sim._circuit_V_dis_step = float(V_dis_step)
+        assert sim.phase_switches_at_time(sim._time)["floating"], sim._time
+        return sim
+
+    # NEGATIVE CONTROL: the driven freewheel tail.
+    _th_sim = _th_build(10.0, 800.0)
+    _th_phase = _th_sim._cathode_phase_options()
+    assert _th_phase["inductive_tail"] is True, _th_phase
+    assert _th_phase["floating"] is False, _th_phase
+    _th_sim.run(t_end=_th_sim._time + 2.0e-9, max_steps=1)
+    assert _th_sim._circuit_I_loop > 0.0, _th_sim._circuit_I_loop
+
+    # HAND-OFF, by either condition: floating, and the loop current is zero.
+    for _th_V, _th_I in ((-0.05, 800.0), (10.0, 0.5)):
+        _th_sim = _th_build(_th_V, _th_I)
+        _th_phase = _th_sim._cathode_phase_options()
+        assert _th_phase["floating"] is True, (_th_V, _th_I, _th_phase)
+        assert _th_phase["inductive_tail"] is False, (_th_V, _th_I, _th_phase)
+        assert _th_phase["solve_enabled"] is True, (_th_V, _th_I, _th_phase)
+        # The RHS gate keeps the cathode ACTIVE across the hand-off, so the
+        # electrode rows continue at I = 0 instead of dropping to zero.
+        assert _th_sim._effective_cathode_flags(
+            active_only=True
+        )["cathode_coupling"] is True
+        _th_solve = _th_sim.solve_cathode_boundary(update_cache=False)
+        assert _th_solve.metadata["floating"] is True
+        _th_res = _th_solve.beam_result.result
+        assert abs(_th_res.I_tot) <= 1.0e-12 * max(_th_res.I_eth_star, 1.0)
+        assert abs(_th_res.I_cathode_kirchhoff_residual) <= 1.0e-12
+        _th_sim.run(t_end=_th_sim._time + 2.0e-9, max_steps=1)
+        assert _th_sim._circuit_I_loop == 0.0, _th_sim._circuit_I_loop
+
+
+# ----------------------------------------------------------------------
+# tail-handoff-surface-continuity
+# ----------------------------------------------------------------------
+@_case("tail-handoff-surface-continuity")
+def _case_tail_handoff_surface_continuity():
+    """Evaporative emission cooling is continuous across the hand-off.
+
+    An open circuit is zero NET current, not zero emission. At ``I_tot = 0``
+    the emitter still releases its space-charge-limited ``I_eth_star`` and
+    those electrons leave; the balance closes because the plasma returns a
+    LARGER collected current over the barrier, which is a different flux
+    arriving at the surface, not the emitted one turned back. So the surface's
+    ``P_emis`` at ``I_tot = 0`` must be the limit of its value from the driven
+    side, and the surface ledger takes no step at the hand-off.
+
+    Checked on the late-afterglow state of the reference machine, where the
+    emission is largest relative to the loop current:
+
+      CONTINUITY   ``P_emis`` at ``I_tot = 0`` equals its value at
+        ``I_tot = 1e-12`` and ``1e-9`` A to better than 1e-6 relative, and the
+        approach from 1e-3 A is monotone and small. The formula is the shipped
+        ``cathode_power_balance_terms_W``, driven by the shipped
+        ``solve_idriven``, so this is the solver's own arithmetic.
+      NEGATIVE CONTROL  the retired ``0.0 if floating`` form is discontinuous
+        by the whole term: ``I_eth_star`` (61.895109 A here) times
+        ``phi_wf + 2 k_B T_s`` (3.198777 eV) = 197.988671 W, dropped in one
+        step. That is the defect this case exists to keep out.
+
+    NOT ASSERTED, and deliberately not built: the energy the COLLECTED
+    electrons deposit back on the surface. See the module the term would live
+    in; at this state it is the larger number and the reviewer's item.
+    """
+    from cablp.cathode.circuit import (
+        DeviceConfig as _sc_DeviceConfig,
+        PlasmaState as _sc_PlasmaState,
+    )
+    from cablp.cathode.circuit_idriven import solve_idriven as _sc_solve
+    from cablp.solvers._sim1d.physics.cathode import (
+        cathode_power_balance_terms_W as _sc_terms,
+    )
+
+    _sc_cfg_kw = dict(
+        A_c=math.pi * 18.415 ** 2,
+        mu=4.0026,
+        V_bank=177.843,
+        phi_wf=2.869,
+        C_R=9.3,
+        R_comp=0.0072244,
+        eta=0.358,
+        L_cath=53.25,
+        R_cath=18.415,
+    )
+    _sc_Ts = 1913.453373340071
+    _sc_cfg = _sc_DeviceConfig(T_s=_sc_Ts, **_sc_cfg_kw)
+    _sc_pl = _sc_PlasmaState(
+        T_e=0.1, n_e=3.424966858999728e11, n_n=4.701649450942045e13
+    )
+    _sc_alpha = math.exp(-0.5)
+    # The surface-side input_dict the warming update passes: only these four
+    # keys are read by the term.
+    _sc_idict = {
+        "R_cath": 18.415,
+        "cathode_emissivity": 0.7,
+        "cathode_Ts_base_K": 1910.0,
+        "phi_wf": 2.869,
+        "cathode_conduction_W_per_K": 0.0,
+    }
+
+    def _sc_P_emis(I_A, force_zero=False):
+        r = _sc_solve(
+            _sc_cfg, _sc_pl, I_A, anode_T_e=0.1, alpha_sheath=_sc_alpha,
+            alpha_sheath_anode=_sc_alpha, phi_c_cap_V=1000.0,
+        )
+        I_emis = 0.0 if force_zero else float(r.I_eth_star)
+        return _sc_terms(
+            T_s_K=_sc_Ts,
+            P_ion_W=float(r.P_cathode_i),
+            I_eth_star_A=I_emis,
+            input_dict=_sc_idict,
+        )[3], float(r.I_eth_star)
+
+    _sc_P0, _sc_I0 = _sc_P_emis(0.0)
+    # The term is live and of the expected size at zero net current.
+    assert _sc_P0 > 100.0, _sc_P0
+    assert _sc_I0 > 10.0, _sc_I0
+    # CONTINUITY from the driven side.
+    for _sc_I, _sc_rtol in ((1.0e-12, 1.0e-12), (1.0e-9, 1.0e-9),
+                            (1.0e-6, 1.0e-6), (1.0e-3, 1.0e-4)):
+        _sc_P, _ = _sc_P_emis(_sc_I)
+        assert abs(_sc_P - _sc_P0) <= _sc_rtol * _sc_P0, (
+            _sc_I, _sc_P, _sc_P0
+        )
+    # NEGATIVE CONTROL: the retired form drops the whole term at the hand-off.
+    _sc_P_old, _ = _sc_P_emis(0.0, force_zero=True)
+    assert _sc_P_old == 0.0, _sc_P_old
+    # ...and the size of that step is I_eth_star * (phi_wf + 2 k_B T_s).
+    _sc_per_electron = 2.869 + 2.0 * 8.617333262e-5 * _sc_Ts
+    assert np.isclose(
+        _sc_P0 - _sc_P_old, _sc_I0 * _sc_per_electron, rtol=1e-12, atol=0.0
+    ), (_sc_P0, _sc_I0, _sc_per_electron)
+    assert _sc_P0 - _sc_P_old > 100.0, _sc_P0 - _sc_P_old
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -25821,7 +26172,7 @@ def _case_floor_audit_names_its_configuration():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 143, "historical_stance": 60}
+_CASE_CENSUS = {"total": 146, "historical_stance": 61}
 
 
 def _assert_case_census():

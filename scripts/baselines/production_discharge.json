@@ -438,13 +438,13 @@
     "finite": true,
     "n_max": 32932274212188.65,
     "n_min": 851867382.0568187,
-    "neutral_inventory_relative_drift": 1.1050316740971529,
+    "neutral_inventory_relative_drift": 1.1050157539160839,
     "nn_max": 134775373329105.28,
     "nn_min": 234229705970.4254,
-    "plasma_inventory_relative_drift": 4580.676971504302,
+    "plasma_inventory_relative_drift": 4581.051756338596,
     "samples": 2620,
-    "steps": 60135,
-    "thermal_energy_relative_drift": 4564.821049047724,
-    "total_particle_inventory_relative_drift": 1.1938326447140895
+    "steps": 60084,
+    "thermal_energy_relative_drift": 4565.2969543503905,
+    "total_particle_inventory_relative_drift": 1.193823992170962
   }
 }
