@@ -988,7 +988,7 @@ def load_arm(path):
 def plan_lines(t_star_ms):
     out = []
     out.append("B0c arm plan -- registration of record: "
-               "the B0c registration, R1-R16, ratified 2026-08-24")
+               "the B0c registration, R1-R16")
     out.append("")
     out.append("[R1] Fixture: verify_sim1d_k2_dvm.make_sim() exactly "
                f"(exchange={EXCHANGE_MODEL!r}, fixture cadence "
@@ -2552,7 +2552,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(
         description=(
             "B0c cadence + velocity-grid convergence harness "
-            "(the B0c registration, R1-R16, ratified 2026-08-24)."
+            "(the B0c registration, R1-R16)."
         )
     )
     mode = p.add_mutually_exclusive_group(required=True)

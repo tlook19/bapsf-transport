@@ -12,7 +12,7 @@ of a saved state and of the consult's
 own algebra, not of the new code, so they are measurable before a line of the
 operator exists.
 
-**The operator** (advisor consult 2026-08-26; Braginskii conventions):
+**The operator** (Braginskii conventions):
 
     Delta = -div(3/2 T_e Gamma_d) - p_e div(Gamma_d / n) - div(q_u)
             + 0.71 Gamma_d . grad(T_e),
@@ -112,11 +112,10 @@ _C_FACE = 1.5 + 0.71
 #: The consult's boundary coefficient, 5/2 (enthalpy) + 0.71 (thermal force).
 _C_BOUNDARY = 2.5 + 0.71
 
-#: The pins of record, AMENDED 2026-08-31 by the advisor adjudication and the
-#: ratified amendment that followed it. Two of the 2026-08-26 consult's
-#: readings did not survive measurement and are recorded here as RETIRED
-#: rather than quietly dropped, because a retired pin that vanishes leaves the
-#: next reader re-deriving the same wrong number.
+#: The pins of record, as amended. Two earlier readings did not survive
+#: measurement and are carried here as RETIRED entries rather than quietly
+#: dropped, because a retired pin that vanishes leaves the next reader
+#: re-deriving the same wrong number.
 PINS = {
     # RETIRED: the consult's +14.8 kW rode the circuit's ion current at the
     # cathode face. The channel there carries the RETURNING thermal-electron
@@ -327,7 +326,7 @@ def _face_pairs(
     pressure-drift-work channel, because the two faces that bound the operator
     treat them differently.
 
-    **The cathode face** (amended 2026-08-31 after the advisor adjudication).
+    **The cathode face.**
     The enthalpy and thermal-force channels there would carry the RETURNING
     thermal-electron current, and the cathode sheath repels plasma electrons --
     ``P_cathode_e`` is 0.06 W on this artifact, a return current of order
@@ -339,7 +338,7 @@ def _face_pairs(
     carrier and no ledger partner.
 
     **The anode face.** ``"sheath_row_closes_all"`` is the registered closure
-    (ruled 2026-08-31) and closes BOTH channels: the kinetic anode sheath row
+    and it closes BOTH channels: the kinetic anode sheath row
     is the total electron energy flux at the sheath edge for the thermal
     population, so any fluid export there double-counts it. The other two
     values are disclosed instrument arms bounding that double count.
