@@ -39,7 +39,29 @@ Standalone: standard library plus the ``git`` executable.  No third-party
 imports, no package imports, runnable from anywhere.
 
     python validate_manifest.py <manifest.json> [<manifest.json> ...]
+    python validate_manifest.py --family r2-rename <manifest.json> ...
     python validate_manifest.py --self-test
+
+DOCUMENT FAMILIES.  Three kinds of document live in this directory and only
+one of them is a rename manifest:
+
+  ``r2-rename``     -- the delta and cumulative manifests the six checks below
+                       are written for (discriminator: ``manifest_kind``).
+  ``r3-semantic``   -- per-change SEMANTIC records (``kind: "r3-semantic-*"``).
+  ``h-quarantine``  -- the hydrogen-quarantine SEMANTIC record
+                       (``kind: "h-quarantine"``).
+
+The semantic records carry no path mappings and assert no file continuity, and
+each states in its own ``schema_note`` that it deliberately does not validate
+here.  A run over a MIXED set is therefore refused, naming every family it was
+handed, rather than reporting schema failures about documents that were never
+rename manifests; ``--family r2-rename`` selects the manifests this module
+does check and ignores the rest.
+
+DELTAS ARE SUPPLIED IN CHAIN ORDER.  Check (3) compares each delta against the
+one before it in the order given, so a glob's alphabetical order is not
+generally the chain's; a cumulative is composed against exactly the deltas
+spanning its own window.
 
 DRAFT manifests (``new_revision`` == ``"TBD-at-commit"``, filename carrying
 ``.DRAFT.``) are accepted: the new end of checks (2) and the whole of checks
@@ -87,6 +109,115 @@ from pathlib import Path
 DRAFT_SENTINEL = "TBD-at-commit"
 
 MANIFEST_KINDS = frozenset({"delta", "cumulative"})
+
+#: The document families that live beside this file.  Only ``r2-rename`` is a
+#: rename manifest; the other two are SEMANTIC records that carry no path
+#: mappings and assert no file continuity, and each one says so in its own
+#: ``schema_note``.  Feeding them to the six checks below produces a wall of
+#: schema failures that says nothing about the documents -- which is what a
+#: bare ``*.json`` glob over this directory used to do.
+MANIFEST_FAMILIES = ("r2-rename", "r3-semantic", "h-quarantine")
+
+#: The one family this module holds checks for.
+VALIDATED_FAMILY = "r2-rename"
+
+
+def manifest_family(manifest):
+    """Return the document family of a loaded manifest, or ``None``.
+
+    Keyed on the discriminator each family already carries, so classification
+    reads the documents rather than their filenames: a rename manifest carries
+    ``manifest_kind``, an R3 semantic record carries an ``r3-semantic-*``
+    ``kind``, and the hydrogen-quarantine record carries ``kind`` exactly
+    ``"h-quarantine"``.  ``None`` means the document announces no family and
+    is not classified -- never silently validated as one.
+    """
+    if isinstance(manifest.get("manifest_kind"), str):
+        return "r2-rename"
+    kind = manifest.get("kind")
+    if isinstance(kind, str):
+        if kind.startswith("r3-semantic-"):
+            return "r3-semantic"
+        if kind == "h-quarantine":
+            return "h-quarantine"
+    return None
+
+
+def classify_manifests(manifest_paths):
+    """Return ``{family or None: [path, ...]}`` over the supplied manifests.
+
+    Unreadable files are classified ``None`` alongside unclassifiable ones:
+    the family gate refuses either way, and the schema check reports the
+    unreadability itself when a run gets that far.
+    """
+    families = {}
+    for path in manifest_paths:
+        try:
+            manifest = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+        families.setdefault(manifest_family(manifest), []).append(path)
+    return families
+
+
+def _family_listing(families):
+    """One line per family present, naming its members."""
+    lines = []
+    for family in list(MANIFEST_FAMILIES) + [None]:
+        members = families.get(family)
+        if not members:
+            continue
+        label = family if family else "unclassified (no family discriminator)"
+        names = ", ".join(sorted(Path(p).name for p in members))
+        lines.append(f"  {label}: {names}")
+    return "\n".join(lines)
+
+
+def select_family(parser, requested, families):
+    """Return the manifests to validate, or exit through ``parser.error``.
+
+    The gate, in one place: this module is the executable statement of the
+    RENAME-manifest schema and holds no checks for the other two families, so
+    a run that is not entirely ``r2-rename`` is refused rather than reported
+    on.  A mixed set names every family it found; a set of one non-validated
+    family says which document it was handed and that the refusal is the
+    document's own position, not this tool's opinion.
+    """
+    present = [f for f in families if families[f]]
+    if requested is not None:
+        selected = families.get(requested, [])
+        if requested != VALIDATED_FAMILY:
+            parser.error(
+                f"--family {requested} names a SEMANTIC record family; this "
+                f"module validates the {VALIDATED_FAMILY} manifests and holds "
+                f"no checks for it. Those documents carry no path mappings "
+                f"and assert no file continuity -- each says so in its own "
+                f"schema_note. Accepted: --family {VALIDATED_FAMILY}"
+            )
+        if not selected:
+            parser.error(
+                f"--family {requested} selected none of the manifests "
+                f"supplied. What was supplied:\n{_family_listing(families)}"
+            )
+        return selected
+    if len(present) == 1 and present[0] == VALIDATED_FAMILY:
+        return families[VALIDATED_FAMILY]
+    if len(present) == 1:
+        parser.error(
+            f"every manifest supplied is a {present[0]} document, and this "
+            f"module validates the {VALIDATED_FAMILY} manifests. Those "
+            f"documents carry no path mappings and assert no file continuity "
+            f"-- each says so in its own schema_note. What was supplied:\n"
+            f"{_family_listing(families)}"
+        )
+    parser.error(
+        "the manifests supplied span more than one document family, and only "
+        f"{VALIDATED_FAMILY} validates here -- running them together reports "
+        "schema failures about documents that were never rename manifests. "
+        f"What was supplied:\n{_family_listing(families)}\n"
+        f"Accepted: --family {VALIDATED_FAMILY} to validate that family and "
+        "ignore the rest, or supply those manifests alone"
+    )
 
 CHANGE_KINDS = frozenset({
     "move", "rename", "move+rename", "split", "merge", "delete", "add",
@@ -1612,6 +1743,13 @@ def main(argv=None):
              "manifest of record)",
     )
     parser.add_argument(
+        "--family",
+        default=None,
+        choices=MANIFEST_FAMILIES,
+        help="validate only the manifests of this document family; required "
+             "whenever the supplied set spans more than one",
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="exercise every check against synthetic fixtures and exit",
@@ -1622,12 +1760,15 @@ def main(argv=None):
         return self_test()
     if not args.manifests:
         parser.error("give at least one manifest, or --self-test")
+    manifests = select_family(
+        parser, args.family, classify_manifests(args.manifests)
+    )
     if args.emit_expanded:
-        return emit_expanded(args.manifests)
+        return emit_expanded(manifests)
 
     repo = args.repo
     if repo is None:
-        anchor = Path(args.manifests[0]).resolve().parent
+        anchor = Path(manifests[0]).resolve().parent
         try:
             repo = git(anchor, "rev-parse", "--show-toplevel").strip()
         except GitError as error:
@@ -1639,9 +1780,9 @@ def main(argv=None):
             )
             for check in ("SCHEMA", "CHAIN", "COVERAGE", "GROUPS", "DELETES"):
                 findings.skip(check, "not run: no repository to validate against")
-            return report(findings, args.manifests)
-    findings = validate(Path(repo), args.manifests, skip_git=args.skip_git)
-    return report(findings, args.manifests)
+            return report(findings, manifests)
+    findings = validate(Path(repo), manifests, skip_git=args.skip_git)
+    return report(findings, manifests)
 
 
 if __name__ == "__main__":

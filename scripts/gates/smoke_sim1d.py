@@ -25112,6 +25112,124 @@ def _case_prescribed_drive_handoff():
 
 
 # --------------------------------------------------------------------
+# golden-fixture-packed-row-count
+# --------------------------------------------------------------------
+@_case("golden-fixture-packed-row-count", historical_stance=True)
+def _case_golden_fixture_packed_row_count():
+    # STATE_NAMES_1D IS NOT A ROW COUNT. It names the five always-packed rows,
+    # the fixed head of the layout; the optional rows that follow are packed
+    # BY PRESENCE, so the packed width of any given run is a property of its
+    # flags and not of the tuple. The golden fixtures record a
+    # fields_per_cell of their own, and nothing tied the two together -- a
+    # reader who took len(STATE_NAMES_1D) for the fixture's row count would be
+    # wrong about the shipped reference configuration today, which packs a
+    # sixth row.
+    #
+    # The tie asserted here follows the stance by construction: it builds no
+    # config of its own (build_baseline_config()) and reads the widths the
+    # sidecars actually recorded, so a stance event that adds or drops an
+    # optional row moves both sides together and a change that moves only one
+    # of them fails here.
+    from baseline_sim1d import build_baseline_config
+
+    _pr_params, _pr_flags = build_baseline_config()
+    _pr_names = state_field_names(LAPDSim1D(_pr_params, _pr_flags).state)
+
+    # The head is the five always-packed rows, in order.
+    assert len(STATE_NAMES_1D) == 5, STATE_NAMES_1D
+    assert _pr_names[: len(STATE_NAMES_1D)] == tuple(STATE_NAMES_1D), _pr_names
+    # ... and the reference configuration packs strictly more than the head,
+    # which is the whole reason the tuple cannot serve as the row count.
+    assert len(_pr_names) > len(STATE_NAMES_1D), _pr_names
+
+    _pr_baselines = Path(__file__).resolve().parents[1] / "baselines"
+    _pr_widths = {}
+    for _pr_side in ("production_discharge.json", "golden_digest_4k.json"):
+        with open(_pr_baselines / _pr_side) as _pr_fh:
+            _pr_widths[_pr_side] = int(json.load(_pr_fh)["fields_per_cell"])
+        assert _pr_widths[_pr_side] == len(_pr_names), (
+            f"{_pr_side} records fields_per_cell="
+            f"{_pr_widths[_pr_side]} while the stance of record packs "
+            f"{len(_pr_names)} rows {_pr_names}"
+        )
+    # The two fixtures are captured from the same configuration, so they can
+    # never disagree with each other about the width either.
+    assert len(set(_pr_widths.values())) == 1, _pr_widths
+
+
+# --------------------------------------------------------------------
+# dvm-jet-rn-interval-refusals
+# --------------------------------------------------------------------
+@_case("dvm-jet-rn-interval-refusals")
+def _case_dvm_jet_rn_interval_refusals():
+    # THE THREE SURFACE JETS REFUSE R_N = 0 THE SAME WAY. Each jet's launch
+    # band is formed by dividing R_E by R_N, and the solver forms all three
+    # bands before the engine exists. The collector spec was already put
+    # through the engine's validator at that point; the cathode and anode
+    # specs were not, so their R_N = 0 reached the division and answered with
+    # a ZeroDivisionError -- a Python arithmetic failure where the validators
+    # promise an interval statement naming the key. All three now validate
+    # before the band is formed, so the message a reader gets is the same
+    # message whichever surface was misconfigured.
+    for _jr_label, _jr_params, _jr_flags, _jr_says in (
+        (
+            "cathode",
+            {
+                "neutral_kinetic_dvm_cathode_jet": True,
+                "neutral_kinetic_dvm_cathode_jet_R_N": 0.0,
+                "neutral_kinetic_dvm_cathode_jet_R_E": 0.0,
+                "cathode_neutral_jet": False,
+            },
+            {"cathode_coupling": True},
+            "0 < R_E <= R_N < 1",
+        ),
+        (
+            "anode",
+            {
+                "neutral_kinetic_dvm_anode_jet": True,
+                "neutral_kinetic_dvm_anode_jet_R_N": 0.0,
+                "neutral_kinetic_dvm_anode_jet_R_E": 0.0,
+                "anode_neutral_jet": False,
+            },
+            {"cathode_coupling": True},
+            "0 < R_E <= R_N < 1",
+        ),
+        (
+            "collector",
+            {
+                "neutral_kinetic_dvm_collector_jet": True,
+                "neutral_kinetic_dvm_collector_jet_R_N": 0.0,
+                "neutral_kinetic_dvm_collector_jet_R_E": 0.0,
+                "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple": 3.0,
+            },
+            {},
+            "0 < R_N <= 1",
+        ),
+    ):
+        _jr_p, _jr_f = default_config()
+        _jr_p["neutral_model"] = "kinetic_dvm"
+        _jr_p.update(_jr_params)
+        _jr_f.update(_jr_flags)
+        try:
+            LAPDSim1D(_jr_p, _jr_f)
+        except ZeroDivisionError as _jr_zero:
+            raise AssertionError(
+                f"the DVM {_jr_label} jet answered R_N = 0 with a "
+                f"ZeroDivisionError ({_jr_zero}) instead of the interval "
+                "statement its validator promises"
+            )
+        except ValueError as _jr_error:
+            assert _jr_says in str(_jr_error), (_jr_label, str(_jr_error))
+            assert _jr_label in str(_jr_error).lower(), (
+                _jr_label, str(_jr_error)
+            )
+        else:
+            raise AssertionError(
+                f"the DVM {_jr_label} jet accepted R_N = 0"
+            )
+
+
+# --------------------------------------------------------------------
 # smoke-summary
 # --------------------------------------------------------------------
 @_case("smoke-summary")
@@ -25135,7 +25253,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 138, "historical_stance": 58}
+_CASE_CENSUS = {"total": 140, "historical_stance": 59}
 
 
 def _assert_case_census():

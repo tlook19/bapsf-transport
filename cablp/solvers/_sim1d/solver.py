@@ -103,12 +103,15 @@ from .physics.kinetic_dvm import (
     TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
     WALL_REFLECTION_MODELS as KINETIC_DVM_WALL_REFLECTION_MODELS,
     TransientDVM,
-    # The engine's own collector-jet spec validator, applied by the solver
-    # BEFORE the launch band is formed. The band divides R_E by R_N, so a
-    # spec that reaches it unchecked answers "R_N = 0" with a
-    # ZeroDivisionError instead of the interval statement the reader needs.
-    # Calling the engine's validator rather than restating its intervals here
-    # is what keeps one statement of them.
+    # The engine's own jet-spec validators, applied by the solver BEFORE the
+    # launch band is formed. The band divides R_E by R_N, so a spec that
+    # reaches it unchecked answers "R_N = 0" with a ZeroDivisionError instead
+    # of the interval statement the reader needs. All three surfaces are
+    # validated at the same point for that reason. Calling the engine's
+    # validators rather than restating their intervals here is what keeps one
+    # statement of them.
+    _validated_anode_jet as validated_dvm_anode_jet_spec,
+    _validated_cathode_jet as validated_dvm_cathode_jet_spec,
     _validated_collector_jet as validated_dvm_collector_jet_spec,
     launch_band_velocity_extent_cm_s,
     thermal_sonic_velocity_extent_cm_s,
@@ -4760,7 +4763,7 @@ class LAPDSim1D:
             refuse_dvm_cathode_jet_without_cathode_coupling(
                 self._input_dict, self._flags
             )
-            cathode_jet = {
+            cathode_jet = validated_dvm_cathode_jet_spec({
                 "R_N": float(
                     self._input_dict.get(
                         "neutral_kinetic_dvm_cathode_jet_R_N"
@@ -4774,7 +4777,7 @@ class LAPDSim1D:
                 "T_launch_eV": self._input_dict.get(
                     "neutral_kinetic_dvm_cathode_jet_T_launch_eV"
                 ),
-            }
+            })
         self._dvm_cathode_jet = cathode_jet
         self._dvm_cadence_s = cadence
         self._dvm_transfer_relax_fraction = relax_fraction
@@ -4816,7 +4819,7 @@ class LAPDSim1D:
                     "exactly one interior anode face, or "
                     "neutral_kinetic_dvm_anode_jet = False"
                 )
-            anode_jet = {
+            anode_jet = validated_dvm_anode_jet_spec({
                 "R_N": float(
                     self._input_dict.get(
                         "neutral_kinetic_dvm_anode_jet_R_N"
@@ -4830,7 +4833,7 @@ class LAPDSim1D:
                 "T_launch_eV": self._input_dict.get(
                     "neutral_kinetic_dvm_anode_jet_T_launch_eV"
                 ),
-            }
+            })
         self._dvm_anode_jet = anode_jet
         # The collector-side energetic return, default off and ABSENT rather
         # than present at a neutral setting, exactly as the two jets above

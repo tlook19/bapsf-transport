@@ -76,6 +76,14 @@ leading first-order coefficient is (theta - 1/2) = 0.1 of backward Euler's, so
 the second-order term still contributes at these dt. Read shifted as a scale
 check.
 
+EXIT CODE. 0 when BOTH preconditions hold -- floors inert in every run and the
+stiffest conduction mode resolved at every dt of the triplet -- and 1 when
+either fails, in which case the orders printed are not measurements and the
+closing lines say which precondition failed. The exit code gates the
+PRECONDITIONS only: which order value counts as passing depends on the scheme,
+the splitting and the Picard count being asked about, and is the caller's
+question. Whether the numbers mean anything at all is not.
+
 Usage:
     python scripts/gates/verify_sim1d_order.py
     python scripts/gates/verify_sim1d_order.py --picard 4 --splitting strang
@@ -517,7 +525,23 @@ def main(argv=None):
             "meaningful."
         )
     print("-" * 76)
-    return 0
+    # THE EXIT CODE CARRIES THE PRECONDITIONS. This harness exited 0 whichever
+    # way the two lines above read, so a run whose orders it had just declared
+    # NOT MEANINGFUL was indistinguishable, to anything reading exit codes,
+    # from one whose orders it stood behind. The labelled output says which it
+    # was; the exit code now says the same thing.
+    #
+    # It is the PRECONDITIONS this gates on, not the order values: what number
+    # counts as passing is the caller's question and depends on the scheme,
+    # the splitting and the Picard count being asked about. What is not the
+    # caller's question is whether the numbers mean anything at all.
+    ok = not any_dirty and resolved
+    if not ok:
+        print(
+            "EXIT 1: at least one precondition failed, so the orders above "
+            "are not measurements."
+        )
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

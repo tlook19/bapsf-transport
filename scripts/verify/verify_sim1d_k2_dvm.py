@@ -3458,6 +3458,17 @@ def wr1_pins():
     Raises ``KeyError`` naming the closure if the suite is re-run under one
     the table does not pin -- a silently unpinned pass is exactly what this
     member exists to prevent.
+
+    WHAT THIS GUARD DOES NOT REACH. The eight pinned offsets (two closures x
+    four alpha) are specific to the exchange-closure SET *and* to the
+    ``wr_box`` fixture's velocity and axial grid: the offset they pin is the
+    accommodated share's velocity-RESOLUTION residue, so it moves with
+    ``nz``, ``nvz`` and ``nvp`` just as it moves with the closure. Only the
+    closure half is guarded -- an unpinned closure raises here, while a moved
+    fixture grid raises nothing anywhere and re-runs the pins against numbers
+    measured on a grid that no longer exists. Changing either the fixture
+    grid or the closure set therefore means re-measuring and re-registering
+    ALL EIGHT values, by hand, in the same change.
     """
     try:
         return WR1_OFFSET_PINS[EXCHANGE_MODEL]
