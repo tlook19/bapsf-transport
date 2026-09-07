@@ -8,15 +8,33 @@ from cablp.constants import ev_to_erg, kb_cgs
 from ..physics.kinetic_neutrals import T_WALL_K
 
 
+# The five ALWAYS-PACKED rows, in packed order. This tuple is NOT the packed
+# layout of any particular run -- it is the layout's fixed head. Up to four
+# optional rows follow it, each present only when its flag builds the field,
+# and they pack in the flag-introduction order the four names below are
+# declared in. `state_field_names(state)` returns the actual row order of a
+# state and is what a reader wanting THIS run's layout should call;
+# `len(STATE_NAMES_1D)` answers a different question and is not a row count.
+#
+# THE ROWS PACK BY PRESENCE, NOT BY POSITION, so "the sixth row" names no
+# fixed field: it is whichever optional field is the first one present. The
+# shipped reference configuration is the worked example -- it runs a kinetic
+# neutral closure, which clears `neutral_momentum`, so `M_n` is ABSENT and
+# the golden fixture's sixth row is the two-zone annulus density `nn_a`.
+# (The smoke case `golden-fixture-packed-row-count` ties that fixture's
+# recorded `fields_per_cell` to the live packing, so a flag change that moves
+# the layout cannot pass unnoticed.)
 STATE_NAMES_1D = ("n", "nn", "M", "Ee", "Ei")
-# The optional sixth field: axial neutral momentum,
-# present only when the `neutral_momentum` flag builds it. STATE_NAMES_1D
-# stays the 5-field tuple because it anchors the historical packed layout,
-# the golden fixture, and the HDF5 format.
+# Optional axial neutral momentum, present only when the
+# `neutral_momentum` flag builds it, and packed FIRST of the optional rows.
+# STATE_NAMES_1D stays the 5-field tuple because it anchors the historical
+# packed layout, the golden fixture, and the HDF5 format.
 NEUTRAL_MOMENTUM_NAME = "M_n"
 # The optional annulus neutral density: present only
 # when the `neutral_two_zone` flag builds it, and `nn` is then the COLUMN
-# density. Packed after M_n in flag-introduction order.
+# density. Packed after M_n in flag-introduction order -- which puts it in
+# the SIXTH row whenever M_n is absent, as it is under every kinetic neutral
+# closure.
 NEUTRAL_ANNULUS_NAME = "nn_a"
 # Optional annulus axial momentum for the kinetic-derived two-momentum
 # reduction. Packed after nn_a, so every existing 5/6/7-field layout remains

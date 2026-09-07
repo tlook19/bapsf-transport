@@ -25112,6 +25112,52 @@ def _case_prescribed_drive_handoff():
 
 
 # --------------------------------------------------------------------
+# golden-fixture-packed-row-count
+# --------------------------------------------------------------------
+@_case("golden-fixture-packed-row-count", historical_stance=True)
+def _case_golden_fixture_packed_row_count():
+    # STATE_NAMES_1D IS NOT A ROW COUNT. It names the five always-packed rows,
+    # the fixed head of the layout; the optional rows that follow are packed
+    # BY PRESENCE, so the packed width of any given run is a property of its
+    # flags and not of the tuple. The golden fixtures record a
+    # fields_per_cell of their own, and nothing tied the two together -- a
+    # reader who took len(STATE_NAMES_1D) for the fixture's row count would be
+    # wrong about the shipped reference configuration today, which packs a
+    # sixth row.
+    #
+    # The tie asserted here follows the stance by construction: it builds no
+    # config of its own (build_baseline_config()) and reads the widths the
+    # sidecars actually recorded, so a stance event that adds or drops an
+    # optional row moves both sides together and a change that moves only one
+    # of them fails here.
+    from baseline_sim1d import build_baseline_config
+
+    _pr_params, _pr_flags = build_baseline_config()
+    _pr_names = state_field_names(LAPDSim1D(_pr_params, _pr_flags).state)
+
+    # The head is the five always-packed rows, in order.
+    assert len(STATE_NAMES_1D) == 5, STATE_NAMES_1D
+    assert _pr_names[: len(STATE_NAMES_1D)] == tuple(STATE_NAMES_1D), _pr_names
+    # ... and the reference configuration packs strictly more than the head,
+    # which is the whole reason the tuple cannot serve as the row count.
+    assert len(_pr_names) > len(STATE_NAMES_1D), _pr_names
+
+    _pr_baselines = Path(__file__).resolve().parents[1] / "baselines"
+    _pr_widths = {}
+    for _pr_side in ("production_discharge.json", "golden_digest_4k.json"):
+        with open(_pr_baselines / _pr_side) as _pr_fh:
+            _pr_widths[_pr_side] = int(json.load(_pr_fh)["fields_per_cell"])
+        assert _pr_widths[_pr_side] == len(_pr_names), (
+            f"{_pr_side} records fields_per_cell="
+            f"{_pr_widths[_pr_side]} while the stance of record packs "
+            f"{len(_pr_names)} rows {_pr_names}"
+        )
+    # The two fixtures are captured from the same configuration, so they can
+    # never disagree with each other about the width either.
+    assert len(set(_pr_widths.values())) == 1, _pr_widths
+
+
+# --------------------------------------------------------------------
 # dvm-jet-rn-interval-refusals
 # --------------------------------------------------------------------
 @_case("dvm-jet-rn-interval-refusals")
@@ -25207,7 +25253,7 @@ def _case_smoke_summary():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 139, "historical_stance": 58}
+_CASE_CENSUS = {"total": 140, "historical_stance": 59}
 
 
 def _assert_case_census():
