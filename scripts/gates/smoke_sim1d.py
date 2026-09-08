@@ -18075,16 +18075,6 @@ def _case_dt_min_lock(no_source_params):
     else:
         raise AssertionError("dt_min lock guard did not fire past its threshold")
 
-    # The two runs above are the only places the suite drives each half of the
-    # lock's signal on its own -- (ii-c) sets the accepted flag and nothing
-    # else, the forced-clamp transient the raw flag and nothing else -- so the
-    # union census is asserted against THEM rather than against a second pair
-    # built to the same recipe, which could drift away from these.
-    return {
-        "dt_min_lock_snap_result": snap_result,
-        "dt_min_lock_transient_result": transient_result,
-    }
-
     # Misconfiguration is loud at CONSTRUCTION time, not hours into a run.
     for bad_lock in (0, -1, 2.5, float("nan"), "many"):
         try:
@@ -18097,6 +18087,16 @@ def _case_dt_min_lock(no_source_params):
             raise AssertionError(
                 f"dt_min_lock_max_steps accepted {bad_lock!r}"
             )
+
+    # The two runs above are the only places the suite drives each half of the
+    # lock's signal on its own -- (ii-c) sets the accepted flag and nothing
+    # else, the forced-clamp transient the raw flag and nothing else -- so the
+    # union census is asserted against THEM rather than against a second pair
+    # built to the same recipe, which could drift away from these.
+    return {
+        "dt_min_lock_snap_result": snap_result,
+        "dt_min_lock_transient_result": transient_result,
+    }
 
 
 # --------------------------------------------------------------------
