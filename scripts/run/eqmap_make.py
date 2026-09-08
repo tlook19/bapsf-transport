@@ -117,7 +117,8 @@ def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
     base that configuration's runs would have equilibrated to for themselves.
 
     ``stance`` is the configuration's committed NAME or the PATH of a
-    configuration file, or ``None`` for a map that names none. A map header written before configurations were named
+    configuration file, or ``None`` for a map that names none. A map header
+    written before configurations were named
     carries no stance name, and replaying one through here with ``None``
     reproduces exactly the configuration it was built at; a NEW map states its
     configuration, because the driver refuses to build one that does not.
