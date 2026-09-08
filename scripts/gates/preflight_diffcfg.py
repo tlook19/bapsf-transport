@@ -119,7 +119,7 @@ import compare_sim1d_es1 as cmp_es1  # noqa: E402
 import run_m6_point  # noqa: E402
 from extra_overrides import coerce_override  # noqa: E402
 from stance_config import (  # noqa: E402
-    available_stances, load_named_configuration,
+    available_stances, load_named_configuration_or_exit,
 )
 
 NAMESPACES = ("params", "flags")
@@ -409,7 +409,7 @@ def main(argv=None):
         # NAME or PATH, resolved by the loader: the file that was actually
         # read is what the reference line names, so a derived configuration
         # given by path is not reported as if it lived in scripts/stances/.
-        named = load_named_configuration(args.stance)
+        named = load_named_configuration_or_exit(args.stance)
         stance_params, stance_flags = default_config()
         stance_params.update(named.params)
         stance_flags.update(named.flags)

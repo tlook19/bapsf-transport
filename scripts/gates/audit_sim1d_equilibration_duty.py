@@ -36,7 +36,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config  # noqa: E402
 from stance_config import (  # noqa: E402
-    available_stances, load_named_configuration,
+    available_stances, load_named_configuration_or_exit,
 )
 
 
@@ -176,7 +176,7 @@ def main(argv=None):
 
     base_params, base_flags = default_config()
     if args.stance is not None:
-        named = load_named_configuration(args.stance)
+        named = load_named_configuration_or_exit(args.stance)
         base_params.update(named.params)
         base_flags.update(named.flags)
         if args.family is None:

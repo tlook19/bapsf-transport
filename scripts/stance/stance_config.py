@@ -81,6 +81,7 @@ saved trajectory can say which configuration produced it.
 """
 
 import hashlib
+import os
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -186,6 +187,21 @@ def without_mesh_sized_package(params, flags):
 MAX_CHAIN_FILES = 3
 
 
+class _UnresolvedConfigurationSpec(ValueError):
+    """A ``spec`` (name or path) that does not resolve to a configuration file.
+
+    Raised only by the two checks that a spec names something that EXISTS --
+    an unknown committed stance name, and a path with no file at it -- before
+    any file is opened. It stays a ``ValueError`` (an existing
+    ``except ValueError`` still catches it), but as a distinct subclass it is
+    what :func:`load_named_configuration_or_exit` and
+    :func:`load_configuration_or_exit` convert to a clean process exit. A
+    refusal about a spec's file CONTENT once it is found and opened -- an
+    unknown key, a bad base, a restated delta, a chain too deep -- is a plain
+    ``ValueError`` and is unaffected.
+    """
+
+
 @dataclass(frozen=True)
 class Stance:
     """One loaded configuration: its name, its file, and its two deltas.
@@ -240,7 +256,7 @@ def load_stance(name):
     path = STANCE_DIR / f"{name}{SUFFIX}"
     if not path.is_file():
         known = ", ".join(available_stances()) or "(none committed)"
-        raise ValueError(
+        raise _UnresolvedConfigurationSpec(
             f"unknown stance {name!r}: no {path.name} in {STANCE_DIR}. "
             f"Available stances: {known}"
         )
@@ -284,7 +300,7 @@ def load_named_configuration(spec):
     if "/" in text or "\\" in text or text.endswith(SUFFIX):
         path = Path(text)
         if not path.is_file():
-            raise ValueError(
+            raise _UnresolvedConfigurationSpec(
                 f"no configuration file at {path}. Name a committed "
                 f"configuration ({', '.join(available_stances()) or 'none'}) "
                 f"or the path of a configuration file; the LAPD reference "
@@ -292,6 +308,47 @@ def load_named_configuration(spec):
             )
         return _load(path.stem, path, ())
     return load_stance(text)
+
+
+def _exit_unresolved(error):
+    """Print ``error`` argparse-style and exit(2); never returns."""
+    prog = os.path.basename(sys.argv[0])
+    print(f"{prog}: error: {error}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def load_named_configuration_or_exit(spec):
+    """Return :func:`load_named_configuration`'s :class:`Stance`, or exit(2).
+
+    A misspelled stance name or a mistyped path is a USER INPUT mistake, not
+    a bug: the two "spec does not resolve" refusals
+    (:func:`load_named_configuration`'s own docstring names them) are caught
+    here and printed to stderr as ``<prog>: error: <the loader's message>``,
+    the same shape argparse itself uses for a parsing refusal, followed by
+    ``SystemExit(2)`` -- a clean exit, not a traceback. Every other refusal
+    (bad file content, a bad base, a solver construction error) is
+    unaffected and still raises through to a traceback, because it is not
+    about what the caller typed for ``spec``.
+    """
+    try:
+        return load_named_configuration(spec)
+    except _UnresolvedConfigurationSpec as error:
+        _exit_unresolved(error)
+
+
+def load_configuration_or_exit(spec):
+    """Return :func:`load_configuration`'s ``(params, flags, lineage)``, or exit(2).
+
+    The :func:`load_configuration` counterpart to
+    :func:`load_named_configuration_or_exit`, for a driver that wants the
+    resolved pair rather than the :class:`Stance`. Converts the same two
+    "spec does not resolve" refusals to a clean ``SystemExit(2)``; every
+    other refusal still raises through to a traceback.
+    """
+    try:
+        return load_configuration(spec)
+    except _UnresolvedConfigurationSpec as error:
+        _exit_unresolved(error)
 
 
 def stance_config(name):

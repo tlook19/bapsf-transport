@@ -102,7 +102,7 @@ from cablp.solvers._sim1d.results.io import save_result_hdf5  # noqa: E402
 from compare_sim1d_es1 import run_model  # noqa: E402
 from extra_overrides import parse_extra_overrides  # noqa: E402
 from stance_config import (  # noqa: E402
-    available_stances, load_named_configuration,
+    available_stances, load_named_configuration_or_exit,
 )
 
 # This instrument profiles a NAMED configuration -- ``--stance NAME_OR_PATH``
@@ -431,7 +431,7 @@ def _run_production(nx, tau_afterglow, exchange_model, t_end, extra_pairs,
     extra = {"tau_afterglow": tau_afterglow}
     configuration = None
     if stance is not None:
-        named = load_named_configuration(stance)
+        named = load_named_configuration_or_exit(stance)
         extra.update(named.params)
         configuration = named.lineage
     extra.update(parse_extra_overrides(extra_pairs, "--extra"))
@@ -543,7 +543,7 @@ def main(argv=None):
     # The mesh and the afterglow budget default to the NAMED configuration's
     # own, so the profile reports the cost of the configuration it names.
     if args.stance is not None:
-        _named_params = load_named_configuration(args.stance).params
+        _named_params = load_named_configuration_or_exit(args.stance).params
         if args.nx is None:
             args.nx = int(_named_params["nx"])
         if args.tau_afterglow is None:

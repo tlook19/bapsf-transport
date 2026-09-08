@@ -53,7 +53,7 @@ from stance_config import (  # noqa: E402
     STANCE_DIR,
     SUFFIX,
     available_stances,
-    load_configuration,
+    load_configuration_or_exit,
 )
 
 REFERENCE_CONFIGURATION = STANCE_DIR / f"g1atrim{SUFFIX}"
@@ -234,7 +234,7 @@ def _run_live(args):
             "--config <path.toml> for a configuration file, derived or not. "
             f"The LAPD reference configuration is {REFERENCE_CONFIGURATION}."
         )
-    params, flags, configuration = load_configuration(args.config)
+    params, flags, configuration = load_configuration_or_exit(args.config)
     if args.nx is not None:
         params["nx"] = args.nx
     configuration = configuration.with_identity(params, flags)

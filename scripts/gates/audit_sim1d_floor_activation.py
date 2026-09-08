@@ -74,7 +74,7 @@ from baseline_sim1d import (  # noqa: E402
     baseline_lineage,
     build_baseline_config,
 )
-from stance_config import available_stances, load_configuration  # noqa: E402
+from stance_config import available_stances, load_configuration_or_exit  # noqa: E402
 
 
 # A value sitting exactly on its floor round-trips through
@@ -375,7 +375,7 @@ def build_audit_config(args):
     if args.no_stance:
         params, flags = default_config()
         return params, flags, None
-    params, flags, lineage = load_configuration(args.stance)
+    params, flags, lineage = load_configuration_or_exit(args.stance)
     return params, flags, lineage
 
 

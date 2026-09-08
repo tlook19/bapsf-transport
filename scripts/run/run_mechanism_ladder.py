@@ -35,7 +35,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from compare_sim1d_es1 import run_model
-from stance_config import available_stances, load_named_configuration
+from stance_config import available_stances, load_named_configuration_or_exit
 from cablp.solvers._sim1d.core.model_families import values_equal
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
@@ -387,7 +387,7 @@ def main(argv=None):
     stance = None
     configuration = None
     if args.stance is not None:
-        stance = load_named_configuration(args.stance)
+        stance = load_named_configuration_or_exit(args.stance)
         superseded = sorted(
             key for key, value in stance.params.items()
             if key in extra and extra[key] != value

@@ -34,7 +34,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 
 from stance_config import (  # noqa: E402
     available_stances,
-    load_named_configuration,
+    load_named_configuration_or_exit,
     without_mesh_sized_package,
 )
 
@@ -169,7 +169,7 @@ def main(argv=None):
 
     base = (
         None if args.stance is None
-        else load_named_configuration(args.stance)
+        else load_named_configuration_or_exit(args.stance)
     )
     print(
         "sim1d stability sweep configuration: "
