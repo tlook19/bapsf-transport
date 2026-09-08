@@ -43,13 +43,24 @@ GATE REGISTRY
   FIXTURE: the golden config at nx=60 for the digest; ``default_config()``
   for the moment and kinetic-DVM A/B routes.
   PASS: every checkpoint and the final digest unchanged from the committed
-  reference; the config identity moves ONLY by the addition of the three new
-  keys, proven by a strip control that reproduces the base identity
-  bit-for-bit THROUGH THE GATE'S OWN EXPRESSION (the two golden references
-  legitimately carry different identities, so each must be computed through
-  its own); both routes row-by-row bit-identical to base with only the new
-  all-zero rows one-sided. The digest and A/B legs run outside this suite;
-  the strip control is checked here.
+  reference; the config identity carries this member's keys, certified by
+  two LIVE-computed controls -- PRESENCE (the declared key list is exactly
+  the ``electron_drift_`` keys the live resolved config carries, and
+  stripping them moves that config's identity) and SAME-OBJECT (the identity
+  this suite computes for the live resolved digest config equals the
+  ``config_identity`` in the digest gate's own committed reference, so both
+  gates are reading one config); both routes row-by-row bit-identical to
+  base with only the new all-zero rows one-sided. The digest and A/B legs
+  run outside this suite; the identity controls are checked here.
+
+  WHAT THE IDENTITY CONTROLS DO NOT CERTIFY: that the identity moves ONLY by
+  this member's keys relative to some earlier state of the configuration.
+  That claim needs a base identity fixed before the member existed, and the
+  identity hashes the WHOLE resolved config -- so any such pin parts company
+  with the live value at the first unrelated key addition or removal, for
+  reasons that have no bearing on these keys, and the control then fails on
+  its own bookkeeping instead of on its subject. The controls above are
+  computed live on every run and hold across any such rotation.
 
 **G2 -- the volume identity.**
   QUANTITY: ``total - (boundary_in - boundary_out + W_EMF)``, relative to the
@@ -203,6 +214,7 @@ the A/B bit-inertness reader
 """
 
 import argparse
+import json
 import sys
 from types import SimpleNamespace
 from pathlib import Path
@@ -240,40 +252,18 @@ from edt_consult_pins import (  # noqa: E402
 #: The consult's window, in seconds.
 WINDOW = (1.0e-4, 2.01e-2)
 
-#: The golden config identity WITHOUT this member's three keys, computed
-#: through the digest gate's OWN expression. G1's strip control must reproduce
-#: it. The two golden references carry different identities by design, so a
-#: control computed through the other expression matches neither.
-#:
-#: ROTATED with the golden references when [legacy-boundary-retirement] removed
-#: `characteristic_boundary` and `neutral_kinetic_dvm_tn_feedback`
-#: (retired; see commit 1fc05c9). The previous value, 21a9b476..., was
-#: this same quantity
-#: while those two keys still existed; stripping the three edt keys AND
-#: restoring those two reproduces it bit-for-bit, which is the proof that the
-#: move is those two keys and nothing else.
-BASE_COMMIT = "1fc05c9 minus the edt keys"
-BASE_CONFIG_IDENTITY = (
-    "7f2eadcb0b0610fa1ab6c8cd4fe174d61227ce1e2973e1d146cbbb1e91993d87"
-)
-
-#: The keys this branch adds, by namespace, for G1's strip control.
-#:
-#: EXTENDED 2026-08-31 by the two cathode-jet arming keys. They are not this
-#: member's physics -- they belong to the arming criterion -- but G1 measures
-#: the identity of the WHOLE golden config against a fixed pre-edt baseline,
-#: so every key added downstream of that baseline has to be stripped for the
-#: control to reach it. The alternative was to re-baseline
-#: ``BASE_CONFIG_IDENTITY`` on every unrelated config addition, which would
-#: destroy exactly the property it exists to pin: that this baseline is the
-#: config with the edt keys REMOVED, not merely some earlier config. Adding a
-#: name here is inert unless that key really is present, because the strip is
-#: a dict comprehension over keys that exist.
+#: The prefix this member's config keys share, and the keys themselves by
+#: namespace. G1's presence control scans the live resolved config for the
+#: prefix and requires the scan to return exactly these names, so a key
+#: dropped from the lists -- or one that no longer exists in the config --
+#: fails the gate instead of silently narrowing the control to whatever is
+#: left. Only this member's own keys belong here: the lists are the subject
+#: of the presence claim, not a strip list reaching back to some earlier
+#: state of the configuration.
+EDT_KEY_PREFIX = "electron_drift_"
 ADDED_PARAMS = (
     "electron_drift_charge_death",
     "electron_drift_anode_handshake",
-    "neutral_jet_arm_current_A",
-    "neutral_jet_disarm_current_A",
 )
 ADDED_FLAGS = ("electron_drift_transport",)
 
@@ -344,8 +334,41 @@ def _armed_golden(charge_death, anode_handshake):
 
 
 def gate1_strip_control(report):
-    """The added keys move the golden config identity and nothing else."""
-    from golden_digest_gate import DIGEST_PARAM_OVERRIDES, digest_config_identity
+    """This member's keys are in the golden config identity's payload.
+
+    Every reference this control compares against is computed or read LIVE,
+    in-process. It cannot be otherwise: the identity hashes the WHOLE
+    resolved config, so a hash pinned at a pre-member state of the code stops
+    describing "the config minus these keys" the moment any UNRELATED key is
+    added or removed downstream of it. A control built on such a pin then
+    fails on its own stale bookkeeping, which says nothing about the keys it
+    exists to check.
+
+    PRESENCE, in two parts. COVERAGE: ``ADDED_PARAMS``/``ADDED_FLAGS`` is
+        exactly the set of ``EDT_KEY_PREFIX`` keys the live resolved config
+        carries, so the control cannot shrink to a subset of the member's
+        keys without failing. IDENTITY: stripping those keys out of the live
+        resolved config moves its identity -- if it did not, the keys are
+        absent from the payload the identity hashes over and every identity
+        claim about them is vacuous.
+    SAME-OBJECT: the identity this suite computes equals the
+        ``config_identity`` recorded in the digest gate's own committed
+        reference -- the file that gate's ``--verify`` compares a fresh run
+        against -- so this suite and the digest gate are hashing one config
+        rather than two that merely resemble each other. That reference
+        rotates at each reviewed recapture, as a side effect of the work that
+        moves the config, so it never needs a hand-update here.
+
+    What no live control can supply is the ONLY-these-keys claim against an
+    earlier baseline: that needs a base identity fixed before the member
+    existed, and such a pin is precisely what stops being true at the next
+    unrelated rotation.
+    """
+    from golden_digest_gate import (
+        DEFAULT_REFERENCE,
+        DIGEST_PARAM_OVERRIDES,
+        digest_config_identity,
+    )
 
     params, flags = build_baseline_config(DIGEST_PARAM_OVERRIDES)
     live = digest_config_identity(params, flags)
@@ -353,19 +376,37 @@ def gate1_strip_control(report):
         k: v for k, v in params.items() if k not in ADDED_PARAMS
     }
     stripped_flags = {k: v for k, v in flags.items() if k not in ADDED_FLAGS}
-    recovered = digest_config_identity(stripped_params, stripped_flags)
-    report.note("G1", f"identity on this branch      {live}")
-    report.note("G1", f"identity with the keys strip {recovered}")
+    stripped = digest_config_identity(stripped_params, stripped_flags)
+    declared = set(ADDED_PARAMS) | set(ADDED_FLAGS)
+    carried = {k for k in (*params, *flags) if k.startswith(EDT_KEY_PREFIX)}
+    reference_identity = json.loads(DEFAULT_REFERENCE.read_text())[
+        "config_identity"
+    ]
+
+    report.note("G1", f"identity, live resolved config     {live}")
+    report.note("G1", f"identity, this member's keys strip {stripped}")
     report.note(
-        "G1",
-        f"identity at base {BASE_COMMIT}     {BASE_CONFIG_IDENTITY}",
+        "G1", f"identity, digest gate's reference  {reference_identity}"
     )
     report.check(
         "G1",
-        recovered == BASE_CONFIG_IDENTITY and live != BASE_CONFIG_IDENTITY,
-        f"strip control: the identity moves ONLY by the "
-        f"{len(ADDED_PARAMS) + len(ADDED_FLAGS)} keys added since this "
-        f"baseline (computed through the digest gate's own expression)",
+        declared == carried,
+        f"presence control, coverage: the {len(declared)} declared keys are "
+        f"exactly the {EDT_KEY_PREFIX!r} keys the live config carries "
+        f"(declared only: {sorted(declared - carried)}; "
+        f"carried only: {sorted(carried - declared)})",
+    )
+    report.check(
+        "G1",
+        stripped != live,
+        f"presence control, identity: stripping "
+        f"{', '.join(sorted(declared))} moves the live config identity",
+    )
+    report.check(
+        "G1",
+        live == reference_identity,
+        "same-object control: this suite's live identity equals the "
+        f"config_identity committed in {DEFAULT_REFERENCE.name}",
     )
 
 
