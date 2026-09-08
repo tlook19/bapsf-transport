@@ -26928,6 +26928,135 @@ def _case_cathode_enthalpy_on_beam_placement(
 
 
 # ----------------------------------------------------------------------
+# cell-role-whitelist-on-load
+# ----------------------------------------------------------------------
+@_case("cell-role-whitelist-on-load")
+def _case_cell_role_whitelist_on_load():
+    # THE ROLE VOCABULARY IS CLOSED, ON BOTH BOUNDARIES. `CELL_ROLES` names
+    # every string a resolved mesh may carry in `cell_role`. A load that met
+    # any other name used to return it in silence, and silence is the whole
+    # hazard: every role-keyed selection downstream -- `== "end_wall"`, the
+    # plasma-dead mask, the recycle routing -- then selects NOTHING, so the
+    # artifact reads like a legal run with its far end quietly missing.
+    #
+    # The check runs AFTER the retired-name alias map, so the two statements
+    # compose: a pre-rename artifact still reads through
+    # `LEGACY_CELL_ROLE_ALIASES`, and a name that table does not map -- a name
+    # never issued, or one whose alias entry regressed -- is REFUSED.
+    import cablp.solvers._sim1d.results.io as _cw_io
+    from cablp.solvers._sim1d.core.geometry import (
+        CELL_ROLES,
+        PLASMA_DEAD_ROLES,
+        _assert_known_cell_roles,
+    )
+    from cablp.solvers._sim1d.results.io import (
+        CELL_ROLE_SHIM_ATTR,
+        save_result_hdf5,
+    )
+
+    # (iv) THE REGISTRY CONTRACT. The plasma-dead roles are a subset of the
+    # accepted set -- a role added to one and forgotten in the other would
+    # make a live mask name something no mesh can carry -- and the retired
+    # far-end name is deliberately NOT a member: it reaches a current name
+    # through the alias table or not at all.
+    assert PLASMA_DEAD_ROLES <= CELL_ROLES, PLASMA_DEAD_ROLES - CELL_ROLES
+    assert "collector" not in CELL_ROLES
+    # ...and the builder-side half of "cannot desync" refuses too, which is
+    # what keeps the assembly and the registry moving in one commit.
+    try:
+        _assert_known_cell_roles(np.asarray(["column", "sausage"], dtype=object))
+    except ValueError as _cw_bexc:
+        assert "sausage" in str(_cw_bexc), _cw_bexc
+    else:
+        raise AssertionError("the builder accepted an unregistered role")
+
+    # NO SOLVE: t_end = 0.0 writes the initial state and stops, which is all a
+    # role round-trip needs. The equilibration flag is cleared because run()
+    # does not equilibrate and says so loudly; nothing here reads nn.
+    _cw_params, _cw_flags = default_config()
+    _cw_flags["neutral_equilibration"] = False
+    _cw_result = LAPDSim1D(_cw_params, _cw_flags).run(t_end=0.0)
+
+    with tempfile.TemporaryDirectory() as _cw_tmp:
+        _cw_room = Path(_cw_tmp)
+
+        def _cw_written(name, role=None):
+            """Save the result, optionally overwriting its LAST stored role."""
+            target = _cw_room / name
+            save_result_hdf5(target, _cw_result)
+            if role is not None:
+                with h5py.File(target, "r+") as _cw_file:
+                    _cw_file["geometry/cell_role"][-1] = role
+            return target
+
+        # (i) A FRESHLY WRITTEN FILE ROUND-TRIPS UNTOUCHED. Every role it
+        # carries is registered, so neither the alias map nor the whitelist
+        # has anything to do and the shim attribute says so.
+        _cw_h5 = _cw_written("roles.h5")
+        _cw_loaded = load_result_hdf5(_cw_h5)
+        _cw_roles = {str(_cw_r) for _cw_r in _cw_loaded.cell_role}
+        assert _cw_roles <= CELL_ROLES, _cw_roles - CELL_ROLES
+        assert getattr(_cw_loaded, CELL_ROLE_SHIM_ATTR) is False
+        assert str(_cw_loaded.cell_role[-1]) == "end_wall"
+
+        # (ii) THE SAME FILE WITH ONE ROLE REWRITTEN IN PLACE to a string no
+        # mesh ever issued. The refusal names the file, the offending string
+        # and the accepted set, and points at the one route a retired name
+        # has. `endwall` is chosen to be one underscore from a real role:
+        # a typo is exactly how this arrives in practice.
+        _cw_bad = _cw_written("unknown_role.h5", "endwall")
+        try:
+            load_result_hdf5(_cw_bad)
+        except ValueError as _cw_exc:
+            _cw_msg = str(_cw_exc)
+        else:
+            raise AssertionError("an unregistered cell_role was ACCEPTED")
+        assert "endwall" in _cw_msg, _cw_msg
+        assert str(_cw_bad) in _cw_msg, _cw_msg
+        assert "'end_wall'" in _cw_msg, _cw_msg
+        assert "LEGACY_CELL_ROLE_ALIASES" in _cw_msg, _cw_msg
+
+        # (iii) A PRE-RENAME ARTIFACT still reads, through the alias table,
+        # and the load reports that it did.
+        _cw_old = _cw_written("pre_rename.h5", "collector")
+        _cw_old_loaded = load_result_hdf5(_cw_old)
+        assert getattr(_cw_old_loaded, CELL_ROLE_SHIM_ATTR) is True
+        assert str(_cw_old_loaded.cell_role[-1]) == "end_wall"
+        assert {
+            str(_cw_r) for _cw_r in _cw_old_loaded.cell_role
+        } <= CELL_ROLES
+
+        # ...AND THE SAME FILE WITH THE ALIAS TABLE EMPTIED. This is the
+        # scenario the whitelist exists for: a retired name whose alias entry
+        # is gone is not a name the reader can act on, and before the
+        # whitelist it loaded in silence. Emptying the table is the only way
+        # to show that the refusal is what stands behind the alias map rather
+        # than a second copy of it.
+        assert _cw_io.LEGACY_CELL_ROLE_ALIASES == {"collector": "end_wall"}
+        _cw_kept_aliases = _cw_io.LEGACY_CELL_ROLE_ALIASES
+        _cw_io.LEGACY_CELL_ROLE_ALIASES = {}
+        try:
+            load_result_hdf5(_cw_old)
+        except ValueError as _cw_rexc:
+            _cw_rmsg = str(_cw_rexc)
+        else:
+            raise AssertionError(
+                "'collector' was ACCEPTED with the alias table emptied"
+            )
+        finally:
+            _cw_io.LEGACY_CELL_ROLE_ALIASES = _cw_kept_aliases
+        assert "collector" in _cw_rmsg, _cw_rmsg
+        assert "LEGACY_CELL_ROLE_ALIASES" in _cw_rmsg, _cw_rmsg
+
+        # The restore is a fact to assert, not a hope: the table is back and
+        # the very same file reads again.
+        assert _cw_io.LEGACY_CELL_ROLE_ALIASES == {"collector": "end_wall"}
+        assert getattr(
+            load_result_hdf5(_cw_old), CELL_ROLE_SHIM_ATTR
+        ) is True
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -26936,7 +27065,7 @@ def _case_cathode_enthalpy_on_beam_placement(
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 151, "historical_stance": 64}
+_CASE_CENSUS = {"total": 152, "historical_stance": 64}
 
 
 def _assert_case_census():
