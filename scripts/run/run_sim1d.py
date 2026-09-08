@@ -126,11 +126,25 @@ def main(argv=None):
     )
     # The clamp no longer appears in the constraint histogram above (it is a
     # fact about the step, not a bound), so report the census explicitly.
+    # Three counts, not one. ``clamped_steps`` is the RAW clamp (a bound asked
+    # for less than dt_min); ``accepted_clamped_steps`` is the disjoint other
+    # half (a cap or the retry ladder pushed the ACCEPTED step under the floor
+    # while no bound asked for it); ``lock_steps`` is their union, which is the
+    # signal the run loop's dt_min lock counts. Printing the raw half alone
+    # reads as a quiet run through exactly the grind the lock exists to catch.
     print(
         "sim1d dt_min clamp: "
         f"clamped_steps={summary.dt_min_clamped_step_count}, "
         f"max_consecutive={summary.max_consecutive_dt_min_clamped_steps}, "
-        f"hard_zero_steps={summary.dt_min_hard_zero_step_count}"
+        f"hard_zero_steps={summary.dt_min_hard_zero_step_count}, "
+        f"accepted_clamped_steps={summary.dt_min_accepted_clamped_step_count}, "
+        f"lock_steps={summary.dt_min_lock_step_count}, "
+        f"lock_signal_overlap={summary.dt_min_lock_signal_overlap_count}"
+        + (
+            ""
+            if summary.dt_min_lock_accepted_signal_present
+            else " (accepted clamp flag absent: lock_steps is the raw count)"
+        )
     )
     # Cathode clamp census. A cathode solve whose root sits above the composed
     # ceiling is clamped to the ceiling and tagged capability_limited, and

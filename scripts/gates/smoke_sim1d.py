@@ -17840,6 +17840,7 @@ print(json.dumps({
 @_case(
     "dt-min-lock",
     historical_stance=True,
+    provides=("dt_min_lock_snap_result", "dt_min_lock_transient_result"),
 )
 def _case_dt_min_lock(no_source_params):
     # ---- dt_min lock: honest labeling, census, loud failure ----------------
@@ -18073,6 +18074,16 @@ def _case_dt_min_lock(no_source_params):
         assert "modelling breakdown" in lock_message
     else:
         raise AssertionError("dt_min lock guard did not fire past its threshold")
+
+    # The two runs above are the only places the suite drives each half of the
+    # lock's signal on its own -- (ii-c) sets the accepted flag and nothing
+    # else, the forced-clamp transient the raw flag and nothing else -- so the
+    # union census is asserted against THEM rather than against a second pair
+    # built to the same recipe, which could drift away from these.
+    return {
+        "dt_min_lock_snap_result": snap_result,
+        "dt_min_lock_transient_result": transient_result,
+    }
 
     # Misconfiguration is loud at CONSTRUCTION time, not hours into a run.
     for bad_lock in (0, -1, 2.5, float("nan"), "many"):
@@ -27396,6 +27407,89 @@ def _case_configuration_file_value_typed_to_template():
 
 
 # ----------------------------------------------------------------------
+# dt-min-lock-union-summary
+# ----------------------------------------------------------------------
+@_case("dt-min-lock-union-summary")
+def _case_dt_min_lock_union_summary(
+    dt_min_lock_snap_result, dt_min_lock_transient_result
+):
+    # THE REPORTED CENSUS MUST BE THE SIGNAL THE GUARD COUNTS. The run loop's
+    # dt_min lock fires on the OR of two disjoint per-step flags, but the
+    # health summary reported only the raw one -- so the (ii-c) grind, whose
+    # every step sets the accepted flag and none the raw one, read out as
+    # "clamped_steps=0": a clean run, in exactly the failure mode the lock
+    # exists to catch. The union is now its own field beside the two parts,
+    # additive and folded into neither.
+    snap = summarize_result(dt_min_lock_snap_result)
+    # (i) THE GRIND THE RAW COUNT CANNOT SEE. Every step is an accepted step
+    # below dt_min, no step is a raw clamp, and the union is the whole run.
+    assert snap.dt_min_clamped_step_count == 0
+    assert snap.below_dt_min_step_count == dt_min_lock_snap_result.steps
+    assert (
+        snap.dt_min_accepted_clamped_step_count
+        == dt_min_lock_snap_result.steps
+    )
+    assert snap.dt_min_lock_step_count == dt_min_lock_snap_result.steps
+    assert snap.dt_min_lock_accepted_signal_present is True
+    # DISJOINTNESS IS CHECKED, NOT ASSUMED. The raw flag needs the raw bound
+    # below dt_min and the accepted flag needs it strictly above, so no step
+    # can set both; the census reports a violation count so that construction
+    # property is a reading rather than a claim.
+    assert snap.dt_min_lock_signal_overlap_count == 0
+
+    transient = summarize_result(dt_min_lock_transient_result)
+    # (ii) THE MIRROR: the forced-clamp run drives the other half alone.
+    assert transient.dt_min_clamped_step_count == 5
+    assert transient.dt_min_accepted_clamped_step_count == 0
+    assert transient.dt_min_lock_step_count == 5
+    assert transient.dt_min_lock_signal_overlap_count == 0
+    for summary in (snap, transient):
+        # The union covers each part and, the two being disjoint, is exactly
+        # their sum.
+        assert summary.dt_min_lock_step_count >= (
+            summary.dt_min_clamped_step_count
+        )
+        assert summary.dt_min_lock_step_count >= (
+            summary.dt_min_accepted_clamped_step_count
+        )
+        assert summary.dt_min_lock_step_count == (
+            summary.dt_min_clamped_step_count
+            + summary.dt_min_accepted_clamped_step_count
+        )
+        assert summary.dt_min_lock_signal_overlap_count == 0
+
+    # (iii) A RESULT THAT CANNOT REPORT THE ACCEPTED HALF SAYS SO. Stripping
+    # the flag off the diagnostics leaves the union readable only as the raw
+    # count; the presence field is what keeps that partial census from passing
+    # as the whole signal.
+    stripped = SimpleNamespace(
+        **{
+            field: getattr(dt_min_lock_transient_result, field)
+            for field in dir(dt_min_lock_transient_result)
+            if not field.startswith("_") and field != "diagnostics"
+        },
+        diagnostics=[
+            SimpleNamespace(
+                **{
+                    name: value
+                    for name, value in dataclasses.asdict(diag).items()
+                    if name != "clamped_to_dt_min_accepted"
+                }
+            )
+            for diag in dt_min_lock_transient_result.diagnostics
+        ],
+    )
+    stripped_summary = summarize_result(stripped)
+    assert stripped_summary.dt_min_lock_accepted_signal_present is False
+    assert stripped_summary.dt_min_accepted_clamped_step_count == 0
+    assert (
+        stripped_summary.dt_min_lock_step_count
+        == stripped_summary.dt_min_clamped_step_count
+        == 5
+    )
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -27404,7 +27498,7 @@ def _case_configuration_file_value_typed_to_template():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 153, "historical_stance": 64}
+_CASE_CENSUS = {"total": 154, "historical_stance": 64}
 
 
 def _assert_case_census():

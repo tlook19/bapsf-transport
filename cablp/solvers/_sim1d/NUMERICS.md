@@ -317,7 +317,11 @@ clamped_to_dt_min  OR  (accepted_dt <= dt_min(1 + 1e-9)  AND  dt_raw > dt_min(1 
 evaluated after acceptance, the relative slack keeping a step that merely lands
 on the floor from counting, and the run loop's own caps and the retry ladder
 being able to push an accepted step under the floor while no candidate asked for
-less.
+less. The two operands are disjoint — the first needs `dt_raw` below
+$\Delta t_\text{min}$ and the second needs it strictly above — so the union is
+their sum. The health census reports that union as `dt_min_lock_step_count`
+beside each part under its own name, together with a count of steps setting
+both, which is the disjointness read out rather than assumed.
 
 ## Step acceptance and rejection
 
