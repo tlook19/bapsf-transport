@@ -2146,7 +2146,7 @@ class LAPDSim1D:
             # boundary operator's own flux and is honest without a circuit.
             raise ValueError(
                 "end_wall_sheath_full_debit cannot arm: this configuration "
-                "does not supply a end-wall-role plasma-absorbing face, "
+                "does not supply an end-wall-role plasma-absorbing face, "
                 "which is the face whose collected electrons are charged the "
                 "sheath fall."
             )

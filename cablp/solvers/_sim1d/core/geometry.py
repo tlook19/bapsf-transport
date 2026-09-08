@@ -3,10 +3,61 @@ from dataclasses import dataclass
 import numpy as np
 
 
+# THE ACCEPTED CELL-ROLE VOCABULARY -- the single registry of every string a
+# resolved mesh may carry in ``cell_role``, and the one the rest of the package
+# reads. Two consumers keep it honest: ``_assert_known_cell_roles`` checks the
+# mesh builder's assembled roles against it once per construction, so the
+# builder and this set cannot desync; and ``load_result_hdf5`` refuses a saved
+# trajectory whose roles are not named here. An unrecognised role is SILENT
+# breakage rather than an error -- every role-keyed selection downstream
+# (``== "end_wall"``, the plasma-dead mask, the recycle routing) simply selects
+# nothing -- which is why it is refused at both boundaries instead.
+#
+# RETIRED names are deliberately NOT members. A saved artifact written under an
+# older name reaches a current one only through ``LEGACY_CELL_ROLE_ALIASES`` in
+# ``results/io.py``; a retired name that table does not map is refused.
+CELL_ROLES = frozenset(
+    {
+        "plenum",
+        "obstruction",
+        "cathode",
+        "gap",
+        "puff",
+        "column",
+        "end",
+        "end_wall",
+    }
+)
+
 # Roles that carry no plasma: the machine behind the cathode. The plasma domain
 # is bounded inside the neutral domain by a reflecting face wherever a
 # plasma-dead cell abuts a live one.
 PLASMA_DEAD_ROLES = frozenset({"plenum", "obstruction"})
+
+# The subset relation is a fact about the two sets above, checked at import so a
+# role added to one and forgotten in the other cannot ship. An explicit raise,
+# not ``assert``: ``python -O`` strips the latter.
+if not PLASMA_DEAD_ROLES <= CELL_ROLES:
+    raise AssertionError(
+        "PLASMA_DEAD_ROLES must be a subset of CELL_ROLES; "
+        f"{sorted(PLASMA_DEAD_ROLES - CELL_ROLES)} is not an accepted role"
+    )
+
+
+def _assert_known_cell_roles(cell_role):
+    """Refuse an assembled ``cell_role`` naming a role :data:`CELL_ROLES` lacks.
+
+    Run once per geometry construction, on the resolved cell array: a set
+    membership per distinct string and no arithmetic, so no trajectory moves.
+    Raises ``ValueError`` naming the offending strings and the accepted set.
+    """
+    unknown = sorted({str(role) for role in cell_role} - CELL_ROLES)
+    if unknown:
+        raise ValueError(
+            "assembled cell_role carries role name(s) CELL_ROLES does not "
+            f"accept: {unknown}. Accepted: {sorted(CELL_ROLES)}. The mesh "
+            "builder and CELL_ROLES must move in the same commit."
+        )
 
 
 @dataclass(frozen=True)
@@ -1039,6 +1090,7 @@ def _assemble_geometry(
     neutral_face_area_cm2 = _face_min(neutral_area_cm2)
     neutral_face_hydraulic_radius_cm = _face_min(neutral_hydraulic_radius_cm)
 
+    _assert_known_cell_roles(cell_role)
     dead = np.asarray([role in PLASMA_DEAD_ROLES for role in cell_role], dtype=bool)
     plasma_active = ~dead
     # Absorbing faces are the plasma-terminating surfaces: the whole cross-section

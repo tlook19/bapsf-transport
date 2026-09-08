@@ -1046,7 +1046,7 @@ def neutral_source_sink_rhs(
                 dEn += neutral_energy_floor(puff)
     if pump_enabled:
         # The unmodeled pump elbow folds into an effective speed on the plenum
-        # a end-wall-side pump has no elbow in front of it.
+        # an end-wall-side pump has no elbow in front of it.
         S_left = _effective_pump_speed(
             S_pump_L,
             pump_elbow_conductance_lps if is_plenum_cell(geometry, pump_left_index)
