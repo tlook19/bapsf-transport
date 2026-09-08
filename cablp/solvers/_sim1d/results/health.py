@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from ..core.geometry import PLASMA_DEAD_ROLES
+
 
 def summarize_result(result):
     """Return lightweight health diagnostics for a saved sim1d trajectory."""
@@ -149,6 +151,17 @@ def summarize_result(result):
         below_dt_min_step_cap_counts=dt_min_clamp_summary[
             "below_dt_min_step_caps"
         ],
+        # The dt_min LOCK's own signal: the union of the raw clamp above and
+        # the accepted-step clamp, which is what the run loop counts. Additive
+        # beside the two parts, never folded into either.
+        dt_min_lock_step_count=dt_min_clamp_summary["lock_steps"],
+        dt_min_accepted_clamped_step_count=dt_min_clamp_summary[
+            "lock_accepted"
+        ],
+        dt_min_lock_signal_overlap_count=dt_min_clamp_summary["lock_overlap"],
+        dt_min_lock_accepted_signal_present=dt_min_clamp_summary[
+            "lock_accepted_present"
+        ],
         dvm_arm_configured=_dvm_arm_configured(result),
         dvm_transfer_ledger_census=_dvm_ledger_census_summary(result),
     )
@@ -189,7 +202,13 @@ def _plasma_active(result):
         return np.asarray(result.plasma_active, dtype=bool)
     roles = np.asarray(getattr(result, "cell_role", ()), dtype=object)
     if roles.size:
-        return ~np.isin(roles, ("plenum", "obstruction"))
+        # ``PLASMA_DEAD_ROLES`` itself, not a literal restating it: a role
+        # added there and forgotten here would silently read as plasma-live.
+        # ``np.isin`` wants a sequence rather than a set (it treats a set as a
+        # single object element), so the frozenset is sorted into one -- sorted
+        # rather than ``list`` only so the argument is reproducible; membership
+        # is order-independent, so the two spellings test identically.
+        return ~np.isin(roles, sorted(PLASMA_DEAD_ROLES))
     return np.ones(np.asarray(result.plasma_volume_cm3).shape, dtype=bool)
 
 
@@ -245,6 +264,10 @@ def _dt_min_clamp_summary(result):
     is read as the clamp flag. The fallback is unambiguous because the current
     solver never emits that label. ``dt_raw`` has no such fallback, so the
     hard-zero count reads 0 for those older files.
+
+    The counts here are the RAW clamp alone. The dt_min lock the run loop
+    enforces fires on a wider signal -- see :func:`_dt_min_lock_signal_summary`
+    -- which is reported beside them, never folded into them.
     """
     diagnostics = getattr(result, "diagnostics", ())
     clamped = np.asarray(
@@ -263,8 +286,15 @@ def _dt_min_clamp_summary(result):
         )
     )
     below = _below_dt_min_summary(result, diagnostics)
+    lock = _dt_min_lock_signal_summary(diagnostics, clamped)
     if not clamped.size or not np.any(clamped):
-        return {"clamped": 0, "hard_zero": hard_zero, "max_run": 0, **below}
+        return {
+            "clamped": 0,
+            "hard_zero": hard_zero,
+            "max_run": 0,
+            **below,
+            **lock,
+        }
     edges = np.diff(np.concatenate(([False], clamped, [False])).astype(np.int8))
     run_lengths = np.flatnonzero(edges == -1) - np.flatnonzero(edges == 1)
     return {
@@ -272,6 +302,71 @@ def _dt_min_clamp_summary(result):
         "hard_zero": hard_zero,
         "max_run": int(np.max(run_lengths)),
         **below,
+        **lock,
+    }
+
+
+_ACCEPTED_CLAMP_ABSENT = object()
+
+
+def _dt_min_lock_signal_summary(diagnostics, clamped):
+    """Census the signal the run loop's dt_min lock actually counts.
+
+    The lock does NOT count the raw clamp alone. Two disjoint per-step flags
+    exist and the guard counts their OR: ``clamped_to_dt_min`` (a candidate
+    bound asked for less than ``dt_min`` and was lifted up to the floor) and
+    ``clamped_to_dt_min_accepted`` (no candidate asked for less than
+    ``dt_min``, but a post-bound cap or the retry ladder carried the ACCEPTED
+    step under the floor anyway). Reading either one alone misreads the guard:
+    a save-cadence grind sets only the second, a drained floor-pinned cell only
+    the first.
+
+    Disjointness is a construction property -- the raw flag needs ``dt_raw``
+    below ``dt_min`` and the accepted flag needs ``dt_raw`` strictly above it
+    -- so the union equals the sum of the parts. It is CHECKED here rather
+    than assumed: ``lock_overlap`` counts the steps that set both, and a
+    non-zero reading means the two flags stopped being complementary.
+
+    Presence gating. A result whose diagnostics carry no
+    ``clamped_to_dt_min_accepted`` attribute at all cannot report the accepted
+    half; the union then reads as the raw count and ``lock_accepted_present``
+    says so, rather than passing off a partial census as the whole signal. A
+    FILE written before the flag existed is a different case: ``results/io.py``
+    fills the dataclass default 0.0 for a missing dataset, so such a result
+    reads present with an accepted count of 0 -- which lands on the same union
+    either way, those runs predating the flag entirely.
+
+    Reported as counts only. The lock's own criterion is CONSECUTIVENESS, and
+    that run length is already carried, for the raw half, by
+    ``max_consecutive_dt_min_clamped_steps``; nothing here redefines it.
+    """
+    raw_accepted = [
+        getattr(diag, "clamped_to_dt_min_accepted", _ACCEPTED_CLAMP_ABSENT)
+        for diag in diagnostics
+    ]
+    accepted_present = bool(raw_accepted) and all(
+        value is not _ACCEPTED_CLAMP_ABSENT for value in raw_accepted
+    )
+    accepted = np.asarray(
+        [
+            False if value is _ACCEPTED_CLAMP_ABSENT else bool(value)
+            for value in raw_accepted
+        ],
+        dtype=bool,
+    )
+    clamped = np.asarray(clamped, dtype=bool)
+    if not clamped.size or not accepted.size:
+        return {
+            "lock_steps": int(np.count_nonzero(clamped)),
+            "lock_accepted": 0,
+            "lock_overlap": 0,
+            "lock_accepted_present": accepted_present,
+        }
+    return {
+        "lock_steps": int(np.count_nonzero(clamped | accepted)),
+        "lock_accepted": int(np.count_nonzero(accepted)),
+        "lock_overlap": int(np.count_nonzero(clamped & accepted)),
+        "lock_accepted_present": accepted_present,
     }
 
 

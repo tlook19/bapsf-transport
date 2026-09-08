@@ -2,7 +2,12 @@ import math
 
 import numpy as np
 
-from ..core.geometry import is_plenum_cell, puff_cell_indices, pump_cell_indices
+from ..core.geometry import (
+    CELL_ROLES,
+    is_plenum_cell,
+    puff_cell_indices,
+    pump_cell_indices,
+)
 from ..core.state import ConservativeState1D, neutral_energy_floor
 from .puff_orifice import launch_row_for_grid
 from .sources import neutral_wind_velocity
@@ -1045,8 +1050,8 @@ def neutral_source_sink_rhs(
             if dEn is not None:
                 dEn += neutral_energy_floor(puff)
     if pump_enabled:
-        # The unmodeled pump elbow folds into an effective speed on the plenum
-        # an end-wall-side pump has no elbow in front of it.
+        # The unmodeled pump elbow folds into an effective speed on the
+        # plenum; an end-wall-side pump has no elbow in front of it.
         S_left = _effective_pump_speed(
             S_pump_L,
             pump_elbow_conductance_lps if is_plenum_cell(geometry, pump_left_index)
@@ -1193,7 +1198,17 @@ def puff_rate(sccm, valves, chamber_vol, delivery_fraction=1.0):
 # Roles a distributed gas puff may land on: the main plasma chamber, not the
 # plenum/obstruction behind the cathode, the cathode-anode gap, or the
 # end wall region.
-_PUFF_ELIGIBLE_ROLES = frozenset({"puff", "column", "source", "domain", "end"})
+_PUFF_ELIGIBLE_ROLES = frozenset({"puff", "column", "end"})
+
+# The subset relation is a fact about the two sets, checked at import so a
+# role added here and never accepted as a cell role -- or accepted once and
+# since retired -- cannot ship as a member no mesh can ever match. An explicit
+# raise, not ``assert``: ``python -O`` strips the latter.
+if not _PUFF_ELIGIBLE_ROLES <= CELL_ROLES:
+    raise AssertionError(
+        "_PUFF_ELIGIBLE_ROLES must be a subset of CELL_ROLES; "
+        f"{sorted(_PUFF_ELIGIBLE_ROLES - CELL_ROLES)} is not an accepted role"
+    )
 
 
 def gas_puff_rate_profile(

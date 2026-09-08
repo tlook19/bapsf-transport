@@ -76,6 +76,7 @@ The suppression is deliberately narrow in both directions:
 """
 
 import argparse
+import ast
 import contextlib
 import dataclasses
 import inspect
@@ -17840,6 +17841,7 @@ print(json.dumps({
 @_case(
     "dt-min-lock",
     historical_stance=True,
+    provides=("dt_min_lock_snap_result", "dt_min_lock_transient_result"),
 )
 def _case_dt_min_lock(no_source_params):
     # ---- dt_min lock: honest labeling, census, loud failure ----------------
@@ -18086,6 +18088,16 @@ def _case_dt_min_lock(no_source_params):
             raise AssertionError(
                 f"dt_min_lock_max_steps accepted {bad_lock!r}"
             )
+
+    # The two runs above are the only places the suite drives each half of the
+    # lock's signal on its own -- (ii-c) sets the accepted flag and nothing
+    # else, the forced-clamp transient the raw flag and nothing else -- so the
+    # union census is asserted against THEM rather than against a second pair
+    # built to the same recipe, which could drift away from these.
+    return {
+        "dt_min_lock_snap_result": snap_result,
+        "dt_min_lock_transient_result": transient_result,
+    }
 
 
 # --------------------------------------------------------------------
@@ -27400,6 +27412,89 @@ def _case_configuration_file_value_typed_to_template():
 
 
 # ----------------------------------------------------------------------
+# dt-min-lock-union-summary
+# ----------------------------------------------------------------------
+@_case("dt-min-lock-union-summary")
+def _case_dt_min_lock_union_summary(
+    dt_min_lock_snap_result, dt_min_lock_transient_result
+):
+    # THE REPORTED CENSUS MUST BE THE SIGNAL THE GUARD COUNTS. The run loop's
+    # dt_min lock fires on the OR of two disjoint per-step flags, but the
+    # health summary reported only the raw one -- so the (ii-c) grind, whose
+    # every step sets the accepted flag and none the raw one, read out as
+    # "clamped_steps=0": a clean run, in exactly the failure mode the lock
+    # exists to catch. The union is now its own field beside the two parts,
+    # additive and folded into neither.
+    snap = summarize_result(dt_min_lock_snap_result)
+    # (i) THE GRIND THE RAW COUNT CANNOT SEE. Every step is an accepted step
+    # below dt_min, no step is a raw clamp, and the union is the whole run.
+    assert snap.dt_min_clamped_step_count == 0
+    assert snap.below_dt_min_step_count == dt_min_lock_snap_result.steps
+    assert (
+        snap.dt_min_accepted_clamped_step_count
+        == dt_min_lock_snap_result.steps
+    )
+    assert snap.dt_min_lock_step_count == dt_min_lock_snap_result.steps
+    assert snap.dt_min_lock_accepted_signal_present is True
+    # DISJOINTNESS IS CHECKED, NOT ASSUMED. The raw flag needs the raw bound
+    # below dt_min and the accepted flag needs it strictly above, so no step
+    # can set both; the census reports a violation count so that construction
+    # property is a reading rather than a claim.
+    assert snap.dt_min_lock_signal_overlap_count == 0
+
+    transient = summarize_result(dt_min_lock_transient_result)
+    # (ii) THE MIRROR: the forced-clamp run drives the other half alone.
+    assert transient.dt_min_clamped_step_count == 5
+    assert transient.dt_min_accepted_clamped_step_count == 0
+    assert transient.dt_min_lock_step_count == 5
+    assert transient.dt_min_lock_signal_overlap_count == 0
+    for summary in (snap, transient):
+        # The union covers each part and, the two being disjoint, is exactly
+        # their sum.
+        assert summary.dt_min_lock_step_count >= (
+            summary.dt_min_clamped_step_count
+        )
+        assert summary.dt_min_lock_step_count >= (
+            summary.dt_min_accepted_clamped_step_count
+        )
+        assert summary.dt_min_lock_step_count == (
+            summary.dt_min_clamped_step_count
+            + summary.dt_min_accepted_clamped_step_count
+        )
+        assert summary.dt_min_lock_signal_overlap_count == 0
+
+    # (iii) A RESULT THAT CANNOT REPORT THE ACCEPTED HALF SAYS SO. Stripping
+    # the flag off the diagnostics leaves the union readable only as the raw
+    # count; the presence field is what keeps that partial census from passing
+    # as the whole signal.
+    stripped = SimpleNamespace(
+        **{
+            field: getattr(dt_min_lock_transient_result, field)
+            for field in dir(dt_min_lock_transient_result)
+            if not field.startswith("_") and field != "diagnostics"
+        },
+        diagnostics=[
+            SimpleNamespace(
+                **{
+                    name: value
+                    for name, value in dataclasses.asdict(diag).items()
+                    if name != "clamped_to_dt_min_accepted"
+                }
+            )
+            for diag in dt_min_lock_transient_result.diagnostics
+        ],
+    )
+    stripped_summary = summarize_result(stripped)
+    assert stripped_summary.dt_min_lock_accepted_signal_present is False
+    assert stripped_summary.dt_min_accepted_clamped_step_count == 0
+    assert (
+        stripped_summary.dt_min_lock_step_count
+        == stripped_summary.dt_min_clamped_step_count
+        == 5
+    )
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -27408,7 +27503,7 @@ def _case_configuration_file_value_typed_to_template():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 153, "historical_stance": 64}
+_CASE_CENSUS = {"total": 154, "historical_stance": 64}
 
 
 def _assert_case_census():
@@ -27426,6 +27521,73 @@ def _assert_case_census():
 
 
 _assert_case_census()
+
+
+# ----------------------------------------------------------------------
+# Case-body reachability, asserted at import.
+#
+# A case that ends in a ``return`` (the registry's way of handing values to a
+# later case) is one careless insertion away from burying the clauses that
+# follow it. Nothing catches that on its own: the suite still exits 0, the
+# case still "passes", and the buried assertions simply stop running -- the
+# worst failure a gate can have, because it is indistinguishable from a green
+# one. It happened, to eleven lines of a construction-refusal loop.
+#
+# So the shape is checked rather than trusted, syntactically: nothing after a
+# ``return`` or ``raise`` at the TOP LEVEL of a case body can execute, whatever
+# the values, and that is decidable from the parse tree alone. Only the
+# function's own top level is inspected -- a return inside an ``if`` or a
+# ``for`` says nothing about what follows the block, and the several cases
+# that raise inside a ``try``/``else`` are untouched.
+# ----------------------------------------------------------------------
+def _unreachable_case_statements(source, case_function_names):
+    """Return one ``(function, kind, terminator_line, dead_line)`` per offender.
+
+    Takes the SOURCE rather than reading a file, so the check can be pointed at
+    any revision of this module -- which is how its own negative control runs.
+    """
+    findings = []
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if node.name not in case_function_names:
+            continue
+        for index, statement in enumerate(node.body):
+            if not isinstance(statement, (ast.Return, ast.Raise)):
+                continue
+            if index + 1 < len(node.body):
+                findings.append(
+                    (
+                        node.name,
+                        "return" if isinstance(statement, ast.Return) else "raise",
+                        statement.lineno,
+                        node.body[index + 1].lineno,
+                    )
+                )
+            break
+    return findings
+
+
+def _assert_case_bodies_reachable():
+    """Fail at import if a registered case buries statements after a return."""
+    findings = _unreachable_case_statements(
+        Path(__file__).read_text(encoding="utf-8"),
+        {entry.fn.__name__ for entry in _CASES},
+    )
+    if findings:
+        where = "; ".join(
+            f"{name}: line {dead} onwards is unreachable past the {kind} "
+            f"at line {terminator}"
+            for name, kind, terminator, dead in findings
+        )
+        raise AssertionError(
+            "smoke case body has unreachable statements -- those assertions "
+            f"are silently not running: {where}. Move the terminating "
+            "statement to the END of the case body."
+        )
+
+
+_assert_case_bodies_reachable()
 
 
 def main(argv=None):
