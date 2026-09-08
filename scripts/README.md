@@ -21,7 +21,11 @@ identity. **No entry point that builds a solver has a bare mode.** Every driver 
 `run/`, the scorer's own run route in `score/compare_sim1d_es1.py`, and
 `gates/audit_sim1d_equilibration_duty.py` each take `--config`/`--stance` or an
 explicit `--no-stance`, so an artifact can always say which configuration
-produced it. One deliberate exception, which names a
+produced it. That value takes either form everywhere it is accepted: a
+committed configuration NAME in `stances/`, or the PATH of a configuration
+file, derived or not — so a derived configuration runs from where it lives,
+and the lineage recorded is the same either way. One deliberate exception,
+which names a
 configuration without being asked: `run/capture_phase3_rhs.py` runs one locked
 recipe and takes the reference configuration's name from it. Scoring an
 existing artifact (`compare_sim1d_es1.py --from-h5`) names nothing on purpose:
@@ -55,7 +59,8 @@ the radiation and power-ledger tools read a trajectory and report physics from
 it. A file belongs here when it *consumes* an h5 and says how the model did.
 
 **`stance/`** — everything that decides what the operating point IS.
-`stance_config.py` loads the committed stance; `g1_build_profiles.py`,
+`stance_config.py` resolves a configuration by committed name or by file
+path; `g1_build_profiles.py`,
 `build_msi_field_profile.py`, `sp3_build_nn0.py`, `puff_orifice.py` and the
 coil-field solvers build the per-cell profiles and rows the stance names; the
 circuit fits pin the drive constants. A file belongs here when

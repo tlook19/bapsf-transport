@@ -14,9 +14,12 @@ test, so everything else is frozen at the ES1 calibration.
 
 The rung is a DELTA, not a configuration. ``--es`` supplies the one measured
 machine-input pair and every switch below states one more override, but what
-those override is a NAMED configuration: ``--stance NAME`` applies a committed
-configuration file, and a rung that genuinely names none says so with
-``--no-stance``. There is no bare mode -- an unnamed rung stood on whichever
+those override is a NAMED configuration: ``--stance NAME_OR_PATH`` applies a
+committed configuration name in ``scripts/stances/`` or the PATH of a
+configuration file (derived or not) -- either way the file's lineage (name,
+base chain, file sha256, identity) is recorded in the saved run -- and a rung
+that genuinely names none says so with ``--no-stance``. There is no bare mode
+-- an unnamed rung stood on whichever
 values the shared driver dicts happened to hold, which is not a configuration
 anyone can name afterwards.
 """
@@ -33,7 +36,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from compare_sim1d_es1 import run_model
-from stance_config import available_stances, load_stance
+from stance_config import available_stances, load_named_configuration
 from cablp.solvers._sim1d.core.model_families import values_equal
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
@@ -194,9 +197,12 @@ def main(argv=None):
     p.add_argument("--es", type=int, choices=(1, 2, 3), required=True)
     stance_group = p.add_mutually_exclusive_group()
     stance_group.add_argument(
-        "--stance", metavar="NAME", default=None,
-        help="committed configuration file (scripts/stances/NAME.toml) "
-             "applied over this rung's overrides. Available: "
+        "--stance", metavar="NAME_OR_PATH", default=None,
+        help="configuration applied over this rung's overrides: a committed "
+             "configuration name in scripts/stances/, or the path of a "
+             "configuration file (derived or not), whose lineage -- name, "
+             "base chain, file sha256, identity -- is recorded in the saved "
+             "run exactly as for a name. Available: "
              + (", ".join(available_stances()) or "(none committed)"))
     stance_group.add_argument(
         "--no-stance", action="store_true",
@@ -382,7 +388,7 @@ def main(argv=None):
     stance = None
     configuration = None
     if args.stance is not None:
-        stance = load_stance(args.stance)
+        stance = load_named_configuration(args.stance)
         superseded = sorted(
             key for key, value in stance.params.items()
             if key in extra and extra[key] != value

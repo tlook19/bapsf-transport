@@ -462,9 +462,10 @@ def main(argv=None):
     )
     stance_group = parser.add_mutually_exclusive_group()
     stance_group.add_argument(
-        "--stance", metavar="NAME", default=None,
-        help="committed configuration file (scripts/stances/NAME.toml) this "
-             "audit measures. Available: "
+        "--stance", metavar="NAME_OR_PATH", default=None,
+        help="configuration this audit measures: a committed configuration "
+             "name in scripts/stances/, or the path of a configuration file "
+             "(derived or not). Available: "
              + (", ".join(available_stances()) or "(none committed)"),
     )
     stance_group.add_argument(

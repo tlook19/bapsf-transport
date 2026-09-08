@@ -58,10 +58,13 @@ Reference sides, exactly one required:
 
 ``--reference REF.h5``
     the config a saved run recorded.
-``--stance NAME``
-    the config a committed stance file names (``scripts/stances/NAME.toml``,
-    applied to ``default_config()``), so a candidate can be diffed against the
-    stance of record without a saved run to point at.
+``--stance NAME_OR_PATH``
+    the config a named configuration resolves to, applied to
+    ``default_config()``, so a candidate can be diffed against the
+    configuration of record without a saved run to point at. The value is
+    either a committed configuration name in ``scripts/stances/`` or the PATH
+    of a configuration file (derived or not); the reference line names the
+    file that was actually read.
 
 Usage:
 
@@ -71,6 +74,13 @@ Usage:
 
     python scripts/gates/preflight_diffcfg.py --stance g1atrim \\
         m6 -- --es 1 --stance g1atrim --sgp 9010 --save-h5 /dev/null
+
+    python scripts/gates/preflight_diffcfg.py \\
+        --stance scripts/stances/examples/g1atrim_fluid_comparator.toml \\
+        --expect 'params:V_bank=177.843' \\
+        m6 -- --es 1 \\
+        --stance scripts/stances/examples/g1atrim_fluid_comparator.toml \\
+        --sgp 9010 --save-h5 /dev/null
 
     python scripts/gates/preflight_diffcfg.py --reference REF.h5 \\
         --expect 'params:b_ion_neutral_drag=1.0' \\
@@ -103,12 +113,33 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
     if _dir not in _sys.path:
         _sys.path.insert(0, _dir)
 
+from cablp.solvers._sim1d import default_config  # noqa: E402
+
 import compare_sim1d_es1 as cmp_es1  # noqa: E402
 import run_m6_point  # noqa: E402
 from extra_overrides import coerce_override  # noqa: E402
-from stance_config import available_stances, stance_config  # noqa: E402
+from stance_config import (  # noqa: E402
+    available_stances, load_named_configuration,
+)
 
 NAMESPACES = ("params", "flags")
+
+
+def _display_path(path):
+    """Return ``path`` as it reads from the checkout root, absolute if outside.
+
+    The reference line must name the file the loader actually opened, and that
+    file is named the same way whichever checkout ran the pre-flight -- a
+    configuration inside the tree reads as its repository path
+    (``scripts/stances/g1atrim.toml``) rather than as one worktree's absolute
+    location, and a configuration file kept outside the tree reads absolute
+    because it has no repository path to give.
+    """
+    resolved = Path(path).resolve()
+    try:
+        return str(resolved.relative_to(_SCRIPTS.parent))
+    except ValueError:
+        return str(resolved)
 
 
 class _Captured(Exception):
@@ -305,10 +336,12 @@ def build_parser():
     )
     reference.add_argument(
         "--stance",
-        metavar="NAME",
+        metavar="NAME_OR_PATH",
         help=(
-            "committed stance file (scripts/stances/NAME.toml) applied to "
-            "default_config() as the baseline, instead of a saved run. "
+            "configuration applied to default_config() as the baseline, "
+            "instead of a saved run: a committed configuration name in "
+            "scripts/stances/, or the path of a configuration file (derived "
+            "or not), whose resolved file is named on the reference line. "
             "Available: " + (", ".join(available_stances()) or "(none committed)")
         ),
     )
@@ -373,10 +406,16 @@ def main(argv=None):
         build = lambda: cmp_es1.run_model(**kwargs)  # noqa: E731
 
     if args.stance is not None:
-        stance_params, stance_flags = stance_config(args.stance)
+        # NAME or PATH, resolved by the loader: the file that was actually
+        # read is what the reference line names, so a derived configuration
+        # given by path is not reported as if it lived in scripts/stances/.
+        named = load_named_configuration(args.stance)
+        stance_params, stance_flags = default_config()
+        stance_params.update(named.params)
+        stance_flags.update(named.flags)
         reference_params = _as_recorded(stance_params)
         reference_flags = _as_recorded(stance_flags)
-        source = f"stance {args.stance} (scripts/stances/{args.stance}.toml)"
+        source = f"stance {named.name} ({_display_path(named.path)})"
     else:
         reference_params, reference_flags = read_reference(args.reference)
         source = args.reference

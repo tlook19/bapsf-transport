@@ -35,7 +35,9 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config  # noqa: E402
-from stance_config import available_stances, load_stance  # noqa: E402
+from stance_config import (  # noqa: E402
+    available_stances, load_named_configuration,
+)
 
 
 def _instrument(sim, ledger):
@@ -149,9 +151,10 @@ def main(argv=None):
                          "production point) on top of default_config")
     stance_group = ap.add_mutually_exclusive_group()
     stance_group.add_argument(
-        "--stance", metavar="NAME", default=None,
-        help="committed configuration file (scripts/stances/NAME.toml) this "
-             "audit measures. Available: "
+        "--stance", metavar="NAME_OR_PATH", default=None,
+        help="configuration this audit measures: a committed configuration "
+             "name in scripts/stances/, or the path of a configuration file "
+             "(derived or not). Available: "
              + (", ".join(available_stances()) or "(none committed)"))
     stance_group.add_argument(
         "--no-stance", action="store_true",
@@ -173,7 +176,7 @@ def main(argv=None):
 
     base_params, base_flags = default_config()
     if args.stance is not None:
-        named = load_stance(args.stance)
+        named = load_named_configuration(args.stance)
         base_params.update(named.params)
         base_flags.update(named.flags)
         if args.family is None:

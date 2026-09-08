@@ -5,11 +5,14 @@ that need params the ladder driver does not expose (close lag, L, etc.),
 kept as a separate file so concurrent sessions editing the shared driver
 and solver are never touched.
 
-The configuration package is named, not accreted: ``--stance NAME`` applies a
-committed stance file (``scripts/stances/NAME.toml``) as the base config, and
-``--extra`` / ``--extra-flag`` still layer on top of it and say so. Naming the
-package is mandatory -- a run either names its stance or acknowledges that it
-has none with ``--no-stance``.
+The configuration package is named, not accreted: ``--stance NAME_OR_PATH``
+applies a named configuration as the base config, and ``--extra`` /
+``--extra-flag`` still layer on top of it and say so. The value is either a
+committed configuration name in ``scripts/stances/`` or the PATH of a
+configuration file (derived or not); either way the file's lineage -- name,
+base chain, per-file sha256, identity -- is recorded in the saved run. Naming
+the package is mandatory -- a run either names its configuration or
+acknowledges that it has none with ``--no-stance``.
 
 An array-valued param -- a per-mesh-cell profile, hundreds of numbers -- goes
 in through ``--extra-npz KEY=path.npz:arrayname`` rather than as a kilobyte of
@@ -20,6 +23,9 @@ value.
 Usage:
     python scripts/run/run_m6_point.py --es 1 --stance g1atrim --sgp 9010 \
         --save-h5 out.h5
+    python scripts/run/run_m6_point.py --es 1 \
+        --stance scripts/stances/examples/g1atrim_fluid_comparator.toml \
+        --sgp 9010 --save-h5 out.h5
     python scripts/run/run_m6_point.py --es 1 --no-stance --sgp 9010 \
         --close-lag 2e-3 --save-h5 out.h5 [--mn] [--L 8.1e-6] [--extra k=v ...]
 """
@@ -44,7 +50,7 @@ from run_mechanism_ladder import (
     RUNG_OWNED_LIVE,
     refuse_rung_supersession,
 )
-from stance_config import available_stances, load_stance
+from stance_config import available_stances, load_named_configuration
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 from cablp.solvers._sim1d.results.health import summarize_result
 
@@ -131,10 +137,14 @@ def main(argv=None):
     p.add_argument("--es", type=int, choices=(1, 2, 3), required=True)
     stance_group = p.add_mutually_exclusive_group()
     stance_group.add_argument(
-        "--stance", metavar="NAME", default=None,
-        help="committed stance file (scripts/stances/NAME.toml) applied as the "
-             "base config, on top of this driver's own defaults and below "
-             "--nn0-profile-npz / --extra / --extra-flag. Available: "
+        "--stance", metavar="NAME_OR_PATH", default=None,
+        help="configuration applied as the base config, on top of this "
+             "driver's own defaults and below --nn0-profile-npz / --extra / "
+             "--extra-flag: a committed configuration name in "
+             "scripts/stances/, or the path of a configuration file (derived "
+             "or not), whose lineage -- name, base chain, file sha256, "
+             "identity -- is recorded in the saved run exactly as for a name. "
+             "Available: "
              + (", ".join(available_stances()) or "(none committed)"))
     stance_group.add_argument(
         "--no-stance", action="store_true",
@@ -280,7 +290,7 @@ def main(argv=None):
     rung_owned = {key: extra[key] for key in RUNG_OWNED_LIVE}
     stance = None
     if args.stance is not None:
-        stance = load_stance(args.stance)
+        stance = load_named_configuration(args.stance)
         superseded = [
             f"{key}: {_brief_value(extra[key])} -> "
             f"{_brief_value(value)}"

@@ -83,9 +83,9 @@ def main():
     ap.add_argument("--nx", type=int, default=120)
     stance_group = ap.add_mutually_exclusive_group()
     stance_group.add_argument(
-        "--stance", metavar="NAME", default=None,
-        help="committed configuration file (scripts/stances/NAME.toml), or a "
-             "configuration file's path, this seed is equilibrated at")
+        "--stance", metavar="NAME_OR_PATH", default=None,
+        help="committed configuration name in scripts/stances/, or the path "
+             "of a configuration file, this seed is equilibrated at")
     stance_group.add_argument(
         "--no-stance", action="store_true",
         help="acknowledge that this seed names no configuration and is built "
