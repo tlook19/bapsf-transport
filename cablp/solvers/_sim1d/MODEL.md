@@ -793,9 +793,25 @@ collected electron rather than the thermal $2T_e$ alone. The barrier is
 $\Lambda_\text{eff}=\Lambda+\ln(1/\alpha_\text{se})$: the sheath lift
 $\Lambda=\ln\sqrt{\mu m_p/2\pi m_e}$ for the configured gas, plus the presheath
 drop implied by the same $\alpha_\text{se}$ that face samples its Bohm flux at,
-so the flux and the barrier describe one sheath edge. Cathode faces are
-untouched — the accelerated species there is the ion. The row is absent
-entirely when the flag is off.
+so the flux and the barrier describe one sheath edge. $\Lambda_\text{eff}$ is
+a state-dependent barrier rather than a constant and lies in
+$[\Lambda,\Lambda+\tfrac12]$, both limits being limits of the same
+$\alpha_\text{se}$: a collisional presheath SHORTER than the sampling cell
+puts that cell at the sheath edge, $\alpha_\text{se}\to e^{-1/2}$ carries the
+whole Boltzmann drop and $\Lambda_\text{eff}\to\Lambda+\tfrac12$; a presheath
+LONGER than the cell leaves the cell inside it, $\alpha_\text{se}\to1$ and
+$\Lambda_\text{eff}\to\Lambda$, the rest of the drop resolved by the interior
+cells. The row is ELECTRON ENERGY ONLY — the particle, momentum and
+ion-thermal bookings at the face remain the boundary operator's — and it is
+booked whenever plasma reaches the face, independent of the circuit, on the
+very flux that operator books; the collector surface-power diagnostic includes
+it. The form assumes a surface drawing no net current and the cold-ion sheath,
+so with $T_i\gtrsim T_e$ at the face it overstates the barrier by
+$\tfrac12\ln(1+\gamma_iT_i/T_e)$, $\gamma_i$ the ion adiabatic index. Arming
+refuses at construction on a configuration supplying no plasma-absorbing face
+of the collector role.
+Cathode faces are untouched — the accelerated species there is the ion. The
+row is absent entirely when the flag is off.
 
 ### Wall return and jet rebirth spectra
 

@@ -1,0 +1,55 @@
+# THE THERMAL-ONLY END-WALL COMPARATOR: the reference configuration with the
+# machine's far end face booking its collected electrons the plasma-thermal
+# 2 Te alone, as it did before the reference charged the store the barrier
+# those electrons climbed.
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: the measured machine, the operating point, the drive
+# calibration, the velocity mesh, the neutral closure and the initial neutral
+# state are all inherited, so this file cannot drift from the reference and a
+# reader can see the whole difference between the two arms at a glance.
+#
+# WHAT IT IS FOR. The reference debits the electron store, per electron the
+# end wall collects, the sheath-edge 2 Te AND the barrier Lambda_eff Te that
+# electron climbed, the end wall having no circuit branch to supply the fall.
+# Unset -- which is what this file does -- the face keeps the 2 Te alone and
+# the barrier energy is not booked anywhere: the row does not exist, and the
+# saved term structure is what it was before the closure. This arm is
+# therefore the comparator that isolates what the end-wall booking changed, at
+# the reference's own machine and operating point.
+#
+# WHAT IT DOES NOT CHANGE. No particle, momentum or ion-energy booking moves;
+# the row the reference arms and this file unsets is electron energy only. The
+# emitting cathode face is untouched -- that is `cathode_face_full_debit`, a
+# separate key, off in the reference and off here. The circuit and the load
+# ledger are untouched: the potential those electrons ride is field energy the
+# ions already deposit on the surface.
+#
+# READ THE COLUMN, NOT ONLY THE FACE. The two arms differ by one end-cell row,
+# but the column re-equilibrates as a whole through the far-end neutral field,
+# so the difference is not confined to the collector cell and is conditional on
+# the neutral closure both sides run.
+#
+# HOW TO RUN IT. The campaign drivers resolve `--stance <name>` against
+# `scripts/stances/`, so copy this file there first; `run_sim1d.py` takes the
+# path directly and needs no copy:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/g1atrim_thermal_only_collector.toml \
+#         --output g1atrim_thermal_only_collector.h5
+#
+# The saved trajectory records the lineage -- this file's name, "g1atrim" as
+# its base, both files' sha256, the delta key below, and the resolved
+# configuration's identity -- so the arm is identifiable from its artifact
+# alone. Its `rhs_terms` does NOT carry the collector sheath-climb row that the
+# reference's does; `scripts/score/power_ledger_sim1d.py` reports that row per
+# window on the reference side and notes it as absent here, which on this arm
+# is by construction rather than an omission.
+base = "g1atrim"
+
+
+[input_flags]
+# The selection, and the whole of it. Unsetting the key needs no input the
+# reference does not already supply, and removes the construction requirement
+# the armed key carries: the row is simply not built.
+collector_sheath_full_debit = false

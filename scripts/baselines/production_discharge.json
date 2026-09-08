@@ -32,6 +32,7 @@
       "cathode_jet_hot_carrier",
       "cathode_jet_surface_debit",
       "cathode_neutral_jet",
+      "collector_sheath_full_debit",
       "energy_exchange_rate_fraction",
       "equilibration_gas_puff_on_s",
       "gas_puff_orifice_id_cm",
@@ -87,9 +88,9 @@
       "use_cached_neutral_seed"
     ],
     "file_sha256": [
-      "3acd42357faab77375cfdd7bb4838fe8cd7daf696a4aae93c7f2d2feaad04e19"
+      "f5d7ccc7d6e77e63c7205c688792ba05459197fb475f9ba5573e801af7729a19"
     ],
-    "identity": "2b37aa0776ae93dd558d4be6f3586ff8cf08ed18dae2cbf5ef87003ecacf976a",
+    "identity": "882309460cac58cb28413406054a103444e9c761b9ec6740767ef19b1584a9b4",
     "name": "g1atrim"
   },
   "description": "Golden baseline at the stance of record, re-cut to the gate mesh: default_config() plus the committed stance file scripts/stances/g1atrim.toml, minus that stance's mesh-sized package, plus the run-shape overrides in baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60).",
@@ -109,7 +110,7 @@
     "cathode_emitting_area": false,
     "cathode_face_full_debit": false,
     "cathode_schottky": true,
-    "collector_sheath_full_debit": false,
+    "collector_sheath_full_debit": true,
     "coupled_circuit_picard": false,
     "coverage_closure": false,
     "cx": true,
@@ -432,21 +433,21 @@
   "result_format": "sim1d packed conservative trajectory y[saves, fields*cells]",
   "saves": 2620,
   "summary": {
-    "Te_max": 26.519273483938694,
+    "Te_max": 26.51927348732366,
     "Te_min": 0.1,
-    "Ti_max": 7.300913923328672,
+    "Ti_max": 7.304124827987815,
     "Ti_min": 0.02585,
-    "final_time": 0.026187567924143985,
+    "final_time": 0.026187585881540167,
     "finite": true,
-    "n_max": 32932274212188.65,
-    "n_min": 851867382.0568187,
-    "neutral_inventory_relative_drift": 1.1050157539160839,
-    "nn_max": 134775373329105.28,
-    "nn_min": 234229705970.4254,
-    "plasma_inventory_relative_drift": 4581.051756338596,
+    "n_max": 33179671241986.45,
+    "n_min": 853020628.938509,
+    "neutral_inventory_relative_drift": 1.102452772632111,
+    "nn_max": 153763101821086.88,
+    "nn_min": 233039750620.71774,
+    "plasma_inventory_relative_drift": 4552.078449243313,
     "samples": 2620,
-    "steps": 60084,
-    "thermal_energy_relative_drift": 4565.2969543503905,
-    "total_particle_inventory_relative_drift": 1.193823992170962
+    "steps": 61309,
+    "thermal_energy_relative_drift": 4533.05729690822,
+    "total_particle_inventory_relative_drift": 1.1906992487330978
   }
 }
