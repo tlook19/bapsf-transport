@@ -26109,8 +26109,11 @@ def _case_tail_handoff_surface_continuity():
         step. That is the defect this case exists to keep out.
 
     NOT ASSERTED, and deliberately not built: the energy the COLLECTED
-    electrons deposit back on the surface. See the module the term would live
-    in; at this state it is the larger number and the reviewer's item.
+    electrons deposit back on the surface -- the ``cathode_e_collected_climb``
+    term ``cathode_face_full_debit`` books in
+    ``cablp/solvers/_sim1d/physics/cathode.py``, which at this state is the
+    larger of the two surface electron-energy channels, so this case's
+    continuity check covers only the smaller one.
     """
     from cablp.cathode.circuit import (
         DeviceConfig as _sc_DeviceConfig,
