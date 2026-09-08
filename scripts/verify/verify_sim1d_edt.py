@@ -345,15 +345,15 @@ def _armed_golden(charge_death, anode_handshake):
 
 def gate1_strip_control(report):
     """The added keys move the golden config identity and nothing else."""
-    from golden_digest_gate import DIGEST_PARAM_OVERRIDES, config_identity
+    from golden_digest_gate import DIGEST_PARAM_OVERRIDES, digest_config_identity
 
     params, flags = build_baseline_config(DIGEST_PARAM_OVERRIDES)
-    live = config_identity(params, flags)
+    live = digest_config_identity(params, flags)
     stripped_params = {
         k: v for k, v in params.items() if k not in ADDED_PARAMS
     }
     stripped_flags = {k: v for k, v in flags.items() if k not in ADDED_FLAGS}
-    recovered = config_identity(stripped_params, stripped_flags)
+    recovered = digest_config_identity(stripped_params, stripped_flags)
     report.note("G1", f"identity on this branch      {live}")
     report.note("G1", f"identity with the keys strip {recovered}")
     report.note(

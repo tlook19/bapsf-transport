@@ -149,8 +149,20 @@ class _StepDigestTracker:
             self.checkpoints[step] = self.hasher.hexdigest()
 
 
-def config_identity(params, flags):
-    """Return the sha256 of the resolved params/flags JSON, sorted keys."""
+def digest_config_identity(params, flags):
+    """Return the sha256 of the resolved params/flags JSON, sorted keys.
+
+    The record key this hash is stored under, in both the digest record dict
+    and the committed reference ``scripts/baselines/golden_digest_4k.json``,
+    stays ``"config_identity"`` -- only this function's name changed. This
+    hash is this gate's OWN, distinct from
+    ``cablp.solvers._sim1d.core.config.config_identity``: the digest
+    configuration additionally carries ``max_steps_action="stop"`` (see
+    ``DIGEST_PARAM_OVERRIDES``), and this gate hashes it by a simpler rule
+    (plain ``json.dumps(sort_keys=True)`` over ``_json_safe``, with no
+    canonicalization beyond key sorting). Do not change the rule; do not
+    conflate the two functions.
+    """
     payload = json.dumps(
         {"params": _json_safe(params), "flags": _json_safe(flags)},
         sort_keys=True,
@@ -221,7 +233,7 @@ def compute_digest(
         "checkpoint_interval": int(checkpoint_interval),
         "digest": tracker.hasher.hexdigest(),
         "checkpoints": checkpoints,
-        "config_identity": config_identity(params, flags),
+        "config_identity": digest_config_identity(params, flags),
         "cells": cells,
         "fields_per_cell": int(y.shape[1] // cells),
         "final_time": float(result.final_time),
