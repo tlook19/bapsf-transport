@@ -199,7 +199,7 @@ Companion gates that are NOT this suite's to run, and where they live: smoke
 digest gate (``scripts/gates/golden_digest_gate.py``), the snapshot delta
 (``scripts/edt_snapshot_delta.py`` (retired; see commit 48be9a4)) and
 the A/B bit-inertness reader
-(``scripts/edt_bitinert_ab.py``).
+(``scripts/edt_bitinert_ab.py`` (retired; see commit 48be9a4)).
 """
 
 import argparse
