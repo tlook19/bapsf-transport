@@ -971,7 +971,7 @@ def neutral_source_sink_rhs(
     """Return conservative RHS for neutral gas puff and pump terms.
 
     Both terms are anchored by ``cell_role``, not by ``[0]``/``[-1]``: the
-    puff lands on its puff cell and each pump on the plenum/collector at its end.
+    puff lands on its puff cell and each pump on the plenum/end wall at its end.
     Legacy roles resolve to the source and end cells, reproducing today exactly.
     The puff's axial shape comes from ``gas_puff_rate_profile``, and
     ``gas_puff_delivery_fraction`` [1] scales the flow both ends of the puff
@@ -1046,7 +1046,7 @@ def neutral_source_sink_rhs(
                 dEn += neutral_energy_floor(puff)
     if pump_enabled:
         # The unmodeled pump elbow folds into an effective speed on the plenum
-        # a collector-side pump has no elbow in front of it.
+        # a end-wall-side pump has no elbow in front of it.
         S_left = _effective_pump_speed(
             S_pump_L,
             pump_elbow_conductance_lps if is_plenum_cell(geometry, pump_left_index)
@@ -1192,7 +1192,7 @@ def puff_rate(sccm, valves, chamber_vol, delivery_fraction=1.0):
 
 # Roles a distributed gas puff may land on: the main plasma chamber, not the
 # plenum/obstruction behind the cathode, the cathode-anode gap, or the
-# collector region.
+# end wall region.
 _PUFF_ELIGIBLE_ROLES = frozenset({"puff", "column", "source", "domain", "end"})
 
 

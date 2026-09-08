@@ -197,7 +197,7 @@ def moment_hop_steady(kn, C_hop, T_in, K_r):
         A[nz + idx, nz + idx] -= rate * V_ann[idx]
     # sources [atoms/s]
     b[0] -= bgs.get("cathode_face", 0.0)
-    b[nz - 1] -= bgs.get("collector_face", 0.0)
+    b[nz - 1] -= bgs.get("end_wall_face", 0.0)
     rec = kn.bg.get("rec_cell")
     if rec is not None:
         scale = bgs.get("vol_rec", rec.sum()) / max(rec.sum(), 1e-300)
@@ -276,7 +276,7 @@ def selftest():
     src = dict(kn2.bg["sources"])
     kn2.bg["sources"] = {
         "puff": 1.0e20, "puff_z": 0.5 * 12 * 30.0,
-        "cathode_face": 0.0, "collector_face": 0.0,
+        "cathode_face": 0.0, "end_wall_face": 0.0,
     }
     res = kn2.solve()
     # normalized flatness and zone balance over the interior

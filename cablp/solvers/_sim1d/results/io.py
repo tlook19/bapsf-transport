@@ -45,6 +45,43 @@ _CONFIGURATION_JSON_ATTRS = (
     "configuration_delta_keys",
 )
 
+#: READ-SIDE ALIAS TABLE for ``geometry/cell_role``. The far-end role was
+#: named ``"collector"`` until the end-wall rename; the model's far face IS
+#: the LAPD chamber's end wall, so the role and every key and label that
+#: carried the old name now read ``end_wall``. A trajectory saved before the
+#: rename holds the OLD string in its saved array, so the load maps it. The
+#: map is PRESENCE-GATED: a file whose roles carry none of these strings is
+#: not touched, and no other role is rewritten.
+LEGACY_CELL_ROLE_ALIASES = {"collector": "end_wall"}
+
+#: Set on every loaded result: ``True`` when :data:`LEGACY_CELL_ROLE_ALIASES`
+#: actually rewrote at least one role on this file, ``False`` otherwise. It
+#: says what the LOAD did, not what the file is, so a reader can tell a
+#: pre-rename artifact from one written after it without re-opening the file.
+CELL_ROLE_SHIM_ATTR = "cell_role_legacy_alias_applied"
+
+
+def _apply_cell_role_aliases(cell_role):
+    """Map retired ``cell_role`` strings to their current names.
+
+    Returns ``(roles, fired)``. ``fired`` is ``True`` only when a stored role
+    was actually rewritten; when nothing matches the array is returned
+    unchanged, and nothing is copied.
+    """
+    roles = np.asarray(cell_role, dtype=object)
+    hits = [
+        index
+        for index, role in enumerate(roles)
+        if role in LEGACY_CELL_ROLE_ALIASES
+    ]
+    if not hits:
+        return cell_role, False
+    mapped = roles.copy()
+    for index in hits:
+        mapped[index] = LEGACY_CELL_ROLE_ALIASES[mapped[index]]
+    return mapped, True
+
+
 # The optional per-sample arrays a run may or may not carry. ``_write_arrays``
 # skips the ones the result lacks and ``_read_arrays`` skips the ones the file
 # lacks, so this list is additive: adding a name here cannot change any file a
@@ -426,7 +463,9 @@ def load_result_hdf5(path):
                 "plasma_active",
             ),
         )
-        geometry["cell_role"] = _read_string_array(h5["geometry/cell_role"])
+        geometry["cell_role"], _cell_role_shim = _apply_cell_role_aliases(
+            _read_string_array(h5["geometry/cell_role"])
+        )
         params = _read_json_attr(h5, "params_json")
         flags = _read_json_attr(h5, "flags_json")
 
@@ -512,6 +551,8 @@ def load_result_hdf5(path):
             flags=flags,
             path=path,
         )
+        # Whether the retired-role map above rewrote anything on this file.
+        setattr(result, CELL_ROLE_SHIM_ATTR, _cell_role_shim)
         # Configuration lineage, presence-gated attribute by attribute. Absent
         # reads as None -- "this file does not say" -- and nothing is inferred
         # from the file's other attributes.

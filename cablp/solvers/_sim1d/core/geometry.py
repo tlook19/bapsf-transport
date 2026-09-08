@@ -14,7 +14,7 @@ class Sim1DGeometry:
     """Axial layout for conservative 1D state arrays.
 
     The resolved typed-segment machine contains plenum / obstruction / cathode /
-    anode / puff / column / collector regions. ``nx`` is the number of column
+    anode / puff / column / end wall regions. ``nx`` is the number of column
     cells and ``cells`` is the full typed-segment cell count.
 
     Neutral face quantities are *restricting* apertures (the minimum of the two
@@ -105,12 +105,12 @@ def pump_cell_indices(geometry):
     """Return ``(left, right)`` cell indices carrying the pump sinks.
 
     The pump belongs on the plenum behind a cathode; the non-cathode end
-    keeps its own pump on the collector. Resolving by role keeps this correct if
+    keeps its own pump on the end wall. Resolving by role keeps this correct if
     the layout changes.
     """
     roles = np.asarray(geometry.cell_role)
     left = np.flatnonzero(roles == "plenum")
-    right = np.flatnonzero((roles == "plenum") | (roles == "collector"))
+    right = np.flatnonzero((roles == "plenum") | (roles == "end_wall"))
     left_index = int(left[0]) if left.size else 0
     right_index = int(right[-1]) if right.size else geometry.cells - 1
     return left_index, right_index
@@ -166,7 +166,7 @@ def absorbing_live_cells_by_role(geometry):
     """Return ``{role: (cell, ...)}`` for the plasma-absorbing faces.
 
     The key of each entry is the ``cell_role`` of the LIVE cell against an
-    absorbing face -- ``"cathode"`` and ``"collector"`` on a single-cathode
+    absorbing face -- ``"cathode"`` and ``"end_wall"`` on a single-cathode
     machine, ``"cathode"`` twice on a twin. The value is the tuple of those
     live cell indices, in face order.
 
@@ -272,10 +272,10 @@ def _build_resolved_geometry(input_dict, flags):
     Single-cathode (default), reading left to right::
 
         [plenum, (obstruction)] |cathode  [cathode..gap x nx_gap]  anode|
-        [puff, column x (nx-1)] [collector]
+        [puff, column x (nx-1)] [end wall]
 
     Twin cathode (``TwinCathode``) mirrors the source end instead of the
-    collector, putting its cathode surface at ``z = Lm``. Which column cell
+    end wall, putting its cathode surface at ``z = Lm``. Which column cell
     carries the ``puff`` role depends on ``source_fixed_grid``: with it on
     (the default) the role follows ``gas_puff_z_cm``, and on the uniform
     column it is the cell adjacent to an anode face, where gas enters in
@@ -321,7 +321,7 @@ def _build_resolved_geometry(input_dict, flags):
 
     plenum_length = float(input_dict.get("plenum_length_cm", 100.0))
     gap_length = float(input_dict.get("cathode_anode_gap_cm", 50.0))
-    collector_length = float(input_dict.get("collector_length_cm", 100.0))
+    end_wall_length = float(input_dict.get("end_wall_length_cm", 100.0))
     for name, value in (
         ("plenum_length_cm", plenum_length),
         ("cathode_anode_gap_cm", gap_length),
@@ -353,11 +353,11 @@ def _build_resolved_geometry(input_dict, flags):
     if twin:
         column_length = total_length - 2.0 * gap_length
     else:
-        if collector_length <= 0.0:
+        if end_wall_length <= 0.0:
             raise ValueError(
-                f"collector_length_cm must be positive (got {collector_length})"
+                f"end_wall_length_cm must be positive (got {end_wall_length})"
             )
-        column_length = total_length - gap_length - collector_length
+        column_length = total_length - gap_length - end_wall_length
     if column_length <= 0.0:
         raise ValueError(
             "resolved boundary regions exceed Lm; no room for the column "
@@ -369,7 +369,7 @@ def _build_resolved_geometry(input_dict, flags):
         flags,
         gap_length=gap_length,
         total_length=total_length,
-        collector_length=collector_length,
+        end_wall_length=end_wall_length,
         twin=twin,
     )
     if source_grid is None:
@@ -387,7 +387,7 @@ def _build_resolved_geometry(input_dict, flags):
         if outer_length <= 0.0:
             raise ValueError(
                 "source_fixed_grid leaves no far column between the source "
-                f"region and the collector (outer_length={outer_length} cm)"
+                f"region and the end wall (outer_length={outer_length} cm)"
             )
         column_roles = ["column"] * (n_fixed + nx)
         column_roles[source_grid["puff_offset"]] = "puff"
@@ -402,8 +402,8 @@ def _build_resolved_geometry(input_dict, flags):
         lengths += list(reversed(gap_lengths)) + list(reversed(behind_lengths))
     else:
         end_cells = 1 if end_expansion is None else end_expansion["cells"]
-        roles += ["end"] * (end_cells - 1) + ["collector"]
-        lengths += [collector_length / end_cells] * end_cells
+        roles += ["end"] * (end_cells - 1) + ["end_wall"]
+        lengths += [end_wall_length / end_cells] * end_cells
 
     length_cm = np.asarray(lengths, dtype=float)
     cell_role = np.asarray(roles, dtype=object)
@@ -446,7 +446,7 @@ def _build_resolved_geometry(input_dict, flags):
 
     if end_expansion is not None:
         end = np.flatnonzero(
-            np.isin(cell_role, np.asarray(["end", "collector"], dtype=object))
+            np.isin(cell_role, np.asarray(["end", "end_wall"], dtype=object))
         )
         n_end = int(end_expansion["cells"])
         if end.size != n_end or not np.array_equal(
@@ -603,7 +603,7 @@ def _build_resolved_geometry(input_dict, flags):
         neutral_baffle_clear_radius_cm=baffle_radii,
         anode_transparency=1.0 - float(input_dict.get("eta", 0.0)),
         anode_neutral_transparency=_anode_neutral_transparency(input_dict),
-        # Plasma-terminating surfaces: every cathode, plus the collector's outer
+        # Plasma-terminating surfaces: every cathode, plus the end wall's outer
         # face when there is one (a twin machine ends in plenums instead, whose
         # back walls are closed and see no plasma).
         absorbing_face_indices=(
@@ -614,12 +614,12 @@ def _build_resolved_geometry(input_dict, flags):
 
 
 def _source_fixed_grid_spec(
-    input_dict, flags, *, gap_length, total_length, collector_length, twin
+    input_dict, flags, *, gap_length, total_length, end_wall_length, twin
 ):
     """Validate and return the optional fixed-cell source-region specification.
 
     Resolution studies on the default mesh are self-confounding: ``nx`` uniform
-    column cells span anode face to collector start, so refining ``nx`` moves
+    column cells span anode face to end wall start, so refining ``nx`` moves
     every cell edge -- including the puff cell, whose centre anchors the default
     cosine puff profile. This mode -- the ``source_fixed_grid`` flag, which
     ships ON -- pins the column between the anode
@@ -669,11 +669,11 @@ def _source_fixed_grid_spec(
             "source_region_length_cm must lie strictly beyond the anode face "
             f"(got {region_length} cm vs cathode_anode_gap_cm={gap_length} cm)"
         )
-    column_end = total_length - collector_length
+    column_end = total_length - end_wall_length
     if region_length >= column_end:
         raise ValueError(
-            "source_region_length_cm must lie strictly before the collector "
-            f"block (got {region_length} cm vs Lm - collector_length_cm = "
+            "source_region_length_cm must lie strictly before the end wall "
+            f"block (got {region_length} cm vs Lm - end_wall_length_cm = "
             f"{column_end} cm)"
         )
 
@@ -743,7 +743,7 @@ def _end_expansion_spec(input_dict, flags, *, twin):
     if twin:
         raise ValueError(
             "end_expansion_geometry is defined only for the single-cathode "
-            "collector end"
+            "end wall"
         )
 
     cells_float = float(raw["end_expansion_cells"])

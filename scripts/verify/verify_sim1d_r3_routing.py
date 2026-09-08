@@ -21,9 +21,9 @@ Gates:
      sink deposited by cathode_source_terms (routing on) equals the circuit's
      P_cathode_e_thermal, and the sheath-fall phi is NOT in the plasma sink
      (deposited < full P_cathode_e);
-  G5 no electron double-book + collector sheath present: the characteristic
+  G5 no electron double-book + end wall sheath present: the characteristic
      boundary contributes ZERO electron energy at the (driven) cathode and the
-     2Te floating-sheath loss at the collector. (The pure-ghost comparison arm
+     2Te floating-sheath loss at the end wall. (The pure-ghost comparison arm
      -- sheath_energy_routing=False -- was retired with that parameter;
      the routing it selected is now the only one, so G5
      asserts its two values directly.)
@@ -125,7 +125,7 @@ def main():
     print(f"   plasma-thermal {r.P_cathode_e_thermal:.4e} < full P_cathode_e "
           f"{r.P_cathode_e:.4e}  (phi to electrode {r.P_cathode_e_phi:.4e})")
 
-    # G5 fluid boundary electron routing: cathode 0, collector 2Te.
+    # G5 fluid boundary electron routing: cathode 0, end wall 2Te.
     geo = sim.geometry
     mu, mi = sim._mu, sim.ion_mass_g
     roles = np.asarray(geo.cell_role)
@@ -153,7 +153,7 @@ def main():
             # Driven electrode: the circuit books its electron power, so the
             # boundary must add exactly nothing here (no double-book).
             g5 &= routed.Ee[live] == 0.0
-        elif role == "collector":
+        elif role == "end_wall":
             # Floating exhaust: the boundary IS the electron sheath, 2Te per
             # electron at the Bohm flux.
             expect = 2.0 * Te * ev_to_erg * routed.n[live]

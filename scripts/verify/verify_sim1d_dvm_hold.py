@@ -120,7 +120,7 @@ ROUNDOFF_REL = 1.0e-12
 #: ``case_synthetic_relaxation`` for why it is 2 and not 1.
 ACCURACY_C = 2.0
 
-#: The brief's cell: ambient helium at the collector end of the g1atrim DVM
+#: The brief's cell: ambient helium at the end wall of the g1atrim DVM
 #: arm at 12 ms, where nu*dt_tick reached 3.8.
 CELL_TN_K = 300.0
 CELL_NN_CM3 = 6.5e13

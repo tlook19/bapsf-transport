@@ -79,7 +79,7 @@ area. The material derivative along the flow is
 $D/Dt\equiv\partial_t+u\,\partial_z$. No perpendicular derivative appears
 anywhere in the model.
 
-$+z$ runs from the cathode end toward the collector end; a flux is positive
+$+z$ runs from the cathode end toward the end wall; a flux is positive
 toward $+z$; a source is positive into the field it is written on; $Q_{ie}$ is
 a sink for electrons and a source for ions.
 
@@ -89,7 +89,11 @@ The machine is represented as a straight axial line of finite-volume cells.
 The neutral gas fills the whole vessel, while the plasma occupies only part of
 it — a plenum behind the cathode, and any obstructed volume, carry neutral
 transport but no plasma. **The first cell is that neutral-only plenum; the last
-is the collector cell, a live plasma cell terminated by an absorbing face.**
+is the end wall cell, a live plasma cell terminated by an absorbing face.**
+That face is the LAPD chamber's end wall: there is no distinct collector
+electrode, and the `end_wall` cell role it carries was formerly named
+`collector`, which is the value a trajectory saved before the rename holds in
+`geometry/cell_role`.
 Both run the same operators as every other cell. Every cell and every face
 records whether plasma lives there: a face at the edge of the plasma is CLOSED
 to it, and the subset of those faces where plasma is absorbed by a surface
@@ -710,7 +714,7 @@ $\tfrac52T_i$, not $\tfrac32T_i$ — the $S_\text{an}$ terms above.
 
 **End-face sheath debit at the cathode.** `cathode_face_full_debit` extends
 that convention to the emitting face and adds what an emitter does that a
-collector does not. Armed, three further electron-energy rows are booked at the
+end wall does not. Armed, three further electron-energy rows are booked at the
 cathode cell, kept apart because they are three channels with two signs:
 $+2k_BT_s\Gamma_\text{em}$, the enthalpy the released electrons carry in off a
 half-Maxwellian at the surface temperature; $+e(\phi_c^+-\max(\phi_c,0))\Gamma_\text{em}$,
@@ -768,26 +772,26 @@ other face bounding the plasma is closed, carrying no particle or
 thermal-energy flux while keeping the live cell's pressure as its momentum
 flux: no flux through the wall, but the wall still pushes back.
 
-**Collector.** The far-end faces take the same ghost-cell outflow with a
+**End wall.** The far-end faces take the same ghost-cell outflow with a
 floating rather than a driven sheath. No circuit branch owns the electron
 energy there, so the boundary term itself books the floating electron sheath at
 $2T_e$ per collected ion, electron flux equalling ion flux at a floating
 surface; at the cathode that term is owned by the circuit.
-`end_recycle_to_annulus` routes the collector faces' neutralized flux into that
+`end_recycle_to_annulus` routes the end wall faces' neutralized flux into that
 cell's annulus, $\partial_tn_{n,a}|_\text{recycle}=\dot N_\text{loss}/V_\text{ann}$,
 as thermal diffuse gas carrying no directed momentum.
 
-**End-face sheath debit at the collector.** `collector_sheath_full_debit`
+**End-face sheath debit at the end wall.** `end_wall_sheath_full_debit`
 completes that booking the way `anode_sheath_full_debit` completes the anode's.
 The two end-face keys are INDEPENDENT — different faces, different fluxes,
 different regimes — so either, both or neither may be armed and each refuses at
 construction on its own missing input alone. A
 floating surface draws no net current, so the electrons that reach it climbed a
 barrier $\Lambda_\text{eff}T_e$ — and with no circuit branch behind the
-collector there is nothing but the electron thermal store to supply it: the
+end wall there is nothing but the electron thermal store to supply it: the
 fall comes out of that store and is handed to the ions, which deposit it on the
 surface. Armed, a separate electron-energy row
-$-\Lambda_\text{eff}T_e\Gamma_\text{coll}$ is booked at each collector cell,
+$-\Lambda_\text{eff}T_e\Gamma_\text{coll}$ is booked at each end wall cell,
 making the face debit the sheath-edge $\gamma_e=2+\Lambda_\text{eff}$ per
 collected electron rather than the thermal $2T_e$ alone. The barrier is
 $\Lambda_\text{eff}=\Lambda+\ln(1/\alpha_\text{se})$: the sheath lift
@@ -804,12 +808,12 @@ $\Lambda_\text{eff}\to\Lambda$, the rest of the drop resolved by the interior
 cells. The row is ELECTRON ENERGY ONLY — the particle, momentum and
 ion-thermal bookings at the face remain the boundary operator's — and it is
 booked whenever plasma reaches the face, independent of the circuit, on the
-very flux that operator books; the collector surface-power diagnostic includes
+very flux that operator books; the end wall surface-power diagnostic includes
 it. The form assumes a surface drawing no net current and the cold-ion sheath,
 so with $T_i\gtrsim T_e$ at the face it overstates the barrier by
 $\tfrac12\ln(1+\gamma_iT_i/T_e)$, $\gamma_i$ the ion adiabatic index. Arming
 refuses at construction on a configuration supplying no plasma-absorbing face
-of the collector role.
+of the end wall role.
 Cathode faces are untouched — the accelerated species there is the ion. The
 row is absent entirely when the flag is off.
 
@@ -819,7 +823,7 @@ Flux reaching a surface is neutralized and reborn as gas. The thermal rebirth
 is the cosine half-flux at that surface's own temperature, and which
 temperature that is follows the surface: the LOW-$z$ end plane and the closed
 faces flanking a cathode cell re-emit at the live cathode temperature $T_s$,
-while the collector face, the cylindrical wall, the anode wires and the
+while the end wall face, the cylindrical wall, the anode wires and the
 baffles re-emit at the wall temperature. The spectrum is entered on the
 velocity grid as $c_\perp\exp(-c_\perp^2/2s^2)$, the azimuthally integrated 2D
 Maxwellian, with one further power of $c_\perp$ from the cosine flux law. At the cylindrical wall a landing splits into an
@@ -840,9 +844,9 @@ backscattered atoms carry all of $R_E$ and each leaves with
 $$\varepsilon_\text{back}=\frac{R_E}{R_N}\left(\phi+T_i\right),$$
 
 $\phi=\phi_c$ at the cathode (clamped at zero before the sum) and $\phi_a$ at
-the anode, the sum clamped at zero in both; the collector jet reads its arrival
+the anode, the sum clamped at zero in both; the end wall jet reads its arrival
 energy from $T_e$ and $T_i$ alone. **The three channels handle a zero clamped
-incident energy differently**: the anode and collector jets launch nothing from
+incident energy differently**: the anode and end wall jets launch nothing from
 such a cell, while the cathode jet is governed by its arming latch and its
 launch builder REFUSES a counted launch at or below zero energy rather than
 silently dropping it. The remaining $1-R_N$ keeps the thermal re-emission.
@@ -966,7 +970,7 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `recombination_energy_return` | `physics/reactions.py:recombination_energy_return_rhs` |
 | `cathode_surface_loss` | `physics/cathode.py:cathode_source_terms` |
 | `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode part) |
-| `collector_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (`collector_sheath_full_debit` only) |
+| `end_wall_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (`end_wall_sheath_full_debit` only) |
 | `cathode_e_emitted_enthalpy` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
 | `cathode_e_emitted_fall` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
 | `cathode_e_collected_climb` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |

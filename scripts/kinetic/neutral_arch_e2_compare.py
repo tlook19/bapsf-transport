@@ -210,11 +210,11 @@ def build_shared(bg, args):
         "recombination": rec,
         "anode": anode,
         "cathode_face": float(src.get("cathode_face", 0.0)),
-        "collector_face": float(src.get("collector_face", 0.0)),
+        "end_wall_face": float(src.get("end_wall_face", 0.0)),
     }
     total_rate = (
         puff.sum() + rec.sum() + anode.sum()
-        + sources["cathode_face"] + sources["collector_face"]
+        + sources["cathode_face"] + sources["end_wall_face"]
     )
     if total_rate <= 0.0:
         raise ValueError("the background's source ledger is empty")
@@ -433,7 +433,7 @@ def run_dvm(shared, dt, nvz, nvp, accommodation, elastic_model, progress=None):
         ledger["external"] += (
             led["birth_puff"] + led["birth_recombination"]
             + led["birth_anode"] + led["birth_cathode_face"]
-            + led["birth_collector_face"]
+            + led["birth_end_wall_face"]
         )
         # ``_march`` also returns the intercepted mesh ENERGIES (the
         # B0a energy ledger's one in-sweep tally); nothing here reads
@@ -734,7 +734,7 @@ class TransientMC:
             arr = np.asarray(src[name], dtype=float)
             if arr.sum() > 0.0:
                 menu.append((name, float(arr.sum()) * self.t_switch, False))
-        for name in ("cathode_face", "collector_face"):
+        for name in ("cathode_face", "end_wall_face"):
             if float(src[name]) > 0.0:
                 menu.append((name, float(src[name]) * self.t_switch, False))
         atoms = np.array([a for _, a, _ in menu])
@@ -815,7 +815,7 @@ class TransientMC:
             ic = rng.choice(w.size, size=N, p=w / w.sum())
             pos = self._in_cell(ic, self.Rp)
             vel = cylinder_spectrum(rng, N, T_WALL_K)
-        elif name in ("cathode_face", "collector_face"):
+        elif name in ("cathode_face", "end_wall_face"):
             left = name == "cathode_face"
             radius = self.sh["R_cath"] if left else self.Rp[-1]
             rad = radius * np.sqrt(rng.random(N))
@@ -1366,7 +1366,7 @@ def compare_rows(shared, dvm_d, mc_m, mc_s, ref_label):
                 w = weight[m] / max(weight[m].sum(), 1e-300)
                 e = np.sqrt(((mc_s[key][:, m] * w[None, :]) ** 2).sum(axis=1))
             rows.append((lab, key, kind, d, r, e, ref_label))
-    for j, end in enumerate(("end L (cathode)", "end R (collector)")):
+    for j, end in enumerate(("end L (cathode)", "end R (end wall)")):
         for key in ("wend_inc", "wend_ret"):
             rows.append(
                 (end, key, "extensive", dvm_d[key][:, j], mc_m[key][:, j],
@@ -1644,8 +1644,8 @@ def spectrum_block(L, shared, dvm_d, mc_m, mc_s, ref_label):
         ("radial wall, NON-accommodated", "spec_rad_ref", "specE_rad_ref", None),
         ("end L (cathode), accommodated", "spec_end_acc", "specE_end_acc", 0),
         ("end L (cathode), NON-accommodated", "spec_end_ref", "specE_end_ref", 0),
-        ("end R (collector), accommodated", "spec_end_acc", "specE_end_acc", 1),
-        ("end R (collector), NON-accommodated", "spec_end_ref", "specE_end_ref",
+        ("end R (end wall), accommodated", "spec_end_acc", "specE_end_acc", 1),
+        ("end R (end wall), NON-accommodated", "spec_end_ref", "specE_end_ref",
          1),
     ]
     for phase, pname in ((0, "transient (sources on)"),

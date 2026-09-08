@@ -45,8 +45,8 @@ Inputs
     until the 2026-08-24 CAD-span gap adoption moved
     ``cathode_anode_gap_cm`` 50.0 -> 53.25, which moves the anode face and
     with it every cell downstream of the cathode face. The grid of record
-    is ``Lm = 2117.8, collector_length_cm = 7.8, nx = 268``, and the
-    terminal cell is the 7.8 cm collector at the flange. BEHIND the
+    is ``Lm = 2117.8, end_wall_length_cm = 7.8, nx = 268``, and the
+    terminal cell is the 7.8 cm end wall at the flange. BEHIND the
     cathode face the mesh deliberately changes, under the fidelity
     package that replaced the guessed cathode box with the measured
     source chamber: the
@@ -96,20 +96,23 @@ import numpy as np
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(HERE))
 
+from cablp.solvers._sim1d.core.config import (  # noqa: E402
+    apply_legacy_config_key_aliases,
+)
 from cablp.solvers._sim1d.core.geometry import build_geometry  # noqa: E402
 
 CENSUS_NPZ = os.path.join(HERE, "lapd_end_field_1400G_rp18p415_census2026.npz")
 REFERENCE_H5 = os.path.join(HERE, "l2a7b_foot45_cr6p94.h5")
 
 #: The G1 grid of record, superseding an earlier draft that put the
-#: collector at 217.8: the end flange is the wall, the outer column runs
+#: end wall at 217.8: the end flange is the wall, the outer column runs
 #: at a uniform dz through z = 2110 cm, and the terminal cell is the 7.8 cm
-#: collector at the flange where the 0.95 cap binds flat. That far-column dz
-#: is (Lm - gap - collector - source span)/nx, so the CAD-span gap adoption
+#: end wall at the flange where the 0.95 cap binds flat. That far-column dz
+#: is (Lm - gap - end wall - source span)/nx, so the CAD-span gap adoption
 #: moved it 7.5 -> 7.487873... cm; the build report carries the measured
 #: value.
 LM_CM = 2117.8
-COLLECTOR_LENGTH_CM = 7.8
+END_WALL_LENGTH_CM = 7.8
 NX = 268
 #: The fidelity package: the guessed Rcs 40 / Lcs 25 cathode box is
 #: RETIRED (Lcs = 0 omits the obstruction cell); the plenum is the
@@ -166,8 +169,14 @@ def _reference_config():
     import h5py
 
     with h5py.File(REFERENCE_H5, "r") as handle:
-        params = json.loads(handle.attrs["params_json"])
-        flags = json.loads(handle.attrs["flags_json"])
+        # Addressed under CURRENT key names: the archived run predates the
+        # end-wall rename and spells the far-end keys the old way.
+        params = apply_legacy_config_key_aliases(
+            json.loads(handle.attrs["params_json"])
+        )
+        flags = apply_legacy_config_key_aliases(
+            json.loads(handle.attrs["flags_json"])
+        )
     return params, flags
 
 
@@ -181,7 +190,7 @@ def _g1_config(params, flags):
     p = dict(params)
     f = dict(flags)
     p["Lm"] = LM_CM
-    p["collector_length_cm"] = COLLECTOR_LENGTH_CM
+    p["end_wall_length_cm"] = END_WALL_LENGTH_CM
     p["nx"] = NX
     p["gas_puff_z_cm"] = GAS_PUFF_Z_CM
     p["cathode_anode_gap_cm"] = CATHODE_ANODE_GAP_CM
@@ -269,11 +278,11 @@ def main():
     say(f"census   : {CENSUS_NPZ}")
     say(f"reference: {REFERENCE_H5}")
     say(
-        f"grid     : Lm {ref_params['Lm']} -> {LM_CM} cm, collector "
-        f"{ref_params['collector_length_cm']} -> {COLLECTOR_LENGTH_CM} cm, "
+        f"grid     : Lm {ref_params['Lm']} -> {LM_CM} cm, end wall "
+        f"{ref_params['end_wall_length_cm']} -> {END_WALL_LENGTH_CM} cm, "
         f"nx {ref_params['nx']} -> {NX} (the rrr grid of record: the outer "
         f"column extends at its own dz through 2110 cm; terminal cell "
-        f"{COLLECTOR_LENGTH_CM} cm at the flange)"
+        f"{END_WALL_LENGTH_CM} cm at the flange)"
     )
     say(
         f"source   : Rcs {ref_params['Rcs']} -> {RCS_CM}, Lcs "
@@ -369,7 +378,7 @@ def main():
         raise AssertionError(f"unexpected role changes: {sorted(moved_roles)}")
     say("ASSERT role changes confined to the puff/column swap: PASS")
     end = np.flatnonzero(
-        np.isin(np.asarray(mesh.cell_role), np.asarray(["end", "collector"], dtype=object))
+        np.isin(np.asarray(mesh.cell_role), np.asarray(["end", "end_wall"], dtype=object))
     )
     say(
         f"n_end = {end.size}; end dz = "
@@ -470,7 +479,7 @@ def main():
             f"(rel {(area_terminal - area_previous) / area_terminal:+.6f})"
         )
         # Sub-cell diagnostic, report-only: the terminal cell is the 7.8 cm
-        # collector at the flange (the rrr grid of record), so a centre
+        # end wall at the flange (the rrr grid of record), so a centre
         # sample and a volume average of the same profile should now nearly
         # agree. Both are stated; the arms carry the centre sample.
         fine_z_cm = np.linspace(
@@ -610,7 +619,7 @@ def main():
     for arm, case in (("G1a", "droop_min"), ("G1b", "off")):
         payload = [
             f"Lm={LM_CM}",
-            f"collector_length_cm={COLLECTOR_LENGTH_CM}",
+            f"end_wall_length_cm={END_WALL_LENGTH_CM}",
             f"nx={NX}",
             f"gas_puff_z_cm={GAS_PUFF_Z_CM}",
             f"Rcs={RCS_CM}",
@@ -649,7 +658,7 @@ def main():
         plasma_radius_profile_cm_droop_min=profiles["droop_min"],
         plasma_radius_profile_cm_off=profiles["off"],
         Lm_cm=LM_CM,
-        collector_length_cm=COLLECTOR_LENGTH_CM,
+        end_wall_length_cm=END_WALL_LENGTH_CM,
         nx=NX,
         gas_puff_z_cm=GAS_PUFF_Z_CM,
         Rcs_cm=RCS_CM,

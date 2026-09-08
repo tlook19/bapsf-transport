@@ -265,7 +265,7 @@ def cathode_sample_indices(geometry):
     temperature would drive the circuit with garbage.
 
     A twin machine samples both cathodes; otherwise the ``end`` slot is the
-    collector, which is what ``end_mode`` describes.
+    end wall, which is what ``end_mode`` describes.
     """
     cathode_cells = cathode_adjacent_cells(geometry)
     if not cathode_cells:
@@ -319,7 +319,7 @@ def cathode_boundary_state(
         end=_cell_state(end_index, state, derived, geometry),
         enabled=bool(input_flags.get("cathode_coupling", False)),
         mode=input_dict.get("cathode_model", "disabled"),
-        end_mode=input_dict.get("end_mode", "collector"),
+        end_mode=input_dict.get("end_mode", "end_wall"),
         twin_cathode=bool(input_flags.get("TwinCathode", False)),
         circuit=_circuit_placeholders(input_dict),
     )
@@ -696,7 +696,7 @@ class VesselNode1D:
     ``C_total_F`` is the capacitance bridging the floating cathode/anode
     system to the wall conductor; ``R_leak_ohm`` is the positive resistance of
     the feedthrough capacitors' leakage path, or ``None`` for the idealized
-    hard float. ``collector_cells`` are the cells whose plasma-terminating
+    hard float. ``end_wall_cells`` are the cells whose plasma-terminating
     face IS the vessel, i.e. where the column's ion wall flux is read.
 
     The leak is SYMMETRIC: a linear resistor in both directions. If the
@@ -707,7 +707,7 @@ class VesselNode1D:
 
     C_total_F: float
     R_leak_ohm: float | None
-    collector_cells: np.ndarray
+    end_wall_cells: np.ndarray
 
 
 def resolve_vessel_node(input_dict, geometry):
@@ -745,12 +745,12 @@ def resolve_vessel_node(input_dict, geometry):
                 "with the wrong sign (got "
                 f"{input_dict.get('vessel_leak_resistance_ohm')!r})"
             )
-    collector = np.flatnonzero(
-        np.asarray(geometry.cell_role) == "collector"
+    end_wall = np.flatnonzero(
+        np.asarray(geometry.cell_role) == "end_wall"
     ).astype(int)
-    if collector.size == 0:
+    if end_wall.size == 0:
         raise ValueError(
-            "regime_vessel_node needs a plasma-terminating COLLECTOR cell: "
+            "regime_vessel_node needs a plasma-terminating END WALL cell: "
             "the far end is the vessel, and it carries both the transmitted "
             "beam's terminal surface and the column's ion wall flux, which "
             "are the two currents the node integrates. Accepted: the resolved "
@@ -759,7 +759,7 @@ def resolve_vessel_node(input_dict, geometry):
     return VesselNode1D(
         C_total_F=C_total,
         R_leak_ohm=R_leak,
-        collector_cells=collector,
+        end_wall_cells=end_wall,
     )
 
 

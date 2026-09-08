@@ -89,7 +89,7 @@ def _plasma_live_mask(result):
     """Return the per-cell plasma-live boolean, or None on results without roles.
 
     Membership in ``PLASMA_DEAD_ROLES`` is the authoritative test, so twin and
-    collector geometries -- whose dead cells are not a contiguous z<0 block --
+    end wall geometries -- whose dead cells are not a contiguous z<0 block --
     stay correct. Results saved before ``cell_role`` was written carry no roles
     and are left unmasked.
     """

@@ -9,7 +9,7 @@ separate short startup run (verify_sim1d_r3_boundary_startup.py), NOT here.
 
 Gates:
   G1 both outward normals drain their live cell (Bohm particle SINK, source-left
-     and collector-right), and only the live cell (the plenum is untouched);
+     and end-wall-right), and only the live cell (the plenum is untouched);
   G2 the particle sink is the sonic flux ~ n * c_s * A to the flux's KEP
      dissipation band (the ghost n_se = alpha*n plus Rusanov upwinding);
   G3 restoring momentum: at the A1 ANOMALY state (interior flowing AWAY from each

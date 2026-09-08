@@ -67,14 +67,64 @@ PORTS_Z_CM = {11: 470.05, 21: 789.55, 29: 1045.15, 41: 1428.55, 50: 1716.1}
 #: Energy rows read from each rhs_terms channel.
 ENERGY_ROWS = ("Ee", "Ei", "En", "En_a")
 
+#: READ-SIDE ALIASES, retired label -> current label. The model's far face is
+#: the LAPD chamber's END WALL, and the role, keys and rows that carried the
+#: old ``collector`` name were renamed. A trajectory saved before the rename
+#: holds the old names in its groups, its params block and its
+#: ``geometry/cell_role``, so every read below resolves through this table
+#: and reports the CURRENT label whatever the artifact spells it. It is a
+#: read alias only: nothing here is ever written.
+LEGACY_LABEL_ALIASES = {
+    "collector": "end_wall",
+    "collector_e_sheath_climb": "end_wall_e_sheath_climb",
+    "collector_face": "end_wall_face",
+    "collector_surface_power_W": "end_wall_surface_power_W",
+    "birth_collector_face": "birth_end_wall_face",
+    "birth_collector_jet": "birth_end_wall_jet",
+    "energy_birth_collector_face": "energy_birth_end_wall_face",
+    "energy_birth_collector_jet": "energy_birth_end_wall_jet",
+    "collector_length_cm": "end_wall_length_cm",
+    "collector_sheath_full_debit": "end_wall_sheath_full_debit",
+    "neutral_kinetic_dvm_collector_jet": "neutral_kinetic_dvm_end_wall_jet",
+    "neutral_kinetic_dvm_collector_jet_R_N":
+        "neutral_kinetic_dvm_end_wall_jet_R_N",
+    "neutral_kinetic_dvm_collector_jet_R_E":
+        "neutral_kinetic_dvm_end_wall_jet_R_E",
+    "neutral_kinetic_dvm_collector_jet_T_launch_eV":
+        "neutral_kinetic_dvm_end_wall_jet_T_launch_eV",
+    "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple":
+        "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple",
+}
+
+#: The same table read the other way, current label -> the retired label a
+#: pre-rename artifact stores it under.
+LEGACY_LABELS_BY_CURRENT = {
+    new: old for old, new in LEGACY_LABEL_ALIASES.items()
+}
+
+
+def current_label(name):
+    """Return ``name``'s current spelling, mapping a retired one."""
+    return LEGACY_LABEL_ALIASES.get(name, name)
+
+
+def legacy_get(mapping, key, default=None):
+    """``mapping[key]``, falling back to ``key``'s retired spelling."""
+    if key in mapping:
+        return mapping[key]
+    old = LEGACY_LABELS_BY_CURRENT.get(key)
+    if old is not None and old in mapping:
+        return mapping[old]
+    return default
+
 #: The four rhs_terms channels the two END-FACE keys add, in the order the
-#: per-window block reports them: `collector_sheath_full_debit`'s one row
+#: per-window block reports them: `end_wall_sheath_full_debit`'s one row
 #: first, then `cathode_face_full_debit`'s emitting-face three.  Each row is
-#: PRESENCE-GATED on ITS OWN key, so a run may carry the collector row alone,
+#: PRESENCE-GATED on ITS OWN key, so a run may carry the end wall row alone,
 #: the three cathode rows alone, all four, or none -- absence here means
 #: "never booked", never "booked zero".
 END_SHEATH_ROWS = (
-    "collector_e_sheath_climb",
+    "end_wall_e_sheath_climb",
     "cathode_e_emitted_enthalpy",
     "cathode_e_emitted_fall",
     "cathode_e_collected_climb",
@@ -138,14 +188,14 @@ CHANNEL_PHASE = {
         ("BOTH",
          "energy leaving through the characteristic ghost-cell boundary at "
          "the local Bohm flux"),
-    "collector_e_sheath_climb":
+    "end_wall_e_sheath_climb":
         ("BOTH",
-         "END-FACE SHEATH CLOSURE (Ee only): the sheath fall the collector's "
+         "END-FACE SHEATH CLOSURE (Ee only): the sheath fall the end wall's "
          "collected electrons climbed, taken from the electron store and "
          "handed to the ions. With the 2 Te of characteristic_boundary the "
-         "collector debit is the sheath-edge (2 + Lambda_eff) Te per "
+         "end wall debit is the sheath-edge (2 + Lambda_eff) Te per "
          "collected electron. Present only on a run with "
-         "collector_sheath_full_debit armed"),
+         "end_wall_sheath_full_debit armed"),
     "cathode_e_emitted_enthalpy":
         ("BOTH",
          "END-FACE SHEATH CLOSURE (Ee only), HEATING: the 2 k_B T_s the "
@@ -387,11 +437,14 @@ def integrate_rows(f, i0, i1, vols):
     list of channels present in the artifact."""
     if "rhs_terms" not in f:
         return {}, []
-    channels = sorted(f["rhs_terms"].keys())
+    # Channel names are resolved through the retired-label table on read, so
+    # a pre-rename artifact reports its rows under their current names.
+    stored = sorted(f["rhs_terms"].keys())
+    channels = [current_label(channel) for channel in stored]
     table = {}
-    for channel in channels:
+    for channel, name_in_file in zip(channels, stored):
         for name in ENERGY_ROWS:
-            key = f"rhs_terms/{channel}/{name}"
+            key = f"rhs_terms/{name_in_file}/{name}"
             if key not in f:
                 continue
             mean = np.mean(f[key][i0:i1 + 1], axis=0)
@@ -494,6 +547,10 @@ def dvm_flow_power(f, key, i0, i1, dt_s):
     every one of them.
     """
     path = f"dvm_particle_ledger/{key}"
+    if path not in f:
+        # A pre-rename artifact stores this row under its retired name.
+        old_key = LEGACY_LABELS_BY_CURRENT.get(key)
+        path = f"dvm_particle_ledger/{old_key}" if old_key else path
     if path not in f:
         return float("nan")
     return float(np.sum(f[path][i0 + 1:i1 + 1])) / ERG_PER_J / dt_s
@@ -602,7 +659,7 @@ def report_window(f, label, lo, hi, geom, port_top):
                       "channels in this window; move the window past the "
                       "tail or discount them explicitly.")
 
-    print("\n--- END-FACE SHEATH CLOSURE (collector_sheath_full_debit, "
+    print("\n--- END-FACE SHEATH CLOSURE (end_wall_sheath_full_debit, "
           "cathode_face_full_debit) [kW], window mean ---")
     if not table:
         print("  n/a -- rhs_terms ABSENT from this artifact")
@@ -625,7 +682,7 @@ def report_window(f, label, lo, hi, geom, port_top):
                       "(the two end-face keys arm independently, so a "
                       "one-key run is missing the other key's rows by "
                       "construction)")
-            print("  the collector row is the sheath fall its collected "
+            print("  the end wall row is the sheath fall its collected "
                   "electrons climbed; read it WITH characteristic_boundary,\n"
                   "  which carries the same face's 2 Te. The three cathode "
                   "rows are the emitting face's own channels and are\n"
@@ -683,13 +740,13 @@ def report_window(f, label, lo, hi, geom, port_top):
         print("  dvm_particle_ledger ABSENT from this artifact -- a moment "
               "run launches no kinetic jet")
     else:
-        # The energy the collector jet put INTO the gas: the atoms it launched
+        # The energy the end wall jet put INTO the gas: the atoms it launched
         # times the launch energy each carried, as the engine booked it at the
         # birth site. It is not an rhs_terms channel -- the jet is a neutral
         # birth, not a fluid source row -- so it is invisible in the channel
         # table above and has to be read from the jet's own ledger.
         for jet_key, jet_label in (
-            ("energy_birth_collector_jet", "collector jet injected"),
+            ("energy_birth_end_wall_jet", "end wall jet injected"),
             ("energy_birth_cathode_jet", "cathode jet injected"),
             ("energy_birth_anode_jet", "anode jet injected"),
         ):
@@ -740,7 +797,9 @@ def report_window(f, label, lo, hi, geom, port_top):
     roles = geom["roles"]
     dens = {}
     for channel in channels:
-        key = f"rhs_terms/{channel}/Ee"
+        key = f"rhs_terms/{LEGACY_LABELS_BY_CURRENT.get(channel, channel)}/Ee"
+        if key not in f:
+            key = f"rhs_terms/{channel}/Ee"
         if key in f:
             dens[channel] = np.mean(f[key][i0:i1 + 1], axis=0) / ERG_PER_J
     n_w = np.mean(f["n"][i0:i1 + 1], axis=0) if "n" in f else None
@@ -773,7 +832,7 @@ def load_geometry(f):
         "vols": vols,
         "two_zone": two_zone,
         "z": f["geometry/z_cm"][:],
-        "roles": [r.decode() if isinstance(r, bytes) else str(r)
+        "roles": [current_label(r.decode() if isinstance(r, bytes) else str(r))
                   for r in f["geometry/cell_role"][:]],
     }
 
@@ -802,7 +861,8 @@ def print_header(f, path, geom, drive, afterglow):
     print(f"dvm jets : neutral_model={params.get('neutral_model')}, "
           f"cathode={params.get('neutral_kinetic_dvm_cathode_jet')}, "
           f"anode={params.get('neutral_kinetic_dvm_anode_jet')}, "
-          f"collector={params.get('neutral_kinetic_dvm_collector_jet')}")
+          f"end_wall="
+          f"{legacy_get(params, 'neutral_kinetic_dvm_end_wall_jet')}")
     print(f"grid     : {Vp.size} cells, V_p total {Vp.sum():.6e} cm^3, "
           f"V_m total {Vm.sum():.6e} cm^3, "
           f"V_ann total {np.maximum(Vm - Vp, 0.0).sum():.6e} cm^3")

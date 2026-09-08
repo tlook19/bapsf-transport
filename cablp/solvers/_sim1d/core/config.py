@@ -119,9 +119,9 @@ def geometry_defaults():
     Lm:
         Total machine length represented by the 1D mesh [cm].
     nx:
-        Number of resolved column cells between anode and collector. Under the
+        Number of resolved column cells between anode and end wall. Under the
         ``source_fixed_grid`` flag it counts only the *far* column cells,
-        between the source region end and the collector.
+        between the source region end and the end wall.
     Rm:
         Default neutral/machine radius [cm].
     Rp:
@@ -143,8 +143,8 @@ def geometry_defaults():
     nx_gap:
         Number of resolved cells across the cathode-anode gap. These are the
         smallest cells in the mesh, so they set the explicit CFL timestep.
-    collector_length_cm:
-        Length of the collector cell at the non-cathode end (single-cathode
+    end_wall_length_cm:
+        Length of the end wall cell at the non-cathode end (single-cathode
         layout only; the twin layout mirrors the source end instead) [cm].
     Rcs:
         Inner radius of the annular cathode-structure obstruction between plenum
@@ -156,7 +156,7 @@ def geometry_defaults():
         Effective blockage radius of plenum support rods [cm]. ``0`` => none;
         reduces plenum neutral volume only. Consumed in M2.
     end_expansion_cells:
-        Number of cells resolving the collector/end expansion when the
+        Number of cells resolving the end-wall/end expansion when the
         ``end_expansion_geometry`` flag is enabled. ``None`` when off.
     end_expansion_machine_radius_cm:
         Vessel/neutral radius [cm] throughout the expanded end region.
@@ -253,8 +253,8 @@ def geometry_defaults():
     source_region_length_cm:
         End of the fixed-cell-size source region [cm, measured from the cathode
         surface]; the region runs from the anode face at ``cathode_anode_gap_cm``
-        to here and must lie strictly between the anode face and the collector
-        block (``Lm - collector_length_cm``). ``None`` when off. Requires the
+        to here and must lie strictly between the anode face and the end wall
+        block (``Lm - end_wall_length_cm``). ``None`` when off. Requires the
         ``source_fixed_grid`` flag, and is required by it.
     source_region_dz_cm:
         Cell size [cm] inside that source region, held fixed independently of
@@ -270,7 +270,7 @@ def geometry_defaults():
         "plenum_length_cm": 166.0,
         "cathode_anode_gap_cm": 53.25,
         "nx_gap": 5,
-        "collector_length_cm": 7.8,
+        "end_wall_length_cm": 7.8,
         "Rcs": 0.0,
         "Lcs": 0.0,
         "Rsup": 0.0,
@@ -761,7 +761,7 @@ def model_mode_defaults():
         directly use this selector.
     end_mode:
         End boundary behaviour, carried into the cathode-boundary
-        diagnostics as a label. ``"collector"`` is the only accepted value;
+        diagnostics as a label. ``"end_wall"`` is the only accepted value;
         the 0D-era ``"mirrored_source"`` alternative, which the conservative
         solver never branched on, was removed at D3 (2026-08-21) and raises.
     cathode_model:
@@ -1211,20 +1211,20 @@ def model_mode_defaults():
         raises at the tick rather than launching at the wrong energy. Read
         only when ``neutral_kinetic_dvm_anode_jet`` is on; must be ``None``
         or positive.
-    neutral_kinetic_dvm_collector_jet:
-        Whether the transient DVM splits the counted COLLECTOR return into an
+    neutral_kinetic_dvm_end_wall_jet:
+        Whether the transient DVM splits the counted END WALL return into an
         ENERGETIC FAST SHARE and a thermal remainder. Off, every ion the
         far-end characteristic boundary removes comes back as a cosine
         half-flux directed into the column at the 300 K wall temperature,
         which is the shipped reading. On, the
-        ``neutral_kinetic_dvm_collector_jet_R_N`` share is instead born as a
+        ``neutral_kinetic_dvm_end_wall_jet_R_N`` share is instead born as a
         ``-z``-directed volume birth in the end cell the return was counted
         into, carrying ``(R_E/R_N)`` of the arrival energy per atom, and the
-        remaining ``1 - R_N`` keeps the thermal face inflow. The collector
-        plate carries neither a sheath solve nor an energy book in this
+        remaining ``1 - R_N`` keeps the thermal face inflow. The end wall
+        carries neither a sheath solve nor an energy book in this
         model, so two things follow that its cathode and anode twins do not
         share: the per-ion arrival energy is PRESCRIBED, through
-        ``neutral_kinetic_dvm_collector_jet_sheath_Te_multiple``, rather than
+        ``neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple``, rather than
         read from a solve; and the energy the launched atoms carry is debited
         from no surface book, exactly as the ``(3/2) k T_wall`` per atom the
         thermal return already carries is debited from none. Inert unless
@@ -1232,13 +1232,13 @@ def model_mode_defaults():
         model raises at construction, as does arming it without all three of
         its required numbers, or naming any of its four numbers while it is
         off.
-    neutral_kinetic_dvm_collector_jet_R_N:
-        Particle share of the counted collector return that leaves the plate
+    neutral_kinetic_dvm_end_wall_jet_R_N:
+        Particle share of the counted end wall return that leaves the plate
         as the energetic directed launch rather than desorbing thermally.
         ``None`` until a configuration names it: required when
-        ``neutral_kinetic_dvm_collector_jet`` is on, refused when it is off,
+        ``neutral_kinetic_dvm_end_wall_jet`` is on, refused when it is off,
         and required there to satisfy ``0 < R_N <= 1``.
-    neutral_kinetic_dvm_collector_jet_R_E:
+    neutral_kinetic_dvm_end_wall_jet_R_E:
         TOTAL returned energy fraction of that same channel: the energy that
         leaves with the launched atoms over the energy the collected ions
         arrived with. The ``R_N`` launched atoms carry all of it, so each
@@ -1249,7 +1249,7 @@ def model_mode_defaults():
         reflection coefficient. ``None`` until a configuration names it:
         required when the channel is on, refused when it is off, and required
         there to satisfy ``0 < R_E <= 1``.
-    neutral_kinetic_dvm_collector_jet_T_launch_eV:
+    neutral_kinetic_dvm_end_wall_jet_T_launch_eV:
         NUMERICS parameter of that channel: the width of the smear the
         monoenergetic launch beam is represented by on the discrete velocity
         grid. ``None`` ties it to the grid -- the axial bin containing the
@@ -1261,17 +1261,17 @@ def model_mode_defaults():
         and what this changes is only how wide a bundle of bins carries it. A
         spectrum this leaves too narrow or too fast for the grid to project
         raises at the tick rather than launching at the wrong energy. Read
-        only when ``neutral_kinetic_dvm_collector_jet`` is on, refused when
+        only when ``neutral_kinetic_dvm_end_wall_jet`` is on, refused when
         it is off; must be ``None`` or positive.
-    neutral_kinetic_dvm_collector_jet_sheath_Te_multiple:
+    neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple:
         The multiple of the end cell's ``Te`` which, plus that cell's ``Ti``,
         is the kinetic energy ONE collected ion is taken to arrive at the
-        collector with. It is the FLOATING-SHEATH CONVENTION THE CALLER
-        STATES, not a solved potential: this model carries no collector
-        sheath and no collector circuit, so nothing here computes a drop and
+        end wall with. It is the FLOATING-SHEATH CONVENTION THE CALLER
+        STATES, not a solved potential: this model carries no end wall
+        sheath and no end wall circuit, so nothing here computes a drop and
         this number is the whole statement about one. ``None`` until a
         configuration names it: required when
-        ``neutral_kinetic_dvm_collector_jet`` is on, refused when it is off,
+        ``neutral_kinetic_dvm_end_wall_jet`` is on, refused when it is off,
         and required there to be a positive finite float.
     neutral_kinetic_dvm_jet_launch_width:
         ONE dimensionless width, shared by every armed surface jet, tying the
@@ -1391,7 +1391,7 @@ def model_mode_defaults():
         # "adiabatic" PAIRS with hyperbolic_energy_consistent: same gamma=5/3
         # energy system, so the signal speed matches the flux.
         "hyperbolic_wave_speed": "adiabatic",
-        "end_mode": "collector",
+        "end_mode": "end_wall",
         "Ti_birth_ionization": "neutral",
         # "conservative": no spurious 3Te/2 electron birth energy; ion
         # mass-loading mixing energy booked explicitly.
@@ -1453,16 +1453,16 @@ def model_mode_defaults():
         "neutral_kinetic_dvm_anode_jet_R_N": 0.63,
         "neutral_kinetic_dvm_anode_jet_R_E": 0.41,
         "neutral_kinetic_dvm_anode_jet_T_launch_eV": None,
-        # Collector-side energetic return, default OFF. Unlike the two
+        # End-wall-side energetic return, default OFF. Unlike the two
         # surfaces above there is no fluid channel to mirror and no sheath
         # solve to read, so every one of its four numbers is None -- "not
         # named" -- until a configuration names it, and naming one while the
         # channel is off is refused rather than left inert:
-        "neutral_kinetic_dvm_collector_jet": False,
-        "neutral_kinetic_dvm_collector_jet_R_N": None,
-        "neutral_kinetic_dvm_collector_jet_R_E": None,
-        "neutral_kinetic_dvm_collector_jet_T_launch_eV": None,
-        "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple": None,
+        "neutral_kinetic_dvm_end_wall_jet": False,
+        "neutral_kinetic_dvm_end_wall_jet_R_N": None,
+        "neutral_kinetic_dvm_end_wall_jet_R_E": None,
+        "neutral_kinetic_dvm_end_wall_jet_T_launch_eV": None,
+        "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple": None,
         # Shared ENERGY-TIED launch smear for every armed surface jet.
         # None = "keep the grid-tied width", the shipped behaviour; a float
         # in (0, 2/3) smears every jet at T = beta * e_launch instead:
@@ -2342,7 +2342,7 @@ def cathode_defaults():
         (``cathode.beam_deposition.landau_branching_fraction``, which carries the
         formula and its ``v_phi/v_te`` validity caveat). That share of each
         cell's power is walked exactly as ``"tail_walk"`` walks all of it —
-        same birth energy, launch, Coulomb machinery, cathode and collector
+        same birth energy, launch, Coulomb machinery, cathode and end wall
         conventions and tail end ledger — and ``1 - f_Landau`` is banked
         locally exactly as ``"local"`` banks all of it. NO new physical
         constant: the branching is computed from boxed inputs and the birth
@@ -2571,7 +2571,7 @@ def cathode_defaults():
         in the SAME term that rebirths the particles, so the two are
         consistent by construction, and the surface absorbs the difference
         between the incoming sonic momentum and the re-emitted jet momentum.
-        Collector faces stay momentum-free. ``False`` rebirths at rest.
+        End wall faces stay momentum-free. ``False`` rebirths at rest.
         Requires the ``neutral_momentum`` flag (there is no ``M_n`` field for
         the momentum to land in otherwise) and a geometry with an absorbing
         cathode face; raises at construction otherwise. The reflected atoms'
@@ -3974,7 +3974,7 @@ input_flags_template_1d = {
     # chamber-mean nn.
     "neutral_two_zone": True,
     # Route the END-REGION recycle stream into the annulus. The plasma-
-    # terminating faces whose live cell has the COLLECTOR role rebirth their
+    # terminating faces whose live cell has the END WALL role rebirth their
     # absorbed flux as thermal diffuse gas in that cell's annulus row nn_a
     # (dN_loss / V_ann) instead of in its column row nn; the CATHODE faces are
     # untouched, so the ratified jet/debit closure over them is unchanged. The
@@ -3993,9 +3993,9 @@ input_flags_template_1d = {
     # energy twice.
     #
     # Requires neutral_two_zone (the destination row must exist), refuses
-    # any geometry whose routed collector cell has no annulus (V_ann = 0),
+    # any geometry whose routed end wall cell has no annulus (V_ann = 0),
     # and refuses a kinetic neutral_model ('kinetic', 'kinetic_dvm'), whose
-    # collector wall-return source channel counts the column nn row alone and
+    # end wall wall-return source channel counts the column nn row alone and
     # would therefore lose the routed stream entirely; all three are
     # construction-time ValueErrors. Default OFF and bit-exact off
     # (presence-gated: the off path passes no annulus volume to the
@@ -4097,7 +4097,7 @@ input_flags_template_1d = {
     # with no surface having absorbed them. A PLASMA-DEAD cell's flights stay
     # in the dead block they were born in, so its (floor-density) births can no
     # longer deposit out of a masked cell into a live one either. A BOUNDARY
-    # cell -- the live cell against a cathode disc or a collector -- is the
+    # cell -- the live cell against a cathode disc or a end wall -- is the
     # cell that receives everything folded at that wall, on both counts. The
     # mask itself is untouched; the flag only stops feeding it rows to delete.
     # Cells with no column (Rp = 0) keep the in-place identity row they already
@@ -4390,7 +4390,7 @@ input_flags_template_1d = {
     # beam energy the climb is subtracted from must be the circuit-bounded
     # one, never the atomic-data cap), beam_deposition_model='csda' (only the
     # CSDA rays book a transmitted flux at a terminating surface) and a
-    # plasma-terminating collector face (the ion wall channel) -- each a
+    # plasma-terminating end wall face (the ion wall channel) -- each a
     # construction-time ValueError, as are a non-positive vessel_capacitance_F
     # and a non-positive vessel_leak_resistance_ohm. V_cm(t) and the three
     # current channels ride the cathode diagnostics; nothing here is scored.
@@ -4439,7 +4439,7 @@ input_flags_template_1d = {
     # keys, one per axial end. The anode flag above applied to the machine's
     # two AXIAL ends, where the same thermal-only routing leaves the same
     # energy unbooked. The two ends are separate faces carrying separate
-    # fluxes in separate regimes -- the collector row is live in every phase,
+    # fluxes in separate regimes -- the end wall row is live in every phase,
     # the cathode fall row is identically zero until a virtual cathode forms
     # -- and nothing couples them except the column, so each end is armed on
     # its own: either key, both, or neither. Every row either key adds is
@@ -4448,8 +4448,8 @@ input_flags_template_1d = {
     # key: unarmed, that key's rows do not exist at all and the saved term
     # structure is what it was before the closure.
     #
-    # COLLECTOR -- ``collector_sheath_full_debit`` arms ONE row,
-    # ``collector_e_sheath_climb``, negative. The collector is a
+    # END WALL -- ``end_wall_sheath_full_debit`` arms ONE row,
+    # ``end_wall_e_sheath_climb``, negative. The end wall is a
     # floating exhaust with no circuit branch, so the fall its collected
     # electrons climb comes out of the plasma electron store and is handed to
     # the ions, which deposit it on the surface. The row is
@@ -4480,11 +4480,11 @@ input_flags_template_1d = {
     #
     # WHAT IT RAISES. Must be a real bool. Arming it refuses at construction
     # unless the configuration supplies a plasma-absorbing face of the
-    # COLLECTOR role -- the face whose collected electrons are charged the
+    # END WALL role -- the face whose collected electrons are charged the
     # sheath fall. It does NOT require the cathode circuit solve: this row is
     # a boundary-operator quantity, computed on the very flux that operator
     # books, and is honest with or without a circuit. Bit-exact when off.
-    "collector_sheath_full_debit": False,
+    "end_wall_sheath_full_debit": False,
     # CATHODE -- ``cathode_face_full_debit`` arms THREE rows at the emitting
     # face, kept apart because they are three different physical channels
     # with two different signs:
@@ -4681,6 +4681,30 @@ def default_config():
 #: A name stays here once removed: the message is the only thing a retired
 #: key still owns.
 RETIRED_PARAM_KEYS = {
+    # The end-wall rename. The model's far face IS the LAPD chamber's end
+    # wall -- there is no distinct collector electrode -- so the role and
+    # every key that carried its name were renamed. A pre-rename
+    # configuration file is the case that reaches this path.
+    "collector_length_cm": (
+        "end_wall_length_cm, the same length of the same cell under the "
+        "face's own name"
+    ),
+    "neutral_kinetic_dvm_collector_jet": (
+        "neutral_kinetic_dvm_end_wall_jet, the same channel under the "
+        "face's own name"
+    ),
+    "neutral_kinetic_dvm_collector_jet_R_N": (
+        "neutral_kinetic_dvm_end_wall_jet_R_N"
+    ),
+    "neutral_kinetic_dvm_collector_jet_R_E": (
+        "neutral_kinetic_dvm_end_wall_jet_R_E"
+    ),
+    "neutral_kinetic_dvm_collector_jet_T_launch_eV": (
+        "neutral_kinetic_dvm_end_wall_jet_T_launch_eV"
+    ),
+    "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple": (
+        "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple"
+    ),
     "T_s": (
         "cathode_Ts_base_K, the heater-maintained standby surface "
         "temperature -- the static warming model holds the surface at it "
@@ -4694,14 +4718,68 @@ RETIRED_PARAM_KEYS = {
 #: key, not a retired one, and must keep reading as the plain unknown key it
 #: is.
 RETIRED_FLAG_KEYS = {
+    # The end-wall rename; see RETIRED_PARAM_KEYS above.
+    "collector_sheath_full_debit": (
+        "end_wall_sheath_full_debit, the same sheath-climb row at the same "
+        "face under the face's own name"
+    ),
     "end_sheath_full_debit": (
-        "collector_sheath_full_debit and cathode_face_full_debit, the two "
+        "end_wall_sheath_full_debit and cathode_face_full_debit, the two "
         "independent end-face keys it was split into -- the first arms the "
-        "collector's sheath-climb row, the second the emitting cathode "
+        "end wall's sheath-climb row, the second the emitting cathode "
         "face's three rows, and a configuration that armed the merged key "
         "arms BOTH"
     ),
 }
+
+
+#: SAVED-ARTIFACT key aliases, retired name -> current name. Used ONLY when a
+#: params/flags block is read back off a stored file that was written before a
+#: rename, so a reader can address it under the names the code now uses.
+#:
+#: It is deliberately NOT consulted by :func:`resolve_config`: a LIVE
+#: configuration naming a retired key is refused there, with its successor
+#: named, because a silently accepted alias is exactly the inert control that
+#: boundary exists to forbid. Reading a stored file is the opposite case --
+#: the file cannot be edited to say something else, and the value in it is a
+#: fact about a run that already happened.
+LEGACY_CONFIG_KEY_ALIASES = {
+    "collector_length_cm": "end_wall_length_cm",
+    "collector_sheath_full_debit": "end_wall_sheath_full_debit",
+    "neutral_kinetic_dvm_collector_jet": "neutral_kinetic_dvm_end_wall_jet",
+    "neutral_kinetic_dvm_collector_jet_R_N":
+        "neutral_kinetic_dvm_end_wall_jet_R_N",
+    "neutral_kinetic_dvm_collector_jet_R_E":
+        "neutral_kinetic_dvm_end_wall_jet_R_E",
+    "neutral_kinetic_dvm_collector_jet_T_launch_eV":
+        "neutral_kinetic_dvm_end_wall_jet_T_launch_eV",
+    "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple":
+        "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple",
+}
+
+#: The retired VALUES a stored params block may carry, per key.
+LEGACY_CONFIG_VALUE_ALIASES = {
+    "end_mode": {"collector": "end_wall"},
+}
+
+
+def apply_legacy_config_key_aliases(mapping):
+    """Return a stored params/flags block under the CURRENT key names.
+
+    Presence-gated in both directions: a block naming none of the retired keys
+    is returned as an unchanged copy, and a retired key whose current name is
+    ALSO present is left alone rather than overwriting the current one -- two
+    spellings of one control in one stored block is a corrupt file, not an
+    alias to resolve.
+    """
+    out = dict(mapping)
+    for old, new in LEGACY_CONFIG_KEY_ALIASES.items():
+        if old in out and new not in out:
+            out[new] = out.pop(old)
+    for key, values in LEGACY_CONFIG_VALUE_ALIASES.items():
+        if key in out and out[key] in values:
+            out[key] = values[out[key]]
+    return out
 
 
 def resolve_config(params=None, flags=None, models=None):
