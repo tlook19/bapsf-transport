@@ -540,9 +540,12 @@ DVM_LIMITED_STEP_RECORD_CAP = 4096
 #: included -- is what it was before the key existed.
 #: ``beam_launch_enthalpy_V`` is the ``2 k_B T_s / e`` [V] the beam launch
 #: potential carries this solve and ``P_emitted_enthalpy_on_beam`` [W] the
-#: power that enthalpy rides at, at the FULL emitted current the march
-#: launches. Both are zero on a solve whose regime keeps the enthalpy on the
-#: cathode-adjacent cell, which is a computed zero and not an absence.
+#: power that enthalpy rides at, normalised at the flux the ACTIVE deposition
+#: route launches into the column -- the FULL emitted current under the CSDA
+#: march, that current netted by the gap survival under Beer-Lambert, whose
+#: column heating is ``P_prim``. Both are zero on a solve whose regime keeps
+#: the enthalpy on the cathode-adjacent cell, which is a computed zero and not
+#: an absence.
 _CATHODE_ENTHALPY_ON_BEAM_KEYS = (
     "beam_launch_enthalpy_V",
     "P_emitted_enthalpy_on_beam",

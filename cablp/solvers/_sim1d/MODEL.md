@@ -747,9 +747,43 @@ unchanged. The gate lives in the sheath solve, which is what knows the regime,
 and the row reads its verdict back off the result, so the cell and the beam
 cannot both carry the enthalpy or both drop it. The placement moves energy
 between the cathode cell and the column; it creates none. Armed, the solve also
-reports the shift as $2k_BT_s/e$ in volts and the power it carries at the full
-emitted current the march launches; both are exported to the cathode
-diagnostics, presence-gated on the flag.
+reports the shift as $2k_BT_s/e$ in volts and the power it carries; both are
+exported to the cathode diagnostics, presence-gated on the flag.
+
+*Per route.* The shifted quantity is one object, the beam LAUNCH POTENTIAL
+$\phi_c+2k_BT_s/e$, and every route that launches a beam reads it there:
+
+- **Current-driven and prescribed-measured** (the two dispatched sheath
+  solves) carry the placement. The launch potential sets the ray energy, the
+  anode-mesh climb is subtracted from it rather than from the bare fall, and
+  the beam mean free path $l_b$ — hence the cathode-anode gap bypass — is
+  evaluated at it too, because the primary crosses the gap carrying its
+  emission enthalpy on top of the fall. That mean free path is the ONE channel
+  through which the placement moves a trajectory, and evaluating it at the
+  launch potential is what makes the CSDA $\sigma_\text{eff}$ inversion's own
+  premise true: that inversion, and the beam gap ledger's circuit view,
+  already solve at the launch potential. In the current-driven solve the
+  sheath root is a current match that the gap bypass does not enter, so the
+  fall and the released current are unmoved by the shift; only the bypass and
+  what it feeds move.
+- **CSDA deposition** is handed the FULL released flux $I_\text{eth}^\star/e$
+  at the launch potential and carries the gap itself, so the whole of
+  $\Delta\cdot I_\text{eth}^\star$ is launched into the column and the
+  reported on-beam power is that.
+- **Beer-Lambert deposition** heats the column through $P_\text{prim}$, which
+  already carries the gap-survival factor
+  $1-\eta\,b_\text{bypass}$, so only that share of the beam — and of its
+  enthalpy — ever enters the column and the reported on-beam power is netted
+  by the same factor. The deposition route therefore selects the
+  normalisation of that diagnostic, and nothing else; no rhs row, potential or
+  current reads the distinction, so it cannot move a trajectory on either
+  route.
+- **The off-dispatch voltage-driven beam assembly** (`solve_beam_system`, kept
+  as the voltage-driven reference and reached by no live caller) cannot carry
+  the placement at all: it takes no launch enthalpy and passes none to the
+  sheath solve, so its launch potential is identically $\phi_c$. It reads that
+  potential through the same accessor as every other route, so the omission is
+  zero rather than a bare drop kept silently.
 
 **Prescribed drive.** `cathode_solver_model = "prescribed_measured"` imposes
 both loop quantities — $I(t)$ and $V_\text{dis}(t)$ interpolated from a

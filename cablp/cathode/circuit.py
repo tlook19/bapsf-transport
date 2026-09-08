@@ -380,10 +380,14 @@ class SolverResult:
     # Emitted-electron launch enthalpy carried ON THE BEAM
     # (``cathode_enthalpy_on_beam``). ``beam_launch_enthalpy_V`` is the
     # ``2 k_B T_s / e`` [V] added to the beam launch potential ahead of the
-    # anode-mesh climb, and ``P_emitted_enthalpy_on_beam`` [W] the power that
-    # potential carries at the emitted flux the march launches --
-    # ``beam_launch_enthalpy_V * I_eth_star``, the FULL released current with
-    # no bypass factor, because the march launches all of it.
+    # anode-mesh climb -- and to the beam mean free path, which is the
+    # launched beam's -- and ``P_emitted_enthalpy_on_beam`` [W] the power that
+    # potential carries at the flux the ACTIVE deposition route launches into
+    # the column: ``beam_launch_enthalpy_V * I_eth_star`` where the route's
+    # march is handed the FULL released current and carries the gap itself,
+    # that product netted by ``1 - eta * beam_bypass_fraction`` where the
+    # route heats the column through ``P_prim`` instead. The caller states
+    # which; see :func:`_emitted_enthalpy_on_beam_W`.
     #
     # Both are 0.0 unless the key is armed AND the emitted electrons ARE the
     # primary beam, which is the regime ``phi_c_minus == 0``: with a virtual

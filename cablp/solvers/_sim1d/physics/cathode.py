@@ -3881,9 +3881,9 @@ def cathode_emission_sheath_power_W(result, T_s_K):
         EXACTLY ZERO where the solve carried this enthalpy on the beam
         instead, which it reports as a nonzero ``beam_launch_enthalpy_V``:
         there the released electrons ARE the primary beam, the launch
-        potential already includes the enthalpy and the CSDA march deposits
-        it along the column, so booking it here as well would be the same
-        energy twice. The gate is the SOLVE's, read back off the result, so
+        potential already includes the enthalpy and the deposition route
+        deposits it along the column, so booking it here as well would be the
+        same energy twice. The gate is the SOLVE's, read back off the result, so
         this row and the beam cannot disagree about which of them carries it.
 
     ``+e (phi_c_plus - max(phi_c, 0)) Gamma_em``
