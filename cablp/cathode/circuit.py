@@ -380,10 +380,14 @@ class SolverResult:
     # Emitted-electron launch enthalpy carried ON THE BEAM
     # (``cathode_enthalpy_on_beam``). ``beam_launch_enthalpy_V`` is the
     # ``2 k_B T_s / e`` [V] added to the beam launch potential ahead of the
-    # anode-mesh climb, and ``P_emitted_enthalpy_on_beam`` [W] the power that
-    # potential carries at the emitted flux the march launches --
-    # ``beam_launch_enthalpy_V * I_eth_star``, the FULL released current with
-    # no bypass factor, because the march launches all of it.
+    # anode-mesh climb -- and to the beam mean free path, which is the
+    # launched beam's -- and ``P_emitted_enthalpy_on_beam`` [W] the power that
+    # potential carries at the flux the ACTIVE deposition route launches into
+    # the column: ``beam_launch_enthalpy_V * I_eth_star`` where the route's
+    # march is handed the FULL released current and carries the gap itself,
+    # that product netted by ``1 - eta * beam_bypass_fraction`` where the
+    # route heats the column through ``P_prim`` instead. The caller states
+    # which; see :func:`_emitted_enthalpy_on_beam_W`.
     #
     # Both are 0.0 unless the key is armed AND the emitted electrons ARE the
     # primary beam, which is the regime ``phi_c_minus == 0``: with a virtual
@@ -413,6 +417,55 @@ def _launch_potential_V(phi_c, enthalpy_V):
     if enthalpy_V == 0.0:
         return phi_c
     return phi_c + enthalpy_V
+
+
+def _beam_launch_enthalpy_V(emitted_enthalpy_V, phi_c_minus):
+    """Return the launch enthalpy [V] the beam carries in THIS regime.
+
+    ``emitted_enthalpy_V`` where the emitted electrons ARE the primary beam,
+    which is the regime ``phi_c_minus == 0``; 0.0 once a virtual cathode
+    stands between them and the column, because there the emitted population
+    is not the launched beam and the caller books the enthalpy on the
+    cathode-adjacent cell instead.
+
+    The single definition of the regime gate. Each sheath solve reads it
+    twice -- once while it evaluates the beam mean free path at the launch
+    potential, once when it fills ``SolverResult.beam_launch_enthalpy_V`` --
+    so a solve cannot admit the shift in one place and refuse it in the
+    other.
+    """
+    return float(emitted_enthalpy_V) if phi_c_minus == 0.0 else 0.0
+
+
+def _emitted_enthalpy_on_beam_W(
+    enthalpy_V, I_eth_star, gap_survival, gap_netted
+):
+    """Return the power [W] the launch enthalpy rides at on the ACTIVE route.
+
+    ``enthalpy_V * I_eth_star``, the FULL released current, where the
+    deposition route launches every emitted electron and carries the
+    cathode-anode gap itself -- the CSDA march, which is handed
+    ``I_eth_star / e`` at the launch potential, so the whole of the enthalpy
+    enters the column and the march decides where it lands.
+
+    Netted by ``gap_survival`` where the route heats the column through
+    ``P_prim`` instead (Beer-Lambert): ``P_prim`` already carries the factor
+    ``1 - eta * beam_bypass_fraction``, so only that share of the beam, and of
+    its enthalpy, ever enters the column; the rest leaves with the beam that
+    bypasses to the anode. ``gap_survival`` is that same factor, passed in
+    rather than re-formed so the diagnostic and ``P_prim`` cannot disagree
+    about how much beam the column received.
+
+    A DIAGNOSTIC only. No rhs row, potential or current is built from the
+    return value, so the route distinction here cannot move a trajectory --
+    it can only make the reported number true of the route that ran.
+    0.0 enthalpy gives 0.0 on both routes, which is what keeps an unarmed
+    solve's value the computed zero it always was.
+    """
+    P = enthalpy_V * I_eth_star
+    if not gap_netted:
+        return P
+    return P * gap_survival
 
 
 def beam_launch_potential_V(result):
@@ -924,6 +977,7 @@ def solve(
     anode_T_e: float | None = None,
     tail_anode_current_A: float = 0.0,
     emitted_enthalpy_V: float = 0.0,
+    emitted_enthalpy_gap_netted: bool = False,
 ) -> SolverResult:
     """Solve for all sheath potentials and currents given device config and plasma state.
 
@@ -951,8 +1005,19 @@ def solve(
         default) otherwise. It is applied only where the emitted electrons ARE
         the primary beam -- ``phi_c_minus == 0`` -- and is reported back as
         ``beam_launch_enthalpy_V``; elsewhere it is dropped and the caller's
-        cathode-adjacent booking stands. 0.0 is an exact identity on every
+        cathode-adjacent booking stands. Where it applies, the beam mean free
+        path below is evaluated at the LAUNCH potential ``phi_c + enthalpy``
+        rather than at the bare drop, because that sum is the energy the
+        primary carries across the gap. 0.0 is an exact identity on every
         float here.
+    emitted_enthalpy_gap_netted : bool
+        Whether the deposition route that will consume this solve heats the
+        column through ``P_prim`` and so already nets out the gap-bypassing
+        beam (Beer-Lambert), rather than launching the full released flux and
+        carrying the gap itself (the CSDA march). It selects the flux the
+        reported ``P_emitted_enthalpy_on_beam`` rides at and NOTHING else --
+        see :func:`_emitted_enthalpy_on_beam_W`. False (the default) is the
+        full-flux normalisation.
     floating : bool
         RETIRED. True raises: the separate open-circuit root this used to
         select did not satisfy its own current balance at an emitting
@@ -1222,9 +1287,21 @@ def solve(
         beam_bypass_fraction = 0.0
         l_b = 0.0
         psi_c_plus = _do_solve(_make_f(beam_bypass_fraction))
+        # The mean free path is the LAUNCH potential's, not the bare drop's:
+        # the primary crosses the gap carrying its emission enthalpy on top of
+        # the fall, and this is the same regime gate and the same shift the
+        # returned ``beam_launch_enthalpy_V`` and ``P_prim`` are built from.
+        # With no enthalpy placed, ``_launch_potential_V`` hands back the drop
+        # AS THE SAME OBJECT, so every unarmed root is bit for bit historical.
+        def _launch_V_at(psi, psi_minus):
+            return _launch_potential_V(
+                (psi - psi_minus) * T_e,
+                _beam_launch_enthalpy_V(emitted_enthalpy_V, psi_minus * T_e),
+            )
+
         for _ in range(4):
             _pm = _psi_minus_at(psi_c_plus)
-            l_b = _compute_l_b((psi_c_plus - _pm) * T_e, T_e, n_e, plasma.n_n, plasma.sigma_b)
+            l_b = _compute_l_b(_launch_V_at(psi_c_plus, _pm), T_e, n_e, plasma.n_n, plasma.sigma_b)
             next_bypass = _compute_beam_bypass_fraction(l_b, config.L_cath)
             if abs(next_bypass - beam_bypass_fraction) < 1e-4:
                 beam_bypass_fraction = next_bypass
@@ -1232,7 +1309,7 @@ def solve(
             beam_bypass_fraction = next_bypass
             psi_c_plus = _do_solve(_make_f(beam_bypass_fraction))
         _pm = _psi_minus_at(psi_c_plus)
-        l_b = _compute_l_b((psi_c_plus - _pm) * T_e, T_e, n_e, plasma.n_n, plasma.sigma_b)
+        l_b = _compute_l_b(_launch_V_at(psi_c_plus, _pm), T_e, n_e, plasma.n_n, plasma.sigma_b)
         beam_bypass_fraction = _compute_beam_bypass_fraction(l_b, config.L_cath)
         long_mfp = l_b > 0.0 and l_b > config.L_cath
 
@@ -1287,12 +1364,18 @@ def solve(
     # The launch enthalpy rides the beam only where the emitted electrons ARE
     # the beam; with a virtual cathode present the caller books it on the
     # cathode-adjacent cell instead and this is exactly 0.0.
-    beam_launch_enthalpy_V = (
-        float(emitted_enthalpy_V) if phi_c_minus == 0.0 else 0.0
+    beam_launch_enthalpy_V = _beam_launch_enthalpy_V(
+        emitted_enthalpy_V, phi_c_minus
     )
-    P_emitted_enthalpy_on_beam = beam_launch_enthalpy_V * I_eth_star
+    gap_survival = 1.0 - eta * beam_bypass_fraction
+    P_emitted_enthalpy_on_beam = _emitted_enthalpy_on_beam_W(
+        beam_launch_enthalpy_V,
+        I_eth_star,
+        gap_survival,
+        emitted_enthalpy_gap_netted,
+    )
     P_prim = (
-        (1.0 - eta * beam_bypass_fraction)
+        gap_survival
         * I_eth_star
         * _launch_potential_V(phi_c, beam_launch_enthalpy_V)
     )
@@ -1382,6 +1465,16 @@ def solve_beam_system(
     kept as the voltage-driven reference assembly, and the twin-cathode
     branch below with it.
 
+    THE LAUNCH ENTHALPY IS NOT AVAILABLE ON THIS ROUTE. It takes no
+    ``emitted_enthalpy_V`` and passes none to ``solve``, so every result it
+    assembles carries ``beam_launch_enthalpy_V = 0.0`` and the launch
+    potential below IS ``result.phi_c``, the same float object -- the arrays
+    are read through :func:`beam_launch_potential_V` all the same, so the one
+    definition of the launch energy is the one this route reads too, and the
+    omission against the three dispatch routes is exactly zero rather than a
+    silently bare drop. ``cathode_enthalpy_on_beam`` reaches the solver only
+    through ``circuit_idriven`` and ``circuit_prescribed``.
+
     Calls solve() for the primary cathode at ``cathode_index`` and, when
     config.Twin is True, also for the twin at ``twin_index``. Those default to
     0 and -1, the end cells, which is where a lumped source/end geometry puts the
@@ -1429,7 +1522,7 @@ def solve_beam_system(
         tail_anode_current_A=tail_anode_current_A,
     )
     x0_next = result.phi_c_plus
-    phi_c_0 = result.phi_c
+    phi_c_0 = beam_launch_potential_V(result)
     if phi_c_0 > I_ion:
         v_beam[cathode_index] = math.sqrt(2.0 * phi_c_0 * _erg_per_eV / _me_cgs)
         _I_beam_0 = result.I_eth_star * (1.0 - config.eta * result.beam_bypass_fraction)
@@ -1467,7 +1560,7 @@ def solve_beam_system(
             tail_anode_current_A=tail_anode_current_A,
         )
         x0_twin_next = result_twin.phi_c_plus
-        phi_c_1 = result_twin.phi_c
+        phi_c_1 = beam_launch_potential_V(result_twin)
         if phi_c_1 > I_ion:
             v_beam[twin_index] = math.sqrt(2.0 * phi_c_1 * _erg_per_eV / _me_cgs)
             _I_beam_1 = result_twin.I_eth_star * (
@@ -1512,12 +1605,12 @@ def solve_beam_system(
     l_b_profile = np.zeros(cells)
     if beam_cross[cathode_index] != 0.0:
         for j in range(cells):
-            l_b_profile[j] = _compute_l_b(result.phi_c, Te[j], ne[j], nn[j], beam_atten_cross[cathode_index])
+            l_b_profile[j] = _compute_l_b(beam_launch_potential_V(result), Te[j], ne[j], nn[j], beam_atten_cross[cathode_index])
 
     l_b_profile_twin = np.zeros(cells)
     if config.Twin and result_twin is not None and beam_cross[twin_index] != 0.0:
         for j in range(cells):
-            l_b_profile_twin[j] = _compute_l_b(result_twin.phi_c, Te[j], ne[j], nn[j], beam_atten_cross[twin_index])
+            l_b_profile_twin[j] = _compute_l_b(beam_launch_potential_V(result_twin), Te[j], ne[j], nn[j], beam_atten_cross[twin_index])
 
     return BeamResult(
         result=result,

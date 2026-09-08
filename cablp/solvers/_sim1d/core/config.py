@@ -4525,19 +4525,31 @@ input_flags_template_1d = {
     # ``phi_c_minus == 0``, in which no virtual cathode has formed and
     # ``cathode_e_emitted_fall`` is identically zero. There the enthalpy is
     # added to the beam LAUNCH POTENTIAL instead, ahead of the anode-mesh
-    # climb, so it is carried by the CSDA march and deposited where the march
-    # deposits; the cathode-adjacent row is then exactly zero and the two
+    # climb, so it is carried by the deposition route and deposited where that
+    # route deposits; the cathode-adjacent row is then exactly zero and the two
     # cannot both book it. In the virtual-cathode regime, and in every
     # floating, afterglow and inductive-tail phase, the cathode-adjacent
     # booking returns unchanged.
     #
+    # WHAT IT MOVES BESIDES THE ROW. The beam mean free path, and so the
+    # cathode-anode gap bypass, is evaluated at that launch potential rather
+    # than at the bare fall -- the primary crosses the gap carrying its
+    # emission enthalpy on top of it. That is the one channel through which
+    # this key moves an armed trajectory; the current-driven sheath root
+    # itself is a current match the bypass does not enter.
+    #
     # WHAT IT ADDS TO THE FILE. ``2 k_B T_s / e`` [V] rides the sheath result
-    # as ``beam_launch_enthalpy_V`` and the power it carries, the full
-    # ``2 k_B T_s Gamma_em`` at the emitted flux the march launches, as
-    # ``P_emitted_enthalpy_on_beam``; both are exported to the cathode
-    # diagnostics PRESENCE-GATED on this key, so an unarmed run's dataset set
-    # is unchanged. ``T_s`` is the surface temperature the solve ran at (the
-    # evolving value under ``cathode_warming_model = "power_balance"``).
+    # as ``beam_launch_enthalpy_V`` and the power it carries as
+    # ``P_emitted_enthalpy_on_beam``, normalised at the flux the ACTIVE
+    # ``beam_deposition_model`` launches into the column: the full
+    # ``2 k_B T_s Gamma_em`` under ``"csda"``, whose march is handed the whole
+    # released flux at the launch potential; that power netted by the
+    # gap-survival factor ``P_prim`` carries under ``"beer_lambert"``, where
+    # the bypassing beam's enthalpy never enters the column. Both are exported
+    # to the cathode diagnostics PRESENCE-GATED on this key, so an unarmed
+    # run's dataset set is unchanged. ``T_s`` is the surface temperature the
+    # solve ran at (the evolving value under ``cathode_warming_model =
+    # "power_balance"``).
     #
     # WHAT IT RAISES. Must be a real bool. Bit-exact when off.
     "cathode_enthalpy_on_beam": False,

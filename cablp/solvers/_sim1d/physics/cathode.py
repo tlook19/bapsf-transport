@@ -819,6 +819,41 @@ def vessel_beam_climb_V(input_flags, V_cm_V):
     return float(V_cm_V)
 
 
+def cathode_beam_deposition_is_csda(input_dict):
+    """Whether this configuration deposits the beam with the CSDA march.
+
+    The ONE equality test against ``beam_deposition_model``. Two things read
+    it: the deposition dispatch, which launches the march under it and the
+    Beer-Lambert profile otherwise; and
+    :func:`cathode_emitted_enthalpy_gap_netted`, which tells the sheath solve
+    which flux its launch-enthalpy diagnostic rides at. The selector is an
+    EQUALITY test with a Beer-Lambert fallback rather than a membership one,
+    so any value that is not exactly ``"csda"`` selects Beer-Lambert; sharing
+    one function is what keeps the two readers from selecting different
+    routes.
+    """
+    return str(
+        input_dict.get("beam_deposition_model", "beer_lambert")
+    ) == "csda"
+
+
+def cathode_emitted_enthalpy_gap_netted(input_dict):
+    """Whether the beam's launch enthalpy is netted by the gap survival.
+
+    False under the CSDA march, which is handed the FULL released flux at the
+    launch potential and carries the cathode-anode gap itself: the whole of
+    ``Delta * I_eth_star`` is launched into the column. True under
+    Beer-Lambert, whose column heating is ``P_prim`` and therefore already
+    netted by ``1 - eta * beam_bypass_fraction``: only that share of the beam,
+    and of its enthalpy, ever enters the column.
+
+    Selects the normalisation of the ``P_emitted_enthalpy_on_beam``
+    DIAGNOSTIC and nothing else, so it cannot move a trajectory on either
+    route.
+    """
+    return not cathode_beam_deposition_is_csda(input_dict)
+
+
 def cathode_beam_launch_enthalpy_V(input_dict, input_flags):
     """Return the emitted electrons' launch enthalpy [V] the beam carries.
 
@@ -956,6 +991,9 @@ def idriven_result_evaluator(
             # cannot disagree about what the anode is collecting.
             tail_anode_current_A=float(tail_anode_current_prev_A),
             emitted_enthalpy_V=emitted_enthalpy_V,
+            emitted_enthalpy_gap_netted=(
+                cathode_emitted_enthalpy_gap_netted(input_dict)
+            ),
         )
 
     return solve_at
@@ -1435,6 +1473,9 @@ def solve_cathode_boundary(
             beam_climb_V=beam_climb_V,
             tail_anode_current_A=float(tail_anode_current_prev_A),
             emitted_enthalpy_V=emitted_enthalpy_V,
+            emitted_enthalpy_gap_netted=(
+                cathode_emitted_enthalpy_gap_netted(input_dict)
+            ),
         )
     else:
         # The circuit is explicit solver state: no inductive fold, no
@@ -1499,12 +1540,15 @@ def solve_cathode_boundary(
             beam_climb_V=beam_climb_V,
             tail_anode_current_A=float(tail_anode_current_prev_A),
             emitted_enthalpy_V=emitted_enthalpy_V,
+            emitted_enthalpy_gap_netted=(
+                cathode_emitted_enthalpy_gap_netted(input_dict)
+            ),
         )
     beam_deposition = None
     beam_gap_ledger = None
     beam_reservoir_deposition = None
     beam_plateau_edge = None
-    if str(input_dict.get("beam_deposition_model", "beer_lambert")) == "csda":
+    if cathode_beam_deposition_is_csda(input_dict):
         (
             beam_deposition,
             beam_gap_ledger,
@@ -3838,10 +3882,11 @@ def cathode_emission_sheath_power_W(result, T_s_K):
         EXACTLY ZERO where the solve carried this enthalpy on the beam
         instead, which it reports as a nonzero ``beam_launch_enthalpy_V``:
         there the released electrons ARE the primary beam, the launch
-        potential already includes the enthalpy and the CSDA march deposits
-        it along the column, so booking it here as well would be the same
-        energy twice. The gate is the SOLVE's, read back off the result, so
-        this row and the beam cannot disagree about which of them carries it.
+        potential already includes the enthalpy and the deposition route
+        deposits it along the column, so booking it here as well would be the
+        same energy twice. The gate is the SOLVE's, read back off the
+        result, so this row and the beam cannot disagree about which of them
+        carries it.
 
     ``+e (phi_c_plus - max(phi_c, 0)) Gamma_em``
         The remainder of the fall those same electrons drop through on their
