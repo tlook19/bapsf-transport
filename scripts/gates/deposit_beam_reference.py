@@ -58,6 +58,24 @@ Usage::
 solver's ARGUMENTS, and the compiled march is bit-exact against pure, so the
 trajectory it samples is the same one. ``--build`` and ``--verify`` refuse the
 opt-in.
+
+What the corpus was built against
+---------------------------------
+A fixture of outputs is only as readable as the inputs it was computed
+through, and a constants change looks exactly like an implementation
+regression once the corpus outlives the constants. So ``--build`` records, in
+``__provenance__``, the commit it wrote the fixture at, the kernel selection
+the writing process loaded, and the He electron-neutral momentum-transfer
+table (``HE_EN_MT_NODE_EV`` / ``HE_EN_MT_SIGMA_CM2``) that the reference
+outputs were computed through -- that table sets the electron-neutral
+collision rate, hence the Landau branching fraction, hence every branched
+entry. ``--verify`` prints all three beside its verdict, and on a FAILURE
+says whether the live table has moved away from the recorded one, so a stale
+corpus identifies itself rather than being read as a regression.
+
+Those fields arrived with format ``deposit-beam-reference-v2``; every reader
+is presence-gated, so a ``v1`` corpus verifies and fails exactly as before,
+with the table reported as UNRECORDED.
 """
 
 import argparse
@@ -70,7 +88,7 @@ import numpy as np
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE = SCRIPT_DIR / "data" / "deposit_beam_reference.npz"
-FIXTURE_FORMAT = "deposit-beam-reference-v1"
+FIXTURE_FORMAT = "deposit-beam-reference-v2"
 
 _ERG_PER_EV = 1.602176634e-12
 
@@ -288,6 +306,7 @@ def capture(output, t_end, targets=DEFAULT_TARGETS):
         "widest_ray_cells": champions["widest_ray"]["score"],
         "widest_tail_cells": champions["widest_tail"]["score"],
         "compiled_kernels": os.environ.get("CABLP_COMPILED_KERNELS", ""),
+        "commit": _repo_commit(),
     }
     _write_captured(Path(output), entries, census)
     print(
@@ -865,6 +884,60 @@ def _call_kwargs(entry):
     return kw
 
 
+# --- build provenance -------------------------------------------------------
+#
+# What the corpus was built AGAINST, recorded in the fixture so that a corpus
+# left behind by a constants change SAYS SO instead of reading as an
+# implementation regression. Every reader below is presence-gated: a corpus
+# written before these fields (format ``deposit-beam-reference-v1``) verifies
+# exactly as it always did.
+
+#: ``__provenance__`` keys holding the He electron-neutral momentum-transfer
+#: table the reference outputs were computed through. ``beam_deposition`` reads
+#: that table for the electron-neutral collision rate, which sets the Landau
+#: branching fraction, so a change to it moves branched entries of the corpus.
+MT_TABLE_KEYS = ("he_en_mt_node_eV", "he_en_mt_sigma_cm2")
+
+
+def _repo_commit():
+    """The checkout's ``HEAD`` commit, or ``None`` outside a work tree."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(SCRIPT_DIR.parent), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None
+
+
+def _live_mt_table():
+    """The live He e-n momentum-transfer nodes, as fixture provenance."""
+    import cablp.atomic.cross_sections as X
+
+    return {
+        "he_en_mt_node_eV": [float(v) for v in X.HE_EN_MT_NODE_EV],
+        "he_en_mt_sigma_cm2": [float(v) for v in X.HE_EN_MT_SIGMA_CM2],
+    }
+
+
+def _recorded_mt_table(provenance):
+    """The recorded table, or ``None`` for a corpus predating the field."""
+    if not all(key in provenance for key in MT_TABLE_KEYS):
+        return None
+    return {key: [float(v) for v in provenance[key]] for key in MT_TABLE_KEYS}
+
+
+def _fmt_mt_table(table):
+    nodes = ", ".join(repr(v) for v in table["he_en_mt_node_eV"])
+    sigma = ", ".join(repr(v) for v in table["he_en_mt_sigma_cm2"])
+    return f"nodes ({nodes}) eV, sigma ({sigma}) cm^2"
+
+
 def _require_pure(B):
     if B._CSDA_MARCH is not None:
         raise RuntimeError(
@@ -1123,11 +1196,18 @@ def build(captured_path, fixture_path):
         records.append(
             (arrays, scalars, _diagnostics(entry, arrays, scalars, counts))
         )
+    from cablp.cathode import kernels as _kernels
+
     provenance = {
         "format": FIXTURE_FORMAT,
         "reference_path": "pure",
         "numpy": np.__version__,
         "platform": sys.platform,
+        # The commit this fixture was written at, and the kernel selection the
+        # writing process actually loaded -- "pure" here by construction, since
+        # --build refuses the compiled march.
+        "commit": _repo_commit(),
+        "kernel_id": _kernels.PROVENANCE,
         "capture_census": census,
         "entries": len(entries),
         "note": (
@@ -1137,6 +1217,7 @@ def build(captured_path, fixture_path):
             "compiled march is bit-exact against pure, so the trajectory it "
             "sampled is the pure one."
         ),
+        **_live_mt_table(),
     }
     data = _pack(entries, records, provenance)
     path = Path(fixture_path)
@@ -1286,6 +1367,22 @@ def verify(fixture_path, quiet=False):
         f"{provenance.get('format')}, reference path "
         f"{provenance.get('reference_path')}"
     )
+    recorded_mt = _recorded_mt_table(provenance)
+    live_mt = _live_mt_table()
+    print(
+        f"built at commit {provenance.get('commit') or 'UNRECORDED'}, kernel "
+        f"{provenance.get('kernel_id') or 'UNRECORDED'}"
+    )
+    if recorded_mt is None:
+        print(
+            "He e-n momentum-transfer table: UNRECORDED -- this corpus "
+            "predates the momentum-transfer provenance fields"
+        )
+    else:
+        print(
+            f"He e-n momentum-transfer table: {_fmt_mt_table(recorded_mt)}"
+            + ("" if recorded_mt == live_mt else "  [LIVE TABLE DIFFERS]")
+        )
     print(
         f"compared {total} values across {compared_fields} result fields: "
         f"{bad} differing"
@@ -1319,6 +1416,25 @@ def verify(fixture_path, quiet=False):
             "VERIFY FAILED -- the live implementation does not reproduce the "
             "reference corpus."
         )
+        if recorded_mt is None:
+            print(
+                "    STALE-CORPUS HINT: this corpus predates the "
+                "momentum-transfer provenance fields (format "
+                f"{provenance.get('format')}), so the He e-n table it was "
+                "built against cannot be compared with the live one "
+                f"({_fmt_mt_table(live_mt)}); a constants change is a live "
+                "explanation for this failure. Rebuild with --build to "
+                "record the table."
+            )
+        elif recorded_mt != live_mt:
+            print(
+                "    STALE-CORPUS HINT: the live He e-n momentum-transfer "
+                f"table ({_fmt_mt_table(live_mt)}) differs from the one this "
+                f"corpus was built against ({_fmt_mt_table(recorded_mt)}). "
+                "The corpus is STALE against the live constants -- read this "
+                "as a constants change to be recaptured, not as an "
+                "implementation regression."
+            )
         return 1
     print(
         "VERIFY OK -- the live pure implementation is bit-identical to the "
