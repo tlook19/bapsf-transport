@@ -3779,7 +3779,12 @@ def _deposit_electrode_power(
     store, so the ANODE debit is the sheath-edge ``(2 Te + phi_a)`` per
     collected electron while the cathode side keeps its thermal-only
     routing -- at the cathode the accelerated species is the ion, so the
-    electron fall there is not plasma-electron energy. ``I_e_coll`` is the
+    electron fall there is not plasma-electron energy IN THIS FUNCTION's own
+    booking. The sibling rows ``end_wall_e_sheath_climb`` and
+    ``cathode_e_collected_climb`` -- presence-gated by ``end_wall_sheath_full_debit``
+    and ``cathode_face_full_debit`` respectively, and independent of this
+    function -- do book a collected-electron fall as plasma-electron energy,
+    at the end wall and at the emitting cathode face. ``I_e_coll`` is the
     collected electron current ``I_i_a * fe_a``, and its ``phi_a`` moment is
     the result's own ``P_anode_e_phi``, the complementary member of the R3.2
     split, which rides exactly that flux. The increment is deposited under
