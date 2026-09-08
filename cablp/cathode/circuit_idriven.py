@@ -1035,7 +1035,7 @@ def solve_idriven(
     P_loss = P_cathode_e + P_cathode_i_pl + P_anode_e + P_anode_i_pl
     # Closed surface-resolved audit (replaces P_net/P_net2). Only the PLASMA-
     # THERMAL parts leave the plasma thermal store; the phi parts are sheath-field
-    # energy deposited on the electrodes. The collector (floating) exhaust is
+    # energy deposited on the electrodes. The end wall (floating) exhaust is
     # booked separately on the fluid side (no circuit branch).
     P_plasma_thermal_loss = (
         P_cathode_e_thermal + P_cathode_i_thermal

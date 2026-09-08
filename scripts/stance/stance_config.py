@@ -88,6 +88,10 @@ from cablp.solvers._sim1d import (  # noqa: E402
     default_config,
     resolve_declaration_blocks,
 )
+from cablp.solvers._sim1d.core.config import (  # noqa: E402
+    RETIRED_FLAG_KEYS,
+    RETIRED_PARAM_KEYS,
+)
 from cablp.solvers._sim1d.core.model_declarations import (  # noqa: E402
     FAMILIES_BY_NAME,
 )
@@ -100,6 +104,14 @@ from cablp.solvers._sim1d.core.model_families import (  # noqa: E402
 #: The two namespace tokens a declared family's membership carries, mapped onto
 #: this loader's table names.
 _SPACE_TABLE = {PARAMS: "input_dict", FLAGS: "input_flags"}
+
+#: The solver's two retirement registers, read as one map for the unknown-key
+#: refusal below. A retired name reaches THIS refusal first -- a configuration
+#: file is checked against the templates before anything is constructed -- so
+#: the successor sentence is attached here as well as at construction, from
+#: the same single source. Both namespaces are merged because the message is
+#: the same either way: the key does not exist and here is what replaced it.
+_RETIRED_KEYS = {**RETIRED_PARAM_KEYS, **RETIRED_FLAG_KEYS}
 
 #: Directory holding the committed stance files.
 STANCE_DIR = _SCRIPTS / "stances"
@@ -439,6 +451,13 @@ def _read_deltas(name, path, document):
                 if other is not None
                 else "; no LAPDSim1D configuration template owns it"
             )
+            # A RETIRED key reaches this refusal before the solver's own, so
+            # the message says what replaced it here too -- the case a stored
+            # configuration file written before a rename or a removal hits,
+            # where "unknown key" alone does not tell its author where to go.
+            successor = _RETIRED_KEYS.get(key)
+            if successor is not None:
+                owner = f"{owner}. {key} is RETIRED; use {successor}"
             raise ValueError(
                 f"configuration {name!r} ({path}) sets unknown {namespace} "
                 f"key {key!r}{owner}"

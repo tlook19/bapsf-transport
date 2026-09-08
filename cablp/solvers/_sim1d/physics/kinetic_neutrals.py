@@ -453,7 +453,7 @@ class KN2Zone:
     def sweep(self, Sc, Sa, Fc_in_L, Fa_in_L, Fc_in_R, Fa_in_R):
         """March one generation. S* are volume sources [cm^-3 s^-1 / bin];
         F*_in are inflow densities [cm^-3 / bin] at the domain ends
-        (cathode side L, collector side R; only the inward-moving half of
+        (cathode side L, end wall side R; only the inward-moving half of
         each is used). Returns (Fc, Fa) [cm^-3 / bin] and the intercepted
         collided-flux tallies for the next generation."""
         g = self.g
@@ -529,7 +529,7 @@ class KN2Zone:
         """Generation-iterate to the steady state.
 
         Primary sources come from ``self.bg["sources"]`` (the run's own
-        ledger, exactly the TPMC's menu): cathode/collector faces as
+        ledger, exactly the TPMC's menu): cathode/end wall faces as
         boundary inflows (cosine at T_s / 300 K), the puff as an annulus
         volume source at 300 K over the configured axial profile
         (:func:`puff_launch_bins`), volume recombination in the column at the
@@ -555,7 +555,7 @@ class KN2Zone:
             self.A_col[0],
         )
         Fc_in_R = inflow(
-            bgs.get("collector_face", 0.0),
+            bgs.get("end_wall_face", 0.0),
             g.half_flux_spectrum(T_WALL_K, -1),
             self.A_col[-1],
         )
@@ -1072,7 +1072,7 @@ class KN2ZoneJump(KN2Zone):
             self.A_col[0],
         )
         Fc_in_R = inflow(
-            bgs.get("collector_face", 0.0),
+            bgs.get("end_wall_face", 0.0),
             g.half_flux_spectrum(T_WALL_K, -1),
             self.A_col[-1],
         )

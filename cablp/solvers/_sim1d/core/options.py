@@ -57,7 +57,7 @@ def surface_loss_kwargs(input_dict):
     # non-default use.
     return {
         "alpha_isat": float(input_dict.get("alpha_isat", np.exp(-0.5))),
-        "end_mode": input_dict.get("end_mode", "collector"),
+        "end_mode": input_dict.get("end_mode", "end_wall"),
         "b_surface_loss": float(input_dict.get("b_surface_loss", 1.0)),
     }
 

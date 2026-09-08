@@ -121,7 +121,7 @@ from cablp.solvers._sim1d.physics.neutrals import (
     # The eligibility mask the puff itself uses. Imported rather than
     # restated: the spread must not carry gas into a cell the source is
     # forbidden from reaching (the plenum behind the cathode, the gap, the
-    # collector region), and "which cells those are" has exactly one owner.
+    # end wall region), and "which cells those are" has exactly one owner.
     _PUFF_ELIGIBLE_ROLES,
     gas_puff_rate_profile,
     neutral_zone_volumes,
@@ -742,7 +742,7 @@ def main(argv=None):
                         "the TYPE its key carries in the configuration "
                         "template. Applied AFTER the whole stance is "
                         "assembled, so the geometry keys (Lm, "
-                        "collector_length_cm, gas_puff_z_cm, ...) take effect "
+                        "end_wall_length_cm, gas_puff_z_cm, ...) take effect "
                         "everywhere this script reads the config. A value "
                         "that cannot be read as its key's type, and a key "
                         "neither template owns, are refused here; a key filed "

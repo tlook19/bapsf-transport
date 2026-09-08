@@ -4,7 +4,7 @@ The boundary sets the edge dynamics, so its decisive validation is a run, not a
 static probe. This runs the live ES1 stance to a short startup window (through
 main discharge) and checks that the boundary:
 
-  (a) establishes the Bohm outflow at the edge: the source-cathode and collector
+  (a) establishes the Bohm outflow at the edge: the source-cathode and end wall
       edge cells flow INTO their walls at ~ the sound speed (u sign = outward
       normal, |u| a good fraction of c_s), instead of the A1 "away from the wall"
       signature;
@@ -105,7 +105,7 @@ def summarize(sim, result, name):
         cs = float(ion_sound_speed(float(Te[idx, live]), sim._mu)) if Te is not None else float("nan")
         into_wall = (np.sign(u_edge) == np.sign(outward)) and abs(u_edge) > 0.3 * cs
         edge_ok &= into_wall
-        role = "cathode " if outward < 0 else "collector"
+        role = "cathode " if outward < 0 else "end_wall"
         print(f"   {role} cell {live:3d}: u={u_edge:+.3e}  outward={outward:+.0f}  "
               f"c_s={cs:.3e}  Mach={u_edge/cs:+.2f}  into-wall={into_wall}")
     net, internal, kinetic = term_power(result, geo, name, sel)

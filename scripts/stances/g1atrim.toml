@@ -72,13 +72,13 @@
 [input_dict]
 
 # MACHINE GEOMETRY -- measured end-to-end (G1, 2026-08-18) and adopted with
-# the g1atrim trim. The machine scalars (Lm, the plenum and collector block
+# the g1atrim trim. The machine scalars (Lm, the plenum and end wall block
 # lengths, the puff-pipe position, and since 2026-08-24 the cathode-anode gap
 # with the fixed source region that rides its far side) are config defaults
 # since the R2a fold-in and are no longer named here. What remains is per-cell
 # and per-mesh: the two radius profiles and the baffle arrays, all sized to
 # THIS mesh (280 cells: 1 plenum + 5 gap + 5 fixed source + 268 far column +
-# 1 collector). The CAD-span gap adoption (50.0 -> 53.25 cm) left that cell
+# 1 end wall). The CAD-span gap adoption (50.0 -> 53.25 cm) left that cell
 # census unchanged but moved every cell downstream of the cathode face, so the
 # profiles below were REBUILT against the new mesh in the same event.
 #
@@ -436,14 +436,17 @@ anode_sheath_full_debit = true
 # sheath-edge 2 Te, so the face debit is (2 + Lambda_eff) Te per collected
 # electron. The end wall carries no circuit branch, so nothing but the
 # electron thermal store can supply that fall; the ions carry it to the
-# surface and the collector surface-power diagnostic includes it. The row is
+# surface and the end wall surface-power diagnostic includes it. The row is
 # ELECTRON ENERGY ONLY -- no particle, momentum or ion-thermal booking at the
 # face moves -- and it is booked whenever plasma reaches the face, independent
 # of the cathode circuit solve. It requires a
-# plasma-absorbing face of the COLLECTOR role, which this stance's geometry
+# plasma-absorbing face of the END WALL role, which this stance's geometry
 # supplies. The emitting cathode face's own three rows are the separate
 # cathode_face_full_debit key, which this stance leaves at its config default.
-collector_sheath_full_debit = true
+# The response is not local to the end cell: the column re-equilibrates as a
+# whole through the far-end neutral field, so the port-level response to this
+# booking is conditional on the kinetic neutral closure (kinetic_dvm).
+end_wall_sheath_full_debit = true
 
 # OPERATOR HOME OF THE BEAM'S ELECTRON-ENERGY DEPOSITION. Armed 2026-08-25. The
 # beam_power_deposition Ee row leaves the explicit operator A and is applied by

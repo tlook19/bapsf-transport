@@ -525,7 +525,7 @@ def zero_plasma(dvm):
 #     routing error, but the gate's statement is exact-zero and is not
 #     relaxed here.
 #
-# ``collector_length_cm`` is pinned at the R5 value. The config default dropped
+# ``end_wall_length_cm`` is pinned at the R5 value. The config default dropped
 # 100 -> 7.8 at R2a, and inheriting it subdivided the ten-cell end block into
 # 0.78 cm cells -- a mesh R5 never had, and the one on which the explicit
 # neutral-diffusion checkerboard measured 2026-08-23 appeared.
@@ -535,7 +535,7 @@ R5_STANDIN_PARAMS = {
     "Rcs": 40.0,
     "Lcs": 25.0,
     "Rsup": 0.0,
-    "collector_length_cm": 100.0,
+    "end_wall_length_cm": 100.0,
     "end_expansion_cells": 10,
     "end_expansion_machine_radius_cm": 100.0,
     "end_expansion_plasma_radius_cm": 15.0,
@@ -640,7 +640,7 @@ DISARMED_ENERGY_ROWS = (
     "birth_puff",
     "birth_recombination",
     "birth_cathode_face",
-    "birth_collector_face",
+    "birth_end_wall_face",
     "birth_anode",
     "net_surface_wall",
     "net_surface_mesh",
@@ -682,12 +682,12 @@ def all_channels_energy_closure(annulus_flights, nz=12):
         "puff": np.zeros(nz),
         "anode": np.zeros(nz),
         "cathode_face": np.zeros(nz),
-        "collector_face": np.zeros(nz),
+        "end_wall_face": np.zeros(nz),
     }
     sources["puff"][3] = 3.0e17
     sources["anode"][nz // 2] = 2.0e16
     sources["cathode_face"][0] = 5.0e16
-    sources["collector_face"][-1] = 4.0e16
+    sources["end_wall_face"][-1] = 4.0e16
     plasma = geometry_plasma(nz)
     worst_dist = 0.0
     worst_dom = 0.0
@@ -897,7 +897,7 @@ def _production_geometry_keys():
 #:
 #: This constant previously restated the R5 parametric flare instead (now
 #: R5_STANDIN_PARAMS above), which the G1 measured geometry had retired, and
-#: rebuilt it on a config whose ``collector_length_cm`` default had since
+#: rebuilt it on a config whose ``end_wall_length_cm`` default had since
 #: dropped 100 -> 7.8 -- producing ten 0.78 cm end cells no stance ever ran.
 #: The gates that step a solver on it were rejecting candidate steps on that
 #: mesh alone (measured 2026-08-23).
@@ -949,7 +949,7 @@ def recycle_identity(geometry_keys, steps=40):
     rates = sim._kinetic_channel_rates(state, sim.derived, sim.time)
     by_role = absorbing_live_cells_by_role(geom)
     faces = []
-    for role, key in (("cathode", "cath_cells"), ("collector", "coll_cells")):
+    for role, key in (("cathode", "cath_cells"), ("end_wall", "coll_cells")):
         channel = np.asarray(rates[key], dtype=float)
         cells = list(by_role.get(role, ()))
         elsewhere = np.delete(channel, cells) if cells else channel
@@ -1351,7 +1351,7 @@ def gate_s1():
         }
         dep_ok = (
             sim._dvm.cath_cell == expected.get("cathode")
-            and sim._dvm.coll_cell == expected.get("collector")
+            and sim._dvm.coll_cell == expected.get("end_wall")
         )
         ok = ok and dep_ok
         lines.append(dep + f" (matches the sampled faces: {dep_ok})")
@@ -1377,7 +1377,7 @@ def gate_s2():
     configured speed after the plenum elbow's series conductance. The booked
     half is taken off a LIVE ledger rather than assumed.
 
-    Run on the PRODUCTION machine, whose plenum and collector faces differ in
+    Run on the PRODUCTION machine, whose plenum and end wall faces differ in
     area by 3.63x, with unequal speeds at the two ends and the elbow set, so
     one shared area, a swapped end, or a dropped elbow cannot satisfy both
     ends at once. ``vbar`` is rebuilt here from ``m_He_cgs`` -- the neutral
@@ -1436,7 +1436,7 @@ def gate_s2():
         )
     # The fixture must actually exercise what the identity distinguishes:
     # two different end areas, and an elbow that bites on the plenum end
-    # and is absent on the collector end.
+    # and is absent on the end wall.
     area_ratio = areas["R"] / areas["L"]
     elbow_bites = _effective_pump_speed(S_L, C_elbow) < S_L
     fixture_ok = (
@@ -1448,7 +1448,7 @@ def gate_s2():
     ok = ok and fixture_ok
     lines.append(
         f"fixture: end-area ratio R/L = {area_ratio:.6f}, elbow bites on the "
-        f"plenum end = {elbow_bites}, collector end takes no elbow = "
+        f"plenum end = {elbow_bites}, end wall takes no elbow = "
         f"{not is_plenum_cell(geom, -1)}"
     )
     return (
@@ -2946,7 +2946,7 @@ def gate_l5():
 #: another's count -- or that landed at another's cell -- could not pass.
 B1_FED_COUNTS = {
     "cathode_face": 5.0e16,
-    "collector_face": 4.0e16,
+    "end_wall_face": 4.0e16,
     "recombination": 3.0e16,
     "anode": 2.0e16,
 }
@@ -2985,7 +2985,7 @@ def b1_home_cells(dvm):
     """
     return {
         "cathode_face": int(dvm.cath_cell),
-        "collector_face": int(dvm.coll_cell),
+        "end_wall_face": int(dvm.coll_cell),
         "recombination": dvm.nz // 3,
         "anode": 2 * dvm.nz // 3,
     }
@@ -3014,7 +3014,7 @@ def gate_b1():
     uniform tube): fed one channel at a time, the counted particles put
     EXACTLY ZERO on the far side of their own emitting face -- the march
     cannot move anything against the direction it was launched in -- and
-    the cathode's return drifts downstream while the collector's drifts
+    the cathode's return drifts downstream while the end wall's drifts
     upstream. The two volume births stay in the cell they were fed (they
     are substep-B births, applied after the march).
 
@@ -3086,7 +3086,7 @@ def gate_b1():
             extra = float(mass[:home].sum() + mass_a[:home].sum())
             directed = float(dvm.column_drift()[home]) > 0.0
             where = f"upstream of face {home}"
-        elif name == "collector_face":
+        elif name == "end_wall_face":
             extra = float(mass[home + 1:].sum() + mass_a[home + 1:].sum())
             directed = float(dvm.column_drift()[home]) < 0.0
             where = f"downstream of face {home}"
@@ -3331,7 +3331,7 @@ def gate_b3():
     expected = {
         "cathode_face": float(rows["cathode_face"].sum())
         * dvm._energy_of(g.half_flux_spectrum(B1_T_S_K, +1)),
-        "collector_face": float(rows["collector_face"].sum())
+        "end_wall_face": float(rows["end_wall_face"].sum())
         * dvm._energy_of(g.half_flux_spectrum(dvm.T_wall_K, -1)),
         "anode": float(rows["anode"].sum()) * dvm.E_wall_mean,
         "recombination": float((rows["recombination"] * E_Mi).sum()),
@@ -4351,7 +4351,7 @@ def gate_cf3():
         )
         rows = {name: np.zeros(nz) for name in B1_FED_COUNTS}
         rows["cathode_face"][dvm.cath_cell] = B1_FED_COUNTS["cathode_face"]
-        rows["collector_face"][dvm.coll_cell] = B1_FED_COUNTS["collector_face"]
+        rows["end_wall_face"][dvm.coll_cell] = B1_FED_COUNTS["end_wall_face"]
         rows["recombination"][nz // 3] = B1_FED_COUNTS["recombination"]
         rows["anode"][2 * nz // 3] = B1_FED_COUNTS["anode"]
         puff = np.zeros(nz)
@@ -4820,11 +4820,11 @@ def gate_cj3():
                 "recombination": np.full(nz, 1.0e15),
                 "puff": np.zeros(nz),
                 "anode": np.zeros(nz),
-                "collector_face": np.zeros(nz),
+                "end_wall_face": np.zeros(nz),
             }
             sources["puff"][3] = 3.0e17
             sources["anode"][nz // 2] = 2.0e16
-            sources["collector_face"][-1] = 4.0e16
+            sources["end_wall_face"][-1] = 4.0e16
             plasma = geometry_plasma(nz)
             cross = 0.0
             moment = 0.0
@@ -5270,7 +5270,7 @@ def gate_ja9():
     rows = {
         "recombination": np.zeros(nz),
         "anode": np.zeros(nz),
-        "collector_face": np.zeros(nz),
+        "end_wall_face": np.zeros(nz),
         "cathode_face": np.zeros(nz),
     }
     rows["cathode_face"][dvm.cath_cell] = CJ_COUNT
@@ -6497,11 +6497,11 @@ def gate_aj3():
                 "recombination": np.full(nz, 1.0e15),
                 "puff": np.zeros(nz),
                 "cathode_face": np.zeros(nz),
-                "collector_face": np.zeros(nz),
+                "end_wall_face": np.zeros(nz),
             }
             sources["puff"][3] = 3.0e17
             sources["cathode_face"][0] = 2.0e16
-            sources["collector_face"][-1] = 4.0e16
+            sources["end_wall_face"][-1] = 4.0e16
             plasma = geometry_plasma(nz)
             cross = 0.0
             moment = 0.0

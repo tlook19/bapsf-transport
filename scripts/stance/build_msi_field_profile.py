@@ -52,7 +52,7 @@ the machine's own port-referenced frame (the ``bapsflib.lapd`` convention):
 ``z = 0`` at PORT 53, the most northern regular port, with ``+z`` pointing
 SOUTH, toward the main cathode -- ``portnum_to_z = 31.95 * (53 - port)``. The
 model's ``z`` runs the other way, from ``z = 0`` at the cathode face toward
-the far collector. The two frames are REVERSED with respect to each other, so
+the far end wall. The two frames are REVERSED with respect to each other, so
 the registration is a reflection:
 
     z_model = C - z_MSI,   C = PORT53_Z_MODEL_CM = 1814.67 cm
@@ -151,7 +151,7 @@ which is what decides whether either hold is observable at all.
 THE MESH AND THE VESSEL ARE NOT REBUILT. Both come from
 ``g1_build_profiles.py`` unchanged: its ``_g1_config`` mesh probe resolves the
 stance's 280-cell mesh (1 plenum + 5 gap + 5 fixed source + 268 far column +
-1 collector) and its ``build_vessel_profile`` gives the measured
+1 end wall) and its ``build_vessel_profile`` gives the measured
 ``machine_radius_profile_cm`` staircase. This script changes ONE array.
 
 Inputs
@@ -1057,7 +1057,7 @@ def main():
         f"reach {raw.max():.4f} cm and the cap takes over"
     )
     say(
-        f"COLLECTOR (terminal cell {mesh.cells - 1}, z = "
+        f"END WALL (terminal cell {mesh.cells - 1}, z = "
         f"{mesh.z_cm[-1]:.3f} cm): r = {profile[-1]:.4f} cm "
         f"(cap {cap[-1]:.4f} cm, uncapped ratio would give {raw[-1]:.4f} cm); "
         f"census droop_min gave {census_profiles['droop_min'][-1]:.4f} cm"

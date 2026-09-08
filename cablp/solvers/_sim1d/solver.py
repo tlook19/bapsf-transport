@@ -116,7 +116,7 @@ from .physics.kinetic_dvm import (
     # statement of them.
     _validated_anode_jet as validated_dvm_anode_jet_spec,
     _validated_cathode_jet as validated_dvm_cathode_jet_spec,
-    _validated_collector_jet as validated_dvm_collector_jet_spec,
+    _validated_end_wall_jet as validated_dvm_end_wall_jet_spec,
     launch_band_velocity_extent_cm_s,
     thermal_sonic_velocity_extent_cm_s,
 )
@@ -348,7 +348,7 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     # same reason: they re-book electron energy at surfaces whose particle
     # and recycle bookings are already complete in the rows above, and they
     # move no particles of any species.
-    "collector_e_sheath_climb": "none",
+    "end_wall_e_sheath_climb": "none",
     "cathode_e_emitted_enthalpy": "none",
     "cathode_e_emitted_fall": "none",
     "cathode_e_collected_climb": "none",
@@ -400,22 +400,22 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
 }
 
 
-#: The RHS row ``collector_sheath_full_debit`` adds: the sheath fall the
-#: collector's collected electrons climbed. A one-tuple rather than a bare
+#: The RHS row ``end_wall_sheath_full_debit`` adds: the sheath fall the
+#: end wall's collected electrons climbed. A one-tuple rather than a bare
 #: name so the two end-face keys are read the same way wherever their rows
 #: are seeded, filled or tabulated.
-END_SHEATH_COLLECTOR_ROWS = ("collector_e_sheath_climb",)
+END_SHEATH_END_WALL_ROWS = ("end_wall_e_sheath_climb",)
 
 
 #: Every row the two end-face keys can add, in the order they are built:
-#: the collector's, then the emitting cathode face's three in the order
+#: the end wall's, then the emitting cathode face's three in the order
 #: :func:`~.physics.cathode.cathode_emission_sheath_power_W` returns them.
 #: PRESENCE-GATED PER KEY -- this tuple is the union, not a group that arms
 #: together. With neither key armed none of them exists, so an unarmed run's
 #: saved term structure -- the golden included -- is what it was before the
 #: closure existed; with one key armed only that key's rows exist. Every
 #: reader defaults their absence.
-END_SHEATH_DEBIT_ROWS = END_SHEATH_COLLECTOR_ROWS + END_SHEATH_CATHODE_ROWS
+END_SHEATH_DEBIT_ROWS = END_SHEATH_END_WALL_ROWS + END_SHEATH_CATHODE_ROWS
 
 
 #: Name of the RHS row carrying the beam's electron-energy deposition. Bound
@@ -604,7 +604,7 @@ class StepAttempt1D:
     source_booking: dict | None = None
     cathode_jet_energy_booking: np.ndarray | None = None
     anode_jet_energy_booking: np.ndarray | None = None
-    collector_jet_energy_booking: np.ndarray | None = None
+    end_wall_jet_energy_booking: np.ndarray | None = None
     coverage_burn: np.ndarray | None = None
     coverage_reservoir_burn: np.ndarray | None = None
     coverage_w: np.ndarray | None = None
@@ -1315,7 +1315,7 @@ class LAPDSim1D:
                     "flag: the routed stream is deposited into the annulus "
                     "row nn_a, which only the two-zone closure builds"
                 )
-            routed_cells = self._recycle_cells.get("collector", ())
+            routed_cells = self._recycle_cells.get("end_wall", ())
             V_ann = self._zone_volumes[1]
             dead = [
                 int(cell)
@@ -1324,23 +1324,23 @@ class LAPDSim1D:
             ]
             if dead:
                 raise ValueError(
-                    "end_recycle_to_annulus would route the collector recycle "
+                    "end_recycle_to_annulus would route the end wall recycle "
                     f"into cells with no annulus volume (V_ann = 0): {dead}. "
                     "The destination zone must exist wherever the routing "
                     "deposits, so a geometry whose plasma fills the vessel at "
-                    "the collector face is refused rather than silently "
+                    "the end wall face is refused rather than silently "
                     "destroying the routed stream"
                 )
             if self._neutral_model != "moment":
                 raise ValueError(
                     "end_recycle_to_annulus is incompatible with "
                     f"neutral_model={self._neutral_model!r}: a kinetic "
-                    "neutral model sources its collector wall-return channel "
+                    "neutral model sources its end wall wall-return channel "
                     "from the boundary term's COLUMN nn row alone, while this "
                     "flag moves that face's whole stream onto the annulus "
                     "nn_a row and leaves the column row exactly zero, so the "
                     "routed atoms would be counted by nothing and the "
-                    "collector recycle would be lost. Accepted: "
+                    "end wall recycle would be lost. Accepted: "
                     "neutral_model='moment'"
                 )
         if self._neutral_model == "kinetic":
@@ -1477,17 +1477,17 @@ class LAPDSim1D:
         self._dvm_anode_jet_energy_stage_accum = None
         self._dvm_anode_jet_incident_row = None
         self._anode_energy_ledger_J = None
-        # Collector jet: the same four, collector-side. There is no surface
-        # book to go with them -- the collector plate has neither a sheath
+        # End wall jet: the same four, end-wall-side. There is no surface
+        # book to go with them -- the end wall has neither a sheath
         # solve nor an energy ledger in this model, so the arrival energy is
         # PRESCRIBED from the end cell's own Te/Ti at the configured multiple
         # and the launched energy is debited from nothing.
-        self._dvm_collector_jet = None
-        self._dvm_collector_jet_energy_booked = np.zeros(
+        self._dvm_end_wall_jet = None
+        self._dvm_end_wall_jet_energy_booked = np.zeros(
             self._geometry.cells, dtype=float
         )
-        self._dvm_collector_jet_energy_stage_accum = None
-        self._dvm_collector_jet_incident_row = None
+        self._dvm_end_wall_jet_energy_stage_accum = None
+        self._dvm_end_wall_jet_incident_row = None
         if self._neutral_model == "kinetic_dvm":
             self._configure_kinetic_dvm()
         else:
@@ -1630,15 +1630,15 @@ class LAPDSim1D:
                         f"leave it at {_default!r}, or arm the channel with "
                         f"neutral_model='kinetic_dvm' (got {_given!r})"
                     )
-            # The same statement, collector-side: the channel splits the
+            # The same statement, end-wall-side: the channel splits the
             # transient DVM's COUNTED far-end return, and no other neutral
             # model carries one to split.
             if bool(
-                self._input_dict.get("neutral_kinetic_dvm_collector_jet")
+                self._input_dict.get("neutral_kinetic_dvm_end_wall_jet")
             ):
                 raise ValueError(
-                    "neutral_kinetic_dvm_collector_jet splits the transient "
-                    "DVM's counted collector return into an energetic fast "
+                    "neutral_kinetic_dvm_end_wall_jet splits the transient "
+                    "DVM's counted end wall return into an energetic fast "
                     "share and a thermal remainder, and has no meaning under "
                     f"neutral_model={self._neutral_model!r}, which carries no "
                     "such counted stream. Accepted: leave it off, or set it "
@@ -1646,18 +1646,18 @@ class LAPDSim1D:
                     "neutral_two_zone flag"
                 )
             for _key in (
-                "neutral_kinetic_dvm_collector_jet_R_N",
-                "neutral_kinetic_dvm_collector_jet_R_E",
-                "neutral_kinetic_dvm_collector_jet_T_launch_eV",
-                "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple",
+                "neutral_kinetic_dvm_end_wall_jet_R_N",
+                "neutral_kinetic_dvm_end_wall_jet_R_E",
+                "neutral_kinetic_dvm_end_wall_jet_T_launch_eV",
+                "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple",
             ):
                 _given = self._input_dict.get(_key)
                 _default = input_dict_template_1d.get(_key)
                 if _given != _default:
                     raise ValueError(
-                        f"{_key} parameterizes the transient DVM's collector "
+                        f"{_key} parameterizes the transient DVM's end wall "
                         "fast-share channel and is read only under "
-                        "neutral_kinetic_dvm_collector_jet, which has no "
+                        "neutral_kinetic_dvm_end_wall_jet, which has no "
                         "meaning under "
                         f"neutral_model={self._neutral_model!r}. Accepted: "
                         f"leave it at {_default!r}, or arm the channel with "
@@ -2096,33 +2096,33 @@ class LAPDSim1D:
         # missing input only, so arming one never reports the other's.
         #
         # Each face is looked up through the SAME helper its own booking
-        # reads: the collector row is written by the boundary operator, which
+        # reads: the end wall row is written by the boundary operator, which
         # resolves its faces by role, and the three cathode rows are
         # deposited at ``cathode_adjacent_cells`` exactly as the electrode
         # rows are. A guard on a second view of the topology could pass while
         # the booking still found nowhere to land.
-        _collector_sheath_full_debit = self._flags.get(
-            "collector_sheath_full_debit"
+        _end_wall_sheath_full_debit = self._flags.get(
+            "end_wall_sheath_full_debit"
         )
-        if not isinstance(_collector_sheath_full_debit, bool):
+        if not isinstance(_end_wall_sheath_full_debit, bool):
             raise ValueError(
-                "collector_sheath_full_debit must be a bool (got "
-                f"{_collector_sheath_full_debit!r})"
+                "end_wall_sheath_full_debit must be a bool (got "
+                f"{_end_wall_sheath_full_debit!r})"
             )
-        if _collector_sheath_full_debit and not absorbing_live_cells_by_role(
+        if _end_wall_sheath_full_debit and not absorbing_live_cells_by_role(
             self._geometry
-        ).get("collector"):
+        ).get("end_wall"):
             # A face the mesh does not carry would book nothing at all -- an
             # unarmed run that reads like an armed one. The cathode circuit
             # solve is deliberately NOT required here: this row rides the
             # boundary operator's own flux and is honest without a circuit.
             raise ValueError(
-                "collector_sheath_full_debit cannot arm: this configuration "
-                "does not supply a collector-role plasma-absorbing face, "
+                "end_wall_sheath_full_debit cannot arm: this configuration "
+                "does not supply a end-wall-role plasma-absorbing face, "
                 "which is the face whose collected electrons are charged the "
                 "sheath fall."
             )
-        self._collector_sheath_full_debit = _collector_sheath_full_debit
+        self._end_wall_sheath_full_debit = _end_wall_sheath_full_debit
         _cathode_face_full_debit = self._flags.get("cathode_face_full_debit")
         if not isinstance(_cathode_face_full_debit, bool):
             raise ValueError(
@@ -3957,7 +3957,7 @@ class LAPDSim1D:
         Reads the LIVE plasma-terminating boundary term -- whichever of the
         characteristic ghost-cell outflow and the volumetric absorption the
         run configured -- on the accepted state, and integrates its ``n`` row
-        over the collector cells' plasma volume. The loss channel is not
+        over the end wall cells' plasma volume. The loss channel is not
         re-derived here: this is the same term the fluid itself subtracts, so
         the node cannot book an ion flux the column did not lose.
 
@@ -3978,7 +3978,7 @@ class LAPDSim1D:
         )
         row = np.asarray(term.n, dtype=float)
         Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
-        cells = node.collector_cells
+        cells = node.end_wall_cells
         # The row is a SINK there (negative); a positive current onto the wall
         # is its negation. Clamped at zero so a cell that is momentarily a net
         # source cannot book a backwards wall current.
@@ -5015,7 +5015,7 @@ class LAPDSim1D:
                 ),
             })
         self._dvm_anode_jet = anode_jet
-        # The collector-side energetic return, default off and ABSENT rather
+        # The end-wall-side energetic return, default off and ABSENT rather
         # than present at a neutral setting, exactly as the two jets above
         # are. It needs no cathode solve and no mesh face: the plate stands at
         # the downstream end of the column, its thermal return is already
@@ -5024,47 +5024,47 @@ class LAPDSim1D:
         # of its four be named while the channel is off -- the two refusals
         # below, in that order, so a config that armed the channel and forgot
         # a number is told which number rather than which key is surplus.
-        collector_jet = None
-        if bool(self._input_dict.get("neutral_kinetic_dvm_collector_jet")):
+        end_wall_jet = None
+        if bool(self._input_dict.get("neutral_kinetic_dvm_end_wall_jet")):
             missing = [
                 key
                 for key in (
-                    "neutral_kinetic_dvm_collector_jet_R_N",
-                    "neutral_kinetic_dvm_collector_jet_R_E",
-                    "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple",
+                    "neutral_kinetic_dvm_end_wall_jet_R_N",
+                    "neutral_kinetic_dvm_end_wall_jet_R_E",
+                    "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple",
                 )
                 if self._input_dict.get(key) is None
             ]
             if missing:
                 raise ValueError(
-                    "neutral_kinetic_dvm_collector_jet is armed and every "
+                    "neutral_kinetic_dvm_end_wall_jet is armed and every "
                     "number it reads must be named -- there is no default "
-                    "collector plate to fall back on, and this model solves "
-                    "no collector sheath to derive one from. Undeclared "
+                    "end wall to fall back on, and this model solves "
+                    "no end wall sheath to derive one from. Undeclared "
                     f"(None): {missing}. Accepted: name R_N (the particle "
                     "share that leaves fast), R_E (the share of the arrival "
                     "energy that leaves with it) and sheath_Te_multiple (the "
                     "multiple of the end cell's Te which, plus its Ti, IS "
                     "that arrival energy), or "
-                    "neutral_kinetic_dvm_collector_jet = False"
+                    "neutral_kinetic_dvm_end_wall_jet = False"
                 )
-            collector_jet = validated_dvm_collector_jet_spec({
+            end_wall_jet = validated_dvm_end_wall_jet_spec({
                 "R_N": float(
                     self._input_dict.get(
-                        "neutral_kinetic_dvm_collector_jet_R_N"
+                        "neutral_kinetic_dvm_end_wall_jet_R_N"
                     )
                 ),
                 "R_E": float(
                     self._input_dict.get(
-                        "neutral_kinetic_dvm_collector_jet_R_E"
+                        "neutral_kinetic_dvm_end_wall_jet_R_E"
                     )
                 ),
                 "T_launch_eV": self._input_dict.get(
-                    "neutral_kinetic_dvm_collector_jet_T_launch_eV"
+                    "neutral_kinetic_dvm_end_wall_jet_T_launch_eV"
                 ),
                 "sheath_Te_multiple": float(
                     self._input_dict.get(
-                        "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple"
+                        "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple"
                     )
                 ),
             })
@@ -5072,23 +5072,23 @@ class LAPDSim1D:
             named = [
                 key
                 for key in (
-                    "neutral_kinetic_dvm_collector_jet_R_N",
-                    "neutral_kinetic_dvm_collector_jet_R_E",
-                    "neutral_kinetic_dvm_collector_jet_T_launch_eV",
-                    "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple",
+                    "neutral_kinetic_dvm_end_wall_jet_R_N",
+                    "neutral_kinetic_dvm_end_wall_jet_R_E",
+                    "neutral_kinetic_dvm_end_wall_jet_T_launch_eV",
+                    "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple",
                 )
                 if self._input_dict.get(key) is not None
             ]
             if named:
                 raise ValueError(
-                    f"{named} parameterize the transient DVM's collector "
+                    f"{named} parameterize the transient DVM's end wall "
                     "fast-share channel, which is OFF "
-                    "(neutral_kinetic_dvm_collector_jet = False), so nothing "
+                    "(neutral_kinetic_dvm_end_wall_jet = False), so nothing "
                     "reads them and a silently inert control is exactly what "
                     "this refuses. Accepted: leave them at None, or arm the "
-                    "channel with neutral_kinetic_dvm_collector_jet = True"
+                    "channel with neutral_kinetic_dvm_end_wall_jet = True"
                 )
-        self._dvm_collector_jet = collector_jet
+        self._dvm_end_wall_jet = end_wall_jet
         # B6: the thin annular baffles, default off and ABSENT rather than
         # present at a neutral setting, exactly as the two jets are. The
         # geometry has already validated and mapped them onto faces (and has
@@ -5128,9 +5128,9 @@ class LAPDSim1D:
             vmax_cm_s,
             cathode_band_eV,
             anode_band_eV,
-            collector_band_eV,
+            end_wall_band_eV,
         ) = self._resolve_dvm_velocity_extent(
-            cathode_jet, anode_jet, collector_jet
+            cathode_jet, anode_jet, end_wall_jet
         )
         self._dvm = TransientDVM(
             geometry=self._geometry,
@@ -5139,7 +5139,7 @@ class LAPDSim1D:
             vmax_cm_s=vmax_cm_s,
             cathode_launch_band_eV=cathode_band_eV,
             anode_launch_band_eV=anode_band_eV,
-            collector_launch_band_eV=collector_band_eV,
+            end_wall_launch_band_eV=end_wall_band_eV,
             accommodation=accommodation,
             wall_reflection=reflection,
             elastic_model=elastic,
@@ -5147,7 +5147,7 @@ class LAPDSim1D:
             annulus_flights=flights,
             cathode_jet=cathode_jet,
             anode_jet=anode_jet,
-            collector_jet=collector_jet,
+            end_wall_jet=end_wall_jet,
             jet_launch_width=self._input_dict.get(
                 "neutral_kinetic_dvm_jet_launch_width"
             ),
@@ -5165,12 +5165,12 @@ class LAPDSim1D:
         self._dvm_particle_accum = self._zero_dvm_particle_accum()
 
     def _resolve_dvm_velocity_extent(
-        self, cathode_jet, anode_jet, collector_jet
+        self, cathode_jet, anode_jet, end_wall_jet
     ):
         """Resolve the DVM velocity-grid half-extent and the jets' launch bands.
 
         Returns
-        ``(vmax_cm_s, cathode_band_eV, anode_band_eV, collector_band_eV)``.
+        ``(vmax_cm_s, cathode_band_eV, anode_band_eV, end_wall_band_eV)``.
         Each band is ``(e_min, e_max)`` in eV per atom for an armed jet and
         ``None`` for one that is not, and a ``None`` band is what makes the
         engine's construction-time reachability check say nothing for that
@@ -5184,7 +5184,7 @@ class LAPDSim1D:
         borrows that same cathode ceiling as a stated allowance rather than as
         a bound on ``phi_a``, which has no cap and is given none here.
 
-        THE COLLECTOR BAND IS FORMED THE SAME WAY ON A DIFFERENT ARRIVAL
+        THE END WALL BAND IS FORMED THE SAME WAY ON A DIFFERENT ARRIVAL
         ENERGY. Its per-ion arrival energy is not a sheath fall but the
         prescribed ``sheath_Te_multiple * Te + Ti``, so its ``e_max`` is
         ``(R_E/R_N)(mult * Te_allowance + Ti_allowance)`` -- the multiple
@@ -5226,7 +5226,7 @@ class LAPDSim1D:
         Ti_floor_eV = float(p["Ti_floor"])
         phi_cap_V = float(p.get("cathode_phi_c_cap_V"))
         Ti_allowance_eV = 10.0
-        # The documented electron-temperature allowance the collector band is
+        # The documented electron-temperature allowance the end wall band is
         # formed at; see the note above for why the solver has no Te ceiling
         # to read and why this is the engine's own ion-temperature cap.
         Te_allowance_eV = GRID_TI_CAP_EV
@@ -5240,7 +5240,7 @@ class LAPDSim1D:
                 ratio * (phi_cap_V + Ti_allowance_eV),
             )
 
-        def collector_band_eV(spec):
+        def end_wall_band_eV(spec):
             if spec is None:
                 return None
             ratio = float(spec["R_E"]) / float(spec["R_N"])
@@ -5255,10 +5255,10 @@ class LAPDSim1D:
 
         cathode_band = band(cathode_jet)
         anode_band = band(anode_jet)
-        collector_band = collector_band_eV(collector_jet)
+        end_wall_band = end_wall_band_eV(end_wall_jet)
         bands = [
             b
-            for b in (cathode_band, anode_band, collector_band)
+            for b in (cathode_band, anode_band, end_wall_band)
             if b is not None
         ]
 
@@ -5271,7 +5271,7 @@ class LAPDSim1D:
                 launch_band_velocity_extent_cm_s(e_max),
                 cathode_band,
                 anode_band,
-                collector_band,
+                end_wall_band,
             )
         vmax = float(named)
         if not np.isfinite(vmax) or vmax <= 0.0:
@@ -5292,7 +5292,7 @@ class LAPDSim1D:
                 "did. Accepted: an extent at or above that sizing, or None "
                 "to have it sized to the launch band"
             )
-        return vmax, cathode_band, anode_band, collector_band
+        return vmax, cathode_band, anode_band, end_wall_band
 
     def _dvm_end_sticking(self, key):
         """Return the end-plane sticking probability of a pump speed [L/s].
@@ -5459,7 +5459,7 @@ class LAPDSim1D:
         self._dvm_source_rows = None
         self._dvm_cathode_jet_incident_row = None
         self._dvm_anode_jet_incident_row = None
-        self._dvm_collector_jet_incident_row = None
+        self._dvm_end_wall_jet_incident_row = None
         state = self.state if y is None else self._unpack(y)
         # The zone-exchange term exists only in two-zone runs, so the term
         # ledger (and the saved rhs_terms structure) is unchanged when the
@@ -5545,11 +5545,11 @@ class LAPDSim1D:
             # only its own rows, so a one-key run's structure is the same here
             # as it is once the plasma exists.
             end_sheath_terms = {}
-            if self._collector_sheath_full_debit:
+            if self._end_wall_sheath_full_debit:
                 end_sheath_terms.update(
                     {
                         name: self._zero_rhs_state()
-                        for name in END_SHEATH_COLLECTOR_ROWS
+                        for name in END_SHEATH_END_WALL_ROWS
                     }
                 )
             if self._cathode_face_full_debit:
@@ -5701,14 +5701,14 @@ class LAPDSim1D:
         # and the launch are one number; ``None`` leaves the boundary term on
         # its historical path, keyword for keyword.
         carrier_out = {} if self._cathode_jet_carrier else None
-        # The end-face sheath closure's collector member travels the same way,
+        # The end-face sheath closure's end wall member travels the same way,
         # and for the same reason: the fall it charges rides the very flux the
         # boundary operator books, so it is computed there and carried back
         # rather than rebuilt from a second sampling of the sheath edge.
         # ``None`` leaves the boundary term on its historical path, keyword
         # for keyword.
-        collector_climb_out = (
-            {} if self._collector_sheath_full_debit else None
+        end_wall_climb_out = (
+            {} if self._end_wall_sheath_full_debit else None
         )
         # The sheath-resolved electrode solve produces BOTH electrode rows in
         # one call. Bound here rather than inline in the dict so the solve
@@ -5754,7 +5754,7 @@ class LAPDSim1D:
                 cathode_solve=cathode_solve,
                 time=time,
                 carrier_out=carrier_out,
-                collector_climb_out=collector_climb_out,
+                end_wall_climb_out=end_wall_climb_out,
             ),
             "pressure_work": pressure_work,
             # The electron-velocity correction to the row above: pressure_work
@@ -5879,9 +5879,9 @@ class LAPDSim1D:
                     ionization_rate=ionization_rate_per_neutral,
                 )
             )
-        if self._collector_sheath_full_debit or self._cathode_face_full_debit:
-            # The end-face sheath rows, each key's own. The collector row
-            # travels here through ``collector_climb_out``, filled by the
+        if self._end_wall_sheath_full_debit or self._cathode_face_full_debit:
+            # The end-face sheath rows, each key's own. The end wall row
+            # travels here through ``end_wall_climb_out``, filled by the
             # boundary operator's own evaluation above, so the fall charged
             # and the flux it is charged on are one number rather than two
             # readings of it; it is ``None`` when that key is unarmed, which
@@ -5889,10 +5889,10 @@ class LAPDSim1D:
             # zero for it.
             terms.update(
                 self._end_sheath_debit_terms(
-                    collector_climb_row=(
+                    end_wall_climb_row=(
                         None
-                        if collector_climb_out is None
-                        else collector_climb_out["Ee"]
+                        if end_wall_climb_out is None
+                        else end_wall_climb_out["Ee"]
                     ),
                     cathode_solve=cathode_solve,
                 )
@@ -5945,14 +5945,14 @@ class LAPDSim1D:
                             cathode_solve,
                         )
                     )
-                if self._dvm_collector_jet is not None:
+                if self._dvm_end_wall_jet is not None:
                     # The same reading for the ions the far-end boundary
                     # removed, off this evaluation's state alone: the
-                    # collector's arrival energy is prescribed from Te/Ti and
+                    # end wall's arrival energy is prescribed from Te/Ti and
                     # reads no solve.
-                    self._dvm_collector_jet_incident_row = (
-                        self._dvm_collector_jet_incident_energy_row(
-                            self._dvm_source_rows["collector_face"], state
+                    self._dvm_end_wall_jet_incident_row = (
+                        self._dvm_end_wall_jet_incident_energy_row(
+                            self._dvm_source_rows["end_wall_face"], state
                         )
                     )
                 terms = {
@@ -6356,10 +6356,10 @@ class LAPDSim1D:
                 self._dvm_anode_jet_energy_stage_accum = np.zeros(
                     self._geometry.cells, dtype=float
                 )
-            if self._dvm_collector_jet is not None:
-                # The collector channel's arrival-ENERGY tally, on the same
+            if self._dvm_end_wall_jet is not None:
+                # The end wall channel's arrival-ENERGY tally, on the same
                 # stage weight and the same attempt lifetime.
-                self._dvm_collector_jet_energy_stage_accum = np.zeros(
+                self._dvm_end_wall_jet_energy_stage_accum = np.zeros(
                     self._geometry.cells, dtype=float
                 )
 
@@ -6459,10 +6459,10 @@ class LAPDSim1D:
                 self._dvm_anode_jet_energy_stage_accum
             )
             self._dvm_anode_jet_energy_stage_accum = None
-            attempt_collector_jet_energy_booking = (
-                self._dvm_collector_jet_energy_stage_accum
+            attempt_end_wall_jet_energy_booking = (
+                self._dvm_end_wall_jet_energy_stage_accum
             )
-            self._dvm_collector_jet_energy_stage_accum = None
+            self._dvm_end_wall_jet_energy_stage_accum = None
             attempt_coverage_burn = self._coverage_burn_accum
             attempt_coverage_reservoir_burn = (
                 self._coverage_reservoir_burn_accum
@@ -6484,8 +6484,8 @@ class LAPDSim1D:
             source_booking=attempt_source_booking,
             cathode_jet_energy_booking=attempt_jet_energy_booking,
             anode_jet_energy_booking=attempt_anode_jet_energy_booking,
-            collector_jet_energy_booking=(
-                attempt_collector_jet_energy_booking
+            end_wall_jet_energy_booking=(
+                attempt_end_wall_jet_energy_booking
             ),
             coverage_burn=attempt_coverage_burn,
             coverage_reservoir_burn=attempt_coverage_reservoir_burn,
@@ -7128,16 +7128,16 @@ class LAPDSim1D:
                 step_anode_incident_erg = float(
                     np.sum(anode_jet_energy_booking)
                 )
-            collector_jet_energy_booking = getattr(
-                attempt, "collector_jet_energy_booking", None
+            end_wall_jet_energy_booking = getattr(
+                attempt, "end_wall_jet_energy_booking", None
             )
-            if collector_jet_energy_booking is not None:
-                # The same discipline collector-side, with no surface book to
-                # hold an increment for: the collector plate has none, so the
+            if end_wall_jet_energy_booking is not None:
+                # The same discipline end-wall-side, with no surface book to
+                # hold an increment for: the end wall has none, so the
                 # tick accumulator is the whole commit.
-                self._dvm_collector_jet_energy_booked = (
-                    self._dvm_collector_jet_energy_booked
-                    + collector_jet_energy_booking
+                self._dvm_end_wall_jet_energy_booked = (
+                    self._dvm_end_wall_jet_energy_booked
+                    + end_wall_jet_energy_booking
                 )
         self._restore_step_cache(attempt.solver_cache)
         self._set_state_vector(attempt.y)
@@ -8860,10 +8860,10 @@ class LAPDSim1D:
         # INNER sim, a guard firing on a state where the thing it protects
         # cannot happen. Clearing them changes no configuration that
         # constructed before: every config the cathode key touches is one that
-        # raised, and the collector key only ever seeded zero rows on a
+        # raised, and the end wall key only ever seeded zero rows on a
         # Plasma=False pre-solve, so the equilibrated seed, its cache
         # signature and every existing trajectory are bit-identical.
-        flags["collector_sheath_full_debit"] = False
+        flags["end_wall_sheath_full_debit"] = False
         flags["cathode_face_full_debit"] = False
         # The two DVM directed-recycle jets, cleared for the SAME reason as
         # cathode_coupling above: this pre-solve has no plasma and no cathode
@@ -8881,20 +8881,20 @@ class LAPDSim1D:
         # `get_config()` returned, so these two lines reach the inner sim only.
         params["neutral_kinetic_dvm_cathode_jet"] = False
         params["neutral_kinetic_dvm_anode_jet"] = False
-        # The collector channel is cleared for the same reason and, unlike the
+        # The end wall channel is cleared for the same reason and, unlike the
         # two above, its four numbers with it: they are refused outright while
         # the channel is off, so clearing the flag alone would turn a legal
         # outer configuration into an inner refusal.
-        params["neutral_kinetic_dvm_collector_jet"] = False
-        params["neutral_kinetic_dvm_collector_jet_R_N"] = None
-        params["neutral_kinetic_dvm_collector_jet_R_E"] = None
-        params["neutral_kinetic_dvm_collector_jet_T_launch_eV"] = None
-        params["neutral_kinetic_dvm_collector_jet_sheath_Te_multiple"] = None
+        params["neutral_kinetic_dvm_end_wall_jet"] = False
+        params["neutral_kinetic_dvm_end_wall_jet_R_N"] = None
+        params["neutral_kinetic_dvm_end_wall_jet_R_E"] = None
+        params["neutral_kinetic_dvm_end_wall_jet_T_launch_eV"] = None
+        params["neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple"] = None
         # The SHARED launch width goes with them, for the same reason again:
         # it smears the surface jets' launch spectra, all three are now off,
         # and a width nothing reads is refused outright rather than ignored --
         # so leaving it set would turn a legal outer configuration into an
-        # inner refusal, which is precisely what clearing the collector's four
+        # inner refusal, which is precisely what clearing the end wall's four
         # numbers above prevents. Every configuration this line touches is one
         # that raised here, so the equilibrated seed, its cache signature and
         # every existing trajectory are bit-identical; a configuration that
@@ -10031,7 +10031,7 @@ class LAPDSim1D:
 
     def characteristic_boundary_rhs(
         self, y=None, state=None, cathode_solve=None, time=None,
-        carrier_out=None, collector_climb_out=None,
+        carrier_out=None, end_wall_climb_out=None,
     ):
         """Return the characteristic ghost-cell Bohm outflow (audit A1/A16).
 
@@ -10045,8 +10045,8 @@ class LAPDSim1D:
         ``carrier_out`` is the directed hot surface carrier's launch channel;
         ``None`` is the historical call and is unchanged bit for bit.
 
-        ``collector_climb_out`` is the ``collector_sheath_full_debit`` key's
-        collector channel: given a dict, the operator writes the collector
+        ``end_wall_climb_out`` is the ``end_wall_sheath_full_debit`` key's
+        end wall channel: given a dict, the operator writes the end wall
         faces' sheath-fall electron row into it under ``"Ee"`` for the caller
         to book as its own named term. ``None`` -- the default and every
         diagnostic caller -- computes nothing.
@@ -10076,7 +10076,7 @@ class LAPDSim1D:
                 self._end_recycle_annulus_volume()
             ),
             cathode_carrier_out=carrier_out,
-            collector_sheath_climb_out=collector_climb_out,
+            end_wall_sheath_climb_out=end_wall_climb_out,
         )
 
     def anode_collection_rhs(
@@ -10433,11 +10433,11 @@ class LAPDSim1D:
             cathode_solve=cathode_solve,
         )
 
-    def _end_sheath_debit_terms(self, collector_climb_row, cathode_solve):
+    def _end_sheath_debit_terms(self, end_wall_climb_row, cathode_solve):
         """Return the end-face sheath rows the two keys arm, per key.
 
-        Keyed by :data:`END_SHEATH_COLLECTOR_ROWS` when
-        ``collector_sheath_full_debit`` is armed and by
+        Keyed by :data:`END_SHEATH_END_WALL_ROWS` when
+        ``end_wall_sheath_full_debit`` is armed and by
         :data:`END_SHEATH_CATHODE_ROWS` when ``cathode_face_full_debit`` is;
         an unarmed key contributes NO key at all, so the caller's term dict
         carries exactly the rows the configuration asked for. Every row is
@@ -10447,9 +10447,9 @@ class LAPDSim1D:
         these rows only move electron energy that those rows leave on the
         surface.
 
-        ``collector_climb_row`` is the per-cell electron-energy row
-        [erg cm^-3 s^-1] the boundary operator wrote back for the collector
-        faces on THIS evaluation, or ``None`` when the collector key is
+        ``end_wall_climb_row`` is the per-cell electron-energy row
+        [erg cm^-3 s^-1] the boundary operator wrote back for the end wall
+        faces on THIS evaluation, or ``None`` when the end wall key is
         unarmed and the operator computed none. The three cathode rows are
         built from ``cathode_solve``'s own circuit result at the emitter
         surface temperature the solve ran at, converted from watts to the same
@@ -10460,7 +10460,7 @@ class LAPDSim1D:
         WITH NO SOLVE THIS STEP (the pre-drive phases, and any step whose
         cathode phase runs none) the three cathode rows are exactly zero: the
         released and returning currents are quantities of a solve, and there
-        is no honest value for them without one. The collector row is
+        is no honest value for them without one. The end wall row is
         independent of the circuit and is booked whenever its own key is
         armed, solve or no solve.
 
@@ -10470,9 +10470,9 @@ class LAPDSim1D:
         """
         zeros = np.zeros(self._geometry.cells, dtype=float)
         rows = {}
-        if self._collector_sheath_full_debit:
-            rows["collector_e_sheath_climb"] = np.asarray(
-                collector_climb_row, dtype=float
+        if self._end_wall_sheath_full_debit:
+            rows["end_wall_e_sheath_climb"] = np.asarray(
+                end_wall_climb_row, dtype=float
             )
         beam_result = (
             None if cathode_solve is None else cathode_solve.beam_result
@@ -12175,8 +12175,8 @@ class LAPDSim1D:
             )
         cathode_diagnostics = {
             **self._cathode_diagnostic_snapshot(time=time),
-            # R5.4: collector surface-power ledger line (diagnostic-only).
-            "collector_surface_power_W": self._collector_surface_power_W(
+            # R5.4: end wall surface-power ledger line (diagnostic-only).
+            "end_wall_surface_power_W": self._end_wall_surface_power_W(
                 rhs_terms, derived
             ),
         }
@@ -12916,21 +12916,21 @@ class LAPDSim1D:
             "floating": phase == "afterglow",
         }
 
-    def _collector_surface_power_W(self, rhs_terms, derived):
-        """Return the power [W] the plasma deposits on the floating collector.
+    def _end_wall_surface_power_W(self, rhs_terms, derived):
+        """Return the power [W] the plasma deposits on the floating end wall.
 
-        R5.4 (R3 tail): completes the power ledger with the collector
+        R5.4 (R3 tail): completes the power ledger with the end wall
         surface-power line. The plasma-terminating boundary term
         (`characteristic_boundary`) removes
         electron (2Te sheath), ion internal, and reconstructed kinetic energy at
-        the collector cell; the negative of that removal is the surface power the
-        collector receives. Diagnostic-only (no state change). It is an ambient
+        the end wall cell; the negative of that removal is the surface power the
+        end wall receives. Diagnostic-only (no state change). It is an ambient
         plasma Bohm-outflow loss -- regime-dependent (small in the high-density/
         detached ES runs, significant in low-puff/attached runs), independent of
         whether any beam survives downstream.
 
-        ``collector_e_sheath_climb`` IS PART OF THE SURFACE LOAD and is summed
-        here on the same convention, whenever ``collector_sheath_full_debit``
+        ``end_wall_e_sheath_climb`` IS PART OF THE SURFACE LOAD and is summed
+        here on the same convention, whenever ``end_wall_sheath_full_debit``
         put it in the ledger. That row takes the sheath fall out of the plasma
         ELECTRON store and hands it to the ions, which carry it to the plate:
         it is a removal from the plasma exactly as the boundary rows are, so
@@ -12942,8 +12942,8 @@ class LAPDSim1D:
         ``rhs_terms.get`` on an absent key and this line is what it always was.
         """
         roles = np.asarray(self._geometry.cell_role)
-        collector = roles == "collector"
-        if not np.any(collector):
+        end_wall = roles == "end_wall"
+        if not np.any(end_wall):
             return 0.0
         Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
         u = np.asarray(derived.u, dtype=float)
@@ -12952,7 +12952,7 @@ class LAPDSim1D:
         for name in (
             "characteristic_boundary",
             "boundary_absorption",
-            "collector_e_sheath_climb",
+            "end_wall_e_sheath_climb",
         ):
             term = rhs_terms.get(name)
             if term is None:
@@ -12963,7 +12963,7 @@ class LAPDSim1D:
             n = np.zeros_like(Ee) if term.n is None else np.asarray(term.n, dtype=float)
             dK = u * M - 0.5 * m * u**2 * n  # reconstructed kinetic removal
             p_cell = -(Ee + Ei + dK) * Vp * 1.0e-7  # erg/s -> W; sink -> surface gain
-            total += float(np.sum(p_cell[collector]))
+            total += float(np.sum(p_cell[end_wall]))
         return total
 
     def _cathode_diagnostic_snapshot(self, time=None):
@@ -13599,7 +13599,7 @@ class LAPDSim1D:
         coll_cells = np.zeros(self._geometry.cells)
         for role, target in (
             ("cathode", cath_cells),
-            ("collector", coll_cells),
+            ("end_wall", coll_cells),
         ):
             for cell in self._recycle_cells.get(role, ()):
                 target[cell] = recycle[cell]
@@ -13614,7 +13614,7 @@ class LAPDSim1D:
             an_gain = an_gain + np.clip(anode.nn_a, 0.0, None) * V_ann
         return {
             "cathode_face": cath_cells,
-            "collector_face": coll_cells,
+            "end_wall_face": coll_cells,
             "recombination": rec_cells,
             "anode": an_gain,
         }
@@ -13645,7 +13645,7 @@ class LAPDSim1D:
         an = self.anode_collection_rhs(state=state)
         rows = self._kinetic_source_channel_rows(boundary, reaction_terms, an)
         cath_cells = rows["cathode_face"]
-        coll_cells = rows["collector_face"]
+        coll_cells = rows["end_wall_face"]
         rec_cells = rows["recombination"]
         an_gain = rows["anode"]
         src_kwargs = self._neutral_source_kwargs(time=time)
@@ -13896,7 +13896,7 @@ class LAPDSim1D:
     #: and configuration alone it carries no plasma-state sampling error.
     _DVM_COUNTED_SOURCES = (
         "cathode_face",
-        "collector_face",
+        "end_wall_face",
         "recombination",
         "anode",
     )
@@ -14075,18 +14075,18 @@ class LAPDSim1D:
         )
         return np.asarray(anode_row, dtype=float) * per_ion_erg
 
-    def _dvm_collector_jet_incident_energy_row(self, collector_row, state):
-        """Return the collector return's ARRIVAL ion-energy row [erg/s].
+    def _dvm_end_wall_jet_incident_energy_row(self, end_wall_row, state):
+        """Return the end wall return's ARRIVAL ion-energy row [erg/s].
 
         ``mult * Te + Ti`` per collected ion, clamped at zero, times the
         counted return rate, per cell -- the row is non-zero only where the
         far-end characteristic boundary actually drained, so the temperatures
         that form it are that end cell's own.
 
-        ``mult`` is ``neutral_kinetic_dvm_collector_jet_sheath_Te_multiple``,
+        ``mult`` is ``neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple``,
         the PRESCRIBED floating-sheath convention the configuration states.
         Nothing is solved here and nothing can be: this model carries no
-        collector sheath and no collector circuit, so unlike
+        end wall sheath and no end wall circuit, so unlike
         :meth:`_dvm_anode_jet_incident_energy_row` there is no ``phi`` to
         read and no cathode solve to read it from. The clamp is kept for
         parity with the two solved surfaces, where a slightly negative sheath
@@ -14104,13 +14104,13 @@ class LAPDSim1D:
         derived = derive_state(
             state, floors=self._floors, ion_mass_g=self._ion_mass_g
         )
-        multiple = float(self._dvm_collector_jet["sheath_Te_multiple"])
+        multiple = float(self._dvm_end_wall_jet["sheath_Te_multiple"])
         per_ion_erg = np.maximum(
             multiple * np.asarray(derived.Te, dtype=float)
             + np.asarray(derived.Ti, dtype=float),
             0.0,
         ) * ev_to_erg
-        return np.asarray(collector_row, dtype=float) * per_ion_erg
+        return np.asarray(end_wall_row, dtype=float) * per_ion_erg
 
     def _accumulate_dvm_source_booking(self):
         """Tally this RHS stage's share of the tick's booked source inflow.
@@ -14144,12 +14144,12 @@ class LAPDSim1D:
                 self._dvm_ion_stage_weight
                 * self._dvm_anode_jet_incident_row
             )
-        if self._dvm_collector_jet_energy_stage_accum is not None:
-            # The ENERGY half of the collector channel's counted pair, on the
+        if self._dvm_end_wall_jet_energy_stage_accum is not None:
+            # The ENERGY half of the end wall channel's counted pair, on the
             # same stage weight and from the same evaluation's rows.
-            self._dvm_collector_jet_energy_stage_accum += (
+            self._dvm_end_wall_jet_energy_stage_accum += (
                 self._dvm_ion_stage_weight
-                * self._dvm_collector_jet_incident_row
+                * self._dvm_end_wall_jet_incident_row
             )
 
     def _dvm_booked_transfer_rhs(self):
@@ -14927,7 +14927,7 @@ class LAPDSim1D:
         self._dvm_anode_jet_energy_booked = np.zeros(
             self._geometry.cells, dtype=float
         )
-        self._dvm_collector_jet_energy_booked = np.zeros(
+        self._dvm_end_wall_jet_energy_booked = np.zeros(
             self._geometry.cells, dtype=float
         )
 
@@ -15013,10 +15013,10 @@ class LAPDSim1D:
             self._dvm_anode_jet_energy_booked = np.zeros(
                 self._geometry.cells, dtype=float
             )
-        collector_jet_incident = None
-        if self._dvm_collector_jet is not None:
-            collector_jet_incident = self._dvm_collector_jet_energy_booked
-            self._dvm_collector_jet_energy_booked = np.zeros(
+        end_wall_jet_incident = None
+        if self._dvm_end_wall_jet is not None:
+            end_wall_jet_incident = self._dvm_end_wall_jet_energy_booked
+            self._dvm_end_wall_jet_energy_booked = np.zeros(
                 self._geometry.cells, dtype=float
             )
         self._dvm_ion_booked = np.zeros(self._geometry.cells, dtype=float)
@@ -15033,7 +15033,7 @@ class LAPDSim1D:
             cathode_jet_incident_erg=jet_incident,
             cathode_jet_counts=jet_counts,
             anode_jet_incident_erg=anode_jet_incident,
-            collector_jet_incident_erg=collector_jet_incident,
+            end_wall_jet_incident_erg=end_wall_jet_incident,
             T_s_K=(
                 float(self._cathode_Ts_K)
                 if self._cathode_Ts_K is not None

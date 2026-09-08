@@ -66,7 +66,7 @@ def analyze(f):
     cd = f["cathode_diagnostics"]
 
     def cm(key):  # circuit scalar [W], summed over source + twin end (nan-safe:
-        # a collector end has NaN cathode diagnostics, contributing zero)
+        # an end-wall end has NaN cathode diagnostics, contributing zero)
         stack = []
         for pre in ("source_", "end_"):
             name = pre + key

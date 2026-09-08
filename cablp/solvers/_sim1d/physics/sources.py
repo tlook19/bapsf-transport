@@ -835,13 +835,13 @@ def characteristic_boundary_rhs(
     energy_consistent=False,
     end_recycle_annulus_volume_cm3=None,
     cathode_carrier_out=None,
-    collector_sheath_climb_out=None,
+    end_wall_sheath_climb_out=None,
 ):
     """Return the characteristic ghost-cell Bohm outflow at absorbing faces.
 
     THE plasma-terminating boundary operator: since the legacy volumetric
     absorber was retired (see commit 1fc05c9) this is the only
-    discretization of the cathode/collector surfaces, and it always runs.
+    discretization of the cathode/end wall surfaces, and it always runs.
     At each
     plasma-terminating (absorbing) face a ghost state is set to the Bohm
     outflow condition
@@ -865,14 +865,14 @@ def characteristic_boundary_rhs(
     plasma thermal store. At DRIVEN electrodes (the cathode) the circuit owns
     it -- it is booked once by ``cathode_source_terms`` as
     ``P_cathode_e_thermal`` -- so this term adds nothing there. At the
-    COLLECTOR (a floating zero-net-current exhaust with no circuit branch)
+    END WALL (a floating zero-net-current exhaust with no circuit branch)
     this term IS the electron sheath: ``2 Te`` per electron at the Bohm flux
     (electron flux = ion flux).
 
-    ``collector_sheath_climb_out``: when given (a dict), the COLLECTOR's
+    ``end_wall_sheath_climb_out``: when given (a dict), the END WALL's
     sheath-fall electron debit is computed and written back into it under the
     key ``"Ee"`` as a per-cell electron-energy row [erg cm^-3 s^-1], negative
-    where it acts. It is the ``collector_sheath_full_debit`` closure's row
+    where it acts. It is the ``end_wall_sheath_full_debit`` closure's row
     and is NOT added to the returned state: the caller books it as its
     own named RHS row, so the two rows together are the sheath-edge
     ``(2 + Lambda_eff) Te`` per collected electron while this function's own
@@ -884,7 +884,7 @@ def characteristic_boundary_rhs(
     its Bohm flux at, so the two cannot describe different sheath edges. The
     fall is taken from the plasma electron store and handed to the ions,
     which deposit it on the floating surface -- there is no circuit branch
-    here to supply it, which is what makes the collector different from the
+    here to supply it, which is what makes the end wall different from the
     driven electrodes above. CATHODE faces are untouched: the accelerated
     species there is the ion. ``None`` -- the default -- computes nothing and
     is the historical call, bit for bit.
@@ -892,7 +892,7 @@ def characteristic_boundary_rhs(
     ``end_recycle_annulus_volume_cm3``: when given (the per-cell annulus
     volume [cm^3], supplied only under the ``end_recycle_to_annulus``
     closure), the recycle stream rebirthed at faces whose live cell has the
-    ``collector`` role is deposited into the ANNULUS row ``nn_a`` at
+    ``end_wall`` role is deposited into the ANNULUS row ``nn_a`` at
     ``dN_loss / V_ann`` instead of into the column row ``nn``. CATHODE faces
     are untouched, so the jet/debit closure that owns them is unchanged. The
     routed atoms are thermal and diffuse: no directed momentum is booked for
@@ -918,7 +918,7 @@ def characteristic_boundary_rhs(
     off the hot disc at ``v_eff = sqrt(pi k T_s / (2 m))`` (the per-particle
     directed momentum of a cosine-law effusive flux). The momentum rides in the
     SAME term that rebirths the particles, so the two are consistent by
-    construction. Collector faces stay momentum-free (their sheath is the
+    construction. End wall faces stay momentum-free (their sheath is the
     ~Te-scale ambipolar drop, not the cathode fall). The reflected atoms'
     kinetic energy beyond the mean-flow momentum is NOT booked -- neutrals
     carry no energy field (the standing M2 convention).
@@ -944,11 +944,11 @@ def characteristic_boundary_rhs(
         getattr(geometry, "plasma_absorbing", np.zeros(0)), dtype=bool
     )
     if not np.any(absorbing) or b_surface_loss == 0.0:
-        if collector_sheath_climb_out is not None:
+        if end_wall_sheath_climb_out is not None:
             # The write-back happens on EVERY path a dict is passed on, so
             # the caller reads one key and never has to decide what an absent
             # one meant. There is no collected flux to charge here.
-            collector_sheath_climb_out["Ee"] = zeros.copy()
+            end_wall_sheath_climb_out["Ee"] = zeros.copy()
         return ConservativeState1D(
             n=zeros,
             nn=zeros.copy(),
@@ -974,7 +974,7 @@ def characteristic_boundary_rhs(
     jet_M_n = np.zeros(cells, dtype=float) if jet_active else None
     carrier_active = jet_active and cathode_carrier_out is not None
     withheld_abs = np.zeros(cells, dtype=float) if carrier_active else None
-    climb_active = collector_sheath_climb_out is not None
+    climb_active = end_wall_sheath_climb_out is not None
     climb_Ee = np.zeros(cells, dtype=float) if climb_active else None
     # The sheath lift is a property of the ion mass alone, so it is read once
     # here rather than per face -- and read from the circuit, which is where
@@ -993,7 +993,7 @@ def characteristic_boundary_rhs(
             continue
         live_is_right = live == face
         # Outward normal: plasma on the high-z side of the surface flows toward
-        # -z to reach it (source cathode), and +z otherwise (collector).
+        # -z to reach it (source cathode), and +z otherwise (end wall).
         outward = -1.0 if live_is_right else 1.0
 
         Te_l = float(derived.Te[live])
@@ -1062,10 +1062,10 @@ def characteristic_boundary_rhs(
         # only routing since the pure-ghost enthalpy alternative was
         # retired; see commit 1fc05c9. See the module docstring's
         # ELECTRON ENERGY ROW.
-        if roles[live] == "collector":
+        if roles[live] == "end_wall":
             d_Ee[live] += 2.0 * Te_l * ev_to_erg * (scale * f_n)
             if climb_active:
-                # collector_sheath_full_debit. The fall those
+                # end_wall_sheath_full_debit. The fall those
                 # electrons climbed, at the sheath edge THIS face sampled its
                 # Bohm flux at: alpha_eff is the same factor, so the density
                 # drop the flux was taken across and the drop the barrier is
@@ -1077,7 +1077,7 @@ def characteristic_boundary_rhs(
         # Particles/s leaving through this face (density sink-rate x cell volume).
         cell_loss = -scale * f_n * Vp[live]
         loss_abs[live] += cell_loss
-        if route_active and roles[live] == "collector":
+        if route_active and roles[live] == "end_wall":
             routed_abs[live] += cell_loss
         if jet_active and roles[live] == "cathode":
             v_back = cathode_jet_backscatter_speed(
@@ -1113,7 +1113,7 @@ def characteristic_boundary_rhs(
         # Scaled with the row it rides: the climb charges the flux this
         # function actually books, so a scaled surface loss scales both.
         climb_Ee *= scale_b
-        collector_sheath_climb_out["Ee"] = climb_Ee
+        end_wall_sheath_climb_out["Ee"] = climb_Ee
     if route_active:
         routed_abs *= scale_b
     if jet_active:
@@ -1124,7 +1124,7 @@ def characteristic_boundary_rhs(
 
     # Neutral return: the absorbed plasma flux is rebirthed as neutrals on the
     # column (two-zone) or chamber-mean volume
-    # -- and, under the end-recycle routing, the collector faces' share goes to
+    # -- and, under the end-recycle routing, the end wall faces' share goes to
     # the annulus instead, leaving the column row exactly zero there.
     column_abs = loss_abs if not route_active else loss_abs - routed_abs
     if carrier_active:

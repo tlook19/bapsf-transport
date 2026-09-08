@@ -163,7 +163,7 @@ from cablp.plasma.params import LN_LAMBDA_MIN, c_log, time_elec_coll
 from cablp.constants import He_e_mass_ratio
 from cablp.solvers._sim1d.solver import (
     END_SHEATH_CATHODE_ROWS,
-    END_SHEATH_COLLECTOR_ROWS,
+    END_SHEATH_END_WALL_ROWS,
     END_SHEATH_DEBIT_ROWS,
     _timestep_limiters,
 )
@@ -755,7 +755,7 @@ def _case_shipped_defaults_and_base_geometry():
     assert geom.z_edges_cm[0] < 0.0
     assert np.isclose(geom.z_edges_cm[-1], params["Lm"])
     assert geom.cell_role[0] == "plenum"
-    assert geom.cell_role[-1] == "collector"
+    assert geom.cell_role[-1] == "end_wall"
     assert np.all(geom.plasma_volume_cm3 > 0.0)
     assert np.all(geom.neutral_volume_cm3 > geom.plasma_volume_cm3)
 
@@ -777,11 +777,11 @@ def _case_shipped_defaults_and_base_geometry():
     assert resolved_geom.cells > resolved_params["nx"] + 2
     assert np.all(resolved_geom.plasma_volume_cm3 > 0.0)
     assert np.all(resolved_geom.neutral_volume_cm3 > resolved_geom.plasma_volume_cm3)
-    assert {"plenum", "cathode", "gap", "puff", "column", "collector"} <= set(
+    assert {"plenum", "cathode", "gap", "puff", "column", "end_wall"} <= set(
         resolved_geom.cell_role
     )
     assert list(resolved_geom.cell_role[:2]) == ["plenum", "cathode"]
-    assert resolved_geom.cell_role[-1] == "collector"
+    assert resolved_geom.cell_role[-1] == "end_wall"
     assert not resolved_geom.plasma_open[0] and not resolved_geom.plasma_open[-1]
 
     # Selector validity. Each of these keys accepts a CLOSED set of values and
@@ -859,22 +859,22 @@ def _case_shipped_defaults_and_base_geometry():
         resolved_geom.z_edges_cm[0], -resolved_params["plenum_length_cm"]
     )
     assert resolved_geom.length_cm.sum() > resolved_params["Lm"]
-    # Two cell counts: nx_gap across the gap, nx from the anode to the collector.
+    # Two cell counts: nx_gap across the gap, nx from the anode to the end wall.
     assert anode_face - cathode_face == resolved_params["nx_gap"]
     gap_dz = resolved_params["cathode_anode_gap_cm"] / resolved_params["nx_gap"]
     assert np.allclose(
         resolved_geom.length_cm[cathode_face:anode_face], gap_dz
     )
     # The smallest cell in the mesh sets the explicit CFL, and it is either a
-    # gap cell or the collector block -- every other segment (plenum, fixed
+    # gap cell or the end wall block -- every other segment (plenum, fixed
     # source region, far column) is longer than both on any shipped geometry.
     # Which of the two wins is a property of the machine, not of the mesher:
-    # on the nominal 100 cm collector it is the gap, and on the G1 measured
-    # collector (7.8 cm, a config default since the R2a fold-in) it is the
-    # collector block.
+    # on the nominal 100 cm end wall it is the gap, and on the G1 measured
+    # end wall (7.8 cm, a config default since the R2a fold-in) it is the
+    # end wall block.
     assert np.isclose(
         resolved_geom.length_cm.min(),
-        min(gap_dz, resolved_params["collector_length_cm"]),
+        min(gap_dz, resolved_params["end_wall_length_cm"]),
     )
 
     # The cathode surface is a plasma wall; the anode face is interior and open.
@@ -921,7 +921,7 @@ def _case_shipped_defaults_and_base_geometry():
     assert np.all(np.isnan(resolved_geom.neutral_face_conductance_cm3_s))
 
     # G1: default-off expanded end geometry. The provisional hardware arm
-    # resolves a 150 cm, Rm=100 cm collector region in ten cells. Plasma area
+    # resolves a 150 cm, Rm=100 cm end wall region in ten cells. Plasma area
     # is either unchanged (vessel-only) or smoothly flared; the source/end
     # params are presence-gated so incomplete or flag-off configs fail loudly.
     assert not resolved_flags["end_expansion_geometry"]
@@ -1088,7 +1088,7 @@ def _case_shipped_defaults_and_base_geometry():
 )
 def _case_source_fixed_grid():
     # Fixed-cell-size source region (``source_fixed_grid``). Without it, nx
-    # uniform column cells span anode face to collector start, so a refinement
+    # uniform column cells span anode face to end wall start, so a refinement
     # study moves every near-source cell edge -- including the puff cell, whose
     # centre anchors the default cosine puff profile. With it on the column from
     # the anode face to source_region_length_cm is meshed at exactly
@@ -1123,7 +1123,7 @@ def _case_source_fixed_grid():
             srcgrid_off_flags,
             gap_length=srcgrid_off_params["cathode_anode_gap_cm"],
             total_length=srcgrid_off_params["Lm"],
-            collector_length=srcgrid_off_params["collector_length_cm"],
+            end_wall_length=srcgrid_off_params["end_wall_length_cm"],
             twin=False,
         )
         is None
@@ -1170,7 +1170,7 @@ def _case_source_fixed_grid():
     assert np.all(
         srcgrid_geom.length_cm[srcgrid_anode_face:srcgrid_region_end_face] == 10.0
     )
-    # nx meshes only the far column, from the region end to the collector.
+    # nx meshes only the far column, from the region end to the end wall.
     assert srcgrid_geom.cells == srcgrid_off_geom.cells + srcgrid_n_fixed
     srcgrid_puff, srcgrid_puff_twin = puff_cell_indices(srcgrid_geom)
     assert srcgrid_puff == srcgrid_puff_twin
@@ -1217,19 +1217,19 @@ def _case_source_fixed_grid():
 
     # (c) Every misconfiguration raises loudly at construction; none falls back.
     srcgrid_twin_params = _srcgrid_params(60)
-    srcgrid_twin_params["collector_length_cm"] = 100.0
-    # A source region reaching PAST the collector block start, derived from the
-    # machine rather than hardcoded (the G1 collector is 7.8 cm, so a fixed
+    srcgrid_twin_params["end_wall_length_cm"] = 100.0
+    # A source region reaching PAST the end wall block start, derived from the
+    # machine rather than hardcoded (the G1 end wall is 7.8 cm, so a fixed
     # 1900 cm would now be comfortably inside the column) and rounded up to a
     # whole number of source cells so the integer-multiple check cannot fire
     # first and mask the one this case is about.
-    srcgrid_past_collector = float(
+    srcgrid_past_end_wall = float(
         _srcgrid_params(60)["cathode_anode_gap_cm"]
         + 10.0
         * np.ceil(
             (
                 resolved_params["Lm"]
-                - resolved_params["collector_length_cm"]
+                - resolved_params["end_wall_length_cm"]
                 - _srcgrid_params(60)["cathode_anode_gap_cm"]
             )
             / 10.0
@@ -1264,10 +1264,10 @@ def _case_source_fixed_grid():
         (
             {
                 **_srcgrid_params(60),
-                "source_region_length_cm": srcgrid_past_collector,
+                "source_region_length_cm": srcgrid_past_end_wall,
             },
             srcgrid_flags,
-            "strictly before the collector",
+            "strictly before the end wall",
         ),
         (
             {**_srcgrid_params(60), "source_region_dz_cm": 7.0},
@@ -1308,7 +1308,7 @@ def _case_source_fixed_grid():
     expansion_params.update(
         {
             "Lm": 2125.85,
-            "collector_length_cm": 150.0,
+            "end_wall_length_cm": 150.0,
             "end_expansion_cells": 10,
             "end_expansion_machine_radius_cm": 100.0,
             "end_expansion_plasma_radius_cm": 50.0,
@@ -1329,12 +1329,12 @@ def _case_source_fixed_grid():
     expansion_sim = LAPDSim1D(expansion_params, expansion_flags)
     expansion_geom = expansion_sim.get_initial_snapshot().geometry
     end_cells = np.flatnonzero(
-        np.isin(expansion_geom.cell_role, np.asarray(["end", "collector"]))
+        np.isin(expansion_geom.cell_role, np.asarray(["end", "end_wall"]))
     )
     assert end_cells.size == 10
     assert np.array_equal(end_cells, np.arange(expansion_geom.cells - 10, expansion_geom.cells))
     assert list(expansion_geom.cell_role[-10:-1]) == ["end"] * 9
-    assert expansion_geom.cell_role[-1] == "collector"
+    assert expansion_geom.cell_role[-1] == "end_wall"
     assert expansion_geom.cells == resolved_geom.cells + 9
     assert np.allclose(expansion_geom.length_cm[end_cells], 15.0)
     start_face = int(end_cells[0])
@@ -1417,15 +1417,15 @@ def _case_variable_area_well_balancedness(
     # Well-balancedness of the variable-area flux tube: for a uniform stationary
     # plasma the quasi-1D p*dA/dz geometric source cancels the area-weighted
     # pressure flux bit-for-bit -- but this property applies only across the
-    # INTERIOR expansion cells (role "end"). The terminating "collector" cell is
+    # INTERIOR expansion cells (role "end"). The terminating "end_wall" cell is
     # a plasma-OPEN boundary: it carries a Bohm outflow (ghost u_g = c_s) whose
     # flux is supplied by characteristic_boundary_rhs (a term not summed here),
     # so a uniform stationary state is deliberately NOT its equilibrium -- the
     # plasma flows out. (hyperbolic_energy_consistent and hyperbolic_wave_speed
     # have no effect on this state: at u=0 with no gradients the KEP convective
     # term and the Rusanov dissipation both vanish at every interior face, so
-    # only the collector ghost can be nonzero.) The legacy reflecting-wall
-    # alternative, under which the collector cancelled like the interior, was
+    # only the end wall ghost can be nonzero.) The legacy reflecting-wall
+    # alternative, under which the end wall cancelled like the interior, was
     # retired; see commit 1fc05c9.
     resolved_params, resolved_flags = _resolved_config()
     sim, snapshot = _base_sim()
@@ -1446,9 +1446,9 @@ def _case_variable_area_well_balancedness(
         state=uniform_expansion
     )
     interior_expansion_cells = np.flatnonzero(expansion_geom.cell_role == "end")
-    collector_cells = np.flatnonzero(expansion_geom.cell_role == "collector")
+    end_wall_cells = np.flatnonzero(expansion_geom.cell_role == "end_wall")
     assert interior_expansion_cells.size == 9
-    assert collector_cells.size == 1
+    assert end_wall_cells.size == 1
     expansion_momentum_residual = expansion_advective.M + expansion_geometric.M
     # Interior variable-area cells: exact cancellation (the load-bearing
     # well-balancedness of the KEP pressure flux against the flux-tube source).
@@ -1456,10 +1456,10 @@ def _case_variable_area_well_balancedness(
         expansion_momentum_residual[interior_expansion_cells],
         np.zeros(interior_expansion_cells.size),
     )
-    # Terminating collector cell: an open Bohm outflow, directed toward +z, so
+    # Terminating end wall cell: an open Bohm outflow, directed toward +z, so
     # a net POSITIVE momentum residual -- the load-bearing contrast against the
     # interior cells' exact cancellation asserted just above.
-    assert np.all(expansion_momentum_residual[collector_cells] > 0.0)
+    assert np.all(expansion_momentum_residual[end_wall_cells] > 0.0)
     assert np.allclose(expansion_geometric.n, 0.0)
     assert np.allclose(expansion_geometric.Ee, 0.0)
     assert np.allclose(expansion_geometric.Ei, 0.0)
@@ -1521,7 +1521,7 @@ def _case_variable_area_well_balancedness(
             ), (_twin_prefix, _twin_mg_row)
     assert list(twin_resolved_geom.cell_role[:2]) == ["plenum", "cathode"]
     assert list(twin_resolved_geom.cell_role[-2:]) == ["cathode", "plenum"]
-    assert "collector" not in set(twin_resolved_geom.cell_role)
+    assert "end_wall" not in set(twin_resolved_geom.cell_role)
     assert len(twin_resolved_geom.cathode_face_indices) == 2
     assert len(twin_resolved_geom.anode_face_indices) == 2
     twin_near, twin_far = twin_resolved_geom.cathode_face_indices
@@ -1547,7 +1547,7 @@ def _case_variable_area_well_balancedness(
     assert resolved_geom.cell_role[resolved_puff] == "puff"
     assert resolved_puff not in (0, resolved_geom.cells - 1)
     assert resolved_geom.cell_role[resolved_pump_left] == "plenum"
-    assert resolved_geom.cell_role[resolved_pump_right] == "collector"
+    assert resolved_geom.cell_role[resolved_pump_right] == "end_wall"
     assert is_plenum_cell(resolved_geom, resolved_pump_left)
     assert not is_plenum_cell(resolved_geom, resolved_pump_right)
 
@@ -1714,9 +1714,9 @@ def _case_variable_area_well_balancedness(
         pack_state(transparent_sim.anode_collection_rhs(state=flowing_state)), 0.0
     )
 
-    # M4a: the cathode surface and collector are absorbing Bohm faces.
+    # M4a: the cathode surface and end wall are absorbing Bohm faces.
     assert resolved_geom.plasma_absorbing[cathode_face]
-    assert resolved_geom.plasma_absorbing[-1]  # collector outer face
+    assert resolved_geom.plasma_absorbing[-1]  # end wall outer face
     assert not resolved_geom.plasma_absorbing[anode_face]
     # Absorbing faces are still closed: nothing passes through to the far side.
     assert not resolved_geom.plasma_open[cathode_face]
@@ -1731,9 +1731,9 @@ def _case_variable_area_well_balancedness(
     absorbed = resolved_sim.characteristic_boundary_rhs(state=flowing_state)
     assert absorbed.n[cathode_face] < 0.0  # cathode cell drains to the surface
     assert absorbed.nn[cathode_face] > 0.0
-    assert absorbed.n[-1] < 0.0  # collector drains too
+    assert absorbed.n[-1] < 0.0  # end wall drains too
     # Momentum leaves at c_s directed INTO each surface: negative (toward -z) at
-    # the cathode, positive (toward +z) at the collector. This is what makes the
+    # the cathode, positive (toward +z) at the end wall. This is what makes the
     # sonic condition drive flow toward the wall rather than just delete plasma.
     assert absorbed.M[cathode_face] > 0.0
     assert absorbed.M[-1] < 0.0
@@ -1760,7 +1760,7 @@ def _case_variable_area_well_balancedness(
     assert resolved_source_index == cathode_face
     assert resolved_geom.cell_role[resolved_source_index] == "cathode"
     assert resolved_end_index == resolved_geom.cells - 1
-    assert resolved_geom.cell_role[resolved_end_index] == "collector"
+    assert resolved_geom.cell_role[resolved_end_index] == "end_wall"
     twin_source_index, twin_end_index = cathode_sample_indices(twin_resolved_geom)
     assert twin_resolved_geom.cell_role[twin_source_index] == "cathode"
     assert twin_resolved_geom.cell_role[twin_end_index] == "cathode"
@@ -2173,7 +2173,7 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
     assert cathode_boundary.source.index == cathode_face
     assert cathode_boundary.source.role == "cathode"
     assert cathode_boundary.end.index == geom.cells - 1
-    assert cathode_boundary.end.role == "collector"
+    assert cathode_boundary.end.role == "end_wall"
     assert cathode_boundary.end_mode == params["end_mode"]
     assert cathode_boundary.twin_cathode == flags["TwinCathode"]
     for key in (
@@ -3600,7 +3600,7 @@ def _case_vessel_common_mode_node(
         _vcm_node = _vcm_node_mod.VesselNode1D(
             C_total_F=1.3e-6,
             R_leak_ohm=_vcm_R,
-            collector_cells=np.asarray([3], dtype=int),
+            end_wall_cells=np.asarray([3], dtype=int),
         )
         _vcm_V_cm = 0.0
         _vcm_Q = {"e": 0.0, "i": 0.0, "leak": 0.0, "node": 0.0, "abs": 0.0}
@@ -3637,7 +3637,7 @@ def _case_vessel_common_mode_node(
     # the wall raise V_cm, ions lower it, and a hard float never leaks.
     _vcm_hard = _vcm_node_mod.VesselNode1D(
         C_total_F=1.3e-6, R_leak_ohm=None,
-        collector_cells=np.asarray([3], dtype=int),
+        end_wall_cells=np.asarray([3], dtype=int),
     )
     assert _vcm_node_mod.vessel_node_advance(
         _vcm_hard, 0.0, 1.0, 0.0, 1.0e-6
@@ -3653,7 +3653,7 @@ def _case_vessel_common_mode_node(
     # buys that; an Euler step of this length would change sign).
     _vcm_soft = _vcm_node_mod.VesselNode1D(
         C_total_F=1.3e-6, R_leak_ohm=1.0e3,
-        collector_cells=np.asarray([3], dtype=int),
+        end_wall_cells=np.asarray([3], dtype=int),
     )
     _vcm_drained = _vcm_node_mod.vessel_node_advance(
         _vcm_soft, 100.0, 0.0, 0.0, 1.0
@@ -3692,7 +3692,7 @@ def _case_vessel_common_mode_node(
             assert _vcm_needle in str(_vcm_err), (_vcm_over, str(_vcm_err))
         else:
             raise AssertionError(f"regime_vessel_node accepted {_vcm_over!r}")
-    # A geometry with no plasma-terminating COLLECTOR has no ion wall channel
+    # A geometry with no plasma-terminating END WALL has no ion wall channel
     # and no terminal surface for the beam, so the node refuses it. Checked at
     # the resolver, because LAPDSim1D builds only the resolved geometry and
     # cannot present this case at all.
@@ -3704,9 +3704,9 @@ def _case_vessel_common_mode_node(
             )),
         )
     except ValueError as _vcm_err:
-        assert "COLLECTOR" in str(_vcm_err), _vcm_err
+        assert "END WALL" in str(_vcm_err), _vcm_err
     else:
-        raise AssertionError("regime_vessel_node accepted a collector-free grid")
+        raise AssertionError("regime_vessel_node accepted an end-wall-free grid")
 
     # (v) END TO END. Off, the node is ABSENT (not zero) and its diagnostics
     # do not exist at all; the vessel constants are unreadable from the off
@@ -7412,10 +7412,10 @@ def _case_ionization_birth_energy_model(csda_params, csda_sim, csda_terms):
     _ib_M = np.asarray(rhs.M, dtype=float)
     assert np.allclose(_ib_M[_ib_interior], 0.0, atol=1e-20)
     # Non-vacuous, and directed OUT of the domain at each terminating cell:
-    # -z at the cathode (plasma on its high-z side), +z at the collector.
+    # -z at the cathode (plasma on its high-z side), +z at the end wall.
     _ib_cath, _ib_coll = _ib_term
     assert str(geom.cell_role[_ib_cath]) == "cathode"
-    assert str(geom.cell_role[_ib_coll]) == "collector"
+    assert str(geom.cell_role[_ib_coll]) == "end_wall"
     assert _ib_M[_ib_cath] < 0.0
     assert _ib_M[_ib_coll] > 0.0
     pressure_rhs = sim.pressure_work_rhs()
@@ -8722,7 +8722,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             assert h5["n"].shape == run_result.n.shape
             assert h5["geometry/cell_role"].shape == (geom.cells,)
             assert h5["geometry/cell_role"][0].decode("utf-8") == "plenum"
-            assert h5["geometry/cell_role"][-1].decode("utf-8") == "collector"
+            assert h5["geometry/cell_role"][-1].decode("utf-8") == "end_wall"
             assert h5["rhs_terms/pressure_work/Ee"].shape == (4, geom.cells)
             assert h5["total_rhs/Ee"].shape == (4, geom.cells)
             assert (
@@ -9318,7 +9318,17 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     # so shipped on single-cathode runs as five NaN and seven 0.0 columns
     # nothing could fill. There is no carve-out now: no prefix, no rows.
     assert "end_phi_c" not in cathode_diag
-    assert not [k for k in cathode_diag if k.startswith("end_")]
+    # ONE row in this group legitimately begins with ``end_`` and is not a
+    # twin-cathode dataset: ``end_wall_surface_power_W``, the far face's
+    # surface-power ledger line, which every run carries. It is excluded BY
+    # NAME rather than by loosening the prefix, and asserted PRESENT, so the
+    # exemption is pinned to that one row instead of opening the test to any
+    # future ``end_*`` name.
+    assert "end_wall_surface_power_W" in cathode_diag
+    assert not [
+        k for k in cathode_diag
+        if k.startswith("end_") and k != "end_wall_surface_power_W"
+    ]
     assert np.all(
         np.isin(
             cathode_diag["source_regime"],
@@ -12872,7 +12882,7 @@ def _case_neutral_wall_momentum_partition():
 )
 def _case_end_recycle_routing(p2z_flags, p2z_params):
     # --- L6 END-RECYCLE ROUTING (end_recycle_to_annulus). The recycle stream
-    # rebirthed at COLLECTOR faces is deposited into that cell's annulus row
+    # rebirthed at END WALL faces is deposited into that cell's annulus row
     # instead of its column row, as thermal diffuse gas. The cathode face, the
     # plasma rows, and the flag-off trajectory are untouched. Both
     # plasma-terminating discretizations carry it, so both are exercised.
@@ -12898,7 +12908,7 @@ def _case_end_recycle_routing(p2z_flags, p2z_params):
             "expected end_recycle_to_annulus without neutral_two_zone to fail"
         )
     # ...and the destination must have VOLUME. A machine whose plasma fills
-    # the bore leaves every cell -- the routed collector included -- with
+    # the bore leaves every cell -- the routed end wall included -- with
     # V_ann = 0, and the routing would then destroy the stream it moves.
     try:
         LAPDSim1D(
@@ -12926,7 +12936,7 @@ def _case_end_recycle_routing(p2z_flags, p2z_params):
     er_Va = np.maximum(
         np.asarray(er_geo.neutral_volume_cm3, dtype=float) - er_Vp, 0.0
     )
-    er_coll = list(absorbing_live_cells_by_role(er_geo)["collector"])
+    er_coll = list(absorbing_live_cells_by_role(er_geo)["end_wall"])
     assert er_coll, er_row
     er_mask = np.zeros(er_geo.cells, dtype=bool)
     er_mask[er_coll] = True
@@ -12939,7 +12949,7 @@ def _case_end_recycle_routing(p2z_flags, p2z_params):
             getattr(er_t_off, er_field), getattr(er_t_on, er_field)
         ), (er_row, er_field)
     assert er_t_off.nn_a is None and er_t_on.nn_a is not None, er_row
-    # (a) PARTICLE CLOSURE: what the collector faces take out of the
+    # (a) PARTICLE CLOSURE: what the end wall faces take out of the
     # plasma is exactly what lands in those cells' annulus, and nothing
     # lands anywhere else.
     er_loss = float((-er_t_on.n * er_Vp)[er_mask].sum())
@@ -12948,7 +12958,7 @@ def _case_end_recycle_routing(p2z_flags, p2z_params):
     assert abs(er_dep - er_loss) <= 1e-12 * er_loss, (er_row, er_dep, er_loss)
     assert np.all(er_t_on.nn_a[~er_mask] == 0.0), er_row
     # The column row loses exactly the routed share and nothing else --
-    # exactly zero on a cell whose only absorbing face is a collector one,
+    # exactly zero on a cell whose only absorbing face is a end wall one,
     # and bit-identical (the cathode face) everywhere else.
     assert np.all(er_t_on.nn[er_mask] == 0.0), er_row
     assert np.array_equal(
@@ -12998,12 +13008,12 @@ def _case_end_recycle_routing(p2z_flags, p2z_params):
     er_en_geo = er_en_on.geometry
     er_en_mask = np.zeros(er_en_geo.cells, dtype=bool)
     er_en_mask[
-        list(absorbing_live_cells_by_role(er_en_geo)["collector"])
+        list(absorbing_live_cells_by_role(er_en_geo)["end_wall"])
     ] = True
     er_en_t_off = er_en_off.rhs_terms()[er_en_row]
     er_en_t_on = er_en_on.rhs_terms()[er_en_row]
     assert er_en_t_off.En is not None and er_en_t_on.En is not None
-    # OFF: the collector face books a positive wall-temperature credit.
+    # OFF: the end wall face books a positive wall-temperature credit.
     assert np.all(er_en_t_off.En[er_en_mask] > 0.0)
     # ON: the routed face books NO column energy at all, while the untouched
     # cathode face's credit is unchanged bit for bit.
@@ -13394,12 +13404,12 @@ def _case_end_recycle_kinetic_refusal(
     kd_flags, kd_params, p2z_flags, p2z_params
 ):
     # --- end_recycle_to_annulus under a KINETIC neutral model. Those arms
-    # source their collector wall-return channel from the boundary term's
+    # source their end wall wall-return channel from the boundary term's
     # COLUMN nn row alone, while this flag moves that face's whole stream
     # onto the annulus nn_a row and leaves the column row exactly zero, so
     # the routed atoms would reach the kinetic state as nothing at all.
     # Construction refuses the pair rather than advancing an arm whose
-    # collector recycle has been deleted.
+    # end wall recycle has been deleted.
     erk_flags_on = dict(kd_flags, end_recycle_to_annulus=True)
     for erk_params, erk_selector in (
         (kd_params, "kinetic_dvm"),
@@ -13449,7 +13459,7 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
     # fitted 15 cm radii, the plenum-choke obstruction and the built-in end
     # flare, none of which the measured machine uses). The R2a fold-in moved
     # the four machine scalars into the config defaults, so they are named here
-    # with the rest of the arm rather than inherited -- the tiny G1 collector
+    # with the rest of the arm rather than inherited -- the tiny G1 end wall
     # block would otherwise put a 7.8 cm cell under this block's fixed
     # dt = 1 ns steps.
     kd_obs_params = dict(kd_params)
@@ -13457,7 +13467,7 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
         {
             "Lm": 2000.0,
             "plenum_length_cm": 100.0,
-            "collector_length_cm": 100.0,
+            "end_wall_length_cm": 100.0,
             "gas_puff_z_cm": 60.0,
             "Rp": 15.0,
             "R_cath": 15.0,
@@ -13480,10 +13490,10 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
     assert kd_obs_roles[:3] == ["plenum", "obstruction", "cathode"]
     kd_obs_cath = 2
     kd_obs_coll = len(kd_obs_roles) - 1
-    assert kd_obs_roles[kd_obs_coll] == "collector"
+    assert kd_obs_roles[kd_obs_coll] == "end_wall"
     assert absorbing_live_cells_by_role(kd_obs_sim.geometry) == {
         "cathode": (kd_obs_cath,),
-        "collector": (kd_obs_coll,),
+        "end_wall": (kd_obs_coll,),
     }
     # The arm's deposition targets ARE the absorbing faces' live cells.
     assert kd_obs_sim._dvm.cath_cell == kd_obs_cath
@@ -14005,10 +14015,10 @@ def _case_gas_puff_axial_profile():
             total_in,
             rtol=1e-12,
         )
-        # nothing lands behind the cathode or in the gap/collector
+        # nothing lands behind the cathode or in the gap/end wall
         roles = np.asarray(puff_geom.cell_role)
         forbidden = np.isin(
-            roles, ("plenum", "obstruction", "cathode", "gap", "collector")
+            roles, ("plenum", "obstruction", "cathode", "gap", "end_wall")
         )
         assert np.all(gauss_rate[forbidden] == 0.0)
     # narrow profile centred on the puff cell concentrates there
@@ -22234,7 +22244,7 @@ def _case_prescribed_area_well_balancedness(
         "prescriptions of the same area with no composition rule",
         params_over={
             "Lm": 2125.85,
-            "collector_length_cm": 150.0,
+            "end_wall_length_cm": 150.0,
             "end_expansion_cells": 10,
             "end_expansion_machine_radius_cm": 100.0,
             "end_expansion_plasma_radius_cm": 50.0,
@@ -24555,7 +24565,7 @@ def _case_ts_retirement_successor_key(p2z_flags, p2z_params):
 def _case_dvm_particle_ledger_export(kd_flags, kd_params):
     # The engine computes a per-tick PARTICLE ledger and the solver kept only
     # the last one, so the far-end column neutrals could not be attributed to
-    # the collector face, the puff or the wall return from any saved run. The
+    # the end wall face, the puff or the wall return from any saved run. The
     # export books those counts at save cadence. Four statements: the moment
     # path writes no such group at all, a DVM run carries every declared row
     # with finite values, the rows are the ENGINE's own numbers rather than a
@@ -24574,14 +24584,14 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
         save_result_hdf5 as _save_result_hdf5_pl,
     )
 
-    # The K2d observation geometry: the shipped collector block is a 7.8 cm
+    # The K2d observation geometry: the shipped end wall block is a 7.8 cm
     # cell, which this case's fixed dt = 1 ns steps cannot afford.
     pl_params = dict(kd_params)
     pl_params.update(
         {
             "Lm": 2000.0,
             "plenum_length_cm": 100.0,
-            "collector_length_cm": 100.0,
+            "end_wall_length_cm": 100.0,
             "gas_puff_z_cm": 60.0,
             "Rp": 15.0,
             "R_cath": 15.0,
@@ -25679,7 +25689,7 @@ def _case_golden_fixture_packed_row_count():
 def _case_dvm_jet_rn_interval_refusals():
     # THE THREE SURFACE JETS REFUSE R_N = 0 THE SAME WAY. Each jet's launch
     # band is formed by dividing R_E by R_N, and the solver forms all three
-    # bands before the engine exists. The collector spec was already put
+    # bands before the engine exists. The end wall spec was already put
     # through the engine's validator at that point; the cathode and anode
     # specs were not, so their R_N = 0 reached the division and answered with
     # a ZeroDivisionError -- a Python arithmetic failure where the validators
@@ -25710,12 +25720,15 @@ def _case_dvm_jet_rn_interval_refusals():
             "0 < R_E <= R_N < 1",
         ),
         (
-            "collector",
+            # The surface's name AS THE MESSAGE SPELLS IT: the validators name
+            # the face in prose ("the DVM end wall jet's R_N ..."), so the
+            # label checked below is the prose form, not the key's.
+            "end wall",
             {
-                "neutral_kinetic_dvm_collector_jet": True,
-                "neutral_kinetic_dvm_collector_jet_R_N": 0.0,
-                "neutral_kinetic_dvm_collector_jet_R_E": 0.0,
-                "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple": 3.0,
+                "neutral_kinetic_dvm_end_wall_jet": True,
+                "neutral_kinetic_dvm_end_wall_jet_R_N": 0.0,
+                "neutral_kinetic_dvm_end_wall_jet_R_E": 0.0,
+                "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple": 3.0,
             },
             {},
             "0 < R_N <= 1",
@@ -26176,7 +26189,7 @@ def _case_tail_handoff_surface_continuity():
 @_case("end-face-full-debit-split", historical_stance=True)
 def _case_end_face_full_debit_split():
     # THE TWO END-FACE KEYS, each default off and each arming ITS OWN rows.
-    # `collector_sheath_full_debit` books the collector's sheath-climb row;
+    # `end_wall_sheath_full_debit` books the end wall's sheath-climb row;
     # `cathode_face_full_debit` books the emitting face's three. They are
     # independent: either, both or neither.
     _es_params, _es_flags = _base_config()
@@ -26190,7 +26203,7 @@ def _case_end_face_full_debit_split():
     # present-and-zero and is what keeps an unarmed saved ledger unchanged.
     _es_unnamed = LAPDSim1D(dict(_es_params), dict(_es_flags))
     _es_off_flags = dict(_es_flags)
-    _es_off_flags["collector_sheath_full_debit"] = False
+    _es_off_flags["end_wall_sheath_full_debit"] = False
     _es_off_flags["cathode_face_full_debit"] = False
     _es_off = LAPDSim1D(dict(_es_params), _es_off_flags)
     _es_unnamed_terms = _es_unnamed.rhs_terms()
@@ -26203,9 +26216,9 @@ def _case_end_face_full_debit_split():
     # combinations are checked against the same unarmed term set, so a row
     # leaking across the split shows up as a set difference rather than as a
     # number nobody looked at.
-    def _es_build(collector, cathode):
+    def _es_build(end_wall, cathode):
         _flags = dict(_es_flags)
-        _flags["collector_sheath_full_debit"] = collector
+        _flags["end_wall_sheath_full_debit"] = end_wall
         _flags["cathode_face_full_debit"] = cathode
         return LAPDSim1D(dict(_es_params), _flags)
 
@@ -26216,7 +26229,7 @@ def _case_end_face_full_debit_split():
     _es_cath_only_terms = _es_cath_only.rhs_terms()
     _es_on_terms = _es_both.rhs_terms()
     assert set(_es_coll_only_terms) == (
-        set(_es_off_terms) | set(END_SHEATH_COLLECTOR_ROWS)
+        set(_es_off_terms) | set(END_SHEATH_END_WALL_ROWS)
     ), sorted(set(_es_coll_only_terms) ^ set(_es_off_terms))
     assert set(_es_cath_only_terms) == (
         set(_es_off_terms) | set(END_SHEATH_CATHODE_ROWS)
@@ -26227,7 +26240,7 @@ def _case_end_face_full_debit_split():
     # ... and each one-key run's rows are BIT-IDENTICAL to the same rows on
     # the both-key run: the split changes which rows exist, never what any of
     # them books.
-    for _es_name in END_SHEATH_COLLECTOR_ROWS:
+    for _es_name in END_SHEATH_END_WALL_ROWS:
         assert (
             _es_coll_only_terms[_es_name].Ee.tobytes()
             == _es_on_terms[_es_name].Ee.tobytes()
@@ -26242,7 +26255,7 @@ def _case_end_face_full_debit_split():
     # faces they name.
     _es_geom = _es_both.geometry
     _es_roles = np.asarray(_es_geom.cell_role)
-    _es_coll = int(np.flatnonzero(_es_roles == "collector")[0])
+    _es_coll = int(np.flatnonzero(_es_roles == "end_wall")[0])
     _es_cath = int(np.flatnonzero(_es_roles == "cathode")[0])
     _es_rows = {}
     for _es_name in END_SHEATH_DEBIT_ROWS:
@@ -26255,7 +26268,7 @@ def _case_end_face_full_debit_split():
         assert np.all(np.isfinite(_es_row)), _es_name
         _es_rows[_es_name] = _es_row
     _es_cell = {
-        "collector_e_sheath_climb": _es_coll,
+        "end_wall_e_sheath_climb": _es_coll,
         "cathode_e_emitted_enthalpy": _es_cath,
         "cathode_e_emitted_fall": _es_cath,
         "cathode_e_collected_climb": _es_cath,
@@ -26264,19 +26277,19 @@ def _case_end_face_full_debit_split():
         _es_support = set(np.flatnonzero(_es_row).tolist())
         assert _es_support <= {_es_cell[_es_name]}, (_es_name, _es_support)
 
-    # (iv) SIGNS, which are the physics and are not free. The collector debit
+    # (iv) SIGNS, which are the physics and are not free. The end wall debit
     # comes OUT of the electron store; the emitted electrons' enthalpy and the
     # part of the fall the beam row does not carry go INTO it; the returning
     # electrons' barrier climb comes out. All four are nonzero on this stance
     # at its initial state -- a virtual cathode has formed there, so the fall
     # row is exercised rather than sitting at its zero branch.
-    assert _es_rows["collector_e_sheath_climb"][_es_coll] < 0.0
+    assert _es_rows["end_wall_e_sheath_climb"][_es_coll] < 0.0
     assert _es_rows["cathode_e_emitted_enthalpy"][_es_cath] > 0.0
     assert _es_rows["cathode_e_emitted_fall"][_es_cath] > 0.0
     assert _es_rows["cathode_e_collected_climb"][_es_cath] < 0.0
 
     # (v) THE CLOSED FORMS, against the solve and the boundary flux this very
-    # evaluation used. The collector face must debit the sheath-edge
+    # evaluation used. The end wall face must debit the sheath-edge
     # (2 + Lambda_eff) Te per collected electron once the new row is added to
     # the 2 Te that characteristic_boundary always books, with Lambda_eff read
     # off the SAME alpha the boundary sampled its flux at.
@@ -26299,7 +26312,7 @@ def _case_end_face_full_debit_split():
     _es_gamma = float(_es_on_terms["characteristic_boundary"].n[_es_coll])
     _es_booked = (
         float(_es_on_terms["characteristic_boundary"].Ee[_es_coll])
-        + _es_rows["collector_e_sheath_climb"][_es_coll]
+        + _es_rows["end_wall_e_sheath_climb"][_es_coll]
     )
     _es_closed = (
         (2.0 + _es_lambda_eff)
@@ -26341,9 +26354,9 @@ def _case_end_face_full_debit_split():
     # and each key names ONLY its own input. A non-bool reads like a value and
     # is refused. The cathode key without the circuit solve leaves its three
     # rows with no honest input, and it says so rather than booking zeros; the
-    # collector key does NOT require that solve, because its row rides the
+    # end wall key does NOT require that solve, because its row rides the
     # boundary operator's own flux, so the same configuration constructs.
-    for _es_key in ("collector_sheath_full_debit", "cathode_face_full_debit"):
+    for _es_key in ("end_wall_sheath_full_debit", "cathode_face_full_debit"):
         _es_bad_flags = dict(_es_flags)
         _es_bad_flags[_es_key] = 1
         try:
@@ -26366,7 +26379,7 @@ def _case_end_face_full_debit_split():
             "cathode_face_full_debit armed without the cathode circuit solve"
         )
     _es_nocirc_flags = dict(_es_flags)
-    _es_nocirc_flags["collector_sheath_full_debit"] = True
+    _es_nocirc_flags["end_wall_sheath_full_debit"] = True
     _es_nocirc_flags["cathode_coupling"] = False
     LAPDSim1D(dict(_es_params), _es_nocirc_flags)
 
@@ -26385,7 +26398,7 @@ def _case_end_face_full_debit_split():
                 _es_exc
             )
             assert "end_sheath_full_debit is RETIRED" in str(_es_exc), _es_exc
-            assert "collector_sheath_full_debit" in str(_es_exc), _es_exc
+            assert "end_wall_sheath_full_debit" in str(_es_exc), _es_exc
             assert "cathode_face_full_debit" in str(_es_exc), _es_exc
         else:
             raise AssertionError(
@@ -26396,7 +26409,7 @@ def _case_end_face_full_debit_split():
     _es_default_params, _es_default_flags = default_config()
     assert "end_sheath_full_debit" not in _es_default_flags
     assert "end_sheath_full_debit" not in _es_default_params
-    assert "collector_sheath_full_debit" in _es_default_flags
+    assert "end_wall_sheath_full_debit" in _es_default_flags
     assert "cathode_face_full_debit" in _es_default_flags
 
 
@@ -26476,18 +26489,18 @@ def _case_cathode_emitted_fall_beam_row_non_overlap(
 
 
 # --------------------------------------------------------------------
-# collector-lambda-eff-barrier-bracket
+# end-wall-lambda-eff-barrier-bracket
 # --------------------------------------------------------------------
-@_case("collector-lambda-eff-barrier-bracket", historical_stance=True)
-def _case_collector_lambda_eff_barrier_bracket():
+@_case("end-wall-lambda-eff-barrier-bracket", historical_stance=True)
+def _case_end_wall_lambda_eff_barrier_bracket():
     # LAMBDA_EFF IS A STATE-DEPENDENT BARRIER AND ITS RANGE IS [Lambda,
-    # Lambda + 1/2]. The collector row books -Lambda_eff Te Gamma_coll beside
+    # Lambda + 1/2]. The end wall row books -Lambda_eff Te Gamma_coll beside
     # the boundary term's unconditional 2 Te on the same face and the same
     # flux, so the run's own two rows read the barrier back exactly:
     #
-    #     Lambda_eff = 2 * collector_e_sheath_climb / characteristic_boundary
+    #     Lambda_eff = 2 * end_wall_e_sheath_climb / characteristic_boundary
     #
-    # at the collector cell. Lambda_eff = Lambda + ln(1/alpha_se), and
+    # at the end wall cell. Lambda_eff = Lambda + ln(1/alpha_se), and
     # alpha_se runs between exp(-1/2) (the presheath fits inside the sampling
     # cell: the cell is at the sheath edge and carries the whole Boltzmann
     # drop) and 1 (the presheath is longer than the cell: the cell sits inside
@@ -26501,7 +26514,7 @@ def _case_collector_lambda_eff_barrier_bracket():
     _le_params, _le_flags = _base_config()
     _le_flags = dict(_le_flags)
     _le_flags["cathode_coupling"] = True
-    _le_flags["collector_sheath_full_debit"] = True
+    _le_flags["end_wall_sheath_full_debit"] = True
     # This case reads a barrier off two RHS rows, not a neutral profile, and
     # ``run()`` performs no equilibration -- so the equilibration flag is
     # cleared rather than left on to warn that it did nothing.
@@ -26512,9 +26525,9 @@ def _case_collector_lambda_eff_barrier_bracket():
     _le_lambda = sheath_lift_lambda(_le_sim.mu)
     _le_geom = _le_sim.geometry
     _le_roles = np.asarray(_le_geom.cell_role)
-    _le_coll = int(np.flatnonzero(_le_roles == "collector")[0])
+    _le_coll = int(np.flatnonzero(_le_roles == "end_wall")[0])
     _le_climb = np.asarray(
-        _le_result.rhs_terms["collector_e_sheath_climb"]["Ee"], dtype=float
+        _le_result.rhs_terms["end_wall_e_sheath_climb"]["Ee"], dtype=float
     )[:, _le_coll]
     _le_char = np.asarray(
         _le_result.rhs_terms["characteristic_boundary"]["Ee"], dtype=float
@@ -26558,6 +26571,153 @@ def _case_collector_lambda_eff_barrier_bracket():
         ), (_le_i, _le_read[_le_i], _le_alpha)
 
 # ----------------------------------------------------------------------
+# end-wall-rename-retired-names
+# ----------------------------------------------------------------------
+@_case("end-wall-rename-retired-names")
+def _case_end_wall_rename_retired_names():
+    # THE END-WALL RENAME. The model's far face IS the LAPD chamber's end
+    # wall -- there is no distinct collector electrode -- so the cell role and
+    # every configuration key that carried the old ``collector`` name were
+    # renamed to ``end_wall``. Two halves are asserted here:
+    #
+    #   IN: a LIVE configuration naming a retired key, or the retired
+    #       ``end_mode`` VALUE, is REFUSED at construction with the
+    #       replacement named. A quietly accepted alias would be exactly the
+    #       silent/inert control the config boundary exists to forbid.
+    #   BACK: a SAVED artifact written before the rename still reads, because
+    #       ``load_result_hdf5`` maps the stored ``cell_role`` string and says
+    #       that it did.
+    from cablp.solvers._sim1d.core.config import (
+        LEGACY_CONFIG_KEY_ALIASES,
+        RETIRED_FLAG_KEYS,
+        RETIRED_PARAM_KEYS,
+        apply_legacy_config_key_aliases,
+        input_dict_template_1d,
+        input_flags_template_1d,
+    )
+    from cablp.solvers._sim1d.results.io import (
+        CELL_ROLE_SHIM_ATTR,
+        LEGACY_CELL_ROLE_ALIASES,
+        _apply_cell_role_aliases,
+    )
+
+    _ew_p, _ew_f = default_config()
+
+    # (a) EVERY retired param key refuses in input_dict, naming its successor.
+    _ew_retired_params = (
+        ("collector_length_cm", 7.8, "end_wall_length_cm"),
+        ("neutral_kinetic_dvm_collector_jet", True,
+         "neutral_kinetic_dvm_end_wall_jet"),
+        ("neutral_kinetic_dvm_collector_jet_R_N", 0.5,
+         "neutral_kinetic_dvm_end_wall_jet_R_N"),
+        ("neutral_kinetic_dvm_collector_jet_R_E", 0.6,
+         "neutral_kinetic_dvm_end_wall_jet_R_E"),
+        ("neutral_kinetic_dvm_collector_jet_T_launch_eV", 0.2,
+         "neutral_kinetic_dvm_end_wall_jet_T_launch_eV"),
+        ("neutral_kinetic_dvm_collector_jet_sheath_Te_multiple", 3.0,
+         "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple"),
+    )
+    for _ew_old, _ew_value, _ew_new in _ew_retired_params:
+        assert _ew_old not in input_dict_template_1d, _ew_old
+        assert _ew_old in RETIRED_PARAM_KEYS, _ew_old
+        assert _ew_new in input_dict_template_1d, _ew_new
+        try:
+            LAPDSim1D(dict(_ew_p, **{_ew_old: _ew_value}), _ew_f)
+        except ValueError as _ew_exc:
+            _ew_msg = str(_ew_exc)
+        else:
+            raise AssertionError(f"{_ew_old} was ACCEPTED in input_dict")
+        assert "unknown LAPDSim1D configuration keys" in _ew_msg, _ew_msg
+        assert f"{_ew_old} is RETIRED" in _ew_msg, _ew_msg
+        assert _ew_new in _ew_msg, _ew_msg
+
+    # (b) the retired FLAG key, same statement in the other namespace.
+    assert "collector_sheath_full_debit" not in input_flags_template_1d
+    assert "collector_sheath_full_debit" in RETIRED_FLAG_KEYS
+    assert "end_wall_sheath_full_debit" in input_flags_template_1d
+    try:
+        LAPDSim1D(_ew_p, dict(_ew_f, collector_sheath_full_debit=True))
+    except ValueError as _ew_fexc:
+        _ew_fmsg = str(_ew_fexc)
+    else:
+        raise AssertionError(
+            "collector_sheath_full_debit was ACCEPTED in input_flags"
+        )
+    assert "unknown LAPDSim1D configuration keys" in _ew_fmsg, _ew_fmsg
+    assert "collector_sheath_full_debit is RETIRED" in _ew_fmsg, _ew_fmsg
+    assert "end_wall_sheath_full_debit" in _ew_fmsg, _ew_fmsg
+
+    # (c) the retired end_mode VALUE. The key survives the rename; the value
+    # it names does not, and the refusal says what replaced it.
+    try:
+        LAPDSim1D(dict(_ew_p, end_mode="collector"), _ew_f)
+    except ValueError as _ew_vexc:
+        _ew_vmsg = str(_ew_vexc)
+    else:
+        raise AssertionError("end_mode='collector' was ACCEPTED")
+    assert "end_mode='collector' is not available" in _ew_vmsg, _ew_vmsg
+    assert "Accepted: 'end_wall'" in _ew_vmsg, _ew_vmsg
+    assert "RENAMED to 'end_wall'" in _ew_vmsg, _ew_vmsg
+    # NEGATIVE CONTROL on that clause: it is scoped to the retired value, so
+    # any other rejected end_mode gets the bare refusal.
+    try:
+        LAPDSim1D(dict(_ew_p, end_mode="mirrored_source"), _ew_f)
+    except ValueError as _ew_oexc:
+        assert "RENAMED" not in str(_ew_oexc), str(_ew_oexc)
+    else:
+        raise AssertionError("end_mode='mirrored_source' was ACCEPTED")
+
+    # (d) THE READ SHIM. A stored role array is mapped, and the load reports
+    # that it was; an array carrying none of the retired strings is returned
+    # untouched and reports False.
+    assert LEGACY_CELL_ROLE_ALIASES == {"collector": "end_wall"}
+    _ew_old_roles = np.asarray(
+        ["plenum", "cathode", "column", "collector"], dtype=object
+    )
+    _ew_mapped, _ew_fired = _apply_cell_role_aliases(_ew_old_roles)
+    assert _ew_fired is True
+    assert list(_ew_mapped) == ["plenum", "cathode", "column", "end_wall"]
+    # the input is not mutated -- a caller holding the stored array keeps it
+    assert list(_ew_old_roles) == [
+        "plenum", "cathode", "column", "collector"
+    ]
+    _ew_new_roles = np.asarray(
+        ["plenum", "cathode", "column", "end_wall"], dtype=object
+    )
+    _ew_kept, _ew_quiet = _apply_cell_role_aliases(_ew_new_roles)
+    assert _ew_quiet is False
+    assert _ew_kept is _ew_new_roles
+    assert CELL_ROLE_SHIM_ATTR == "cell_role_legacy_alias_applied"
+
+    # (e) THE SAVED-BLOCK KEY MAP, the read-side counterpart of (a)/(b). It
+    # is for STORED blocks only and is never consulted by resolve_config --
+    # which is what (a) and (b) just proved, since a mapped key would have
+    # been accepted there.
+    _ew_stored = {
+        "collector_length_cm": 7.8,
+        "collector_sheath_full_debit": True,
+        "end_mode": "collector",
+        "nx": 60,
+    }
+    _ew_current = apply_legacy_config_key_aliases(_ew_stored)
+    assert _ew_current == {
+        "end_wall_length_cm": 7.8,
+        "end_wall_sheath_full_debit": True,
+        "end_mode": "end_wall",
+        "nx": 60,
+    }, _ew_current
+    # presence-gated: a block naming none of them is an unchanged copy
+    _ew_plain = {"nx": 60, "end_mode": "end_wall"}
+    assert apply_legacy_config_key_aliases(_ew_plain) == _ew_plain
+    # and every retired name in the map is refused live, so the two tables
+    # cannot drift apart into an accepted alias
+    for _ew_old in LEGACY_CONFIG_KEY_ALIASES:
+        assert (
+            _ew_old in RETIRED_PARAM_KEYS or _ew_old in RETIRED_FLAG_KEYS
+        ), _ew_old
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -26566,7 +26726,7 @@ def _case_collector_lambda_eff_barrier_bracket():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 149, "historical_stance": 63}
+_CASE_CENSUS = {"total": 150, "historical_stance": 63}
 
 
 def _assert_case_census():

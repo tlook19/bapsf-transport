@@ -734,7 +734,7 @@ bookkeeping.
 | Fluid↔circuit Picard | `solver.py:_accept_step_with_picard`, `_picard_snapshot`, `_picard_restore` |
 | CSDA beam march; plateau edge | `cablp/cathode/beam_deposition.py:deposit_beam`, `plateau_edge_energy_eV` |
 | Velocity grid, moment projection | `physics/kinetic_neutrals.py:stretched_axis`, `stretched_positive_axis`, `VGrid.maxwellian` |
-| Launch spectra; extent guard | `physics/kinetic_dvm.py:_cathode_jet_launch_spectrum`, `_anode_jet_launch_spectrum`, `_collector_jet_launch_spectrum`, `_refuse_unreachable_launch_band` |
+| Launch spectra; extent guard | `physics/kinetic_dvm.py:_cathode_jet_launch_spectrum`, `_anode_jet_launch_spectrum`, `_end_wall_jet_launch_spectrum`, `_refuse_unreachable_launch_band` |
 | Energy-matched wall return | `physics/kinetic_dvm.py:_solve_wall_return_spectra`, `_secant_wall_return_speeds`, `_bisect_wall_return_speeds` |
 | Tick booking and ionization debit | `physics/kinetic_dvm.py:_book_transfer`, `_debit_booked_ionization` |
 | Transfer hold, scoping and debt ledger | `solver.py:_dvm_scope_step_transfer`, `_dvm_arm_transfer_hold`, `_dvm_transfer_hold_offer`, `_dvm_book_step_transfer` |

@@ -106,7 +106,7 @@ PRODUCTION_STANCE = "g1atrim"
 
 # THE RE-CUT. Four stance params are per-cell arrays sized to the stance's own
 # 280-cell mesh (1 plenum + 5 gap + 5 fixed source + 268 far column + 1
-# collector). They cannot travel to nx=60, and they are NOT resampled here:
+# end wall). They cannot travel to nx=60, and they are NOT resampled here:
 #
 #   * the two radius profiles are built offline by scripts/stance/g1_build_profiles.py
 #     from a measured field census, and the vessel profile is a STAIRCASE whose

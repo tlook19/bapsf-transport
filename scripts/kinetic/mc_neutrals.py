@@ -19,12 +19,12 @@ flows, hot-atom penetration depth -- carry an undisclosed O(1) uncertainty
 wherever the gas sits near fill density. Events: electron-impact ionization
 (absorb), resonant CX (resample velocity from the local ion Maxwellian +
 drift: the relay). Boundaries: diffuse 300 K re-emission at the radial wall
-and collector; the anode mesh
+and end wall; the anode mesh
 plane intercepts with probability 1 - T (T = 1 - eta) and re-emits on the
 incident side; the cathode disc re-emits either thermally (the solver's
 at-rest convention) or as the directed jet (--jet); end pumps are sticking
 probabilities s = S_pump / (A vbar / 4). Sources and their absolute rates
-come from the run's own ledger (puff cell, cathode/collector faces, anode
+come from the run's own ledger (puff cell, cathode/end wall faces, anode
 mesh), so tallies are absolute densities.
 
 Track-length estimators per z-cell, split column / annulus: nn and mean
@@ -76,6 +76,9 @@ import puff_orifice as orifice
 from cablp.atomic.adas import he_rates
 from cablp.constants import m_He_cgs
 from cablp.atomic.cross_sections import charge_ex_react, phelps_he_backscatter_cm2
+from cablp.solvers._sim1d.core.config import (
+    apply_legacy_config_key_aliases,
+)
 from cablp.solvers._sim1d.core.geometry import (
     absorbing_live_cells_by_role,
     build_geometry,
@@ -86,6 +89,7 @@ from cablp.solvers._sim1d.physics.kinetic_neutrals import (
 from cablp.solvers._sim1d.physics.neutrals import (
     gas_puff_rate_profile,
 )
+from cablp.solvers._sim1d.results.io import LEGACY_CELL_ROLE_ALIASES
 
 EV = 1.602176634e-12
 KB = 1.380649e-16
@@ -256,7 +260,7 @@ def assert_end_recycle_routed_live(ba, ba_ann, path, window_ms):
     ``ba_ann`` the annulus rate row it was built from (``None`` on a run whose
     boundary term carries no ``nn_a`` row, which returns immediately).
 
-    Under ``end_recycle_to_annulus`` the collector faces' recycle is booked
+    Under ``end_recycle_to_annulus`` the end wall faces' recycle is booked
     into the ANNULUS row, so a menu assembled from the column row alone loses
     the end recycle entirely -- and, unlike the all-zero case, it does so
     while the CATHODE row stays nonzero, which is precisely why
@@ -272,7 +276,7 @@ def assert_end_recycle_routed_live(ba, ba_ann, path, window_ms):
         f"{window_ms[0]}-{window_ms[1]} ms but the assembled recycle row is "
         f"zero on every routed cell, for {path}.\n"
         "  likely cause: the menu was read from rhs_terms/<boundary>/nn "
-        "alone. Under the end_recycle_to_annulus closure the collector faces "
+        "alone. Under the end_recycle_to_annulus closure the end wall faces "
         "rebirth their stream into the nn_a row on the annulus volume; a "
         "column-only read degrades the end recycle to nothing while leaving "
         "the cathode face intact. Refusing to run source-starved."
@@ -540,13 +544,23 @@ def load_background(path, window_ms, puff_orifice=None):
         m = (t >= window_ms[0]) & (t <= window_ms[1])
         # Read here rather than at the point of use: the config-derived puff
         # below needs them, and there is only ever one copy.
-        params = json.loads(f.attrs["params_json"])
+        # The stored blocks are addressed under CURRENT key names: an
+        # artifact written before the end-wall rename spells the far-end keys
+        # the old way, and build_geometry below reads the new ones.
+        params = apply_legacy_config_key_aliases(
+            json.loads(f.attrs["params_json"])
+        )
         raw_flags = f.attrs.get("flags_json")
-        flags = json.loads(raw_flags) if raw_flags is not None else {}
+        flags = apply_legacy_config_key_aliases(
+            json.loads(raw_flags) if raw_flags is not None else {}
+        )
         g = f["geometry"]
         roles = [
-            r.decode() if isinstance(r, bytes) else str(r)
-            for r in g["cell_role"][:]
+            LEGACY_CELL_ROLE_ALIASES.get(role, role)
+            for role in (
+                r.decode() if isinstance(r, bytes) else str(r)
+                for r in g["cell_role"][:]
+            )
         ]
         # Domain: cathode face (first non-plenum cell edge) to the far end.
         first = roles.index("cathode") if "cathode" in roles else 0
@@ -614,7 +628,7 @@ def load_background(path, window_ms, puff_orifice=None):
         # Volume-integrated boundary recycle. Both zones, each on its OWN
         # volume: under neutral_two_zone the boundary term's nn row lives on
         # the column volume Vp, and under the end_recycle_to_annulus closure
-        # the COLLECTOR faces' share is booked into nn_a on the annulus
+        # the END WALL faces' share is booked into nn_a on the annulus
         # (Vm - Vp) instead. A column-only read then drops the entire end
         # recycle -- the same defect the two-zone puff had, one term over --
         # and would leave the cathode row nonzero, so the existing
@@ -628,7 +642,7 @@ def load_background(path, window_ms, puff_orifice=None):
         # read IS the state-level truth for face recycle on such an artifact:
         # the boundary term rebirths exactly what it removed, so it reproduces
         # the plasma-side removal -n * Vp cell for cell (verified equal at the
-        # cathode cell, the collector cell and in total on that artifact).
+        # cathode cell, the end wall cell and in total on that artifact).
         ba_col = np.mean(f[f"rhs_terms/{row}/nn"][:][m], axis=0)
         ba_ann = None
         if f"rhs_terms/{row}/nn_a" in f:
@@ -809,7 +823,7 @@ def load_background(path, window_ms, puff_orifice=None):
                 # sets the neutral-row conversion to unity there, because nn
                 # IS the column density and the column volume IS Vp -- so the
                 # row integrates on Vp and the old * Vm read over-counted the
-                # channel by Vm/Vp (~29x at the collector cell on l2a7b). No
+                # channel by Vm/Vp (~29x at the end wall cell on l2a7b). No
                 # annulus row is written for these terms today; one is
                 # consumed where it exists so the read cannot go stale if that
                 # ever changes.
@@ -839,7 +853,7 @@ def load_background(path, window_ms, puff_orifice=None):
     # end cells are the only meaningful attribution.
     by_role = absorbing_live_cells_by_role(build_geometry(params, flags))
     if by_role:
-        missing = [r for r in ("cathode", "collector") if r not in by_role]
+        missing = [r for r in ("cathode", "end_wall") if r not in by_role]
         if missing:
             raise ValueError(
                 f"no plasma-absorbing live cell with role(s) {missing}; "
@@ -847,14 +861,14 @@ def load_background(path, window_ms, puff_orifice=None):
                 "cannot be attributed per face."
             )
         cath_cell = int(by_role["cathode"][0])
-        coll_cell = int(by_role["collector"][-1])
+        coll_cell = int(by_role["end_wall"][-1])
     else:
         cath_cell = roles.index("cathode")
         coll_cell = len(roles) - 1
     anode_cells = [i for i, r in enumerate(roles) if r == "gap"][-1:]  # gap side
     bg["sources"] = {
         "cathode_face": float(ba[cath_cell]),
-        "collector_face": float(ba[coll_cell]),
+        "end_wall_face": float(ba[coll_cell]),
         "anode_left": float(an[an.nonzero()[0][0]]) if an.any() else 0.0,
         "anode_right": float(an[an.nonzero()[0][-1]]) if an.any() else 0.0,
         # The puff is a DISTRIBUTION over cells, not a point: the solver's
@@ -1032,7 +1046,7 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
             pos[:, 1] = Rm[icell] * 0.999 * np.sin(th)
             pos[:, 2] = ze[icell] + rng.random(N) * (ze[icell + 1] - ze[icell])
             vel = wall_emit_inward(rng, pos[:, 0], pos[:, 1], T_WALL_K)
-        elif name in ("cathode_face", "collector_face"):
+        elif name in ("cathode_face", "end_wall_face"):
             at_start = name == "cathode_face"
             rad = (R_cath if at_start else Rp[-1]) * np.sqrt(rng.random(N))
             th = rng.random(N) * 2 * np.pi
@@ -1092,7 +1106,7 @@ def run_mc(bg, n_particles, jet, rng, r_n=(0.5, 0.5), r_e=(0.2, 0.25),
             raise ValueError(name)
         return pos, vel
 
-    names = [k for k in ("puff", "cathode_face", "collector_face",
+    names = [k for k in ("puff", "cathode_face", "end_wall_face",
                          "anode_left", "anode_right", "vol_rec")
              if src.get(k, 0.0) > 0]
     rates = np.array([src[k] for k in names])
@@ -2223,7 +2237,7 @@ def main(argv=None):
     # the NBL is the layer through which the incoming column plasma cools
     # and recombines, so only a fraction of the column flux reaches the
     # wall as ions (divertor-like physics on LAPD); the vol_rec /
-    # collector_face source-rate ratio above is the ledger's own
+    # end_wall_face source-rate ratio above is the ledger's own
     # detachment fraction.
     half = zc.size // 2
     for label, prof in (("MC", res["nn_mean"]), ("model", bg["nn_model"])):

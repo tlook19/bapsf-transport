@@ -132,7 +132,7 @@ def probe_shared(shared, t_end):
         "recombination": zeros.copy(),
         "anode": zeros.copy(),
         "cathode_face": 0.0,
-        "collector_face": 0.0,
+        "end_wall_face": 0.0,
     }
     sh["seed_col"] = np.ones(nz)
     sh["seed_ann"] = np.where(sh["V_ann"] > 0.0, 1.0, 0.0)

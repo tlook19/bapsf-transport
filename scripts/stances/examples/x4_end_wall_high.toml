@@ -1,4 +1,4 @@
-# THE COLLECTOR FAST SHARE, HIGH ARM: the reference configuration with half of
+# THE END WALL FAST SHARE, HIGH ARM: the reference configuration with half of
 # the far-end return re-born fast instead of thermal.
 #
 # A DERIVED configuration. It names its base and states what it moves, and
@@ -8,14 +8,14 @@
 # inherited, so this file cannot drift from the reference and a reader can see
 # the whole difference between the two arms at a glance.
 #
-# WHAT IT IS FOR. The reference's collector rebirth is 100 % THERMAL: the
+# WHAT IT IS FOR. The reference's end wall rebirth is 100 % THERMAL: the
 # plasma flux the characteristic boundary removes at the far end comes back
 # into the end cell as a cosine half-flux at the 300 K wall temperature, so
-# every ion that reaches the collector is handed back as a room-temperature
+# every ion that reaches the end wall is handed back as a room-temperature
 # atom no matter what it arrived with. This arm asks what changes when a share
-# of that return leaves the plate FAST instead, on the same footing the
+# of that return leaves the end wall FAST instead, on the same footing the
 # cathode and anode jets already stand on. It is the high arm of a two-arm
-# bracket; its partner is x4_collector_low.toml, which differs from it in the
+# bracket; its partner is x4_end_wall_low.toml, which differs from it in the
 # two shares and in nothing else.
 #
 # WHAT THE THREE NUMBERS MEAN. R_N is the PARTICLE share that leaves fast and
@@ -25,15 +25,15 @@
 # legal statement here and means each launched atom leaves with more than the
 # mean arrival energy per collected ion. The arrival energy itself is
 # PRESCRIBED -- sheath_Te_multiple times the end cell's Te, plus its Ti --
-# because this model carries no collector sheath and no collector circuit, so
+# because this model carries no end wall sheath and no end wall circuit, so
 # there is no potential to solve and the multiple is the whole statement about
 # one. It is a floating-sheath CONVENTION this file states, not a measurement.
 #
 # HOW TO RUN IT:
 #
 #     python scripts/run/run_sim1d.py \
-#         --config scripts/stances/examples/x4_collector_high.toml \
-#         --output x4_collector_high.h5
+#         --config scripts/stances/examples/x4_end_wall_high.toml \
+#         --output x4_end_wall_high.h5
 #
 # The saved trajectory records the lineage -- this file's name, "g1atrim" as
 # its base, both files' sha256, the delta keys below, and the resolved
@@ -48,17 +48,17 @@ base = "g1atrim"
 # WHY THESE STAND FLAT AND NOT IN A [models.*] BLOCK. None of the four keys is
 # a member of a declared family: the reference's [models.neutral_closure] block
 # claims the fluid-wind machinery the DVM supersedes, and these belong to the
-# DVM's own collector channel, which no family selects for or against.
+# DVM's own end wall channel, which no family selects for or against.
 #
 # T_launch_eV is NOT set, so the launch smear stays tied to the velocity grid
 # -- the axial bin containing the launch speed, which is the narrowest spectrum
 # the grid resolves there and the value the channel is specified at.
 [input_dict]
 # The arm. Off in the reference, where the whole far-end return is thermal.
-neutral_kinetic_dvm_collector_jet = true
+neutral_kinetic_dvm_end_wall_jet = true
 # Half the returning particles leave fast, carrying three fifths of the
 # arrival energy between them.
-neutral_kinetic_dvm_collector_jet_R_N = 0.5
-neutral_kinetic_dvm_collector_jet_R_E = 0.6
+neutral_kinetic_dvm_end_wall_jet_R_N = 0.5
+neutral_kinetic_dvm_end_wall_jet_R_E = 0.6
 # The prescribed floating-sheath convention: an ion arrives with 3 Te + Ti.
-neutral_kinetic_dvm_collector_jet_sheath_Te_multiple = 3.0
+neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple = 3.0

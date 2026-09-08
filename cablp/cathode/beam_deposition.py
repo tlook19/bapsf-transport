@@ -416,7 +416,7 @@ damping rate at the beam-resonant phase velocity
 (:func:`landau_branching_fraction`, which carries the formula and its
 validity caveat). A fraction ``f_Landau`` of each cell's extracted power is
 withheld and walked exactly as ``"tail_walk"`` walks all of it -- same birth
-energy, same 50/50 launch, same Coulomb machinery, same cathode and collector
+energy, same 50/50 launch, same Coulomb machinery, same cathode and end wall
 conventions, same tail end ledger -- and the remaining ``1 - f_Landau`` is
 banked as local bulk heat, exactly as ``"local"`` banks all of it. The two
 existing values are therefore the ``f_Landau ≡ 1`` and ``f_Landau ≡ 0``

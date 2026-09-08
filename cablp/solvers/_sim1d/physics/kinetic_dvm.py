@@ -78,7 +78,7 @@ Maxwellian bin for bin) and only it makes the returning population
 TRAVEL: a volume birth deposits its whole mass inside one cell for a
 whole tick, which at a plasma-terminating surface re-ionizes on the spot
 and re-ignites the cell it was supposed to be draining. That applies to
-the end walls and, since K2d, to the cathode/collector recycle channels,
+the end walls and, since K2d, to the cathode/end wall recycle channels,
 whose faces are interior whenever something sits behind the surface.
 
 INTERIOR CLOSED FACES are the solid obstructions standing inside the
@@ -227,15 +227,15 @@ CATHODE_JET_MOMENT_REL_TOL = 1.0e-10
 # book's ``backscatter`` row.
 ANODE_JET_MOMENT_REL_TOL = 1.0e-10
 
-# The same tolerance, and very nearly the same statement, for the COLLECTOR
+# The same tolerance, and very nearly the same statement, for the END WALL
 # JET. What differs is which book the placed spectrum is cross-checked
-# against: the collector plate has no energy book in this model, so the
+# against: the end wall has no energy book in this model, so the
 # spectrum's discrete moments are checked against the PRESCRIBED arrival
 # energy the configuration stated instead of against a surface debit. A
 # projection that misses them would hand the gas an energy other than the one
 # the configuration asked for, which is the same failure with a different
 # counterparty.
-COLLECTOR_JET_MOMENT_REL_TOL = 1.0e-10
+END_WALL_JET_MOMENT_REL_TOL = 1.0e-10
 
 # Ion-temperature and drift ceilings the THERMAL/SONIC velocity-grid sizing is
 # built from: four ion thermal speeds at the temperature cap plus 1.5 of the
@@ -355,8 +355,8 @@ LEDGER_BIRTH_CHANNELS = (
     "recombination",
     "cathode_face",
     "cathode_jet",
-    "collector_face",
-    "collector_jet",
+    "end_wall_face",
+    "end_wall_jet",
     "anode",
     "anode_jet",
 )
@@ -368,20 +368,20 @@ LEDGER_EXTERNAL_BIRTHS = (
     "recombination",
     "cathode_face",
     "cathode_jet",
-    "collector_face",
-    "collector_jet",
+    "end_wall_face",
+    "end_wall_jet",
     "anode",
     "anode_jet",
 )
 # External births the ENGINE splits out of another channel rather than
 # receiving as a ledger entry of its own. ``cathode_jet`` is the ``R_N``
 # energetic-backscatter share of ``cathode_face``, ``anode_jet`` is the same
-# share of ``anode``, and ``collector_jet`` is the energetic fast share of
-# ``collector_face``: the partner counts each stream ONCE, under the parent
+# share of ``anode``, and ``end_wall_jet`` is the energetic fast share of
+# ``end_wall_face``: the partner counts each stream ONCE, under the parent
 # channel, and the split happens here. A caller naming one of these in
 # ``sources``/``source_counts`` would be handing particles nothing reads, so
 # :meth:`TransientDVM._check_source_channels` refuses it.
-LEDGER_ENGINE_SPLIT_BIRTHS = ("cathode_jet", "anode_jet", "collector_jet")
+LEDGER_ENGINE_SPLIT_BIRTHS = ("cathode_jet", "anode_jet", "end_wall_jet")
 # PRESENCE-GATED momentum diagnostics [g cm/s per tick], emitted only when the
 # anode jet is armed. They are not a momentum ledger and nothing closes over
 # them: they are two named readings of the plan's "launch momentum booked
@@ -528,14 +528,14 @@ LEDGER_PARTICLE_ROW_DOC = {
         "atoms",
         "the energetic backscatter share split out of the cathode face",
     ),
-    "birth_collector_face": (
+    "birth_end_wall_face": (
         "atoms",
-        "thermal recycle at the collector face, less the birth_collector_jet "
+        "thermal recycle at the end wall face, less the birth_end_wall_jet "
         "share split out of it",
     ),
-    "birth_collector_jet": (
+    "birth_end_wall_jet": (
         "atoms",
-        "the energetic fast share split out of the collector face",
+        "the energetic fast share split out of the end wall face",
     ),
     "birth_anode": (
         "atoms",
@@ -838,16 +838,16 @@ class TransientDVM:
     launched, and the axial momentum the mesh INTERCEPTED and kept (the wires
     re-emit at rest, so all of it stays on the structure).
 
-    ``collector_jet`` is the COLLECTOR-SIDE ENERGETIC RETURN, ``None``
-    (absent) by default. Armed, it splits the counted ``collector_face``
+    ``end_wall_jet`` is the END WALL-SIDE ENERGETIC RETURN, ``None``
+    (absent) by default. Armed, it splits the counted ``end_wall_face``
     channel -- the ions the far-end characteristic boundary removes -- into an
     ``R_N`` fast share and the thermal remainder. The fast share is a VOLUME
     birth in the cell the return was counted into, directed into ``-z`` (the
     direction the thermal return is already injected in, so the plate has one
     orientation and not two), each atom carrying ``R_E/R_N`` of the arrival
-    energy handed to :meth:`update` as ``collector_jet_incident_erg``. Two
-    things differ from the two surfaces above, both because THE COLLECTOR
-    PLATE IS NOT A SOLVED SURFACE in this model:
+    energy handed to :meth:`update` as ``end_wall_jet_incident_erg``. Two
+    things differ from the two surfaces above, both because THE END WALL
+    IS NOT A SOLVED SURFACE in this model:
 
     * ``R_E`` is not a reflection coefficient and is not bounded by ``R_N``.
       The spec accepts ``0 < R_N <= 1`` and ``0 < R_E <= 1`` independently, so
@@ -855,7 +855,7 @@ class TransientDVM:
       than the mean arrival energy per collected ion;
     * nothing is DEBITED. The cathode jet's energy comes off the cathode
       surface's own power balance and the anode jet's off the anode energy
-      book, because both surfaces have one; the collector has neither a sheath
+      book, because both surfaces have one; the end wall has neither a sheath
       solve nor an energy book here, so the arrival energy is prescribed by
       the caller and the launched energy is booked against no counterparty --
       the same convention under which the thermal return's own
@@ -863,7 +863,7 @@ class TransientDVM:
 
     A cell whose committed arrival energy is exactly ZERO launches nothing and
     is born wholly thermal, per cell, exactly as the anode's does. See
-    :meth:`_split_collector_recycle`.
+    :meth:`_split_end_wall_recycle`.
 
     ``baffle_faces`` / ``baffle_clear_radius_cm`` are the THIN ANNULAR
     BAFFLES, empty (absent) by default. Each is a zero-thickness annular disc
@@ -898,7 +898,7 @@ class TransientDVM:
         annulus_flights="rates",
         cathode_jet=None,
         anode_jet=None,
-        collector_jet=None,
+        end_wall_jet=None,
         transparency=1.0,
         mesh_face=-999,
         baffle_faces=(),
@@ -911,7 +911,7 @@ class TransientDVM:
         u_cap_cm_s=GRID_U_CAP_CM_S,
         cathode_launch_band_eV=None,
         anode_launch_band_eV=None,
-        collector_launch_band_eV=None,
+        end_wall_launch_band_eV=None,
         jet_launch_width=None,
         grid=None,
     ):
@@ -937,10 +937,10 @@ class TransientDVM:
             )
         self.cathode_jet = _validated_cathode_jet(cathode_jet)
         self.anode_jet = _validated_anode_jet(anode_jet)
-        self.collector_jet = _validated_collector_jet(collector_jet)
+        self.end_wall_jet = _validated_end_wall_jet(end_wall_jet)
         self.jet_launch_width = _validated_jet_launch_width(
             jet_launch_width,
-            (self.cathode_jet, self.anode_jet, self.collector_jet),
+            (self.cathode_jet, self.anode_jet, self.end_wall_jet),
         )
         # How many launch spectra this tick projected, and how many of those
         # took the GRID-TIED floor because the energy-tied width was narrower
@@ -995,7 +995,7 @@ class TransientDVM:
         # free-molecular choice. Both ends are open (the pumped faces).
         self.face_c = _throat_areas(self.A_col)
         self.face_a = _throat_areas(self.A_ann)
-        # Where a SCALAR cathode/collector wall return is deposited. A typed
+        # Where a SCALAR cathode/end-wall wall return is deposited. A typed
         # geometry resolves it by role, because the live cell against the
         # cathode surface is not the first cell whenever something sits behind
         # the cathode (a plenum always does; an obstruction adds another). The
@@ -1015,8 +1015,8 @@ class TransientDVM:
                 self.cath_cells = tuple(
                     int(cell) for cell in by_role["cathode"]
                 )
-            if by_role.get("collector"):
-                self.coll_cell = int(by_role["collector"][0])
+            if by_role.get("end_wall"):
+                self.coll_cell = int(by_role["end_wall"][0])
         self._configure_closed_faces(geometry)
         Rp = np.asarray(geometry.Rp_cm, dtype=float)
         Rm = np.asarray(geometry.Rm_cm, dtype=float)
@@ -1255,7 +1255,7 @@ class TransientDVM:
         )
         self._refuse_unreachable_launch_band("anode", anode_launch_band_eV)
         self._refuse_unreachable_launch_band(
-            "collector", collector_launch_band_eV
+            "end_wall", end_wall_launch_band_eV
         )
 
     # ------------------------------------------- launch-band reachability
@@ -1302,14 +1302,14 @@ class TransientDVM:
                 lambda e, cell: self._anode_jet_launch_spectrum(e, cell, 1.0)
             )
         else:
-            builder = self._collector_jet_launch_spectrum
+            builder = self._end_wall_jet_launch_spectrum
         # The configured quantity that sets the TOP of this surface's band,
         # named so the refusal points at the lever the reader actually has:
         # the two solved surfaces borrow the cathode's sheath cap, while the
-        # collector's arrival energy is prescribed outright.
+        # end wall's arrival energy is prescribed outright.
         energy_lever = (
-            "a smaller neutral_kinetic_dvm_collector_jet_sheath_Te_multiple"
-            if surface == "collector"
+            "a smaller neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple"
+            if surface == "end_wall"
             else "a smaller cathode_phi_c_cap_V"
         )
         n = int(LAUNCH_BAND_CHECK_SAMPLES)
@@ -2223,8 +2223,8 @@ class TransientDVM:
             )
         return spec
 
-    def _collector_jet_launch_temperature_eV(self, v_back):
-        """Return the COLLECTOR jet's launch smear [eV] at a speed [cm/s].
+    def _end_wall_jet_launch_temperature_eV(self, v_back):
+        """Return the END WALL jet's launch smear [eV] at a speed [cm/s].
 
         The configured ``T_launch_eV`` when one was named; otherwise the
         shared ENERGY-TIED width of
@@ -2235,15 +2235,15 @@ class TransientDVM:
         (:func:`_validated_jet_launch_width`), so the order here decides
         nothing.
         """
-        named = self.collector_jet["T_launch_eV"]
+        named = self.end_wall_jet["T_launch_eV"]
         if named is not None:
             return float(named)
         if self.jet_launch_width is not None:
             return self._smeared_launch_temperature_eV(v_back)
         return self._grid_tied_launch_temperature_eV(v_back)
 
-    def _collector_jet_launch_spectrum(self, e_launch, cell):
-        """Return the COLLECTOR fast-share spectrum at ``e_launch`` erg/atom.
+    def _end_wall_jet_launch_spectrum(self, e_launch, cell):
+        """Return the END WALL fast-share spectrum at ``e_launch`` erg/atom.
 
         The anode jet's construction at a fixed ``-z`` direction -- the plate
         stands at the downstream end of the column and its thermal return is
@@ -2257,15 +2257,15 @@ class TransientDVM:
         THIS IS ITS OWN METHOD RATHER THAN A CALL INTO
         :meth:`_anode_jet_launch_spectrum` WITH ``direction = -1``, for two
         reasons that are not stylistic. It reads a different spec -- the
-        collector's own ``T_launch_eV`` -- and the anode method is the
+        end wall's own ``T_launch_eV`` -- and the anode method is the
         DEFECT-INJECTION POINT the anode channel's negative controls override
-        (``scripts/verify/verify_sim1d_k2_dvm.py``), so routing the collector
+        (``scripts/verify/verify_sim1d_k2_dvm.py``), so routing the end wall
         through it would let an anode-side harness defect act silently on the
-        collector too and quietly weaken both controls.
+        end wall too and quietly weaken both controls.
 
         The one substantive difference from the two surfaces above is what the
         moment check is a check AGAINST. There the placed energy is
-        cross-booked against a surface debit; here the collector has no energy
+        cross-booked against a surface debit; here the end wall has no energy
         book, so the target is the PRESCRIBED arrival energy the configuration
         stated. A miss would hand the gas an energy other than the one asked
         for, which is the same failure with a different counterparty.
@@ -2273,12 +2273,12 @@ class TransientDVM:
         e_launch = float(e_launch)
         if not np.isfinite(e_launch) or e_launch <= 0.0:
             raise ValueError(
-                "the DVM collector jet needs a positive finite launch energy "
+                "the DVM end wall jet needs a positive finite launch energy "
                 f"per atom at cell {cell} (got {e_launch!r} erg). A cell that "
                 "collects ions at ZERO arrival energy is not this case and "
                 "never reaches here: it launches nothing and its whole "
                 "counted stream is born thermal "
-                "(:meth:`_split_collector_recycle`). What is left for this "
+                "(:meth:`_split_end_wall_recycle`). What is left for this "
                 "guard is the arithmetically impossible one -- a POSITIVE "
                 "committed arrival energy whose per-atom launch energy came "
                 "out non-finite or non-positive anyway, which means the "
@@ -2286,24 +2286,24 @@ class TransientDVM:
                 "rather than that the ions arrived cold"
             )
         v_back = np.sqrt(2.0 * e_launch / M_HE)
-        T_launch = self._collector_jet_launch_temperature_eV(v_back)
+        T_launch = self._end_wall_jet_launch_temperature_eV(v_back)
         if not np.isfinite(T_launch) or T_launch <= 0.0:
             raise ValueError(
-                "the DVM collector jet's launch smear must be a positive "
+                "the DVM end wall jet's launch smear must be a positive "
                 f"temperature (got {T_launch!r} eV at cell {cell})"
             )
         s2 = T_launch * EV / M_HE
         u2 = v_back * v_back - 3.0 * s2
         if u2 <= 0.0:
             raise ValueError(
-                "the DVM collector jet cannot represent a launch energy below "
+                "the DVM end wall jet cannot represent a launch energy below "
                 "its own smear: cell "
                 f"{cell} asks for {e_launch / EV:.6g} eV per atom while the "
                 f"launch spectrum's thermal content alone is "
                 f"{1.5 * T_launch:.6g} eV (T_launch = {T_launch:.6g} eV). "
-                "Accepted: a smaller neutral_kinetic_dvm_collector_jet_"
+                "Accepted: a smaller neutral_kinetic_dvm_end_wall_jet_"
                 "T_launch_eV, or a larger "
-                "neutral_kinetic_dvm_collector_jet_sheath_Te_multiple"
+                "neutral_kinetic_dvm_end_wall_jet_sheath_Te_multiple"
             )
         u = -np.sqrt(u2)
         spec = self.g.maxwellian(T_launch, u, exact_moments=True)
@@ -2314,17 +2314,17 @@ class TransientDVM:
         u_rel = abs(got_u - u) / max(abs(u), np.sqrt(s2))
         if (
             not np.isfinite(total)
-            or abs(total - 1.0) > COLLECTOR_JET_MOMENT_REL_TOL
-            or e_rel > COLLECTOR_JET_MOMENT_REL_TOL
-            or u_rel > COLLECTOR_JET_MOMENT_REL_TOL
+            or abs(total - 1.0) > END_WALL_JET_MOMENT_REL_TOL
+            or e_rel > END_WALL_JET_MOMENT_REL_TOL
+            or u_rel > END_WALL_JET_MOMENT_REL_TOL
         ):
             raise ValueError(
-                "the DVM collector jet's launch spectrum did not reach its "
+                "the DVM end wall jet's launch spectrum did not reach its "
                 f"moments at cell {cell}: density {total - 1.0:+.3e} from 1, "
                 f"mean energy {e_rel:.3e} relative from "
                 f"{e_launch / EV:.6g} eV, drift {u_rel:.3e} relative from "
                 f"{u:.6g} cm/s (tolerance "
-                f"{COLLECTOR_JET_MOMENT_REL_TOL:.1e}, T_launch "
+                f"{END_WALL_JET_MOMENT_REL_TOL:.1e}, T_launch "
                 f"{T_launch:.6g} eV). The moment compensation gave up -- a "
                 "singular two-basis solve, or a spectrum too fast for this "
                 "velocity grid -- and the analytic bin masses it left "
@@ -2332,8 +2332,8 @@ class TransientDVM:
                 "the configuration prescribed. Accepted: a LARGER "
                 "velocity-grid extent (neutral_kinetic_dvm_vmax_cm_s; unset "
                 "it to have the extent sized to the launch band), a smaller "
-                "neutral_kinetic_dvm_collector_jet_R_E / larger _R_N, a "
-                "smaller neutral_kinetic_dvm_collector_jet_sheath_Te_"
+                "neutral_kinetic_dvm_end_wall_jet_R_E / larger _R_N, a "
+                "smaller neutral_kinetic_dvm_end_wall_jet_sheath_Te_"
                 "multiple, or naming neutral_kinetic_dvm_jet_launch_width. "
                 "What a finer neutral_kinetic_dvm_nvz does depends on that "
                 "width: with it unset the smear IS the local bin width, so "
@@ -2780,7 +2780,7 @@ class TransientDVM:
         cathode_jet_incident_erg=None,
         cathode_jet_counts=None,
         anode_jet_incident_erg=None,
-        collector_jet_incident_erg=None,
+        end_wall_jet_incident_erg=None,
         T_s_K=None,
     ):
         """Advance ``(f_c, f_a)`` by one neutral-clock tick of ``dt`` seconds.
@@ -2803,7 +2803,7 @@ class TransientDVM:
         ``sources`` holds the
         external ledger in atoms/s: ``puff`` (annulus cells),
         ``recombination`` (column cells), ``cathode_face`` /
-        ``collector_face`` (column cells, or a scalar attributed to the
+        ``end_wall_face`` (column cells, or a scalar attributed to the
         role-resolved ``cath_cell`` / ``coll_cell``), ``anode`` (column
         cells).
 
@@ -2843,11 +2843,11 @@ class TransientDVM:
         and is required exactly when the engine was built with an
         ``anode_jet`` spec and refused otherwise.
 
-        ``collector_jet_incident_erg`` is that same quantity for the
-        ``collector_face`` channel -- ``sum over the tick of
+        ``end_wall_jet_incident_erg`` is that same quantity for the
+        ``end_wall_face`` channel -- ``sum over the tick of
         N (mult * Te + Ti)`` per column cell [erg] at the caller's PRESCRIBED
-        sheath multiple, since this model solves no collector sheath -- and is
-        required exactly when the engine was built with a ``collector_jet``
+        sheath multiple, since this model solves no end wall sheath -- and is
+        required exactly when the engine was built with a ``end_wall_jet``
         spec and refused otherwise.
 
         ``T_s_K`` is the live cathode-surface temperature used for
@@ -2859,7 +2859,7 @@ class TransientDVM:
 
         The two recycle channels enter as directed INFLOWS at their own
         faces -- a ``+z`` half-flux spectrum at the cathode's upstream face,
-        a ``-z`` one at the collector's downstream face -- so they are
+        a ``-z`` one at the end wall's downstream face -- so they are
         transported and attacked by the loss channels within this same
         update. Every other external channel is a volume birth in substep B.
 
@@ -2937,7 +2937,7 @@ class TransientDVM:
         rec = channel("recombination")
         anode = channel("anode")
         cath = channel("cathode_face")
-        coll = channel("collector_face")
+        coll = channel("end_wall_face")
         # The cathode-side energetic recycle splits the counted recycle
         # stream: ``R_N`` backscatters (a volume birth in substep B, below)
         # and the remainder keeps the thermal face inflow. Absent the jet
@@ -2953,13 +2953,13 @@ class TransientDVM:
         anode_thermal, anode_jet, anode_jet_energy = (
             self._split_anode_recycle(anode, anode_jet_incident_erg)
         )
-        # The collector-side energetic return splits the counted far-end
+        # The end-wall-side energetic return splits the counted far-end
         # return the same way: ``R_N`` leaves fast as a directed volume birth
         # into ``-z`` (substep B, below) and the remainder keeps the thermal
         # face inflow. Absent the jet spec nothing here runs and
         # ``coll_thermal`` IS the array the channel handed over.
         coll_thermal, coll_jet, coll_jet_energy = (
-            self._split_collector_recycle(coll, collector_jet_incident_erg)
+            self._split_end_wall_recycle(coll, end_wall_jet_incident_erg)
         )
         inject_c = {}
         spec_cath = g.half_flux_spectrum(T_s_K, +1)
@@ -3258,24 +3258,24 @@ class TransientDVM:
                 f_c[cell] += count * inv_vc[cell] * spectrum
                 n_cathode_jet += count
                 e_cathode_jet += count * self._energy_of(spectrum)
-        # The collector jet's fast share: a VOLUME birth in the cell the
+        # The end wall jet's fast share: a VOLUME birth in the cell the
         # return was counted into, on a narrow shifted Maxwellian pointed into
         # ``-z`` -- the direction the plate's own thermal return is already
         # injected in -- whose DISCRETE mean energy is the committed launch
         # energy per atom. The energy row is the count times that same
         # discrete mean, so what the gas received and what the row says are
         # one number by construction.
-        n_collector_jet = 0.0
-        e_collector_jet = 0.0
+        n_end_wall_jet = 0.0
+        e_end_wall_jet = 0.0
         if coll_jet is not None:
             for cell in np.flatnonzero(coll_jet):
                 count = float(coll_jet[cell])
-                spectrum = self._collector_jet_launch_spectrum(
+                spectrum = self._end_wall_jet_launch_spectrum(
                     coll_jet_energy[cell] / count, int(cell)
                 )
                 f_c[cell] += count * inv_vc[cell] * spectrum
-                n_collector_jet += count
-                e_collector_jet += count * self._energy_of(spectrum)
+                n_end_wall_jet += count
+                e_end_wall_jet += count * self._energy_of(spectrum)
 
         # --- end walls: pump what sticks, buffer what returns
         out_L = float(out[("c", -1)].sum() + out[("a", -1)].sum())
@@ -3332,7 +3332,7 @@ class TransientDVM:
             spec_coll=spec_coll,
             e_birth_cathode_jet=e_cathode_jet,
             e_birth_anode_jet=e_anode_jet,
-            e_birth_collector_jet=e_collector_jet,
+            e_birth_end_wall_jet=e_end_wall_jet,
         )
 
         # --- plasma coupling: minus the moments of the kinetic operators
@@ -3377,8 +3377,8 @@ class TransientDVM:
             "birth_recombination": float(rec.sum()),
             "birth_cathode_face": float(cath_thermal.sum()),
             "birth_cathode_jet": n_cathode_jet,
-            "birth_collector_face": float(coll_thermal.sum()),
-            "birth_collector_jet": n_collector_jet,
+            "birth_end_wall_face": float(coll_thermal.sum()),
+            "birth_end_wall_jet": n_end_wall_jet,
             "birth_anode": float(anode_thermal.sum()),
             "birth_anode_jet": n_anode_jet,
             # The counted handshake, per update: what the partner booked,
@@ -3448,7 +3448,7 @@ class TransientDVM:
                 "channel by the engine and are not fed directly: each surface "
                 "jet's directed share is taken from its parent counted "
                 "stream ('cathode_jet' from 'cathode_face', 'anode_jet' from "
-                "'anode', 'collector_jet' from 'collector_face'), so feeding "
+                "'anode', 'end_wall_jet' from 'end_wall_face'), so feeding "
                 "one here would count the same recycled particles twice"
             )
         unknown = sorted(set(source_counts) - accepted)
@@ -3698,11 +3698,11 @@ class TransientDVM:
         jet_energy = float(self.anode_jet["R_E"]) * incident
         return thermal, jet, jet_energy
 
-    def _split_collector_recycle(self, coll, incident_erg):
-        """Split the counted collector return into its thermal and fast shares.
+    def _split_end_wall_recycle(self, coll, incident_erg):
+        """Split the counted end wall return into its thermal and fast shares.
 
-        The collector twin of :meth:`_split_anode_recycle`, with the same
-        contract: ``(thermal, jet, jet_energy)``; without a ``collector_jet``
+        The end wall twin of :meth:`_split_anode_recycle`, with the same
+        contract: ``(thermal, jet, jet_energy)``; without a ``end_wall_jet``
         spec the whole stream is thermal, ``jet`` is ``None`` and the returned
         ``thermal`` IS the array handed in, so the off path runs exactly the
         arithmetic it ran before the channel existed. Armed, ``jet`` is
@@ -3719,16 +3719,16 @@ class TransientDVM:
         ledger a special case.
 
         The SCALAR convention is carried, as at the cathode: a caller that
-        supplies ``collector_face`` as a bare rate or scalar has it deposited
+        supplies ``end_wall_face`` as a bare rate or scalar has it deposited
         at the role-resolved :attr:`coll_cell`, which is the same placement
         rule the thermal face inflow uses, so the split, the birth and the
         inflow cannot disagree about where the return happened.
         """
-        if self.collector_jet is None:
+        if self.end_wall_jet is None:
             if incident_erg is not None:
                 raise ValueError(
-                    "collector_jet_incident_erg was supplied to a DVM built "
-                    "with no collector_jet spec: there is no energetic fast "
+                    "end_wall_jet_incident_erg was supplied to a DVM built "
+                    "with no end_wall_jet spec: there is no energetic fast "
                     "share to receive it, and a silently inert energy booking "
                     "is exactly the misbooking the counted handshake exists "
                     "to prevent"
@@ -3736,9 +3736,9 @@ class TransientDVM:
             return coll, None, None
         if incident_erg is None:
             raise ValueError(
-                "the DVM collector jet is armed and needs "
-                "collector_jet_incident_erg -- the counted arrival ion energy "
-                "[erg] per column cell that the collector_face particles "
+                "the DVM end wall jet is armed and needs "
+                "end_wall_jet_incident_erg -- the counted arrival ion energy "
+                "[erg] per column cell that the end_wall_face particles "
                 "arrived with over this tick, at the prescribed "
                 "sheath_Te_multiple * Te + Ti. Deriving a second one here "
                 "would let the launched energy be formed from a state the "
@@ -3747,13 +3747,13 @@ class TransientDVM:
         incident = np.asarray(incident_erg, dtype=float)
         if incident.shape != (self.nz,):
             raise ValueError(
-                "collector_jet_incident_erg must carry one arrival energy per "
+                "end_wall_jet_incident_erg must carry one arrival energy per "
                 f"column cell (got shape {incident.shape}, expected "
                 f"{(self.nz,)})"
             )
         if not np.all(np.isfinite(incident)) or np.any(incident < 0.0):
             raise ValueError(
-                "collector_jet_incident_erg must be finite and non-negative "
+                "end_wall_jet_incident_erg must be finite and non-negative "
                 f"(got min {float(np.min(incident))!r}, max "
                 f"{float(np.max(incident))!r})"
             )
@@ -3762,10 +3762,10 @@ class TransientDVM:
             scalar = float(counts)
             counts = np.zeros(self.nz)
             counts[self.coll_cell] = scalar
-        jet = float(self.collector_jet["R_N"]) * counts
+        jet = float(self.end_wall_jet["R_N"]) * counts
         jet = np.where(incident > 0.0, jet, 0.0)
         thermal = counts - jet
-        jet_energy = float(self.collector_jet["R_E"]) * incident
+        jet_energy = float(self.end_wall_jet["R_E"]) * incident
         return thermal, jet, jet_energy
 
     def _debit_booked_ionization(self, ion_counts, L_ion, f_c, vol_c):
@@ -3899,7 +3899,7 @@ class TransientDVM:
         spec_coll,
         e_birth_cathode_jet,
         e_birth_anode_jet,
-        e_birth_collector_jet,
+        e_birth_end_wall_jet,
     ):
         """Return this update's ENERGY ledger [erg], channel by channel.
 
@@ -3979,7 +3979,7 @@ class TransientDVM:
         )
         e_birth_anode = float(anode.sum()) * self.E_wall_mean
         e_birth_cathode_face = float(cath.sum()) * self._energy_of(spec_cath)
-        e_birth_collector_face = float(coll.sum()) * self._energy_of(spec_coll)
+        e_birth_end_wall_face = float(coll.sum()) * self._energy_of(spec_coll)
 
         e_pending_L = self._energy_of(self.pend_L_c) + self._energy_of(
             self.pend_L_a
@@ -4016,11 +4016,11 @@ class TransientDVM:
             # rebuilt here, so the row cannot describe a spectrum other than
             # the one the gas received.
             "birth_cathode_jet": e_birth_cathode_jet,
-            "birth_collector_face": e_birth_collector_face,
+            "birth_end_wall_face": e_birth_end_wall_face,
             # As with the two jets above: already the counted number times the
             # DISCRETE mean energy of the spectrum that was placed, summed at
             # the birth site rather than rebuilt here.
-            "birth_collector_jet": e_birth_collector_jet,
+            "birth_end_wall_jet": e_birth_end_wall_jet,
             "birth_anode": e_birth_anode,
             # As with the cathode jet: already the counted number times the
             # DISCRETE mean energy of the spectra that were placed, summed at
@@ -4512,14 +4512,14 @@ def _validated_anode_jet(spec):
     return {"R_N": R_N, "R_E": R_E, "T_launch_eV": T_launch}
 
 
-#: The keys a ``collector_jet`` spec carries, exactly.
-COLLECTOR_JET_SPEC_KEYS = ("R_N", "R_E", "T_launch_eV", "sheath_Te_multiple")
+#: The keys a ``end_wall_jet`` spec carries, exactly.
+END_WALL_JET_SPEC_KEYS = ("R_N", "R_E", "T_launch_eV", "sheath_Te_multiple")
 
 
-def _validated_collector_jet(spec):
-    """Return a validated collector-jet spec, or ``None`` when absent.
+def _validated_end_wall_jet(spec):
+    """Return a validated end-wall jet spec, or ``None`` when absent.
 
-    The collector twin of :func:`_validated_anode_jet`, on a DIFFERENT
+    The end wall twin of :func:`_validated_anode_jet`, on a DIFFERENT
     interval and with one key more.
 
     ``R_N`` is the particle share of the counted return that leaves fast and
@@ -4533,39 +4533,39 @@ def _validated_collector_jet(spec):
 
     ``sheath_Te_multiple`` is the multiple of the end cell's ``Te`` which,
     plus its ``Ti``, IS that arrival energy. It is a convention the caller
-    states rather than a solved potential -- this model carries no collector
+    states rather than a solved potential -- this model carries no end wall
     sheath -- and must be a positive finite float.
 
     ``T_launch_eV`` is ``None`` (grid-tied) or a positive finite float.
     """
     if spec is None:
         return None
-    unknown = sorted(set(spec) - set(COLLECTOR_JET_SPEC_KEYS))
-    missing = sorted(set(COLLECTOR_JET_SPEC_KEYS) - set(spec))
+    unknown = sorted(set(spec) - set(END_WALL_JET_SPEC_KEYS))
+    missing = sorted(set(END_WALL_JET_SPEC_KEYS) - set(spec))
     if unknown or missing:
         raise ValueError(
-            "the DVM collector_jet spec carries exactly "
-            f"{list(COLLECTOR_JET_SPEC_KEYS)}; got unknown {unknown} and "
+            "the DVM end_wall_jet spec carries exactly "
+            f"{list(END_WALL_JET_SPEC_KEYS)}; got unknown {unknown} and "
             f"missing {missing}"
         )
     R_N = float(spec["R_N"])
     R_E = float(spec["R_E"])
     if not 0.0 < R_N <= 1.0:
         raise ValueError(
-            "the DVM collector jet's R_N is the PARTICLE share of the counted "
-            "collector return that leaves fast, so it requires 0 < R_N <= 1 "
+            "the DVM end wall jet's R_N is the PARTICLE share of the counted "
+            "end wall return that leaves fast, so it requires 0 < R_N <= 1 "
             f"(got R_N={R_N})"
         )
     if not 0.0 < R_E <= 1.0:
         raise ValueError(
-            "the DVM collector jet's R_E is the share of the ARRIVAL ENERGY "
+            "the DVM end wall jet's R_E is the share of the ARRIVAL ENERGY "
             "that leaves with those particles, so it requires 0 < R_E <= 1 "
             f"(got R_E={R_E})"
         )
     multiple = float(spec["sheath_Te_multiple"])
     if not np.isfinite(multiple) or multiple <= 0.0:
         raise ValueError(
-            "the DVM collector jet's sheath_Te_multiple is the multiple of "
+            "the DVM end wall jet's sheath_Te_multiple is the multiple of "
             "the end cell's Te which, plus its Ti, is the energy one collected "
             "ion arrives with, and must be a positive finite float "
             f"(got {multiple!r})"
@@ -4575,7 +4575,7 @@ def _validated_collector_jet(spec):
         T_launch = float(T_launch)
         if not np.isfinite(T_launch) or T_launch <= 0.0:
             raise ValueError(
-                "the DVM collector jet's T_launch_eV is the width of the "
+                "the DVM end wall jet's T_launch_eV is the width of the "
                 "smear its monoenergetic beam is represented by and must be a "
                 "positive finite temperature, or None to tie it to the local "
                 f"velocity-grid bin (got {T_launch!r})"
@@ -4593,7 +4593,7 @@ def _validated_jet_launch_width(width, jets):
 
     ``width`` is the dimensionless ratio ``T_launch / e_launch`` every armed
     surface jet smears its launch spectrum at; ``jets`` is the resolved
-    ``(cathode, anode, collector)`` spec triple, ``None`` where a channel is
+    ``(cathode, anode, end wall)`` spec triple, ``None`` where a channel is
     off. ``None`` leaves every jet on the GRID-TIED width it has always used
     and this function says nothing further.
 
@@ -4628,13 +4628,13 @@ def _validated_jet_launch_width(width, jets):
             "neutral_kinetic_dvm_jet_launch_width smears the SURFACE JETS' "
             "launch spectra and every one of them is off "
             "(neutral_kinetic_dvm_cathode_jet, _anode_jet and "
-            "_collector_jet), so nothing reads it and a silently inert "
+            "_end_wall_jet), so nothing reads it and a silently inert "
             f"control is exactly what this refuses (got {width!r}). "
             "Accepted: arm at least one jet, or leave the width unset"
         )
     named = [
         surface
-        for surface, spec in zip(("cathode", "anode", "collector"), jets)
+        for surface, spec in zip(("cathode", "anode", "end_wall"), jets)
         if spec is not None and spec["T_launch_eV"] is not None
     ]
     if named:
