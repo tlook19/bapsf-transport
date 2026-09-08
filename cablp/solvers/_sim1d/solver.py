@@ -535,6 +535,34 @@ _CATHODE_RESULT_KEYS = (
 DVM_LIMITED_STEP_RECORD_CAP = 4096
 
 
+#: The cathode-result members ``cathode_enthalpy_on_beam`` adds, exported
+#: PRESENCE-GATED on that key so an unarmed run's dataset set -- the golden
+#: included -- is what it was before the key existed.
+#: ``beam_launch_enthalpy_V`` is the ``2 k_B T_s / e`` [V] the beam launch
+#: potential carries this solve and ``P_emitted_enthalpy_on_beam`` [W] the
+#: power that enthalpy rides at, at the FULL emitted current the march
+#: launches. Both are zero on a solve whose regime keeps the enthalpy on the
+#: cathode-adjacent cell, which is a computed zero and not an absence.
+_CATHODE_ENTHALPY_ON_BEAM_KEYS = (
+    "beam_launch_enthalpy_V",
+    "P_emitted_enthalpy_on_beam",
+)
+
+
+def _cathode_result_keys(flags):
+    """Return the cathode-result members this run exports, per key.
+
+    :data:`_CATHODE_RESULT_KEYS` always, plus
+    :data:`_CATHODE_ENTHALPY_ON_BEAM_KEYS` under
+    ``cathode_enthalpy_on_beam``. One function answers "which members exist"
+    for the seeding and for the write alike, so they cannot drift into
+    seeding a column nothing fills or filling one nothing seeded.
+    """
+    if flags.get("cathode_enthalpy_on_beam"):
+        return _CATHODE_RESULT_KEYS + _CATHODE_ENTHALPY_ON_BEAM_KEYS
+    return _CATHODE_RESULT_KEYS
+
+
 def _cathode_result_prefixes(flags):
     """Return the cathode-result diagnostic prefixes this run exports.
 
@@ -13371,7 +13399,7 @@ class LAPDSim1D:
         # as they already defaulted the NaN.
         for prefix in _cathode_result_prefixes(self._flags):
             diag[f"{prefix}_regime"] = "none"
-            for key in _CATHODE_RESULT_KEYS:
+            for key in _cathode_result_keys(self._flags):
                 diag[f"{prefix}_{key}"] = np.nan
             diag[f"{prefix}_long_mfp"] = np.nan
             # At-cap regime flag: 1.0 where the exported ``phi_c`` is the
@@ -13572,7 +13600,7 @@ class LAPDSim1D:
         if result is None:
             return
         diag[f"{prefix}_regime"] = str(result.regime)
-        for key in _CATHODE_RESULT_KEYS:
+        for key in _cathode_result_keys(self._flags):
             if not current_driven and key in _CURRENT_DRIVEN_ONLY_CATHODE_KEYS:
                 diag[f"{prefix}_{key}"] = np.nan
                 continue
