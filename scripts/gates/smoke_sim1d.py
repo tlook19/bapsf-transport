@@ -26108,12 +26108,13 @@ def _case_tail_handoff_surface_continuity():
         ``phi_wf + 2 k_B T_s`` (3.198777 eV) = 197.988671 W, dropped in one
         step. That is the defect this case exists to keep out.
 
-    NOT ASSERTED, and deliberately not built: the energy the COLLECTED
-    electrons deposit back on the surface -- the ``cathode_e_collected_climb``
-    term ``cathode_face_full_debit`` books in
-    ``cablp/solvers/_sim1d/physics/cathode.py``, which at this state is the
-    larger of the two surface electron-energy channels, so this case's
-    continuity check covers only the smaller one.
+    NOT ASSERTED, and NOT MODELLED: the energy the COLLECTED plasma electrons
+    deposit back on the surface in return. ``cathode_power_balance_terms_W``
+    (``cablp/solvers/_sim1d/physics/cathode.py``) states plainly that this
+    deposit is not modelled, and while it is off the books ``P_emis`` is the
+    whole of the face's electron-channel budget. At this state the unmodelled
+    deposit would be the larger of the face's two electron-energy quantities,
+    so this case's continuity check covers only the smaller, modelled one.
     """
     from cablp.cathode.circuit import (
         DeviceConfig as _sc_DeviceConfig,
