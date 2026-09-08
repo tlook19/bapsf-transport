@@ -112,9 +112,11 @@ from cablp.cathode.circuit import (
     _exp_clamped,
     _j_eth_crit,
     _kB_SI,
+    _launch_potential_V,
     _me_cgs,
     _mp_cgs,
     beam_excitation_channel,
+    beam_launch_potential_V,
 )
 from cablp.atomic.cross_sections import H_EII_cross_lkup, He_EII_cross_lkup
 from cablp.cathode.kernels import COMPILED_KERNELS as _COMPILED_KERNELS
@@ -420,6 +422,7 @@ def solve_idriven(
     circuit_V_avail_V: float | None = None,
     circuit_bound_object: str = "phi_c",
     tail_anode_current_A: float = 0.0,
+    emitted_enthalpy_V: float = 0.0,
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
 
@@ -440,6 +443,13 @@ def solve_idriven(
     deposition that produces it is solved after this, so the coupling is
     lagged one step rather than iterated. 0.0 (the default) leaves the solve
     bit-for-bit as it was.
+    ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy
+    ``2 k_B T_s / e`` [V] when ``cathode_enthalpy_on_beam`` has placed it on
+    the beam, 0.0 (the default) otherwise. It is applied only where the
+    emitted electrons ARE the primary beam -- ``phi_c_minus == 0`` -- and is
+    reported back as ``beam_launch_enthalpy_V``; elsewhere it is dropped and
+    the caller's cathode-adjacent booking stands. 0.0 is an exact identity on
+    every float here.
     ``circuit_V_avail_V`` is the optional CIRCUIT-AVAILABLE device voltage
     [V] -- the largest device voltage the external loop can sustain at this
     current, ``V_src - I*(R_comp + R_mesh)``, which is the loop equation
@@ -968,7 +978,18 @@ def solve_idriven(
     P_wall = I_tot * (V_b + I_tot * config.R_comp)
     P_load = I_tot * V_b
     P_comp = I_tot**2 * config.R_comp
-    P_prim = (1.0 - eta * beam_bypass_fraction) * I_eth_star * phi_c
+    # The launch enthalpy rides the beam only where the emitted electrons ARE
+    # the beam; with a virtual cathode present the caller books it on the
+    # cathode-adjacent cell instead and this is exactly 0.0.
+    beam_launch_enthalpy_V = (
+        float(emitted_enthalpy_V) if phi_c_minus == 0.0 else 0.0
+    )
+    P_emitted_enthalpy_on_beam = beam_launch_enthalpy_V * I_eth_star
+    P_prim = (
+        (1.0 - eta * beam_bypass_fraction)
+        * I_eth_star
+        * _launch_potential_V(phi_c, beam_launch_enthalpy_V)
+    )
     P_ohmic = I_tot * V_p
     # Electron sheath powers with *physical flux barriers* -- a deliberate,
     # documented divergence from the frozen module's `_P_elec(phi_net,...)`:
@@ -1141,6 +1162,8 @@ def solve_idriven(
             float("nan") if circuit_V_avail_V is None else circuit_V_avail_V
         ),
         bound_active=bound_active,
+        beam_launch_enthalpy_V=beam_launch_enthalpy_V,
+        P_emitted_enthalpy_on_beam=P_emitted_enthalpy_on_beam,
         regime=regime,
         long_mfp=long_mfp,
         beam_bypass_fraction=beam_bypass_fraction,
@@ -1173,6 +1196,7 @@ def solve_beam_system_idriven(
     circuit_bound_object: str = "phi_c",
     beam_climb_V: float | None = None,
     tail_anode_current_A: float = 0.0,
+    emitted_enthalpy_V: float = 0.0,
 ) -> BeamResult:
     """Current-driven, single-cathode counterpart of ``solve_beam_system``.
 
@@ -1198,6 +1222,12 @@ def solve_beam_system_idriven(
     and gap bypass are NOT shifted: the climb sits downstream of the mesh, and
     the common-mode node moves the whole cathode/anode system together and so
     cannot change the anode-to-cathode differential the circuit integrates.
+
+    ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy [V] the
+    beam carries when ``cathode_enthalpy_on_beam`` has placed it there; it is
+    handed to the sheath solve, which decides from its own ``phi_c_minus``
+    whether the regime admits it, and reaches the arrays through the result.
+    0.0 (the default) leaves every array bit-for-bit historical.
     """
     result = solve_idriven(
         config,
@@ -1218,6 +1248,7 @@ def solve_beam_system_idriven(
         circuit_V_avail_V=circuit_V_avail_V,
         circuit_bound_object=circuit_bound_object,
         tail_anode_current_A=tail_anode_current_A,
+        emitted_enthalpy_V=emitted_enthalpy_V,
     )
     return assemble_beam_arrays(
         result=result,
@@ -1272,7 +1303,9 @@ def assemble_beam_arrays(
     beam_exc_cross = np.zeros(cells)
     beam_exc_energy = np.zeros(cells)
 
-    phi_c_0 = beam_launch_energy_eV(result.phi_c, beam_climb_V)
+    phi_c_0 = beam_launch_energy_eV(
+        beam_launch_potential_V(result), beam_climb_V
+    )
     if phi_c_0 > I_ion:
         v_beam[cathode_index] = math.sqrt(2.0 * phi_c_0 * _erg_per_eV / _me_cgs)
         _I_beam_0 = result.I_eth_star * (

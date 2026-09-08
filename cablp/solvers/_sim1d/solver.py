@@ -535,6 +535,34 @@ _CATHODE_RESULT_KEYS = (
 DVM_LIMITED_STEP_RECORD_CAP = 4096
 
 
+#: The cathode-result members ``cathode_enthalpy_on_beam`` adds, exported
+#: PRESENCE-GATED on that key so an unarmed run's dataset set -- the golden
+#: included -- is what it was before the key existed.
+#: ``beam_launch_enthalpy_V`` is the ``2 k_B T_s / e`` [V] the beam launch
+#: potential carries this solve and ``P_emitted_enthalpy_on_beam`` [W] the
+#: power that enthalpy rides at, at the FULL emitted current the march
+#: launches. Both are zero on a solve whose regime keeps the enthalpy on the
+#: cathode-adjacent cell, which is a computed zero and not an absence.
+_CATHODE_ENTHALPY_ON_BEAM_KEYS = (
+    "beam_launch_enthalpy_V",
+    "P_emitted_enthalpy_on_beam",
+)
+
+
+def _cathode_result_keys(flags):
+    """Return the cathode-result members this run exports, per key.
+
+    :data:`_CATHODE_RESULT_KEYS` always, plus
+    :data:`_CATHODE_ENTHALPY_ON_BEAM_KEYS` under
+    ``cathode_enthalpy_on_beam``. One function answers "which members exist"
+    for the seeding and for the write alike, so they cannot drift into
+    seeding a column nothing fills or filling one nothing seeded.
+    """
+    if flags.get("cathode_enthalpy_on_beam"):
+        return _CATHODE_RESULT_KEYS + _CATHODE_ENTHALPY_ON_BEAM_KEYS
+    return _CATHODE_RESULT_KEYS
+
+
 def _cathode_result_prefixes(flags):
     """Return the cathode-result diagnostic prefixes this run exports.
 
@@ -2150,6 +2178,25 @@ class LAPDSim1D:
                     "does not supply " + "; ".join(missing) + "."
                 )
         self._cathode_face_full_debit = _cathode_face_full_debit
+        _cathode_enthalpy_on_beam = self._flags.get("cathode_enthalpy_on_beam")
+        if not isinstance(_cathode_enthalpy_on_beam, bool):
+            raise ValueError(
+                "cathode_enthalpy_on_beam must be a bool (got "
+                f"{_cathode_enthalpy_on_beam!r})"
+            )
+        if _cathode_enthalpy_on_beam and not _cathode_face_full_debit:
+            # The key MOVES a row; it does not create one. Without
+            # cathode_face_full_debit the emitted-enthalpy row is never
+            # computed, so there is nothing to place and an armed key here
+            # would be a silent inert control.
+            raise ValueError(
+                "cathode_enthalpy_on_beam cannot arm: this configuration "
+                "does not supply cathode_face_full_debit, the key that books "
+                "the emitted electrons' launch enthalpy at all; this key only "
+                "moves that booking onto the beam launch while the beam is "
+                "launched."
+            )
+        self._cathode_enthalpy_on_beam = _cathode_enthalpy_on_beam
         # Beam electron-energy deposition re-homed into the implicit heat
         # substep. A real bool for the same reason as the two flags above: the
         # flag MOVES a ~10^5 W source between operators, and an int or a string
@@ -8865,6 +8912,15 @@ class LAPDSim1D:
         # signature and every existing trajectory are bit-identical.
         flags["end_wall_sheath_full_debit"] = False
         flags["cathode_face_full_debit"] = False
+        # ...and the key that only MOVES the cathode key's enthalpy row, for
+        # the same reason once more: its construction guard requires exactly
+        # the key the line above has just cleared, so leaving it armed would
+        # refuse the INNER sim on a state where the row it places does not
+        # exist. It is inert here twice over -- no cathode solve means no beam
+        # to carry the enthalpy and no row to move it off. Clearing it changes
+        # no configuration that constructed before: every config that reaches
+        # this line armed is one that raised.
+        flags["cathode_enthalpy_on_beam"] = False
         # The two DVM directed-recycle jets, cleared for the SAME reason as
         # cathode_coupling above: this pre-solve has no plasma and no cathode
         # solve, so there is no collected ion flux for either jet to split and
@@ -13352,7 +13408,7 @@ class LAPDSim1D:
         # as they already defaulted the NaN.
         for prefix in _cathode_result_prefixes(self._flags):
             diag[f"{prefix}_regime"] = "none"
-            for key in _CATHODE_RESULT_KEYS:
+            for key in _cathode_result_keys(self._flags):
                 diag[f"{prefix}_{key}"] = np.nan
             diag[f"{prefix}_long_mfp"] = np.nan
             # At-cap regime flag: 1.0 where the exported ``phi_c`` is the
@@ -13553,7 +13609,7 @@ class LAPDSim1D:
         if result is None:
             return
         diag[f"{prefix}_regime"] = str(result.regime)
-        for key in _CATHODE_RESULT_KEYS:
+        for key in _cathode_result_keys(self._flags):
             if not current_driven and key in _CURRENT_DRIVEN_ONLY_CATHODE_KEYS:
                 diag[f"{prefix}_{key}"] = np.nan
                 continue

@@ -732,6 +732,25 @@ term and the collected climb a cooling one, the face's net sign is a property
 of the state — an emitter releasing a large current into a sub-$T_s$ plasma
 heats it. The rows are absent entirely when the flag is off.
 
+**Where the launch enthalpy is booked.** `cathode_enthalpy_on_beam`, which
+requires `cathode_face_full_debit` and refuses at construction without it,
+moves the first of those three rows rather than changing it. Where the emitted
+electrons ARE the primary beam — the circuit's own regime test $\phi_c^-=0$,
+in which no virtual cathode has formed and the fall row above is identically
+zero — the enthalpy $2k_BT_s$ per emitted electron belongs with the beam launch
+energy, so it is added to the beam LAUNCH POTENTIAL ahead of the anode-mesh
+climb and deposited where the CSDA march deposits it, and the cathode-cell row
+$+2k_BT_s\Gamma_\text{em}$ is then exactly zero. Where the emitted population is
+NOT the launched beam — the virtual-cathode regime $\phi_c^->0$, and every
+floating, afterglow and inductive-tail phase — the cathode-cell booking stands
+unchanged. The gate lives in the sheath solve, which is what knows the regime,
+and the row reads its verdict back off the result, so the cell and the beam
+cannot both carry the enthalpy or both drop it. The placement moves energy
+between the cathode cell and the column; it creates none. Armed, the solve also
+reports the shift as $2k_BT_s/e$ in volts and the power it carries at the full
+emitted current the march launches; both are exported to the cathode
+diagnostics, presence-gated on the flag.
+
 **Prescribed drive.** `cathode_solver_model = "prescribed_measured"` imposes
 both loop quantities — $I(t)$ and $V_\text{dis}(t)$ interpolated from a
 supplied trace onto the model clock — and consults nothing about the surface

@@ -20,6 +20,7 @@ from cablp.cathode.circuit import (
     PlasmaState,
     _compute_beam_bypass_fraction,
     _compute_l_b,
+    beam_launch_potential_V,
 )
 from cablp.plasma.params import LN_LAMBDA_MIN, c_log
 from cablp.cathode.circuit_idriven import (
@@ -818,6 +819,32 @@ def vessel_beam_climb_V(input_flags, V_cm_V):
     return float(V_cm_V)
 
 
+def cathode_beam_launch_enthalpy_V(input_dict, input_flags):
+    """Return the emitted electrons' launch enthalpy [V] the beam carries.
+
+    ``2 k_B T_s / e``, the flux-weighted mean energy of the half-Maxwellian
+    the emitter releases, as a potential -- so a sheath solve adds it to a
+    drop rather than to an energy. ``0.0`` -- ``cathode_enthalpy_on_beam``
+    unarmed -- means "the enthalpy stays where ``cathode_face_full_debit``
+    books it", on the cathode-adjacent plasma cell, and is the value that
+    leaves every launch potential the ``phi_c`` object it always was.
+
+    ``T_s`` is read from ``input_dict["cathode_Ts_base_K"]``, which is the one
+    point every emission path reads the surface temperature from and therefore
+    carries the evolving value under ``cathode_warming_model =
+    "power_balance"``. Pass the SUBSTITUTED dict, the one the device config was
+    built from, so the enthalpy and the emission it rides are at one
+    temperature.
+
+    Whether the regime admits the shift is NOT decided here: the sheath solve
+    owns that test, because it is the solve that knows whether a virtual
+    cathode has formed.
+    """
+    if not bool(input_flags.get("cathode_enthalpy_on_beam", False)):
+        return 0.0
+    return 2.0 * _KB_EV_PER_K * float(input_dict["cathode_Ts_base_K"])
+
+
 def idriven_result_evaluator(
     state,
     floors,
@@ -894,6 +921,10 @@ def idriven_result_evaluator(
         state, derived, geometry, idx, mu, ion_mass_g, input_dict
     )
 
+    emitted_enthalpy_V = cathode_beam_launch_enthalpy_V(
+        input_dict, input_flags
+    )
+
     def solve_at(I_A):
         # The available voltage is a function of I, so a bounded consumer's
         # solve sees the bound move with the current it is testing. The
@@ -924,6 +955,7 @@ def idriven_result_evaluator(
             # the loop equation's V_dis(I) and the per-step sheath solve
             # cannot disagree about what the anode is collecting.
             tail_anode_current_A=float(tail_anode_current_prev_A),
+            emitted_enthalpy_V=emitted_enthalpy_V,
         )
 
     return solve_at
@@ -1349,6 +1381,11 @@ def solve_cathode_boundary(
     )
     solver_model = validate_cathode_solver_model(input_dict, input_flags)
     beam_climb_V = vessel_beam_climb_V(input_flags, vessel_V_cm_V)
+    # Read off the SUBSTITUTED dict above, so the enthalpy rides the same
+    # surface temperature the emission does.
+    emitted_enthalpy_V = cathode_beam_launch_enthalpy_V(
+        input_dict, input_flags
+    )
     beam_cross_prev = np.asarray(beam_cross_prev, dtype=float)
     if beam_cross_prev.shape != (geometry.cells,):
         raise ValueError(
@@ -1397,6 +1434,7 @@ def solve_cathode_boundary(
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
             beam_climb_V=beam_climb_V,
             tail_anode_current_A=float(tail_anode_current_prev_A),
+            emitted_enthalpy_V=emitted_enthalpy_V,
         )
     else:
         # The circuit is explicit solver state: no inductive fold, no
@@ -1460,6 +1498,7 @@ def solve_cathode_boundary(
             circuit_bound_object=circuit_bound_object(input_dict),
             beam_climb_V=beam_climb_V,
             tail_anode_current_A=float(tail_anode_current_prev_A),
+            emitted_enthalpy_V=emitted_enthalpy_V,
         )
     beam_deposition = None
     beam_gap_ledger = None
@@ -2009,16 +2048,21 @@ def _csda_beam_deposition(
     ends = (0, -1) if twin else (0,)
     for end in ends:
         result = beam_result.result if end == 0 else beam_result.result_twin
-        # The energy THIS ray carries into the column. Without the vessel node
-        # it is ``result.phi_c``, the same object, so every ray below is the
-        # historical one; with the node armed it is that drop less the
-        # mesh-to-column climb, and one local carries it to the deposition
-        # ray, the gap probe, the tail keying and the sigma_eff inversion
-        # alike, so the ray and the instruments that measure it cannot be
-        # launched at two different energies.
+        # The energy THIS ray carries into the column. With neither the vessel
+        # node nor the emitted-enthalpy placement it is ``result.phi_c``, the
+        # same object, so every ray below is the historical one; the placement
+        # ADDS the launch enthalpy to the drop and the node then subtracts the
+        # mesh-to-column climb from that sum, in that order, because the climb
+        # sits downstream of the mesh and the enthalpy is carried in from the
+        # emitter. One local carries the result to the deposition ray, the gap
+        # probe, the tail keying and the sigma_eff inversion alike, so the ray
+        # and the instruments that measure it cannot be launched at two
+        # different energies.
         phi_c_ray = (
             None if result is None
-            else beam_launch_energy_eV(result.phi_c, beam_climb_V)
+            else beam_launch_energy_eV(
+                beam_launch_potential_V(result), beam_climb_V
+            )
         )
         if result is None or phi_c_ray <= I_ion:
             deposition[end] = None
@@ -3791,6 +3835,14 @@ def cathode_emission_sheath_power_W(result, T_s_K):
         I_eth_star / e`` is the SPACE-CHARGE-RELEASED flux, not the Richardson
         ceiling. Always >= 0.
 
+        EXACTLY ZERO where the solve carried this enthalpy on the beam
+        instead, which it reports as a nonzero ``beam_launch_enthalpy_V``:
+        there the released electrons ARE the primary beam, the launch
+        potential already includes the enthalpy and the CSDA march deposits
+        it along the column, so booking it here as well would be the same
+        energy twice. The gate is the SOLVE's, read back off the result, so
+        this row and the beam cannot disagree about which of them carries it.
+
     ``+e (phi_c_plus - max(phi_c, 0)) Gamma_em``
         The remainder of the fall those same electrons drop through on their
         way from the barrier peak into the plasma. The beam row already
@@ -3833,8 +3885,9 @@ def cathode_emission_sheath_power_W(result, T_s_K):
     # k_B T_s as a voltage, so all three rows are one current times one
     # potential and share the elementary charge exactly.
     kT_s_V = _KB_EV_PER_K * T_s
+    on_beam = float(result.beam_launch_enthalpy_V) != 0.0
     return (
-        2.0 * kT_s_V * I_em,
+        0.0 if on_beam else 2.0 * kT_s_V * I_em,
         (phi_c_plus - max(phi_c, 0.0)) * I_em,
         -phi_c_plus * I_ec,
     )

@@ -108,6 +108,7 @@ from cablp.cathode.circuit import (
     _compute_l_b,
     _e_SI,
     _exp_clamped,
+    _launch_potential_V,
     _mp_cgs,
 )
 from cablp.cathode.circuit_idriven import assemble_beam_arrays
@@ -135,6 +136,7 @@ def solve_prescribed(
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
     tail_anode_current_A: float = 0.0,
+    emitted_enthalpy_V: float = 0.0,
 ) -> SolverResult:
     """Solve the cathode sheath for a MEASURED current and device voltage.
 
@@ -146,6 +148,11 @@ def solve_prescribed(
     ``alpha_sheath`` / ``alpha_sheath_anode`` are the two electrodes' own
     presheath factors, and ``tail_anode_current_A`` is the lagged QL-tail
     current the anode mesh collected without it crossing the anode sheath.
+    ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy
+    ``2 k_B T_s / e`` [V] when ``cathode_enthalpy_on_beam`` has placed it on
+    the beam, 0.0 (the default) otherwise; this mode has no space-charge
+    barrier, so ``phi_c_minus`` is always zero here and the shift always
+    applies when it is given.
 
     Returns a ``SolverResult`` field-for-field compatible with the other two
     solvers'; see the module docstring for the ``I_eth``, ``regime`` and
@@ -284,7 +291,18 @@ def solve_prescribed(
     P_wall = I_tot * (V_b + I_tot * config.R_comp)
     P_load = I_tot * V_b
     P_comp = I_tot**2 * config.R_comp
-    P_prim = (1.0 - eta * beam_bypass_fraction) * I_eth_star * phi_c
+    # The launch enthalpy rides the beam only where the emitted electrons ARE
+    # the beam; this mode reports no space-charge barrier, so that regime test
+    # is satisfied on every solve here and the shift is whatever was given.
+    beam_launch_enthalpy_V = (
+        float(emitted_enthalpy_V) if phi_c_minus == 0.0 else 0.0
+    )
+    P_emitted_enthalpy_on_beam = beam_launch_enthalpy_V * I_eth_star
+    P_prim = (
+        (1.0 - eta * beam_bypass_fraction)
+        * I_eth_star
+        * _launch_potential_V(phi_c, beam_launch_enthalpy_V)
+    )
     P_ohmic = I_tot * V_p
     # Electron/ion sheath powers: the SAME expressions the current-driven
     # solve assembles, with the same physical flux barriers (an attracting
@@ -398,6 +416,8 @@ def solve_prescribed(
         phi_c_ceiling_V=float(phi_c_cap_V),
         circuit_V_avail_V=float("nan"),
         bound_active=1.0 if capability_limited else 0.0,
+        beam_launch_enthalpy_V=beam_launch_enthalpy_V,
+        P_emitted_enthalpy_on_beam=P_emitted_enthalpy_on_beam,
         regime=regime,
         long_mfp=long_mfp,
         beam_bypass_fraction=beam_bypass_fraction,
@@ -427,6 +447,7 @@ def solve_beam_system_prescribed(
     alpha_sheath_anode: float | None = None,
     beam_climb_V: float | None = None,
     tail_anode_current_A: float = 0.0,
+    emitted_enthalpy_V: float = 0.0,
 ) -> BeamResult:
     """Prescribed-measured counterpart of ``solve_beam_system_idriven``.
 
@@ -435,6 +456,11 @@ def solve_beam_system_prescribed(
     (:func:`cablp.cathode.circuit_idriven.assemble_beam_arrays`), so the beam
     the column sees is built by exactly the same code on both drive routes and
     only the sheath underneath it differs.
+
+    ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy [V] the
+    beam carries when ``cathode_enthalpy_on_beam`` has placed it there,
+    handed to the sheath solve and reaching the arrays through the result.
+    0.0 (the default) leaves every array bit-for-bit historical.
     """
     result = solve_prescribed(
         config,
@@ -452,6 +478,7 @@ def solve_beam_system_prescribed(
         alpha_sheath=alpha_sheath,
         alpha_sheath_anode=alpha_sheath_anode,
         tail_anode_current_A=tail_anode_current_A,
+        emitted_enthalpy_V=emitted_enthalpy_V,
     )
     return assemble_beam_arrays(
         result=result,

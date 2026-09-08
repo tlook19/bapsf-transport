@@ -698,6 +698,32 @@ def report_window(f, label, lo, hi, geom, port_top):
                   "rows are the emitting face's own channels and are\n"
                   "  additional to cathode_surface_loss, not a re-cut of it.")
 
+    # The emitted enthalpy's OTHER placement (cathode_enthalpy_on_beam). This
+    # is NOT an rhs_terms row and must not be added into the net above: it is
+    # the part of beam_power_deposition that IS the emitted electrons' launch
+    # enthalpy, carried by the beam wherever the released electrons are the
+    # primary beam. It is the reading that explains a zero
+    # cathode_e_emitted_enthalpy row on an armed run -- the enthalpy did not
+    # vanish, it moved from the cathode-adjacent cell into the column.
+    # ABSENT (not zero) on a run that did not arm the key.
+    if dg is not None and "source_P_emitted_enthalpy_on_beam" in dg:
+        on_beam = diagnostic_mean(
+            dg, "source_P_emitted_enthalpy_on_beam", mask
+        )
+        launch_V = diagnostic_mean(dg, "source_beam_launch_enthalpy_V", mask)
+        print()
+        print("--- EMITTED ENTHALPY CARRIED ON THE BEAM "
+              "(cathode_enthalpy_on_beam), window mean ---")
+        print(f"{'  cathode_e_emitted_enthalpy_on_beam':<44}"
+              f"{on_beam / 1e3:>16.5f}  kW")
+        print(f"{'  beam launch enthalpy':<44}{launch_V:>16.5f}  V")
+        print("  rides beam_power_deposition, NOT the end-face net above; it "
+              "is the full 2 k_B T_s\n"
+              "  at the emitted current the march launches, and it is zero on "
+              "a frame whose solve\n"
+              "  kept the enthalpy on the cathode-adjacent cell (a virtual "
+              "cathode, or no beam).")
+
     print("\n--- CIRCUIT AND SOURCE DIAGNOSTICS, window mean ---")
     if dg is None:
         print("  cathode_diagnostics ABSENT from this artifact")
