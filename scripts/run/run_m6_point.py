@@ -50,7 +50,7 @@ from run_mechanism_ladder import (
     RUNG_OWNED_LIVE,
     refuse_rung_supersession,
 )
-from stance_config import available_stances, load_named_configuration
+from stance_config import available_stances, load_named_configuration_or_exit
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 from cablp.solvers._sim1d.results.health import summarize_result
 
@@ -290,7 +290,7 @@ def main(argv=None):
     rung_owned = {key: extra[key] for key in RUNG_OWNED_LIVE}
     stance = None
     if args.stance is not None:
-        stance = load_named_configuration(args.stance)
+        stance = load_named_configuration_or_exit(args.stance)
         superseded = [
             f"{key}: {_brief_value(extra[key])} -> "
             f"{_brief_value(value)}"

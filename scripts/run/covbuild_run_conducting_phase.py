@@ -42,7 +42,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 from extra_overrides import parse_extra_overrides
 from run_mechanism_ladder import ES_OPERATING
-from stance_config import available_stances, load_named_configuration
+from stance_config import available_stances, load_named_configuration_or_exit
 
 
 #: The window DELTA this instrument applies over the configuration it names.
@@ -86,7 +86,7 @@ def build_config(nx, coverage=None, extra=None, configuration=None):
     })
     lineage = None
     if configuration is not None:
-        named = load_named_configuration(configuration)
+        named = load_named_configuration_or_exit(configuration)
         params.update(named.params)
         flags.update(named.flags)
         lineage = named.lineage

@@ -58,7 +58,7 @@ def es1_config(nx, stance=None):
     from compare_sim1d_es1 import PARAM_OVERRIDES, FLAG_OVERRIDES
     from cablp.solvers._sim1d import default_config
 
-    from stance_config import load_named_configuration
+    from stance_config import load_named_configuration_or_exit
 
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
@@ -68,7 +68,7 @@ def es1_config(nx, stance=None):
         params["nx"] = nx
     lineage = None
     if stance is not None:
-        named = load_named_configuration(stance)
+        named = load_named_configuration_or_exit(stance)
         params.update(named.params)
         flags.update(named.flags)
         lineage = named.lineage

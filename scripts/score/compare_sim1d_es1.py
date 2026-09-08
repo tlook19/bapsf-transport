@@ -105,7 +105,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from stance_config import (  # noqa: E402
-    available_stances, load_named_configuration, load_stance,
+    available_stances, load_named_configuration_or_exit, load_stance,
 )
 
 OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
@@ -2955,7 +2955,7 @@ def main(argv=None):
         # where the campaign drivers apply theirs.
         configuration = None
         if args.stance is not None:
-            named = load_named_configuration(args.stance)
+            named = load_named_configuration_or_exit(args.stance)
             configuration = named.lineage
             label += f" [stance={named.name}]"
         if args.drag_closure is not None:

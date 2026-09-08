@@ -70,7 +70,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 from cablp.solvers._sim1d import LAPDSim1D, default_config  # noqa: E402
 from extra_overrides import parse_extra_overrides  # noqa: E402
 from stance_config import (  # noqa: E402
-    STANCE_DIR, SUFFIX, available_stances, load_named_configuration,
+    STANCE_DIR, SUFFIX, available_stances, load_named_configuration_or_exit,
 )
 from cablp.solvers._sim1d.core.neutral_seed_cache import (  # noqa: E402
     neutral_seed_signature,
@@ -99,7 +99,7 @@ def stance_header_value(stance):
     """
     if stance is None:
         return ""
-    named = load_named_configuration(stance)
+    named = load_named_configuration_or_exit(stance)
     if named.path == STANCE_DIR / f"{stance}{SUFFIX}":
         return stance
     path = named.path.resolve()
@@ -132,7 +132,7 @@ def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
         # run_m6_point's own neutral-exchange stance.
         params["neutral_exchange_model"] = "knudsen"
     if stance is not None:
-        named = load_named_configuration(stance)
+        named = load_named_configuration_or_exit(stance)
         params.update(named.params)
         flags.update(named.flags)
     if nx is not None:
