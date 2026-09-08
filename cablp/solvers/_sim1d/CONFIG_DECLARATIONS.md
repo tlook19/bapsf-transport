@@ -218,7 +218,9 @@ the authority on what each edge means.
 
 ## Derived configurations — a base and what it moves
 
-*(Adopted 2026-09-03, the "no default plasma" ruling.)*
+*(The "no default plasma" convention: `default_config()` is a template of keys
+and their classes, never an implied plasma; every run names a
+configuration.)*
 
 Every run names a configuration. `default_config()` is the TEMPLATE of keys and
 their classes — never an implied plasma — and the configuration a run names is

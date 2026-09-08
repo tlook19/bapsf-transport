@@ -132,12 +132,13 @@ OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
 PRODUCTION_STANCE = "g1atrim"
 _STANCE = load_stance(PRODUCTION_STANCE).params
 
-# WHAT THIS DICT IS, since the "no default plasma" ruling (2026-09-03): the
-# INSTRUMENT BASE LAYER BENEATH A NAMED CONFIGURATION, NOT A PLASMA. It is the
-# shared production package every run_model caller stands on -- the circuit,
-# the rate model, the numerics -- and it is not a configuration anyone runs:
-# both campaign drivers and this file's own run route apply a named
-# configuration over it, and none of them has a bare mode any more.
+# WHAT THIS DICT IS, since every run must name its configuration ("no default
+# plasma"): the INSTRUMENT BASE LAYER BENEATH A NAMED CONFIGURATION, NOT A
+# PLASMA. It is the shared production package every run_model caller stands
+# on -- the circuit, the rate model, the numerics -- and it is not a
+# configuration anyone runs: both campaign drivers and this file's own run
+# route apply a named configuration over it, and none of them has a bare
+# mode any more.
 PARAM_OVERRIDES = {
     # DISCHARGE CIRCUIT -- the corrected stance. These
     # mirror the config defaults EXACTLY (core/config.py active_defaults); the

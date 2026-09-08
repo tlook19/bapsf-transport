@@ -6199,11 +6199,12 @@ def aj_feed_mixed(dvm, count=AJ_COUNT, per_ion_eV=AJ_PHI_TI_EV):
 class _AJZeroThroughJet(TransientDVM):
     """Harness defect: send the ZERO-incident cells down the jet path anyway.
 
-    The pre-ruling behaviour, reinstated as AJ6's negative control: split
-    ``R_N`` off every fed cell regardless of whether it carries any committed
-    incident energy. It is the exact arithmetic this member ran before the
-    fluid-parity ruling, restored by dropping ONE mask, so the control tests
-    the ruling itself rather than a strawman.
+    The behaviour reinstated as AJ6's negative control: split ``R_N`` off
+    every fed cell regardless of whether it carries any committed incident
+    energy. It is the exact arithmetic this member ran before zero-incident
+    cells were required to launch nothing and be born wholly thermal,
+    restored by dropping ONE mask, so the control tests that requirement
+    itself rather than a strawman.
     """
 
     def _split_anode_recycle(self, anode, incident_erg):
