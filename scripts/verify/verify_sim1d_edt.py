@@ -266,7 +266,6 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from baseline_sim1d import build_baseline_config  # noqa: E402
-from golden_digest_gate import DIGEST_PARAM_OVERRIDES  # noqa: E402
 from edt_consult_pins import (  # noqa: E402
     ANODE_HANDSHAKE_CHOICES,
     CHARGE_DEATH_CHOICES,
@@ -274,6 +273,7 @@ from edt_consult_pins import (  # noqa: E402
     _window_mean_rows,
     evaluate,
 )
+from golden_digest_gate import DIGEST_PARAM_OVERRIDES  # noqa: E402
 
 #: The consult's window, in seconds.
 WINDOW = (1.0e-4, 2.01e-2)
@@ -337,7 +337,8 @@ G5_NEGATIVE_CONTROLS = ("operand-scale", "launch-offset")
 
 #: The relative perturbation ``operand-scale`` applies to the temperature
 #: operand. Small enough that it is plainly a perturbation and not a
-#: different quantity, and still six orders above the tolerance.
+#: different quantity, and the residual it produces still sits five orders
+#: above the tolerance.
 G5_OPERAND_PERTURBATION = 1.0e-6
 
 
