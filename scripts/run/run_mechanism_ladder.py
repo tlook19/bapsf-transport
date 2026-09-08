@@ -19,9 +19,8 @@ committed configuration name in ``scripts/stances/`` or the PATH of a
 configuration file (derived or not) -- either way the file's lineage (name,
 base chain, file sha256, identity) is recorded in the saved run -- and a rung
 that genuinely names none says so with ``--no-stance``. There is no bare mode
--- an unnamed rung stood on whichever
-values the shared driver dicts happened to hold, which is not a configuration
-anyone can name afterwards.
+-- an unnamed rung stood on whichever values the shared driver dicts happened
+to hold, which is not a configuration anyone can name afterwards.
 """
 
 import argparse

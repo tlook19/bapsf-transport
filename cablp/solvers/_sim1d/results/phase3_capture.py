@@ -176,9 +176,8 @@ def reserve_run_id(output_directory, run_id, allocation_record):
 
 def configuration_identity(params, flags):
     """Return the canonical resolved configuration SHA-256 identity."""
-    # This deliberately matches golden_digest_gate.digest_config_identity
-    # byte for byte, including json.dumps' default item separators.  The
-    # selected
+    # This deliberately matches golden_digest_gate.digest_config_identity byte
+    # for byte, including json.dumps' default item separators. The selected
     # configuration identity is already committed in that representation.
     payload = json.dumps(
         {"params": params, "flags": flags},
