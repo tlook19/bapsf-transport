@@ -54,9 +54,18 @@ it, rather than reaching the solver's own construction-time refusal. A block's
 members are exempt from that check by construction -- the family membership
 carries the namespace, which is why a block cannot misfile a key at all.
 
-Values are TOML-native (float, integer, string, boolean, array); arrays reach
-the solver as lists, which is what the config keys that take per-cell profiles
-expect.
+Values are TYPED TO THE TEMPLATE, by the rule ``--extra`` uses
+(``run/extra_overrides.py``), because TOML distinguishes ``1900`` from
+``1900.0`` and the configuration IDENTITY hashes the difference: without it
+one physical configuration reached by two spellings of one number carries two
+identities. A float key takes an integer and a whole float alike and resolves
+to a float; an integer key takes a float with no fractional part; a boolean or
+string key given anything else is refused, naming the file, the key, the value
+and the expected type. A key whose template value is ``None`` or a list states
+no scalar type to normalise to, so arrays and the profile keys pass through as
+written -- arrays reach the solver as lists, which is what the config keys that
+take per-cell profiles expect -- and a key named in ``[none_valued]`` stays
+``None`` whatever its template type.
 
 RESOLUTION ORDER, and it is the whole contract::
 
@@ -81,6 +90,14 @@ from types import MappingProxyType
 _SCRIPTS = Path(__file__).resolve().parents[1]
 if str(_SCRIPTS.parent) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS.parent))
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(_SCRIPTS / _sub)
+    if _dir not in sys.path:
+        sys.path.insert(0, _dir)
+
+from extra_overrides import coerce_value  # noqa: E402
 
 from cablp.solvers._sim1d import (  # noqa: E402
     ConfigurationLineage,
@@ -208,7 +225,8 @@ def load_stance(name):
 
     Raises ``ValueError`` on an unknown name (listing what is available), on an
     unknown table or top-level key, on a key its namespace does not own, on a
-    key named in ``[none_valued]`` that also carries a value, and on anything a
+    key named in ``[none_valued]`` that also carries a value, on a value that
+    cannot be read as its template key's type, and on anything a
     ``[models.<family>]`` declaration block gets wrong -- an unknown family, a
     key the family does not own, an incomplete membership, a block for a family
     the file does not select, two blocks claiming one key, or a member also
@@ -411,7 +429,11 @@ def _read_allow_restated(name, path, document):
 
 
 def _read_deltas(name, path, document):
-    """Return this file's OWN ``(params, flags, models)``, fully validated."""
+    """Return this file's OWN ``(params, flags, models)``, validated and typed.
+
+    The two deltas carry every value in the type its template key states; the
+    blocks come back AS WRITTEN, which is what they are kept for.
+    """
     template = dict(zip(NAMESPACES, default_config()))
     resolved = {namespace: dict(document.get(namespace, {}))
                 for namespace in NAMESPACES}
@@ -463,6 +485,20 @@ def _read_deltas(name, path, document):
                 f"key {key!r}{owner}"
             )
 
+    # TYPED TO THE TEMPLATE, by the same rule the ``--extra`` switches use.
+    # TOML distinguishes 1900 from 1900.0 and the config identity hashes the
+    # difference, so without this a file could spell the reference
+    # configuration's own value and resolve to an identity nothing else
+    # recognises. The rule runs BEFORE the declaration blocks resolve, so the
+    # block resolver compares flat values already in their template's type.
+    for namespace in NAMESPACES:
+        table = resolved[namespace]
+        for key in sorted(table):
+            table[key] = _coerce_delta(
+                name, path, namespace, key, table[key],
+                template[namespace][key], "",
+            )
+
     # DECLARATION BLOCKS, projected into the two deltas above. The solver's
     # own resolver does the work, so a configuration file and a driver cannot
     # disagree about what a block means, and its refusals (unknown family,
@@ -475,12 +511,48 @@ def _read_deltas(name, path, document):
         )
     except ValueError as error:
         raise ValueError(f"configuration {name!r} ({path}): {error}") from None
+    # A block's members are written in the file too, so they are typed to the
+    # template exactly as a flat delta is -- after the projection, where the
+    # family membership has already filed each member in its namespace.
+    projected = {"input_dict": block_params, "input_flags": block_flags}
+    for family_name in sorted(models):
+        for namespace, key in _family_members(family_name):
+            if key not in projected[namespace]:
+                continue
+            projected[namespace][key] = _coerce_delta(
+                name, path, namespace, key, projected[namespace][key],
+                template[namespace][key], f"[models.{family_name}] ",
+            )
     resolved["input_dict"].update(block_params)
     resolved["input_flags"].update(block_flags)
     return (
         resolved["input_dict"],
         resolved["input_flags"],
         {key: dict(value) for key, value in models.items()},
+    )
+
+
+def _coerce_delta(name, path, namespace, key, value, template, origin):
+    """Return one file value as the type its owning template key carries.
+
+    The call site of :func:`extra_overrides.coerce_value` for a CONFIGURATION
+    FILE: it builds the refusal's heading -- the file, where in it the value
+    was written, and the value itself -- and leaves the rule to the one place
+    that states it. ``origin`` is empty for a flat delta and names the
+    declaration block for a projected member.
+
+    ``None`` passes through untouched whatever the template says. TOML has no
+    null literal, so the only way a value reaches here as ``None`` is a key
+    named in a ``[none_valued]`` array, which is an explicit unset rather than
+    a value of the key's type -- ``nn0 = None`` on a key the template gives a
+    float is the reference configuration's own form, not a mis-spelling.
+    """
+    if value is None:
+        return None
+    return coerce_value(
+        key, value, template,
+        f"configuration {name!r} ({path}) {origin}sets {namespace} key "
+        f"{key} = {value!r}",
     )
 
 

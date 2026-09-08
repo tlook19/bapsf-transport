@@ -18,6 +18,16 @@ typed. Values that cannot be read as the owning key's type, and keys that
 neither template owns, raise ``ValueError`` at this layer, before anything is
 constructed.
 
+A COMMAND LINE is not the only place a configuration value is written, and a
+configuration FILE spells the same ambiguity: ``cathode_Ts_base_K = 1900`` is
+a TOML integer and ``1900.0`` a TOML float. So the rule itself lives in
+:func:`coerce_value` here, as ONE definition, and the file loader
+(``stance/stance_config.py``) applies it to the values it reads out of
+``[input_dict]``, ``[input_flags]`` and the ``[models.*]`` projection. What
+the two routes do NOT share is a string key's fallback: a command-line token
+is text and IS its own value, while a TOML string is already a string, so a
+file that gives a string key a number is refused rather than stringified.
+
 ``input_dict`` and ``input_flags`` share no key, so the template that OWNS a
 key is found by looking it up in both. Which namespace a value is FILED into
 is still the switch's -- ``--extra`` for params, ``--extra-flag`` for flags --
@@ -50,12 +60,28 @@ def _read(raw):
         return raw
 
 
-def _coerce(key, raw, value, template, switch):
+def coerce_value(key, value, template, where, raw=None):
     """Return ``value`` as the type ``template`` carries, or raise.
 
+    THE ONE DEFINITION of the coercion rule, and every route that reads a
+    configuration value calls it: the ``--extra`` switches below and the
+    configuration-FILE loader (``stance/stance_config.py``). One physical
+    configuration must carry ONE identity however its numbers were spelled,
+    and ``config_identity`` hashes the canonical JSON text -- where ``1900``
+    and ``1900.0`` are different bytes -- so a rule that normalised only the
+    command line would leave the files free to fork the identity instead.
+
     ``template`` is the key's value in :func:`default_config`, which is what
-    states the type. ``raw`` is the token as typed, used for a string key --
-    where the token itself is the value -- and in refusals.
+    states the type. ``where`` names the place the value was written, and
+    heads every refusal: a switch and its token, or a file and its table.
+
+    ``raw`` is the token AS TYPED, and only a value that arrived as TEXT has
+    one. The ``--extra`` route parses a bare token that may not be JSON at
+    all, so a string key's token IS its value and stands where the parse did
+    not produce a string. A value that arrived already typed -- from a TOML
+    table, where a quoted string is a string and ``1`` is an integer --
+    passes no token, and a string key there refuses a non-string like every
+    other key does.
     """
     kind = type(template)
     if kind not in _TYPE_NAMES:
@@ -74,13 +100,16 @@ def _coerce(key, raw, value, template, switch):
             return value
         if type(value) is int:
             return float(value)
-    else:
-        # A string key: every token is a legible value of its type, so the
-        # token as typed is the value. JSON quoting is honoured where it was
-        # used, so both ``k=ads_des`` and ``k="ads_des"`` give ``ads_des``.
-        return value if isinstance(value, str) else raw
+    elif isinstance(value, str):
+        return value
+    elif raw is not None:
+        # A string key on a TEXT route: every token is a legible value of its
+        # type, so the token as typed is the value. JSON quoting is honoured
+        # where it was used, so both ``k=ads_des`` and ``k="ads_des"`` give
+        # ``ads_des``.
+        return raw
     raise ValueError(
-        f"{switch} {key}={raw}: {key} carries {expected} -- the configuration "
+        f"{where}: {key} carries {expected} -- the configuration "
         f"template gives it {template!r} -- and {value!r} cannot be read as "
         f"one. Spell the value as {expected}."
     )
@@ -117,7 +146,9 @@ def coerce_override(key, raw, switch="--extra", templates=None):
             "which template owns the key in "
             "cablp/solvers/_sim1d/core/config.py and spell it exactly."
         )
-    return _coerce(key, raw, _read(raw), template, switch)
+    return coerce_value(
+        key, _read(raw), template, f"{switch} {key}={raw}", raw
+    )
 
 
 def parse_extra_overrides(items, switch="--extra"):
