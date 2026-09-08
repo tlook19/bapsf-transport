@@ -212,6 +212,24 @@ def run_case(case, base=None):
             # reason phi_c is.
             params["neutral_kinetic_dvm_cathode_jet"] = False
             params["neutral_kinetic_dvm_anode_jet"] = False
+            # WIDTH GOES WITH THE LAST JET IT COULD STILL SMEAR. The
+            # reference names neutral_kinetic_dvm_jet_launch_width for the
+            # cathode/anode jets just turned off above; if the end wall jet
+            # is not itself armed by this corner's own configuration, no
+            # surface jet remains and the width would be a silently inert
+            # control -- exactly what the solver refuses. Compute this from
+            # the resolved params rather than assuming: a corner (or a
+            # future reference) that arms the end-wall jet on its own has a
+            # jet left for the width to smear, and the key stays named.
+            if not any(
+                params.get(key)
+                for key in (
+                    "neutral_kinetic_dvm_cathode_jet",
+                    "neutral_kinetic_dvm_anode_jet",
+                    "neutral_kinetic_dvm_end_wall_jet",
+                )
+            ):
+                params["neutral_kinetic_dvm_jet_launch_width"] = None
     params.update(
         {
             "nx": 20,
