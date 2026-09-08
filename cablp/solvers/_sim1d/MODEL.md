@@ -646,6 +646,8 @@ both subtracted populations raise $\phi_a$ logarithmically:
 
 $$\psi_a=\Lambda_\text{anode}-\ln\!\left(\max\!\left(1+\frac{J_\text{anode}}{J_{i,a}},\epsilon\right)\right),\qquad \phi_a=\psi_aT_{e,\text{anode}}$$
 
+This is a Boltzmann floating-sheath balance evaluated at the mesh, with $J_{i,a}$ the $\eta$-scaled Bohm ion flux collected there (the same current `anode_collection_rhs` removes from the fluid), so the fall's sign is an output of that balance rather than an assumption: $\phi_a$ sits at its repelling maximum $\Lambda_\text{anode}T_{e,\text{anode}}$ when $J_\text{anode}\le0$ (no net current beyond the ion-scaled floating balance) and falls — through zero into an attracting drop if the mesh must pass enough net electron current — as $J_\text{anode}$ grows, entering $V_b$ through $\phi_a$ and thereby the beam launch drop $\phi_c$ and, downstream of it, $P_\text{prim}$.
+
 $$V_b=\phi_c+V_p-\phi_a,\qquad V_\text{dis}=V_b+V_\text{series}$$
 
 $V_p=I_\text{tot}R_p$ the ohmic gap drop across the Spitzer column
