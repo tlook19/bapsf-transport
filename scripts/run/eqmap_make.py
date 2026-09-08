@@ -69,7 +69,9 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config  # noqa: E402
 from extra_overrides import parse_extra_overrides  # noqa: E402
-from stance_config import available_stances  # noqa: E402
+from stance_config import (  # noqa: E402
+    STANCE_DIR, SUFFIX, available_stances, load_named_configuration,
+)
 from cablp.solvers._sim1d.core.neutral_seed_cache import (  # noqa: E402
     neutral_seed_signature,
 )
@@ -80,6 +82,32 @@ from cablp.solvers._sim1d.physics.neutrals import (  # noqa: E402
 # npz format tag. eqmap_slice.py refuses anything else.
 MAP_FORMAT = "sim1d-eqmap-v1"
 
+#: The checkout root, for writing a configuration's path the way it reads in
+#: the repository rather than as one worktree's absolute location.
+_ROOT = _Path(__file__).resolve().parents[2]
+
+
+def stance_header_value(stance):
+    """Return the header's record of WHICH configuration a map was built at.
+
+    A committed NAME records as itself: it names one file in
+    ``scripts/stances/`` and nothing else, so the name is already the whole
+    statement. A PATH records as the file the loader actually opened, written
+    from the checkout root, so replaying the map reads that file rather than a
+    guessed ``scripts/stances/`` location. ``None`` -- a map that names no
+    configuration -- records as the empty string, which replays as ``None``.
+    """
+    if stance is None:
+        return ""
+    named = load_named_configuration(stance)
+    if named.path == STANCE_DIR / f"{stance}{SUFFIX}":
+        return stance
+    path = named.path.resolve()
+    try:
+        return str(path.relative_to(_ROOT))
+    except ValueError:
+        return str(path)
+
 
 def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
     """Return the (params, flags) the map is built at.
@@ -88,8 +116,8 @@ def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
     plus the ES benchmark overrides -- so the map's equilibrated base is the
     base that configuration's runs would have equilibrated to for themselves.
 
-    ``stance`` is the committed configuration's name, or ``None`` for a map
-    that names none. A map header written before configurations were named
+    ``stance`` is the configuration's committed NAME or the PATH of a
+    configuration file, or ``None`` for a map that names none. A map header written before configurations were named
     carries no stance name, and replaying one through here with ``None``
     reproduces exactly the configuration it was built at; a NEW map states its
     configuration, because the driver refuses to build one that does not.
@@ -103,9 +131,7 @@ def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
         # run_m6_point's own neutral-exchange stance.
         params["neutral_exchange_model"] = "knudsen"
     if stance is not None:
-        from stance_config import load_stance
-
-        named = load_stance(stance)
+        named = load_named_configuration(stance)
         params.update(named.params)
         flags.update(named.flags)
     if nx is not None:
@@ -327,9 +353,11 @@ def main(argv=None):
                          "--es 0 omits the rung layer")
     stance_group = ap.add_mutually_exclusive_group()
     stance_group.add_argument(
-        "--stance", metavar="NAME", default=None,
-        help="committed configuration file (scripts/stances/NAME.toml) the "
-             "map is built at. Available: "
+        "--stance", metavar="NAME_OR_PATH", default=None,
+        help="configuration the map is built at: a committed configuration "
+             "name in scripts/stances/, or the path of a configuration file "
+             "(derived or not), which the map header records as the file the "
+             "loader read. Available: "
              + (", ".join(available_stances()) or "(none committed)"))
     stance_group.add_argument(
         "--no-stance", action="store_true",
@@ -448,7 +476,7 @@ def main(argv=None):
         "kind": "equilibration map: nn(z,t) through a foot-fill 101st cycle",
         "producer": "scripts/run/eqmap_make.py",
         # --- the stance the map was built at ---
-        "stance": "" if args.stance is None else args.stance,
+        "stance": stance_header_value(args.stance),
         "es": None if args.es == 0 else int(args.es),
         "nx": int(p_eff["nx"]),
         "cells": int(geometry.cells),
