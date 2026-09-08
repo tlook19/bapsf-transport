@@ -828,8 +828,9 @@ def cathode_beam_deposition_is_csda(input_dict):
     :func:`cathode_emitted_enthalpy_gap_netted`, which tells the sheath solve
     which flux its launch-enthalpy diagnostic rides at. The selector is an
     EQUALITY test with a Beer-Lambert fallback rather than a membership one,
-    so the two cannot select different routes only if they share this
-    function.
+    so any value that is not exactly ``"csda"`` selects Beer-Lambert; sharing
+    one function is what keeps the two readers from selecting different
+    routes.
     """
     return str(
         input_dict.get("beam_deposition_model", "beer_lambert")
@@ -3883,8 +3884,9 @@ def cathode_emission_sheath_power_W(result, T_s_K):
         there the released electrons ARE the primary beam, the launch
         potential already includes the enthalpy and the deposition route
         deposits it along the column, so booking it here as well would be the
-        same energy twice. The gate is the SOLVE's, read back off the result, so
-        this row and the beam cannot disagree about which of them carries it.
+        same energy twice. The gate is the SOLVE's, read back off the
+        result, so this row and the beam cannot disagree about which of them
+        carries it.
 
     ``+e (phi_c_plus - max(phi_c, 0)) Gamma_em``
         The remainder of the fall those same electrons drop through on their
