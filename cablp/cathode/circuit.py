@@ -377,6 +377,58 @@ class SolverResult:
     phi_c_ceiling_V: float = float("nan")
     circuit_V_avail_V: float = float("nan")
     bound_active: float = float("nan")
+    # Emitted-electron launch enthalpy carried ON THE BEAM
+    # (``cathode_enthalpy_on_beam``). ``beam_launch_enthalpy_V`` is the
+    # ``2 k_B T_s / e`` [V] added to the beam launch potential ahead of the
+    # anode-mesh climb, and ``P_emitted_enthalpy_on_beam`` [W] the power that
+    # potential carries at the emitted flux the march launches --
+    # ``beam_launch_enthalpy_V * I_eth_star``, the FULL released current with
+    # no bypass factor, because the march launches all of it.
+    #
+    # Both are 0.0 unless the key is armed AND the emitted electrons ARE the
+    # primary beam, which is the regime ``phi_c_minus == 0``: with a virtual
+    # cathode present the emitted population is not the launched beam and the
+    # enthalpy stays on the cathode-adjacent cell. 0.0 is therefore both the
+    # dataclass default and the armed-but-out-of-regime value, and it is the
+    # value :func:`beam_launch_potential_V` reads as "no shift", so an unarmed
+    # run's launch potential is the ``phi_c`` object it always was.
+    beam_launch_enthalpy_V: float = 0.0
+    P_emitted_enthalpy_on_beam: float = 0.0
+
+
+def _launch_potential_V(phi_c, enthalpy_V):
+    """Return the launch potential [V] for a drop and an enthalpy shift.
+
+    ``enthalpy_V`` of exactly 0.0 -- an unarmed run, and an armed run outside
+    the beam-launched regime -- returns ``phi_c`` AS THE SAME OBJECT, so every
+    downstream consumer is bit for bit what it was before the shift existed.
+    Otherwise the shift is ADDED: the emitted electrons enter the column with
+    their launch enthalpy on top of the fall they dropped through.
+
+    The single definition of the shift. Its two readers are the three sheath
+    solves, which apply it while assembling ``P_prim`` before the result
+    object exists, and :func:`beam_launch_potential_V`, which applies it to a
+    solved result -- so a build cannot end up with two launch potentials.
+    """
+    if enthalpy_V == 0.0:
+        return phi_c
+    return phi_c + enthalpy_V
+
+
+def beam_launch_potential_V(result):
+    """Return the potential [V] a solved sheath launches its beam at.
+
+    ``result.phi_c`` plus ``result.beam_launch_enthalpy_V``, the emitted
+    electrons' launch enthalpy when ``cathode_enthalpy_on_beam`` has placed it
+    on the beam. The sum is formed BEFORE any anode-mesh climb: the climb is a
+    step downstream of the mesh and is subtracted from this potential by
+    :func:`cablp.cathode.circuit_idriven.beam_launch_energy_eV`, which owns
+    that half.
+
+    With the enthalpy at 0.0 the return value IS ``result.phi_c``, the same
+    object, which is what keeps an unarmed beam bit-for-bit historical.
+    """
+    return _launch_potential_V(result.phi_c, result.beam_launch_enthalpy_V)
 
 
 @dataclass(slots=True)
@@ -871,6 +923,7 @@ def solve(
     anode_current_A: float | None = None,
     anode_T_e: float | None = None,
     tail_anode_current_A: float = 0.0,
+    emitted_enthalpy_V: float = 0.0,
 ) -> SolverResult:
     """Solve for all sheath potentials and currents given device config and plasma state.
 
@@ -892,6 +945,14 @@ def solve(
         value the LAST accepted step measured: the deposition that produces it
         is solved after this, so the coupling is lagged one step rather than
         iterated. 0.0 (the default) is an exact identity on every float here.
+    emitted_enthalpy_V : float
+        The emitted electrons' launch enthalpy ``2 k_B T_s / e`` [V] when
+        ``cathode_enthalpy_on_beam`` has placed it on the beam, 0.0 (the
+        default) otherwise. It is applied only where the emitted electrons ARE
+        the primary beam -- ``phi_c_minus == 0`` -- and is reported back as
+        ``beam_launch_enthalpy_V``; elsewhere it is dropped and the caller's
+        cathode-adjacent booking stands. 0.0 is an exact identity on every
+        float here.
     floating : bool
         RETIRED. True raises: the separate open-circuit root this used to
         select did not satisfy its own current balance at an emitting
@@ -1223,7 +1284,18 @@ def solve(
         P_wall = I_tot * config.V_bank
         P_load = I_tot * V_b
     P_comp = I_tot**2 * config.R_comp
-    P_prim = (1.0 - eta * beam_bypass_fraction) * I_eth_star * phi_c
+    # The launch enthalpy rides the beam only where the emitted electrons ARE
+    # the beam; with a virtual cathode present the caller books it on the
+    # cathode-adjacent cell instead and this is exactly 0.0.
+    beam_launch_enthalpy_V = (
+        float(emitted_enthalpy_V) if phi_c_minus == 0.0 else 0.0
+    )
+    P_emitted_enthalpy_on_beam = beam_launch_enthalpy_V * I_eth_star
+    P_prim = (
+        (1.0 - eta * beam_bypass_fraction)
+        * I_eth_star
+        * _launch_potential_V(phi_c, beam_launch_enthalpy_V)
+    )
     P_ohmic = I_tot * V_p
     P_cathode_e = _P_elec(phi_c, T_e, I_i, Lambda)
     P_cathode_i = _P_ion(phi_c, T_e, I_i)
@@ -1264,6 +1336,8 @@ def solve(
         P_net=P_net,
         P_net2=P_net2,
         P_loss=P_loss,
+        beam_launch_enthalpy_V=beam_launch_enthalpy_V,
+        P_emitted_enthalpy_on_beam=P_emitted_enthalpy_on_beam,
         regime=regime,
         long_mfp=long_mfp,
         beam_bypass_fraction=beam_bypass_fraction,
