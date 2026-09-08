@@ -8912,6 +8912,15 @@ class LAPDSim1D:
         # signature and every existing trajectory are bit-identical.
         flags["end_wall_sheath_full_debit"] = False
         flags["cathode_face_full_debit"] = False
+        # ...and the key that only MOVES the cathode key's enthalpy row, for
+        # the same reason once more: its construction guard requires exactly
+        # the key the line above has just cleared, so leaving it armed would
+        # refuse the INNER sim on a state where the row it places does not
+        # exist. It is inert here twice over -- no cathode solve means no beam
+        # to carry the enthalpy and no row to move it off. Clearing it changes
+        # no configuration that constructed before: every config that reaches
+        # this line armed is one that raised.
+        flags["cathode_enthalpy_on_beam"] = False
         # The two DVM directed-recycle jets, cleared for the SAME reason as
         # cathode_coupling above: this pre-solve has no plasma and no cathode
         # solve, so there is no collected ion flux for either jet to split and

@@ -26900,6 +26900,32 @@ def _case_cathode_enthalpy_on_beam_placement(
     else:
         raise AssertionError("cathode_enthalpy_on_beam accepted a non-bool")
 
+    # (v) ...AND THAT REFUSAL MUST NOT REACH THE EQUILIBRATION PRE-SOLVE.
+    # `run_neutral_equilibration` builds a second LAPDSim1D for the
+    # neutrals-only pre-solve and clears `cathode_face_full_debit` on its own
+    # copy of the flags -- that pre-solve has no plasma at either end face and
+    # no cathode solve, so the key is inert there and its own guard would
+    # otherwise refuse the inner sim. The guard in (iv) requires exactly the
+    # key that line clears, so this key has to be cleared beside it or a legal
+    # OUTER configuration turns into an inner refusal. The gap is not
+    # hypothetical: the same class of failure surfaced at the 2026-09-02
+    # kinetic stance event, on two DVM jet guards, and only after a capture
+    # had been started. NO SOLVE -- t_end = 0.0 runs the pre-solve to zero
+    # steps, so this exercises the inner construction and nothing else.
+    _eb_eq_flags = dict(_eb_flags)
+    _eb_eq_flags["cathode_enthalpy_on_beam"] = True
+    _eb_eq_flags["neutral_equilibration"] = True
+    _eb_eq_params = dict(_eb_params)
+    _eb_eq_params["neutral_equilibration_cycles"] = 1
+    _eb_eq_params["neutral_equilibration_dt"] = 1.0e-3
+    _eb_eq_sim = LAPDSim1D(_eb_eq_params, _eb_eq_flags)
+    _eb_eq_result = _eb_eq_sim.run_neutral_equilibration(t_end=0.0)
+    assert _eb_eq_result.time[-1] == 0.0
+    # ... on the pre-solve's OWN copy: the outer run still carries the key it
+    # was configured with, because that is the run the placement is for.
+    assert _eb_eq_sim._flags["cathode_enthalpy_on_beam"] is True
+    assert _eb_eq_sim._cathode_enthalpy_on_beam is True
+
 
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
