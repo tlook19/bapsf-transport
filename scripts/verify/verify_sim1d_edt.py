@@ -228,7 +228,6 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
     if _dir not in _sys.path:
         _sys.path.insert(0, _dir)
 
-from b5cj_bitinert_ab import step_once  # noqa: E402
 from baseline_sim1d import build_baseline_config  # noqa: E402
 from edt_consult_pins import (  # noqa: E402
     ANODE_HANDSHAKE_CHOICES,
@@ -318,6 +317,20 @@ class Report:
 
     def note(self, gate, line):
         print(f"[    ] {gate} {line}")
+
+
+def step_once(sim):
+    """Advance one step through the production step-acceptance path."""
+    split = sim._flags.get("implicit_heat_conduction", False)
+    diag = sim.suggest_timestep(include_heat_conduction=not split)
+
+    def generate():
+        attempt, retries, reason, events = sim._attempt_step_with_retries(
+            dt=diag.dt, operator_split=None, diag=diag,
+        )
+        return attempt, (retries, reason, events)
+
+    return sim._accept_step_with_picard(generate)
 
 
 def _armed_golden(charge_death, anode_handshake):
