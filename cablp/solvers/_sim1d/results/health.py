@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from ..core.geometry import PLASMA_DEAD_ROLES
+
 
 def summarize_result(result):
     """Return lightweight health diagnostics for a saved sim1d trajectory."""
@@ -200,7 +202,13 @@ def _plasma_active(result):
         return np.asarray(result.plasma_active, dtype=bool)
     roles = np.asarray(getattr(result, "cell_role", ()), dtype=object)
     if roles.size:
-        return ~np.isin(roles, ("plenum", "obstruction"))
+        # ``PLASMA_DEAD_ROLES`` itself, not a literal restating it: a role
+        # added there and forgotten here would silently read as plasma-live.
+        # ``np.isin`` wants a sequence rather than a set (it treats a set as a
+        # single object element), so the frozenset is sorted into one -- sorted
+        # rather than ``list`` only so the argument is reproducible; membership
+        # is order-independent, so the two spellings test identically.
+        return ~np.isin(roles, sorted(PLASMA_DEAD_ROLES))
     return np.ones(np.asarray(result.plasma_volume_cm3).shape, dtype=bool)
 
 
