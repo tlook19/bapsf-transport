@@ -121,16 +121,40 @@ GATE REGISTRY
   ARMED; and a LIVE discharge state (``export_counts`` arm, ``GOLDEN_STEPS``
   steps) with the currents set to zero.
   PASS: (i) exactly zero on every cell -- not "small", zero; (ii) the
-  unguarded arithmetic leaves ``G5_DISCONTINUITY_W`` on the launch cell and
-  nowhere else, matching its closed form to 1e-12.
+  unguarded arithmetic leaves the residue on the launch cell and nowhere
+  else, and it equals the closed form ``T_e[launch] x lo_work[launch]``
+  computed LIVE from the same run, to 1e-12.
 
   Both are needed, and (ii) is the one that earns its place. The operator
   answers J = 0 with a GUARD, not with arithmetic, so calling it at zero
   current only reaches an early return: (i) alone certifies that the guard
   fires and says nothing about what it is for. The cathode-face work channel
   rides the difference velocity ``u_e - u_i`` and does not vanish with the
-  current, so the guard is cutting out a real residue; pinning its size is
-  what stops a future change to that channel moving it silently.
+  current, so the guard is cutting out a real residue; tying its size to the
+  closed form is what stops a future change to that channel moving it
+  silently.
+
+  WHY A CLOSED FORM AND NOT A PINNED SCALAR. The comparison is between two
+  routes to the same quantity on ONE run: the measured route assembles the
+  residue the way the operator does, from the face work currents divided by
+  the face densities and multiplied back by the cell density, while the
+  closed form takes the launch cell's electron temperature times the launch
+  face's work current directly. They agree only if the high face contributes
+  nothing at zero current, the cathode face's density normalization cancels
+  against the cell it is taken from, and the sign convention is the one the
+  operator uses -- so a change to the work channel breaks the agreement.
+  Both routes are recomputed on every run, so the statement survives
+  configuration rotations that move the run's state without touching that
+  channel. A pinned scalar cannot: it is the residue's VALUE on one vintage
+  of the configuration, and any unrelated key rotation moves the state the
+  residue rides on, after which the pin fails on its own staleness rather
+  than on its subject. NON-VACUITY is gated with it -- the measured residue
+  finite and strictly positive, and each closed-form operand finite and
+  non-zero -- because an equality of zeros would pass while certifying
+  nothing. NEGATIVE CONTROLS, pre-registered in ``G5_NEGATIVE_CONTROLS`` and
+  run via ``--g5-negative-control``: perturbing the temperature operand must
+  fail the comparison, and taking the closed form one cell below the launch
+  cell must fail the non-vacuity guard on a dead work operand.
 
   WHAT THE RESIDUE IS. It is a
   discontinuity in the CLOSURE FAMILY, not in the physics. The GUARDED zero
@@ -138,10 +162,11 @@ GATE REGISTRY
   plasma is ambipolar and the ion-velocity pressure work is already exact --
   while the residue is the DRIVEN face closure evaluated outside its own
   validity, where the repelling-sheath statement its work channel encodes no
-  longer holds. So the number below is not a physical jump, and it is
-  fixture-specific by nature: it equals T_e[launch] x that face's ion current
-  on the state it is measured at, which is why the fixture is pinned with it.
-  A run crosses this boundary ONCE, at cathode-solve shutoff.
+  longer holds. So the residue is not a physical jump, and it is
+  state-specific by nature: it equals T_e[launch] x that face's ion current
+  on the state it is measured at, which is exactly why it is gated against
+  that product rather than against a number. A run crosses this boundary
+  ONCE, at cathode-solve shutoff.
 
 **G6 -- the afterglow clause (REPORTED, NOT GATED).**
   QUANTITY: the operator's net over the source region during afterglow.
@@ -241,6 +266,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         _sys.path.insert(0, _dir)
 
 from baseline_sim1d import build_baseline_config  # noqa: E402
+from golden_digest_gate import DIGEST_PARAM_OVERRIDES  # noqa: E402
 from edt_consult_pins import (  # noqa: E402
     ANODE_HANDSHAKE_CHOICES,
     CHARGE_DEATH_CHOICES,
@@ -287,11 +313,32 @@ PIN_TOLERANCE = 0.15
 #: are gated, because quoting either alone was the review finding.
 G4_TARGETS_CLOSURE_KW = (35.4, 29.9)
 
-#: The discontinuity the J = 0 guard removes, in watts on the launch cell,
-#: measured at the ``export_counts`` arm after ``GOLDEN_STEPS`` steps. It is
-#: fixture-specific by nature -- it rides that state's own u_1 and n_1 -- so
-#: the fixture is pinned with it.
-G5_DISCONTINUITY_W = 0.372957143
+#: G5's bar on the measured-versus-closed-form residual. The two routes to
+#: the residue differ by ONE divide-then-multiply round trip through a
+#: bit-identical density (the measured route forms ``n * (lo_work / n_face)``
+#: at a closed cathode face where ``n_face`` IS the launch cell's own ``n``;
+#: the closed form uses ``lo_work`` directly), so the arithmetic bounds their
+#: difference at about two ulp of the product -- order 1e-16 relative. The
+#: residual below is normalized by ``max(|measured|, 1 W)``, so on a
+#: sub-watt residue this bar reads as 1e-12 W absolute: four orders of
+#: headroom over the arithmetic bound, and nine orders below the drift a
+#: stale pin on the residue's VALUE would report.
+G5_CLOSED_FORM_TOLERANCE = 1e-12
+
+#: G5's pre-registered negative controls, selected by ``--g5-negative-control``
+#: or by passing the name to :func:`gate5`. Each perturbs exactly ONE side of
+#: the comparison and the gate MUST fail: ``operand-scale`` moves the
+#: temperature operand off the value the measured route used, which the
+#: residual catches; ``launch-offset`` takes the closed form one cell below
+#: the launch cell, where no work current is booked, which the non-vacuity
+#: guard catches on a dead operand. A control that does not fire means the
+#: comparison has gone inert.
+G5_NEGATIVE_CONTROLS = ("operand-scale", "launch-offset")
+
+#: The relative perturbation ``operand-scale`` applies to the temperature
+#: operand. Small enough that it is plainly a perturbation and not a
+#: different quantity, and still six orders above the tolerance.
+G5_OPERAND_PERTURBATION = 1.0e-6
 
 
 class Report:
@@ -324,7 +371,7 @@ def step_once(sim):
 
 
 def _armed_golden(charge_death, anode_handshake):
-    params, flags = build_baseline_config({"max_steps_action": "stop"})
+    params, flags = build_baseline_config(DIGEST_PARAM_OVERRIDES)
     params = dict(params)
     flags = dict(flags)
     flags["electron_drift_transport"] = True
@@ -364,11 +411,7 @@ def gate1_strip_control(report):
     existed, and such a pin is precisely what stops being true at the next
     unrelated rotation.
     """
-    from golden_digest_gate import (
-        DEFAULT_REFERENCE,
-        DIGEST_PARAM_OVERRIDES,
-        digest_config_identity,
-    )
+    from golden_digest_gate import DEFAULT_REFERENCE, digest_config_identity
 
     params, flags = build_baseline_config(DIGEST_PARAM_OVERRIDES)
     live = digest_config_identity(params, flags)
@@ -629,8 +672,35 @@ def gates3410(report, geom, h5):
         )
 
 
-def gate5(report):
-    """J = 0: the operator is exactly zero, by configuration and by arithmetic."""
+def gate5(report, negative_control=None):
+    """J = 0: the operator is exactly zero, by configuration and by arithmetic.
+
+    The second half measures the residue the guard removes and gates it
+    against its CLOSED FORM, computed live from the same run: the launch
+    cell's electron temperature times the launch face's work current,
+    ``T_e[launch] x lo_work[launch]``. The units close on their own -- eV
+    times amperes is watts -- and the equality is a real statement about the
+    operator's arithmetic rather than a restatement of it, because it holds
+    only if the high face contributes nothing at zero current, the cathode
+    face's density normalization cancels against the cell it is taken from,
+    and the sign is the operator's. A change to the work channel breaks it.
+
+    WHAT A PINNED SCALAR CANNOT DO. The residue is state-specific: it rides
+    the launch cell's own ``n`` and ``u`` at the step this gate stops at, so
+    its VALUE moves whenever an unrelated configuration key rotates the run
+    that reaches that step. A pin on that value then reports its own
+    staleness -- a mismatch that says nothing about the channel the gate
+    exists to watch. Both sides of the closed-form comparison are recomputed
+    on every run, so the statement is invariant under those rotations while
+    staying sensitive to the thing it gates.
+
+    NON-VACUITY is gated, not assumed: the measured residue must be finite
+    and strictly positive and each closed-form operand finite and non-zero,
+    so an inert state cannot pass this as an equality of zeros.
+
+    ``negative_control`` selects a pre-registered perturbation from
+    ``G5_NEGATIVE_CONTROLS``; under either one this gate MUST fail.
+    """
     params, flags = default_config()
     params = dict(params)
     flags = dict(flags)
@@ -683,8 +753,9 @@ def gate5(report):
     # exists to cut out. It is a DOCUMENTED magnitude, not a defect: the
     # cathode-face work channel rides the difference velocity u_e - u_i and
     # does not vanish with the current, so at J = 0 the unguarded arithmetic
-    # leaves this much on the launch cell. Pinning it means a future change to
-    # that channel cannot move the discontinuity silently.
+    # leaves this much on the launch cell. Gating it against its closed form
+    # means a future change to that channel cannot move the discontinuity
+    # silently, and does so without a scalar that ages out of date.
     geom = live._plasma_geometry()
     spec = live._electron_drift
     derived = derive_state(
@@ -718,19 +789,55 @@ def gate5(report):
         where=n_face[index + 1] > 0.0,
     )
     unguarded = -Te * n * (w_hi - w_lo)
+
+    # The closed form is built from the same run's own quantities. Under a
+    # pre-registered negative control one side of it is perturbed, and the
+    # checks below must then report a failure rather than absorb it.
+    closed_form_cell = launch
+    perturbation = 1.0
+    if negative_control == "launch-offset":
+        closed_form_cell = launch - 1
+    elif negative_control == "operand-scale":
+        perturbation = 1.0 + G5_OPERAND_PERTURBATION
+    elif negative_control is not None:
+        raise ValueError(
+            f"unknown G5 negative control {negative_control!r}; the "
+            f"pre-registered ones are {list(G5_NEGATIVE_CONTROLS)}"
+        )
+
     measured_W = float(unguarded[launch])
-    closed_form_W = float(Te[launch] * lo_work[launch])
+    Te_operand = float(Te[closed_form_cell]) * perturbation
+    work_operand = float(lo_work[closed_form_cell])
+    closed_form_W = Te_operand * work_operand
     residual = abs(measured_W - closed_form_W) / max(abs(measured_W), 1.0)
+    carried = int(np.count_nonzero(unguarded))
+    # NON-VACUITY, gated: a zero or non-finite residue, or a closed form built
+    # on a dead operand, would make the equality below an equality of zeros.
+    measured_live = bool(np.isfinite(measured_W) and measured_W > 0.0)
+    operands_live = bool(
+        np.isfinite(Te_operand)
+        and Te_operand != 0.0
+        and np.isfinite(work_operand)
+        and work_operand != 0.0
+    )
+    control = (
+        "" if negative_control is None
+        else f"NEGATIVE CONTROL {negative_control!r} armed -- must FAIL. "
+    )
     report.check(
         "G5",
-        abs(measured_W - G5_DISCONTINUITY_W) / abs(G5_DISCONTINUITY_W) <= 1e-6
-        and residual <= 1e-12
-        and int(np.count_nonzero(unguarded)) == 1,
-        f"unguarded arithmetic at zero current: {measured_W:.9f} W on the "
-        f"launch cell against the pinned {G5_DISCONTINUITY_W:.6f} W, and "
-        f"against its closed form T_e[launch] x lo_work[launch] = "
-        f"{closed_form_W:.9f} W (relative {residual:.3e}); "
-        f"{int(np.count_nonzero(unguarded))} cell carries it (1 required). "
+        measured_live
+        and operands_live
+        and residual <= G5_CLOSED_FORM_TOLERANCE
+        and carried == 1,
+        f"{control}unguarded arithmetic at zero current: {measured_W:.9f} W "
+        f"on launch cell {launch} against its closed form "
+        f"T_e[{closed_form_cell}] x lo_work[{closed_form_cell}] = "
+        f"{Te_operand:.9e} eV x {work_operand:.9e} A = {closed_form_W:.9f} W "
+        f"-- residual {residual:.3e} (bar "
+        f"{G5_CLOSED_FORM_TOLERANCE:.0e}); non-vacuity: measured finite and "
+        f"positive={measured_live}, both operands finite and "
+        f"non-zero={operands_live}; {carried} cell carries it (1 required). "
         "This is the DOCUMENTED discontinuity the guard removes, measured at "
         f"the export_counts arm after {GOLDEN_STEPS} steps",
     )
@@ -1029,6 +1136,14 @@ def main(argv=None):
     )
     ap.add_argument("--golden-steps", type=int, default=GOLDEN_STEPS)
     ap.add_argument(
+        "--g5-negative-control",
+        choices=G5_NEGATIVE_CONTROLS,
+        default=None,
+        help="arm one of G5's pre-registered negative controls; the suite "
+             "MUST then report G5 as FAILED, and a clean run afterwards MUST "
+             "restore the pass",
+    )
+    ap.add_argument(
         "--registration",
         action="store_true",
         help="print the gate registry and exit without running anything",
@@ -1057,7 +1172,7 @@ def main(argv=None):
         gates3410(report, geom, h5)
         gate6(report, geom, h5)
         gate12(report, geom, h5)
-    gate5(report)
+    gate5(report, args.g5_negative_control)
     gate11(report, args.golden_steps)
 
     print("=" * 78)
