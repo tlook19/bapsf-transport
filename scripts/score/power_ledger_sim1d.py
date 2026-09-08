@@ -75,14 +75,24 @@ ENERGY_ROWS = ("Ee", "Ei", "En", "En_a")
 #: and reports the CURRENT label whatever the artifact spells it. It is a
 #: read alias only: nothing here is ever written.
 LEGACY_LABEL_ALIASES = {
+    # the saved cell role
     "collector": "end_wall",
+    # saved rhs_terms channel / cathode_diagnostics dataset names
     "collector_e_sheath_climb": "end_wall_e_sheath_climb",
-    "collector_face": "end_wall_face",
     "collector_surface_power_W": "end_wall_surface_power_W",
+    # saved dvm_particle_ledger dataset names
     "birth_collector_face": "birth_end_wall_face",
     "birth_collector_jet": "birth_end_wall_jet",
     "energy_birth_collector_face": "energy_birth_end_wall_face",
     "energy_birth_collector_jet": "energy_birth_end_wall_jet",
+    # the DVM CHANNEL names those rows are derived from, and the internal
+    # per-attempt booking record. Neither is a dataset name on its own; both
+    # are carried so a caller holding a channel name read off an old
+    # artifact's row can resolve it here rather than re-deriving the map.
+    "collector_face": "end_wall_face",
+    "collector_jet": "end_wall_jet",
+    "collector_jet_energy_booking": "end_wall_jet_energy_booking",
+    # saved params/flags keys
     "collector_length_cm": "end_wall_length_cm",
     "collector_sheath_full_debit": "end_wall_sheath_full_debit",
     "neutral_kinetic_dvm_collector_jet": "neutral_kinetic_dvm_end_wall_jet",

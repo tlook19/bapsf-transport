@@ -9318,7 +9318,17 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     # so shipped on single-cathode runs as five NaN and seven 0.0 columns
     # nothing could fill. There is no carve-out now: no prefix, no rows.
     assert "end_phi_c" not in cathode_diag
-    assert not [k for k in cathode_diag if k.startswith("end_")]
+    # ONE row in this group legitimately begins with ``end_`` and is not a
+    # twin-cathode dataset: ``end_wall_surface_power_W``, the far face's
+    # surface-power ledger line, which every run carries. It is excluded BY
+    # NAME rather than by loosening the prefix, and asserted PRESENT, so the
+    # exemption is pinned to that one row instead of opening the test to any
+    # future ``end_*`` name.
+    assert "end_wall_surface_power_W" in cathode_diag
+    assert not [
+        k for k in cathode_diag
+        if k.startswith("end_") and k != "end_wall_surface_power_W"
+    ]
     assert np.all(
         np.isin(
             cathode_diag["source_regime"],
@@ -25710,7 +25720,10 @@ def _case_dvm_jet_rn_interval_refusals():
             "0 < R_E <= R_N < 1",
         ),
         (
-            "end_wall",
+            # The surface's name AS THE MESSAGE SPELLS IT: the validators name
+            # the face in prose ("the DVM end wall jet's R_N ..."), so the
+            # label checked below is the prose form, not the key's.
+            "end wall",
             {
                 "neutral_kinetic_dvm_end_wall_jet": True,
                 "neutral_kinetic_dvm_end_wall_jet_R_N": 0.0,

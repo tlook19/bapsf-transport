@@ -90,10 +90,9 @@ The neutral gas fills the whole vessel, while the plasma occupies only part of
 it — a plenum behind the cathode, and any obstructed volume, carry neutral
 transport but no plasma. **The first cell is that neutral-only plenum; the last
 is the end wall cell, a live plasma cell terminated by an absorbing face.**
-That face is the LAPD chamber's end wall: there is no distinct collector
-electrode, and the `end_wall` cell role it carries was formerly named
-`collector`, which is the value a trajectory saved before the rename holds in
-`geometry/cell_role`.
+That face is the LAPD chamber's end wall, not a separate electrode, and the
+`end_wall` cell role it carries was formerly named `collector` — the value a
+trajectory saved before the rename holds in `geometry/cell_role`.
 Both run the same operators as every other cell. Every cell and every face
 records whether plasma lives there: a face at the edge of the plasma is CLOSED
 to it, and the subset of those faces where plasma is absorbed by a surface
