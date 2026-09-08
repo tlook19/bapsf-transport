@@ -50,8 +50,8 @@ b_11s_21p = [7.087e-1, -9.347e-2, -1.598e0, 2.986e0, -1.293e0, 3.086e-1]
 #   sigma = pi*a0^2 * Ry / (g_i * E) * Omega(x),  g_i = 1 for 1^1S.
 # form "allowed"  -> Table 1 / Eq. (2), 6 coefficients (n^1P levels)
 # form "forbidden"-> Table 2 / Eq. (3), 5 coefficients (n^1S, n^1D, n^1F)
-# Coefficients transcribed from the published tables and verified against the
-# rendered PDF pages digit by digit (2026-07-20); the 2^1P row is identical to
+# Coefficients transcribed from the published tables and checked digit by
+# digit against the rendered PDF pages; the 2^1P row is identical to
 # the in-repo b_11s_21p (provenance anchor for the whole set). Fit accuracy is
 # 5-10% outside the threshold-resonance region (paper Sec. 2); underlying
 # cross sections carry the 10-30% assessment of the DeltaS = 0 group.
