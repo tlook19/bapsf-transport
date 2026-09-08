@@ -106,9 +106,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     stance_group = ap.add_mutually_exclusive_group()
     stance_group.add_argument(
-        "--stance", metavar="NAME", default=None,
-        help="committed configuration file (scripts/stances/NAME.toml), or a "
-             "configuration file's path, this sweep is based on. Available: "
+        "--stance", metavar="NAME_OR_PATH", default=None,
+        help="committed configuration name in scripts/stances/, or the path "
+             "of a configuration file, this sweep is based on. Available: "
              + (", ".join(available_stances()) or "(none committed)"))
     stance_group.add_argument(
         "--no-stance", action="store_true",

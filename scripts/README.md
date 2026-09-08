@@ -21,11 +21,11 @@ identity. **No entry point that builds a solver has a bare mode.** Every driver 
 `run/`, the scorer's own run route in `score/compare_sim1d_es1.py`, and
 `gates/audit_sim1d_equilibration_duty.py` each take `--config`/`--stance` or an
 explicit `--no-stance`, so an artifact can always say which configuration
-produced it. The campaign drivers `run/run_m6_point.py` and
-`run/run_mechanism_ladder.py` take either form of that value: a committed
-configuration NAME in `stances/`, or the PATH of a configuration file, so a
-derived configuration runs from where it lives and records the same lineage
-either way. One deliberate exception, which names a
+produced it. That value takes either form everywhere it is accepted: a
+committed configuration NAME in `stances/`, or the PATH of a configuration
+file, derived or not — so a derived configuration runs from where it lives,
+and the lineage recorded is the same either way. One deliberate exception,
+which names a
 configuration without being asked: `run/capture_phase3_rhs.py` runs one locked
 recipe and takes the reference configuration's name from it. Scoring an
 existing artifact (`compare_sim1d_es1.py --from-h5`) names nothing on purpose:

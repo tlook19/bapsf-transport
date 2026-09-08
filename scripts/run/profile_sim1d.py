@@ -6,7 +6,9 @@ be analysed later without re-running it.
 
 Config authority
 ----------------
-``--stance NAME`` names the configuration to profile, and its own mesh and
+``--stance NAME_OR_PATH`` names the configuration to profile -- a committed
+configuration name in ``scripts/stances/``, or the PATH of a configuration
+file (derived or not) -- and its own mesh and
 afterglow budget are the defaults for ``--nx`` and ``--tau-afterglow`` --
 read from the file, never transcribed, so a profile cannot report a cost for a
 configuration it did not run.  The shared driver package underneath comes from
@@ -99,9 +101,12 @@ from cablp.solvers._sim1d import LAPDSim1D  # noqa: E402
 from cablp.solvers._sim1d.results.io import save_result_hdf5  # noqa: E402
 from compare_sim1d_es1 import run_model  # noqa: E402
 from extra_overrides import parse_extra_overrides  # noqa: E402
-from stance_config import available_stances, load_stance  # noqa: E402
+from stance_config import (  # noqa: E402
+    available_stances, load_named_configuration,
+)
 
-# This instrument profiles a NAMED configuration -- ``--stance NAME`` -- and
+# This instrument profiles a NAMED configuration -- ``--stance NAME_OR_PATH``
+# -- and
 # takes its mesh and its afterglow budget FROM THAT FILE. Neither is
 # transcribed here, so the instrument cannot drift from the configuration it
 # says it profiled, and neither is
@@ -427,7 +432,7 @@ def _run_production(nx, tau_afterglow, exchange_model, t_end, extra_pairs,
     extra = {"tau_afterglow": tau_afterglow}
     configuration = None
     if stance is not None:
-        named = load_stance(stance)
+        named = load_named_configuration(stance)
         extra.update(named.params)
         configuration = named.lineage
     extra.update(parse_extra_overrides(extra_pairs, "--extra"))
@@ -478,9 +483,10 @@ def main(argv=None):
     parser.add_argument("--out-dir", default=str(SCRIPT_DIR))
     stance_group = parser.add_mutually_exclusive_group()
     stance_group.add_argument(
-        "--stance", metavar="NAME", default=None,
-        help="committed configuration file (scripts/stances/NAME.toml) to "
-             "profile; its own nx and tau_afterglow are the defaults for the "
+        "--stance", metavar="NAME_OR_PATH", default=None,
+        help="configuration to profile: a committed configuration name in "
+             "scripts/stances/, or the path of a configuration file (derived "
+             "or not); its own nx and tau_afterglow are the defaults for the "
              "two options below. Available: "
              + (", ".join(available_stances()) or "(none committed)"))
     stance_group.add_argument(
@@ -538,7 +544,7 @@ def main(argv=None):
     # The mesh and the afterglow budget default to the NAMED configuration's
     # own, so the profile reports the cost of the configuration it names.
     if args.stance is not None:
-        _named_params = load_stance(args.stance).params
+        _named_params = load_named_configuration(args.stance).params
         if args.nx is None:
             args.nx = int(_named_params["nx"])
         if args.tau_afterglow is None:

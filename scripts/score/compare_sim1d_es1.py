@@ -104,7 +104,9 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
     if _dir not in _sys.path:
         _sys.path.insert(0, _dir)
 
-from stance_config import available_stances, load_stance  # noqa: E402
+from stance_config import (  # noqa: E402
+    available_stances, load_named_configuration, load_stance,
+)
 
 OVERLAY = _SCRIPTS / "data" / "es1_sim1d_overlay.npz"
 
@@ -2878,10 +2880,11 @@ def main(argv=None):
     )
     stance_group = parser.add_mutually_exclusive_group()
     stance_group.add_argument(
-        "--stance", metavar="NAME", default=None,
-        help="committed configuration file (scripts/stances/NAME.toml) the RUN "
-             "route builds its model at; ignored by --from-h5, which scores "
-             "the artifact's own configuration. Available: "
+        "--stance", metavar="NAME_OR_PATH", default=None,
+        help="configuration the RUN route builds its model at: a committed "
+             "configuration name in scripts/stances/, or the path of a "
+             "configuration file (derived or not); ignored by --from-h5, "
+             "which scores the artifact's own configuration. Available: "
              + (", ".join(available_stances()) or "(none committed)"))
     stance_group.add_argument(
         "--no-stance", action="store_true",
@@ -2951,7 +2954,7 @@ def main(argv=None):
         # where the campaign drivers apply theirs.
         configuration = None
         if args.stance is not None:
-            named = load_stance(args.stance)
+            named = load_named_configuration(args.stance)
             configuration = named.lineage
             label += f" [stance={named.name}]"
         if args.drag_closure is not None:
