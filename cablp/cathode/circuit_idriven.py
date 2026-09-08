@@ -104,10 +104,12 @@ from cablp.cathode.circuit import (
     _P_elec,
     _P_ion,
     _annular_emission_state,
+    _beam_launch_enthalpy_V,
     _c_log_ei,
     _compute_beam_bypass_fraction,
     _compute_l_b,
     _e_SI,
+    _emitted_enthalpy_on_beam_W,
     _erg_per_eV,
     _exp_clamped,
     _j_eth_crit,
@@ -423,6 +425,7 @@ def solve_idriven(
     circuit_bound_object: str = "phi_c",
     tail_anode_current_A: float = 0.0,
     emitted_enthalpy_V: float = 0.0,
+    emitted_enthalpy_gap_netted: bool = False,
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
 
@@ -448,8 +451,17 @@ def solve_idriven(
     the beam, 0.0 (the default) otherwise. It is applied only where the
     emitted electrons ARE the primary beam -- ``phi_c_minus == 0`` -- and is
     reported back as ``beam_launch_enthalpy_V``; elsewhere it is dropped and
-    the caller's cathode-adjacent booking stands. 0.0 is an exact identity on
-    every float here.
+    the caller's cathode-adjacent booking stands. Where it applies, the beam
+    mean free path is evaluated at the LAUNCH potential ``phi_c + enthalpy``
+    rather than at the bare drop, because that sum is the energy the primary
+    carries across the gap. 0.0 is an exact identity on every float here.
+    ``emitted_enthalpy_gap_netted`` says whether the deposition route that
+    consumes this solve heats the column through ``P_prim`` and so already
+    nets out the gap-bypassing beam (Beer-Lambert), rather than launching the
+    full released flux and carrying the gap itself (the CSDA march). It
+    selects the flux the reported ``P_emitted_enthalpy_on_beam`` rides at and
+    NOTHING else -- see ``circuit._emitted_enthalpy_on_beam_W``. False (the
+    default) is the full-flux normalisation.
     ``circuit_V_avail_V`` is the optional CIRCUIT-AVAILABLE device voltage
     [V] -- the largest device voltage the external loop can sustain at this
     current, ``V_src - I*(R_comp + R_mesh)``, which is the loop equation
@@ -724,7 +736,17 @@ def solve_idriven(
         J_star_p, psi_minus_p, _ = _emission_state(psi)
         J_tot_p = J_i * (1.0 - _exp_clamped(Lambda - psi)) + J_star_p
         phi_c_p = psi * T_e - psi_minus_p * T_e
-        l_b_p = _compute_l_b(phi_c_p, T_e, n_e, plasma.n_n, plasma.sigma_b)
+        # The bound's beam is the LAUNCHED beam: same regime gate, same shift
+        # and same launch-potential object the solved sheath below uses, so the
+        # ceiling cannot be built from a beam energy the result contradicts.
+        # Unarmed, ``_launch_potential_V`` hands back ``phi_c_p`` itself.
+        l_b_p = _compute_l_b(
+            _launch_potential_V(
+                phi_c_p,
+                _beam_launch_enthalpy_V(emitted_enthalpy_V, psi_minus_p * T_e),
+            ),
+            T_e, n_e, plasma.n_n, plasma.sigma_b,
+        )
         bypass_p = _compute_beam_bypass_fraction(l_b_p, config.L_cath)
         J_anode_p = J_tot_p - eta * bypass_p * J_star_p - J_tail_a
         psi_a_p = Lambda_anode - math.log(
@@ -916,10 +938,23 @@ def solve_idriven(
             f"(psi_c_plus={psi_c_plus!r}, T_e={T_e!r}, I_tot_A={I_tot_A!r})"
         )
 
+    # The launch enthalpy rides the beam only where the emitted electrons ARE
+    # the beam; with a virtual cathode present the caller books it on the
+    # cathode-adjacent cell instead and this is exactly 0.0. Resolved HERE,
+    # above the mean free path, because the path is the launched beam's.
+    beam_launch_enthalpy_V = _beam_launch_enthalpy_V(
+        emitted_enthalpy_V, phi_c_minus
+    )
     # Beam MFP and bypass: explicit evaluation at the solved sheath (the
     # voltage-driven path needs a fixed-point loop here only because its
-    # residual feeds bypass back into the root equation).
-    l_b = _compute_l_b(phi_c, T_e, n_e, plasma.n_n, plasma.sigma_b)
+    # residual feeds bypass back into the root equation). At the LAUNCH
+    # potential -- the primary crosses the gap carrying its emission enthalpy
+    # on top of the fall -- which is ``phi_c`` itself, the same float object,
+    # on every unarmed solve.
+    l_b = _compute_l_b(
+        _launch_potential_V(phi_c, beam_launch_enthalpy_V),
+        T_e, n_e, plasma.n_n, plasma.sigma_b,
+    )
     beam_bypass_fraction = _compute_beam_bypass_fraction(l_b, config.L_cath)
     long_mfp = l_b > 0.0 and l_b > config.L_cath
 
@@ -978,15 +1013,15 @@ def solve_idriven(
     P_wall = I_tot * (V_b + I_tot * config.R_comp)
     P_load = I_tot * V_b
     P_comp = I_tot**2 * config.R_comp
-    # The launch enthalpy rides the beam only where the emitted electrons ARE
-    # the beam; with a virtual cathode present the caller books it on the
-    # cathode-adjacent cell instead and this is exactly 0.0.
-    beam_launch_enthalpy_V = (
-        float(emitted_enthalpy_V) if phi_c_minus == 0.0 else 0.0
+    gap_survival = 1.0 - eta * beam_bypass_fraction
+    P_emitted_enthalpy_on_beam = _emitted_enthalpy_on_beam_W(
+        beam_launch_enthalpy_V,
+        I_eth_star,
+        gap_survival,
+        emitted_enthalpy_gap_netted,
     )
-    P_emitted_enthalpy_on_beam = beam_launch_enthalpy_V * I_eth_star
     P_prim = (
-        (1.0 - eta * beam_bypass_fraction)
+        gap_survival
         * I_eth_star
         * _launch_potential_V(phi_c, beam_launch_enthalpy_V)
     )
@@ -1197,6 +1232,7 @@ def solve_beam_system_idriven(
     beam_climb_V: float | None = None,
     tail_anode_current_A: float = 0.0,
     emitted_enthalpy_V: float = 0.0,
+    emitted_enthalpy_gap_netted: bool = False,
 ) -> BeamResult:
     """Current-driven, single-cathode counterpart of ``solve_beam_system``.
 
@@ -1228,6 +1264,9 @@ def solve_beam_system_idriven(
     handed to the sheath solve, which decides from its own ``phi_c_minus``
     whether the regime admits it, and reaches the arrays through the result.
     0.0 (the default) leaves every array bit-for-bit historical.
+    ``emitted_enthalpy_gap_netted`` is handed to that same solve and selects
+    the flux its ``P_emitted_enthalpy_on_beam`` DIAGNOSTIC is normalised at,
+    per deposition route; no array below reads it.
     """
     result = solve_idriven(
         config,
@@ -1249,6 +1288,7 @@ def solve_beam_system_idriven(
         circuit_bound_object=circuit_bound_object,
         tail_anode_current_A=tail_anode_current_A,
         emitted_enthalpy_V=emitted_enthalpy_V,
+        emitted_enthalpy_gap_netted=emitted_enthalpy_gap_netted,
     )
     return assemble_beam_arrays(
         result=result,
@@ -1369,11 +1409,18 @@ def assemble_beam_arrays(
             l_b[cathode_index] * beam_cross[cathode_index] * nn[cathode_index]
         )
 
+    # The Beer-Lambert column profile is the LAUNCH potential's, the same
+    # object ``phi_c_0`` above was built from, so the deposition length and the
+    # beam it attenuates cannot be launched at two different energies. It IS
+    # ``result.phi_c`` on every solve that placed no enthalpy on the beam.
+    # (The mesh climb ``beam_climb_V`` is deliberately NOT subtracted here --
+    # it never is on this route, which the vessel node refuses at
+    # construction -- so this stays the pre-climb launch potential.)
     l_b_profile = np.zeros(cells)
     if beam_cross[cathode_index] != 0.0:
         for j in range(cells):
             l_b_profile[j] = _compute_l_b(
-                result.phi_c, Te[j], ne[j], nn[j],
+                beam_launch_potential_V(result), Te[j], ne[j], nn[j],
                 beam_atten_cross[cathode_index],
             )
 

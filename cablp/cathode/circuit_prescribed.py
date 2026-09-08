@@ -103,10 +103,12 @@ from cablp.cathode.circuit import (
     SolverResult,
     _LN_LAMBDA_MIN,
     _P_ion,
+    _beam_launch_enthalpy_V,
     _c_log_ei,
     _compute_beam_bypass_fraction,
     _compute_l_b,
     _e_SI,
+    _emitted_enthalpy_on_beam_W,
     _exp_clamped,
     _launch_potential_V,
     _mp_cgs,
@@ -137,6 +139,7 @@ def solve_prescribed(
     alpha_sheath_anode: float | None = None,
     tail_anode_current_A: float = 0.0,
     emitted_enthalpy_V: float = 0.0,
+    emitted_enthalpy_gap_netted: bool = False,
 ) -> SolverResult:
     """Solve the cathode sheath for a MEASURED current and device voltage.
 
@@ -152,7 +155,15 @@ def solve_prescribed(
     ``2 k_B T_s / e`` [V] when ``cathode_enthalpy_on_beam`` has placed it on
     the beam, 0.0 (the default) otherwise; this mode has no space-charge
     barrier, so ``phi_c_minus`` is always zero here and the shift always
-    applies when it is given.
+    applies when it is given -- including to the beam mean free path inside
+    the loop root below, which is evaluated at the LAUNCH potential
+    ``phi_c + enthalpy`` because that sum is the energy the primary carries
+    across the gap. ``emitted_enthalpy_gap_netted`` says whether the
+    deposition route that consumes this solve heats the column through
+    ``P_prim`` and so already nets out the gap-bypassing beam (Beer-Lambert)
+    rather than launching the full released flux (the CSDA march); it selects
+    the flux the reported ``P_emitted_enthalpy_on_beam`` rides at and NOTHING
+    else -- see ``circuit._emitted_enthalpy_on_beam_W``.
 
     Returns a ``SolverResult`` field-for-field compatible with the other two
     solvers'; see the module docstring for the ``I_eth``, ``regime`` and
@@ -235,8 +246,18 @@ def solve_prescribed(
     # The anode fall as a function of the cathode fall, and the single
     # bracketed root of the loop relation (see the module docstring).
     # ------------------------------------------------------------------
+    # This mode reports no space-charge barrier, so the regime gate is
+    # satisfied on every solve here and the shift is whatever was given; it is
+    # read through the shared gate all the same, so the mean free path and the
+    # returned ``beam_launch_enthalpy_V`` cannot disagree. Unarmed, the launch
+    # potential IS the drop, the same float object.
+    _enthalpy_V = _beam_launch_enthalpy_V(emitted_enthalpy_V, 0.0)
+
     def _anode_state(phi_c):
-        l_b = _compute_l_b(phi_c, T_e, n_e, plasma.n_n, plasma.sigma_b)
+        l_b = _compute_l_b(
+            _launch_potential_V(phi_c, _enthalpy_V),
+            T_e, n_e, plasma.n_n, plasma.sigma_b,
+        )
         bypass = _compute_beam_bypass_fraction(l_b, config.L_cath)
         I_anode = I_tot - eta * bypass * I_eth_star - float(
             tail_anode_current_A
@@ -291,15 +312,20 @@ def solve_prescribed(
     P_wall = I_tot * (V_b + I_tot * config.R_comp)
     P_load = I_tot * V_b
     P_comp = I_tot**2 * config.R_comp
-    # The launch enthalpy rides the beam only where the emitted electrons ARE
-    # the beam; this mode reports no space-charge barrier, so that regime test
-    # is satisfied on every solve here and the shift is whatever was given.
-    beam_launch_enthalpy_V = (
-        float(emitted_enthalpy_V) if phi_c_minus == 0.0 else 0.0
+    # The same gate the mean free path above was evaluated through, read on
+    # the solved ``phi_c_minus`` (identically zero in this mode).
+    beam_launch_enthalpy_V = _beam_launch_enthalpy_V(
+        emitted_enthalpy_V, phi_c_minus
     )
-    P_emitted_enthalpy_on_beam = beam_launch_enthalpy_V * I_eth_star
+    gap_survival = 1.0 - eta * beam_bypass_fraction
+    P_emitted_enthalpy_on_beam = _emitted_enthalpy_on_beam_W(
+        beam_launch_enthalpy_V,
+        I_eth_star,
+        gap_survival,
+        emitted_enthalpy_gap_netted,
+    )
     P_prim = (
-        (1.0 - eta * beam_bypass_fraction)
+        gap_survival
         * I_eth_star
         * _launch_potential_V(phi_c, beam_launch_enthalpy_V)
     )
@@ -448,6 +474,7 @@ def solve_beam_system_prescribed(
     beam_climb_V: float | None = None,
     tail_anode_current_A: float = 0.0,
     emitted_enthalpy_V: float = 0.0,
+    emitted_enthalpy_gap_netted: bool = False,
 ) -> BeamResult:
     """Prescribed-measured counterpart of ``solve_beam_system_idriven``.
 
@@ -461,6 +488,9 @@ def solve_beam_system_prescribed(
     beam carries when ``cathode_enthalpy_on_beam`` has placed it there,
     handed to the sheath solve and reaching the arrays through the result.
     0.0 (the default) leaves every array bit-for-bit historical.
+    ``emitted_enthalpy_gap_netted`` is handed to that same solve and selects
+    the flux its ``P_emitted_enthalpy_on_beam`` DIAGNOSTIC is normalised at,
+    per deposition route; no array below reads it.
     """
     result = solve_prescribed(
         config,
@@ -479,6 +509,7 @@ def solve_beam_system_prescribed(
         alpha_sheath_anode=alpha_sheath_anode,
         tail_anode_current_A=tail_anode_current_A,
         emitted_enthalpy_V=emitted_enthalpy_V,
+        emitted_enthalpy_gap_netted=emitted_enthalpy_gap_netted,
     )
     return assemble_beam_arrays(
         result=result,
