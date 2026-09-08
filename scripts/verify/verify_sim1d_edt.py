@@ -385,7 +385,9 @@ def gate1_strip_control(report):
 
     report.note("G1", f"identity, live resolved config     {live}")
     report.note("G1", f"identity, this member's keys strip {stripped}")
-    report.note("G1", f"identity, digest gate's reference  {reference_identity}")
+    report.note(
+        "G1", f"identity, digest gate's reference  {reference_identity}"
+    )
     report.check(
         "G1",
         declared == carried,
