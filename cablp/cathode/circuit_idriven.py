@@ -403,6 +403,12 @@ def beam_launch_energy_eV(phi_c, climb_V):
     The single definition both beam readers use -- the Beer-Lambert beam-array
     assembly in :func:`solve_beam_system_idriven` and the CSDA deposition
     rays -- so a build cannot end up with two launch energies.
+
+    This is the value the beam readers deposit, NOT the sheath-launch
+    potential the ``P_prim`` ledger row is priced at: with a climb armed the
+    two differ by ``climb_V``, and that difference is not booked into any
+    plasma or circuit power row -- the mesh, not the model's energy ledger,
+    is what absorbs it.
     """
     if climb_V is None:
         return phi_c
@@ -1020,6 +1026,9 @@ def solve_idriven(
         gap_survival,
         emitted_enthalpy_gap_netted,
     )
+    # Priced at the launch potential itself, BEFORE any anode-mesh climb: the
+    # beam readers deposit beam_launch_energy_eV(...) instead, net of that
+    # climb, and the climbed-away difference is not booked into this power.
     P_prim = (
         gap_survival
         * I_eth_star

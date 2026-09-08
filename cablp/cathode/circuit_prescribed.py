@@ -324,6 +324,9 @@ def solve_prescribed(
         gap_survival,
         emitted_enthalpy_gap_netted,
     )
+    # Priced at the launch potential itself, BEFORE any anode-mesh climb: the
+    # beam readers deposit beam_launch_energy_eV(...) instead, net of that
+    # climb, and the climbed-away difference is not booked into this power.
     P_prim = (
         gap_survival
         * I_eth_star

@@ -777,7 +777,10 @@ $\phi_c+2k_BT_s/e$, and every route that launches a beam reads it there:
   by the same factor. The deposition route therefore selects the
   normalisation of that diagnostic, and nothing else; no rhs row, potential or
   current reads the distinction, so it cannot move a trajectory on either
-  route.
+  route. $P_\text{prim}$ itself stays priced at the launch potential BEFORE
+  the anode-mesh climb (unlike the ray energy the beam array's velocity and
+  cross sections read), and the climbed-away difference is not booked into
+  any plasma or circuit power row.
 - **The off-dispatch voltage-driven beam assembly** (`solve_beam_system`, kept
   as the voltage-driven reference and reached by no live caller) cannot carry
   the placement at all: it takes no launch enthalpy and passes none to the
