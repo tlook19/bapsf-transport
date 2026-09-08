@@ -5,9 +5,10 @@ pass/fail; a diff of a hash file answers nothing at all. This one answers WHICH
 CASE DIGEST MOVED AND WHY, in resolved values, so a reviewer can read a
 legitimate rotation rather than take one on trust.
 
-Since the "no default plasma" ruling (2026-09-03) neither campaign driver has a
-bare mode, so both driver cases name the reference configuration and their
-digests rotated with the rename. For each of them this prints:
+Since every run must name its configuration ("no default plasma"), neither
+campaign driver has a bare mode, so both driver cases name the reference
+configuration and their digests rotated with the rename. For each of them
+this prints:
 
 * the digest WITHOUT the reference layer -- the pre-rotation value, rebuilt
   from the same code that builds the rotated one so the rotation can be read

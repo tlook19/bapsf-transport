@@ -8,8 +8,8 @@ root as `python scripts/<dir>/<name>.py`; scripts import each other by bare
 module name, and each one that does carries a short block putting the seven
 code directories on `sys.path`, so the layout costs the caller nothing.
 
-**Every run names a configuration** (the "no default plasma" ruling,
-2026-09-03). `default_config()` is the template of keys and their classes, not
+**Every run names a configuration** (the "no default plasma" convention).
+`default_config()` is the template of keys and their classes, not
 a plasma anyone runs; `stances/g1atrim.toml` is the LAPD reference
 configuration a run starts from; and an alternate the campaign runs against it
 is a DERIVED configuration — a committed file naming a `base` plus the deltas

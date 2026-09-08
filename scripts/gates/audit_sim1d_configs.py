@@ -4,13 +4,13 @@ The cases here are the config-complete production/campaign entry points. Their
 canonical JSON hashes are reviewed snapshots: a changed default, precedence
 rule, or driver choice fails before a solver run can silently inherit it.
 
-Both campaign-driver cases name the REFERENCE CONFIGURATION, because since the
-"no default plasma" ruling (2026-09-03) neither driver has a bare mode: a run
-either names a configuration or says with --no-stance that it names none. Each
-case is that driver's own resolution of a stanced command line -- the rung and
-the switch defaults, with the configuration layered last, exactly where the
-driver layers it. The golden case is the reference configuration by
-construction and is unchanged by that ruling.
+Both campaign-driver cases name the REFERENCE CONFIGURATION: since every run
+must name its configuration ("no default plasma"), neither driver has a bare
+mode -- a run either names a configuration or says with --no-stance that it
+names none. Each case is that driver's own resolution of a stanced command
+line -- the rung and the switch defaults, with the configuration layered
+last, exactly where the driver layers it. The golden case is the reference
+configuration by construction, independent of driver mode.
 """
 
 import argparse

@@ -23441,7 +23441,7 @@ def _case_cathode_closed_audit_export():
 
 
 # --------------------------------------------------------------------
-# DERIVED CONFIGURATIONS (the "no default plasma" ruling, 2026-09-03).
+# DERIVED CONFIGURATIONS (no default plasma: every run names its configuration).
 #
 # Every run names a configuration; an alternate the campaign runs against the
 # reference is a FILE (base + declared deltas), not a command line. The four
