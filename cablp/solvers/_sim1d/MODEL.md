@@ -646,6 +646,8 @@ both subtracted populations raise $\phi_a$ logarithmically:
 
 $$\psi_a=\Lambda_\text{anode}-\ln\!\left(\max\!\left(1+\frac{J_\text{anode}}{J_{i,a}},\epsilon\right)\right),\qquad \phi_a=\psi_aT_{e,\text{anode}}$$
 
+This is a Boltzmann floating-sheath balance evaluated at the mesh, with $J_{i,a}$ the $\eta$-scaled Bohm ion flux collected there (the same current `anode_collection_rhs` removes from the fluid): $\Lambda_\text{anode}T_{e,\text{anode}}$ is the value of $\phi_a$ at $J_\text{anode}=0$, a negative $J_\text{anode}$ — the subtracted beam-bypass and tail-walker populations above — raises $\phi_a$ above it, and a positive $J_\text{anode}$ lowers it, through zero, into an attracting drop; the sign is an output of the balance either way, entering $V_b$ through $\phi_a$ and thereby the beam launch drop $\phi_c$ and, downstream of it, $P_\text{prim}$.
+
 $$V_b=\phi_c+V_p-\phi_a,\qquad V_\text{dis}=V_b+V_\text{series}$$
 
 $V_p=I_\text{tot}R_p$ the ohmic gap drop across the Spitzer column
@@ -780,7 +782,10 @@ $\phi_c+2k_BT_s/e$, and every route that launches a beam reads it there:
   route. $P_\text{prim}$ itself stays priced at the launch potential BEFORE
   the anode-mesh climb (unlike the ray energy the beam array's velocity and
   cross sections read), and the climbed-away difference is not booked into
-  any plasma or circuit power row.
+  any plasma or circuit power row. The anode-mesh climb above never applies
+  here: `regime_vessel_node` refuses any `beam_deposition_model` other than
+  `"csda"` at construction, so a nonzero climb and Beer-Lambert deposition
+  cannot coexist.
 - **The off-dispatch voltage-driven beam assembly** (`solve_beam_system`, kept
   as the voltage-driven reference and reached by no live caller) cannot carry
   the placement at all: it takes no launch enthalpy and passes none to the

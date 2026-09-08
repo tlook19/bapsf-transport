@@ -104,9 +104,9 @@ def _check_cell_roles(path, cell_role):
     Runs AFTER :func:`_apply_cell_role_aliases`, so a retired name the alias
     table maps is already a current one by the time it is checked here and a
     retired name that table does NOT map arrives unmapped and refuses. The
-    check is PRESENCE-GATED in the only sense a check can be: a file whose
-    roles are all accepted is read, not touched -- nothing is copied, no array
-    is rebuilt, and the loaded result is exactly what it was before.
+    check is non-mutating on the accepted path: a file whose roles are all
+    accepted is read, not touched -- nothing is copied, no array is rebuilt,
+    and the loaded result is exactly what it was before.
 
     Raises ``ValueError`` naming the file, the distinct offending strings and
     the accepted set.

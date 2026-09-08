@@ -9,28 +9,27 @@ module name, and each one that does carries a short block putting the seven
 code directories on `sys.path`, so the layout costs the caller nothing.
 
 **Every run names a configuration** (the "no default plasma" convention).
-`default_config()` is the template of keys and their classes, not
-a plasma anyone runs; `stances/g1atrim.toml` is the LAPD reference
-configuration a run starts from; and an alternate the campaign runs against it
-is a DERIVED configuration — a committed file naming a `base` plus the deltas
-that move it, `stances/examples/g1atrim_fluid_comparator.toml` being the worked
-one. `stance/stance_config.py` resolves both forms and returns, with the
-`(params, flags)`, the lineage a run writes into its HDF5: the configuration's
-name, its base chain, each file's sha256, its delta keys and the resolved
-identity. **No entry point that builds a solver has a bare mode.** Every driver in
-`run/`, the scorer's own run route in `score/compare_sim1d_es1.py`, and
+`default_config()` is the template of keys and their classes, not a plasma
+anyone runs; `stances/g1atrim.toml` is the LAPD reference configuration a run
+starts from; and an alternate the campaign runs against it is a DERIVED
+configuration — a committed file naming a `base` plus the deltas that move it,
+`stances/examples/g1atrim_fluid_comparator.toml` being the worked one.
+`stance/stance_config.py` resolves both forms and returns, with the `(params,
+flags)`, the lineage a run writes into its HDF5: the configuration's name, its
+base chain, each file's sha256, its delta keys and the resolved identity. **No
+entry point that builds a solver has a bare mode.** Every driver in `run/`, the
+scorer's own run route in `score/compare_sim1d_es1.py`, and
 `gates/audit_sim1d_equilibration_duty.py` each take `--config`/`--stance` or an
 explicit `--no-stance`, so an artifact can always say which configuration
-produced it. That value takes either form everywhere it is accepted: a
-committed configuration NAME in `stances/`, or the PATH of a configuration
-file, derived or not — so a derived configuration runs from where it lives,
-and the lineage recorded is the same either way. One deliberate exception,
-which names a
+produced it. That value takes either form everywhere it is accepted: a committed
+configuration NAME in `stances/`, or the PATH of a configuration file, derived
+or not — so a derived configuration runs from where it lives, and the lineage
+recorded is the same either way. One deliberate exception, which names a
 configuration without being asked: `run/capture_phase3_rhs.py` runs one locked
-recipe and takes the reference configuration's name from it. Scoring an
-existing artifact (`compare_sim1d_es1.py --from-h5`) names nothing on purpose:
-it reads the configuration out of the file it scores. The form, its refusals and the lineage fields are
-`cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md`.
+recipe and takes the reference configuration's name from it. Scoring an existing
+artifact (`compare_sim1d_es1.py --from-h5`) names nothing on purpose: it reads
+the configuration out of the file it scores. The form, its refusals and the
+lineage fields are `cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md`.
 
 **`gates/`** — the checks that must pass before anything merges, and the
 fixtures they read. `smoke_sim1d.py` is the assertion suite every solver
@@ -74,11 +73,22 @@ solver.
 
 **`verify/`** — the per-build acceptance instruments. Every
 `verify_sim1d_*.py` is the registered gate of one build (its cases are cited
-by name in the campaign record), alongside the reference-corpus builders
-(`build_wall_return_reference.py`, `bench_wall_return.py`). These differ from
-`gates/` in cadence, not in rigor: a `gates/` check runs on every merge, a
-`verify/` instrument runs for the build that owns it and stays runnable
-afterwards so its verdict can be re-derived.
+by name in the campaign record), alongside the wall-return reference corpus's
+builder, verifier and bench (`build_wall_return_reference.py`,
+`verify_wall_return_reference.py`, `bench_wall_return.py`). The rest split
+into four kinds: read-only audits/censuses of a saved run or build
+(`audit_sim1d_afterglow_ion_channel.py`, `census_afterglow_tail_handoff.py`,
+`t23c_pairwise_audit.py`); regime- or lane-equivalence checks
+(`r3lane_equivalence.py`, `regime_r2_handoff_check.py`,
+`regime_r2_overlap_gate.py`); one fixed-point/underflow fence
+(`r3fma_underflow_fence.py`); and one-build acceptance instruments not named
+`verify_sim1d_*.py` (`k2_dvm_exchange_acceptance.py`,
+`k2_dvm_exchange_measure.py`, `k7cbuild_frozen_bitexact.py`,
+`verify_beam_deposition.py`, `verify_hbd_momentum.py`,
+`verify_phase3_source_capture.py`). These differ from `gates/` in cadence, not
+in rigor: a `gates/` check runs on every merge, a `verify/` instrument runs
+for the build that owns it and stays runnable afterwards so its verdict can be
+re-derived.
 
 **`kinetic/`** — the neutral-closure instruments that stand outside the
 solver: `mc_neutrals.py` (frozen-field TPMC) and `kn2zone.py` (the

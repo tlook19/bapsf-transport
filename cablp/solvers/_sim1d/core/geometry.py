@@ -8,10 +8,10 @@ import numpy as np
 # reads. Two consumers keep it honest: ``_assert_known_cell_roles`` checks the
 # mesh builder's assembled roles against it once per construction, so the
 # builder and this set cannot desync; and ``load_result_hdf5`` refuses a saved
-# trajectory whose roles are not named here. An unrecognised role is SILENT
-# breakage rather than an error -- every role-keyed selection downstream
-# (``== "end_wall"``, the plasma-dead mask, the recycle routing) simply selects
-# nothing -- which is why it is refused at both boundaries instead.
+# trajectory whose roles are not named here. An unrecognised role is refused
+# at both boundaries -- construction and load -- rather than left to break
+# silently: every role-keyed selection downstream (``== "end_wall"``, the
+# plasma-dead mask, the recycle routing) would simply select nothing.
 #
 # RETIRED names are deliberately NOT members. A saved artifact written under an
 # older name reaches a current one only through ``LEGACY_CELL_ROLE_ALIASES`` in

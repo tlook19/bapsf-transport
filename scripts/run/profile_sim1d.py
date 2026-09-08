@@ -106,13 +106,12 @@ from stance_config import (  # noqa: E402
 )
 
 # This instrument profiles a NAMED configuration -- ``--stance NAME_OR_PATH``
-# -- and
-# takes its mesh and its afterglow budget FROM THAT FILE. Neither is
+# -- and takes its mesh and its afterglow budget FROM THAT FILE. Neither is
 # transcribed here, so the instrument cannot drift from the configuration it
-# says it profiled, and neither is
-# ``compare_sim1d_es1.PRODUCTION_NX``, which is the no-stance FALLBACK mesh and
-# which this instrument used to take by default -- profiling the production
-# package on a mesh the production configuration does not run.
+# says it profiled, and neither is ``compare_sim1d_es1.PRODUCTION_NX``, which
+# is the no-stance FALLBACK mesh and which this instrument used to take by
+# default -- profiling the production package on a mesh the production
+# configuration does not run.
 
 # Repo root, used only to shorten frame filenames in the folded stacks.
 _REPO_ROOT = SCRIPT_DIR.parent
