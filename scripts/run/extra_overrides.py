@@ -1,4 +1,4 @@
-"""The one reader of ``--extra KEY=VALUE`` overrides, shared by the drivers.
+"""The ``--extra KEY=VALUE`` reader, and the coercion rule both routes share.
 
 A command-line override arrives as TEXT, and the value a driver files into
 ``input_dict`` or ``input_flags`` is whatever that text parses to -- so
