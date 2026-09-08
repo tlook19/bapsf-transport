@@ -26717,6 +26717,190 @@ def _case_end_wall_rename_retired_names():
         ), _ew_old
 
 
+
+# --------------------------------------------------------------------
+# cathode-enthalpy-on-beam-placement
+# --------------------------------------------------------------------
+@_case("cathode-enthalpy-on-beam-placement", historical_stance=True)
+def _case_cathode_enthalpy_on_beam_placement(
+    plasma_probe, solve_idriven, uni_cfg
+):
+    # WHERE THE EMITTED ELECTRONS' LAUNCH ENTHALPY IS BOOKED.
+    # `cathode_enthalpy_on_beam` MOVES the `cathode_e_emitted_enthalpy` row
+    # `cathode_face_full_debit` books; it never creates one and never books it
+    # twice. Where the emitted electrons ARE the primary beam -- the circuit's
+    # own regime test phi_c_minus == 0 -- the enthalpy rides the beam launch
+    # potential and the CSDA march deposits it, and the cathode-adjacent row
+    # is exactly zero. Everywhere else the cathode-adjacent row stands and the
+    # beam is untouched.
+    from cablp.cathode.circuit import beam_launch_potential_V
+    from cablp.cathode.circuit_idriven import beam_launch_energy_eV
+
+    _eb_params, _eb_flags = _base_config()
+    _eb_flags = dict(_eb_flags)
+    _eb_flags["cathode_coupling"] = True
+    _eb_flags["cathode_face_full_debit"] = True
+
+    def _eb_build(on_beam):
+        _flags = dict(_eb_flags)
+        _flags["cathode_enthalpy_on_beam"] = on_beam
+        return LAPDSim1D(dict(_eb_params), _flags)
+
+    _eb_off = _eb_build(False)
+    _eb_on = _eb_build(True)
+    _eb_off_terms = _eb_off.rhs_terms()
+    _eb_on_terms = _eb_on.rhs_terms()
+    _eb_Ts = float(_eb_params["cathode_Ts_base_K"])
+    _eb_delta_V = 2.0 * 8.617333262e-5 * _eb_Ts
+    assert _eb_delta_V > 0.0, _eb_delta_V
+
+    # (i) FLAG OFF IS TODAY'S ARMED RUN. The key adds no row, moves no row and
+    # moves no packed RHS: the term set is the one `cathode_face_full_debit`
+    # alone produces and the enthalpy row is still its closed form on the
+    # cathode-adjacent cell.
+    assert set(_eb_off_terms) == set(_eb_on_terms)
+    assert set(END_SHEATH_CATHODE_ROWS) <= set(_eb_off_terms)
+    _eb_geom = _eb_off.geometry
+    _eb_cath = int(
+        np.flatnonzero(np.asarray(_eb_geom.cell_role) == "cathode")[0]
+    )
+    _eb_Vp = float(_eb_geom.plasma_volume_cm3[_eb_cath])
+    _eb_off_result = _eb_off._cathode_solve.beam_result.result
+    _eb_off_enth_W = (
+        np.asarray(_eb_off_terms["cathode_e_emitted_enthalpy"].Ee,
+                   dtype=float)[_eb_cath]
+        * _eb_Vp / 1.0e7
+    )
+    assert np.isclose(
+        _eb_off_enth_W,
+        _eb_delta_V * float(_eb_off_result.I_eth_star),
+        rtol=1e-12,
+        atol=0.0,
+    ), (_eb_off_enth_W, _eb_delta_V * float(_eb_off_result.I_eth_star))
+    assert _eb_off_enth_W > 0.0, _eb_off_enth_W
+    # ... and the OFF solve reports no shift at all, so every launch potential
+    # it hands on is the phi_c object it always was.
+    assert _eb_off_result.beam_launch_enthalpy_V == 0.0
+    assert _eb_off_result.P_emitted_enthalpy_on_beam == 0.0
+    assert beam_launch_potential_V(_eb_off_result) is _eb_off_result.phi_c
+
+    # (ii) ARMED IN THE BEAM REGIME the enthalpy leaves the cathode cell and
+    # rides the launch potential. Solved on the SAME circuit the solver's
+    # cathode dispatch calls, at a driven discharge where no virtual cathode
+    # has formed -- the regime the key is about, which this stance's own
+    # initial state is not in (see (iii)).
+    _eb_fix_Ts = float(uni_cfg.T_s)
+    _eb_fix_delta_V = 2.0 * 8.617333262e-5 * _eb_fix_Ts
+    _eb_beam_points = 0
+    for _eb_I in (20.0, 100.0, 300.0, 600.0, 1000.0):
+        _eb_r0 = solve_idriven(uni_cfg, plasma_probe, I_tot_A=_eb_I)
+        _eb_r1 = solve_idriven(
+            uni_cfg, plasma_probe, I_tot_A=_eb_I,
+            emitted_enthalpy_V=_eb_fix_delta_V,
+        )
+        assert _eb_r0.phi_c_minus == 0.0, (_eb_I, _eb_r0.phi_c_minus)
+        # the ROOT is untouched: the shift is applied after the solve, so the
+        # sheath and everything keyed to it are the same floats.
+        assert _eb_r1.phi_c == _eb_r0.phi_c, _eb_I
+        assert _eb_r1.phi_c_plus == _eb_r0.phi_c_plus, _eb_I
+        assert _eb_r1.I_eth_star == _eb_r0.I_eth_star, _eb_I
+        assert (
+            _eb_r1.beam_bypass_fraction == _eb_r0.beam_bypass_fraction
+        ), _eb_I
+        # the solve REPORTS the shift and the power it carries, at the FULL
+        # emitted current the march launches (no bypass factor).
+        assert _eb_r1.beam_launch_enthalpy_V == _eb_fix_delta_V, _eb_I
+        assert _eb_r1.P_emitted_enthalpy_on_beam == (
+            _eb_fix_delta_V * _eb_r1.I_eth_star
+        ), _eb_I
+        # the cathode-adjacent enthalpy row yields, and ONLY it: the other two
+        # rows are the identical floats the unshifted solve books.
+        _eb_e1, _eb_f1, _eb_c1 = cathode_emission_sheath_power_W(
+            _eb_r1, _eb_fix_Ts
+        )
+        _eb_e0, _eb_f0, _eb_c0 = cathode_emission_sheath_power_W(
+            _eb_r0, _eb_fix_Ts
+        )
+        assert _eb_e1 == 0.0, (_eb_I, _eb_e1)
+        assert _eb_e0 > 0.0, (_eb_I, _eb_e0)
+        assert np.isclose(
+            _eb_e0, _eb_fix_delta_V * _eb_r0.I_eth_star,
+            rtol=1e-12, atol=0.0,
+        ), (_eb_I, _eb_e0)
+        assert _eb_f1 == _eb_f0 == 0.0, (_eb_I, _eb_f1, _eb_f0)
+        assert _eb_c1 == _eb_c0, (_eb_I, _eb_c1, _eb_c0)
+        # the ray launch energy carries +delta, ahead of the mesh climb, and
+        # the unshifted result still hands on the same phi_c object.
+        assert beam_launch_potential_V(_eb_r0) is _eb_r0.phi_c, _eb_I
+        assert beam_launch_potential_V(_eb_r1) == (
+            _eb_r0.phi_c + _eb_fix_delta_V
+        ), _eb_I
+        assert beam_launch_energy_eV(
+            beam_launch_potential_V(_eb_r1), None
+        ) == _eb_r0.phi_c + _eb_fix_delta_V, _eb_I
+        # ... and the climb is still subtracted from the shifted potential,
+        # not from the bare drop.
+        _eb_climb = 3.0
+        assert beam_launch_energy_eV(
+            beam_launch_potential_V(_eb_r1), _eb_climb
+        ) == max(_eb_r0.phi_c + _eb_fix_delta_V - _eb_climb, 0.0), _eb_I
+        # the beam-deposition diagnostic moves by the bypass-scaled shift,
+        # which is what P_prim is and is NOT what the reported row carries.
+        assert np.isclose(
+            _eb_r1.P_prim - _eb_r0.P_prim,
+            (1.0 - uni_cfg.eta * _eb_r0.beam_bypass_fraction)
+            * _eb_fix_delta_V
+            * _eb_r0.I_eth_star,
+            rtol=1e-12,
+            atol=0.0,
+        ), (_eb_I, _eb_r1.P_prim - _eb_r0.P_prim)
+        _eb_beam_points += 1
+    assert _eb_beam_points == 5, _eb_beam_points
+
+    # (iii) ARMED IN THE VIRTUAL-CATHODE REGIME the cathode-adjacent booking
+    # RETURNS and the beam is untouched. This stance's initial state is a
+    # virtual cathode, so the armed run is bit-for-bit the unarmed one --
+    # which is the negative control that says (ii)'s zero is the regime gate
+    # firing and not the row being dead.
+    _eb_on_result = _eb_on._cathode_solve.beam_result.result
+    assert float(_eb_on_result.phi_c_minus) > 0.0, "expected a virtual cathode"
+    assert _eb_on_result.beam_launch_enthalpy_V == 0.0
+    assert _eb_on_result.P_emitted_enthalpy_on_beam == 0.0
+    for _eb_name in END_SHEATH_CATHODE_ROWS:
+        assert (
+            _eb_on_terms[_eb_name].Ee.tobytes()
+            == _eb_off_terms[_eb_name].Ee.tobytes()
+        ), _eb_name
+    assert _eb_on_terms["cathode_e_emitted_enthalpy"].Ee[_eb_cath] > 0.0
+    assert _eb_on.rhs().tobytes() == _eb_off.rhs().tobytes()
+
+    # (iv) MISCONFIGURATION REFUSES AT CONSTRUCTION, naming the requirement.
+    # The key MOVES a row it does not compute, so arming it without the key
+    # that computes that row would be a silent inert control.
+    _eb_bad_flags = dict(_eb_flags)
+    _eb_bad_flags["cathode_face_full_debit"] = False
+    _eb_bad_flags["cathode_enthalpy_on_beam"] = True
+    try:
+        LAPDSim1D(dict(_eb_params), _eb_bad_flags)
+    except ValueError as _eb_exc:
+        assert "cathode_enthalpy_on_beam cannot arm" in str(_eb_exc), _eb_exc
+        assert "cathode_face_full_debit" in str(_eb_exc), _eb_exc
+    else:
+        raise AssertionError(
+            "cathode_enthalpy_on_beam armed without cathode_face_full_debit"
+        )
+    # A non-bool reads like a value and is refused too.
+    _eb_nonbool_flags = dict(_eb_flags)
+    _eb_nonbool_flags["cathode_enthalpy_on_beam"] = 1
+    try:
+        LAPDSim1D(dict(_eb_params), _eb_nonbool_flags)
+    except ValueError as _eb_exc:
+        assert "must be a bool" in str(_eb_exc), _eb_exc
+        assert "cathode_enthalpy_on_beam" in str(_eb_exc), _eb_exc
+    else:
+        raise AssertionError("cathode_enthalpy_on_beam accepted a non-bool")
+
+
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
@@ -26726,7 +26910,7 @@ def _case_end_wall_rename_retired_names():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 150, "historical_stance": 63}
+_CASE_CENSUS = {"total": 151, "historical_stance": 64}
 
 
 def _assert_case_census():
