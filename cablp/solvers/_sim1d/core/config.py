@@ -4514,6 +4514,33 @@ input_flags_template_1d = {
     # or potential from the solve raises RuntimeError rather than planting a
     # NaN in an energy row. Bit-exact when off.
     "cathode_face_full_debit": False,
+    # Where the emitted electrons' launch enthalpy is booked while the beam is
+    # launched. Requires ``cathode_face_full_debit`` (the key that computes the
+    # row at all); arming it without that key refuses at construction.
+    #
+    # OFF (default) the ``cathode_e_emitted_enthalpy`` row books
+    # ``+2 k_B T_s Gamma_em`` into the cathode-adjacent plasma cell in every
+    # phase. ON, that placement holds everywhere EXCEPT where the emitted
+    # electrons ARE the primary beam -- the regime the circuit itself names,
+    # ``phi_c_minus == 0``, in which no virtual cathode has formed and
+    # ``cathode_e_emitted_fall`` is identically zero. There the enthalpy is
+    # added to the beam LAUNCH POTENTIAL instead, ahead of the anode-mesh
+    # climb, so it is carried by the CSDA march and deposited where the march
+    # deposits; the cathode-adjacent row is then exactly zero and the two
+    # cannot both book it. In the virtual-cathode regime, and in every
+    # floating, afterglow and inductive-tail phase, the cathode-adjacent
+    # booking returns unchanged.
+    #
+    # WHAT IT ADDS TO THE FILE. ``2 k_B T_s / e`` [V] rides the sheath result
+    # as ``beam_launch_enthalpy_V`` and the power it carries, the full
+    # ``2 k_B T_s Gamma_em`` at the emitted flux the march launches, as
+    # ``P_emitted_enthalpy_on_beam``; both are exported to the cathode
+    # diagnostics PRESENCE-GATED on this key, so an unarmed run's dataset set
+    # is unchanged. ``T_s`` is the surface temperature the solve ran at (the
+    # evolving value under ``cathode_warming_model = "power_balance"``).
+    #
+    # WHAT IT RAISES. Must be a real bool. Bit-exact when off.
+    "cathode_enthalpy_on_beam": False,
     # The electron drift-transport and EMF-work operator, default OFF. The
     # electron energy equation books its pressure work with the ION velocity,
     # which is exact where J = 0 but not in the current-carrying source region:

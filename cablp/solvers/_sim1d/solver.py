@@ -2150,6 +2150,25 @@ class LAPDSim1D:
                     "does not supply " + "; ".join(missing) + "."
                 )
         self._cathode_face_full_debit = _cathode_face_full_debit
+        _cathode_enthalpy_on_beam = self._flags.get("cathode_enthalpy_on_beam")
+        if not isinstance(_cathode_enthalpy_on_beam, bool):
+            raise ValueError(
+                "cathode_enthalpy_on_beam must be a bool (got "
+                f"{_cathode_enthalpy_on_beam!r})"
+            )
+        if _cathode_enthalpy_on_beam and not _cathode_face_full_debit:
+            # The key MOVES a row; it does not create one. Without
+            # cathode_face_full_debit the emitted-enthalpy row is never
+            # computed, so there is nothing to place and an armed key here
+            # would be a silent inert control.
+            raise ValueError(
+                "cathode_enthalpy_on_beam cannot arm: this configuration "
+                "does not supply cathode_face_full_debit, the key that books "
+                "the emitted electrons' launch enthalpy at all; this key only "
+                "moves that booking onto the beam launch while the beam is "
+                "launched."
+            )
+        self._cathode_enthalpy_on_beam = _cathode_enthalpy_on_beam
         # Beam electron-energy deposition re-homed into the implicit heat
         # substep. A real bool for the same reason as the two flags above: the
         # flag MOVES a ~10^5 W source between operators, and an int or a string
