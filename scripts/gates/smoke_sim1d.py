@@ -76,6 +76,7 @@ The suppression is deliberately narrow in both directions:
 """
 
 import argparse
+import ast
 import contextlib
 import dataclasses
 import inspect
@@ -27516,6 +27517,73 @@ def _assert_case_census():
 
 
 _assert_case_census()
+
+
+# ----------------------------------------------------------------------
+# Case-body reachability, asserted at import.
+#
+# A case that ends in a ``return`` (the registry's way of handing values to a
+# later case) is one careless insertion away from burying the clauses that
+# follow it. Nothing catches that on its own: the suite still exits 0, the
+# case still "passes", and the buried assertions simply stop running -- the
+# worst failure a gate can have, because it is indistinguishable from a green
+# one. It happened, to eleven lines of a construction-refusal loop.
+#
+# So the shape is checked rather than trusted, syntactically: nothing after a
+# ``return`` or ``raise`` at the TOP LEVEL of a case body can execute, whatever
+# the values, and that is decidable from the parse tree alone. Only the
+# function's own top level is inspected -- a return inside an ``if`` or a
+# ``for`` says nothing about what follows the block, and the several cases
+# that raise inside a ``try``/``else`` are untouched.
+# ----------------------------------------------------------------------
+def _unreachable_case_statements(source, case_function_names):
+    """Return one ``(function, kind, terminator_line, dead_line)`` per offender.
+
+    Takes the SOURCE rather than reading a file, so the check can be pointed at
+    any revision of this module -- which is how its own negative control runs.
+    """
+    findings = []
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if node.name not in case_function_names:
+            continue
+        for index, statement in enumerate(node.body):
+            if not isinstance(statement, (ast.Return, ast.Raise)):
+                continue
+            if index + 1 < len(node.body):
+                findings.append(
+                    (
+                        node.name,
+                        "return" if isinstance(statement, ast.Return) else "raise",
+                        statement.lineno,
+                        node.body[index + 1].lineno,
+                    )
+                )
+            break
+    return findings
+
+
+def _assert_case_bodies_reachable():
+    """Fail at import if a registered case buries statements after a return."""
+    findings = _unreachable_case_statements(
+        Path(__file__).read_text(encoding="utf-8"),
+        {entry.fn.__name__ for entry in _CASES},
+    )
+    if findings:
+        where = "; ".join(
+            f"{name}: line {dead} onwards is unreachable past the {kind} "
+            f"at line {terminator}"
+            for name, kind, terminator, dead in findings
+        )
+        raise AssertionError(
+            "smoke case body has unreachable statements -- those assertions "
+            f"are silently not running: {where}. Move the terminating "
+            "statement to the END of the case body."
+        )
+
+
+_assert_case_bodies_reachable()
 
 
 def main(argv=None):
