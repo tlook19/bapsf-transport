@@ -4097,7 +4097,7 @@ input_flags_template_1d = {
     # with no surface having absorbed them. A PLASMA-DEAD cell's flights stay
     # in the dead block they were born in, so its (floor-density) births can no
     # longer deposit out of a masked cell into a live one either. A BOUNDARY
-    # cell -- the live cell against a cathode disc or a end wall -- is the
+    # cell -- the live cell against a cathode disc or an end wall -- is the
     # cell that receives everything folded at that wall, on both counts. The
     # mask itself is untouched; the flag only stops feeding it rows to delete.
     # Cells with no column (Rp = 0) keep the in-place identity row they already

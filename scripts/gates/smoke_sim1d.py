@@ -12958,7 +12958,7 @@ def _case_end_recycle_routing(p2z_flags, p2z_params):
     assert abs(er_dep - er_loss) <= 1e-12 * er_loss, (er_row, er_dep, er_loss)
     assert np.all(er_t_on.nn_a[~er_mask] == 0.0), er_row
     # The column row loses exactly the routed share and nothing else --
-    # exactly zero on a cell whose only absorbing face is a end wall one,
+    # exactly zero on a cell whose only absorbing face is an end wall one,
     # and bit-identical (the cathode face) everywhere else.
     assert np.all(er_t_on.nn[er_mask] == 0.0), er_row
     assert np.array_equal(
