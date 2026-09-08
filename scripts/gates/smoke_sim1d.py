@@ -26733,8 +26733,15 @@ def _case_cathode_enthalpy_on_beam_placement(
     # potential and the CSDA march deposits it, and the cathode-adjacent row
     # is exactly zero. Everywhere else the cathode-adjacent row stands and the
     # beam is untouched.
-    from cablp.cathode.circuit import beam_launch_potential_V
+    from cablp.cathode.circuit import (
+        beam_launch_potential_V,
+        solve_beam_system as _eb_solve_beam_system,
+    )
     from cablp.cathode.circuit_idriven import beam_launch_energy_eV
+    from cablp.solvers._sim1d.physics.cathode import (
+        cathode_beam_deposition_is_csda,
+        cathode_emitted_enthalpy_gap_netted,
+    )
 
     _eb_params, _eb_flags = _base_config()
     _eb_flags = dict(_eb_flags)
@@ -26799,14 +26806,32 @@ def _case_cathode_enthalpy_on_beam_placement(
             emitted_enthalpy_V=_eb_fix_delta_V,
         )
         assert _eb_r0.phi_c_minus == 0.0, (_eb_I, _eb_r0.phi_c_minus)
-        # the ROOT is untouched: the shift is applied after the solve, so the
-        # sheath and everything keyed to it are the same floats.
+        # the SHEATH ROOT is untouched: the current-driven root is the current
+        # match, which the gap bypass does not enter, so the fall and the
+        # released current are the identical floats.
         assert _eb_r1.phi_c == _eb_r0.phi_c, _eb_I
         assert _eb_r1.phi_c_plus == _eb_r0.phi_c_plus, _eb_I
         assert _eb_r1.I_eth_star == _eb_r0.I_eth_star, _eb_I
-        assert (
-            _eb_r1.beam_bypass_fraction == _eb_r0.beam_bypass_fraction
+        # the beam MEAN FREE PATH is not: it is the LAUNCHED beam's, so the
+        # armed solve evaluates it at phi_c + delta and gets a strictly longer
+        # path -- a faster primary runs further -- and a strictly larger gap
+        # bypass with it. This is the ONE channel through which the placement
+        # moves an armed trajectory, and it is what makes the CSDA sigma_eff
+        # inversion's premise true: that inversion already solves at the
+        # launch potential.
+        assert _eb_r0.l_b == _compute_l_b(
+            _eb_r0.phi_c, plasma_probe.T_e, plasma_probe.n_e,
+            plasma_probe.n_n, plasma_probe.sigma_b,
         ), _eb_I
+        assert _eb_r1.l_b == _compute_l_b(
+            _eb_r0.phi_c + _eb_fix_delta_V,
+            plasma_probe.T_e, plasma_probe.n_e,
+            plasma_probe.n_n, plasma_probe.sigma_b,
+        ), _eb_I
+        assert _eb_r1.l_b > _eb_r0.l_b, (_eb_I, _eb_r1.l_b, _eb_r0.l_b)
+        assert (
+            _eb_r1.beam_bypass_fraction > _eb_r0.beam_bypass_fraction
+        ), (_eb_I, _eb_r1.beam_bypass_fraction)
         # the solve REPORTS the shift and the power it carries, at the FULL
         # emitted current the march launches (no bypass factor).
         assert _eb_r1.beam_launch_enthalpy_V == _eb_fix_delta_V, _eb_I
@@ -26844,16 +26869,20 @@ def _case_cathode_enthalpy_on_beam_placement(
         assert beam_launch_energy_eV(
             beam_launch_potential_V(_eb_r1), _eb_climb
         ) == max(_eb_r0.phi_c + _eb_fix_delta_V - _eb_climb, 0.0), _eb_I
-        # the beam-deposition diagnostic moves by the bypass-scaled shift,
-        # which is what P_prim is and is NOT what the reported row carries.
-        assert np.isclose(
-            _eb_r1.P_prim - _eb_r0.P_prim,
+        # P_prim is the gap-netted beam power AT THE LAUNCH POTENTIAL, each
+        # arm carrying its own bypass -- which is NOT what the reported
+        # on-beam row carries (that is normalised at the full released
+        # current under this route; see (v)).
+        assert _eb_r1.P_prim == (
+            (1.0 - uni_cfg.eta * _eb_r1.beam_bypass_fraction)
+            * _eb_r1.I_eth_star
+            * (_eb_r0.phi_c + _eb_fix_delta_V)
+        ), (_eb_I, _eb_r1.P_prim)
+        assert _eb_r0.P_prim == (
             (1.0 - uni_cfg.eta * _eb_r0.beam_bypass_fraction)
-            * _eb_fix_delta_V
-            * _eb_r0.I_eth_star,
-            rtol=1e-12,
-            atol=0.0,
-        ), (_eb_I, _eb_r1.P_prim - _eb_r0.P_prim)
+            * _eb_r0.I_eth_star
+            * _eb_r0.phi_c
+        ), (_eb_I, _eb_r0.P_prim)
         _eb_beam_points += 1
     assert _eb_beam_points == 5, _eb_beam_points
 
@@ -26873,6 +26902,130 @@ def _case_cathode_enthalpy_on_beam_placement(
         ), _eb_name
     assert _eb_on_terms["cathode_e_emitted_enthalpy"].Ee[_eb_cath] > 0.0
     assert _eb_on.rhs().tobytes() == _eb_off.rhs().tobytes()
+
+    # (v) THE ON-BEAM DIAGNOSTIC IS THE ACTIVE ROUTE'S. The two deposition
+    # routes launch a different flux into the column, so the power the launch
+    # enthalpy rides at is not the same number on both:
+    #   csda          the march is handed I_eth_star / e AT the launch
+    #                 potential and carries the cathode-anode gap itself, so
+    #                 the whole of delta * I_eth_star is launched
+    #   beer_lambert  the column is heated by P_prim, which already carries
+    #                 1 - eta * beam_bypass_fraction, so only that share of
+    #                 the enthalpy enters; the rest leaves with the beam that
+    #                 bypasses to the anode
+    # The route selects THIS DIAGNOSTIC and nothing else, which is why it
+    # cannot move a trajectory on either arm.
+    assert cathode_beam_deposition_is_csda({"beam_deposition_model": "csda"})
+    assert not cathode_beam_deposition_is_csda(
+        {"beam_deposition_model": "beer_lambert"}
+    )
+    assert not cathode_emitted_enthalpy_gap_netted(
+        {"beam_deposition_model": "csda"}
+    )
+    assert cathode_emitted_enthalpy_gap_netted(
+        {"beam_deposition_model": "beer_lambert"}
+    )
+    # the dispatch's own fallback is beer_lambert, and the two must agree on it
+    assert not cathode_beam_deposition_is_csda({})
+    assert cathode_emitted_enthalpy_gap_netted({})
+    _eb_route_points = 0
+    _eb_route_strict = 0
+    for _eb_I in (20.0, 100.0, 300.0, 600.0, 1000.0):
+        _eb_csda = solve_idriven(
+            uni_cfg, plasma_probe, I_tot_A=_eb_I,
+            emitted_enthalpy_V=_eb_fix_delta_V,
+        )
+        _eb_bl = solve_idriven(
+            uni_cfg, plasma_probe, I_tot_A=_eb_I,
+            emitted_enthalpy_V=_eb_fix_delta_V,
+            emitted_enthalpy_gap_netted=True,
+        )
+        for _eb_member in (
+            "phi_c", "phi_c_plus", "phi_c_minus", "phi_a", "I_eth_star",
+            "I_tot", "l_b", "beam_bypass_fraction", "V_b", "P_prim",
+            "P_net2", "P_loss", "beam_launch_enthalpy_V",
+        ):
+            assert getattr(_eb_bl, _eb_member) == getattr(
+                _eb_csda, _eb_member
+            ), (_eb_I, _eb_member)
+        # csda: the FULL released current
+        assert _eb_csda.P_emitted_enthalpy_on_beam == (
+            _eb_fix_delta_V * _eb_csda.I_eth_star
+        ), _eb_I
+        # beer_lambert: the same power netted by the gap survival P_prim
+        # carries, formed in that order so the two are bit-identical
+        assert _eb_bl.P_emitted_enthalpy_on_beam == (
+            (_eb_fix_delta_V * _eb_bl.I_eth_star)
+            * (1.0 - uni_cfg.eta * _eb_bl.beam_bypass_fraction)
+        ), _eb_I
+        # ... and that IS the delta-share of P_prim on that route, which is
+        # what makes the reading true of the power the column received
+        assert np.isclose(
+            _eb_bl.P_emitted_enthalpy_on_beam,
+            _eb_bl.P_prim
+            - (1.0 - uni_cfg.eta * _eb_bl.beam_bypass_fraction)
+            * _eb_bl.I_eth_star
+            * _eb_bl.phi_c,
+            rtol=1e-12,
+            atol=0.0,
+        ), (_eb_I, _eb_bl.P_emitted_enthalpy_on_beam)
+        if _eb_bl.beam_bypass_fraction > 0.0:
+            assert (
+                _eb_bl.P_emitted_enthalpy_on_beam
+                < _eb_csda.P_emitted_enthalpy_on_beam
+            ), _eb_I
+            _eb_route_strict += 1
+        _eb_route_points += 1
+    assert _eb_route_points == 5, _eb_route_points
+    # the two routes must actually DISAGREE somewhere, or the clause above is
+    # measuring nothing
+    assert _eb_route_strict > 0, _eb_route_strict
+    # unarmed, the route makes no difference at all: 0.0 enthalpy is 0.0 power
+    # on both, so an unarmed solve's value is the computed zero it always was
+    for _eb_netted in (False, True):
+        _eb_zero = solve_idriven(
+            uni_cfg, plasma_probe, I_tot_A=300.0,
+            emitted_enthalpy_gap_netted=_eb_netted,
+        )
+        assert _eb_zero.beam_launch_enthalpy_V == 0.0, _eb_netted
+        assert _eb_zero.P_emitted_enthalpy_on_beam == 0.0, _eb_netted
+
+    # (vi) THE OFF-DISPATCH VOLTAGE-DRIVEN ASSEMBLY CANNOT CARRY THE
+    # PLACEMENT. `solve_beam_system` takes no launch enthalpy and passes none
+    # to `solve`, so every result it assembles reports no shift and the launch
+    # potential it reads IS phi_c -- the same float object. It reads that
+    # potential through `beam_launch_potential_V` all the same, so there is
+    # ONE definition of the launch energy in the module and the omission on
+    # this route is exactly zero rather than a silently bare drop.
+    assert "emitted_enthalpy_V" not in inspect.signature(
+        _eb_solve_beam_system
+    ).parameters
+    _eb_cells = 4
+    _eb_ones = np.ones(_eb_cells)
+    _eb_legacy = _eb_solve_beam_system(
+        uni_cfg,
+        Te=plasma_probe.T_e * _eb_ones,
+        ne=plasma_probe.n_e * _eb_ones,
+        nn=plasma_probe.n_n * _eb_ones,
+        beam_cross_prev=plasma_probe.sigma_b * _eb_ones,
+        plasma_cross=1.0e3 * _eb_ones,
+        I_ion=24.587,
+        gas_type="He",
+    )
+    _eb_legacy_result = _eb_legacy.result
+    assert _eb_legacy_result.beam_launch_enthalpy_V == 0.0
+    assert _eb_legacy_result.P_emitted_enthalpy_on_beam == 0.0
+    assert beam_launch_potential_V(_eb_legacy_result) is (
+        _eb_legacy_result.phi_c
+    )
+    assert float(_eb_legacy_result.phi_c) > 24.587, _eb_legacy_result.phi_c
+    assert float(np.max(_eb_legacy.l_b_profile)) > 0.0
+    for _eb_j in range(_eb_cells):
+        assert _eb_legacy.l_b_profile[_eb_j] == _compute_l_b(
+            _eb_legacy_result.phi_c,
+            plasma_probe.T_e, plasma_probe.n_e, plasma_probe.n_n,
+            _eb_legacy.beam_atten_cross[0],
+        ), _eb_j
 
     # (iv) MISCONFIGURATION REFUSES AT CONSTRUCTION, naming the requirement.
     # The key MOVES a row it does not compute, so arming it without the key
