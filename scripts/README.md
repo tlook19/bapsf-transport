@@ -69,11 +69,11 @@ solver.
 
 **`verify/`** — the per-build acceptance instruments. Every
 `verify_sim1d_*.py` is the registered gate of one build (its cases are cited
-by name in the campaign record), alongside the reference-corpus builders and
-the bit-inertness A/B harnesses. These differ from `gates/` in cadence, not in
-rigor: a `gates/` check runs on every merge, a `verify/` instrument runs for
-the build that owns it and stays runnable afterwards so its verdict can be
-re-derived.
+by name in the campaign record), alongside the reference-corpus builders
+(`build_wall_return_reference.py`, `bench_wall_return.py`). These differ from
+`gates/` in cadence, not in rigor: a `gates/` check runs on every merge, a
+`verify/` instrument runs for the build that owns it and stays runnable
+afterwards so its verdict can be re-derived.
 
 **`kinetic/`** — the neutral-closure instruments that stand outside the
 solver: `mc_neutrals.py` (frozen-field TPMC) and `kn2zone.py` (the
