@@ -27057,6 +27057,192 @@ def _case_cell_role_whitelist_on_load():
 
 
 # ----------------------------------------------------------------------
+# configuration-file-value-typed-to-template
+# ----------------------------------------------------------------------
+@_case("configuration-file-value-typed-to-template")
+def _case_configuration_file_value_typed_to_template():
+    # ONE CONFIGURATION, ONE IDENTITY, HOWEVER ITS NUMBERS WERE SPELLED. TOML
+    # distinguishes `1900` from `1900.0` and `config_identity` hashes the
+    # canonical JSON text, where those are different bytes -- so a file that
+    # spelled a float key's value as an integer used to resolve to a
+    # configuration nothing else recognised, and wrote that spelling into
+    # `params_json` for every run it produced. The `--extra` switches removed
+    # the ambiguity at their parse layer; a configuration FILE is the other
+    # place a value is written, and it now applies THE SAME rule, from the
+    # same definition (`extra_overrides.coerce_value`).
+    import re as _ct_re
+
+    with _derived_fixture_dir() as (_sc, _room):
+        _ct_base = _sc.load_stance("g1atrim")
+        _ct_base_params, _ct_base_flags = default_config()
+        _ct_base_params.update(_ct_base.params)
+        _ct_base_flags.update(_ct_base.flags)
+        # The pin the whole case turns on: the key is a FLOAT in the template
+        # and the base leaves it there, so 1900 and 1900.0 are two spellings
+        # of one move and neither is a restatement.
+        assert type(_ct_base_params["cathode_Ts_base_K"]) is float
+        assert _ct_base_params["cathode_Ts_base_K"] == 1910.0
+
+        # (i) THE PAIR. Two files, one physical configuration.
+        _ct_loaded = {}
+        for _ct_label, _ct_spelling in (("int", "1900"), ("float", "1900.0")):
+            (_room / f"typed_{_ct_label}.toml").write_text(
+                'base = "g1atrim"\n'
+                "\n"
+                "[input_dict]\n"
+                f"cathode_Ts_base_K = {_ct_spelling}\n"
+            )
+            _ct_loaded[_ct_label] = _sc.load_configuration(
+                f"typed_{_ct_label}"
+            )
+        for _ct_label in ("int", "float"):
+            _ct_value = _ct_loaded[_ct_label][0]["cathode_Ts_base_K"]
+            assert type(_ct_value) is float, (_ct_label, type(_ct_value))
+            assert _ct_value == 1900.0, (_ct_label, _ct_value)
+        # Identical RESOLVED dicts first, then identical identity -- so the
+        # match is a fact about values and not about a hash agreeing.
+        assert _ct_loaded["int"][0] == _ct_loaded["float"][0]
+        assert _ct_loaded["int"][1] == _ct_loaded["float"][1]
+        assert (
+            _ct_loaded["int"][2].identity == _ct_loaded["float"][2].identity
+        ), (_ct_loaded["int"][2].identity, _ct_loaded["float"][2].identity)
+        # NEGATIVE CONTROL: the shared identity is not the base's, so the
+        # delta did move and the agreement above is not the agreement of two
+        # files that both did nothing.
+        assert _ct_loaded["int"][2].identity != _ct_base.lineage.identity
+
+        # (ii) A BOOL KEY TAKES true/false AND NOTHING ELSE. `1` is a legible
+        # integer and TOML hands it over as one; a flag is not a number.
+        (_room / "typed_bool.toml").write_text(
+            'base = "g1atrim"\n\n[input_flags]\ncathode_coupling = 1\n'
+        )
+        try:
+            _sc.load_stance("typed_bool")
+        except ValueError as _ct_bexc:
+            _ct_bmsg = str(_ct_bexc)
+        else:
+            raise AssertionError("a bool key ACCEPTED an integer")
+        assert "typed_bool" in _ct_bmsg, _ct_bmsg
+        assert "cathode_coupling" in _ct_bmsg, _ct_bmsg
+        assert "carries bool" in _ct_bmsg, _ct_bmsg
+        assert "1" in _ct_bmsg, _ct_bmsg
+
+        # ...and a STRING key likewise. This is the ONE place the file route
+        # and the `--extra` route part company on purpose: a command-line
+        # token is text and IS its own value, so `--extra gas_type=1` gives
+        # the string "1", while a TOML integer is an integer and the file
+        # is refused rather than quietly stringified.
+        (_room / "typed_str.toml").write_text(
+            'base = "g1atrim"\n\n[input_dict]\ngas_type = 1\n'
+        )
+        try:
+            _sc.load_stance("typed_str")
+        except ValueError as _ct_sexc:
+            _ct_smsg = str(_ct_sexc)
+        else:
+            raise AssertionError("a str key ACCEPTED an integer")
+        assert "gas_type" in _ct_smsg, _ct_smsg
+        assert "carries str" in _ct_smsg, _ct_smsg
+
+        # (iii) AN INT KEY TAKES A WHOLE FLOAT, and resolves to an int: `nx`
+        # is a cell count, and 42.0 names the same mesh 42 does.
+        (_room / "typed_int.toml").write_text(
+            'base = "g1atrim"\n\n[input_dict]\nnx = 42.0\n'
+        )
+        _ct_nx = _sc.load_stance("typed_int").params["nx"]
+        assert type(_ct_nx) is int, type(_ct_nx)
+        assert _ct_nx == 42, _ct_nx
+        # A fractional one is not a cell count at all.
+        (_room / "typed_int_frac.toml").write_text(
+            'base = "g1atrim"\n\n[input_dict]\nnx = 42.5\n'
+        )
+        try:
+            _sc.load_stance("typed_int_frac")
+        except ValueError as _ct_iexc:
+            assert "carries int" in str(_ct_iexc), str(_ct_iexc)
+        else:
+            raise AssertionError("an int key ACCEPTED a fractional float")
+
+        # (iv) THE RESTATED-DELTA CHECK READS THE COERCED VALUE. An integer
+        # spelling of the base's float is the same value, so it is the same
+        # restatement -- the coercion must not let a delta smuggle itself
+        # past the check by changing type instead of value.
+        (_room / "typed_restated.toml").write_text(
+            'base = "g1atrim"\n\n[input_dict]\ncathode_Ts_base_K = 1910\n'
+        )
+        try:
+            _sc.load_stance("typed_restated")
+        except ValueError as _ct_rexc:
+            _ct_rmsg = str(_ct_rexc)
+        else:
+            raise AssertionError("an int spelling of the base's value PASSED")
+        assert "restates" in _ct_rmsg, _ct_rmsg
+        assert "cathode_Ts_base_K" in _ct_rmsg, _ct_rmsg
+
+        # (v) [none_valued] STAYS None whatever the template says. TOML has no
+        # null literal, so a key named there is an explicit UNSET rather than
+        # a value of the key's type, and coercing it to a float would be
+        # coercing the absence of a value.
+        (_room / "typed_unset.toml").write_text(
+            'base = "g1atrim"\n\n'
+            "[none_valued]\n"
+            'input_dict = ["cathode_Ts_base_K"]\n'
+        )
+        assert (
+            _sc.load_stance("typed_unset").params["cathode_Ts_base_K"] is None
+        )
+
+        # (vi) A DECLARATION BLOCK'S MEMBERS ARE FILE VALUES TOO, and are
+        # typed exactly as a flat delta is, after the projection has filed
+        # each member in its namespace. The block is lifted from the base so
+        # its completeness is the base's, with one float member moved AND
+        # spelled as an integer -- moved so the block is a delta at all,
+        # spelled short so it exercises the projection's coercion.
+        _ct_lines = (_room / "g1atrim.toml").read_text().splitlines()
+        _ct_start = _ct_lines.index("[models.beam_tail_closure]")
+        _ct_end = next(
+            i for i in range(_ct_start + 1, len(_ct_lines))
+            if _ct_lines[i].startswith("[")
+        )
+        _ct_block = "\n".join(_ct_lines[_ct_start:_ct_end]).rstrip() + "\n"
+        _ct_block = _ct_re.sub(
+            r"^ql_relaxation_coeff = 30\.0$",
+            "ql_relaxation_coeff = 31",
+            _ct_block,
+            count=1,
+            flags=_ct_re.MULTILINE,
+        )
+        assert "ql_relaxation_coeff = 31\n" in _ct_block
+        (_room / "typed_block.toml").write_text(
+            'base = "g1atrim"\n\n' + _ct_block
+        )
+        _ct_bparams = _sc.load_stance("typed_block").params
+        assert type(_ct_bparams["ql_relaxation_coeff"]) is float
+        assert _ct_bparams["ql_relaxation_coeff"] == 31.0
+
+        # (vii) WHY NOTHING ROTATED. The rule is identity-NEUTRAL over the
+        # committed set by construction, and this is that property stated as
+        # a check rather than as a claim: every scalar the reference
+        # configuration resolves to carries EXACTLY its template key's type,
+        # so there was no int-for-float spelling anywhere for the coercion to
+        # move. `None` is the explicit unset and a `None`/list template names
+        # no scalar type, so both stand outside the statement.
+        _ct_template_p, _ct_template_f = default_config()
+        _ct_spelled = [
+            f"{_ct_space}:{_ct_key}"
+            for _ct_space, _ct_res, _ct_tpl in (
+                ("input_dict", _ct_base_params, _ct_template_p),
+                ("input_flags", _ct_base_flags, _ct_template_f),
+            )
+            for _ct_key, _ct_val in _ct_res.items()
+            if _ct_val is not None
+            and isinstance(_ct_tpl[_ct_key], (bool, int, float, str))
+            and type(_ct_val) is not type(_ct_tpl[_ct_key])
+        ]
+        assert not _ct_spelled, _ct_spelled
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -27065,7 +27251,7 @@ def _case_cell_role_whitelist_on_load():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 152, "historical_stance": 64}
+_CASE_CENSUS = {"total": 153, "historical_stance": 64}
 
 
 def _assert_case_census():
