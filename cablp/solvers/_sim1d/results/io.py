@@ -1,3 +1,18 @@
+"""Read and write the ``sim1d-hdf5-v1`` saved trajectory.
+
+The format is described on :func:`save_result_hdf5`; most of its groups are
+PRESENCE-GATED, so an absent group means "never recorded" and never "zero",
+and a file written before a field existed still loads with that field absent.
+
+``geometry/cell_role`` is the one array read against a CLOSED vocabulary: a
+load accepts only the roles :data:`~cablp.solvers._sim1d.core.geometry.CELL_ROLES`
+names, and refuses with a ``ValueError`` naming the file, the offending
+strings and the accepted set otherwise -- an unrecognised role would load
+silently and then select nothing in every role-keyed selection downstream.
+:data:`LEGACY_CELL_ROLE_ALIASES` is the only route from a retired role name to
+a current one; it is applied first, so a retired name it does not map refuses.
+"""
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +23,7 @@ import numpy as np
 from cablp.cathode.kernels import PURE_PROVENANCE as PURE_KERNEL_PROVENANCE
 
 from ..core.config import ConfigurationLineage, resolve_config
+from ..core.geometry import CELL_ROLES
 from ..core.timestep import TimestepDiagnostics
 from ..physics.hot_neutrals import HOT_CHANNEL_DIAGNOSTIC_FIELDS
 from ..physics.kinetic_dvm import LEDGER_PARTICLE_ROW_DOC
@@ -80,6 +96,33 @@ def _apply_cell_role_aliases(cell_role):
     for index in hits:
         mapped[index] = LEGACY_CELL_ROLE_ALIASES[mapped[index]]
     return mapped, True
+
+
+def _check_cell_roles(path, cell_role):
+    """Refuse a stored role array naming a role :data:`CELL_ROLES` lacks.
+
+    Runs AFTER :func:`_apply_cell_role_aliases`, so a retired name the alias
+    table maps is already a current one by the time it is checked here and a
+    retired name that table does NOT map arrives unmapped and refuses. The
+    check is PRESENCE-GATED in the only sense a check can be: a file whose
+    roles are all accepted is read, not touched -- nothing is copied, no array
+    is rebuilt, and the loaded result is exactly what it was before.
+
+    Raises ``ValueError`` naming the file, the distinct offending strings and
+    the accepted set.
+    """
+    unknown = sorted(
+        {str(role) for role in np.asarray(cell_role, dtype=object)} - CELL_ROLES
+    )
+    if unknown:
+        raise ValueError(
+            f"{path}: geometry/cell_role carries role name(s) this solver does "
+            f"not accept: {unknown}. Accepted: {sorted(CELL_ROLES)}. A retired "
+            "role name reaches a current one ONLY through "
+            "LEGACY_CELL_ROLE_ALIASES; a name that table does not map is "
+            "refused here rather than loaded, because a role-keyed selection "
+            "downstream would silently select nothing."
+        )
 
 
 # The optional per-sample arrays a run may or may not carry. ``_write_arrays``
@@ -466,6 +509,7 @@ def load_result_hdf5(path):
         geometry["cell_role"], _cell_role_shim = _apply_cell_role_aliases(
             _read_string_array(h5["geometry/cell_role"])
         )
+        _check_cell_roles(path, geometry["cell_role"])
         params = _read_json_attr(h5, "params_json")
         flags = _read_json_attr(h5, "flags_json")
 
