@@ -181,6 +181,25 @@ INERT_FLAG_KEYS = frozenset({
     # is what keeps a default-config flag addition from rotating every
     # cached seed in the database.
     "end_recycle_to_annulus",
+    # The three end-face energy-booking flags are inert for a STRONGER reason
+    # than end_recycle_to_annulus above: run_neutral_equilibration does not
+    # merely leave them unreached, it CLEARS all three on the inner sim's copy
+    # of the config (three assignments beside the Plasma=False and
+    # cathode_coupling=False lines that open that function), so the
+    # equilibration runs with them off no matter what the outer run arms and no
+    # armed value can reach a seed. Their content says the same thing:
+    # end_wall_sheath_full_debit books the sheath fall of the electrons the end
+    # wall collects, cathode_face_full_debit books the emitting face's
+    # currents, and cathode_enthalpy_on_beam only MOVES the row the second of
+    # those places -- and a Plasma=False, cathode_coupling=False pre-solve has
+    # no plasma reaching either end face and no cathode solve to read a current
+    # from, so none of the three has a term to book even before the clearing.
+    # Categorised rather than left to fail closed for the reason spelled out
+    # for the prescribed cathode trace above: the fail-closed default rotates
+    # every stored seed's signature the moment such a key joins the template,
+    # an invalidation with no neutral content behind it.
+    "end_wall_sheath_full_debit", "cathode_face_full_debit",
+    "cathode_enthalpy_on_beam",
     # cache-control + equilibration-trigger flags (not seed content)
     "neutral_equilibration", "launch_plasma_after_equilibration",
     "use_cached_neutral_seed",
