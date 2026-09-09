@@ -15,6 +15,7 @@ from .flux import (
     ion_sound_speed,
     plasma_wave_speed,
     _flux_divergence,
+    end_wall_riemann_face_scalar,
     kep_rusanov_face_scalar,
 )
 from ..core.state import (
@@ -820,6 +821,81 @@ def anode_jet_backscatter_speed(anode_jet, Ti_eV, ion_mass_g):
     )
 
 
+def absorbing_face_states(
+    state,
+    derived,
+    geometry,
+    live,
+    outward,
+    mu,
+    ion_mass_g,
+    alpha_isat=np.exp(-0.5),
+    b_presheath_length=1.0,
+    gas_type=None,
+):
+    """Return ``(interior, ghost, alpha_eff)`` for one plasma-absorbing face.
+
+    THE ghost builder of :func:`characteristic_boundary_rhs`, factored out so
+    that a face flux and the sheath quantities booked on it are read from one
+    construction rather than two views of it. ``live`` is the live plasma cell
+    against the face and ``outward`` its outward normal (``+1`` when the plasma
+    lies on the low-z side of the surface, ``-1`` when it lies on the high-z
+    side), so the ghost's velocity always points INTO the wall.
+
+    The two returned dicts carry the conservative and derived scalars
+    (``n, M, Ee, Ei, u, p, Te, Ti``) a single-face flux kernel reads. The ghost
+    is the Bohm outflow condition at the sheath edge: density
+    ``n_se = alpha_eff n``, velocity the ion sound speed
+    :func:`~.flux.ion_sound_speed` directed outward, and the live cell's own
+    ``Te`` and ``Ti``. ``alpha_eff`` is the sheath-edge sampling factor
+    :func:`electrode_sheath_alpha` returns for this cell -- returned rather
+    than recomputed by the caller, so the flux this face delivers and any
+    sheath barrier charged on it describe one sheath edge.
+    """
+    Te_l = float(derived.Te[live])
+    Ti_l = float(derived.Ti[live])
+    cs = float(ion_sound_speed(Te_l, mu))
+
+    # Shared mesh-independent sheath-edge sampling (presheath_alpha): the
+    # SAME factor the circuit reads in R3.2 (via electrode_sheath_alpha).
+    alpha_eff = electrode_sheath_alpha(
+        nn=state.nn[live],
+        Te=Te_l,
+        Ti=Ti_l,
+        cell_length_cm=float(geometry.length_cm[live]),
+        mu=mu,
+        ion_mass_g=ion_mass_g,
+        alpha_isat=alpha_isat,
+        b_presheath_length=b_presheath_length,
+        gas_type=gas_type,
+    )
+
+    n_se = alpha_eff * float(state.n[live])
+    u_g = outward * cs
+    p_g = n_se * (Te_l + Ti_l) * ev_to_erg
+    ghost = {
+        "n": n_se,
+        "M": ion_mass_g * n_se * u_g,
+        "Ee": 1.5 * n_se * Te_l * ev_to_erg,
+        "Ei": 1.5 * n_se * Ti_l * ev_to_erg,
+        "u": u_g,
+        "p": p_g,
+        "Te": Te_l,
+        "Ti": Ti_l,
+    }
+    interior = {
+        "n": float(state.n[live]),
+        "M": float(state.M[live]),
+        "Ee": float(state.Ee[live]),
+        "Ei": float(state.Ei[live]),
+        "u": float(derived.u[live]),
+        "p": float(derived.p[live]),
+        "Te": Te_l,
+        "Ti": Ti_l,
+    }
+    return interior, ghost, alpha_eff
+
+
 def characteristic_boundary_rhs(
     state,
     floors,
@@ -836,6 +912,7 @@ def characteristic_boundary_rhs(
     end_recycle_annulus_volume_cm3=None,
     cathode_carrier_out=None,
     end_wall_sheath_climb_out=None,
+    end_wall_face_riemann_solver=None,
 ):
     """Return the characteristic ghost-cell Bohm outflow at absorbing faces.
 
@@ -888,6 +965,22 @@ def characteristic_boundary_rhs(
     driven electrodes above. CATHODE faces are untouched: the accelerated
     species there is the ion. ``None`` -- the default -- computes nothing and
     is the historical call, bit for bit.
+
+    ``end_wall_face_riemann_solver``: when given (one of
+    ``flux.END_WALL_FACE_RIEMANN_SOLVERS``, supplied only under the
+    ``end_wall_face_riemann_flux`` closure), the faces whose live cell has the
+    ``end_wall`` role take their flux from
+    :func:`~.flux.end_wall_riemann_face_scalar` instead of the KEP/Rusanov
+    kernel. It is ONE substitution and it reaches ONE face: the cathode faces
+    and every interior face are untouched, and because the four rows this
+    function books all ride the single ``f_n`` the substitution returns, the
+    particle sink, the ``2 Te`` electron row, the sheath-climb row and the
+    neutral rebirth continue to describe the same face flux. The Rusanov
+    dissipation ``-a_max (n_R - n_L)/2`` that the ghost's density step drives
+    is what it removes; in the resolved limit, where the ghost equals the
+    interior, that dissipation vanishes and both solvers and the Rusanov
+    kernel are the same physical upwind flux. ``None`` -- the default -- never
+    enters the branch and is the historical call, bit for bit.
 
     ``end_recycle_annulus_volume_cm3``: when given (the per-cell annulus
     volume [cm^3], supplied only under the ``end_recycle_to_annulus``
@@ -996,47 +1089,20 @@ def characteristic_boundary_rhs(
         # -z to reach it (source cathode), and +z otherwise (end wall).
         outward = -1.0 if live_is_right else 1.0
 
-        Te_l = float(derived.Te[live])
-        Ti_l = float(derived.Ti[live])
-        cs = float(ion_sound_speed(Te_l, mu))
-
-        # Shared mesh-independent sheath-edge sampling (presheath_alpha): the
-        # SAME factor the circuit reads in R3.2 (via electrode_sheath_alpha).
-        alpha_eff = electrode_sheath_alpha(
-            nn=state.nn[live],
-            Te=Te_l,
-            Ti=Ti_l,
-            cell_length_cm=float(geometry.length_cm[live]),
+        interior, ghost, alpha_eff = absorbing_face_states(
+            state=state,
+            derived=derived,
+            geometry=geometry,
+            live=live,
+            outward=outward,
             mu=mu,
             ion_mass_g=ion_mass_g,
             alpha_isat=alpha_isat,
             b_presheath_length=b_presheath_length,
             gas_type=gas_type,
         )
-
-        n_se = alpha_eff * float(state.n[live])
-        u_g = outward * cs
-        p_g = n_se * (Te_l + Ti_l) * ev_to_erg
-        ghost = {
-            "n": n_se,
-            "M": ion_mass_g * n_se * u_g,
-            "Ee": 1.5 * n_se * Te_l * ev_to_erg,
-            "Ei": 1.5 * n_se * Ti_l * ev_to_erg,
-            "u": u_g,
-            "p": p_g,
-            "Te": Te_l,
-            "Ti": Ti_l,
-        }
-        interior = {
-            "n": float(state.n[live]),
-            "M": float(state.M[live]),
-            "Ee": float(state.Ee[live]),
-            "Ei": float(state.Ei[live]),
-            "u": float(derived.u[live]),
-            "p": float(derived.p[live]),
-            "Te": Te_l,
-            "Ti": Ti_l,
-        }
+        Te_l = interior["Te"]
+        Ti_l = interior["Ti"]
         # Assemble the +z-oriented face: the interior sits on whichever side the
         # live cell occupies, the ghost (the surface) on the other.
         if live_is_right:
@@ -1044,14 +1110,31 @@ def characteristic_boundary_rhs(
         else:
             left_state, right_state, signL = interior, ghost, -1.0
 
-        f_n, f_M, f_Ee, f_Ei = kep_rusanov_face_scalar(
-            left_state,
-            right_state,
-            mu=mu,
-            ion_mass_g=ion_mass_g,
-            wave_speed=wave_speed,
-            energy_consistent=energy_consistent,
-        )
+        if (
+            end_wall_face_riemann_solver is not None
+            and roles[live] == "end_wall"
+        ):
+            # end_wall_face_riemann_flux. ONE face -- the END WALL's -- and
+            # one face state, from which all four fluxes come; the cathode
+            # face below and every interior face keep the R2 kernel.
+            f_n, f_M, f_Ee, f_Ei = end_wall_riemann_face_scalar(
+                left_state,
+                right_state,
+                solver=end_wall_face_riemann_solver,
+                mu=mu,
+                ion_mass_g=ion_mass_g,
+                wave_speed=wave_speed,
+                energy_consistent=energy_consistent,
+            )
+        else:
+            f_n, f_M, f_Ee, f_Ei = kep_rusanov_face_scalar(
+                left_state,
+                right_state,
+                mu=mu,
+                ion_mass_g=ion_mass_g,
+                wave_speed=wave_speed,
+                energy_consistent=energy_consistent,
+            )
         # One-sided divergence on the live cell (the plenum keeps its closed
         # face and never receives this flux).
         scale = signL * area[face] / Vp[live]

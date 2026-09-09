@@ -905,6 +905,21 @@ surface; at the cathode that term is owned by the circuit.
 cell's annulus, $\partial_tn_{n,a}|_\text{recycle}=\dot N_\text{loss}/V_\text{ann}$,
 as thermal diffuse gas carrying no directed momentum.
 
+ONE FACE FLUX, FOUR ROWS. Whatever supplies the end wall face's particle flux
+$\Gamma_n$, the same number carries every booking made on it: the plasma
+particle sink, the $2T_e$ floating-sheath electron loss, the sheath-climb row
+below when it is armed, and the neutral rebirth that returns the absorbed
+plasma as gas. `end_wall_face_riemann_flux` — default off — replaces that flux
+at the end wall face alone, taking all four fluxes from the exact isothermal
+Riemann solution of the face or from an HLL solve of it (whichever
+`end_wall_face_riemann_solver` names) in place of the interior's Rusanov
+kernel, whose dissipation the ghost's density step drives. The cathode face and
+every interior face are untouched, and because the four rows already ride one
+$\Gamma_n$ they move together and stay mutually consistent. What changes is how
+much plasma the wall takes, and so the density the wall cell settles at; what
+does not change is the accounting on top of it. The numerical statement is
+[`NUMERICS.md`](NUMERICS.md).
+
 **End-face sheath debit at the end wall.** `end_wall_sheath_full_debit`
 completes that booking the way `anode_sheath_full_debit` completes the anode's.
 The two end-face keys are INDEPENDENT — different faces, different fluxes,

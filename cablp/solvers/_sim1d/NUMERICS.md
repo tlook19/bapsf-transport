@@ -48,6 +48,50 @@ flux with its own pressure term, using the same face kernel as the interior
 applied as a one-sided divergence $\pm\,\text{area}\cdot\Gamma/V$ on the live
 cell.
 
+**Riemann flux at the end wall ghost face** (`end_wall_face_riemann_flux`,
+default off). The ghost state's density step across the face drives the
+Rusanov dissipation $-\tfrac12a_\text{max}(n_R-n_L)$, so the delivered flux
+carries a dissipative share the resolved solution does not have. Armed, the
+faces whose live cell has the `end_wall` role — and only those; the cathode
+face and every interior face keep the kernel above — take all four fluxes from
+one face state supplied by the solver `end_wall_face_riemann_solver` names
+(`flux.end_wall_riemann_face_scalar`), so the particle flux the boundary books
+and every energy flux riding it come from the same face state.
+
+`"exact_isothermal"` solves the isothermal Euler pair
+$\partial_tn+\partial_z(nu)=0$, $\partial_tM+\partial_z(Mu+p)=0$ with
+$p=n\,m_ic^2$ and $c$ the face's isothermal sound speed — the same speed the
+ghost's Bohm velocity is set at, so the ghost sits on its own sonic point. The
+pair has two genuinely nonlinear fields and no contact, so the star region is a
+single state $(n_*,u_*)$ where the two wave curves meet,
+
+$$u=u_K\mp c\ln\frac{n_*}{n_K}\quad(\text{rarefaction}),\qquad
+u=u_K\mp c\,\frac{n_*-n_K}{\sqrt{n_*n_K}}\quad(\text{shock}),$$
+
+the upper sign the 1-wave off the left state and the lower the 2-wave off the
+right; the intersection is found by a bracketed Newton iteration in $\ln n_*$
+started from the two-rarefaction solution, which is exact whenever both waves
+expand. The self-similar solution is sampled at $x/t=0$ — landing in either
+initial state, in the star state, or inside a fan at $u=\pm c$ — and the flux is
+that face state's physical flux, $f_n=n_fu_f$ and
+$f_M=m_in_f(u_f^2+c^2)$. $E_e$ and $E_i$ ride the pair as passive scalars whose
+specific values are constant along the linearly degenerate $u$ field, so each is
+upwinded on the face velocity and transported by that same $f_n$. The pair
+carries no ion partial pressure, so this face's momentum flux is smaller than
+the model's own $n(T_e+T_i)$ face pressure by $n_fT_i$.
+
+`"hll"` is the HLL flux on the full $(n,M,E_e,E_i)$ vector with the face's own
+signal speeds $S_L=\min(u_L-c_L,\,u_R-c_R)$ and
+$S_R=\max(u_L+c_L,\,u_R+c_R)$, $c$ from `plasma_wave_speed` at the configured
+`hyperbolic_wave_speed`: the upwind physical flux where $S_L\ge0$ or
+$S_R\le0$, and $(S_RF_L-S_LF_R+S_LS_R(U_R-U_L))/(S_R-S_L)$ otherwise. It keeps
+the model's full face pressure, follows `hyperbolic_energy_consistent` by
+forming the convective momentum flux as the product of the two weighted means
+the HLL average applies to $M$ and $u$, and at $S_R=-S_L=a_\text{max}$ reduces
+to the Rusanov kernel term by term. In the resolved limit, where the ghost
+equals the interior, the Rusanov dissipation vanishes and all three fluxes are
+the same physical upwind flux, up to that closure difference in $f_M$.
+
 **Energy-consistent hyperbolic core** (`hyperbolic_energy_consistent`). The
 convective momentum flux becomes the kinetic-energy-preserving $\{u\}\{M\}$
 form, the pressure work a kinetic-energy-preserving
@@ -726,8 +770,11 @@ bookkeeping.
 | Cell-centred physical fluxes; wall closure | `physics/flux.py:physical_fluxes`, `_apply_plasma_walls` |
 | Front-filling flux | `physics/flux.py:front_filling_fluxes` |
 | KEP single-face flux (boundary) | `physics/flux.py:kep_rusanov_face_scalar` |
+| End wall Riemann face flux | `physics/flux.py:end_wall_riemann_face_scalar`, `exact_isothermal_face_scalar`, `hll_face_scalar` |
+| Isothermal star state and $x/t=0$ sampling | `physics/flux.py:_isothermal_star_state`, `_isothermal_wave`, `_isothermal_face_state` |
 | Flux divergence | `physics/flux.py:_flux_divergence` |
 | Ghost-cell Bohm outflow | `physics/sources.py:characteristic_boundary_rhs` |
+| Absorbing-face ghost state | `physics/sources.py:absorbing_face_states` |
 | Sheath-edge sampling | `physics/sources.py:presheath_alpha`, `electrode_sheath_alpha` |
 | Geometric momentum source | `physics/sources.py:flux_tube_geometry_rhs` |
 | Pressure work, velocity divergence | `physics/sources.py:pressure_work_rhs`, `velocity_divergence`, `hyperbolic_energy_correction_rhs` |

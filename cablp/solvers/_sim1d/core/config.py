@@ -1348,6 +1348,30 @@ def model_mode_defaults():
         Number of perpendicular-speed (``v_perp``) bins in that same grid.
         This axis is positive-only -- it carries the 2D perpendicular speed
         measure -- and is likewise stretched. Inert under ``"moment"``.
+    end_wall_face_riemann_solver:
+        Which Riemann solver supplies the END WALL ghost face's flux under the
+        ``end_wall_face_riemann_flux`` flag. ``None`` -- the default -- is "not
+        named": the face keeps the KEP/Rusanov kernel every other face uses,
+        and naming a solver while the flag is off raises at construction rather
+        than leaving a silently inert control. Armed, it must name one of two
+        solvers, and both deliver all four face fluxes from ONE face state so
+        that the particle sink, the electron sheath rows and the neutral
+        rebirth ride the same particle flux:
+
+        ``"exact_isothermal"``
+            The exact Riemann solution of the isothermal Euler pair ``(n, M)``
+            with ``p = n m_i c^2``, ``c`` the face's isothermal sound speed --
+            the same speed the ghost's Bohm velocity is set at, so the ghost
+            sits exactly at its own sonic point. The pair carries no ion
+            partial pressure, so this face's momentum flux is smaller than the
+            model's own ``n (Te + Ti)`` face pressure by ``n_f Ti``.
+        ``"hll"``
+            The HLL flux on the full ``(n, M, Ee, Ei)`` vector with the face's
+            own signal speeds ``S_L = min(u_L - c_L, u_R - c_R)`` and
+            ``S_R = max(u_L + c_L, u_R + c_R)``, ``c`` per
+            ``hyperbolic_wave_speed``. It keeps the model's full face pressure
+            and reduces to the Rusanov flux term by term at
+            ``S_R = -S_L = a_max``.
     adas_low_te_extension:
         Extends the ADAS ``acd`` (recombination) and ``prb1`` (recombination
         radiated power) coefficients consistently below the bundled ADF11
@@ -1469,6 +1493,10 @@ def model_mode_defaults():
         # refused outright by every other neutral model, so the key can
         # never be a silently inert control:
         "neutral_kinetic_dvm_transfer_hold": None,
+        # None = "not named"; REQUIRED to name one of the two solvers when
+        # end_wall_face_riemann_flux is armed and refused outright while it is
+        # off, so the key can never be a silently inert control:
+        "end_wall_face_riemann_solver": None,
         # Bucket-2 default-off closure instrument: extends acd/prb1 below the
         # 0.2 eV adf11 edge. REFUSED with icool_recomb; the prb1 half is
         # booked through recombination_energy_return:
@@ -3960,6 +3988,23 @@ input_flags_template_1d = {
     # energy, plus a KEP pressure-work discretization -- so the closed-domain
     # total plasma energy K+Ee+Ei is conserved to machine precision.
     "hyperbolic_energy_consistent": True,
+    # Riemann flux at the END WALL ghost face, DEFAULT OFF. The plasma-
+    # terminating faces evaluate the interior's KEP/Rusanov kernel between the
+    # live cell and the Bohm ghost, and the ghost's density step drives that
+    # kernel's -a_max (n_R - n_L)/2 dissipation: the delivered flux carries a
+    # dissipative share the resolved solution does not have, and the wall cell
+    # equilibrates at the density that share implies. Armed, the end wall face
+    # -- and ONLY it: the cathode face and every interior face keep the R2
+    # kernel -- takes its flux from the Riemann solver
+    # end_wall_face_riemann_solver names instead. All four fluxes come from one
+    # face state, so the particle sink, the 2 Te electron row, the sheath-climb
+    # row under end_wall_sheath_full_debit and the neutral recycle rebirth all
+    # ride one f_n, as they already do. Must be a real bool. Arming refuses at
+    # construction unless the solver is named AND the configuration supplies a
+    # plasma-absorbing face of the end wall role -- the only face this key
+    # touches, so without one it would be an armed control that changes
+    # nothing. Bit-exact when off: the branch is never entered.
+    "end_wall_face_riemann_flux": False,
     # Anode-mesh beam interception (R4): the CSDA beam
     # ray launches the full emitted flux Gamma0 = I_eth_star/e through the
     # whole column, so without this the fluid deposits the entire emitted beam
