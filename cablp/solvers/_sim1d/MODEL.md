@@ -337,7 +337,17 @@ the two, $\alpha_r(T_e)n^2$ radiative plus $\alpha_3(T_e)n^3$ three-body. The
 BULK coefficients carry no scale factor; the beam excitation channel is the one
 exception and carries `b_beam_excitation`. Each result records an
 `atomic_rate_domain` ledger of where the run sampled below the tabulated $T_e$
-edge.
+edge. Below that edge the lookup clamps the log-$T_e$ (and log-$n_e$)
+interpolation coordinate to the grid boundary rather than extrapolating, so
+at the reference configuration all five coefficients — `scd`, `acd`,
+`plt1`, `plt2`, `prb1` — are held at their edge-$T_e$ value for any colder
+cell, under-booking recombination (still rising steeply toward low $T_e$)
+between the table edge and the solver's electron-temperature floor below
+it; under the default-off `adas_low_te_extension` flag, `acd` and `prb1`
+are instead extended below the edge by the Janev shape ratio while `scd`,
+`plt1`, `plt2` clamp either way. `atomic_rate_domain`'s
+`active_cell_fraction_below` and `active_volume_fraction_below` report how
+much of the active plasma sat below the table edge at each save.
 
 **Recombination is a sink on every field**, at the local plasma moments: it
 removes $S_\text{rec}$ particles, $m_i u S_\text{rec}$ of momentum, and
