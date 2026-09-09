@@ -889,7 +889,16 @@ collected electron rather than the thermal $2T_e$ alone. The barrier is
 $\Lambda_\text{eff}=\Lambda+\ln(1/\alpha_\text{se})$: the sheath lift
 $\Lambda=\ln\sqrt{\mu m_p/2\pi m_e}$ for the configured gas, plus the presheath
 drop implied by the same $\alpha_\text{se}$ that face samples its Bohm flux at,
-so the flux and the barrier describe one sheath edge. $\Lambda_\text{eff}$ is
+so the flux and the barrier describe one sheath edge. That holds only in the
+RESOLVED limit: at production resolution the delivered ghost-face flux
+behaves as if the wall cell sat at the sheath edge, an effective
+$\alpha\approx1.07$ against the cell density with the Rusanov dissipation
+supplying the excess, while the climb barrier uses $\alpha_\text{se}=e^{-1/2}$
+(the cell read as the presheath entrance) -- so the two describe one edge
+only as the cell resolves the presheath. The mismatch is a one-sided
+$\approx12\%$ item on the climb row, half of $\Lambda_\text{eff}$'s presheath
+share, inside the disclosed width, and it shrinks with resolution.
+$\Lambda_\text{eff}$ is
 a state-dependent barrier rather than a constant and lies in
 $[\Lambda,\Lambda+\tfrac12]$, both limits being limits of the same
 $\alpha_\text{se}$: a collisional presheath SHORTER than the sampling cell
