@@ -27721,6 +27721,482 @@ def _case_far_end_double_ratio_area_cancels():
         ) <= 1.0e-12, (base["metric"], base["D_measured"], moved["D_measured"])
 
 
+
+# --------------------------------------------------------------------
+# end-wall-riemann-flux-unarmed-inert
+# --------------------------------------------------------------------
+@_case("end-wall-riemann-flux-unarmed-inert", historical_stance=True)
+def _case_end_wall_riemann_flux_unarmed_inert():
+    # THE KEY IS A PAIR, AND UNARMED IT IS NOT A CODE PATH. The flag ships
+    # False and the solver name ships unnamed, and with the name unnamed the
+    # boundary operator never reaches the branch at all -- which is the whole
+    # of "bit-exact when off". Stating the flag False explicitly must be the
+    # same construction as never naming it, and the operator called with the
+    # kwarg at its default must be the same call as one that omits it.
+    from cablp.solvers._sim1d.core.config import (
+        input_dict_template_1d,
+        input_flags_template_1d,
+    )
+    from cablp.solvers._sim1d.physics.flux import (
+        END_WALL_FACE_RIEMANN_SOLVERS,
+    )
+    from cablp.solvers._sim1d.physics.sources import (
+        characteristic_boundary_rhs as _rq_boundary,
+    )
+
+    # (i) THE SHIPPED DEFAULTS, in the templates that own them: the flag is a
+    # flag and the solver name is a parameter, and the two namespaces are not
+    # interchangeable.
+    assert input_flags_template_1d["end_wall_face_riemann_flux"] is False
+    assert "end_wall_face_riemann_flux" not in input_dict_template_1d
+    assert input_dict_template_1d["end_wall_face_riemann_solver"] is None
+    assert "end_wall_face_riemann_solver" not in input_flags_template_1d
+    assert END_WALL_FACE_RIEMANN_SOLVERS == ("exact_isothermal", "hll")
+
+    _rq_params, _rq_flags = _base_config()
+    _rq_unnamed = LAPDSim1D(dict(_rq_params), dict(_rq_flags))
+    _rq_off = LAPDSim1D(
+        dict(_rq_params, end_wall_face_riemann_solver=None),
+        dict(_rq_flags, end_wall_face_riemann_flux=False),
+    )
+    assert _rq_unnamed._end_wall_face_riemann_solver is None
+    assert _rq_off._end_wall_face_riemann_solver is None
+    # The packed RHS, the term set, and the boundary term itself: none of the
+    # three may move for a key that was named at its default.
+    assert _rq_off.rhs().tobytes() == _rq_unnamed.rhs().tobytes()
+    assert set(_rq_off.rhs_terms()) == set(_rq_unnamed.rhs_terms())
+    _rq_a = _rq_unnamed.characteristic_boundary_rhs(state=_rq_unnamed.state)
+    _rq_b = _rq_off.characteristic_boundary_rhs(state=_rq_off.state)
+    for _rq_field in ("n", "nn", "M", "Ee", "Ei"):
+        assert (
+            np.asarray(getattr(_rq_a, _rq_field)).tobytes()
+            == np.asarray(getattr(_rq_b, _rq_field)).tobytes()
+        ), _rq_field
+
+    # (ii) THE OPERATOR'S OWN DEFAULT. Passing the kwarg at None is the call
+    # that omits it, byte for byte -- so a caller that has not heard of the
+    # key gets the historical operator.
+    _rq_surface = _rq_unnamed._surface_loss_kwargs()
+    _rq_kwargs = dict(
+        state=_rq_unnamed.state,
+        floors=_rq_unnamed.floors,
+        ion_mass_g=_rq_unnamed.ion_mass_g,
+        mu=_rq_unnamed._mu,
+        geometry=_rq_unnamed._plasma_geometry(),
+        alpha_isat=_rq_surface["alpha_isat"],
+        b_surface_loss=_rq_surface["b_surface_loss"],
+        b_presheath_length=float(
+            _rq_unnamed._input_dict.get("b_presheath_length")
+        ),
+        gas_type=_rq_unnamed._gas_type,
+        wave_speed=_rq_unnamed._hyperbolic_wave_speed,
+        energy_consistent=_rq_unnamed._hyperbolic_energy_consistent,
+    )
+    _rq_omitted = _rq_boundary(**_rq_kwargs)
+    _rq_explicit = _rq_boundary(
+        end_wall_face_riemann_solver=None, **_rq_kwargs
+    )
+    for _rq_field in ("n", "nn", "M", "Ee", "Ei"):
+        assert (
+            np.asarray(getattr(_rq_omitted, _rq_field)).tobytes()
+            == np.asarray(getattr(_rq_explicit, _rq_field)).tobytes()
+        ), _rq_field
+
+
+# --------------------------------------------------------------------
+# end-wall-riemann-flux-refusals
+# --------------------------------------------------------------------
+@_case("end-wall-riemann-flux-refusals", historical_stance=True)
+def _case_end_wall_riemann_flux_refusals():
+    # FIVE REFUSALS, all at construction. The flag must be a real bool; armed,
+    # it must name one of the two solvers AND find the one face it replaces;
+    # off, it must not carry a name, because a named solver behind a cleared
+    # flag is exactly the silent inert control the namespaces exist to forbid.
+    _rf_params, _rf_flags = _base_config()
+
+    def _rf_refuses(params_over, flags_over):
+        try:
+            LAPDSim1D(dict(_rf_params, **params_over),
+                      dict(_rf_flags, **flags_over))
+        except ValueError as exc:
+            return str(exc)
+        raise AssertionError(
+            f"ACCEPTED params={params_over} flags={flags_over}"
+        )
+
+    # (i) not a bool -- an int or a string there would read like a value.
+    for _rf_bad in (1, 0, "yes", None):
+        _rf_msg = _rf_refuses({}, {"end_wall_face_riemann_flux": _rf_bad})
+        assert "end_wall_face_riemann_flux must be a bool" in _rf_msg, _rf_msg
+
+    # (ii) armed with no solver named, and (iii) armed with a name that is not
+    # a solver: one refusal, and it states the accepted set rather than
+    # leaving the caller to guess it.
+    for _rf_name in (None, "roe", "rusanov", "exact"):
+        _rf_msg = _rf_refuses(
+            {"end_wall_face_riemann_solver": _rf_name},
+            {"end_wall_face_riemann_flux": True},
+        )
+        assert "names no solver to install" in _rf_msg, _rf_msg
+        assert "'exact_isothermal'" in _rf_msg and "'hll'" in _rf_msg, _rf_msg
+        assert repr(_rf_name) in _rf_msg, _rf_msg
+
+    # (iv) named while the flag is off.
+    for _rf_name in ("exact_isothermal", "hll"):
+        _rf_msg = _rf_refuses(
+            {"end_wall_face_riemann_solver": _rf_name},
+            {"end_wall_face_riemann_flux": False},
+        )
+        assert "is off" in _rf_msg, _rf_msg
+        assert "silent inert control" in _rf_msg, _rf_msg
+
+    # (v) armed onto a configuration with no END WALL face at all. The twin
+    # layout puts a cathode at both ends, so the role this key resolves its
+    # face by is absent and an armed run would change nothing -- checked
+    # through the same role helper the boundary operator resolves faces with,
+    # so a guard reading a second view of the topology cannot pass while the
+    # substitution lands nowhere.
+    _rf_twin_flags = dict(
+        _rf_flags,
+        TwinCathode=True,
+        source_fixed_grid=False,
+        cathode_coupling=False,
+    )
+    _rf_twin_params = dict(
+        _rf_params,
+        cathode_anode_gap_cm=50.0,
+        source_region_length_cm=None,
+        source_region_dz_cm=None,
+    )
+    _rf_twin_geom = LAPDSim1D(
+        dict(_rf_twin_params), dict(_rf_twin_flags)
+    ).geometry
+    assert "end_wall" not in absorbing_live_cells_by_role(_rf_twin_geom)
+    try:
+        LAPDSim1D(
+            dict(_rf_twin_params, end_wall_face_riemann_solver="hll"),
+            dict(_rf_twin_flags, end_wall_face_riemann_flux=True),
+        )
+    except ValueError as _rf_texc:
+        _rf_tmsg = str(_rf_texc)
+    else:
+        raise AssertionError("armed onto a twin layout was ACCEPTED")
+    assert "cannot arm" in _rf_tmsg, _rf_tmsg
+    assert "end-wall-role plasma-absorbing face" in _rf_tmsg, _rf_tmsg
+    # NEGATIVE CONTROL: the same twin configuration constructs unarmed.
+    LAPDSim1D(dict(_rf_twin_params), dict(_rf_twin_flags))
+
+    # (vi) the dispatcher's own refusal, one layer down: a name that reached
+    # the face kernel anyway names the accepted set there too.
+    from cablp.solvers._sim1d.physics.flux import (
+        END_WALL_FACE_RIEMANN_SOLVERS,
+        end_wall_riemann_face_scalar,
+    )
+    _rf_state = {
+        "n": 1.0e13, "M": 0.0, "Ee": 1.0, "Ei": 1.0,
+        "u": 0.0, "p": 1.0, "Te": 4.0, "Ti": 1.0,
+    }
+    try:
+        end_wall_riemann_face_scalar(
+            _rf_state, dict(_rf_state), solver="roe", mu=4.0,
+            ion_mass_g=m_He_cgs,
+        )
+    except ValueError as _rf_dexc:
+        _rf_dmsg = str(_rf_dexc)
+    else:
+        raise AssertionError("end_wall_riemann_face_scalar accepted 'roe'")
+    assert str(END_WALL_FACE_RIEMANN_SOLVERS) in _rf_dmsg, _rf_dmsg
+
+
+# --------------------------------------------------------------------
+# end-wall-riemann-face-fluxes
+# --------------------------------------------------------------------
+@_case("end-wall-riemann-face-fluxes", historical_stance=True)
+def _case_end_wall_riemann_face_fluxes():
+    # THE ONE-FACE UNIT CHECK, on pairs the boundary operator's own ghost
+    # builder assembles rather than on hand-written dicts: what the flag
+    # installs is a face kernel, and a face kernel is checked at a face.
+    from cablp.solvers._sim1d.physics import flux as _rx_flux
+    from cablp.solvers._sim1d.physics.sources import absorbing_face_states
+
+    _rx_params, _rx_flags = _base_config()
+    _rx_sim = LAPDSim1D(dict(_rx_params), dict(_rx_flags))
+    _rx_geom = _rx_sim.geometry
+    _rx_roles = np.asarray(_rx_geom.cell_role)
+    _rx_face = None
+    for _rx_k in np.flatnonzero(
+        np.asarray(_rx_geom.plasma_absorbing, dtype=bool)
+    ):
+        _rx_live = int(_rx_geom.plasma_face_live_cell[int(_rx_k)])
+        if _rx_live >= 0 and _rx_roles[_rx_live] == "end_wall":
+            _rx_face = int(_rx_k)
+            break
+    assert _rx_face is not None
+    _rx_live = int(_rx_geom.plasma_face_live_cell[_rx_face])
+    _rx_live_is_right = _rx_live == _rx_face
+    _rx_outward = -1.0 if _rx_live_is_right else 1.0
+
+    _rx_mu = _rx_sim._mu
+    _rx_m = _rx_sim.ion_mass_g
+    _rx_Te = 4.0
+    # Ti/Te here is not a stance: it is the ratio at which the adiabatic
+    # signal speed makes a_max exactly 2.9 c_iso on this pair, which is the
+    # reading the flag exists to answer, so the case measures it below.
+    _rx_Ti = 1.166 * _rx_Te
+    _rx_c = _rx_flux.ion_sound_speed(_rx_Te, _rx_mu)
+    _rx_n0 = 1.0e13
+    # The face kernels are compared on the SHIPPED hyperbolic arms, named
+    # explicitly rather than read off this fixture: the fixture pins the
+    # historical operator algebra, and the dissipation reading this case
+    # measures is a property of the adiabatic signal speed.
+    _rx_kw = dict(
+        mu=_rx_mu,
+        ion_mass_g=_rx_m,
+        wave_speed="adiabatic",
+        energy_consistent=True,
+    )
+
+    def _rx_pair(mach, nn_cm3):
+        """Build the (interior, ghost) pair the operator would see here."""
+        _n = np.array(_rx_sim.state.n, dtype=float)
+        _nn = np.array(_rx_sim.state.nn, dtype=float)
+        _M = np.array(_rx_sim.state.M, dtype=float)
+        _Ee = np.array(_rx_sim.state.Ee, dtype=float)
+        _Ei = np.array(_rx_sim.state.Ei, dtype=float)
+        _n[_rx_live] = _rx_n0
+        _nn[_rx_live] = nn_cm3
+        _M[_rx_live] = _rx_m * _rx_n0 * (_rx_outward * mach * _rx_c)
+        _Ee[_rx_live] = 1.5 * _rx_n0 * _rx_Te * ev_to_erg
+        _Ei[_rx_live] = 1.5 * _rx_n0 * _rx_Ti * ev_to_erg
+        _probe = ConservativeState1D(n=_n, nn=_nn, M=_M, Ee=_Ee, Ei=_Ei)
+        _derived = derive_state(
+            _probe, floors=_rx_sim.floors, ion_mass_g=_rx_m
+        )
+        return absorbing_face_states(
+            state=_probe,
+            derived=_derived,
+            geometry=_rx_geom,
+            live=_rx_live,
+            outward=_rx_outward,
+            mu=_rx_mu,
+            ion_mass_g=_rx_m,
+            alpha_isat=float(np.exp(-0.5)),
+            b_presheath_length=1.0,
+            gas_type=_rx_sim._gas_type,
+        )
+
+    def _rx_fluxes(left, right):
+        return (
+            _rx_flux.kep_rusanov_face_scalar(left, right, **_rx_kw),
+            _rx_flux.hll_face_scalar(left, right, **_rx_kw),
+            _rx_flux.exact_isothermal_face_scalar(
+                left, right, mu=_rx_mu, ion_mass_g=_rx_m
+            ),
+        )
+
+    # (i) THE RESOLVED LIMIT. With the two states bracketing the face equal
+    # and at the sound speed, the Rusanov dissipation vanishes and every
+    # consistent flux must be the single state's physical flux. It is, on all
+    # four components, for HLL; and for the exact isothermal solver on the
+    # three components its own system shares with the model's. The FOURTH is
+    # a CLOSURE difference and not a scheme difference, so it is asserted in
+    # closed form rather than waved at: the isothermal pair's momentum flux
+    # carries p = n m c_iso^2 where the model's face pressure is n (Te + Ti),
+    # and the gap is exactly that difference.
+    _rx_interior, _, _ = _rx_pair(mach=1.0, nn_cm3=1.0e17)
+    _rx_res = dict(_rx_interior)
+    _rx_res["u"] = _rx_outward * _rx_c
+    _rx_res["M"] = _rx_m * _rx_res["n"] * _rx_res["u"]
+    _rx_rr, _rx_rh, _rx_re = _rx_fluxes(_rx_res, dict(_rx_res))
+    _rx_upwind = (
+        _rx_res["n"] * _rx_res["u"],
+        _rx_res["M"] * _rx_res["u"] + _rx_res["p"],
+        _rx_res["Ee"] * _rx_res["u"],
+        _rx_res["Ei"] * _rx_res["u"],
+    )
+    for _rx_i in range(4):
+        assert abs(_rx_rr[_rx_i] / _rx_upwind[_rx_i] - 1.0) <= 1.0e-12, _rx_i
+        assert abs(_rx_rh[_rx_i] / _rx_rr[_rx_i] - 1.0) <= 1.0e-12, _rx_i
+    for _rx_i in (0, 2, 3):
+        assert abs(_rx_re[_rx_i] / _rx_rr[_rx_i] - 1.0) <= 1.0e-12, _rx_i
+    _rx_gap = _rx_res["n"] * (
+        (_rx_Te + _rx_Ti) * ev_to_erg - _rx_m * _rx_c * _rx_c
+    )
+    assert abs((_rx_rr[1] - _rx_re[1]) / _rx_gap - 1.0) <= 1.0e-12, (
+        _rx_rr[1], _rx_re[1], _rx_gap
+    )
+
+    # (ii) THE SAMPLE PAIR: the interior at Mach 0.3932 into the wall and the
+    # ghost at the Bohm state the builder puts there, with the sheath-edge
+    # sampling saturated at exp(-1/2) (a collisional presheath shorter than
+    # the cell). This is the face the diagnostic that motivated the flag
+    # reads, and the case pins that reading: a_max is 2.9 c_iso on a face
+    # whose largest characteristic speed is 2 c_iso, and the Rusanov flux
+    # delivers 1.76x the sheath-edge Bohm value.
+    _rx_int, _rx_ghost, _rx_alpha = _rx_pair(mach=0.3932, nn_cm3=1.0e17)
+    assert abs(_rx_alpha / float(np.exp(-0.5)) - 1.0) <= 1.0e-12, _rx_alpha
+    assert abs(_rx_ghost["u"] / (_rx_outward * _rx_c) - 1.0) <= 1.0e-12
+    _rx_amax = abs(_rx_ghost["u"]) + _rx_flux.plasma_wave_speed(
+        _rx_Te, _rx_Ti, _rx_mu, "adiabatic"
+    )
+    assert abs(_rx_amax / _rx_c - 2.9) <= 0.01, _rx_amax / _rx_c
+    if _rx_live_is_right:
+        _rx_left, _rx_right = _rx_ghost, _rx_int
+    else:
+        _rx_left, _rx_right = _rx_int, _rx_ghost
+    _rx_r, _rx_h, _rx_e = _rx_fluxes(_rx_left, _rx_right)
+    _rx_unit = _rx_n0 * _rx_c
+
+    # The exact isothermal star state, and the flux it delivers.
+    _rx_nstar, _rx_ustar = _rx_flux._isothermal_star_state(
+        _rx_left["n"], _rx_left["u"], _rx_right["n"], _rx_right["u"], _rx_c
+    )
+    assert abs(_rx_nstar / _rx_n0 - 0.575) <= 0.01 * 0.575, _rx_nstar / _rx_n0
+    assert abs(_rx_ustar / _rx_c - 0.946) <= 0.01 * 0.946, _rx_ustar / _rx_c
+    assert abs(_rx_e[0] / _rx_unit - 0.544) <= 0.01 * 0.544, _rx_e[0] / _rx_unit
+    # ... which is 0.897 of the sheath-edge Bohm flux, and BELOW the Rusanov
+    # flux, whose dissipative half is the difference.
+    assert abs(
+        _rx_e[0] / (_rx_alpha * _rx_unit) - 0.897
+    ) <= 0.01 * 0.897, _rx_e[0] / (_rx_alpha * _rx_unit)
+    assert abs(
+        _rx_r[0] / (_rx_alpha * _rx_unit) - 1.76
+    ) <= 0.01 * 1.76, _rx_r[0] / (_rx_alpha * _rx_unit)
+    assert _rx_e[0] < _rx_r[0], (_rx_e[0], _rx_r[0])
+    _rx_dissipative = (
+        -0.5 * _rx_amax * (_rx_right["n"] - _rx_left["n"]) / _rx_r[0]
+    )
+    assert 0.50 <= _rx_dissipative <= 0.56, _rx_dissipative
+
+    # The HLL flux sits BETWEEN the two -- it keeps the Rusanov structure but
+    # replaces the symmetric a_max by the face's own one-sided speeds, so it
+    # removes part of the dissipation the exact solution removes all of.
+    assert _rx_e[0] < _rx_h[0] < _rx_r[0], (_rx_e[0], _rx_h[0], _rx_r[0])
+
+    # (iii) HLL AT SYMMETRIC SPEEDS IS THE RUSANOV KERNEL, term by term. The
+    # two are then the same operator differing only in the signal speeds they
+    # read, which is what makes the comparison in (ii) a statement about
+    # dissipation rather than about two unrelated schemes. It is checked by
+    # handing HLL a pair whose two sides carry the same wave speed and
+    # velocity magnitude, so its S_L and S_R are +/- a_max by construction.
+    _rx_sym_l = dict(_rx_int)
+    _rx_sym_r = dict(_rx_int)
+    _rx_sym_r["n"] = 0.7 * _rx_sym_r["n"]
+    _rx_sym_r["M"] = -_rx_sym_l["M"] * 0.7
+    _rx_sym_r["u"] = -_rx_sym_l["u"]
+    _rx_sym_r["Ee"] = 0.7 * _rx_sym_l["Ee"]
+    _rx_sym_r["Ei"] = 0.7 * _rx_sym_l["Ei"]
+    _rx_sym_r["p"] = 0.7 * _rx_sym_l["p"]
+    _rx_sym_rr = _rx_flux.kep_rusanov_face_scalar(
+        _rx_sym_l, _rx_sym_r, **_rx_kw
+    )
+    _rx_sym_hh = _rx_flux.hll_face_scalar(_rx_sym_l, _rx_sym_r, **_rx_kw)
+    for _rx_i in range(4):
+        assert abs(_rx_sym_hh[_rx_i] / _rx_sym_rr[_rx_i] - 1.0) <= 1.0e-12, (
+            _rx_i, _rx_sym_rr[_rx_i], _rx_sym_hh[_rx_i]
+        )
+
+
+# --------------------------------------------------------------------
+# end-wall-riemann-armed-bookings
+# --------------------------------------------------------------------
+@_case("end-wall-riemann-armed-bookings", historical_stance=True)
+def _case_end_wall_riemann_armed_bookings():
+    # ONE f_n, FOUR ROWS -- after stepping, with the flag armed, on both
+    # solvers. Whatever supplies the face flux, the particle sink, the 2 Te
+    # electron row, the sheath-climb row and the neutral rebirth must still
+    # be the same number; a substitution that moved one of them and not the
+    # others would be booking a face that does not exist.
+    _rb_params, _rb_flags = _base_config()
+    _rb_params = dict(_rb_params, max_steps_action="stop")
+    _rb_flags = dict(_rb_flags)
+    _rb_flags["end_wall_sheath_full_debit"] = True
+    # run() is called directly (no equilibration pre-solve is wanted here --
+    # the point is a stepped plasma state, not a seeded neutral profile).
+    _rb_flags["neutral_equilibration"] = False
+    _rb_lambda = sheath_lift_lambda(4)
+
+    def _rb_build(solver):
+        return LAPDSim1D(
+            dict(_rb_params, end_wall_face_riemann_solver=solver),
+            dict(_rb_flags, end_wall_face_riemann_flux=solver is not None),
+        )
+
+    # (0) THE SAME-STATE A/B, taken before anything is stepped so all three
+    # read one state at one time and the only difference between them is the
+    # face kernel. Both solvers deliver LESS plasma to the wall than the
+    # Rusanov kernel does -- its dissipative half is what they remove -- and
+    # they differ from each other, so neither is silently the other.
+    _rb_sinks = {}
+    for _rb_solver in (None, "exact_isothermal", "hll"):
+        _rb_ab = _rb_build(_rb_solver)
+        _rb_ab_cell = int(
+            absorbing_live_cells_by_role(_rb_ab.geometry)["end_wall"][0]
+        )
+        _rb_sinks[_rb_solver] = float(
+            np.asarray(
+                _rb_ab.rhs_terms()["characteristic_boundary"].n
+            )[_rb_ab_cell]
+        )
+    assert (
+        _rb_sinks[None]
+        < _rb_sinks["hll"]
+        < _rb_sinks["exact_isothermal"]
+        < 0.0
+    ), _rb_sinks
+
+    for _rb_solver in (None, "exact_isothermal", "hll"):
+        _rb_sim = _rb_build(_rb_solver)
+        _rb_sim.run(t_end=None, dt=None, max_steps=25)
+        _rb_geom = _rb_sim.geometry
+        _rb_cell = int(
+            absorbing_live_cells_by_role(_rb_geom)["end_wall"][0]
+        )
+        _rb_Vp = float(np.asarray(_rb_geom.plasma_volume_cm3)[_rb_cell])
+        _rb_Vn = float(
+            np.asarray(
+                _rb_geom.plasma_volume_cm3
+                if _rb_sim.state.nn_a is not None
+                else _rb_geom.neutral_volume_cm3
+            )[_rb_cell]
+        )
+        _rb_terms = _rb_sim.rhs_terms()
+        _rb_bnd = _rb_terms["characteristic_boundary"]
+        _rb_climb = _rb_terms["end_wall_e_sheath_climb"]
+        _rb_derived = derive_state(
+            _rb_sim.state, floors=_rb_sim.floors,
+            ion_mass_g=_rb_sim.ion_mass_g,
+        )
+        _rb_Te = float(_rb_derived.Te[_rb_cell])
+        _rb_sink = float(np.asarray(_rb_bnd.n)[_rb_cell])
+        assert np.all(np.isfinite(np.asarray(_rb_bnd.n))), _rb_solver
+        assert _rb_sink < 0.0, (_rb_solver, _rb_sink)
+
+        # (i) THE PARTICLE SINK AND THE NEUTRAL REBIRTH ARE ONE NUMBER: every
+        # plasma particle the face absorbs comes back as a neutral in the same
+        # cell, so the two extensive rates cancel exactly.
+        _rb_recycle = float(np.asarray(_rb_bnd.nn)[_rb_cell])
+        assert abs(
+            _rb_recycle * _rb_Vn / (-_rb_sink * _rb_Vp) - 1.0
+        ) <= 1.0e-12, (_rb_solver, _rb_recycle, _rb_sink)
+
+        # (ii) THE 2 Te ELECTRON ROW RIDES THAT SAME SINK.
+        _rb_e2 = float(np.asarray(_rb_bnd.Ee)[_rb_cell])
+        assert abs(
+            _rb_e2 / (2.0 * _rb_Te * ev_to_erg * _rb_sink) - 1.0
+        ) <= 1.0e-12, (_rb_solver, _rb_e2, _rb_sink)
+
+        # (iii) SO DOES THE SHEATH-CLIMB ROW, and the two together are the
+        # sheath-edge (2 + Lambda_eff) Te per collected electron with
+        # Lambda_eff inside its own [Lambda, Lambda + 1/2] bracket.
+        _rb_climb_row = float(np.asarray(_rb_climb.Ee)[_rb_cell])
+        _rb_gamma = (_rb_e2 + _rb_climb_row) / (
+            _rb_sink * _rb_Te * ev_to_erg
+        )
+        assert (
+            2.0 + _rb_lambda <= _rb_gamma <= 2.0 + _rb_lambda + 0.5 + 1.0e-12
+        ), (_rb_solver, _rb_gamma, _rb_lambda)
+
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
@@ -27730,7 +28206,7 @@ def _case_far_end_double_ratio_area_cancels():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 155, "historical_stance": 64}
+_CASE_CENSUS = {"total": 159, "historical_stance": 68}
 
 
 def _assert_case_census():
