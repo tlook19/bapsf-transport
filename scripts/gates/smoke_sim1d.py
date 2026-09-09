@@ -27604,6 +27604,124 @@ def _case_dt_min_lock_union_summary(
 
 
 # ----------------------------------------------------------------------
+# far-end-double-ratio-area-cancels
+# ----------------------------------------------------------------------
+@_case("far-end-double-ratio-area-cancels")
+def _case_far_end_double_ratio_area_cancels():
+    """The probe-A area factor must divide OUT of the far-end double ratio.
+
+    ``scripts/score/far_end_double_ratio.py`` reports
+    D = (X50/X41) / (X11/X21) precisely because p11 and p50 carry ONE probe's
+    area calibration: a common multiplicative factor on those two rows enters
+    the numerator of both sub-ratios and cancels. That is the instrument's
+    whole claim to being area-free, and it is a property of the arithmetic,
+    so it is checked numerically rather than argued.
+
+    The perturbation is the one a re-calibrated export would actually write:
+    the p11 and p50 paired AREAS are scaled by a common factor (with their
+    pairing strings rewritten to match, since the scorer's upstream-column
+    invariant compares the two), and every already-area-normalized p11/p50
+    row -- the two density conventions and the geomean current density -- is
+    scaled by its reciprocal. Every metric's D must be unchanged to 1e-12.
+
+    The NEGATIVE CONTROL scales p50 alone. That is not an area recalibration
+    of one probe and must move D by exactly the factor, so a version of this
+    case that compared nothing would fail it.
+    """
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    import far_end_double_ratio as _fedr
+
+    overlay_npz = np.load(
+        _Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
+        allow_pickle=False,
+    )
+    base_overlay = {key: overlay_npz[key] for key in overlay_npz.files}
+
+    # A synthetic trajectory whose port cells sit exactly on the overlay's own
+    # z_cm, with a z- and t-dependent n and Te so no ratio is degenerate.
+    z = np.asarray(base_overlay["z_cm"], dtype=float)
+    t_s = np.arange(0.0, 25.0e-3 + 1.0e-9, 1.0e-4)
+    shape = 1.0 + 0.3 * np.cos(z / 600.0)[None, :]
+    ramp = (1.0 + 0.05 * np.sin(t_s * 400.0))[:, None]
+    synthetic = SimpleNamespace(
+        time=t_s,
+        phase=np.array(["main_discharge"] * t_s.size),
+        z_cm=z,
+        n=1.0e13 * shape * ramp,
+        Te=4.0 * shape**2 * ramp,
+    )
+
+    def _scaled(overlay, factor, ports):
+        """Return a copy with a common area recalibration on ``ports``."""
+        out = {k: (v.copy() if isinstance(v, np.ndarray) else v)
+               for k, v in overlay.items()}
+        port_list = [int(p) for p in np.asarray(overlay["port"])]
+        geo_ports = [int(p) for p in
+                     np.asarray(overlay["isat_ftavg_geomean_port"])]
+        pairing = np.asarray(overlay["isat_ftavg_geomean_pairing"]).astype(object)
+        areas = np.asarray(
+            overlay["isat_ftavg_geomean_area_cm2"], dtype=float
+        ).copy()
+        for port in ports:
+            i = geo_ports.index(port)
+            areas[i] *= factor
+            # The pairing string is the exporter's own record of those two
+            # columns; the scorer checks the two against each other, so a
+            # recalibration that moved only the array would be caught.
+            segments = [s.strip() for s in str(pairing[i]).split(" x ")]
+            rewritten = []
+            for seg in segments:
+                head, _, tail = seg.partition("=")
+                value = float(tail.split(" ")[0]) * factor
+                rewritten.append(f"{head}={value:.6f} cm2")
+            pairing[i] = " x ".join(rewritten)
+            for key in ("density_mean_cm3", "density_ftavg_cm3"):
+                out[key] = np.asarray(out[key], dtype=float)
+                out[key][port_list.index(port)] /= factor
+            out["isat_ftavg_geomean_a_per_cm2"] = np.asarray(
+                out["isat_ftavg_geomean_a_per_cm2"], dtype=float
+            )
+            out["isat_ftavg_geomean_a_per_cm2"][i] /= factor
+        out["isat_ftavg_geomean_area_cm2"] = areas
+        out["isat_ftavg_geomean_pairing"] = np.asarray(pairing, dtype=str)
+        return out
+
+    base_rows, base_skip = _fedr.double_ratio_rows(synthetic, base_overlay)
+    assert base_skip is None, base_skip
+    assert len(base_rows) == len(_fedr.METRIC_SPECS), base_rows
+    assert all(np.isfinite(r["D_measured"]) and r["D_measured"] != 0.0
+               for r in base_rows), base_rows
+
+    factor = 1.7
+    cancels = _scaled(base_overlay, factor, _fedr.NEAR_PAIR[1:] + _fedr.FAR_PAIR[1:])
+    cancel_rows, cancel_skip = _fedr.double_ratio_rows(synthetic, cancels)
+    assert cancel_skip is None, cancel_skip
+    for base, moved in zip(base_rows, cancel_rows):
+        assert moved["metric"] == base["metric"], (base, moved)
+        for key in ("D_measured", "D_model", "D_ratio"):
+            assert abs(moved[key] / base[key] - 1.0) <= 1.0e-12, (
+                base["metric"], key, base[key], moved[key]
+            )
+
+    # Negative control: p50 alone is not one probe's recalibration, and every
+    # metric's measured D must move by exactly 1/factor.
+    one_port = _scaled(base_overlay, factor, _fedr.FAR_PAIR[1:])
+    control_rows, control_skip = _fedr.double_ratio_rows(synthetic, one_port)
+    assert control_skip is None, control_skip
+    for base, moved in zip(base_rows, control_rows):
+        assert abs(
+            moved["D_measured"] / base["D_measured"] - 1.0 / factor
+        ) <= 1.0e-12, (base["metric"], base["D_measured"], moved["D_measured"])
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -27612,7 +27730,7 @@ def _case_dt_min_lock_union_summary(
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 154, "historical_stance": 64}
+_CASE_CENSUS = {"total": 155, "historical_stance": 64}
 
 
 def _assert_case_census():
