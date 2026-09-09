@@ -927,9 +927,12 @@ behaves as if the wall cell sat at the sheath edge, an effective
 $\alpha\approx1.07$ against the cell density with the Rusanov dissipation
 supplying the excess, while the climb barrier uses $\alpha_\text{se}=e^{-1/2}$
 (the cell read as the presheath entrance) -- so the two describe one edge
-only as the cell resolves the presheath. The mismatch is a one-sided
-$\approx12\%$ item on the climb row, half of $\Lambda_\text{eff}$'s presheath
-share, inside the disclosed width, and it shrinks with resolution.
+only as the cell resolves the presheath. The mismatch is a one-sided item of
+$\tfrac12/\Lambda_\text{eff}\approx12\%$ on the climb row ($\Lambda_\text{eff}$'s
+whole presheath share), the over-booking against $\alpha=1$; against the
+$\alpha\approx1.07$ this paragraph names, the barrier gap is
+$4.0319-3.4643=0.568$, i.e. $\approx14\%$, inside the disclosed width, and it
+shrinks with resolution.
 $\Lambda_\text{eff}$ is
 a state-dependent barrier rather than a constant and lies in
 $[\Lambda,\Lambda+\tfrac12]$, both limits being limits of the same
