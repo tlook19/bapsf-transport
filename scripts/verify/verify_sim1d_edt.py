@@ -3,12 +3,15 @@
 **These gates were registered BEFORE the operator was implemented** and are not
 moved after seeing results (the standing pre-registration discipline: gates are
 written down before anything is run or implemented). Each names its
-QUANTITY, its MEASUREMENT SITE, and its FIXTURE. Gates 2-4 and 6 are properties
-of a SAVED state and of the advisor consult's own algebra, so they were
-measurable before the solver-side code existed at all;
-``scripts/score/edt_consult_pins.py`` is the standalone evaluator that measured them
-at the unmodified base commit, and this suite checks the implementation against
-those same readings.
+QUANTITY, its MEASUREMENT SITE, and its FIXTURE. Gates 2-4, 6, 10 and 12 are
+properties of a SAVED state and of the advisor consult's own algebra, so they
+were measurable before the solver-side code existed at all;
+``scripts/score/edt_consult_pins.py`` is the standalone evaluator those gates run
+beside the shipped operator. Most of them are now LIVE RELATIONS -- recomputed
+from whatever fixture ``--h5`` names and gated against a self-consistency
+identity assembled on that same run, not against a fixed prior reading -- and
+each registry entry below says which of the consult's original pinned numbers
+were RETIRED as stale and replaced this way.
 
 Run from the checkout root::
 
@@ -108,7 +111,7 @@ GATE REGISTRY
   operator is NOT vacuous (a zero-current state satisfies the identity
   trivially and would gate nothing).
 
-**G3 -- the cathode face (RE-FORMED 2026-08-31).**
+**G3 -- the cathode face.**
   QUANTITY: two statements. (i) the drift enthalpy-plus-thermal-force influx
   at the cathode face is ZERO; (ii) the face-1 WORK term is the exact partner
   of what ``pressure_work_rhs`` books at the same face, so the two sum to
@@ -289,7 +292,7 @@ GATE REGISTRY
   conventions, so a threshold at 6 V would be reporting the convention. A
   pre-breakdown small-current frame reads ~16 V and is NOT a physics reading.
 
-**G11 -- the beam-bypass identity (NEW 2026-08-31).**
+**G11 -- the beam-bypass identity.**
   QUANTITY: every RHS row other than the new term, and the circuit's
   beam-bypass fraction, evaluated at ONE identical state with the flag off and
   with it armed.
@@ -301,7 +304,7 @@ GATE REGISTRY
   registered anode closure holds them to be outside both ``Gamma_d`` and the
   kinetic sheath row, and arming must therefore not touch their booking.
 
-**G12 -- the twin is tied to the kernel (NEW 2026-08-31).**
+**G12 -- the twin is tied to the kernel.**
   QUANTITY: the standalone evaluator's per-cell rows against the SHIPPED
   operator's ``Ee`` row times cell volume.
   SITE: ``edt_consult_pins.evaluate`` against
@@ -364,6 +367,7 @@ from edt_consult_pins import (  # noqa: E402
     evaluate,
 )
 from golden_digest_gate import DIGEST_PARAM_OVERRIDES  # noqa: E402
+from stance_config import _exit_unresolved  # noqa: E402
 
 #: The documented default fixture: the ES1 arm of the re-anchor continuity
 #: pair, a saved run at the configuration of record with the ES1 source region
@@ -401,6 +405,12 @@ ADDED_FLAGS = ("electron_drift_transport",)
 #: the operator is non-vacuous from step 1 there (the pre-breakdown cathode
 #: solve already carries a current), so this only buys a richer state.
 GOLDEN_STEPS = 200
+
+#: The label every emitted line carries when ``--any-configuration`` bypasses
+#: a lineage mismatch: it marks the whole transcript as readings of whatever
+#: configuration the fixture names, not of the reference configuration, so no
+#: line can be quoted as a reading of the latter.
+LABEL = "NOT-A-REFERENCE-READING"
 
 #: The identity's bar, as registered.
 IDENTITY_TOLERANCE = 1e-10
@@ -462,18 +472,28 @@ G5_OPERAND_PERTURBATION = 1.0e-6
 
 
 class Report:
-    """Collects gate outcomes so one failure does not hide the others."""
+    """Collects gate outcomes so one failure does not hide the others.
+
+    ``label``, when set (to :data:`LABEL`), is prefixed onto every line
+    :meth:`check` and :meth:`note` print. It stays ``None`` for a normal run
+    against the reference configuration, in which case every printed line is
+    byte-identical to a build with no labelling concept at all.
+    """
 
     def __init__(self):
         self.failures = []
+        self.label = None
+
+    def _prefix(self):
+        return f"{self.label} " if self.label else ""
 
     def check(self, gate, ok, line):
-        print(f"[{'PASS' if ok else 'FAIL'}] {gate} {line}")
+        print(f"[{'PASS' if ok else 'FAIL'}] {self._prefix()}{gate} {line}")
         if not ok:
             self.failures.append(gate)
 
     def note(self, gate, line):
-        print(f"[    ] {gate} {line}")
+        print(f"[    ] {self._prefix()}{gate} {line}")
 
 
 def step_once(sim):
@@ -1343,8 +1363,8 @@ def gate6(report, geom, h5, afterglow_lo=2.01e-2):
     )
 
 
-def _fixture_lineage(h5, path):
-    """Return the fixture's ``(configuration_name, configuration_identity)``.
+def _fixture_lineage(h5, path, any_configuration=False):
+    """Return ``(configuration_name, configuration_identity, off_reference)``.
 
     The name is CHECKED against the reference configuration and the identity is
     only carried out to be printed. That asymmetry is the point: a run at a
@@ -1357,8 +1377,18 @@ def _fixture_lineage(h5, path):
     the fixture, so it is reported and never gated.
 
     A file whose root attributes name no configuration -- how a trajectory
-    written before configurations were named reads -- is refused rather than
-    guessed at.
+    written before configurations were named reads -- is treated the same as
+    any other mismatch.
+
+    With ``any_configuration`` false (the default), a mismatch RAISES
+    ``ValueError`` and ``off_reference`` is never returned as ``True`` --
+    :func:`main` converts that into a clean ``SystemExit(2)``, the
+    ``_exit_unresolved`` precedent from ``scripts/stance/stance_config.py``,
+    rather than let a caller's mistyped fixture surface as a traceback. With
+    ``any_configuration`` true, a mismatch does not raise: the mismatched name
+    and identity are returned instead, and the caller labels every line of the
+    run as :data:`LABEL` so nothing in it can be quoted as a reading of the
+    reference configuration.
     """
     def _attr(key):
         value = h5.attrs.get(key)
@@ -1371,7 +1401,7 @@ def _fixture_lineage(h5, path):
     name = _attr("configuration_name")
     identity = _attr("configuration_identity")
     if name != PRODUCTION_STANCE:
-        raise ValueError(
+        message = (
             f"the fixture {path} names configuration {name!r}, not the "
             f"reference configuration {PRODUCTION_STANCE!r}. This suite's "
             "saved-state gates read a run at the configuration of record "
@@ -1380,7 +1410,10 @@ def _fixture_lineage(h5, path):
             "list. A trajectory written before configurations were named "
             "carries no name and is refused rather than guessed at."
         )
-    return name, identity
+        if not any_configuration:
+            raise ValueError(message)
+        return name, identity, True
+    return name, identity, False
 
 
 def main(argv=None):
@@ -1411,6 +1444,20 @@ def main(argv=None):
              "restore the pass",
     )
     ap.add_argument(
+        "--any-configuration",
+        action="store_true",
+        help="run the saved-state gates even when --h5's configuration_name "
+             "does not match the reference configuration, instead of "
+             "refusing. The mismatched name and identity are printed loudly "
+             "once at open, and every line this run prints -- every gate "
+             "line, the summary and the final verdict -- is prefixed "
+             f"{LABEL!r}: the readings become readings of whatever "
+             "configuration the fixture names, not of the reference, and no "
+             "line may be quoted as one. Exit-code semantics are unchanged "
+             "(0 = all pass, 1 = failures); the label carries the caveat, "
+             "not the exit code",
+    )
+    ap.add_argument(
         "--registration",
         action="store_true",
         help="print the gate registry and exit without running anything",
@@ -1423,14 +1470,29 @@ def main(argv=None):
     import h5py
 
     report = Report()
-    gate1_strip_control(report)
-    gate2_golden(report, args.golden_steps)
     with h5py.File(args.h5, "r") as h5:
-        name, identity = _fixture_lineage(h5, args.h5)
+        try:
+            name, identity, off_reference = _fixture_lineage(
+                h5, args.h5, args.any_configuration
+            )
+        except ValueError as error:
+            _exit_unresolved(error)
+        if off_reference:
+            report.label = LABEL
+            print(
+                f"{LABEL}: fixture {args.h5} names configuration {name!r}, "
+                f"not the reference configuration {PRODUCTION_STANCE!r} "
+                f"(identity {identity}); continuing because "
+                "--any-configuration was armed. No statement in this run is "
+                "a reading of the reference configuration."
+            )
+        gate1_strip_control(report)
+        gate2_golden(report, args.golden_steps)
         geom = SavedGeometry(h5)
         geom.check_uniform_area()
+        prefix = f"{LABEL} " if off_reference else ""
         print(
-            f"[    ] fixture {args.h5}: configuration {name} "
+            f"[    ] {prefix}fixture {args.h5}: configuration {name} "
             f"(identity {identity}), cells={geom.cells}, "
             f"cathode_cell={geom.cathode_cell}, anode_face={geom.anode_face}"
         )
@@ -1438,14 +1500,15 @@ def main(argv=None):
         gates3410(report, geom, h5, args.g4_negative_control)
         gate6(report, geom, h5)
         gate12(report, geom, h5)
-    gate5(report, args.g5_negative_control)
-    gate11(report, args.golden_steps)
+        gate5(report, args.g5_negative_control)
+        gate11(report, args.golden_steps)
 
     print("=" * 78)
+    prefix = f"{report.label} " if report.label else ""
     if report.failures:
-        print(f"edt build gates: FAILED {sorted(set(report.failures))}")
+        print(f"{prefix}edt build gates: FAILED {sorted(set(report.failures))}")
         return 1
-    print("edt build gates: ALL PASS")
+    print(f"{prefix}edt build gates: ALL PASS")
     return 0
 
 
