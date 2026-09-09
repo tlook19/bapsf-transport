@@ -107,12 +107,14 @@ reaching about sixteen times the mid-machine plateau area some 3 m past port
 builder, not by the solver's `plasma_area_max_vessel_fraction` (which
 resolves to no ceiling here): it holds the plasma area at 95% of the local
 vessel open area, and the last ~1.7 m of column sits at that cap. The last
-few meters of the 1D column therefore form a subsonic diffuser in which the
-flow decelerates by continuity, and the plasma there physically meets the
-end-chamber side wall while the 1D model still books the terminating face as
-the end wall. A configuration carrying no prescribed area profile — the
-golden baseline at `nx=60` is one — holds the flux-tube area constant at
-1065.3525 cm<sup>2</sup> over its 72 cells and carries no such expansion.
+few meters of the 1D column therefore form a subsonic diffuser: the expanding
+section decelerates the flow by continuity, and over the final constant-area
+stretch it re-accelerates into the end wall, still subsonic. The plasma there
+physically meets the end-chamber side wall while the 1D model still books the
+terminating face as the end wall. A configuration carrying no prescribed area
+profile — the golden baseline at `nx=60` is one — holds the flux-tube area
+constant at 1065.3525 cm<sup>2</sup> over its 72 cells and carries no such
+expansion.
 
 Each cell carries two radial zones: the **column** of radius $R_p$ — the plasma
 channel, $V_\text{col}=A\Delta z$ — and the **annulus** between $R_p$ and the
