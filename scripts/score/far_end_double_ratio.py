@@ -125,6 +125,22 @@ METRIC_SPECS = (
      "measured isat_ftavg_geomean_a_per_cm2 [A cm^-2]"),
 )
 
+#: The two overlay key families a metric's measured side is read from,
+#: keyed by the family name used in the gating messages.
+FAMILY_OVERLAY_KEYS = {
+    "density": DENSITY_OVERLAY_KEYS,
+    "J": J_OVERLAY_KEYS,
+}
+
+#: Which family each ``METRIC_SPECS`` entry belongs to, for per-family
+#: gating -- a missing key in one family must not withhold the other's rows.
+METRIC_FAMILY = {
+    "n": "density",
+    "n_ft": "density",
+    "J_upstream": "J",
+    "J_geomean": "J",
+}
+
 
 def model_comparand(result, model_field):
     """Return the model 2-D (time, z) array a metric's model side reads.
@@ -198,23 +214,30 @@ def double_ratio_rows(result, overlay, window_ms=None):
     (p11/p21), their quotient D on each side, and ``D_model / D_measured``.
     A metric whose overlay fields or ports are not all present is skipped with
     its own reason rather than silently dropped; ``skip_reason`` is a printable
-    sentence and ``rows`` is empty only when NO metric could be formed.
+    sentence and ``rows`` is empty only when NO metric could be formed. The
+    density and J (Isat) overlay key families are gated INDEPENDENTLY: a
+    family with all its keys present is read, and a family with a missing key
+    is skipped on its own, naming the missing keys -- one family's absence
+    never withholds the other's metrics.
 
     ``window_ms`` defaults to the scorer's plateau window, so the readings are
     commensurate with the scored plateau rows.
     """
     window = _cmp.PLATEAU_MS if window_ms is None else window_ms
-    missing = _cmp._missing_overlay_keys(
-        overlay, DENSITY_OVERLAY_KEYS + J_OVERLAY_KEYS
-    )
-    if missing:
-        return [], (
-            f"this overlay (schema v{_cmp._overlay_vintage(overlay)}) carries "
-            "no " + ", ".join(missing) + " -- the far-end double ratio needs "
-            "the core-band, flux-tube and area-normalized Isat families over "
-            "the same four ports, and a metric built from a substitute field "
-            "would not be the one this instrument names"
-        )
+    missing_by_family = {
+        family: _cmp._missing_overlay_keys(overlay, keys)
+        for family, keys in FAMILY_OVERLAY_KEYS.items()
+    }
+    skipped = [
+        f"{family} family: this overlay (schema v"
+        f"{_cmp._overlay_vintage(overlay)}) carries no " + ", ".join(missing)
+        + f" -- the far-end double ratio's {family} metrics need this "
+        "family's overlay fields over the same four ports, and a metric "
+        "built from a substitute field would not be the one this instrument "
+        "names"
+        for family, missing in missing_by_family.items()
+        if missing
+    ]
     z_by_port = {
         int(p): float(z)
         for p, z in zip(
@@ -227,8 +250,9 @@ def double_ratio_rows(result, overlay, window_ms=None):
     z_model = np.asarray(result.z_cm, dtype=float)
 
     rows = []
-    skipped = []
     for metric_id, label, model_field, convention in METRIC_SPECS:
+        if missing_by_family[METRIC_FAMILY[metric_id]]:
+            continue
         t_exp, traces = measured_traces(overlay, metric_id)
         model_2d = model_comparand(result, model_field)
         readings = {}
@@ -309,24 +333,29 @@ def _legend_lines(overlay, window):
         f"double ratio: D = (X{FAR_PAIR[1]}/X{FAR_PAIR[0]}) / "
         f"(X{NEAR_PAIR[1]}/X{NEAR_PAIR[0]}), each X a plateau-window mean"
     )
-    lines.append("")
-    lines.append("port rows and the faces behind them:")
-    geo_ports = [int(p) for p in np.asarray(overlay["isat_ftavg_geomean_port"])]
-    pairing = np.asarray(overlay["isat_ftavg_geomean_pairing"])
-    areas = np.asarray(overlay["isat_ftavg_geomean_area_cm2"], dtype=float)
-    channels = np.asarray(overlay["isat_ftavg_upstream_source_channel"])
-    up_ports = [int(p) for p in np.asarray(overlay["isat_ftavg_upstream_port"])]
-    channel_by_port = {int(p): str(c) for p, c in zip(up_ports, channels)}
-    for port in DOUBLE_RATIO_PORTS:
-        if port not in geo_ports:
-            continue
-        i = geo_ports.index(port)
-        lines.append(
-            f"  p{port:<3d} upstream channel {channel_by_port.get(port, '?')}"
-            f"  area(upstream) {areas[i, 0]:.6f} cm2"
-            f"  area(downstream) {areas[i, 1]:.6f} cm2"
-        )
-        lines.append(f"        pairing: {str(pairing[i])}")
+    if all(key in overlay for key in J_OVERLAY_KEYS):
+        lines.append("")
+        lines.append("port rows and the faces behind them:")
+        geo_ports = [
+            int(p) for p in np.asarray(overlay["isat_ftavg_geomean_port"])
+        ]
+        pairing = np.asarray(overlay["isat_ftavg_geomean_pairing"])
+        areas = np.asarray(overlay["isat_ftavg_geomean_area_cm2"], dtype=float)
+        channels = np.asarray(overlay["isat_ftavg_upstream_source_channel"])
+        up_ports = [
+            int(p) for p in np.asarray(overlay["isat_ftavg_upstream_port"])
+        ]
+        channel_by_port = {int(p): str(c) for p, c in zip(up_ports, channels)}
+        for port in DOUBLE_RATIO_PORTS:
+            if port not in geo_ports:
+                continue
+            i = geo_ports.index(port)
+            lines.append(
+                f"  p{port:<3d} upstream channel {channel_by_port.get(port, '?')}"
+                f"  area(upstream) {areas[i, 0]:.6f} cm2"
+                f"  area(downstream) {areas[i, 1]:.6f} cm2"
+            )
+            lines.append(f"        pairing: {str(pairing[i])}")
     lines.append("")
     lines.append("metric conventions:")
     for _, label, model_field, convention in METRIC_SPECS:
@@ -366,12 +395,12 @@ def report_double_ratio(label, rows, skip_reason, overlay, window):
     """Print the legend, the D table and the pre-registered bin verdict."""
     print()
     print(f"=== far-end area-free double ratio: {label} ===")
-    for line in _legend_lines(overlay, window):
-        print(line)
-    print()
     if not rows:
         print(f"  (no metric formed) {skip_reason}")
         return
+    for line in _legend_lines(overlay, window):
+        print(line)
+    print()
     if skip_reason:
         print(f"  partial: {skip_reason}")
         print()
