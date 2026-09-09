@@ -360,8 +360,9 @@ the end of every stage, with `derive_state` additionally applying the
 temperature floors on every read and the implicit heat substep clipping its own
 result — a distinct, higher, low-$T_e$ edge on the bundled ADAS rate tables is
 enforced independently by clamping rather than by a state floor (MODEL.md,
-Ionization and recombination). Densities are clipped directly on the packed fields; the temperatures are
-clipped on the DERIVED quantities, and the packed $E_e$, $E_i$ change only where
+Ionization and recombination). Densities are clipped directly on the packed
+fields; the temperatures are clipped on the DERIVED quantities, and the packed
+$E_e$, $E_i$ change only where
 `conservative_from_primitives` rebuilds them from the floored primitives. Order
 within a call: $n$, then $n_n$, then the temperatures, then the rebuild, then
 the optional fields, the neutral energy floor taken last against the
