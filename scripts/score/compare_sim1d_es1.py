@@ -977,6 +977,9 @@ ZTREND_GEOMEAN_KEYS = (
     "isat_ftavg_geomean_sem_a_per_cm2",
     "isat_ftavg_geomean_time_ms",
     "isat_ftavg_geomean_port",
+    "isat_ftavg_geomean_area_cm2",
+    "isat_ftavg_upstream_a",
+    "isat_ftavg_upstream_port",
 )
 
 #: Ordered (near, far) port pairs whose plateau geomean ratio the z-trend row
@@ -1032,6 +1035,18 @@ def compare_plateau_geomean_ztrend(result, overlay, window_ms=None):
     both sides, so the two comparands need no common calibration: what is
     compared is the axial FALLOFF, not the magnitude.
 
+    Each row also carries the UPSTREAM-FACE ratio: the same port-to-port
+    ratio built from the single upstream probe face alone
+    (``isat_ftavg_upstream_a``, area-normalized by the pairing's own upstream
+    area, ``isat_ftavg_geomean_area_cm2[:, 0]``), which still carries the
+    Mach-probe flow factor the geomean cancels. [geomean, upstream] (in
+    whichever order the two measured ratios fall) brackets the model, and the
+    model is reported as a FACTOR outside that bracket (``model_bracket_factor``:
+    1.0 when the model already sits inside it), not as a sigma count. The
+    bracket's WIDTH is itself the Mach-probe face-ratio growth; a magnitude
+    for it is withheld here -- that reading is the disclosed-conditional
+    Mach block's job, at ``MACH_K_BRACKET``.
+
     ERROR MODEL. Each port carries the same sigma_tot form the scored Isat
     rows carry, built from the geomean's own per-sample SEM and the
     interferometer calibration fraction::
@@ -1043,12 +1058,22 @@ def compare_plateau_geomean_ztrend(result, overlay, window_ms=None):
 
         sigma_R = R * sqrt((sigma_near / J_near)^2 + (sigma_far / J_far)^2)
 
-    ASSUMPTION, stated because it is the conservative one: the two ports'
-    sigma_tot are treated as INDEPENDENT. They are not -- a multiplicative
-    calibration systematic common to both ports cancels identically in the
-    ratio -- so this sigma_R is an upper bound on the ratio's true
-    measurement error, and the deviation it reports is a lower bound. The
-    model side carries no uncertainty, so sigma_R is the whole denominator.
+    Treating the two ports' sigma_tot as INDEPENDENT is the CORRECT form
+    here, not a conservative one: sigma_R is dominated (>= 99%) by the
+    per-port area/calibration term, and the exporter's own
+    ``isat_ftavg_geomean_pairing`` records that area PER PORT -- p11, p21 and
+    p50 happen to share one area pair, but p29 and p41 each carry their own,
+    so there is no shared calibration factor between most pairs to cancel.
+    sigma_R books NEITHER of the two dominant unbooked terms: the p50
+    probe-shadow rider (one-sided, +6 to +18% on the ratio) nor the
+    face-model convention (the geomean cancels the Mach-probe flow factor
+    only to FIRST ORDER in M; at p50 the implied M is ~ 1, where that
+    expansion is already stressed). Both unbooked terms push the MEASURED
+    ratio toward the model, so the ``dev_sigma`` this function still returns
+    is an UPPER bound on the true deviation, not a lower one -- it stays in
+    the row dict and the JSON, labelled as that upper bound, but the printed
+    table reports ``model_bracket_factor`` instead. The model side carries no
+    uncertainty, so sigma_R is the whole denominator.
 
     The rows are an INSTRUMENT: they enter no total, no mean and no verdict
     bin. ``skip_reason`` is a printable sentence and ``rows`` is empty when
@@ -1069,6 +1094,9 @@ def compare_plateau_geomean_ztrend(result, overlay, window_ms=None):
     geo = np.asarray(overlay["isat_ftavg_geomean_a_per_cm2"], dtype=float)
     geo_sem = np.asarray(overlay["isat_ftavg_geomean_sem_a_per_cm2"], dtype=float)
     geo_ports = [int(p) for p in np.asarray(overlay["isat_ftavg_geomean_port"])]
+    geo_areas = np.asarray(overlay["isat_ftavg_geomean_area_cm2"], dtype=float)
+    upstream_a = np.asarray(overlay["isat_ftavg_upstream_a"], dtype=float)
+    upstream_ports = [int(p) for p in np.asarray(overlay["isat_ftavg_upstream_port"])]
     z_by_port = {
         int(p): float(z)
         for p, z in zip(
@@ -1097,6 +1125,15 @@ def compare_plateau_geomean_ztrend(result, overlay, window_ms=None):
         reading["sigma_tot"] = float(
             np.hypot(reading["sem"], N_CAL_FRAC * abs(reading["exp"]))
         )
+        reading["upstream_exp"] = float("nan")
+        if port in upstream_ports:
+            pu = upstream_ports.index(port)
+            j_up = upstream_a[pu] / geo_areas[p, 0]
+            up_reading = _plateau_port_reading(
+                t_exp, j_up, None, isat_model, iz, t_model_ms, window
+            )
+            if up_reading is not None:
+                reading["upstream_exp"] = up_reading["exp"]
         readings[port] = reading
 
     rows = []
@@ -1111,6 +1148,22 @@ def compare_plateau_geomean_ztrend(result, overlay, window_ms=None):
                 a["sigma_tot"] / abs(a["exp"]), b["sigma_tot"] / abs(b["exp"])
             )
         )
+        ratio_upstream = (
+            float(b["upstream_exp"] / a["upstream_exp"])
+            if np.isfinite(a["upstream_exp"]) and np.isfinite(b["upstream_exp"])
+            else float("nan")
+        )
+        if np.isfinite(ratio_upstream):
+            bracket_lo = min(ratio_exp, ratio_upstream)
+            bracket_hi = max(ratio_exp, ratio_upstream)
+            if ratio_model > bracket_hi:
+                bracket_factor = float(ratio_model / bracket_hi)
+            elif ratio_model < bracket_lo:
+                bracket_factor = float(ratio_model / bracket_lo)
+            else:
+                bracket_factor = 1.0
+        else:
+            bracket_factor = float("nan")
         rows.append(
             {
                 "near_port": int(near),
@@ -1119,6 +1172,8 @@ def compare_plateau_geomean_ztrend(result, overlay, window_ms=None):
                 "far_z": b["z"],
                 "ratio_model": float(ratio_model),
                 "ratio_exp": float(ratio_exp),
+                "ratio_upstream": ratio_upstream,
+                "model_bracket_factor": bracket_factor,
                 "sigma_ratio": sigma_ratio,
                 "dev_sigma": float((ratio_model - ratio_exp) / sigma_ratio),
                 "n_samples": int(min(a["n_samples"], b["n_samples"])),
@@ -3031,16 +3086,34 @@ def _report_plateau_geomean_ztrend(rows, skip_reason, window):
     print("   directly and constructs nothing from the individual faces.  A")
     print("   ratio is dimensionless on both sides, so this compares the axial")
     print("   FALLOFF and not the magnitude the scored Isat rows already")
-    print("   carry.  sigma_R is the measured ratio's own error,")
-    print("   R*sqrt((s_near/J_near)^2 +")
+    print("   carry.  Beside it prints the UPSTREAM-FACE ratio, the same")
+    print("   port-to-port ratio built from the single upstream probe face")
+    print("   alone (isat_ftavg_upstream_a, area-normalized by the pairing's")
+    print("   own upstream area) -- the flow-CARRYING counterpart the geomean")
+    print("   cancels.  [geomean, upstream] brackets the model; MODEL prints")
+    print("   as a FACTOR outside that bracket (1.000 when it already sits")
+    print("   inside), not as a sigma count.  The bracket's WIDTH is itself")
+    print("   the Mach-probe face-ratio growth -- a magnitude for it is")
+    print("   withheld here; that reading is the disclosed-conditional Mach")
+    print("   block's job, below.  sigma_R is the measured GEOMEAN ratio's")
+    print("   own error, R*sqrt((s_near/J_near)^2 +")
     print("   (s_far/J_far)^2) with s_p = sqrt(SEM_p^2 + (0.10*J_p)^2); the two")
     print("   ports' sigma_tot are treated as INDEPENDENT, which is the")
-    print("   conservative choice -- a calibration systematic common to both")
-    print("   ports cancels in the ratio, so sigma_R is an upper bound and")
-    print("   |dev|/sig a lower one.  The model side carries no error bar.)")
+    print("   CORRECT form here, not a conservative one -- sigma_R is")
+    print("   dominated (>= 99%) by the per-port area/calibration term, and")
+    print("   the exporter's own isat_ftavg_geomean_pairing records that area")
+    print("   PER PORT (p11/p21/p50 share one pair; p29 and p41 each carry")
+    print("   their own).  sigma_R books NEITHER of the two dominant unbooked")
+    print("   terms: the p50 probe-shadow rider (one-sided, +6 to +18% on the")
+    print("   ratio) nor the face-model convention (the geomean cancels the")
+    print("   flow factor only to FIRST ORDER in M; at p50 the implied M is")
+    print("   ~ 1).  Both push the MEASURED ratio toward the model, so")
+    print("   |dev|/sigma_R (kept in the JSON, not printed here) is an UPPER")
+    print("   bound on the true deviation, not a lower one.  The model side")
+    print("   carries no error bar.)")
     header = (
-        f"{'pair':>11} {'z [cm]':>16} {'model':>9} {'measured':>9} "
-        f"{'sigma_R':>9} {'|dev|/sig':>10} {'n':>4}"
+        f"{'pair':>11} {'z [cm]':>16} {'model':>9} {'geomean':>9} "
+        f"{'upstream':>9} {'sigma_R':>9} {'factor':>8} {'n_t':>5}"
     )
     print(header)
     print("-" * len(header))
@@ -3049,8 +3122,9 @@ def _report_plateau_geomean_ztrend(rows, skip_reason, window):
         span = f"{r['near_z']:.0f}->{r['far_z']:.0f}"
         print(
             f"{pair:>11} {span:>16} {r['ratio_model']:9.3f} "
-            f"{r['ratio_exp']:9.3f} {r['sigma_ratio']:9.3f} "
-            f"{abs(r['dev_sigma']):10.1f} {r['n_samples']:4d}"
+            f"{r['ratio_exp']:9.3f} {r['ratio_upstream']:9.3f} "
+            f"{r['sigma_ratio']:9.3f} {r['model_bracket_factor']:8.3f} "
+            f"{r['n_samples']:5d}"
         )
 
 
