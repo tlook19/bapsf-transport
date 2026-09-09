@@ -22427,6 +22427,69 @@ def _case_config_key_namespace_and_seed_cache():
             _pa_sig_flare_p, _pa_sig_flare_f
         ), f"{_key} must invalidate a cached neutral seed"
 
+    # ---- the three end-face booking flags are OUT of the signature ----
+    # The other direction of the same fail-closed rule. These three CANNOT
+    # reach an equilibrated seed -- run_neutral_equilibration clears all three
+    # on the inner sim's config before it builds it -- so hashing them would
+    # rotate every stored seed with no neutral content behind the
+    # invalidation. The reference is loaded through build_baseline_config(),
+    # so this tracks the stance of record instead of pinning a config.
+    from baseline_sim1d import build_baseline_config as _sf_baseline_config
+
+    _sf_keys = (
+        "end_wall_sheath_full_debit",
+        "cathode_face_full_debit",
+        "cathode_enthalpy_on_beam",
+    )
+    for _key in _sf_keys:
+        assert _key in _seed_cache_mod.INERT_FLAG_KEYS, _key
+        assert _key not in _seed_cache_mod.INERT_PARAM_KEYS, _key
+
+    _sf_p, _sf_f = _sf_baseline_config()
+    _sf_sig = _seed_cache_mod.neutral_seed_signature(_sf_p, _sf_f)
+    for _key in _sf_keys:
+        assert _key in _sf_f and _key not in _sf_p, _key
+        _sf_toggled = {}
+        for _value in (False, True):
+            _sf_alt_f = dict(_sf_f)
+            _sf_alt_f[_key] = _value
+            _sf_toggled[_value] = _seed_cache_mod.neutral_seed_signature(
+                _sf_p, _sf_alt_f
+            )
+        assert _sf_toggled[False] == _sf_toggled[True] == _sf_sig, (
+            f"{_key} must NOT re-key the equilibrated neutral seed"
+        )
+
+    # ...and the exemption really did rotate the reference's signature once,
+    # which is the disclosed cost of the change. Base is reconstructed by
+    # importing the module source under its OWN name from a temp copy and
+    # putting the three keys back: an isolated module object, so restoring
+    # the pre-exemption key set cannot leak into any later case. Both
+    # signatures are computed live -- pinning either hex would make this
+    # clause stale at the next stance event, since every hashed key moves it.
+    import importlib.util as _sf_importlib_util
+
+    with tempfile.TemporaryDirectory() as _sf_dir:
+        _sf_copy = os.path.join(_sf_dir, "neutral_seed_cache_base.py")
+        shutil.copy2(_seed_cache_mod.__file__, _sf_copy)
+        # The dotted name keeps __package__ on the real package, so the
+        # module's relative import of SCCM_TO_PARTICLES_PER_S resolves; the
+        # module object is never put in sys.modules, so nothing else sees it.
+        _sf_spec = _sf_importlib_util.spec_from_file_location(
+            "cablp.solvers._sim1d.core._smoke_neutral_seed_cache_base",
+            _sf_copy,
+        )
+        _sf_base_mod = _sf_importlib_util.module_from_spec(_sf_spec)
+        _sf_spec.loader.exec_module(_sf_base_mod)
+        assert _sf_base_mod is not _seed_cache_mod
+        _sf_base_mod.INERT_FLAG_KEYS = frozenset(
+            _sf_base_mod.INERT_FLAG_KEYS - set(_sf_keys)
+        )
+        _sf_base_sig = _sf_base_mod.neutral_seed_signature(_sf_p, _sf_f)
+    assert _sf_base_sig != _sf_sig, (
+        "exempting the three flags must rotate the reference's seed signature"
+    )
+
 
 # --------------------------------------------------------------------
 # hot-channel-internal-wall
