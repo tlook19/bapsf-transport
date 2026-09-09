@@ -66,9 +66,9 @@ are retained as disclosed INSTRUMENT arms bounding that double count.
     # every arm, both anode instrument arms, and the afterglow clause
     python scripts/score/edt_consult_pins.py --h5 <saved sim1d run>.h5 --all-arms
 
-**Provenance of the pins.** The consult measured the first set on
-``mgcr1_confirm`` over 0.1-20.1 ms at a mean loop current of 2772 A. That was a
-fluid-closure arm and its artifact is RETIRED, so every pin below is
+**Provenance of the pins.** The consult measured the first set on a
+fluid-closure arm's run, over 0.1-20.1 ms at a mean loop current of 2772 A.
+That run's artifact is RETIRED, so every pin below is
 a record of that measurement rather than a reading of the stance of record;
 run artifacts live outside the repo under the artifacts root (see
 ``scripts/README.md``).
@@ -155,8 +155,8 @@ PINS = {
     "afterglow_instant_26ms_kW_RETIRED": -0.017,
 }
 
-#: Q2 -- the cathode-face pins of the amendment, measured on
-#: ``mgcr1_confirm`` (artifact since retired) and reported by the Q2
+#: Q2 -- the cathode-face pins of the amendment, measured on the RETIRED
+#: fluid-closure arm's run and reported by the Q2
 #: section of this evaluator. They exist because the amendment's clause (iii)
 #: rests on them:
 #: the cathode-face enthalpy-ZERO premise is a drive-phase statement, and the
