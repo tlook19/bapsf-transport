@@ -961,10 +961,17 @@ def compare(
 # cannot mistake either for part of the scored set.
 
 #: Overlay keys the plateau geomean z-trend row reads. The geomean is already
-#: AREA-NORMALIZED by its exporter -- per port and per sample it is
+#: AREA-NORMALIZED by its exporter -- per port, per sample and PER x it is
 #: sqrt(J_up * J_dn) of the two probe faces' area-normalized current densities
-#: in A cm^-2 -- so the row reads that field directly and constructs nothing
-#: from the individual faces.
+#: in A cm^-2, and that per-x geomean is then flux-tube QUADRATURED over x
+#: exactly like the exporter's other flux-tube fields -- so the row reads that
+#: field directly and constructs nothing from the individual faces. The
+#: exporter's own field carries the full form (quoted here from
+#: ``isat_ftavg_geomean_definition``): "FLOW-SYMMETRIZED central estimator, in
+#: A cm^-2: per port, per inter-sweep sample and per x, the geometric mean
+#: sqrt(J_up * J_dn) of the two probe faces' area-normalized currents, then
+#: the same despike / background / centroid-fold / R = ftavg_radius_cm
+#: quadrature as the other flux-tube fields."
 ZTREND_GEOMEAN_KEYS = (
     "isat_ftavg_geomean_a_per_cm2",
     "isat_ftavg_geomean_sem_a_per_cm2",
@@ -3018,10 +3025,14 @@ def _report_plateau_geomean_ztrend(rows, skip_reason, window):
     print("   over near: the model's plateau Isat proxy n*sqrt(Te) against the")
     print("   overlay's AREA-NORMALIZED plateau Isat geomean")
     print("   isat_ftavg_geomean_a_per_cm2 [A cm^-2], the flow-cancelled")
-    print("   sqrt(J_up*J_dn) of the two probe faces.  A ratio is dimensionless")
-    print("   on both sides, so this compares the axial FALLOFF and not the")
-    print("   magnitude the scored Isat rows already carry.  sigma_R is the")
-    print("   measured ratio's own error, R*sqrt((s_near/J_near)^2 +")
+    print("   sqrt(J_up*J_dn) taken PER x, then flux-tube QUADRATURED over x")
+    print("   exactly like the exporter's other flux-tube fields (see")
+    print("   isat_ftavg_geomean_definition) -- the row reads that field")
+    print("   directly and constructs nothing from the individual faces.  A")
+    print("   ratio is dimensionless on both sides, so this compares the axial")
+    print("   FALLOFF and not the magnitude the scored Isat rows already")
+    print("   carry.  sigma_R is the measured ratio's own error,")
+    print("   R*sqrt((s_near/J_near)^2 +")
     print("   (s_far/J_far)^2) with s_p = sqrt(SEM_p^2 + (0.10*J_p)^2); the two")
     print("   ports' sigma_tot are treated as INDEPENDENT, which is the")
     print("   conservative choice -- a calibration systematic common to both")
@@ -3043,8 +3054,21 @@ def _report_plateau_geomean_ztrend(rows, skip_reason, window):
         )
 
 
-def _report_plateau_mach(rows, skip_reason, window, face_ruling=None):
-    """Print the disclosed-conditional two-face Mach block, or its skip."""
+def _report_plateau_mach(rows, skip_reason, window, face_ruling=None, show_levels=False):
+    """Print the disclosed-conditional two-face Mach block, or its skip.
+
+    By DEFAULT (``show_levels=False``, the ``--mach-levels`` CLI flag's
+    resting state) this prints only the legend, the face-ratioing clause, and
+    the port-to-port z-trend SIGNS -- the standing position is trend-sign-only
+    for Mach, since dividing by a positive K cannot change a sign while the
+    measured LEVEL depends on the unresolved K bracket and an untreated
+    probe-shadow term. Passing ``show_levels=True`` additionally prints the
+    level table (model M, the face ratio R, and measured M at both
+    ``MACH_K_BRACKET`` ends). Either way ``rows`` and this function's caller's
+    JSON payload carry every field -- the JSON is machine-read and the block
+    is already marked ``scored: false``, so this flag governs only what
+    reaches the human-readable transcript, never what is recorded.
+    """
     print(
         f"\n--- stage (ii) plateau: parallel Mach number, window "
         f"{window[0]:g}-{window[1]:g} ms (DISCLOSED CONDITIONAL) ---"
@@ -3056,10 +3080,10 @@ def _report_plateau_mach(rows, skip_reason, window, face_ruling=None):
     print("   Mach, u/c_s, with c_s taken from the run's configured signal-speed")
     print("   convention.  The measured columns are the two-face estimate")
     print("   M = ln(R)/K with R = J_up/J_dn the ratio of the two probe faces'")
-    print("   AREA-NORMALIZED core-band plateau current densities, printed at")
+    print("   AREA-NORMALIZED core-band plateau current densities; the level")
     print(
-        f"   BOTH ends of the calibration bracket K in "
-        f"[{MACH_K_BRACKET[0]:g}, {MACH_K_BRACKET[1]:g}].  Two things the"
+        f"   table prints under --mach-levels, at BOTH ends of the "
+        f"calibration bracket K in [{MACH_K_BRACKET[0]:g}, {MACH_K_BRACKET[1]:g}].  Two things the"
     )
     print("   measured level is conditional on: the value of K inside that")
     print("   bracket, and an UNTREATED probe-shadow term -- the downstream")
@@ -3085,30 +3109,41 @@ def _report_plateau_mach(rows, skip_reason, window, face_ruling=None):
             f"   Faces (quoted from ftavg_face_ruling): {clause} "
             "This block therefore ratios the CORE-BAND face fields."
         )
-    k_lo, k_hi = MACH_K_BRACKET
-    header = (
-        f"{'port':>6} {'z [cm]':>8} {'M model':>9} {'c_s conv':>11} "
-        f"{'R=Jup/Jdn':>10} {f'M @K={k_lo:g}':>11} {f'M @K={k_hi:g}':>11} "
-        f"{'n':>4}"
-    )
-    print(header)
-    print("-" * len(header))
-    for r in rows:
-        m_lo, m_hi = r["mach_measured"]
-        print(
-            f"{r['port']:>6} {r['z']:8.0f} {r['mach_model']:+9.3f} "
-            f"{r['wave_speed']:>11} {r['face_ratio']:10.3f} "
-            f"{m_lo:+11.3f} {m_hi:+11.3f} {r['n_face_samples']:4d}"
+    if show_levels:
+        k_lo, k_hi = MACH_K_BRACKET
+        header = (
+            f"{'port':>6} {'z [cm]':>8} {'M model':>9} {'c_s conv':>11} "
+            f"{'R=Jup/Jdn':>10} {f'M @K={k_lo:g}':>11} {f'M @K={k_hi:g}':>11} "
+            f"{'n_face':>7} {'n_model':>8}"
         )
+        print(header)
+        print("-" * len(header))
+        for r in rows:
+            m_lo, m_hi = r["mach_measured"]
+            print(
+                f"{r['port']:>6} {r['z']:8.0f} {r['mach_model']:+9.3f} "
+                f"{r['wave_speed']:>11} {r['face_ratio']:10.3f} "
+                f"{m_lo:+11.3f} {m_hi:+11.3f} {r['n_face_samples']:7d} "
+                f"{r['n_model_samples']:8d}"
+            )
     if len(rows) >= 2:
-        first, last = rows[0], rows[-1]
-        d_model = last["mach_model"] - first["mach_model"]
-        d_meas = last["mach_measured"][0] - first["mach_measured"][0]
-        print(
-            f"  z-trend sign (p{first['port']} -> p{last['port']}): "
-            f"model {_trend_sign(d_model)}, measured {_trend_sign(d_meas)} "
-            "(K-free)"
-        )
+        for a, b in zip(rows, rows[1:]):
+            d_model = b["mach_model"] - a["mach_model"]
+            d_meas = b["mach_measured"][0] - a["mach_measured"][0]
+            print(
+                f"  z-trend sign (p{a['port']} -> p{b['port']}): "
+                f"model {_trend_sign(d_model)}, measured {_trend_sign(d_meas)} "
+                "(K-free)"
+            )
+        if len(rows) > 2:
+            first, last = rows[0], rows[-1]
+            d_model = last["mach_model"] - first["mach_model"]
+            d_meas = last["mach_measured"][0] - first["mach_measured"][0]
+            print(
+                f"  z-trend sign (p{first['port']} -> p{last['port']}, "
+                f"overall): model {_trend_sign(d_model)}, measured "
+                f"{_trend_sign(d_meas)} (K-free)"
+            )
     else:
         print(
             "  z-trend sign: not reported -- a trend needs two ports and only "
@@ -3391,6 +3426,17 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
+        "--mach-levels",
+        action="store_true",
+        help=(
+            "print the stage (ii) plateau Mach block's level table (model M, "
+            "the two-face ratio R, and measured M at both MACH_K_BRACKET "
+            "ends) in addition to the default trend-SIGN-only lines. The "
+            "level table is NOT SCORED either way; the JSON payload always "
+            "carries every field regardless of this flag"
+        ),
+    )
+    parser.add_argument(
         "--beta-collapse",
         nargs="*",
         default=None,
@@ -3602,6 +3648,7 @@ def main(argv=None):
             if "ftavg_face_ruling" in overlay
             else None
         ),
+        show_levels=args.mach_levels,
     )
     decay_rows, window = compare_decay(result, overlay, window_ms=args.decay_window)
     _report_decay(decay_rows, window)
