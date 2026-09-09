@@ -90,7 +90,7 @@
     "file_sha256": [
       "a84b79436ac9d63d5b7f6867c3151ed0a71ed1f789c163c8fa5282493e2b6a6f"
     ],
-    "identity": "8d28d3b0ec8b9f9ea63cbf16d8b581afd44226175b22bbdea792a1e24fcd832d",
+    "identity": "028b2e4da4ba436813811f0d0a9d6c678cf8539a9d6895cf7d7d1e72754c0e69",
     "name": "g1atrim"
   },
   "description": "Golden baseline at the stance of record, re-cut to the gate mesh: default_config() plus the committed stance file scripts/stances/g1atrim.toml, minus that stance's mesh-sized package, plus the run-shape overrides in baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60).",
@@ -110,6 +110,7 @@
     "cathode_emitting_area": false,
     "cathode_enthalpy_on_beam": false,
     "cathode_face_full_debit": false,
+    "cathode_ion_secondary_emission": false,
     "cathode_schottky": true,
     "coupled_circuit_picard": false,
     "coverage_closure": false,
@@ -226,6 +227,7 @@
     "cathode_emissivity": 0.7,
     "cathode_emitting_area_initial_fraction": 0.0075,
     "cathode_heat_capacity_J_per_K": 181.0,
+    "cathode_ion_secondary_emission_yield": null,
     "cathode_jet_R_E": 0.18,
     "cathode_jet_R_N": 0.34,
     "cathode_jet_energy_convention": "legacy",
