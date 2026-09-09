@@ -952,6 +952,74 @@ def compare(
     return rows
 
 
+#: Matches one segment of an exporter pairing string, e.g.
+#: ``"i_sweep/ap_L_cm2=0.050926 cm2"``. The ``L``/``R`` letter names the
+#: physical aperture the segment describes and is NOT what fixes its area-
+#: array column -- the two segments' left-to-right ORDER in the string is.
+_PAIRING_SEGMENT_RE = re.compile(r"^(\S+)/ap_[LR]_cm2=[0-9.eE+-]+ cm2$")
+
+
+def _pairing_segment_channels(pairing_string):
+    """Return the two channel names of one exporter pairing string, in the
+    string's own left-to-right order.
+
+    That order is what the exporter wrote into the paired area array's
+    columns -- segment 0's value is column 0, segment 1's value is column 1
+    -- so the returned tuple's order is exactly the area array's column
+    order, whichever physical face (upstream/downstream, L/R) each segment
+    happens to name for this port.
+    """
+    segments = [s.strip() for s in str(pairing_string).split(" x ")]
+    channels = []
+    for seg in segments:
+        m = _PAIRING_SEGMENT_RE.match(seg)
+        if m is None:
+            raise ValueError(
+                f"cannot parse overlay pairing segment {seg!r} out of "
+                f"{pairing_string!r} -- expected '<channel>/ap_L_cm2=<v> cm2' "
+                "or '<channel>/ap_R_cm2=<v> cm2'"
+            )
+        channels.append(m.group(1))
+    return tuple(channels)
+
+
+def _assert_upstream_is_area_column0(family, ports, pairing, area, channel_ports, channel):
+    """Refuse loudly unless area column 0 is the upstream probe face, for
+    every port of one overlay family.
+
+    The scorer normalizes an upstream trace by ``area[:, 0]`` on the strength
+    of the exporter's own pairing bookkeeping -- ``pairing[i]`` records that
+    port's two probe faces as "<chanA>/ap_?_cm2=<vA> cm2 x
+    <chanB>/ap_?_cm2=<vB> cm2", with the two segments' ORDER matching the
+    area array's column order, and ``channel[i]`` (keyed by ``channel_ports``,
+    not assumed to share ``ports``' order) names which channel IS the
+    upstream face. Column 0 is upstream only when the upstream channel is
+    the pairing string's FIRST segment; this is checked per port, not
+    assumed to hold everywhere from one port, because the exporter is known
+    to flip the segment order port-by-port (ES3 p11 rotates while its
+    siblings do not) while keeping the channel record correct -- a future
+    export that flips the columns WITHOUT flipping the channel record is
+    exactly the silent mis-normalization this guards against.
+    """
+    channel_by_port = {int(p): str(c) for p, c in zip(channel_ports, channel)}
+    for i, port in enumerate(ports):
+        port = int(port)
+        if port not in channel_by_port:
+            continue
+        upstream_channel = channel_by_port[port]
+        seg_channels = _pairing_segment_channels(pairing[i])
+        row_area = np.asarray(area[i]).tolist()
+        if upstream_channel not in seg_channels or seg_channels[0] != upstream_channel:
+            raise ValueError(
+                f"overlay {family} port {port}: upstream-face channel "
+                f"{upstream_channel!r} is not area column 0 -- pairing "
+                f"string {str(pairing[i])!r} names segments {seg_channels!r} "
+                f"in that order and area columns are {row_area!r}; the "
+                "scorer assumes column 0 is the upstream face and refuses "
+                "rather than silently mis-normalize"
+            )
+
+
 # --- stage (ii) plateau extensions: the geomean-Isat z-trend INSTRUMENT ROW
 # and the DISCLOSED-CONDITIONAL two-face Mach block.
 #
@@ -978,8 +1046,10 @@ ZTREND_GEOMEAN_KEYS = (
     "isat_ftavg_geomean_time_ms",
     "isat_ftavg_geomean_port",
     "isat_ftavg_geomean_area_cm2",
+    "isat_ftavg_geomean_pairing",
     "isat_ftavg_upstream_a",
     "isat_ftavg_upstream_port",
+    "isat_ftavg_upstream_source_channel",
 )
 
 #: Ordered (near, far) port pairs whose plateau geomean ratio the z-trend row
@@ -1097,6 +1167,14 @@ def compare_plateau_geomean_ztrend(result, overlay, window_ms=None):
     geo_areas = np.asarray(overlay["isat_ftavg_geomean_area_cm2"], dtype=float)
     upstream_a = np.asarray(overlay["isat_ftavg_upstream_a"], dtype=float)
     upstream_ports = [int(p) for p in np.asarray(overlay["isat_ftavg_upstream_port"])]
+    _assert_upstream_is_area_column0(
+        "isat_ftavg",
+        geo_ports,
+        np.asarray(overlay["isat_ftavg_geomean_pairing"]),
+        geo_areas,
+        upstream_ports,
+        np.asarray(overlay["isat_ftavg_upstream_source_channel"]),
+    )
     z_by_port = {
         int(p): float(z)
         for p, z in zip(
@@ -1204,8 +1282,11 @@ MACH_FACE_KEYS = (
     "isat_ftavg_upstream_core_a",
     "isat_ftavg_core_a",
     "isat_ftavg_geomean_area_cm2",
+    "isat_ftavg_geomean_pairing",
     "isat_ftavg_geomean_time_ms",
     "isat_ftavg_geomean_port",
+    "isat_ftavg_upstream_port",
+    "isat_ftavg_upstream_source_channel",
 )
 
 #: The two-face Mach-probe calibration constant K, as a BRACKET rather than a
@@ -1297,6 +1378,14 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
     dn = np.asarray(overlay["isat_ftavg_core_a"], dtype=float)
     areas = np.asarray(overlay["isat_ftavg_geomean_area_cm2"], dtype=float)
     face_ports = [int(p) for p in np.asarray(overlay["isat_ftavg_geomean_port"])]
+    _assert_upstream_is_area_column0(
+        "isat_ftavg",
+        face_ports,
+        np.asarray(overlay["isat_ftavg_geomean_pairing"]),
+        areas,
+        [int(p) for p in np.asarray(overlay["isat_ftavg_upstream_port"])],
+        np.asarray(overlay["isat_ftavg_upstream_source_channel"]),
+    )
     z_by_port = {
         int(p): float(z)
         for p, z in zip(
@@ -1713,6 +1802,8 @@ DECAY_FACE_KEYS = (
     "isat_decay_dn_mean_a",
     "isat_decay_geomean_a_per_cm2",
     "isat_decay_geomean_area_cm2",
+    "isat_decay_geomean_pairing",
+    "isat_decay_source_channel",
 )
 INTERF_DECAY_KEYS = (
     "interf_decay_time_ms",
@@ -1787,6 +1878,14 @@ def compare_decay_faces(overlay, decay_rows, window_ms=DECAY_WINDOW_MS):
     geo = np.asarray(overlay["isat_decay_geomean_a_per_cm2"], dtype=float)
     areas = np.asarray(overlay["isat_decay_geomean_area_cm2"], dtype=float)
     ports = list(np.asarray(overlay["isat_decay_port"], dtype=int))
+    _assert_upstream_is_area_column0(
+        "isat_decay",
+        ports,
+        np.asarray(overlay["isat_decay_geomean_pairing"]),
+        areas,
+        ports,
+        np.asarray(overlay["isat_decay_source_channel"]),
+    )
 
     window_mask = (t_exp >= t0) & (t_exp <= t1)
     tail_mask = t_exp >= t_exp.max() - 5.0
