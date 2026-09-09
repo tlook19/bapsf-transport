@@ -15,16 +15,52 @@ Run from the checkout root::
     PYTHONPATH=<checkout> python scripts/verify/verify_sim1d_edt.py \
         --h5 <saved sim1d run>.h5
 
-``--h5`` is required to RUN the gates: the fixture is a saved sim1d run, read
-from the artifacts root rather than from beside this script. ``--registration``
-prints the registry below and exits without one.
+``--registration`` prints the registry below and exits without running
+anything.
 
-**The fixture named throughout the registry below, ``mgcr1_confirm``, is
-RETIRED.** It was a fluid-closure arm, and the readings recorded
-against it are records of what it measured, not readings of the stance
-of record. The gates themselves are properties of whatever saved run ``--h5``
-names, so they stay runnable against a current artifact; only the recorded
-numbers belong to that retired one.
+**THE FIXTURE IS NAMED ON THE COMMAND LINE, NEVER IN THIS FILE.** ``--h5``
+carries its path and defaults to ``DEFAULT_FIXTURE`` under the artifacts root,
+because the fixture is a RUN ARTIFACT -- it lives outside the repo and is
+superseded whenever the configuration of record moves -- while this file is
+code. A filename written into the registry becomes a dangling pointer the
+moment its artifact is superseded or its directory is emptied, and every
+reading recorded against that name then describes a run nobody can open. This
+suite was in exactly that state: the registry named one retired fluid-closure
+artifact at seven sites and the file no longer existed anywhere.
+
+So the registry states the PROPERTIES the fixture must HAVE, and the suite
+checks at open the ones it can:
+
+  * **the reference configuration.** The file's ``configuration_name`` root
+    attribute must equal ``baseline_sim1d.PRODUCTION_STANCE``, and a file
+    that says otherwise -- or says nothing, which is how a trajectory written
+    before configurations were named reads -- is REFUSED rather than guessed
+    at. ``configuration_identity`` is PRINTED beside it and never compared:
+    it is the identity of the configuration at the vintage the artifact was
+    written, so pinning it here would fail at the first unrelated key
+    rotation, for reasons with no bearing on this suite.
+  * **the ES1 source region present**, which is what ``SavedGeometry`` reads
+    out of the saved ``geometry`` group: exactly one ``cathode`` cell, at
+    least one ``column`` cell downstream of it, and a uniform cell area
+    across the support between them (G2, G3, G4, G6, G10 and G12 all live on
+    that support, and the face-area rebuild is only exact where the area is
+    uniform).
+  * **per-sample ``Te``, ``n`` and ``u`` profiles** and the
+    ``cathode_diagnostics`` currents ``circuit_I_loop`` and
+    ``source_I_eth_star``, plus ``source_P_prim`` for G4's reported
+    throughput normalization.
+  * **a DRIVEN window and an afterglow.** Saved samples across 0.1-20.1 ms
+    carrying a non-zero loop current -- without one G2's non-vacuity clause
+    fails and G4's identities would be equalities of zeros -- and samples
+    past 20.1 ms, which is what G6's window and its 26 ms instant read.
+
+Any current artifact with those properties runs this suite, and the readings
+move with it. That is the point: the gates are properties of whatever run
+``--h5`` names, and no gated statement in this file is a record of one
+particular run. Numbers still quoted in the registry below against the RETIRED
+consult artifact are records of what THAT run measured -- kept so the next
+reader does not re-derive them -- never thresholds and never readings of the
+configuration of record.
 
 Exit 0 = every gated statement passed. A failure is a DELIVERABLE: it is
 printed with its numbers and the suite exits 1. Never relax a tolerance here to
@@ -66,8 +102,8 @@ GATE REGISTRY
   QUANTITY: ``total - (boundary_in - boundary_out + W_EMF)``, relative to the
   larger side.
   SITE: the operator's own named rows on ONE accepted step.
-  FIXTURE: the golden config at nx=60, and the ES1 source region on
-  ``mgcr1_confirm.h5``'s saved state.
+  FIXTURE: the golden config at nx=60, and the ES1 source region on the
+  ``--h5`` fixture's saved state.
   PASS: <= 1e-10 relative on every arm of the bracket, at a state where the
   operator is NOT vacuous (a zero-current state satisfies the identity
   trivially and would gate nothing).
@@ -79,7 +115,7 @@ GATE REGISTRY
   roundoff. Window-mean over 0.1-20.1 ms.
   SITE: ``edt_cathode_face_handshake_W`` and the face-1 work term, via the
   standalone evaluator on the saved state.
-  FIXTURE: ``mgcr1_confirm.h5`` (data in hand; no new run).
+  FIXTURE: the ``--h5`` fixture's saved state (data in hand; no new run).
   PASS: (i) == 0 to roundoff; (ii) |work + pressure_work face-1| / |work| <=
   1e-12, at a magnitude of 4.298 kW.
 
@@ -89,27 +125,70 @@ GATE REGISTRY
   legacy row that has been inert on the shipped stance since R3.2. It is named
   here rather than deleted so that the next reader does not re-derive it.
 
-**G4 -- the compression piece (RE-FORMED 2026-08-31).**
-  QUANTITY: the pressure-drift work summed over the cells STRICTLY DOWNSTREAM
-  of the death cell, window-mean over 0.1-20.1 ms, reported ROW-RELATIVE and
-  throughput-normalized (the standing rule: negative controls gate on the
-  ROW-RELATIVE normalization, because a misbooking that
-  moves its own row by O(1) can read as O(1e-2) throughput-normalized).
-  SITE: ``edt_pressure_drift_work_W``, on the REGISTERED closure (the shipped
-  default, and the headline) and on the ``export_counts`` instrument arm --
-  the one where NO face is closed, so that row is the operator's own interior
-  compression and nothing else.
-  FIXTURE: ``mgcr1_confirm.h5``.
-  PASS: under the REGISTERED closure +35.4 kW (bracket A) / +29.9 kW
-  (bracket B), and on the instrument arms +13.6 / +8.2 kW, each within 15 %
-  ROW-RELATIVE. BOTH are gated and both are labelled, because quoting either
-  alone was a review finding: under ``sheath_row_closes_all`` the mesh face's
-  work term is handed to the sheath row and lands in these same cells, so the
-  row is a different quantity there, not a different value of one quantity.
-  The fixed cells-2-5 range is RETIRED with its "robust,
-  handshake-independent" label: over that range bracket B reads -5.3 kW, so
-  the quantity was bracket-A-specific rather than robust. The
-  throughput-normalized figure is REPORTED, never gated.
+**G4 -- the compression piece (two LIVE relations; the kW pins are RETIRED).**
+  QUANTITY: two statements about the pressure-drift work row, both computed
+  from the SAME run on every pass, window-mean over 0.1-20.1 ms.
+  (i) SUMMATION BY PARTS -- the row summed over the operator's whole support
+  equals ``W_EMF_pressure + cathode_face_work - anode_face_work``, the three
+  face-and-interior powers the evaluator assembles independently of it.
+  (ii) THE CLOSURE IDENTITY -- the row summed over the cells STRICTLY
+  DOWNSTREAM of the death cell, under the REGISTERED closure MINUS the same
+  sum on the ``export_counts`` instrument arm, equals the mesh face's work
+  power that ``sheath_row_closes_all`` hands to the kinetic sheath row.
+  SITE: ``edt_pressure_drift_work_W`` with the evaluator's own face powers, on
+  the REGISTERED closure (the shipped default, and the headline) and on the
+  ``export_counts`` instrument arm -- the one where NO face is closed, so that
+  row is the operator's own interior compression and nothing else.
+  FIXTURE: the ``--h5`` fixture, over the window.
+  PASS: both relations <= 1e-12 relative, with NON-VACUITY gated beside each
+  (finite operands, a non-zero row sum, a non-zero difference) and the SIGN of
+  the closure difference gated positive. The kW figures are REPORTED with the
+  throughput normalization, never gated.
+
+  **The four kW pins are RETIRED: +35.4 / +29.9 kW under the registered
+  closure and +13.6 / +8.2 kW on the instrument arms, each within 15 %
+  ROW-RELATIVE.** They were measured on the retired consult artifact and they
+  are properties of THAT run's state, not of the operator: on a current
+  artifact at the configuration of record the two instrument-arm rows read
+  0.29 and 0.43 row-relative against them and this gate failed at base and tip
+  alike, on its own staleness rather than on its subject. They are named here
+  rather than deleted so the next reader does not re-derive them. The fixed
+  cells-2-5 range is RETIRED with its "robust, handshake-independent" label
+  for the same class of reason: over that range bracket B reads -5.3 kW, so
+  the quantity was bracket-A-specific rather than robust.
+
+  WHY THESE TWO RELATIONS, AND WHAT EACH ONE EARNS. Relation (ii) IS the
+  review finding that made both pins be quoted together, turned into a
+  measurement: under ``sheath_row_closes_all`` the mesh face's work term is
+  handed to the sheath row and lands in these same cells, so the row is a
+  different QUANTITY there, not a different value of one quantity -- and (ii)
+  names the difference exactly, so a future change that made the closure move
+  anything ELSE in these cells breaks it. It cannot, on its own, say the
+  compression row is right: a wholly wrong row would still satisfy it as long
+  as the two arms differed by that one face power. That is what (i) is for --
+  it ties the row itself to quantities assembled by a different route (the
+  interior pressure-gradient sum and the two bounding face work powers), so a
+  misbooking inside the row fails it. G2 gates the volume identity, which is
+  (i) PLUS the enthalpy/thermal-force telescoping; compensating errors between
+  those rows and this one pass G2 and fail (i).
+
+  NEGATIVE CONTROLS, pre-registered in ``G4_NEGATIVE_CONTROLS`` and run via
+  ``--g4-negative-control``, one per statement, and under either one this gate
+  MUST fail. ``emf-operand-scale`` moves the ``W_EMF_pressure`` operand off
+  the value the row was built against, which (i)'s residual catches five
+  orders above its bar; ``mesh-work-drop`` zeroes the mesh face's work power,
+  which (ii) catches both on its residual and on the non-vacuity guard's dead
+  operand. A control that does not fire means the comparison has gone inert.
+
+  THE SIGN IS GATED, and it is the one clause the identities cannot supply:
+  both sides of (ii) carry the same face current, so a global sign error in it
+  flips them together and the equality survives. Over the DRIVEN window the
+  thermal-electron drift at the mesh face runs cathode to anode, so the work
+  power handed to the sheath row is positive; that clause is a statement about
+  the window, not about a magnitude, and it fails on a sign error the
+  equalities absorb. (It is a window-scoped claim by construction: in
+  afterglow the drift reverses -- see G6 -- which is why it is asserted over
+  0.1-20.1 ms and nowhere else.)
 
 **G5 -- the J = 0 limit (negative control at the statement level).**
   QUANTITY: (i) every cell of the operator's total row at zero current;
@@ -174,7 +253,7 @@ GATE REGISTRY
   registered closure as the HEADLINE and the other two labelled INSTRUMENT
   ARM. An earlier form reported ``export_counts`` alone and unlabelled, which
   gave the afterglow term the OPPOSITE SIGN to the shipped default.
-  FIXTURE: ``mgcr1_confirm.h5`` at t = 26 ms AND over the whole
+  FIXTURE: the ``--h5`` fixture at t = 26 ms AND over the whole
   afterglow window (t > 20.1 ms). Both, because the window's mean loop current
   is 218 A while at the 26 ms instant the loop carries ~12 A -- the term is
   confined to the ~1.5 ms ring-down and those are two readings, not one.
@@ -195,7 +274,7 @@ GATE REGISTRY
   support -- the drift is absorbed at the mesh and never traverses the last
   gradient) and faces 2-6 (which includes the mesh face's pressure jump, and
   is the support that reproduces the 2026-08-26 consult's figure).
-  FIXTURE: ``mgcr1_confirm.h5``.
+  FIXTURE: the ``--h5`` fixture.
   REPORTED: the bracket, expected 3.7-6.2 V against the Boltzmann estimate
   ``T_e ln(n_5/n_1)`` = 5.7 V. **The > 6 V binary is DROPPED** as
   discretization-fragile: one arm spans 5.27-6.22 V across defensible
@@ -219,7 +298,7 @@ GATE REGISTRY
   operator's ``Ee`` row times cell volume.
   SITE: ``edt_consult_pins.evaluate`` against
   ``sources.electron_drift_transport_rhs``, on ONE saved state.
-  FIXTURE: ``mgcr1_confirm.h5`` at t = 10 ms, on ALL SIX arms
+  FIXTURE: the ``--h5`` fixture at t = 10 ms, on ALL SIX arms
   (``CHARGE_DEATH_CHOICES`` x ``ANODE_HANDSHAKE_CHOICES``).
   PASS: <= 1e-12 relative on every cell, on every arm, and both exactly zero
   outside the operator's support. **Not bit-identical, by design**: the kernel
@@ -265,7 +344,10 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
     if _dir not in _sys.path:
         _sys.path.insert(0, _dir)
 
-from baseline_sim1d import build_baseline_config  # noqa: E402
+from baseline_sim1d import (  # noqa: E402
+    PRODUCTION_STANCE,
+    build_baseline_config,
+)
 from edt_consult_pins import (  # noqa: E402
     ANODE_HANDSHAKE_CHOICES,
     CHARGE_DEATH_CHOICES,
@@ -274,6 +356,20 @@ from edt_consult_pins import (  # noqa: E402
     evaluate,
 )
 from golden_digest_gate import DIGEST_PARAM_OVERRIDES  # noqa: E402
+
+#: The documented default fixture: the ES1 arm of the re-anchor continuity
+#: pair, a saved run at the configuration of record with the ES1 source region
+#: present, a driven 0.1-20.1 ms window and an afterglow past it. It is a PATH
+#: under the artifacts root, not a name resolved inside the repo, because run
+#: artifacts live outside the repo -- and it is a DEFAULT rather than a pin:
+#: ``--h5`` overrides it, and any artifact carrying the properties listed at
+#: the top of this file runs the suite. When this one is superseded, point
+#: ``--h5`` at the successor; the gated statements do not move with it.
+DEFAULT_FIXTURE = (
+    Path.home()
+    / "bapsf/artifacts/reanchor_continuity_pair_2026-09-04"
+    / "g1atrim_es1_d0e9748.h5"
+)
 
 #: The consult's window, in seconds.
 WINDOW = (1.0e-4, 2.01e-2)
@@ -301,17 +397,32 @@ GOLDEN_STEPS = 200
 #: The identity's bar, as registered.
 IDENTITY_TOLERANCE = 1e-10
 
-#: G4's pins, per charge-death arm, and the shared bar. G3's +14.8 kW pin is
-#: RETIRED as measured-wrong and has no successor number: its
-#: quantity is now zero by construction.
-G4_TARGETS_KW = (13.6, 8.2)
-PIN_TOLERANCE = 0.15
+#: G4's bar on its two live relations. Both compare two assemblies of the same
+#: window-mean quantity that differ by summation order and, for the closure
+#: identity, by one subtraction -- so the arithmetic bounds them at a few ulp
+#: of the larger row. The residuals below are normalized by
+#: ``max(|measured|, 1 W)``, which leaves four orders of headroom over that
+#: bound and many orders below the drift a pin on either VALUE would report.
+#: G3's +14.8 kW pin, like G4's four, is RETIRED as a record of the retired
+#: consult artifact rather than a property of the operator.
+G4_IDENTITY_TOLERANCE = 1e-12
 
-#: G4's pin under the REGISTERED closure, per charge-death arm. The mesh face's
-#: work term is handed to the sheath row there and lands in the same cells, so
-#: this row is a different quantity from the instrument-arm one above -- both
-#: are gated, because quoting either alone was the review finding.
-G4_TARGETS_CLOSURE_KW = (35.4, 29.9)
+#: G4's pre-registered negative controls, selected by ``--g4-negative-control``
+#: or by passing the name to :func:`gates3410`. One per gated statement, and
+#: each perturbs exactly ONE side of its comparison so the gate MUST fail:
+#: ``emf-operand-scale`` moves the ``W_EMF_pressure`` operand off the value the
+#: pressure-work row was assembled against, which the summation-by-parts
+#: residual catches; ``mesh-work-drop`` zeroes the mesh face's work power, so
+#: the closure identity's predicted difference is a dead operand, which both
+#: that residual and the non-vacuity guard catch. A control that does not fire
+#: means the comparison has gone inert.
+G4_NEGATIVE_CONTROLS = ("emf-operand-scale", "mesh-work-drop")
+
+#: The relative perturbation ``emf-operand-scale`` applies. Small enough that
+#: it is plainly a perturbation of one operand rather than a different
+#: quantity, and the residual it produces still sits about five orders above
+#: the bar.
+G4_OPERAND_PERTURBATION = 1.0e-6
 
 #: G5's bar on the measured-versus-closed-form residual. The two routes to
 #: the residue differ by ONE divide-then-multiply round trip through a
@@ -535,15 +646,32 @@ def gate2_es1(report, geom, h5):
             )
 
 
-def gates3410(report, geom, h5):
-    """The cathode face, the compression piece, and the EMF bracket."""
+def gates3410(report, geom, h5, g4_negative_control=None):
+    """The cathode face, the compression piece, and the EMF bracket.
+
+    G4's two relations are recomputed from the same run on every pass, so they
+    survive the configuration rotations that move the state the row rides on --
+    which is exactly what the four kW pins they replace could not do. See the
+    registry entry for what each one earns, and why the sign is gated on its
+    own.
+
+    ``g4_negative_control`` selects a pre-registered perturbation from
+    ``G4_NEGATIVE_CONTROLS``; under either one G4 MUST fail.
+    """
+    if g4_negative_control is not None and (
+        g4_negative_control not in G4_NEGATIVE_CONTROLS
+    ):
+        raise ValueError(
+            f"unknown G4 negative control {g4_negative_control!r}; the "
+            f"pre-registered ones are {list(G4_NEGATIVE_CONTROLS)}"
+        )
     cd = h5["cathode_diagnostics"]
     t = h5["time"][:]
     sel = np.flatnonzero((t >= WINDOW[0]) & (t <= WINDOW[1]))
     throughput_W = float(np.nanmean(cd["source_P_prim"][sel]))
     c, last = geom.cathode_cell, geom.last_source_cell
     gap_sums = {}
-    for charge_death, target_kW in zip(CHARGE_DEATH_CHOICES, G4_TARGETS_KW):
+    for charge_death in CHARGE_DEATH_CHOICES:
         # G4's arm is export_counts: the one where no face is closed, so the
         # pressure-drift row is the interior compression and nothing else.
         rows = _window_mean_rows(
@@ -574,11 +702,11 @@ def gates3410(report, geom, h5):
                 f"{residual:.3e} (bar 1e-12)",
             )
 
-        # --- G4, on BOTH readings, each labelled -----------------------------
-        # Quoting one alone was a review finding: under the registered closure
-        # the mesh face's work term is handed to the sheath row and lands in
-        # these same cells, so the row is a different QUANTITY there, not a
-        # different value of one quantity.
+        # --- G4, two LIVE relations on BOTH readings, each labelled ----------
+        # The kW pins these replace were properties of the retired consult
+        # artifact's state, not of the operator, and they failed on their own
+        # staleness. Both statements below are recomputed from this run on
+        # every pass.
         closure_rows = _window_mean_rows(
             h5,
             geom,
@@ -587,39 +715,114 @@ def gates3410(report, geom, h5):
             charge_death,
             "sheath_row_closes_all",
         )
-        closure_target = G4_TARGETS_CLOSURE_KW[
-            CHARGE_DEATH_CHOICES.index(charge_death)
-        ]
-        for label, source, target in (
-            (
-                "REGISTERED CLOSURE (sheath_row_closes_all)",
-                closure_rows,
-                closure_target,
-            ),
-            ("INSTRUMENT ARM (export_counts)", rows, target_kW),
+        gated = {}
+        for label, source in (
+            ("REGISTERED CLOSURE (sheath_row_closes_all)", closure_rows),
+            ("INSTRUMENT ARM (export_counts)", rows),
         ):
-            value_kW = (
-                float(
-                    source["pressure_work_W"][death_cell + 1 : last + 1].sum()
-                )
-                * 1e-3
+            gated_W = float(
+                source["pressure_work_W"][death_cell + 1 : last + 1].sum()
             )
-            row_relative = abs(value_kW - target) / abs(target)
+            gated[label] = gated_W
+            # (i) SUMMATION BY PARTS over the operator's own support. The row
+            # is a per-cell p_e times a face-velocity difference; summed over
+            # the support the interior faces telescope into the pressure half
+            # of W_EMF, leaving the two bounding face work powers. Those three
+            # are assembled by the evaluator on a different route from the row
+            # itself, so a misbooking inside the row breaks the equality.
+            support_W = float(source["pressure_work_W"][c : last + 1].sum())
+            emf_pressure_W = source["W_EMF_pressure_W"]
+            if g4_negative_control == "emf-operand-scale":
+                emf_pressure_W = emf_pressure_W * (
+                    1.0 + G4_OPERAND_PERTURBATION
+                )
+            face_in_W = source["cathode_face_work_W"]
+            face_out_W = source["anode_face_work_W"]
+            closed_form_W = emf_pressure_W + face_in_W - face_out_W
+            residual = abs(support_W - closed_form_W) / max(
+                abs(support_W), 1.0
+            )
+            # NON-VACUITY, gated: an inert row and dead operands would satisfy
+            # the equality while certifying nothing. ``face_out_W`` is EXACTLY
+            # zero under the registered closure by construction -- that is what
+            # the closure IS -- so it is required finite and no more.
+            live = bool(
+                np.isfinite(support_W)
+                and support_W != 0.0
+                and np.isfinite(emf_pressure_W)
+                and emf_pressure_W != 0.0
+                and np.isfinite(face_in_W)
+                and face_in_W != 0.0
+                and np.isfinite(face_out_W)
+            )
+            control = (
+                "" if g4_negative_control != "emf-operand-scale"
+                else "NEGATIVE CONTROL 'emf-operand-scale' armed -- must "
+                     "FAIL. "
+            )
             report.check(
                 "G4",
-                row_relative <= PIN_TOLERANCE,
-                f"compression piece [{charge_death}] {label}, cells "
+                live and residual <= G4_IDENTITY_TOLERANCE,
+                f"{control}compression piece [{charge_death}] {label}, cells "
                 f"{death_cell + 1}-{last} (strictly downstream of the death "
-                f"cell): {value_kW:+.3f} kW against {target:+.1f} kW -- "
-                f"ROW-RELATIVE {row_relative:.4f} (bar {PIN_TOLERANCE:.2f}); "
-                f"throughput-normalized {value_kW * 1e3 / throughput_W:.4f} "
-                f"of P_prim {throughput_W * 1e-3:.1f} kW (reported, not "
-                "gated)",
+                f"cell): {gated_W * 1e-3:+.3f} kW, throughput-normalized "
+                f"{gated_W / throughput_W:.4f} of P_prim "
+                f"{throughput_W * 1e-3:.1f} kW (both REPORTED, not gated). "
+                f"SUMMATION BY PARTS over the support cells {c}-{last}: row "
+                f"sum {support_W * 1e-3:+.6f} kW against W_EMF_pressure "
+                f"{emf_pressure_W * 1e-3:+.6f} + cathode-face work "
+                f"{face_in_W * 1e-3:+.6f} - anode-face work "
+                f"{face_out_W * 1e-3:+.6f} = {closed_form_W * 1e-3:+.6f} kW "
+                f"-- residual {residual:.3e} (bar "
+                f"{G4_IDENTITY_TOLERANCE:.0e}); non-vacuity: row sum and both "
+                f"live operands finite and non-zero={live}",
             )
-        compression_kW = (
-            float(rows["pressure_work_W"][death_cell + 1 : last + 1].sum())
-            * 1e-3
+
+        # (ii) THE CLOSURE IDENTITY. The two arms' pressure-work rows differ in
+        # ONE cell and by ONE quantity: the mesh face's work power, which
+        # ``sheath_row_closes_all`` hands to the kinetic sheath row. That is
+        # what makes the two readings different QUANTITIES rather than two
+        # values of one, and naming the difference exactly is what would catch
+        # a future closure that moved anything else in these cells.
+        delta_W = (
+            gated["REGISTERED CLOSURE (sheath_row_closes_all)"]
+            - gated["INSTRUMENT ARM (export_counts)"]
         )
+        mesh_work_W = (
+            rows["anode_face_work_W"] - closure_rows["anode_face_work_W"]
+        )
+        if g4_negative_control == "mesh-work-drop":
+            mesh_work_W = 0.0
+        residual = abs(delta_W - mesh_work_W) / max(abs(delta_W), 1.0)
+        live = bool(
+            np.isfinite(delta_W)
+            and delta_W != 0.0
+            and np.isfinite(mesh_work_W)
+            and mesh_work_W != 0.0
+        )
+        # THE SIGN, gated separately: both sides carry the same face current,
+        # so a global sign error in it flips them together and the equality
+        # survives. Over the DRIVEN window the thermal-electron drift at the
+        # mesh face runs cathode to anode, so this power is positive. It is a
+        # window-scoped clause -- in afterglow the drift reverses (G6).
+        sign_ok = bool(mesh_work_W > 0.0)
+        control = (
+            "" if g4_negative_control != "mesh-work-drop"
+            else "NEGATIVE CONTROL 'mesh-work-drop' armed -- must FAIL. "
+        )
+        report.check(
+            "G4",
+            live and sign_ok and residual <= G4_IDENTITY_TOLERANCE,
+            f"{control}closure identity [{charge_death}], cells "
+            f"{death_cell + 1}-{last}: REGISTERED CLOSURE minus INSTRUMENT "
+            f"ARM "
+            f"= {delta_W * 1e-3:+.6f} kW against the mesh-face work power the "
+            f"sheath row takes over, {mesh_work_W * 1e-3:+.6f} kW -- residual "
+            f"{residual:.3e} (bar {G4_IDENTITY_TOLERANCE:.0e}); non-vacuity: "
+            f"difference and mesh-face power finite and non-zero={live}, sign "
+            f"positive over the driven window={sign_ok}",
+        )
+
         legacy_kW = (
             float(rows["pressure_work_W"][c + 1 : last + 1].sum()) * 1e-3
         )
@@ -1127,15 +1330,65 @@ def gate6(report, geom, h5, afterglow_lo=2.01e-2):
     )
 
 
+def _fixture_lineage(h5, path):
+    """Return the fixture's ``(configuration_name, configuration_identity)``.
+
+    The name is CHECKED against the reference configuration and the identity is
+    only carried out to be printed. That asymmetry is the point: a run at a
+    different configuration is a different plasma, and readings taken off it
+    are not readings of the configuration of record -- which is how this suite
+    came to record a fluid-closure arm's numbers as though they were the
+    stance's. The identity, by contrast, is the WHOLE resolved config's hash at
+    the vintage the artifact was written, so it rotates at every unrelated key
+    addition; comparing it here would fail on that bookkeeping rather than on
+    the fixture, so it is reported and never gated.
+
+    A file whose root attributes name no configuration -- how a trajectory
+    written before configurations were named reads -- is refused rather than
+    guessed at.
+    """
+    def _attr(key):
+        value = h5.attrs.get(key)
+        if isinstance(value, bytes):
+            value = value.decode()
+        if value is None or str(value) in ("", "None"):
+            return None
+        return str(value)
+
+    name = _attr("configuration_name")
+    identity = _attr("configuration_identity")
+    if name != PRODUCTION_STANCE:
+        raise ValueError(
+            f"the fixture {path} names configuration {name!r}, not the "
+            f"reference configuration {PRODUCTION_STANCE!r}. This suite's "
+            "saved-state gates read a run at the configuration of record "
+            "with the ES1 source region present, a driven 0.1-20.1 ms window "
+            "and an afterglow past it; see this file's header for the full "
+            "list. A trajectory written before configurations were named "
+            "carries no name and is refused rather than guessed at."
+        )
+    return name, identity
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
         "--h5",
-        default=None,
-        help="the saved sim1d run the gates read their fixture state from; "
-             "under the artifacts root, e.g. ~/bapsf/artifacts/<event>/....h5",
+        default=str(DEFAULT_FIXTURE),
+        help="the saved sim1d run the gates read their fixture state from, "
+             "under the artifacts root; it must carry the properties listed "
+             "at the top of this file, and its configuration_name is checked "
+             "at open. Defaults to DEFAULT_FIXTURE",
     )
     ap.add_argument("--golden-steps", type=int, default=GOLDEN_STEPS)
+    ap.add_argument(
+        "--g4-negative-control",
+        choices=G4_NEGATIVE_CONTROLS,
+        default=None,
+        help="arm one of G4's pre-registered negative controls; the suite "
+             "MUST then report G4 as FAILED, and a clean run afterwards MUST "
+             "restore the pass",
+    )
     ap.add_argument(
         "--g5-negative-control",
         choices=G5_NEGATIVE_CONTROLS,
@@ -1153,9 +1406,6 @@ def main(argv=None):
     if args.registration:
         print(__doc__)
         return 0
-    if args.h5 is None:
-        ap.error("--h5 is required to run the gates; --registration prints "
-                 "the registry without one")
 
     import h5py
 
@@ -1163,14 +1413,16 @@ def main(argv=None):
     gate1_strip_control(report)
     gate2_golden(report, args.golden_steps)
     with h5py.File(args.h5, "r") as h5:
+        name, identity = _fixture_lineage(h5, args.h5)
         geom = SavedGeometry(h5)
         geom.check_uniform_area()
         print(
-            f"[    ] fixture {args.h5}: cells={geom.cells}, "
+            f"[    ] fixture {args.h5}: configuration {name} "
+            f"(identity {identity}), cells={geom.cells}, "
             f"cathode_cell={geom.cathode_cell}, anode_face={geom.anode_face}"
         )
         gate2_es1(report, geom, h5)
-        gates3410(report, geom, h5)
+        gates3410(report, geom, h5, args.g4_negative_control)
         gate6(report, geom, h5)
         gate12(report, geom, h5)
     gate5(report, args.g5_negative_control)
