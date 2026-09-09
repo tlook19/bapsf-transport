@@ -100,6 +100,17 @@ carries the outflow below. In the code that map is `plasma_active[cell]` and
 `plasma_face_live_cell[face]`, and it is the single authority the fluxes and
 the source terms both read.
 
+Under the reference configuration's prescribed area geometry the flux-tube
+area expands beyond port 53 into the end chamber by roughly a factor of
+sixteen, capped where the plasma radius profile saturates at
+`plasma_area_max_vessel_fraction` of the local, larger vessel bore, so the
+last ~3 m of the 1D column form a subsonic diffuser in which the flow
+decelerates by continuity and, over the final ~1.2 m where the radius sits at
+that cap, the plasma physically meets the end-chamber side wall while the 1D
+model still books the terminating face as the end wall. A configuration
+carrying no prescribed area profile — the golden baseline at `nx=60` is one —
+holds the flux-tube area constant and carries no such expansion.
+
 Each cell carries two radial zones: the **column** of radius $R_p$ — the plasma
 channel, $V_\text{col}=A\Delta z$ — and the **annulus** between $R_p$ and the
 bore $R_m$. The neutral gas occupies both, the plasma the column alone.
