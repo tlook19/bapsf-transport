@@ -55,6 +55,15 @@ Stage (ii) has two opt-in readings, both absent unless asked for:
     comparands are per-time-sample fields on the same time base and are read
     over the same domain; they differ by the radial weighting alone.
 
+Two further stage (ii) blocks are REPORT-ONLY and enter no score. The
+geomean-Isat z-trend row prints the port-to-port ratios of the area-normalized
+plateau Isat geomean, measured against model, and appears with ``--window
+plateau``; it is an instrument row and is added to no total or verdict bin. The
+parallel-Mach block prints the model Mach beside the two-face estimate
+``ln(J_up/J_dn)/K`` at both ends of the calibration bracket, and is
+DISCLOSED CONDITIONAL: conditional on K and on an untreated probe-shadow term,
+with only the port-to-port sign free of K.
+
 Separately, ``--beta-collapse`` runs the simulation-informed sweep-bias
 diagnostic (HYPOTHESIS ON RECORD 2026-07-22 plus its two addenda) over
 a set of saved reference runs: per
@@ -92,6 +101,7 @@ from cablp.solvers._sim1d import (
     default_config,
     load_result_hdf5,
 )
+from cablp.solvers._sim1d.physics.flux import plasma_wave_speed
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 
 _SCRIPTS = Path(__file__).resolve().parents[1]
@@ -940,6 +950,369 @@ def compare(
                 )
             rows.append(row)
     return rows
+
+
+# --- stage (ii) plateau extensions: the geomean-Isat z-trend INSTRUMENT ROW
+# and the DISCLOSED-CONDITIONAL two-face Mach block.
+#
+# Neither block feeds a scored row, a mean, a total or a verdict bin. They sit
+# beside the stage (ii) table because they read the same ports over the same
+# drive plateau, and they are printed under their own headers so a reader
+# cannot mistake either for part of the scored set.
+
+#: Overlay keys the plateau geomean z-trend row reads. The geomean is already
+#: AREA-NORMALIZED by its exporter -- per port and per sample it is
+#: sqrt(J_up * J_dn) of the two probe faces' area-normalized current densities
+#: in A cm^-2 -- so the row reads that field directly and constructs nothing
+#: from the individual faces.
+ZTREND_GEOMEAN_KEYS = (
+    "isat_ftavg_geomean_a_per_cm2",
+    "isat_ftavg_geomean_sem_a_per_cm2",
+    "isat_ftavg_geomean_time_ms",
+    "isat_ftavg_geomean_port",
+)
+
+#: Ordered (near, far) port pairs whose plateau geomean ratio the z-trend row
+#: reports. A pair with a port the overlay's geomean port list does not carry
+#: is skipped, so a set that carries only the later ports still reports the
+#: pairs it can form.
+ZTREND_PORT_PAIRS = ((29, 41), (41, 50))
+
+
+def _plateau_port_reading(t_exp, trace, sem, model_2d, iz, t_model_ms, window):
+    """Return one port's plateau window means, or ``None`` if none survive.
+
+    ``trace`` and ``sem`` are the measured per-sample series on ``t_exp``;
+    ``model_2d[:, iz]`` is the model comparand on ``t_model_ms``, interpolated
+    onto ``t_exp`` exactly as the stage (ii) rows interpolate theirs. The
+    surviving sample mask is the stage (ii) one -- finite on both sides and
+    non-zero on the measured side -- intersected with ``window`` and with the
+    model's own time coverage.
+    """
+    t_exp = np.asarray(t_exp, dtype=float)
+    trace = np.asarray(trace, dtype=float)
+    in_window = (
+        (t_exp >= float(window[0]))
+        & (t_exp <= float(window[1]))
+        & (t_exp >= t_model_ms.min())
+        & (t_exp <= t_model_ms.max())
+    )
+    if not np.any(in_window):
+        return None
+    model_t = np.interp(t_exp[in_window], t_model_ms, model_2d[:, iz])
+    exp_t = trace[in_window]
+    good = np.isfinite(exp_t) & np.isfinite(model_t) & (exp_t != 0.0)
+    if not np.any(good):
+        return None
+    sem_t = np.asarray(sem, dtype=float)[in_window] if sem is not None else None
+    return {
+        "model": float(np.mean(model_t[good])),
+        "exp": float(np.mean(exp_t[good])),
+        "sem": (
+            float(np.mean(sem_t[good])) if sem_t is not None else float("nan")
+        ),
+        "n_samples": int(np.count_nonzero(good)),
+    }
+
+
+def compare_plateau_geomean_ztrend(result, overlay, window_ms=None):
+    """Return ``(rows, skip_reason)`` for the plateau geomean-Isat z-trend.
+
+    One row per ``ZTREND_PORT_PAIRS`` entry, comparing the model's PORT-TO-PORT
+    RATIO of the plateau Isat proxy ``n * sqrt(Te)`` against the measured
+    port-to-port ratio of the overlay's AREA-NORMALIZED plateau Isat geomean
+    ``isat_ftavg_geomean_a_per_cm2`` [A cm^-2]. A ratio is dimensionless on
+    both sides, so the two comparands need no common calibration: what is
+    compared is the axial FALLOFF, not the magnitude.
+
+    ERROR MODEL. Each port carries the same sigma_tot form the scored Isat
+    rows carry, built from the geomean's own per-sample SEM and the
+    interferometer calibration fraction::
+
+        sigma_p = sqrt(SEM_p^2 + (N_CAL_FRAC * J_p)^2)
+
+    and the ratio R = J_far / J_near propagates them in quadrature as
+    independent fractional errors::
+
+        sigma_R = R * sqrt((sigma_near / J_near)^2 + (sigma_far / J_far)^2)
+
+    ASSUMPTION, stated because it is the conservative one: the two ports'
+    sigma_tot are treated as INDEPENDENT. They are not -- a multiplicative
+    calibration systematic common to both ports cancels identically in the
+    ratio -- so this sigma_R is an upper bound on the ratio's true
+    measurement error, and the deviation it reports is a lower bound. The
+    model side carries no uncertainty, so sigma_R is the whole denominator.
+
+    The rows are an INSTRUMENT: they enter no total, no mean and no verdict
+    bin. ``skip_reason`` is a printable sentence and ``rows`` is empty when
+    the overlay vintage carries no geomean or when no pair's ports are both
+    present; the rest of the report is unchanged either way.
+    """
+    window = PLATEAU_MS if window_ms is None else window_ms
+    missing = _missing_overlay_keys(overlay, ZTREND_GEOMEAN_KEYS)
+    if missing:
+        return [], (
+            f"this overlay (schema v{_overlay_vintage(overlay)}) carries no "
+            + ", ".join(missing)
+            + " -- the area-normalized plateau geomean arrived with a later "
+            "overlay vintage, so there is no flow-cancelled plateau trace to "
+            "take a port-to-port ratio of"
+        )
+    t_exp = np.asarray(overlay["isat_ftavg_geomean_time_ms"], dtype=float)
+    geo = np.asarray(overlay["isat_ftavg_geomean_a_per_cm2"], dtype=float)
+    geo_sem = np.asarray(overlay["isat_ftavg_geomean_sem_a_per_cm2"], dtype=float)
+    geo_ports = [int(p) for p in np.asarray(overlay["isat_ftavg_geomean_port"])]
+    z_by_port = {
+        int(p): float(z)
+        for p, z in zip(
+            np.asarray(overlay["port"]), np.asarray(overlay["z_cm"], dtype=float)
+        )
+    }
+    origin = _main_discharge_origin(result)
+    t_model_ms = (np.asarray(result.time, dtype=float) - origin) * 1.0e3
+    z_model = np.asarray(result.z_cm, dtype=float)
+    isat_model = np.asarray(result.n, dtype=float) * np.sqrt(
+        np.maximum(np.asarray(result.Te, dtype=float), 0.0)
+    )
+
+    readings = {}
+    for port in sorted({p for pair in ZTREND_PORT_PAIRS for p in pair}):
+        if port not in geo_ports or port not in z_by_port:
+            continue
+        p = geo_ports.index(port)
+        iz = int(np.argmin(np.abs(z_model - z_by_port[port])))
+        reading = _plateau_port_reading(
+            t_exp, geo[p], geo_sem[p], isat_model, iz, t_model_ms, window
+        )
+        if reading is None:
+            continue
+        reading["z"] = z_by_port[port]
+        reading["sigma_tot"] = float(
+            np.hypot(reading["sem"], N_CAL_FRAC * abs(reading["exp"]))
+        )
+        readings[port] = reading
+
+    rows = []
+    for near, far in ZTREND_PORT_PAIRS:
+        if near not in readings or far not in readings:
+            continue
+        a, b = readings[near], readings[far]
+        ratio_exp = b["exp"] / a["exp"]
+        ratio_model = b["model"] / a["model"]
+        sigma_ratio = abs(ratio_exp) * float(
+            np.hypot(
+                a["sigma_tot"] / abs(a["exp"]), b["sigma_tot"] / abs(b["exp"])
+            )
+        )
+        rows.append(
+            {
+                "near_port": int(near),
+                "far_port": int(far),
+                "near_z": a["z"],
+                "far_z": b["z"],
+                "ratio_model": float(ratio_model),
+                "ratio_exp": float(ratio_exp),
+                "sigma_ratio": sigma_ratio,
+                "dev_sigma": float((ratio_model - ratio_exp) / sigma_ratio),
+                "n_samples": int(min(a["n_samples"], b["n_samples"])),
+            }
+        )
+    if not rows:
+        present = ", ".join(str(p) for p in sorted(readings)) or "none"
+        return [], (
+            "no port pair of "
+            + ", ".join(f"p{a}->p{b}" for a, b in ZTREND_PORT_PAIRS)
+            + f" had both ports readable over the plateau (ports read: "
+            f"{present}) -- a ratio needs two ports, and one alone is a "
+            "magnitude, which the scored Isat rows above already carry"
+        )
+    return rows, None
+
+
+#: Ports the disclosed-conditional Mach block reports, in z order.
+MACH_PORTS = (29, 41, 50)
+
+#: Overlay keys that block reads. The two faces are taken in their CORE-BAND
+#: form, not their flux-tube form: the overlay's own face ruling states that
+#: the two faces' flux-tube corrections run in opposite directions with z and
+#: must never be ratioed against each other, and a ratio is exactly what a
+#: two-face Mach estimate is. The per-run face areas are the geomean family's,
+#: which is the pairing the exporter used to build the geomean itself.
+MACH_FACE_KEYS = (
+    "isat_ftavg_upstream_core_a",
+    "isat_ftavg_core_a",
+    "isat_ftavg_geomean_area_cm2",
+    "isat_ftavg_geomean_time_ms",
+    "isat_ftavg_geomean_port",
+)
+
+#: The two-face Mach-probe calibration constant K, as a BRACKET rather than a
+#: value. K is the dimensionless proportionality in ln(J_up / J_dn) = K M
+#: between the two probe faces' area-normalized ion current densities and the
+#: parallel flow Mach number M; the conventional 1.66 lies inside this
+#: bracket. It is consumed by ``compare_plateau_mach`` alone, which reports the
+#: measured M at BOTH ends rather than picking one.
+MACH_K_BRACKET = (1.34, 1.74)
+
+#: Ion mass number the model Mach uses. The solver is hard helium-only --
+#: ``gas_type != "He"`` raises at construction -- so this is the only value a
+#: scored artifact can carry, and the block refuses any other gas_type rather
+#: than assuming it.
+MACH_MU = 4.0
+MACH_GAS_TYPE = "He"
+
+#: Config key naming the run's own signal-speed convention. The model Mach is
+#: u / c_s with c_s taken from THAT convention, so the number is the model's
+#: own Mach and not a second convention introduced by this report.
+MACH_WAVE_SPEED_KEY = "hyperbolic_wave_speed"
+
+#: Needle for the overlay clause that forbids ratioing the two faces'
+#: flux-tube fields, quoted in the block's legend.
+MACH_RATIO_CLAUSE_NEEDLE = "must never be ratioed"
+
+
+def compare_plateau_mach(result, params, overlay, window_ms=None):
+    """Return ``(rows, skip_reason)`` for the disclosed-conditional Mach block.
+
+    One row per ``MACH_PORTS`` entry present in both the run and the overlay,
+    carrying the MODEL Mach number beside a MEASURED two-face estimate.
+
+    MODEL side: the plateau-window mean of ``u / c_s`` at the model cell
+    nearest the port, with ``c_s`` evaluated by the solver's own
+    ``plasma_wave_speed`` under the run's configured ``hyperbolic_wave_speed``
+    convention, so the reported number is the model's own Mach and not a
+    second convention invented here.
+
+    MEASURED side: ``M = ln(R) / K``, where ``R = J_up / J_dn`` is the ratio of
+    the two probe faces' AREA-NORMALIZED core-band plateau current densities
+    and ``K`` is the two-face calibration constant of ``MACH_K_BRACKET``. Both
+    bracket ends are reported. The core-band face fields are used rather than
+    the flux-tube ones because the overlay's face ruling states the two faces'
+    flux-tube corrections run in opposite directions with z and must never be
+    ratioed; the printed legend quotes that clause.
+
+    CONDITIONAL, and not scored. ``R`` carries the flow factor together with an
+    UNTREATED probe-shadow term -- the downstream face collects in the probe
+    body's shadow and under-reads for reasons that are not flow -- so the
+    measured level is an upper bound on ``|M|`` whose size is not established
+    here. Dividing by a positive ``K`` cannot change a sign, so the SIGN of the
+    port-to-port trend is the one statement in the block that is free of ``K``.
+    No row here enters a total, a mean, a sigma or a verdict bin.
+    """
+    window = PLATEAU_MS if window_ms is None else window_ms
+    missing = _missing_overlay_keys(overlay, MACH_FACE_KEYS)
+    if missing:
+        return [], (
+            f"this overlay (schema v{_overlay_vintage(overlay)}) carries no "
+            + ", ".join(missing)
+            + " -- a two-face Mach estimate needs both probe faces and their "
+            "per-run areas, and this vintage exports fewer than that"
+        )
+    if not params:
+        return [], (
+            "the scored artifact carries no configuration parameters, so "
+            "neither the gas nor the signal-speed convention behind the model "
+            "Mach can be read from it"
+        )
+    gas = params.get("gas_type")
+    if gas != MACH_GAS_TYPE:
+        return [], (
+            f"this run's gas_type is {gas!r}, and the ion mass number behind "
+            f"the model Mach is pinned to {MACH_GAS_TYPE} (mu = {MACH_MU:g}); "
+            "assuming a mass for another gas would put a silent factor in the "
+            "sound speed"
+        )
+    if MACH_WAVE_SPEED_KEY not in params:
+        return [], (
+            f"this run's parameters carry no {MACH_WAVE_SPEED_KEY}, so the "
+            "signal-speed convention behind its own Mach number is not "
+            "recoverable from the artifact"
+        )
+    wave_speed = params[MACH_WAVE_SPEED_KEY]
+
+    t_exp = np.asarray(overlay["isat_ftavg_geomean_time_ms"], dtype=float)
+    up = np.asarray(overlay["isat_ftavg_upstream_core_a"], dtype=float)
+    dn = np.asarray(overlay["isat_ftavg_core_a"], dtype=float)
+    areas = np.asarray(overlay["isat_ftavg_geomean_area_cm2"], dtype=float)
+    face_ports = [int(p) for p in np.asarray(overlay["isat_ftavg_geomean_port"])]
+    z_by_port = {
+        int(p): float(z)
+        for p, z in zip(
+            np.asarray(overlay["port"]), np.asarray(overlay["z_cm"], dtype=float)
+        )
+    }
+    origin = _main_discharge_origin(result)
+    t_model_ms = (np.asarray(result.time, dtype=float) - origin) * 1.0e3
+    z_model = np.asarray(result.z_cm, dtype=float)
+    u_model = np.asarray(result.u, dtype=float)
+    cs_model = plasma_wave_speed(
+        np.asarray(result.Te, dtype=float),
+        np.asarray(result.Ti, dtype=float),
+        MACH_MU,
+        wave_speed=wave_speed,
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mach_model = np.where(cs_model > 0.0, u_model / cs_model, np.nan)
+    in_model = (
+        (t_model_ms >= float(window[0]))
+        & (t_model_ms <= float(window[1]))
+    )
+
+    rows = []
+    for port in MACH_PORTS:
+        if port not in face_ports or port not in z_by_port:
+            continue
+        p = face_ports.index(port)
+        iz = int(np.argmin(np.abs(z_model - z_by_port[port])))
+        model_col = mach_model[:, iz][in_model]
+        model_good = np.isfinite(model_col)
+        if not np.any(model_good):
+            continue
+        in_face = (
+            (t_exp >= float(window[0]))
+            & (t_exp <= float(window[1]))
+            & (t_exp >= t_model_ms.min())
+            & (t_exp <= t_model_ms.max())
+        )
+        j_up = up[p][in_face] / areas[p, 0]
+        j_dn = dn[p][in_face] / areas[p, 1]
+        face_good = (
+            np.isfinite(j_up) & np.isfinite(j_dn) & (j_up > 0.0) & (j_dn > 0.0)
+        )
+        ratio = (
+            float(np.mean(j_up[face_good]) / np.mean(j_dn[face_good]))
+            if np.any(face_good)
+            else float("nan")
+        )
+        rows.append(
+            {
+                "port": int(port),
+                "z": z_by_port[port],
+                "mach_model": float(np.mean(model_col[model_good])),
+                "wave_speed": str(wave_speed),
+                "face_ratio": ratio,
+                "mach_measured": [
+                    (
+                        float(np.log(ratio) / k)
+                        if np.isfinite(ratio) and ratio > 0.0
+                        else float("nan")
+                    )
+                    for k in MACH_K_BRACKET
+                ],
+                "area_up_cm2": float(areas[p, 0]),
+                "area_dn_cm2": float(areas[p, 1]),
+                "n_model_samples": int(np.count_nonzero(model_good)),
+                "n_face_samples": int(np.count_nonzero(face_good)),
+            }
+        )
+    if not rows:
+        return [], (
+            "none of the ports "
+            + ", ".join(f"p{p}" for p in MACH_PORTS)
+            + " was readable over the plateau on both the model and the two "
+            "measured faces"
+        )
+    return rows, None
 
 
 def compare_peak_current(result, overlay):
@@ -2524,6 +2897,14 @@ def _report(label, rows, es=1, plateau_ms=None):
             "   fractional error carried across the convention -- the overlay "
             "exports no flux-tube density SEM.)"
         )
+        print(
+            f"   ('{FTAVG_FIELD}' and 'n' score the SAME model density, so "
+            f"their model columns differ only through the sample mask: each "
+            f"row keeps the samples finite and non-zero on both sides, and "
+            f"{FTAVG_DENSITY_KEY} is NaN or zero on samples the core-band "
+            f"comparand is not, so the two model means are taken over "
+            f"different samples.)"
+        )
     if plateau_ms is not None:
         print(
             f"  (the '@pl' columns re-score each row over the drive plateau "
@@ -2621,6 +3002,131 @@ def _report(label, rows, es=1, plateau_ms=None):
             )
 
 
+def _report_plateau_geomean_ztrend(rows, skip_reason, window):
+    """Print the plateau geomean-Isat z-trend instrument row, or its skip."""
+    print(
+        f"\n--- stage (ii) plateau: geomean-Isat z-trend, window "
+        f"{window[0]:g}-{window[1]:g} ms (INSTRUMENT ROW) ---"
+    )
+    if skip_reason is not None:
+        print(f"  SKIPPED: {skip_reason}.")
+        print("  The stage (ii) table above is unaffected and scores as before.")
+        return
+    print("  (INSTRUMENT ROW -- reported, never added to a total, a mean or a")
+    print("   verdict bin; it stands outside the scored set until a claims")
+    print("   decision says otherwise.  Each row is a PORT-TO-PORT RATIO, far")
+    print("   over near: the model's plateau Isat proxy n*sqrt(Te) against the")
+    print("   overlay's AREA-NORMALIZED plateau Isat geomean")
+    print("   isat_ftavg_geomean_a_per_cm2 [A cm^-2], the flow-cancelled")
+    print("   sqrt(J_up*J_dn) of the two probe faces.  A ratio is dimensionless")
+    print("   on both sides, so this compares the axial FALLOFF and not the")
+    print("   magnitude the scored Isat rows already carry.  sigma_R is the")
+    print("   measured ratio's own error, R*sqrt((s_near/J_near)^2 +")
+    print("   (s_far/J_far)^2) with s_p = sqrt(SEM_p^2 + (0.10*J_p)^2); the two")
+    print("   ports' sigma_tot are treated as INDEPENDENT, which is the")
+    print("   conservative choice -- a calibration systematic common to both")
+    print("   ports cancels in the ratio, so sigma_R is an upper bound and")
+    print("   |dev|/sig a lower one.  The model side carries no error bar.)")
+    header = (
+        f"{'pair':>11} {'z [cm]':>16} {'model':>9} {'measured':>9} "
+        f"{'sigma_R':>9} {'|dev|/sig':>10} {'n':>4}"
+    )
+    print(header)
+    print("-" * len(header))
+    for r in rows:
+        pair = f"p{r['near_port']}->p{r['far_port']}"
+        span = f"{r['near_z']:.0f}->{r['far_z']:.0f}"
+        print(
+            f"{pair:>11} {span:>16} {r['ratio_model']:9.3f} "
+            f"{r['ratio_exp']:9.3f} {r['sigma_ratio']:9.3f} "
+            f"{abs(r['dev_sigma']):10.1f} {r['n_samples']:4d}"
+        )
+
+
+def _report_plateau_mach(rows, skip_reason, window, face_ruling=None):
+    """Print the disclosed-conditional two-face Mach block, or its skip."""
+    print(
+        f"\n--- stage (ii) plateau: parallel Mach number, window "
+        f"{window[0]:g}-{window[1]:g} ms (DISCLOSED CONDITIONAL) ---"
+    )
+    if skip_reason is not None:
+        print(f"  SKIPPED: {skip_reason}.")
+        return
+    print("  (NOT SCORED, and CONDITIONAL.  The model column is the run's own")
+    print("   Mach, u/c_s, with c_s taken from the run's configured signal-speed")
+    print("   convention.  The measured columns are the two-face estimate")
+    print("   M = ln(R)/K with R = J_up/J_dn the ratio of the two probe faces'")
+    print("   AREA-NORMALIZED core-band plateau current densities, printed at")
+    print(
+        f"   BOTH ends of the calibration bracket K in "
+        f"[{MACH_K_BRACKET[0]:g}, {MACH_K_BRACKET[1]:g}].  Two things the"
+    )
+    print("   measured level is conditional on: the value of K inside that")
+    print("   bracket, and an UNTREATED probe-shadow term -- the downstream")
+    print("   face collects in the probe body's shadow and under-reads for")
+    print("   reasons that are not flow, which inflates R by a factor this")
+    print("   report does not establish.  Read the measured level as an upper")
+    print("   bound on |M|.  Dividing by a positive K cannot change a sign, so")
+    print("   the port-to-port SIGN below is the one K-free statement here.")
+    print("   Nothing in this block enters a score, a sigma or a verdict bin.)")
+    clause = (
+        _quote_clause(face_ruling, MACH_RATIO_CLAUSE_NEEDLE)
+        if face_ruling is not None
+        else None
+    )
+    if clause is None:
+        print(
+            "   Faces: the CORE-BAND face fields are ratioed, not the "
+            "flux-tube ones; this overlay's ftavg_face_ruling states no "
+            "clause about ratioing the faces."
+        )
+    else:
+        print(
+            f"   Faces (quoted from ftavg_face_ruling): {clause} "
+            "This block therefore ratios the CORE-BAND face fields."
+        )
+    k_lo, k_hi = MACH_K_BRACKET
+    header = (
+        f"{'port':>6} {'z [cm]':>8} {'M model':>9} {'c_s conv':>11} "
+        f"{'R=Jup/Jdn':>10} {f'M @K={k_lo:g}':>11} {f'M @K={k_hi:g}':>11} "
+        f"{'n':>4}"
+    )
+    print(header)
+    print("-" * len(header))
+    for r in rows:
+        m_lo, m_hi = r["mach_measured"]
+        print(
+            f"{r['port']:>6} {r['z']:8.0f} {r['mach_model']:+9.3f} "
+            f"{r['wave_speed']:>11} {r['face_ratio']:10.3f} "
+            f"{m_lo:+11.3f} {m_hi:+11.3f} {r['n_face_samples']:4d}"
+        )
+    if len(rows) >= 2:
+        first, last = rows[0], rows[-1]
+        d_model = last["mach_model"] - first["mach_model"]
+        d_meas = last["mach_measured"][0] - first["mach_measured"][0]
+        print(
+            f"  z-trend sign (p{first['port']} -> p{last['port']}): "
+            f"model {_trend_sign(d_model)}, measured {_trend_sign(d_meas)} "
+            "(K-free)"
+        )
+    else:
+        print(
+            "  z-trend sign: not reported -- a trend needs two ports and only "
+            f"{len(rows)} was readable."
+        )
+
+
+def _trend_sign(delta):
+    """Return '+', '-' or '0' for a port-to-port change, or '?' if not finite."""
+    if not np.isfinite(delta):
+        return "?"
+    if delta > 0.0:
+        return "+"
+    if delta < 0.0:
+        return "-"
+    return "0"
+
+
 def _json_scalar(value):
     """Coerce a numpy scalar to its Python equivalent for ``json.dump``.
 
@@ -2644,6 +3150,12 @@ def json_payload(
     face_skip=None,
     interf_rows=(),
     interf_skip=None,
+    ztrend_rows=(),
+    ztrend_skip=None,
+    ztrend_window=None,
+    mach_rows=(),
+    mach_skip=None,
+    mach_window=None,
 ):
     """Return the machine-readable form of one scoring pass.
 
@@ -2667,6 +3179,13 @@ def json_payload(
     NaN is written as the bare ``NaN`` token (Python's ``json`` default), which
     Python reads back as ``float('nan')``; a strict JSON reader will reject it,
     which is the honest outcome for a row whose fit returned no value.
+
+    The plateau geomean z-trend and the two-face Mach block land under their
+    own top-level keys for the same reason the per-face rows do: they are an
+    instrument row and a disclosed-conditional reading, neither belongs inside
+    a scored stage, and a consumer of the scored blocks must not have to know
+    whether either was produced. When one was not, its ``skipped`` field
+    records the printed reason and its row list is empty.
     """
     tau_ratio_mean, _, tau_ratio_mean_ex_p50, _ = tau_ratio_means(decay_rows)
     return {
@@ -2689,6 +3208,28 @@ def json_payload(
                 "rows": list(interf_rows),
                 "skipped": interf_skip,
             },
+        },
+        "plateau_geomean_ztrend": {
+            "window_ms": (
+                None
+                if ztrend_window is None
+                else [float(ztrend_window[0]), float(ztrend_window[1])]
+            ),
+            "port_pairs": [list(pair) for pair in ZTREND_PORT_PAIRS],
+            "rows": list(ztrend_rows),
+            "skipped": ztrend_skip,
+            "scored": False,
+        },
+        "plateau_mach": {
+            "window_ms": (
+                None
+                if mach_window is None
+                else [float(mach_window[0]), float(mach_window[1])]
+            ),
+            "k_bracket": [float(MACH_K_BRACKET[0]), float(MACH_K_BRACKET[1])],
+            "rows": list(mach_rows),
+            "skipped": mach_skip,
+            "scored": False,
         },
     }
 
@@ -3033,6 +3574,35 @@ def main(argv=None):
         density_ftavg=args.density_ftavg,
     )
     _report(label, rows, es=args.es, plateau_ms=plateau_ms)
+    # The z-trend row belongs to the plateau reading and is computed only when
+    # that reading was asked for; without --window plateau there is no plateau
+    # stage output for it to sit in, and the report renders as it always did.
+    if plateau_ms is None:
+        ztrend_rows, ztrend_skip = (), (
+            "the plateau window was not requested -- this row reads the drive "
+            "plateau alone, which --window plateau selects"
+        )
+    else:
+        ztrend_rows, ztrend_skip = compare_plateau_geomean_ztrend(
+            result, overlay, window_ms=plateau_ms
+        )
+        _report_plateau_geomean_ztrend(ztrend_rows, ztrend_skip, plateau_ms)
+    # The Mach block reads the same drive plateau whichever stage (ii) domain
+    # was asked for: its measured side is a plateau product, and there is no
+    # full-coverage form of it to fall back to.
+    mach_rows, mach_skip = compare_plateau_mach(
+        result, scored_params, overlay, window_ms=PLATEAU_MS
+    )
+    _report_plateau_mach(
+        mach_rows,
+        mach_skip,
+        PLATEAU_MS,
+        face_ruling=(
+            overlay["ftavg_face_ruling"]
+            if "ftavg_face_ruling" in overlay
+            else None
+        ),
+    )
     decay_rows, window = compare_decay(result, overlay, window_ms=args.decay_window)
     _report_decay(decay_rows, window)
     face_rows, face_skip = compare_decay_faces(
@@ -3076,6 +3646,12 @@ def main(argv=None):
                     face_skip=face_skip,
                     interf_rows=interf_rows,
                     interf_skip=interf_skip,
+                    ztrend_rows=ztrend_rows,
+                    ztrend_skip=ztrend_skip,
+                    ztrend_window=plateau_ms,
+                    mach_rows=mach_rows,
+                    mach_skip=mach_skip,
+                    mach_window=PLATEAU_MS,
                 ),
                 handle,
                 indent=2,
