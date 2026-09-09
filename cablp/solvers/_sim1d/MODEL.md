@@ -779,16 +779,14 @@ $\phi_c+2k_BT_s/e$, and every route that launches a beam reads it there:
   exactly the climbed-away term — a prediction channel, not a closed budget.
   It closes at the reference configuration, where the climb is absent.
 - **Beer-Lambert deposition** heats the column through $P_\text{prim}$, which
-  already carries the gap-survival factor
-  $1-\eta\,b_\text{bypass}$, so only that share of the beam — and of its
-  enthalpy — ever enters the column and the reported on-beam power is netted
-  by the same factor. The deposition route therefore selects the
-  normalisation of that diagnostic, and nothing else; no rhs row, potential or
-  current reads the distinction, so it cannot move a trajectory on either
-  route. The anode-mesh climb above never applies here: `regime_vessel_node`
-  refuses any `beam_deposition_model` other than `"csda"` at construction, so
-  a nonzero climb and Beer-Lambert deposition
-  cannot coexist.
+  already carries the gap-survival factor $1-\eta\,b_\text{bypass}$, so only that
+  share of the beam — and of its enthalpy — ever enters the column and the
+  reported on-beam power is netted by the same factor. The deposition route
+  therefore selects the normalisation of that diagnostic, and nothing else; no
+  rhs row, potential or current reads the distinction, so it cannot move a
+  trajectory on either route. The anode-mesh climb above never applies here:
+  `regime_vessel_node` refuses any `beam_deposition_model` other than `"csda"` at
+  construction, so a nonzero climb and Beer-Lambert deposition cannot coexist.
 - **The off-dispatch voltage-driven beam assembly** (`solve_beam_system`, kept
   as the voltage-driven reference and reached by no live caller) cannot carry
   the placement at all: it takes no launch enthalpy and passes none to the
