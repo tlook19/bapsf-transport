@@ -28095,7 +28095,35 @@ def _case_cathode_ion_secondary_emission_current_balance(
         _se_sch += 1
     assert _se_sch == 3, _se_sch
 
-    # (vii) THE YIELD SCALES THE RELEASED CURRENT LINEARLY, which is the one
+    # (vii) THE OPEN CIRCUIT IS THE SAME SOLVE AT I_tot = 0, and armed it is
+    # the one state where the reduced target goes NEGATIVE: the sheath and the
+    # thermionic release must now return the secondaries as well, so the
+    # target is -I_see. The bracket stays valid for any legal yield because
+    # the electron lift exp(Lambda) ~ 1e2 dwarfs gamma_se <= 1 -- which is
+    # part of what the [0, 1] bound buys -- and this asserts that rather than
+    # trusting it. The floating potential FALLS as the yield rises, because a
+    # surface emitting more has to sit lower to collect the return current.
+    _se_float_prev = None
+    for _se_g in (0.0, 0.375, 1.0):
+        _se_fl = solve_idriven(
+            uni_cfg, plasma_probe, I_tot_A=0.0, schottky=True,
+            secondary_yield=_se_g,
+        )
+        # The reported I_tot is RECONSTRUCTED from the sheath, so it recovers
+        # the imposed zero to the scale of the currents it is built from --
+        # the module's own contract, unchanged by the secondaries.
+        assert abs(_se_fl.I_tot) <= 1.0e-12 * max(_se_fl.I_eth_star, 1.0), (
+            _se_g, _se_fl.I_tot, _se_fl.I_eth_star
+        )
+        assert abs(_se_fl.I_cathode_kirchhoff_residual) <= 1.0e-9 * max(
+            _se_fl.I_eth_star, 1.0
+        ), (_se_g, _se_fl.I_cathode_kirchhoff_residual)
+        assert _se_fl.I_see_A == _se_g * _se_fl.I_i, _se_g
+        if _se_float_prev is not None:
+            assert _se_fl.phi_c < _se_float_prev, (_se_g, _se_fl.phi_c)
+        _se_float_prev = _se_fl.phi_c
+
+    # (viii) THE YIELD SCALES THE RELEASED CURRENT LINEARLY, which is the one
     # property the closure asserts about gamma_se: it is a per-ion count, not
     # a fitted response.
     _se_a = solve_idriven(
