@@ -21,6 +21,7 @@ from cablp.cathode.circuit import (
     _compute_beam_bypass_fraction,
     _compute_l_b,
     beam_launch_potential_V,
+    beam_launched_current_A,
 )
 from cablp.plasma.params import LN_LAMBDA_MIN, c_log
 from cablp.cathode.circuit_idriven import (
@@ -602,6 +603,96 @@ def validate_cathode_solver_model(input_dict, input_flags):
     return model
 
 
+#: The ``cathode_solver_model`` the ion-induced secondary emission term is
+#: implemented for. EXPORTED so the refusal message and the threading read one
+#: name; a model stated twice is a model that drifts.
+CATHODE_ION_SECONDARY_SOLVER_MODEL = "current_driven"
+
+
+def validate_cathode_ion_secondary_emission(input_dict, input_flags):
+    """Validate and return the ion-induced secondary electron yield.
+
+    Returns ``gamma_se`` [electrons per arriving ion] when
+    ``cathode_ion_secondary_emission`` is armed and ``0.0`` when it is not --
+    the value every sheath solve reads as "no secondary emission", and the one
+    that leaves the solve's currents and potentials bit for bit what they were
+    before the term existed.
+
+    The ONE place the pair is checked. Called at solver construction, so a
+    misconfiguration is a construction error rather than a run that discovers
+    it at its first cathode solve, and again where the yield is threaded into
+    the solve, so a caller that never builds a ``LAPDSim1D`` gets the same
+    refusals. What it raises:
+
+    - a ``cathode_ion_secondary_emission`` that is not a real bool;
+    - ``cathode_ion_secondary_emission_yield`` set while the flag is off --
+      a silent inert control, which is forbidden;
+    - an armed yield that is not a finite float in [0, 1] -- the message names
+      that bracket;
+    - an armed flag without ``cathode_coupling``, which is where the ion
+      current the secondaries are proportional to comes from;
+    - an armed flag under any ``cathode_solver_model`` other than
+      ``"current_driven"`` -- the prescribed measured drive imposes both loop
+      quantities and derives the emitted current as the remainder, so there is
+      no sheath solve for the secondaries to enter and no consistent booking
+      for them; the message names the model.
+    """
+    armed = input_flags.get("cathode_ion_secondary_emission", False)
+    if not isinstance(armed, bool):
+        raise ValueError(
+            "cathode_ion_secondary_emission must be a bool (got "
+            f"{armed!r})"
+        )
+    yield_value = input_dict.get("cathode_ion_secondary_emission_yield")
+    if not armed:
+        if yield_value is not None:
+            raise ValueError(
+                "cathode_ion_secondary_emission_yield is set "
+                f"({yield_value!r}) while cathode_ion_secondary_emission is "
+                "off, so nothing would read it; arm the flag or clear the "
+                "yield (silent/inert controls are forbidden)"
+            )
+        return 0.0
+    # A real number, not a string that happens to parse: the yield is a
+    # physical quantity read straight into the current match, and a string
+    # there is a configuration that was never typed.
+    numeric = isinstance(yield_value, (int, float)) and not isinstance(
+        yield_value, bool
+    )
+    gamma_se = float(yield_value) if numeric else float("nan")
+    if not numeric or not math.isfinite(gamma_se) or not (
+        0.0 <= gamma_se <= 1.0
+    ):
+        raise ValueError(
+            "cathode_ion_secondary_emission_yield must be a finite float in "
+            "the bracket [0, 1] electrons released per arriving ion (got "
+            f"{yield_value!r}); the term has no default, so an armed run "
+            "names the yield it means"
+        )
+    if not bool(input_flags.get("cathode_coupling", False)):
+        raise ValueError(
+            "cathode_ion_secondary_emission cannot arm: this configuration "
+            "does not supply the cathode circuit solve (input_flags "
+            "cathode_coupling), which is where the ion current I_i the "
+            "released secondary current gamma_se*I_i is proportional to comes "
+            "from."
+        )
+    model = str(
+        input_dict.get("cathode_solver_model", CATHODE_SOLVER_MODELS[0])
+    )
+    if model != CATHODE_ION_SECONDARY_SOLVER_MODEL:
+        raise ValueError(
+            "cathode_ion_secondary_emission cannot arm under "
+            f"cathode_solver_model={model!r}: the term is implemented for "
+            f"{CATHODE_ION_SECONDARY_SOLVER_MODEL!r} only, where the sheath "
+            "root is a current match the secondaries enter; the prescribed "
+            "measured drive imposes both loop quantities and takes the "
+            "emitted current as the remainder, so there is no emission side "
+            "for them to join."
+        )
+    return gamma_se
+
+
 def apply_cathode_Rp_model(
     device_config, derived, geometry, input_dict, input_flags, n
 ):
@@ -959,6 +1050,12 @@ def idriven_result_evaluator(
     emitted_enthalpy_V = cathode_beam_launch_enthalpy_V(
         input_dict, input_flags
     )
+    # Resolved ONCE per evaluator, off the same dicts the device config was
+    # built from, so every current this evaluator is asked about releases the
+    # same secondaries. 0.0 unarmed.
+    secondary_yield = validate_cathode_ion_secondary_emission(
+        input_dict, input_flags
+    )
 
     def solve_at(I_A):
         # The available voltage is a function of I, so a bounded consumer's
@@ -994,6 +1091,7 @@ def idriven_result_evaluator(
             emitted_enthalpy_gap_netted=(
                 cathode_emitted_enthalpy_gap_netted(input_dict)
             ),
+            secondary_yield=secondary_yield,
         )
 
     return solve_at
@@ -1424,6 +1522,13 @@ def solve_cathode_boundary(
     emitted_enthalpy_V = cathode_beam_launch_enthalpy_V(
         input_dict, input_flags
     )
+    # The ion-induced secondary yield, resolved on the same pair of dicts and
+    # refusing the same misconfigurations the solver refused at construction.
+    # 0.0 unarmed, and the PRESCRIBED branch below is never reached armed --
+    # the validator refuses that solver model outright.
+    secondary_yield = validate_cathode_ion_secondary_emission(
+        input_dict, input_flags
+    )
     beam_cross_prev = np.asarray(beam_cross_prev, dtype=float)
     if beam_cross_prev.shape != (geometry.cells,):
         raise ValueError(
@@ -1543,6 +1648,7 @@ def solve_cathode_boundary(
             emitted_enthalpy_gap_netted=(
                 cathode_emitted_enthalpy_gap_netted(input_dict)
             ),
+            secondary_yield=secondary_yield,
         )
     beam_deposition = None
     beam_gap_ledger = None
@@ -2114,7 +2220,7 @@ def _csda_beam_deposition(
                 reservoir_deposition[end] = None
             continue
         launch, direction = beam_launch(geometry, end=end)
-        Gamma0 = result.I_eth_star / qe_SI
+        Gamma0 = beam_launched_current_A(result) / qe_SI
         # K7, per ray: phi_c is THIS cathode's accelerating drop -- the same
         # quantity the ray is launched at and the same one the sheath repels
         # returning electrons with -- so both the keyed birth energy and the

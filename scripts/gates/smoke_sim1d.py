@@ -27876,6 +27876,500 @@ def _case_far_end_double_ratio_empty_legend_guard():
 
 
 # ----------------------------------------------------------------------
+# cathode-ion-secondary-emission-unarmed
+# ----------------------------------------------------------------------
+@_case("cathode-ion-secondary-emission-unarmed")
+def _case_cathode_ion_secondary_emission_unarmed():
+    # AN UNARMED RUN IS THE RUN IT WAS. The pair of keys joins the templates,
+    # so the resolved-config snapshots rotate once (a key added to a template
+    # changes every canonical payload that contains it, which is exactly why
+    # the snapshot file is regenerated in the same commit) -- but nothing an
+    # unarmed run COMPUTES or WRITES moves: the flag defaults False, the yield
+    # defaults None, construction is warning-free, the sheath solve's
+    # secondary current is an exact zero, and the cathode dataset set is what
+    # it was before the key existed.
+    from cablp.solvers._sim1d.core.config import (
+        input_dict_template_1d,
+        input_flags_template_1d,
+    )
+    from cablp.solvers._sim1d.solver import (
+        _CATHODE_ION_SECONDARY_KEYS,
+        _CATHODE_RESULT_KEYS,
+        _cathode_result_keys,
+    )
+    from cablp.solvers._sim1d.physics.cathode import (
+        validate_cathode_ion_secondary_emission,
+    )
+    from cablp.cathode.circuit import beam_launched_current_A
+
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    import audit_sim1d_configs as _se_audit
+
+    # (i) THE KEYS ARE OWNED, AND BY THE RIGHT NAMESPACE. A params key filed
+    # into flags (or the reverse) is the historical silent-inert-control trap;
+    # both namespaces refuse an unknown key, so the only way to be sure the
+    # pair is reachable is to assert which template owns which.
+    assert input_flags_template_1d["cathode_ion_secondary_emission"] is False
+    assert (
+        input_dict_template_1d["cathode_ion_secondary_emission_yield"] is None
+    )
+    assert "cathode_ion_secondary_emission" not in input_dict_template_1d
+    assert (
+        "cathode_ion_secondary_emission_yield" not in input_flags_template_1d
+    )
+
+    # (ii) THE DEFAULT RESOLUTION IS AN EXACT ZERO -- the value every sheath
+    # solve reads as "no secondary emission" and the one that leaves its
+    # arithmetic bit for bit historical.
+    _se_params, _se_flags = default_config()
+    _se_gamma = validate_cathode_ion_secondary_emission(_se_params, _se_flags)
+    assert _se_gamma == 0.0 and isinstance(_se_gamma, float), _se_gamma
+
+    # (iii) CONSTRUCTION IS WARNING-FREE and the solve reports the computed
+    # zero on both new members.
+    _se_flags = dict(_se_flags)
+    _se_flags["neutral_equilibration"] = False
+    with warnings.catch_warnings(record=True) as _se_caught:
+        warnings.simplefilter("always")
+        _se_sim = LAPDSim1D(dict(_se_params), _se_flags)
+    assert not [
+        w for w in _se_caught
+        if "cathode_ion_secondary_emission" in str(w.message)
+    ], [str(w.message) for w in _se_caught]
+    # The cathode solve is built by the first RHS evaluation, not by
+    # construction, so ask for one.
+    _se_sim.rhs_terms()
+    _se_result = _se_sim._cathode_solve.beam_result.result
+    assert _se_result.I_see_A == 0.0, _se_result.I_see_A
+    assert _se_result.P_see_launched_W == 0.0, _se_result.P_see_launched_W
+    # ...and the launched flux is then the released thermionic current itself.
+    assert beam_launched_current_A(_se_result) == _se_result.I_eth_star
+
+    # (iv) THE DATASET SET IS UNCHANGED unarmed and gains exactly the two
+    # members armed, appended rather than inserted.
+    assert _cathode_result_keys({}) == _CATHODE_RESULT_KEYS
+    assert (
+        _cathode_result_keys({"cathode_ion_secondary_emission": False})
+        == _CATHODE_RESULT_KEYS
+    )
+    _se_armed_keys = _cathode_result_keys(
+        {"cathode_ion_secondary_emission": True}
+    )
+    assert _se_armed_keys == _CATHODE_RESULT_KEYS + _CATHODE_ION_SECONDARY_KEYS
+    assert _CATHODE_ION_SECONDARY_KEYS == ("I_see_A", "P_see_launched_W")
+    assert not set(_CATHODE_ION_SECONDARY_KEYS) & set(_CATHODE_RESULT_KEYS)
+
+    # (v) THE RESOLVED-CONFIG AUDIT AGREES WITH THE COMMITTED SNAPSHOTS. The
+    # snapshot file moved with the keys, so what is asserted is that the live
+    # resolution and the committed record are back in agreement -- a default
+    # or a precedence rule that changed alongside them would not be.
+    _se_snap = _se_audit.verify_snapshots()
+    assert _se_snap["flag_count"] == len(input_flags_template_1d)
+    assert _se_snap["parameter_count"] == len(input_dict_template_1d)
+
+    # (vi) THE SEED SIGNATURE IGNORES BOTH KEYS, which is what keeps a key
+    # addition from invalidating every stored neutral seed. They are listed
+    # TOGETHER on purpose: the equilibration pre-solve clears both, and
+    # clearing only one would turn a legal outer configuration into an inner
+    # refusal.
+    from cablp.solvers._sim1d.core.neutral_seed_cache import (
+        INERT_FLAG_KEYS,
+        INERT_PARAM_KEYS,
+    )
+    assert "cathode_ion_secondary_emission" in INERT_FLAG_KEYS
+    assert "cathode_ion_secondary_emission_yield" in INERT_PARAM_KEYS
+
+
+# ----------------------------------------------------------------------
+# cathode-ion-secondary-emission-refusals
+# ----------------------------------------------------------------------
+@_case("cathode-ion-secondary-emission-refusals")
+def _case_cathode_ion_secondary_emission_refusals():
+    # THE FOUR REFUSALS, each at CONSTRUCTION and each naming what is wrong.
+    # The term is presence-gated on a pair of keys, so every way the pair can
+    # be half-configured has to be a loud error rather than a run that
+    # silently carries no secondaries or reads a number nothing consumes.
+    def _se_build(mutate_params=None, mutate_flags=None):
+        params, flags = default_config()
+        flags["neutral_equilibration"] = False
+        if mutate_params:
+            mutate_params(params)
+        if mutate_flags:
+            mutate_flags(flags)
+        return params, flags
+
+    def _se_refuses(label, params, flags, *needles):
+        try:
+            LAPDSim1D(params, flags)
+        except ValueError as exc:
+            text = str(exc)
+            for needle in needles:
+                assert needle in text, (label, needle, text)
+        else:
+            raise AssertionError(f"construction accepted {label}")
+
+    # (i) THE YIELD SET WHILE THE FLAG IS OFF -- a control nothing reads.
+    _se_p, _se_f = _se_build(
+        mutate_params=lambda p: p.__setitem__(
+            "cathode_ion_secondary_emission_yield", 0.375
+        )
+    )
+    _se_refuses(
+        "a yield with the flag off", _se_p, _se_f,
+        "cathode_ion_secondary_emission_yield",
+        "silent/inert controls are forbidden",
+    )
+
+    # (ii) ARMED WITH A YIELD OUTSIDE THE BRACKET, or with no yield at all,
+    # or with something that is not a number. The message names the bracket,
+    # because "invalid" without the domain is a message that has to be
+    # debugged rather than read.
+    for _se_bad in (None, -1.0e-12, 1.0 + 1.0e-12, 1.5, float("nan"),
+                    float("inf"), "0.375", True):
+        _se_p, _se_f = _se_build(
+            mutate_params=lambda p, v=_se_bad: p.__setitem__(
+                "cathode_ion_secondary_emission_yield", v
+            ),
+            mutate_flags=lambda f: f.__setitem__(
+                "cathode_ion_secondary_emission", True
+            ),
+        )
+        _se_refuses(
+            f"an armed yield of {_se_bad!r}", _se_p, _se_f,
+            "cathode_ion_secondary_emission_yield",
+            "[0, 1]",
+        )
+    # ...and the endpoints of that bracket are ACCEPTED, so the refusal is a
+    # domain test and not an accidental exclusion of the closed interval.
+    for _se_edge in (0.0, 1.0, 0.375):
+        _se_p, _se_f = _se_build(
+            mutate_params=lambda p, v=_se_edge: p.__setitem__(
+                "cathode_ion_secondary_emission_yield", v
+            ),
+            mutate_flags=lambda f: f.__setitem__(
+                "cathode_ion_secondary_emission", True
+            ),
+        )
+        LAPDSim1D(_se_p, _se_f)
+
+    # (iii) ARMED WITHOUT THE CATHODE CIRCUIT SOLVE. The refusal names the
+    # missing flag and what the term needed it for.
+    _se_p, _se_f = _se_build(
+        mutate_params=lambda p: p.__setitem__(
+            "cathode_ion_secondary_emission_yield", 0.375
+        ),
+        mutate_flags=lambda f: f.update(
+            {"cathode_ion_secondary_emission": True, "cathode_coupling": False}
+        ),
+    )
+    _se_refuses(
+        "an armed term with no cathode solve", _se_p, _se_f,
+        "cannot arm", "cathode_coupling",
+    )
+
+    # (iv) ARMED UNDER A SOLVER MODEL THAT DOES NOT IMPLEMENT IT. The refusal
+    # names the model, and it fires BEFORE the prescribed drive is resolved --
+    # so the message is about the term rather than about whatever the trace
+    # resolution would have complained about first.
+    _se_p, _se_f = _se_build(
+        mutate_params=lambda p: p.update(
+            {
+                "cathode_ion_secondary_emission_yield": 0.375,
+                "cathode_solver_model": "prescribed_measured",
+            }
+        ),
+        mutate_flags=lambda f: f.__setitem__(
+            "cathode_ion_secondary_emission", True
+        ),
+    )
+    _se_refuses(
+        "an armed term under the prescribed drive", _se_p, _se_f,
+        "cannot arm", "prescribed_measured", "current_driven",
+    )
+
+    # (v) THE FLAG MUST BE A REAL BOOL: a 1 or a "true" there reads like a
+    # value and would arm the term through truthiness.
+    for _se_nonbool in (1, "true", 0.0):
+        _se_p, _se_f = _se_build(
+            mutate_flags=lambda f, v=_se_nonbool: f.__setitem__(
+                "cathode_ion_secondary_emission", v
+            ),
+        )
+        _se_refuses(
+            f"a non-bool flag {_se_nonbool!r}", _se_p, _se_f,
+            "cathode_ion_secondary_emission must be a bool",
+        )
+
+    # (vi) THE SHEATH SOLVE REFUSES ON ITS OWN. It is reachable from callers
+    # that never build a LAPDSim1D, so the domain is checked where the number
+    # is consumed as well as where it is configured.
+    from cablp.cathode.circuit import PlasmaState as _se_PlasmaState
+    from cablp.cathode.circuit_idriven import solve_idriven as _se_solve
+    from cablp.solvers._sim1d.physics.cathode import (
+        cathode_device_config as _se_device_config,
+    )
+    _se_dp, _se_df = default_config()
+    _se_cfg = _se_device_config(_se_dp, _se_df, 4.0)
+    _se_plasma = _se_PlasmaState(
+        T_e=8.0, n_e=4.0e12, n_n=1.5e13, sigma_b=4.0e-17
+    )
+    for _se_bad in (-0.1, 1.1, float("nan")):
+        try:
+            _se_solve(
+                _se_cfg, _se_plasma, I_tot_A=300.0, secondary_yield=_se_bad
+            )
+        except ValueError as _se_exc:
+            assert "secondary_yield" in str(_se_exc), _se_exc
+            assert "[0, 1]" in str(_se_exc), _se_exc
+        else:
+            raise AssertionError(f"the solve accepted {_se_bad!r}")
+
+
+# ----------------------------------------------------------------------
+# cathode-ion-secondary-emission-current-balance
+# ----------------------------------------------------------------------
+@_case("cathode-ion-secondary-emission-current-balance")
+def _case_cathode_ion_secondary_emission_current_balance(
+    plasma_probe, solve_idriven, uni_cfg
+):
+    from cablp.cathode.circuit import (
+        beam_launch_potential_V,
+        beam_launched_current_A,
+    )
+
+    # WHAT THE TERM IS, AT A SOLVED OPERATING POINT. The released secondary
+    # current is exactly the yield times the ion current the solve draws to
+    # the face, and the cathode Kirchhoff sum -- the real check on this solve
+    # -- still closes with it included, at the tolerance the closed audit
+    # already holds every driven solve to.
+    _se_gamma = 0.375
+    _se_points = 0
+    for _se_I in (20.0, 100.0, 300.0, 600.0, 1000.0):
+        _se_off = solve_idriven(uni_cfg, plasma_probe, I_tot_A=_se_I)
+        _se_on = solve_idriven(
+            uni_cfg, plasma_probe, I_tot_A=_se_I, secondary_yield=_se_gamma
+        )
+        # (i) I_see IS gamma * I_i, on the SAME ion current the unarmed solve
+        # drew -- the yield cannot quietly ride a different flux.
+        assert _se_on.I_i == _se_off.I_i, _se_I
+        assert abs(_se_on.I_see_A - _se_gamma * _se_on.I_i) <= 1.0e-12 * max(
+            abs(_se_on.I_see_A), 1.0
+        ), (_se_I, _se_on.I_see_A, _se_gamma * _se_on.I_i)
+        assert _se_on.I_see_A > 0.0, _se_I
+
+        # (ii) THE KIRCHHOFF SUM CLOSES WITH THE SECONDARIES IN IT, and it is
+        # the emitted side they joined: the residual is built from
+        # I_eth_star + I_see + I_i - I_e_ret and stays at the closed audit's
+        # row-relative tolerance.
+        assert abs(_se_on.I_cathode_kirchhoff_residual) <= 1.0e-9 * abs(
+            _se_on.I_tot
+        ), (_se_I, _se_on.I_cathode_kirchhoff_residual, _se_on.I_tot)
+        _se_sum = (
+            _se_on.I_eth_star + _se_on.I_see_A + _se_on.I_i - _se_on.I_e_ret
+        )
+        assert abs(_se_sum - _se_on.I_tot) <= 1.0e-9 * abs(_se_on.I_tot), (
+            _se_I, _se_sum, _se_on.I_tot
+        )
+        # ...and the imposed current is still what the device carries.
+        assert abs(_se_on.I_tot - _se_I) <= 1.0e-9 * _se_I, (
+            _se_I, _se_on.I_tot
+        )
+
+        # (iii) THE LOAD LEDGER STILL CLOSES: the cathode field work is priced
+        # at the LAUNCHED current, so P_load - P_load_ledger stays at zero.
+        assert abs(_se_on.P_load_residual) <= 1.0e-9 * abs(_se_on.P_load), (
+            _se_I, _se_on.P_load_residual, _se_on.P_load
+        )
+
+        # (iv) THE SHEATH SITS SHALLOWER. The secondaries supply part of the
+        # imposed current, so the sheath has less of it to carry and the fall
+        # is strictly smaller at the same loop current. This is the whole
+        # physical content of the term. The thermionic release is
+        # NON-INCREASING with it rather than strictly smaller, because on the
+        # bare temperature-limited branch J* = J_eth is a constant of the
+        # surface and does not depend on psi at all; where the release IS
+        # psi-dependent -- Schottky lowering, the shipped branch -- the
+        # decrease is strict, which the loop below asserts separately.
+        assert _se_on.phi_c < _se_off.phi_c, (
+            _se_I, _se_on.phi_c, _se_off.phi_c
+        )
+        assert _se_on.I_eth_star <= _se_off.I_eth_star, (
+            _se_I, _se_on.I_eth_star, _se_off.I_eth_star
+        )
+
+        # (v) THE SECONDARIES ARE LAUNCHED WITH THE PRIMARIES: the launched
+        # flux is the sum, and the power they carry is that flux's share of
+        # P_prim at the same launch potential and gap survival.
+        assert beam_launched_current_A(_se_on) == (
+            _se_on.I_eth_star + _se_on.I_see_A
+        )
+        _se_gap = 1.0 - uni_cfg.eta * _se_on.beam_bypass_fraction
+        _se_launch = beam_launch_potential_V(_se_on)
+        assert np.isclose(
+            _se_on.P_see_launched_W,
+            _se_gap * _se_on.I_see_A * _se_launch,
+            rtol=1e-12, atol=0.0,
+        ), (_se_I, _se_on.P_see_launched_W)
+        assert np.isclose(
+            _se_on.P_prim,
+            _se_gap * beam_launched_current_A(_se_on) * _se_launch,
+            rtol=1e-12, atol=0.0,
+        ), (_se_I, _se_on.P_prim)
+        assert 0.0 < _se_on.P_see_launched_W < _se_on.P_prim, _se_I
+        _se_points += 1
+    assert _se_points == 5, _se_points
+
+    # (vi) ON THE SHIPPED BRANCH the release follows the fall down: with
+    # Schottky lowering the surface field sets the effective barrier, so a
+    # shallower sheath extracts strictly less thermionic current -- and the
+    # ledger still closes there.
+    _se_sch = 0
+    for _se_I in (20.0, 300.0, 1000.0):
+        _se_off = solve_idriven(
+            uni_cfg, plasma_probe, I_tot_A=_se_I, schottky=True
+        )
+        _se_on = solve_idriven(
+            uni_cfg, plasma_probe, I_tot_A=_se_I, schottky=True,
+            secondary_yield=_se_gamma,
+        )
+        assert _se_on.phi_c < _se_off.phi_c, _se_I
+        assert _se_on.I_eth_star < _se_off.I_eth_star, (
+            _se_I, _se_on.I_eth_star, _se_off.I_eth_star
+        )
+        assert abs(_se_on.I_cathode_kirchhoff_residual) <= 1.0e-9 * abs(
+            _se_on.I_tot
+        ), (_se_I, _se_on.I_cathode_kirchhoff_residual)
+        _se_sch += 1
+    assert _se_sch == 3, _se_sch
+
+    # (vii) THE OPEN CIRCUIT IS THE SAME SOLVE AT I_tot = 0, and armed it is
+    # the one state where the reduced target goes NEGATIVE: the sheath and the
+    # thermionic release must now return the secondaries as well, so the
+    # target is -I_see. The bracket stays valid for any legal yield because
+    # the electron lift exp(Lambda) ~ 1e2 dwarfs gamma_se <= 1 -- which is
+    # part of what the [0, 1] bound buys -- and this asserts that rather than
+    # trusting it. The floating potential FALLS as the yield rises, because a
+    # surface emitting more has to sit lower to collect the return current.
+    _se_float_prev = None
+    for _se_g in (0.0, 0.375, 1.0):
+        _se_fl = solve_idriven(
+            uni_cfg, plasma_probe, I_tot_A=0.0, schottky=True,
+            secondary_yield=_se_g,
+        )
+        # The reported I_tot is RECONSTRUCTED from the sheath, so it recovers
+        # the imposed zero to the scale of the currents it is built from --
+        # the module's own contract, unchanged by the secondaries.
+        assert abs(_se_fl.I_tot) <= 1.0e-12 * max(_se_fl.I_eth_star, 1.0), (
+            _se_g, _se_fl.I_tot, _se_fl.I_eth_star
+        )
+        assert abs(_se_fl.I_cathode_kirchhoff_residual) <= 1.0e-9 * max(
+            _se_fl.I_eth_star, 1.0
+        ), (_se_g, _se_fl.I_cathode_kirchhoff_residual)
+        assert _se_fl.I_see_A == _se_g * _se_fl.I_i, _se_g
+        if _se_float_prev is not None:
+            assert _se_fl.phi_c < _se_float_prev, (_se_g, _se_fl.phi_c)
+        _se_float_prev = _se_fl.phi_c
+
+    # (viii) THE YIELD SCALES THE RELEASED CURRENT LINEARLY, which is the one
+    # property the closure asserts about gamma_se: it is a per-ion count, not
+    # a fitted response.
+    _se_a = solve_idriven(
+        uni_cfg, plasma_probe, I_tot_A=300.0, secondary_yield=0.30
+    )
+    _se_b = solve_idriven(
+        uni_cfg, plasma_probe, I_tot_A=300.0, secondary_yield=0.45
+    )
+    assert np.isclose(
+        _se_b.I_see_A / _se_a.I_see_A, 0.45 / 0.30, rtol=1e-12, atol=0.0
+    ), (_se_a.I_see_A, _se_b.I_see_A)
+
+
+# ----------------------------------------------------------------------
+# cathode-ion-secondary-emission-zero-yield-bit-exact
+# ----------------------------------------------------------------------
+@_case("cathode-ion-secondary-emission-zero-yield-bit-exact")
+def _case_cathode_ion_secondary_emission_zero_yield_bit_exact(
+    plasma_probe, solve_idriven, uni_cfg
+):
+    # A YIELD OF EXACTLY ZERO IS THE UNARMED SOLVE, BIT FOR BIT. This is the
+    # property that makes the term auditable: the armed path and the unarmed
+    # path are the same arithmetic evaluated at gamma_se = 0, so any
+    # difference a real yield produces is the physics and not the plumbing.
+    # Asserted on RAW REPR (not np.isclose) because the claim is bitwise.
+    for _se_I in (0.0, 20.0, 300.0, 1000.0):
+        _se_off = solve_idriven(uni_cfg, plasma_probe, I_tot_A=_se_I)
+        _se_zero = solve_idriven(
+            uni_cfg, plasma_probe, I_tot_A=_se_I, secondary_yield=0.0
+        )
+        _se_a = dataclasses.asdict(_se_off)
+        _se_b = dataclasses.asdict(_se_zero)
+        _se_diff = [k for k in _se_a if repr(_se_a[k]) != repr(_se_b[k])]
+        assert not _se_diff, (_se_I, _se_diff)
+        assert _se_zero.I_see_A == 0.0 and _se_zero.P_see_launched_W == 0.0
+
+    # ...and over a SHORT RUN of the solver, where the flag reaches the solve
+    # through the config rather than through a keyword: every RHS row the
+    # model packs is byte-equal, and so are the circuit currents and sheath
+    # potentials the cathode solve carried.
+    _se_params, _se_flags = default_config()
+    _se_flags = dict(_se_flags)
+    _se_flags["neutral_equilibration"] = False
+
+    def _se_build(armed):
+        params = dict(_se_params)
+        flags = dict(_se_flags)
+        flags["cathode_ion_secondary_emission"] = armed
+        params["cathode_ion_secondary_emission_yield"] = 0.0 if armed else None
+        return LAPDSim1D(params, flags)
+
+    _se_sim_off = _se_build(False)
+    _se_sim_on = _se_build(True)
+    _se_terms_off = _se_sim_off.rhs_terms()
+    _se_terms_on = _se_sim_on.rhs_terms()
+    assert set(_se_terms_off) == set(_se_terms_on)
+    assert _se_terms_off, "the model packed no RHS rows to compare"
+    for _se_name in _se_terms_off:
+        for _se_field in ("n", "nn", "M", "Ee", "Ei"):
+            _se_x = getattr(_se_terms_off[_se_name], _se_field, None)
+            _se_y = getattr(_se_terms_on[_se_name], _se_field, None)
+            if _se_x is None and _se_y is None:
+                continue
+            _se_x = np.asarray(_se_x, dtype=float)
+            _se_y = np.asarray(_se_y, dtype=float)
+            assert _se_x.tobytes() == _se_y.tobytes(), (_se_name, _se_field)
+
+    _se_r_off = _se_sim_off._cathode_solve.beam_result.result
+    _se_r_on = _se_sim_on._cathode_solve.beam_result.result
+    for _se_member in (
+        "phi_c", "phi_c_plus", "phi_c_minus", "phi_a", "V_p", "V_b",
+        "I_i", "I_e_ret", "I_eth_star", "I_tot", "P_prim", "P_ohmic",
+        "I_cathode_kirchhoff_residual", "beam_bypass_fraction", "l_b",
+    ):
+        assert repr(getattr(_se_r_off, _se_member)) == repr(
+            getattr(_se_r_on, _se_member)
+        ), _se_member
+    assert _se_r_on.I_see_A == 0.0
+    assert _se_r_on.P_see_launched_W == 0.0
+
+    # ...and stepping both sims the same short way keeps them byte-identical,
+    # so the equality is a property of the trajectory and not of one RHS
+    # evaluation at the initial state.
+    _se_res_off = _se_sim_off.run(t_end=2.0e-6)
+    _se_res_on = _se_sim_on.run(t_end=2.0e-6)
+    assert _se_res_off.y.shape == _se_res_on.y.shape, (
+        _se_res_off.y.shape, _se_res_on.y.shape
+    )
+    assert _se_res_off.y.tobytes() == _se_res_on.y.tobytes()
+    assert _se_res_off.time.tobytes() == _se_res_on.time.tobytes()
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -27884,7 +28378,7 @@ def _case_far_end_double_ratio_empty_legend_guard():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 157, "historical_stance": 64}
+_CASE_CENSUS = {"total": 161, "historical_stance": 64}
 
 
 def _assert_case_census():
