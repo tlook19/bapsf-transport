@@ -771,7 +771,13 @@ $\phi_c+2k_BT_s/e$, and every route that launches a beam reads it there:
 - **CSDA deposition** is handed the FULL released flux $I_\text{eth}^\star/e$
   at the launch potential and carries the gap itself, so the whole of
   $\Delta\cdot I_\text{eth}^\star$ is launched into the column and the
-  reported on-beam power is that.
+  reported on-beam power is that. $P_\text{prim}$ itself stays priced at the
+  launch potential BEFORE the anode-mesh climb (unlike the ray energy the
+  beam array's velocity and cross sections read), and the climbed-away
+  difference is not booked into any plasma or circuit power row. Under
+  `regime_vessel_node` that leaves the electrode-side power ledger open by
+  exactly the climbed-away term — a prediction channel, not a closed budget.
+  It closes at the reference configuration, where the climb is absent.
 - **Beer-Lambert deposition** heats the column through $P_\text{prim}$, which
   already carries the gap-survival factor
   $1-\eta\,b_\text{bypass}$, so only that share of the beam — and of its
@@ -779,12 +785,9 @@ $\phi_c+2k_BT_s/e$, and every route that launches a beam reads it there:
   by the same factor. The deposition route therefore selects the
   normalisation of that diagnostic, and nothing else; no rhs row, potential or
   current reads the distinction, so it cannot move a trajectory on either
-  route. $P_\text{prim}$ itself stays priced at the launch potential BEFORE
-  the anode-mesh climb (unlike the ray energy the beam array's velocity and
-  cross sections read), and the climbed-away difference is not booked into
-  any plasma or circuit power row. The anode-mesh climb above never applies
-  here: `regime_vessel_node` refuses any `beam_deposition_model` other than
-  `"csda"` at construction, so a nonzero climb and Beer-Lambert deposition
+  route. The anode-mesh climb above never applies here: `regime_vessel_node`
+  refuses any `beam_deposition_model` other than `"csda"` at construction, so
+  a nonzero climb and Beer-Lambert deposition
   cannot coexist.
 - **The off-dispatch voltage-driven beam assembly** (`solve_beam_system`, kept
   as the voltage-driven reference and reached by no live caller) cannot carry
