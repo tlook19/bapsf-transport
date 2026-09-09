@@ -3250,12 +3250,12 @@ def _report_plateau_geomean_ztrend(rows, skip_reason, window):
     print("   (Probe A note: p11 and p50 read PROBE A, not probe B -- probe")
     print("   A's own two face areas are probe B's face areas divided by an")
     print("   empirical factor 2.030, fixed on ES1 by a monotonicity prior")
-    print("   (n(p11) <= n(p21), n(p50) >= n(p41)); see the data repo's")
-    print("   config/may2026_probe_a_area_calibration.toml.  This is NOT a")
-    print("   chord calibration, so the per-port 10% calibration term above")
-    print("   does not describe these two ports, and the p50 level carries")
-    print("   an area factor UNBOUNDED by data.  The AREA-FREE content of")
-    print("   the p41->p50 trend is its DOUBLE RATIO against p11->p21.)")
+    print("   (n(p11) <= n(p21), n(p50) >= n(p41)).  This is NOT a")
+    print("   chord calibration, so the per-port 10% calibration")
+    print("   term above does not describe these two ports, and")
+    print("   the p50 level carries an area factor UNBOUNDED by")
+    print("   data.  The AREA-FREE content of the p41->p50 trend")
+    print("   is its DOUBLE RATIO against p11->p21.)")
     header = (
         f"{'pair':>11} {'z [cm]':>16} {'model':>9} {'geomean':>9} "
         f"{'upstream':>9} {'sigma_R':>9} {'factor':>8} {'n_t':>5}"
