@@ -403,12 +403,12 @@ def report_double_ratio(label, rows, skip_reason, overlay, window):
     print(f"PRE-REGISTERED BINS (threshold D_model/D_measured = "
           f"{DOUBLE_RATIO_BIN:.2f}):")
     print(
-        f"  > {DOUBLE_RATIO_BIN:.2f} in EVERY metric -> item 68's residual is "
-        "area-free; the x1.1-1.9 bracket is adopted"
+        f"  > {DOUBLE_RATIO_BIN:.2f} in EVERY metric -> the far-end residual "
+        "is area-free; the x1.1-1.9 bracket is adopted"
     )
     print(
-        f"  <= {DOUBLE_RATIO_BIN:.2f} in ANY metric -> the ratified x1.23 is "
-        "withdrawn to convention- and area-conditional"
+        f"  <= {DOUBLE_RATIO_BIN:.2f} in ANY metric -> the ratified x1.23 "
+        "far-end ratio is withdrawn to convention- and area-conditional"
     )
     below = [row["label"] for row in rows if row["D_ratio"] <= DOUBLE_RATIO_BIN]
     if below:
