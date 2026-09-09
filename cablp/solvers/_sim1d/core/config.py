@@ -306,18 +306,16 @@ def floor_defaults():
         Minimum neutral density used when flooring state [cm^-3].
     Te_floor:
         Minimum electron temperature recovered from conservative energy [eV].
+        Sits below the ADF11 0.2 eV edge so the afterglow can cool. Lowering it
+        toward the neutral-gas temperature is only meaningful together with the
+        sub-edge ADAS extension -- see the RETIRED recipe in the module note
+        below, which must not be run.
     Ti_floor:
         Minimum ion temperature recovered from conservative energy [eV].
         The Phelps ``ion_neutral_moment_closure`` collision operator is
         thermal-valid with no 0.1 eV clamp; the only consumer that required
         0.1 eV was the retired legacy IAEA CX table. All remaining Ti consumers
         (kappa_par_ion, pressure, sound speed) need only Ti > 0.
-    Te_floor:
-        Minimum electron temperature recovered from conservative energy [eV].
-        Sits below the ADF11 0.2 eV edge so the afterglow can cool. Lowering it
-        toward the neutral-gas temperature is only meaningful together with the
-        sub-edge ADAS extension -- see the RETIRED recipe in the module note
-        below, which must not be run.
     """
     return {
         "ne_floor": 1e8,
