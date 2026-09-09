@@ -956,21 +956,28 @@ def compare(
 #: ``"i_sweep/ap_L_cm2=0.050926 cm2"``. The ``L``/``R`` letter names the
 #: physical aperture the segment describes and is NOT what fixes its area-
 #: array column -- the two segments' left-to-right ORDER in the string is.
-_PAIRING_SEGMENT_RE = re.compile(r"^(\S+)/ap_[LR]_cm2=[0-9.eE+-]+ cm2$")
+_PAIRING_SEGMENT_RE = re.compile(r"^(\S+)/ap_[LR]_cm2=([0-9.eE+-]+) cm2$")
+
+#: Relative tolerance for matching a pairing-string segment's printed area
+#: value against the area array's stored float -- the string is written to
+#: 6 decimal places, so this only needs to absorb that rounding.
+_PAIRING_AREA_RTOL = 1.0e-4
 
 
-def _pairing_segment_channels(pairing_string):
-    """Return the two channel names of one exporter pairing string, in the
-    string's own left-to-right order.
+def _pairing_segments(pairing_string):
+    """Return the two ``(channel, area_value)`` segments of one exporter
+    pairing string, in the string's own left-to-right order.
 
     That order is what the exporter wrote into the paired area array's
-    columns -- segment 0's value is column 0, segment 1's value is column 1
-    -- so the returned tuple's order is exactly the area array's column
-    order, whichever physical face (upstream/downstream, L/R) each segment
-    happens to name for this port.
+    columns when it built the string FROM that array -- segment 0 is column
+    0, segment 1 is column 1 -- so the returned tuple's order is the area
+    array's column order, whichever physical face (upstream/downstream,
+    L/R) each segment happens to name for this port. This function reads
+    only the string; whether a given area array still AGREES with it is a
+    separate, numeric check (``_assert_upstream_is_area_column0`` below).
     """
     segments = [s.strip() for s in str(pairing_string).split(" x ")]
-    channels = []
+    parsed = []
     for seg in segments:
         m = _PAIRING_SEGMENT_RE.match(seg)
         if m is None:
@@ -979,8 +986,8 @@ def _pairing_segment_channels(pairing_string):
                 f"{pairing_string!r} -- expected '<channel>/ap_L_cm2=<v> cm2' "
                 "or '<channel>/ap_R_cm2=<v> cm2'"
             )
-        channels.append(m.group(1))
-    return tuple(channels)
+        parsed.append((m.group(1), float(m.group(2))))
+    return tuple(parsed)
 
 
 def _assert_upstream_is_area_column0(family, ports, pairing, area, channel_ports, channel):
@@ -990,16 +997,20 @@ def _assert_upstream_is_area_column0(family, ports, pairing, area, channel_ports
     The scorer normalizes an upstream trace by ``area[:, 0]`` on the strength
     of the exporter's own pairing bookkeeping -- ``pairing[i]`` records that
     port's two probe faces as "<chanA>/ap_?_cm2=<vA> cm2 x
-    <chanB>/ap_?_cm2=<vB> cm2", with the two segments' ORDER matching the
-    area array's column order, and ``channel[i]`` (keyed by ``channel_ports``,
-    not assumed to share ``ports``' order) names which channel IS the
-    upstream face. Column 0 is upstream only when the upstream channel is
-    the pairing string's FIRST segment; this is checked per port, not
-    assumed to hold everywhere from one port, because the exporter is known
-    to flip the segment order port-by-port (ES3 p11 rotates while its
-    siblings do not) while keeping the channel record correct -- a future
-    export that flips the columns WITHOUT flipping the channel record is
-    exactly the silent mis-normalization this guards against.
+    <chanB>/ap_?_cm2=<vB> cm2", and ``channel[i]`` (keyed by
+    ``channel_ports``, not assumed to share ``ports``' order) names which
+    channel IS the upstream face. Two independent things have to hold for
+    column 0 to be trustworthy as upstream, and this checks BOTH: (1) the
+    upstream channel must be the pairing string's FIRST segment (checked per
+    port, not assumed to hold everywhere from one port, because the exporter
+    is known to flip the segment order port-by-port -- ES3 p11 rotates while
+    its siblings do not -- while keeping the channel record correct), and
+    (2) ``area[i, 0]`` must NUMERICALLY equal that first segment's own
+    printed value, so an area array edited independently of its pairing
+    string (columns reordered without touching the string) is caught even
+    though the channel-vs-segment-order check alone would not see it. A
+    future export that silently decouples the two is exactly what this
+    guards against.
     """
     channel_by_port = {int(p): str(c) for p, c in zip(channel_ports, channel)}
     for i, port in enumerate(ports):
@@ -1007,9 +1018,16 @@ def _assert_upstream_is_area_column0(family, ports, pairing, area, channel_ports
         if port not in channel_by_port:
             continue
         upstream_channel = channel_by_port[port]
-        seg_channels = _pairing_segment_channels(pairing[i])
-        row_area = np.asarray(area[i]).tolist()
-        if upstream_channel not in seg_channels or seg_channels[0] != upstream_channel:
+        segments = _pairing_segments(pairing[i])
+        seg_channels = tuple(c for c, _ in segments)
+        row_area = np.asarray(area[i], dtype=float).tolist()
+        first_channel_ok = (
+            upstream_channel in seg_channels and seg_channels[0] == upstream_channel
+        )
+        area_matches_ok = first_channel_ok and abs(
+            row_area[0] - segments[0][1]
+        ) <= _PAIRING_AREA_RTOL * max(abs(segments[0][1]), 1.0e-30)
+        if not area_matches_ok:
             raise ValueError(
                 f"overlay {family} port {port}: upstream-face channel "
                 f"{upstream_channel!r} is not area column 0 -- pairing "
