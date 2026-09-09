@@ -420,6 +420,9 @@ The fluid stages run at a loop current frozen over the step;
 produces matches the one it ran at to `circuit_picard_tol_rel` relative to
 $\max(\lvert I\rvert,1\ \mathrm{A})$, a snapshot/restore pair restoring every
 step-mutated attribute exactly so a rejected iteration leaves no trace.
+The scheme's order matters here: a backward-Euler (first-order) fold of the
+same loop equation is not dt-converged at production time steps, while the
+TR-BDF2 (second-order) fold is.
 
 **The tail and the open circuit.** Once the source is switched off the loop is
 integrated by that same advance at $V_\text{src}=0$ while it still has current

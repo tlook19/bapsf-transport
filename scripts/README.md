@@ -53,9 +53,11 @@ when its job is to *produce a trajectory*.
 
 **`score/`** — measurement of a saved run against the experiment.
 `compare_sim1d_es1.py` is the scorer of record and `fingerprints_sim1d.py` the
-drive-side transfer check; the plotters render comparison-to-data figures, and
-the radiation and power-ledger tools read a trajectory and report physics from
-it. A file belongs here when it *consumes* an h5 and says how the model did.
+drive-side regression check (in the prescribed-drive mode it also prints the
+response rows an imposed drive does not fix); the plotters render
+comparison-to-data figures, and the radiation and power-ledger tools read a
+trajectory and report physics from it. A file belongs here when it *consumes*
+an h5 and says how the model did.
 
 **`stance/`** — everything that decides what the operating point IS.
 `stance_config.py` resolves a configuration by committed name or by file
