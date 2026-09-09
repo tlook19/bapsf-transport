@@ -952,6 +952,92 @@ def compare(
     return rows
 
 
+#: Matches one segment of an exporter pairing string, e.g.
+#: ``"i_sweep/ap_L_cm2=0.050926 cm2"``. The ``L``/``R`` letter names the
+#: physical aperture the segment describes and is NOT what fixes its area-
+#: array column -- the two segments' left-to-right ORDER in the string is.
+_PAIRING_SEGMENT_RE = re.compile(r"^(\S+)/ap_[LR]_cm2=([0-9.eE+-]+) cm2$")
+
+#: Relative tolerance for matching a pairing-string segment's printed area
+#: value against the area array's stored float -- the string is written to
+#: 6 decimal places, so this only needs to absorb that rounding.
+_PAIRING_AREA_RTOL = 1.0e-4
+
+
+def _pairing_segments(pairing_string):
+    """Return the two ``(channel, area_value)`` segments of one exporter
+    pairing string, in the string's own left-to-right order.
+
+    That order is what the exporter wrote into the paired area array's
+    columns when it built the string FROM that array -- segment 0 is column
+    0, segment 1 is column 1 -- so the returned tuple's order is the area
+    array's column order, whichever physical face (upstream/downstream,
+    L/R) each segment happens to name for this port. This function reads
+    only the string; whether a given area array still AGREES with it is a
+    separate, numeric check (``_assert_upstream_is_area_column0`` below).
+    """
+    segments = [s.strip() for s in str(pairing_string).split(" x ")]
+    parsed = []
+    for seg in segments:
+        m = _PAIRING_SEGMENT_RE.match(seg)
+        if m is None:
+            raise ValueError(
+                f"cannot parse overlay pairing segment {seg!r} out of "
+                f"{pairing_string!r} -- expected '<channel>/ap_L_cm2=<v> cm2' "
+                "or '<channel>/ap_R_cm2=<v> cm2'"
+            )
+        parsed.append((m.group(1), float(m.group(2))))
+    return tuple(parsed)
+
+
+def _assert_upstream_is_area_column0(family, ports, pairing, area, channel_ports, channel):
+    """Refuse loudly unless area column 0 is the upstream probe face, for
+    every port of one overlay family.
+
+    The scorer normalizes an upstream trace by ``area[:, 0]`` on the strength
+    of the exporter's own pairing bookkeeping -- ``pairing[i]`` records that
+    port's two probe faces as "<chanA>/ap_?_cm2=<vA> cm2 x
+    <chanB>/ap_?_cm2=<vB> cm2", and ``channel[i]`` (keyed by
+    ``channel_ports``, not assumed to share ``ports``' order) names which
+    channel IS the upstream face. Two independent things have to hold for
+    column 0 to be trustworthy as upstream, and this checks BOTH: (1) the
+    upstream channel must be the pairing string's FIRST segment (checked per
+    port, not assumed to hold everywhere from one port, because the exporter
+    is known to flip the segment order port-by-port -- ES3 p11 rotates while
+    its siblings do not -- while keeping the channel record correct), and
+    (2) ``area[i, 0]`` must NUMERICALLY equal that first segment's own
+    printed value, so an area array edited independently of its pairing
+    string (columns reordered without touching the string) is caught even
+    though the channel-vs-segment-order check alone would not see it. A
+    future export that silently decouples the two is exactly what this
+    guards against.
+    """
+    channel_by_port = {int(p): str(c) for p, c in zip(channel_ports, channel)}
+    for i, port in enumerate(ports):
+        port = int(port)
+        if port not in channel_by_port:
+            continue
+        upstream_channel = channel_by_port[port]
+        segments = _pairing_segments(pairing[i])
+        seg_channels = tuple(c for c, _ in segments)
+        row_area = np.asarray(area[i], dtype=float).tolist()
+        first_channel_ok = (
+            upstream_channel in seg_channels and seg_channels[0] == upstream_channel
+        )
+        area_matches_ok = first_channel_ok and abs(
+            row_area[0] - segments[0][1]
+        ) <= _PAIRING_AREA_RTOL * max(abs(segments[0][1]), 1.0e-30)
+        if not area_matches_ok:
+            raise ValueError(
+                f"overlay {family} port {port}: upstream-face channel "
+                f"{upstream_channel!r} is not area column 0 -- pairing "
+                f"string {str(pairing[i])!r} names segments {seg_channels!r} "
+                f"in that order and area columns are {row_area!r}; the "
+                "scorer assumes column 0 is the upstream face and refuses "
+                "rather than silently mis-normalize"
+            )
+
+
 # --- stage (ii) plateau extensions: the geomean-Isat z-trend INSTRUMENT ROW
 # and the DISCLOSED-CONDITIONAL two-face Mach block.
 #
@@ -978,8 +1064,10 @@ ZTREND_GEOMEAN_KEYS = (
     "isat_ftavg_geomean_time_ms",
     "isat_ftavg_geomean_port",
     "isat_ftavg_geomean_area_cm2",
+    "isat_ftavg_geomean_pairing",
     "isat_ftavg_upstream_a",
     "isat_ftavg_upstream_port",
+    "isat_ftavg_upstream_source_channel",
 )
 
 #: Ordered (near, far) port pairs whose plateau geomean ratio the z-trend row
@@ -1097,6 +1185,14 @@ def compare_plateau_geomean_ztrend(result, overlay, window_ms=None):
     geo_areas = np.asarray(overlay["isat_ftavg_geomean_area_cm2"], dtype=float)
     upstream_a = np.asarray(overlay["isat_ftavg_upstream_a"], dtype=float)
     upstream_ports = [int(p) for p in np.asarray(overlay["isat_ftavg_upstream_port"])]
+    _assert_upstream_is_area_column0(
+        "isat_ftavg",
+        geo_ports,
+        np.asarray(overlay["isat_ftavg_geomean_pairing"]),
+        geo_areas,
+        upstream_ports,
+        np.asarray(overlay["isat_ftavg_upstream_source_channel"]),
+    )
     z_by_port = {
         int(p): float(z)
         for p, z in zip(
@@ -1204,8 +1300,11 @@ MACH_FACE_KEYS = (
     "isat_ftavg_upstream_core_a",
     "isat_ftavg_core_a",
     "isat_ftavg_geomean_area_cm2",
+    "isat_ftavg_geomean_pairing",
     "isat_ftavg_geomean_time_ms",
     "isat_ftavg_geomean_port",
+    "isat_ftavg_upstream_port",
+    "isat_ftavg_upstream_source_channel",
 )
 
 #: The two-face Mach-probe calibration constant K, as a BRACKET rather than a
@@ -1243,7 +1342,11 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
     nearest the port, with ``c_s`` evaluated by the solver's own
     ``plasma_wave_speed`` under the run's configured ``hyperbolic_wave_speed``
     convention, so the reported number is the model's own Mach and not a
-    second convention invented here.
+    second convention invented here. Each row also carries
+    ``mach_model_probe``, the SAME ``u`` and ``Te`` evaluated instead in the
+    PROBE convention ``u / sqrt(Te / m_i)`` (``plasma_wave_speed``'s
+    ``"isothermal"`` branch) -- printed beside the run-convention model Mach
+    so a reader can tell which sound-speed convention a given number uses.
 
     MEASURED side: ``M = ln(R) / K``, where ``R = J_up / J_dn`` is the ratio of
     the two probe faces' AREA-NORMALIZED core-band plateau current densities
@@ -1297,6 +1400,14 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
     dn = np.asarray(overlay["isat_ftavg_core_a"], dtype=float)
     areas = np.asarray(overlay["isat_ftavg_geomean_area_cm2"], dtype=float)
     face_ports = [int(p) for p in np.asarray(overlay["isat_ftavg_geomean_port"])]
+    _assert_upstream_is_area_column0(
+        "isat_ftavg",
+        face_ports,
+        np.asarray(overlay["isat_ftavg_geomean_pairing"]),
+        areas,
+        [int(p) for p in np.asarray(overlay["isat_ftavg_upstream_port"])],
+        np.asarray(overlay["isat_ftavg_upstream_source_channel"]),
+    )
     z_by_port = {
         int(p): float(z)
         for p, z in zip(
@@ -1315,6 +1426,20 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
     )
     with np.errstate(divide="ignore", invalid="ignore"):
         mach_model = np.where(cs_model > 0.0, u_model / cs_model, np.nan)
+    # PROBE convention, u/sqrt(Te/m_i) -- plasma_wave_speed's "isothermal"
+    # branch is a bit-exact passthrough of that formula, from the SAME u
+    # and Te the run convention above uses. Not the model's own read of
+    # itself; a second, fixed convention printed beside it for comparison.
+    cs_model_probe = plasma_wave_speed(
+        np.asarray(result.Te, dtype=float),
+        np.asarray(result.Ti, dtype=float),
+        MACH_MU,
+        wave_speed="isothermal",
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mach_model_probe = np.where(
+            cs_model_probe > 0.0, u_model / cs_model_probe, np.nan
+        )
     in_model = (
         (t_model_ms >= float(window[0]))
         & (t_model_ms <= float(window[1]))
@@ -1351,6 +1476,9 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
                 "port": int(port),
                 "z": z_by_port[port],
                 "mach_model": float(np.mean(model_col[model_good])),
+                "mach_model_probe": float(
+                    np.mean(mach_model_probe[:, iz][in_model][model_good])
+                ),
                 "wave_speed": str(wave_speed),
                 "face_ratio": ratio,
                 "mach_measured": [
@@ -1787,6 +1915,14 @@ def compare_decay_faces(overlay, decay_rows, window_ms=DECAY_WINDOW_MS):
     geo = np.asarray(overlay["isat_decay_geomean_a_per_cm2"], dtype=float)
     areas = np.asarray(overlay["isat_decay_geomean_area_cm2"], dtype=float)
     ports = list(np.asarray(overlay["isat_decay_port"], dtype=int))
+    _assert_upstream_is_area_column0(
+        "isat_decay",
+        ports,
+        np.asarray(overlay["isat_decay_geomean_pairing"]),
+        areas,
+        ports,
+        np.asarray(overlay["isat_decay_source_channel"]),
+    )
 
     window_mask = (t_exp >= t0) & (t_exp <= t1)
     tail_mask = t_exp >= t_exp.max() - 5.0
@@ -3111,6 +3247,15 @@ def _report_plateau_geomean_ztrend(rows, skip_reason, window):
     print("   |dev|/sigma_R (kept in the JSON, not printed here) is an UPPER")
     print("   bound on the true deviation, not a lower one.  The model side")
     print("   carries no error bar.)")
+    print("   (Probe A note: p11 and p50 read PROBE A, not probe B -- probe")
+    print("   A's own two face areas are probe B's face areas divided by an")
+    print("   empirical factor 2.030, fixed on ES1 by a monotonicity prior")
+    print("   (n(p11) <= n(p21), n(p50) >= n(p41)); see the data repo's")
+    print("   config/may2026_probe_a_area_calibration.toml.  This is NOT a")
+    print("   chord calibration, so the per-port 10% calibration term above")
+    print("   does not describe these two ports, and the p50 level carries")
+    print("   an area factor UNBOUNDED by data.  The AREA-FREE content of")
+    print("   the p41->p50 trend is its DOUBLE RATIO against p11->p21.)")
     header = (
         f"{'pair':>11} {'z [cm]':>16} {'model':>9} {'geomean':>9} "
         f"{'upstream':>9} {'sigma_R':>9} {'factor':>8} {'n_t':>5}"
@@ -3138,7 +3283,10 @@ def _report_plateau_mach(rows, skip_reason, window, face_ruling=None, show_level
     measured LEVEL depends on the unresolved K bracket and an untreated
     probe-shadow term. Passing ``show_levels=True`` additionally prints the
     level table (model M, the face ratio R, and measured M at both
-    ``MACH_K_BRACKET`` ends). Either way ``rows`` and this function's caller's
+    ``MACH_K_BRACKET`` ends), with each port's row followed by that same
+    row's ``mach_model_probe`` on its own line, labelled ``M probe``, so the
+    run-convention and probe-convention model Mach are never printed without
+    their own name attached. Either way ``rows`` and this function's caller's
     JSON payload carry every field -- the JSON is machine-read and the block
     is already marked ``scored: false``, so this flag governs only what
     reaches the human-readable transcript, never what is recorded.
@@ -3183,6 +3331,17 @@ def _report_plateau_mach(rows, skip_reason, window, face_ruling=None, show_level
             f"   Faces (quoted from ftavg_face_ruling): {clause} "
             "This block therefore ratios the CORE-BAND face fields."
         )
+    run_wave_speed = rows[0]["wave_speed"]
+    print("   (Sound-speed convention: MODEL M above is the run's own Mach,")
+    print(
+        f"   u/c_s, with c_s this run's configured {run_wave_speed!r} "
+        "convention (plasma_wave_speed) -- 'adiabatic' is"
+    )
+    print("   sqrt((5/3)(Te+Ti)/m_i), 'isothermal' is sqrt(Te/m_i).  The")
+    print("   PROBE convention is always u/sqrt(Te/m_i) (the isothermal Bohm")
+    print("   speed) regardless of the run's own convention; under")
+    print("   --mach-levels each port's row is followed by that same u and")
+    print("   Te evaluated in the PROBE convention, labelled 'M probe'.)")
     if show_levels:
         k_lo, k_hi = MACH_K_BRACKET
         header = (
@@ -3199,6 +3358,9 @@ def _report_plateau_mach(rows, skip_reason, window, face_ruling=None, show_level
                 f"{r['wave_speed']:>11} {r['face_ratio']:10.3f} "
                 f"{m_lo:+11.3f} {m_hi:+11.3f} {r['n_face_samples']:7d} "
                 f"{r['n_model_samples']:8d}"
+            )
+            print(
+                f"       M probe (u/sqrt(Te/m_i)): {r['mach_model_probe']:+.3f}"
             )
     if len(rows) >= 2:
         for a, b in zip(rows, rows[1:]):
