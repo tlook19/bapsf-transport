@@ -27876,6 +27876,56 @@ def _case_far_end_double_ratio_empty_legend_guard():
 
 
 # ----------------------------------------------------------------------
+# far-end-double-ratio-shared-keys-skip
+# ----------------------------------------------------------------------
+@_case("far-end-double-ratio-shared-keys-skip", provides=())
+def _case_far_end_double_ratio_shared_keys_skip():
+    """A missing shared z-lookup key must skip cleanly, not raise.
+
+    ``double_ratio_rows`` builds ``z_by_port`` from the overlay's ``port``
+    and ``z_cm`` columns unconditionally -- every metric family reads it, so
+    it is not one of the per-family ``FAMILY_OVERLAY_KEYS``. Before the
+    shared-key prerequisite was hoisted out of ``DENSITY_OVERLAY_KEYS``, an
+    overlay missing ``port`` alone would skip the density family (``port``
+    sat in ``DENSITY_OVERLAY_KEYS``) but leave the J family looking present,
+    so the function fell through to ``z_by_port`` and raised ``KeyError:
+    'port'`` instead of returning a clean skip. This overlay keeps every
+    other key (both families' own fields intact) and removes only ``port``.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    import far_end_double_ratio as _fedr
+
+    overlay_npz = np.load(
+        _Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
+        allow_pickle=False,
+    )
+    base_overlay = {key: overlay_npz[key] for key in overlay_npz.files}
+
+    z = np.asarray(base_overlay["z_cm"], dtype=float)
+    t_s = np.arange(0.0, 25.0e-3 + 1.0e-9, 1.0e-4)
+    synthetic = SimpleNamespace(
+        time=t_s,
+        phase=np.array(["main_discharge"] * t_s.size),
+        z_cm=z,
+        n=1.0e13 * np.ones((t_s.size, z.size)),
+        Te=4.0 * np.ones((t_s.size, z.size)),
+    )
+
+    port_absent = {k: v for k, v in base_overlay.items() if k != "port"}
+
+    rows, skip_reason = _fedr.double_ratio_rows(synthetic, port_absent)
+    assert rows == [], rows
+    assert skip_reason is not None
+    assert "port" in skip_reason, skip_reason
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -27884,7 +27934,7 @@ def _case_far_end_double_ratio_empty_legend_guard():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 157, "historical_stance": 64}
+_CASE_CENSUS = {"total": 158, "historical_stance": 64}
 
 
 def _assert_case_census():

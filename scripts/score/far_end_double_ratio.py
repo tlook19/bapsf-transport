@@ -101,14 +101,21 @@ J_OVERLAY_KEYS = (
     "isat_ftavg_upstream_source_channel",
 )
 
-#: Overlay keys the density metrics read.
+#: Overlay keys the density metrics read, beyond the shared z-lookup keys
+#: below (``port``, ``z_cm``).
 DENSITY_OVERLAY_KEYS = (
-    "port",
-    "z_cm",
     "density_time_ms",
     "density_mean_cm3",
     "density_ftavg_cm3",
 )
+
+#: The z-lookup keys every metric family needs -- ``z_by_port`` is built once,
+#: shared across both families, before any per-family gating runs. A missing
+#: key here is checked as an all-or-nothing prerequisite: unlike a
+#: per-family field (which withholds only that family's rows), a missing
+#: shared key would otherwise raise building ``z_by_port`` rather than
+#: skipping cleanly.
+SHARED_OVERLAY_KEYS = ("port", "z_cm")
 
 #: One metric row: (id, printed label, model comparand, measured convention
 #: line). ``model`` is "n" for the density metrics and "Isat" for the J
@@ -215,7 +222,10 @@ def double_ratio_rows(result, overlay, window_ms=None):
     A metric whose overlay fields or ports are not all present is skipped with
     its own reason rather than silently dropped; ``skip_reason`` is a printable
     sentence and ``rows`` is empty only when NO metric could be formed. The
-    density and J (Isat) overlay key families are gated INDEPENDENTLY: a
+    shared z-lookup keys (``port``, ``z_cm``) are an ALL-OR-NOTHING
+    prerequisite checked first -- every metric needs them, so a missing one
+    skips every row with one reason rather than a per-family skip. Past that,
+    the density and J (Isat) overlay key families are gated INDEPENDENTLY: a
     family with all its keys present is read, and a family with a missing key
     is skipped on its own, naming the missing keys -- one family's absence
     never withholds the other's metrics.
@@ -224,6 +234,14 @@ def double_ratio_rows(result, overlay, window_ms=None):
     commensurate with the scored plateau rows.
     """
     window = _cmp.PLATEAU_MS if window_ms is None else window_ms
+    missing_shared = _cmp._missing_overlay_keys(overlay, SHARED_OVERLAY_KEYS)
+    if missing_shared:
+        return [], (
+            f"this overlay (schema v{_cmp._overlay_vintage(overlay)}) "
+            "carries no " + ", ".join(missing_shared) + " -- the far-end "
+            "double ratio's z-lookup is shared by every metric family, so a "
+            "missing shared key withholds all of them"
+        )
     missing_by_family = {
         family: _cmp._missing_overlay_keys(overlay, keys)
         for family, keys in FAMILY_OVERLAY_KEYS.items()
