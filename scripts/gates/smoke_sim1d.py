@@ -27722,6 +27722,160 @@ def _case_far_end_double_ratio_area_cancels():
 
 
 # ----------------------------------------------------------------------
+# far-end-double-ratio-per-family-gating
+# ----------------------------------------------------------------------
+@_case("far-end-double-ratio-per-family-gating")
+def _case_far_end_double_ratio_per_family_gating():
+    """One overlay family's absence must not withhold the other's rows.
+
+    ``double_ratio_rows`` used to gate the density and J (Isat) metric
+    families as one all-or-nothing union: a missing J-family key dropped the
+    density metrics too, against the function's own docstring ("rows is
+    empty only when NO metric could be formed"). This checks the fix in both
+    directions on synthetic overlays built from the real ES1 overlay's key
+    set with one family's keys deleted.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    import far_end_double_ratio as _fedr
+
+    overlay_npz = np.load(
+        _Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
+        allow_pickle=False,
+    )
+    base_overlay = {key: overlay_npz[key] for key in overlay_npz.files}
+
+    z = np.asarray(base_overlay["z_cm"], dtype=float)
+    t_s = np.arange(0.0, 25.0e-3 + 1.0e-9, 1.0e-4)
+    shape = 1.0 + 0.3 * np.cos(z / 600.0)[None, :]
+    ramp = (1.0 + 0.05 * np.sin(t_s * 400.0))[:, None]
+    synthetic = SimpleNamespace(
+        time=t_s,
+        phase=np.array(["main_discharge"] * t_s.size),
+        z_cm=z,
+        n=1.0e13 * shape * ramp,
+        Te=4.0 * shape**2 * ramp,
+    )
+
+    # J family absent (density's port/z_cm identity columns kept, since they
+    # are the shared z-lookup every metric reads, density or J alike).
+    j_absent = {
+        k: v for k, v in base_overlay.items() if k not in _fedr.J_OVERLAY_KEYS
+    }
+    j_absent_rows, j_absent_skip = _fedr.double_ratio_rows(synthetic, j_absent)
+    assert {r["metric"] for r in j_absent_rows} == {"n", "n_ft"}, j_absent_rows
+    assert j_absent_skip is not None and "J family" in j_absent_skip, (
+        j_absent_skip
+    )
+    for key in _fedr.J_OVERLAY_KEYS:
+        assert key in j_absent_skip, (key, j_absent_skip)
+
+    # report_double_ratio must print the density rows without raising, even
+    # though the overlay carries none of the J-family keys the legend used
+    # to read unguarded.
+    _out = StringIO()
+    with contextlib.redirect_stdout(_out):
+        _fedr.report_double_ratio(
+            "smoke: J family absent", j_absent_rows, j_absent_skip,
+            j_absent, _fedr._cmp.PLATEAU_MS,
+        )
+    _text = _out.getvalue()
+    assert "(a) core-band density n" in _text, _text
+    assert "(b) flux-tube density n_ft" in _text, _text
+    assert "port rows and the faces behind them" not in _text, _text
+
+    # Reverse: density's own (non-shared) measured fields absent, J intact.
+    density_only_keys = tuple(
+        k for k in _fedr.DENSITY_OVERLAY_KEYS if k not in ("port", "z_cm")
+    )
+    density_absent = {
+        k: v for k, v in base_overlay.items() if k not in density_only_keys
+    }
+    density_absent_rows, density_absent_skip = _fedr.double_ratio_rows(
+        synthetic, density_absent
+    )
+    assert {r["metric"] for r in density_absent_rows} == {
+        "J_upstream", "J_geomean",
+    }, density_absent_rows
+    assert density_absent_skip is not None
+    assert "density family" in density_absent_skip, density_absent_skip
+    for key in density_only_keys:
+        assert key in density_absent_skip, (key, density_absent_skip)
+
+
+# ----------------------------------------------------------------------
+# far-end-double-ratio-empty-legend-guard
+# ----------------------------------------------------------------------
+@_case("far-end-double-ratio-empty-legend-guard")
+def _case_far_end_double_ratio_empty_legend_guard():
+    """``report_double_ratio`` must not crash when no metric could be formed.
+
+    ``report_double_ratio`` used to call ``_legend_lines`` -- which reads
+    ``isat_ftavg_geomean_port`` unguarded -- BEFORE its ``if not rows`` skip
+    branch, so an overlay carrying no usable rows raised instead of printing
+    the skip line. This overlay has both metric families unusable (the J
+    family's keys are absent outright, and density's own fields are absent
+    too, though the shared port/z_cm columns survive) so ``double_ratio_rows``
+    forms zero rows, and the report call must print the skip line and raise
+    nothing.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    import far_end_double_ratio as _fedr
+
+    overlay_npz = np.load(
+        _Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
+        allow_pickle=False,
+    )
+    base_overlay = {key: overlay_npz[key] for key in overlay_npz.files}
+
+    z = np.asarray(base_overlay["z_cm"], dtype=float)
+    t_s = np.arange(0.0, 25.0e-3 + 1.0e-9, 1.0e-4)
+    synthetic = SimpleNamespace(
+        time=t_s,
+        phase=np.array(["main_discharge"] * t_s.size),
+        z_cm=z,
+        n=1.0e13 * np.ones((t_s.size, z.size)),
+        Te=4.0 * np.ones((t_s.size, z.size)),
+    )
+
+    density_only_keys = tuple(
+        k for k in _fedr.DENSITY_OVERLAY_KEYS if k not in ("port", "z_cm")
+    )
+    no_rows_overlay = {
+        k: v for k, v in base_overlay.items()
+        if k not in _fedr.J_OVERLAY_KEYS and k not in density_only_keys
+    }
+
+    rows, skip_reason = _fedr.double_ratio_rows(synthetic, no_rows_overlay)
+    assert rows == [], rows
+    assert skip_reason is not None
+    assert "J family" in skip_reason and "density family" in skip_reason, (
+        skip_reason
+    )
+
+    _out = StringIO()
+    with contextlib.redirect_stdout(_out):
+        _fedr.report_double_ratio(
+            "smoke: no usable rows", rows, skip_reason, no_rows_overlay,
+            _fedr._cmp.PLATEAU_MS,
+        )
+    _text = _out.getvalue()
+    assert "(no metric formed)" in _text, _text
+    assert "J family" in _text and "density family" in _text, _text
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -27730,7 +27884,7 @@ def _case_far_end_double_ratio_area_cancels():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 155, "historical_stance": 64}
+_CASE_CENSUS = {"total": 157, "historical_stance": 64}
 
 
 def _assert_case_census():
