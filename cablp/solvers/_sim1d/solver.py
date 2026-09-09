@@ -148,9 +148,11 @@ from .physics.cathode import (
     solve_cathode_boundary,
     tail_reflect_face,
     validate_cathode_Rp_model,
+    validate_cathode_ion_secondary_emission,
     validate_cathode_lnL_model,
     validate_cathode_solver_model,
 )
+from cablp.cathode.circuit import beam_launched_current_A
 from cablp.cathode.circuit_idriven import beam_launch_energy_eV
 from .physics.cathode import (
     CATHODE_ENV_T_K,
@@ -553,18 +555,35 @@ _CATHODE_ENTHALPY_ON_BEAM_KEYS = (
 )
 
 
+#: The cathode-result members ``cathode_ion_secondary_emission`` adds,
+#: exported PRESENCE-GATED on that key so an unarmed run's dataset set -- the
+#: golden included -- is what it was before the key existed. ``I_see_A`` is the
+#: secondary electron current the arriving ion flux releases, ``gamma_se*I_i``,
+#: and ``P_see_launched_W`` the share of ``P_prim`` those electrons carry into
+#: the column at the launch potential. A yield of exactly zero is a legal armed
+#: configuration and fills both with a computed zero, not an absence.
+_CATHODE_ION_SECONDARY_KEYS = (
+    "I_see_A",
+    "P_see_launched_W",
+)
+
+
 def _cathode_result_keys(flags):
     """Return the cathode-result members this run exports, per key.
 
     :data:`_CATHODE_RESULT_KEYS` always, plus
     :data:`_CATHODE_ENTHALPY_ON_BEAM_KEYS` under
-    ``cathode_enthalpy_on_beam``. One function answers "which members exist"
-    for the seeding and for the write alike, so they cannot drift into
+    ``cathode_enthalpy_on_beam`` and :data:`_CATHODE_ION_SECONDARY_KEYS` under
+    ``cathode_ion_secondary_emission``. One function answers "which members
+    exist" for the seeding and for the write alike, so they cannot drift into
     seeding a column nothing fills or filling one nothing seeded.
     """
+    keys = _CATHODE_RESULT_KEYS
     if flags.get("cathode_enthalpy_on_beam"):
-        return _CATHODE_RESULT_KEYS + _CATHODE_ENTHALPY_ON_BEAM_KEYS
-    return _CATHODE_RESULT_KEYS
+        keys = keys + _CATHODE_ENTHALPY_ON_BEAM_KEYS
+    if flags.get("cathode_ion_secondary_emission"):
+        keys = keys + _CATHODE_ION_SECONDARY_KEYS
+    return keys
 
 
 def _cathode_result_prefixes(flags):
@@ -2684,6 +2703,20 @@ class LAPDSim1D:
         validate_cathode_Rp_model(self._input_dict, self._flags)
         validate_cathode_lnL_model(self._input_dict)
         self._cathode_solver_model = validate_cathode_solver_model(
+            self._input_dict, self._flags
+        )
+        # Ion-induced secondary electron emission at the emitting face,
+        # validated immediately after the solver model it is gated on and
+        # BEFORE the prescribed drive is resolved -- so a configuration that
+        # arms the term under the measured drive is refused by name rather
+        # than by whatever the trace resolution happens to complain about
+        # first. Two of its refusals are about the solve this run will take
+        # (it needs the cathode circuit solve, and it is implemented for the
+        # current-driven root only); the other two are about the pair of keys.
+        # The resolved yield is not cached on the solver -- the sheath solve
+        # reads it off the same dicts through the same validator, so there is
+        # one resolution and no second copy to drift.
+        validate_cathode_ion_secondary_emission(
             self._input_dict, self._flags
         )
         # PRESCRIBED MEASURED DRIVE (cathode_solver_model =
@@ -8929,6 +8962,20 @@ class LAPDSim1D:
         # no configuration that constructed before: every config that reaches
         # this line armed is one that raised.
         flags["cathode_enthalpy_on_beam"] = False
+        # Ion-induced secondary emission, cleared for the SAME reason as
+        # cathode_coupling above and, like the end wall jet below, WITH its
+        # number: no cathode solve means no ion current arriving at an
+        # emitting face and no secondaries to release, and the key's own
+        # construction guard requires exactly the cathode solve the line above
+        # has switched off, so leaving it armed would refuse the INNER sim on
+        # a state where the current it adds cannot exist. The yield goes with
+        # it because a yield set while the flag is off is refused outright, so
+        # clearing the flag alone would turn a legal outer configuration into
+        # an inner refusal. Clearing them changes no configuration that
+        # constructed before: every config that reaches this line armed is one
+        # that raised.
+        flags["cathode_ion_secondary_emission"] = False
+        params["cathode_ion_secondary_emission_yield"] = None
         # The two DVM directed-recycle jets, cleared for the SAME reason as
         # cathode_coupling above: this pre-solve has no plasma and no cathode
         # solve, so there is no collected ion flux for either jet to split and
@@ -9950,7 +9997,12 @@ class LAPDSim1D:
             return self._zero_rhs_state()
         result = cathode_solve.beam_result.result
         I_tot_A = float(result.I_tot)
-        I_beam_A = float(result.I_eth_star)
+        # The LAUNCHED electron current, which is the beam the drift term has
+        # to subtract off the loop current: with ion-induced secondary
+        # emission armed the secondaries cross the gap with the thermionic
+        # primaries and are part of that beam. ``I_eth_star`` bit for bit
+        # unarmed.
+        I_beam_A = float(beam_launched_current_A(result))
         if not (np.isfinite(I_tot_A) and np.isfinite(I_beam_A)):
             # A solve that did not resolve its currents cannot say what the
             # drift is; booking a guess would be worse than booking nothing.

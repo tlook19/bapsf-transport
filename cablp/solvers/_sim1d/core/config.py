@@ -2104,6 +2104,48 @@ def cathode_defaults():
         the loop current is not held there, because the circuit integrates
         the sheath's unbounded demand rather than the clamped ``V_b``. Only
         the reported/beam-facing objects are clamped.
+    cathode_ion_secondary_emission_yield:
+        Ion-induced secondary electron yield ``gamma_se`` at the emitting
+        face, in electrons released per ion arriving there [dimensionless].
+        ``None`` (the default) and READ ONLY under the
+        ``cathode_ion_secondary_emission`` flag, which the term is gated on;
+        the key has no numeric default, so an armed run states the yield it
+        means.
+
+        WHAT CONSUMES IT. The cathode sheath solve, where the released
+        secondary current ``I_see = gamma_se * I_i`` is formed on the ion
+        current that solve already draws to the face. ``I_see`` is a positive
+        addition to the EMITTED side of the cathode current balance, which
+        the solve keeps as ``I_eth_star + I_see + I_i - I_e_ret = I_tot``, and
+        the secondaries join the LAUNCHED beam: released at the surface at a
+        few eV, they cross the same cathode fall as the thermionic primaries
+        and are priced at the same launch potential in ``P_prim`` and in the
+        gap bypass. Because the ion current is independent of the sheath
+        depth, the term reaches the monotone current match as a reduction of
+        the imposed target rather than as a change to the device relation, so
+        the root, its ceiling ladder and its compiled kernel are unchanged.
+
+        WHAT DOES NOT CONSUME IT, each a disclosed omission rather than an
+        oversight. The space-charge ceiling and its virtual-cathode barrier
+        stay keyed to the ion current alone: both are statements about a
+        half-Maxwellian at the emitter temperature, and the secondaries are
+        not that population, so in the virtual-cathode regime the released
+        total is an overstatement. The ``cathode_face_full_debit`` emission
+        rows keep ``Gamma_em = I_eth_star/e``: their ``2 k_B T_s`` form is the
+        thermionic population's surface enthalpy and does not describe an
+        Auger secondary, which carries no surface-thermal enthalpy here. The
+        surface power balance under ``cathode_warming_model =
+        "power_balance"`` is likewise untouched: thermionic emission cools the
+        lattice through the work function, whereas a secondary's release
+        energy comes from the arriving ion's neutralization, so no additional
+        emission cooling is booked and the ion's potential energy is not
+        removed from the surface either.
+
+        WHAT RAISES. Set while the flag is off, refused at construction (a
+        control nothing reads). Armed, must be a finite float in [0, 1] and is
+        refused outside that bracket. Armed under any ``cathode_solver_model``
+        other than ``"current_driven"``, or without ``cathode_coupling``,
+        refused at construction naming what is missing.
     cathode_Rp_model:
         How the cathode solver's parallel plasma (gap) resistance ``R_p`` is
         built. ``"sample"`` (default, historical) is the solver's internal
@@ -2868,6 +2910,11 @@ def cathode_defaults():
         "cathode_prescribed_start_s": None,
         "cathode_phi_c_cap_V": 1000.0,
         "cathode_circuit_bound_object": "device_voltage",
+        # --- OFF: ion-induced secondary electron emission
+        # (cathode_ion_secondary_emission). None on the off path and REFUSED
+        # at construction while the flag is off, so a yield can never be
+        # configured into a run that would ignore it.
+        "cathode_ion_secondary_emission_yield": None,
         # Surface-state coverage model:
         # "ads_des" evolves contaminant coverage theta with
         # dtheta/dt = -sigma Gamma_i theta
@@ -4552,6 +4599,64 @@ input_flags_template_1d = {
     #
     # WHAT IT RAISES. Must be a real bool. Bit-exact when off.
     "cathode_enthalpy_on_beam": False,
+    # ION-INDUCED SECONDARY ELECTRON EMISSION at the emitting face, default
+    # OFF. Ions arriving at the cathode surface release electrons from it by
+    # potential (Auger) emission -- a channel the model otherwise omits
+    # entirely, so this key ADDS a current rather than moving one. Armed, the
+    # sheath solve releases gamma_se electrons per arriving ion, gamma_se
+    # being cathode_ion_secondary_emission_yield, which the key REQUIRES: the
+    # yield has no default and is refused outside the bracket [0, 1].
+    #
+    # WHAT IT MOVES. The released secondary current I_see = gamma_se * I_i
+    # enters the EMITTED side of the cathode current balance, which stays the
+    # real check, I_eth_star + I_see + I_i - I_e_ret = I_tot. It is
+    # independent of the sheath depth -- the ion current is set by the plasma
+    # state, not by psi -- so it enters the monotone current match as a
+    # reduction of the imposed target and leaves the device relation, its
+    # bracket ladder, its ceiling test and its compiled root exactly as they
+    # were: the sheath and its thermionic release have that much less of the
+    # loop current to supply, so an armed solve sits at a SHALLOWER fall and
+    # releases slightly less thermionic current at the same loop current. The
+    # secondaries are LAUNCHED with the thermionic primaries -- released at
+    # the surface at a few eV, they cross the same fall -- so the beam power,
+    # the gap bypass and the cathode field work are all priced at the sum
+    # I_eth_star + I_see.
+    #
+    # WHAT IT DELIBERATELY LEAVES ALONE, disclosed here because each is a
+    # modelling choice rather than an oversight:
+    #   - the space-charge ceiling and its virtual-cathode barrier, which stay
+    #     keyed to the ion current alone. Both describe a half-Maxwellian at
+    #     the emitter temperature and the secondaries are not that population,
+    #     so this model carries no barrier width for them; in the
+    #     virtual-cathode regime the released total is an OVERSTATEMENT, and
+    #     in the classical regime, where the ceiling does not bind, the
+    #     treatment is exact.
+    #   - the cathode_face_full_debit emission rows, which keep
+    #     Gamma_em = I_eth_star/e. Their +2 k_B T_s form is the thermionic
+    #     population's surface enthalpy; an Auger secondary does not leave off
+    #     that half-Maxwellian and no surface-thermal enthalpy is booked for
+    #     it.
+    #   - the surface power balance under cathode_warming_model =
+    #     "power_balance". Thermionic emission cools the lattice through the
+    #     work function; a secondary's release energy comes from the arriving
+    #     ion's neutralization, not from the lattice, so no extra emission
+    #     cooling is booked -- and the ion potential energy that pays for it
+    #     is not removed from the surface either.
+    #
+    # WHAT IT ADDS TO THE FILE. I_see_A [A] and the launched secondary power
+    # P_see_launched_W [W] ride the sheath result and are exported to the
+    # cathode diagnostics PRESENCE-GATED on this key, so an unarmed run's
+    # dataset set is unchanged.
+    #
+    # WHAT IT RAISES. Must be a real bool. Arming it refuses at construction
+    # without cathode_coupling (the source of the ion current the secondaries
+    # are proportional to) and under any cathode_solver_model other than
+    # "current_driven" (the prescribed measured drive imposes both loop
+    # quantities and takes the emitted current as the remainder, so there is
+    # no emission side for the secondaries to join); the refusal names the
+    # model. Setting the yield while this is off refuses as well. Bit-exact
+    # when off, and bit-exact at a yield of exactly zero.
+    "cathode_ion_secondary_emission": False,
     # The electron drift-transport and EMF-work operator, default OFF. The
     # electron energy equation books its pressure work with the ION velocity,
     # which is exact where J = 0 but not in the current-carrying source region:

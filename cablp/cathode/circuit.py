@@ -229,6 +229,10 @@ class SolverResult:
     I_i         : Ion saturation current
     I_e         : Electron saturation current
     I_eth       : Total thermionic emission current (config constant)
+    I_see_A     : Ion-induced secondary electron current released at the
+                  emitting face, ``gamma_se * I_i``. 0.0 unless
+                  ``cathode_ion_secondary_emission`` is armed, and computed
+                  only on the current-driven path
     I_eth_star  : Allowed thermionic current: the effective emission clamped by
                   the virtual-cathode (space-charge) limit. The effective
                   emission is I_eth itself on the voltage-driven path; on the
@@ -244,7 +248,10 @@ class SolverResult:
     P_wall      : Total power demanded from supply  = I_tot * V_bank
     P_load      : Power delivered to plasma load    = I_tot * V_b
     P_comp      : Compliance resistor dissipation   = I_tot² * R_comp
-    P_prim      : Primary-electron power into plasma = I_eth_star * phi_c
+    P_prim      : Primary-electron power into plasma, priced at the LAUNCHED
+                  electron current (I_eth_star + I_see_A) times the launch
+                  potential, netted by the gap survival
+    P_see_launched_W : The share of P_prim the secondary electrons carry
     P_ohmic     : Plasma ohmic heating              = I_tot * V_p
     P_loss      : Sheath power loss = P_cathode_e + P_cathode_i_pl + P_anode_e + P_anode_i_pl
 
@@ -398,6 +405,41 @@ class SolverResult:
     # run's launch potential is the ``phi_c`` object it always was.
     beam_launch_enthalpy_V: float = 0.0
     P_emitted_enthalpy_on_beam: float = 0.0
+    # Ion-induced secondary electron emission at the emitting face
+    # (``cathode_ion_secondary_emission``). ``I_see_A`` [A] is the secondary
+    # electron current the arriving ion flux releases, ``gamma_se * I_i``, and
+    # ``P_see_launched_W`` [W] the share of ``P_prim`` those electrons carry
+    # into the column -- the same launch potential and the same gap-survival
+    # normalisation the thermionic primaries ride at, because the two
+    # populations are accelerated through one fall and are indistinguishable
+    # once they reach the plasma.
+    #
+    # Both are 0.0 unarmed, and 0.0 is a computed zero rather than an absence:
+    # a yield of exactly zero is a legal armed configuration and gives the
+    # unarmed currents and potentials bit for bit. Only the current-driven
+    # solve assigns them; the emission-enthalpy rows and the surface power
+    # balance are deliberately NOT built on them (see
+    # ``cathode_ion_secondary_emission`` in the flag template).
+    I_see_A: float = 0.0
+    P_see_launched_W: float = 0.0
+
+
+def beam_launched_current_A(result):
+    """Return the electron current [A] the cathode LAUNCHES into the gap.
+
+    ``I_eth_star + I_see_A``: the space-charge-released thermionic current plus
+    the ion-induced secondary current, which is the whole of the population the
+    cathode fall accelerates across the gap. The ONE definition every launched-
+    flux reader takes -- the Beer-Lambert beam-array assembly, the CSDA march's
+    ``Gamma0``, and the electron drift-transport operator's beam current -- so a
+    build cannot end up with two launched fluxes.
+
+    Unarmed, ``I_see_A`` is exactly 0.0 and this is ``I_eth_star`` bit for bit.
+    NOT the flux the emission-enthalpy row or the surface power balance ride at:
+    those are properties of the THERMIONIC population alone and read
+    ``I_eth_star`` directly.
+    """
+    return result.I_eth_star + result.I_see_A
 
 
 def _launch_potential_V(phi_c, enthalpy_V):

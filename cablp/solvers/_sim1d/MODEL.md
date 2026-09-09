@@ -659,10 +659,40 @@ anode factors independent (the anode keeps the flat $e^{-1/2}$). Equivalently
 the cathode Kirchhoff sum closes the loop current, returning plasma electrons
 entering with a minus, $I_\text{tot}=I_\text{eth}^\star+I_i-I_{e,\text{ret}}$.
 
+**Ion-induced secondary emission.** Under `cathode_ion_secondary_emission` the
+ions arriving at the emitting face release electrons from it by potential
+(Auger) emission, a current the model otherwise omits,
+
+$$I_\text{see}=\gamma_\text{se}I_i,$$
+
+$\gamma_\text{se}$ the yield `cathode_ion_secondary_emission_yield` in
+electrons per arriving ion and $I_i$ the same Bohm ion current the solve draws
+to that face. It is a positive addition to the EMITTED side of the cathode
+balance, which stays the closure of the loop,
+
+$$I_\text{tot}=I_\text{eth}^\star+I_\text{see}+I_i-I_{e,\text{ret}},$$
+
+and, being independent of $\psi_+$, it reaches the monotone current match as a
+reduction of the imposed target rather than as a change to $J_\text{tot}(\psi_+)$:
+the sheath and its thermionic release supply only $I_\text{tot}-I_\text{see}$,
+so an armed solve sits at a shallower fall and releases slightly less
+thermionic current at the same loop current. Secondaries leave the surface at a
+few eV and cross the SAME fall as the thermionic primaries, so they are part of
+the launched beam: $\Gamma_0=(I_\text{eth}^\star+I_\text{see})/e$ is the flux
+the deposition route launches, and $P_\text{prim}$, the gap bypass and the
+cathode field work are all priced at that sum. Three bookings are deliberately
+NOT extended to them: the space-charge ceiling and its virtual-cathode barrier,
+which describe a half-Maxwellian at $T_s$ and so overstate the released total
+once the ceiling binds; the emission-enthalpy row below, whose
+$2k_BT_s\Gamma_\text{em}$ is that same population's surface enthalpy; and the
+surface power balance, because a secondary's release energy comes from the
+arriving ion's neutralization rather than from the lattice. Unarmed,
+$I_\text{see}=0$ and every expression here is the one above it.
+
 The anode current the sheath must pass is the loop current less every directly
 collected population,
 
-$$J_\text{anode}=J_\text{tot}-\eta\,\beta_\text{bypass}\,J^\star-J_{\text{tail},a},$$
+$$J_\text{anode}=J_\text{tot}-\eta\,\beta_\text{bypass}\,\left(J^\star+J_\text{see}\right)-J_{\text{tail},a},$$
 
 $\beta_\text{bypass}=e^{-L_\text{cath}/l_b}$ the beam's gap survival at the
 coupling length $l_b$ ($1/l_b=1/(v_b\tau_{ei})+\sigma_bn_n$, zero for
@@ -701,7 +731,7 @@ $$L\frac{dI}{dt}=V_\text{src}-I\left(R_\text{comp}+R_\text{mesh}\right)-V_b(I),$
 so the loop current responds to the TOTAL series resistance while $x$ moves
 only the reported $V_\text{dis}$. The load power closes:
 
-$$P_\text{load}=I_\text{tot}V_b=\underbrace{I_\text{eth}^\star\phi_c+P_{c,i,\phi}-P_{c,e,\phi}}_\text{cathode field work}+\underbrace{I_\text{tot}V_p}_\text{gap ohmic}-\underbrace{I_\text{tot}\phi_a}_\text{anode field work}$$
+$$P_\text{load}=I_\text{tot}V_b=\underbrace{\left(I_\text{eth}^\star+I_\text{see}\right)\phi_c+P_{c,i,\phi}-P_{c,e,\phi}}_\text{cathode field work}+\underbrace{I_\text{tot}V_p}_\text{gap ohmic}-\underbrace{I_\text{tot}\phi_a}_\text{anode field work}$$
 
 The anode term SUBTRACTS, the same sign the device relation carries.
 
@@ -751,8 +781,10 @@ because the beam row already distributes the NET $\phi_c$; and
 $-e\phi_c^+\Gamma_\text{ec}$, the barrier the returning plasma electrons
 climbed, charged to their own store exactly as the anode's repelling branch
 charges $\phi_a$. The fluxes are the solve's own,
-$\Gamma_\text{em}=I_\text{eth}^\star/e$ (the space-charge-released current, not
-the Richardson ceiling) and $\Gamma_\text{ec}=I_{e,\text{ret}}/e$. The beam
+$\Gamma_\text{em}=I_\text{eth}^\star/e$ (the space-charge-released THERMIONIC
+current, not the Richardson ceiling and not the launched flux -- ion-induced
+secondaries carry no surface-thermal enthalpy here) and
+$\Gamma_\text{ec}=I_{e,\text{ret}}/e$. The beam
 deposition row is untouched, and the debit is NOT of the form
 $2(T_e-T_s)\Gamma_\text{em}$: emission and collection are two fluxes, not one
 flux with a temperature difference. Because the emitted enthalpy is a heating

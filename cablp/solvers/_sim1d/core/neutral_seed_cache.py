@@ -100,6 +100,14 @@ INERT_PARAM_KEYS = frozenset({
     # joined the template -- an invalidation with no neutral content behind it.
     "cathode_prescribed_trace_path", "cathode_prescribed_t0_s",
     "cathode_prescribed_start_s",
+    # The ion-induced secondary emission yield, on the same ground as its flag
+    # in INERT_FLAG_KEYS below: run_neutral_equilibration CLEARS both on the
+    # inner sim's copy of the config, and a Plasma=False, cathode_coupling=
+    # False pre-solve has no cathode solve and no ion current arriving at an
+    # emitting face, so no armed value can reach a seed. Categorised rather
+    # than left to fail closed for the reason spelled out for the prescribed
+    # cathode trace above.
+    "cathode_ion_secondary_emission_yield",
     # --- beam deposition / excitation (no plasma/beam during equil) ---
     "beam_anomalous_model", "ql_relaxation_coeff",
     "beam_coulomb_model", "beam_deposition_model",
@@ -200,6 +208,14 @@ INERT_FLAG_KEYS = frozenset({
     # an invalidation with no neutral content behind it.
     "end_wall_sheath_full_debit", "cathode_face_full_debit",
     "cathode_enthalpy_on_beam",
+    # Ion-induced secondary electron emission is inert on the same two
+    # grounds: run_neutral_equilibration clears it (and its yield) on the
+    # inner sim's copy of the config, and with no cathode solve there is no
+    # ion current arriving at an emitting face for it to be proportional to,
+    # so it adds no current a neutral-only equilibration could see. Its
+    # partner number is in INERT_PARAM_KEYS above; the two must be listed
+    # together, because clearing one alone would refuse the inner sim.
+    "cathode_ion_secondary_emission",
     # cache-control + equilibration-trigger flags (not seed content)
     "neutral_equilibration", "launch_plasma_after_equilibration",
     "use_cached_neutral_seed",

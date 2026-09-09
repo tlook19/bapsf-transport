@@ -119,6 +119,7 @@ from cablp.cathode.circuit import (
     _mp_cgs,
     beam_excitation_channel,
     beam_launch_potential_V,
+    beam_launched_current_A,
 )
 from cablp.atomic.cross_sections import H_EII_cross_lkup, He_EII_cross_lkup
 from cablp.cathode.kernels import COMPILED_KERNELS as _COMPILED_KERNELS
@@ -432,6 +433,7 @@ def solve_idriven(
     tail_anode_current_A: float = 0.0,
     emitted_enthalpy_V: float = 0.0,
     emitted_enthalpy_gap_netted: bool = False,
+    secondary_yield: float = 0.0,
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
 
@@ -522,6 +524,44 @@ def solve_idriven(
     available voltage, but the circuit integrates the unbounded demand, so a
     bound solve on a decaying current reports a clamped ``V_b`` while
     ``dI/dt`` stays free.
+    ``secondary_yield`` is the ion-induced SECONDARY ELECTRON YIELD
+    ``gamma_se`` [electrons per arriving ion] at the emitting face, 0.0 (the
+    default) for a solve that carries no secondary emission. It must be finite
+    and in [0, 1]; anything else raises. The released secondary current is
+    ``I_see = gamma_se * I_i``, evaluated on the SAME ion current this solve
+    already draws to the face (the Bohm current, or the fluid's override where
+    one is passed), so the two populations cannot be built from different ion
+    fluxes.
+
+    WHERE IT ENTERS. ``I_see`` is INDEPENDENT of the sheath depth -- the ion
+    current is fixed by the plasma state, not by psi -- so it enters the
+    monotone current match as a shift of the IMPOSED TARGET rather than of the
+    device relation: the sheath and its thermionic release have only
+    ``I_tot - I_see`` left to supply. The device relation ``J_tot(psi)``, its
+    bracket ladder, its ceiling test and the compiled root are therefore the
+    historical ones evaluated at the reduced target, and the located
+    ``psi_c_plus`` is the exact root of the full balance
+    ``I_eth_star + I_see + I_i - I_e_ret = I_tot``, which
+    ``I_cathode_kirchhoff_residual`` still asserts unchanged. The reported
+    ``I_tot``, ``V_b`` and ``J_anode`` are reassembled WITH the secondary
+    current, so nothing downstream reads a loop current the secondaries are
+    missing from. The secondaries are LAUNCHED with the thermionic primaries:
+    they are released at the surface at a few eV and cross the same fall, so
+    they carry the same launch potential and are reported through
+    ``beam_launched_current_A``.
+
+    WHAT IT DOES NOT ENTER, stated because it is a modelling choice and not an
+    oversight: the space-charge ceiling ``_j_eth_crit`` and its virtual-cathode
+    barrier ``psi_minus = delta*ln(J_eth/J_crit)`` are left keyed to the ION
+    current alone. Both are statements about a half-Maxwellian AT THE EMITTER
+    TEMPERATURE -- ``delta = k_B T_s / (e T_e)`` is that population's width --
+    and Auger secondaries are not that population; this module carries no
+    emission-energy scale for them, so there is no ``delta`` to write for them.
+    The consequence is directional and disclosed: in the virtual-cathode regime
+    the secondaries are added on top of a thermionic flux the ceiling has
+    already clamped, so the released total is an OVERSTATEMENT there. In the
+    classical regime, where the ceiling does not bind, the treatment is exact.
+
     ``bridge`` enables the kT_s-width thermal bridge across the
     SCL<->classical release corner (``_bridge_release``); off reproduces
     the hard branches bit-for-bit (the M2 equivalence gate's condition).
@@ -537,6 +577,18 @@ def solve_idriven(
         )
     if phi_c_cap_V <= 0.0:
         raise ValueError(f"phi_c_cap_V must be positive (got {phi_c_cap_V})")
+    # Validated HERE as well as at solver construction, for the same reason
+    # circuit_bound_object is: this solve is reachable from callers that never
+    # build a LAPDSim1D, and a yield outside the domain would otherwise reach
+    # the current match as a silent scaling.
+    secondary_yield = float(secondary_yield)
+    if not math.isfinite(secondary_yield) or not (
+        0.0 <= secondary_yield <= 1.0
+    ):
+        raise ValueError(
+            "secondary_yield must be finite and in [0, 1] electrons per "
+            f"arriving ion (got {secondary_yield})"
+        )
     # Validate the bound's inputs here, at the top, so a misconfigured call
     # fails before it spends a solve. The COMPOSITION itself happens further
     # down, once the device relation the "device_voltage" object is located on
@@ -638,10 +690,22 @@ def solve_idriven(
     eta = config.eta
     mu = config.mu
 
+    # Ion-induced secondary electron emission: every arriving ion releases
+    # ``secondary_yield`` electrons from the surface, which the fall then
+    # accelerates into the gap alongside the thermionic primaries. Exactly
+    # 0.0 unarmed, on every float below.
+    I_see = secondary_yield * I_i
     J_i = I_i * R_p / T_e
     J_i_a = I_i_a * R_p / T_e
     J_eth = I_eth * R_p / T_e
-    J_imposed = float(I_tot_A) * R_p / T_e
+    J_see = I_see * R_p / T_e
+    # THE TARGET, NOT THE DEVICE RELATION (see ``secondary_yield`` in the
+    # docstring): the secondaries are a psi-independent current, so the sheath
+    # and its thermionic release have only what is left of the imposed loop
+    # current to supply. Subtracting an exact 0.0 leaves this the historical
+    # float, so the root, the ladder and the compiled kernel are untouched
+    # unarmed.
+    J_imposed = (float(I_tot_A) - I_see) * R_p / T_e
     # A2a two-population split: current the anode collects from the QL TAIL
     # walkers rather than through its own sheath, scaled like every other
     # current here. It enters J_anode with the beam bypass's sign and for the
@@ -740,7 +804,12 @@ def solve_idriven(
         # same premises the current root already rests on: phi_c and J_tot both
         # rise with psi, and phi_a falls as the anode collects more.
         J_star_p, psi_minus_p, _ = _emission_state(psi)
-        J_tot_p = J_i * (1.0 - _exp_clamped(Lambda - psi)) + J_star_p
+        # The secondaries are part of the current the device carries, so they
+        # ride here exactly as they do in the assembled result below; adding an
+        # exact 0.0 leaves every unarmed float untouched.
+        J_tot_p = (
+            J_i * (1.0 - _exp_clamped(Lambda - psi)) + J_star_p + J_see
+        )
         phi_c_p = psi * T_e - psi_minus_p * T_e
         # The bound's beam is the LAUNCHED beam: same regime gate, same shift
         # and same launch-potential object the solved sheath below uses, so the
@@ -754,7 +823,11 @@ def solve_idriven(
             T_e, n_e, plasma.n_n, plasma.sigma_b,
         )
         bypass_p = _compute_beam_bypass_fraction(l_b_p, config.L_cath)
-        J_anode_p = J_tot_p - eta * bypass_p * J_star_p - J_tail_a
+        # The bypassing population is the LAUNCHED one: the secondaries cross
+        # the gap with the primaries and are intercepted with them.
+        J_anode_p = (
+            J_tot_p - eta * bypass_p * (J_star_p + J_see) - J_tail_a
+        )
         psi_a_p = Lambda_anode - math.log(
             max(1.0 + J_anode_p / J_i_a, 1e-300)
         )
@@ -920,7 +993,13 @@ def solve_idriven(
     # Everything else follows explicitly from the solved psi
     # ------------------------------------------------------------------
     J_star, psi_c_minus, clamped = _emission_state(psi_c_plus)
-    J_tot = J_i * (1.0 - _exp_clamped(Lambda - psi_c_plus)) + J_star
+    # The device carries the thermionic release, the net ion/returning-electron
+    # current AND the secondaries; the root above was solved on the first two
+    # against a target already reduced by the third, so this sum is the imposed
+    # loop current to root-finder roundoff. Unarmed, ``J_see`` is an exact 0.0.
+    J_tot = (
+        J_i * (1.0 - _exp_clamped(Lambda - psi_c_plus)) + J_star + J_see
+    )
     regime = (
         "capability_limited"
         if capability_limited
@@ -964,13 +1043,24 @@ def solve_idriven(
     beam_bypass_fraction = _compute_beam_bypass_fraction(l_b, config.L_cath)
     long_mfp = l_b > 0.0 and l_b > config.L_cath
 
-    J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
+    J_anode = (
+        J_tot - eta * beam_bypass_fraction * (J_star + J_see) - J_tail_a
+    )
     # Anode floating potential: the anode's own sheath, on its own presheath.
     psi_a = Lambda_anode - math.log(max(1.0 + J_anode / J_i_a, 1e-300))
     phi_a = psi_a * T_e_anode
 
     I_tot = J_tot * T_e / R_p
     I_eth_star = J_star * T_e / R_p
+    # THE LAUNCHED FLUX. Secondaries born at the surface at a few eV are
+    # accelerated through the same fall as the thermionic primaries and are
+    # indistinguishable from them once they reach the plasma, so the beam
+    # power, the gap bypass and the cathode field work are all priced at this
+    # sum. ``I_see`` is reported alongside so a run can separate the two.
+    # ``I_eth_star`` keeps its meaning -- the THERMIONIC release -- because the
+    # emission enthalpy and the surface's evaporative cooling are properties of
+    # that population alone.
+    I_launched = I_eth_star + I_see
 
     V_p = I_tot * R_p
     # Device voltage from the loop bookkeeping (see module docstring).
@@ -1029,11 +1119,11 @@ def solve_idriven(
     # Priced at the launch potential itself, BEFORE any anode-mesh climb: the
     # beam readers deposit beam_launch_energy_eV(...) instead, net of that
     # climb, and the climbed-away difference is not booked into this power.
-    P_prim = (
-        gap_survival
-        * I_eth_star
-        * _launch_potential_V(phi_c, beam_launch_enthalpy_V)
-    )
+    _launch_V = _launch_potential_V(phi_c, beam_launch_enthalpy_V)
+    P_prim = gap_survival * I_launched * _launch_V
+    # The share of P_prim the secondaries carry, at the same launch potential
+    # and the same gap-survival normalisation. Exactly 0.0 unarmed.
+    P_see_launched_W = gap_survival * I_see * _launch_V
     P_ohmic = I_tot * V_p
     # Electron sheath powers with *physical flux barriers* -- a deliberate,
     # documented divergence from the frozen module's `_P_elec(phi_net,...)`:
@@ -1079,7 +1169,7 @@ def solve_idriven(
     P_anode_i_thermal = I_i_a * (T_e_anode / 2.0)
     P_anode_i_phi = P_anode_i - P_anode_i_thermal
     P_anode_i_pl = _P_ion(phi_a, T_e_anode, I_i_a, pl=True)
-    _P_beam_bypass = eta * beam_bypass_fraction * I_eth_star * V_b
+    _P_beam_bypass = eta * beam_bypass_fraction * I_launched * V_b
     # DEPRECATED unclosed scalars (kept bit-exact for the R1-R4 golden only).
     # NO LONGER EXPORTED to the HDF5; the successors are the closed audit built
     # just below. P_cathode_i_pl -> P_cathode_i_thermal (it is the ANODE ion
@@ -1136,10 +1226,12 @@ def solve_idriven(
     # I_e_ret = P_cathode_e_phi / phi_c is the returning-electron current; the
     # cathode Kirchhoff (I_eth_star + I_i - I_e_ret == I_tot) is the real check.
     I_e_ret = P_cathode_e_phi / phi_c if phi_c != 0.0 else 0.0
-    cathode_field_work = I_eth_star * phi_c + P_cathode_i_phi - P_cathode_e_phi
+    cathode_field_work = I_launched * phi_c + P_cathode_i_phi - P_cathode_e_phi
     P_load_ledger = cathode_field_work + P_ohmic - I_tot * phi_a
     P_load_residual = P_load - P_load_ledger
-    I_cathode_kirchhoff_residual = (I_eth_star + I_i - I_e_ret) - I_tot
+    I_cathode_kirchhoff_residual = (
+        I_launched + I_i - I_e_ret
+    ) - I_tot
 
     # Active-bound census (see SolverResult): which member of the composed
     # ceiling this solve ended up sitting on. Derived from the regime tag and
@@ -1208,6 +1300,8 @@ def solve_idriven(
         bound_active=bound_active,
         beam_launch_enthalpy_V=beam_launch_enthalpy_V,
         P_emitted_enthalpy_on_beam=P_emitted_enthalpy_on_beam,
+        I_see_A=I_see,
+        P_see_launched_W=P_see_launched_W,
         regime=regime,
         long_mfp=long_mfp,
         beam_bypass_fraction=beam_bypass_fraction,
@@ -1242,6 +1336,7 @@ def solve_beam_system_idriven(
     tail_anode_current_A: float = 0.0,
     emitted_enthalpy_V: float = 0.0,
     emitted_enthalpy_gap_netted: bool = False,
+    secondary_yield: float = 0.0,
 ) -> BeamResult:
     """Current-driven, single-cathode counterpart of ``solve_beam_system``.
 
@@ -1276,6 +1371,12 @@ def solve_beam_system_idriven(
     ``emitted_enthalpy_gap_netted`` is handed to that same solve and selects
     the flux its ``P_emitted_enthalpy_on_beam`` DIAGNOSTIC is normalised at,
     per deposition route; no array below reads it.
+
+    ``secondary_yield`` is the ion-induced secondary electron yield the sheath
+    solve releases at the emitting face; it is handed straight through, and it
+    reaches the arrays below through ``beam_launched_current_A``, which is the
+    launched flux the beam density is built from. 0.0 (the default) leaves
+    every array bit-for-bit historical.
     """
     result = solve_idriven(
         config,
@@ -1298,6 +1399,7 @@ def solve_beam_system_idriven(
         tail_anode_current_A=tail_anode_current_A,
         emitted_enthalpy_V=emitted_enthalpy_V,
         emitted_enthalpy_gap_netted=emitted_enthalpy_gap_netted,
+        secondary_yield=secondary_yield,
     )
     return assemble_beam_arrays(
         result=result,
@@ -1357,7 +1459,7 @@ def assemble_beam_arrays(
     )
     if phi_c_0 > I_ion:
         v_beam[cathode_index] = math.sqrt(2.0 * phi_c_0 * _erg_per_eV / _me_cgs)
-        _I_beam_0 = result.I_eth_star * (
+        _I_beam_0 = beam_launched_current_A(result) * (
             1.0 - config.eta * result.beam_bypass_fraction
         )
         n_beam[cathode_index] = _I_beam_0 / (
