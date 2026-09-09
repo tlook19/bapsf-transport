@@ -108,7 +108,8 @@ protocol. `stances/examples/` holds derived configurations and is an ADDITION
 to that directory rather than a reorganization of it: the committed
 configuration set `stance_config.available_stances()` offers by name is
 `stances/*.toml` and nothing below it, so an example is reached by path and can
-never be mistaken for a base.
+never be mistaken for a base. `stances/examples/g1atrim_es4_fill_linear.toml`
+moves only `S_gp`, to the ES4 rung's piezo-drive fill.
 
 ## Run artifacts do not live here
 

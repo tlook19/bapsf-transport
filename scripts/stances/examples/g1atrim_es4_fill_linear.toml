@@ -1,0 +1,32 @@
+# THE ES4 FILL: the reference configuration with the gas-puff source strength
+# moved to the ES4 rung's piezo drive.
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: everything the reference decides -- the measured machine, the
+# drive calibration, the beam closure, the initial neutral state -- is
+# inherited, so this file cannot drift from the reference and a reader can see
+# the whole difference between the two arms at a glance.
+#
+# WHAT IT IS FOR. ES1-3 share one piezo drive (76.4 V, S_gp = 9010 sccm); ES4
+# drives the piezo at 110 V instead, and this file states the fill that drive
+# produces. V_bank and cathode_Ts_base_K are NOT set here -- those are the
+# --es rung's to set (ES4 shares ES3's heater and bank dial), and a derived
+# configuration file does not restate a rung-owned key.
+#
+# HOW TO RUN IT:
+#
+#     python scripts/run/run_m6_point.py \
+#         --stance scripts/stances/examples/g1atrim_es4_fill_linear.toml \
+#         --es 4 --two-zone --save-h5 out.h5
+#
+# The saved trajectory records the lineage -- this file's name, "g1atrim" as
+# its base, both files' sha256, the delta keys below, and the resolved
+# configuration's identity -- so the arm is identifiable from its artifact
+# alone.
+base = "g1atrim"
+
+
+[input_dict]
+# ES4 fill: the East-valve flow at the 110 V piezo drive from the valve's
+# linear response; ES1-3 run 76.4 V = 9010.
+S_gp = 17320.0

@@ -193,7 +193,13 @@ def refuse_rung_supersession(driver, es, rung_owned, stance,
 
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--es", type=int, choices=(1, 2, 3), required=True)
+    p.add_argument(
+        "--es", type=int, choices=sorted(ES_OPERATING), required=True,
+        help="rung's measured V_bank/Ts_standby_K pair (see ES_OPERATING). "
+             "ES4 shares ES3's heater and bank dial (Ts_standby_K 1972.0, "
+             "V_bank 98.978 -- window-corrected +0.164 V from ES3's 98.814); "
+             "its fill is carried by the --stance configuration file, not "
+             "by this rung table.")
     stance_group = p.add_mutually_exclusive_group()
     stance_group.add_argument(
         "--stance", metavar="NAME_OR_PATH", default=None,
