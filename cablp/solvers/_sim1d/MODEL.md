@@ -836,7 +836,12 @@ current is the loop current the ions do not supply,
 $I_\text{eth}^\star=\max(I-I_i,0)$ — the deep-repelling-sheath limit of the
 Kirchhoff sum above, there being no $\psi$ at which to evaluate the
 returning-electron term; the dropped current is measured by the
-`I_cathode_kirchhoff_residual` diagnostic. A hand-off time
+`I_cathode_kirchhoff_residual` diagnostic. On this route
+`P_load_residual = -phi_c * I_cathode_kirchhoff_residual` is bookkeeping
+rather than a closure check: where $I>I_i$ it equals $P_{c,e,\phi}$, the
+returning electrons' field work (exponentially small once $\phi_c\gg T_e$);
+where $I\le I_i$ (the emission floor, the tail) it carries the whole current
+shortfall instead. A hand-off time
 (`cathode_prescribed_start_s`) separates this mode from the calibrated cathode
 that runs before it.
 
