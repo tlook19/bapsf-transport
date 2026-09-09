@@ -1802,8 +1802,6 @@ DECAY_FACE_KEYS = (
     "isat_decay_dn_mean_a",
     "isat_decay_geomean_a_per_cm2",
     "isat_decay_geomean_area_cm2",
-    "isat_decay_geomean_pairing",
-    "isat_decay_source_channel",
 )
 INTERF_DECAY_KEYS = (
     "interf_decay_time_ms",
