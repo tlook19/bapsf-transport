@@ -182,13 +182,21 @@ GATE REGISTRY
 
   THE SIGN IS GATED, and it is the one clause the identities cannot supply:
   both sides of (ii) carry the same face current, so a global sign error in it
-  flips them together and the equality survives. Over the DRIVEN window the
-  thermal-electron drift at the mesh face runs cathode to anode, so the work
-  power handed to the sheath row is positive; that clause is a statement about
-  the window, not about a magnitude, and it fails on a sign error the
-  equalities absorb. (It is a window-scoped claim by construction: in
-  afterglow the drift reverses -- see G6 -- which is why it is asserted over
-  0.1-20.1 ms and nowhere else.)
+  flips them together and the equality survives. The gated quantity is
+  ``T_e[last] x n[last] x hi_work[last] / n_face[last + 1]``, and the mesh face
+  NEVER carries beam current -- ``_face_pairs`` puts the beam only on the faces
+  within ``beam_faces_through`` of the cathode cell, which the anode face is
+  not, on either arm, for a source region of the length this header admits --
+  so its sign is the sign of ``I_tot`` alone, and that is positive throughout
+  the run: the discharge loop hands off to the open-circuit solve before the
+  device current turns non-positive. What DOES reverse in afterglow is
+  ``Gamma_d = I_tot - I_beam`` in the beam-carrying SOURCE cells, which is what
+  G6's note reports, and it never reaches this face. So restricting the clause
+  to the driven window is deliberate conservatism, not a necessity. What it
+  earns is the sign convention of the face WORK channel -- ``_face_pairs``'s
+  ``hi_work`` and the ``anode_face_work_W`` built from it -- which a flip would
+  carry through both sides of (ii) untouched, and which ``mesh-work-drop``
+  demonstrates it catches.
 
 **G5 -- the J = 0 limit (negative control at the statement level).**
   QUANTITY: (i) every cell of the operator's total row at zero current;
@@ -802,9 +810,14 @@ def gates3410(report, geom, h5, g4_negative_control=None):
         )
         # THE SIGN, gated separately: both sides carry the same face current,
         # so a global sign error in it flips them together and the equality
-        # survives. Over the DRIVEN window the thermal-electron drift at the
-        # mesh face runs cathode to anode, so this power is positive. It is a
-        # window-scoped clause -- in afterglow the drift reverses (G6).
+        # survives. The mesh face never carries beam current -- _face_pairs
+        # puts the beam only on the faces within beam_faces_through of the
+        # cathode cell, which the anode face is not -- so this power's sign is
+        # sign(I_tot) alone, positive throughout the run. Gamma_d's afterglow
+        # reversal is a SOURCE-cell statement (G6) and never reaches this face,
+        # so the window restriction below is conservatism, not necessity. What
+        # the clause catches is a flipped sign convention in the face work
+        # channel, which mesh-work-drop demonstrates.
         sign_ok = bool(mesh_work_W > 0.0)
         control = (
             "" if g4_negative_control != "mesh-work-drop"
