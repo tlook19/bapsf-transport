@@ -16244,6 +16244,52 @@ def _case_adas_low_te_extension_retired(m3_params):
     )
     LAPDSim1D(m3_params, dict(resolved_cathode_flags, icool_recomb=True))
 
+    # --- Te_floor must stay BELOW the adf11 low-Te grid edge under
+    # atomic_rate_model='adas'. Below that edge every coefficient is clamped
+    # to its edge value, so a floor at or above it makes the clamped band the
+    # only band the plasma can occupy -- the atomic_rate_domain ledger's
+    # "fraction below the table" is then zero by construction, and the
+    # standing floor-below-the-edge ordering is false. The edge is read off
+    # the loaded table, not written down, so this cannot drift from the data.
+    from cablp.atomic.adas import (
+        he_rate_temperature_range_eV as _tf_te_range,
+    )
+
+    _tf_edge_eV, _ = _tf_te_range()
+    assert 0.0 < _tf_edge_eV < 1.0, _tf_edge_eV
+    # Te0 is raised alongside the floor because the Te0 > Te_floor guard in
+    # validate_r1_configuration_presence runs FIRST and would otherwise be the
+    # refusal seen: this clause has to reach the table-edge guard itself.
+    try:
+        LAPDSim1D(
+            dict(m3_params, Te_floor=0.25, Te0=0.5), resolved_cathode_flags
+        )
+    except ValueError as exc:
+        assert "Te_floor" in str(exc), str(exc)
+        assert repr(_tf_edge_eV) in str(exc), str(exc)
+        assert "adf11" in str(exc), str(exc)
+    else:
+        raise AssertionError(
+            "expected ValueError for Te_floor above the adf11 low-Te edge"
+        )
+    # The shipped floor is below the edge and constructs.
+    assert float(m3_params["Te_floor"]) < _tf_edge_eV
+    LAPDSim1D(dict(m3_params, Te_floor=0.1), resolved_cathode_flags)
+    # The stance of record constructs unchanged -- built from
+    # build_baseline_config(), so it follows every stance event automatically.
+    from baseline_sim1d import build_baseline_config as _tf_baseline
+
+    _tf_params, _tf_flags = _tf_baseline()
+    assert str(_tf_params["atomic_rate_model"]) == "adas"
+    assert float(_tf_params["Te_floor"]) < _tf_edge_eV
+    LAPDSim1D(_tf_params, _tf_flags)
+    # Presence gate: under 'janev' the adf11 grid is not consulted and its
+    # edge orders nothing, so the same floor does NOT trip this guard.
+    LAPDSim1D(
+        dict(m3_params, Te_floor=0.25, Te0=0.5, atomic_rate_model="janev"),
+        resolved_cathode_flags,
+    )
+
 
 # --------------------------------------------------------------------
 # gcr-recombination-energy-pair
