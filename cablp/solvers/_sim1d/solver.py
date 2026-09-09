@@ -73,6 +73,7 @@ from .core.validation import (
     refuse_cathode_backscatter_double_book,
     refuse_dvm_anode_jet_without_cathode_coupling,
     refuse_dvm_cathode_jet_without_cathode_coupling,
+    refuse_te_floor_above_adas_table_edge,
     resolve_coverage_config,
     resolve_electron_drift_transport_config,
     resolve_emitting_area_config,
@@ -2601,6 +2602,10 @@ class LAPDSim1D:
         is the thing the tracer has to be exempt from and the fill is the
         only thing the profile touches.
         """
+        # The Te floor has to sit below the adf11 low-Te grid edge under
+        # atomic_rate_model='adas'; refused HERE, before the floor is armed,
+        # and read off the loaded table rather than written down.
+        refuse_te_floor_above_adas_table_edge(self._input_dict)
         self._floors = {
             "n": float(self._input_dict["ne_floor"]),
             "nn": float(self._input_dict["nn_floor"]),

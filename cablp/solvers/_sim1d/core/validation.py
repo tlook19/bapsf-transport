@@ -19,6 +19,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from cablp.atomic.adas import he_rate_temperature_range_eV
+
 from .config import (
     coverage_closure_defaults,
     emitting_area_defaults,
@@ -938,6 +940,62 @@ def refuse_dvm_anode_jet_without_cathode_coupling(input_dict, flags):
         "neutral_kinetic_dvm_anode_jet=False"
     )
 
+
+def refuse_te_floor_above_adas_table_edge(input_dict):
+    """Raise when ``Te_floor`` sits at or above the ADF11 low-Te grid edge.
+
+    The bundled He adf11 tables are two-dimensional in ``(ne, Te)`` -- there
+    is no ion-temperature axis, so ``Ti_floor`` has nothing to be ordered
+    against and is out of scope here. On the Te axis the lookup CLAMPS: below
+    the grid's first temperature every coefficient is held at its edge value
+    (``_interp_coords`` clips the log coordinate to the grid), so the whole
+    sub-edge region is a plateau rather than a rate curve.
+
+    The floor is what makes that plateau harmless: with ``Te_floor`` strictly
+    below the edge the clamped band is a band the state can enter and cool
+    through, and the saved ``atomic_rate_domain`` ledger reports how much of
+    the active plasma sits in it. A floor AT or ABOVE the edge inverts that:
+    no cell can ever be recovered below the edge, the ledger's
+    ``active_cell_fraction_below`` is identically zero by construction rather
+    than by physics, and the standing statement that the floor sits below the
+    table edge becomes false while every rate silently reads its edge value.
+
+    Presence-gated on ``atomic_rate_model = "adas"``: under ``"janev"`` the
+    adf11 grid is not consulted at all and its edge orders nothing.
+
+    The check is INDEPENDENT of ``adas_low_te_extension``. That key extends
+    only ``acd`` and ``prb1`` below the edge, by the Janev recombination shape
+    ratio, and it does not move the edge itself -- it reads the same grid
+    edge and rescales beneath it. ``scd`` (ionization) and both ``plt`` line
+    powers still clamp there either way, so the ordering claim is owed on the
+    extended package exactly as it is on the clamped one.
+
+    The edge is READ from the loaded table (``he_rate_temperature_range_eV``,
+    the same source the ``atomic_rate_domain`` writer reads) rather than
+    written down, so this refusal cannot drift from the bundled data.
+    """
+    if str(input_dict.get("atomic_rate_model", "janev")) != "adas":
+        return
+    te_edge_eV, _ = he_rate_temperature_range_eV()
+    te_floor_eV = float(input_dict["Te_floor"])
+    if te_floor_eV < te_edge_eV:
+        return
+    raise ValueError(
+        f"Te_floor={te_floor_eV!r} eV sits at or above the bundled He adf11 "
+        f"low-Te grid edge {te_edge_eV!r} eV, and atomic_rate_model='adas' "
+        "reads that grid. Below the edge every adf11 coefficient is CLAMPED "
+        "to its edge value, so the floor is what keeps the clamped band a "
+        "band the plasma cools through instead of the only band it occupies: "
+        "with the floor at or above the edge no recovered Te can ever lie "
+        "below the edge, the atomic_rate_domain ledger's "
+        "active_cell_fraction_below is zero by construction rather than by "
+        "physics, and the documented ordering (the floor sits below the "
+        "table edge) is false. Accepted: Te_floor strictly below "
+        f"{te_edge_eV!r} eV, or atomic_rate_model='janev', which does not "
+        "consult the adf11 grid. adas_low_te_extension does not lift this: "
+        "it rescales acd and prb1 beneath the same edge without moving it, "
+        "and scd and both plt tables clamp there either way"
+    )
 
 def resolve_coverage_config(input_dict, flags, *, geometry, neutral_model):
     """Validate and RESOLVE the clumpy-plasma coverage closure (v2).

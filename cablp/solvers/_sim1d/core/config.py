@@ -1471,8 +1471,9 @@ def model_mode_defaults():
         # refused outright by every other neutral model, so the key can
         # never be a silently inert control:
         "neutral_kinetic_dvm_transfer_hold": None,
-        # Bucket-2 default-off closure instrument (low-Te ADAS extension; only
-        # active with icool_recomb, sub-0.2 eV):
+        # Bucket-2 default-off closure instrument: extends acd/prb1 below the
+        # 0.2 eV adf11 edge. REFUSED with icool_recomb; the prb1 half is
+        # booked through recombination_energy_return:
         "adas_low_te_extension": False,
         # --- DEPRECATED (legacy-compat selectors; superseded, non-default
         # warns; retained for reproducibility at the tag) ---
