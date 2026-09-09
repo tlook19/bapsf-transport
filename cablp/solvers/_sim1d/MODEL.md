@@ -841,7 +841,7 @@ returning-electron term; the dropped current is measured by the
 rather than a closure check: where $I>I_i$ it equals $P_{c,e,\phi}$, the
 returning electrons' field work (exponentially small once $\phi_c\gg T_e$);
 where $I\le I_i$ (the emission floor, the tail) it carries the whole current
-shortfall instead. A hand-off time
+shortfall on top of $P_{c,e,\phi}$. A hand-off time
 (`cathode_prescribed_start_s`) separates this mode from the calibrated cathode
 that runs before it.
 
