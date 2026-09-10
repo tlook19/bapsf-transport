@@ -1377,9 +1377,13 @@ def model_mode_defaults():
             and reduces to the Rusanov flux term by term at
             ``S_R = -S_L = a_max``.
     cathode_circuit_sample:
-        Which sampled electrode state the CURRENT-DRIVEN circuit advance
-        evaluates its ``V_dis(I)`` relation on. Read only on the accepted-step
-        circuit advance; nothing else in the model reads it.
+        Which sampled electrode state the CURRENT-DRIVEN circuit's
+        ``V_dis(I)`` relation is built on. It has exactly two readers, and
+        they move together: the accepted-step circuit advance, and the
+        loop-relaxation timestep bound (read only under the
+        ``cathode_circuit_voltage_bound`` flag, and built on the same
+        relation as the advance precisely so the two cannot disagree).
+        Nothing else in the model reads this key.
 
         ``"raw"`` (default) evaluates the loop relation on the accepted
         end-of-step state itself, so the loop-current root sees the raw
@@ -1392,8 +1396,8 @@ def model_mode_defaults():
         an accepted step.
 
         Construction raises on any other value. ``"smoothed"`` additionally
-        requires the sample it names to exist and the advance it modifies to
-        run: it raises when ``cathode_sample_smoothing`` is ``None`` (there is
+        requires the sample it names to exist and the advance it selects for
+        to run: it raises when ``cathode_sample_smoothing`` is ``None`` (there is
         no EMA to read), when ``cathode_solver_model`` is not
         ``"current_driven"``, and when the ``cathode_coupling`` flag is off
         (there is no circuit advance).

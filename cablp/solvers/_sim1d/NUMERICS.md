@@ -469,6 +469,10 @@ itself, `"smoothed"` the supply-averaged EMA of the sampled electrode cells
 that `cathode_sample_smoothing` maintains — the same sample the RHS-side sheath
 solve and the accepted-state surface re-solve read, so under `"smoothed"` the
 loop and the fluid evaluate the sheath from one sample within an accepted step.
+The selection reaches BOTH readers of that relation — this advance and the
+`circuit` timestep bound of the adaptive-control table above, which reads the
+device slope off the same evaluator, so the bound and the step cannot be built
+on different samples.
 The fluid stages run at a loop current frozen over the step;
 `coupled_circuit_picard` re-runs the accepted step, at most
 `circuit_picard_max_iter` times in a driven phase, until the current a step
