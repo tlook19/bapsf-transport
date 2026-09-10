@@ -29170,7 +29170,8 @@ def _case_circuit_sample_smoothed_discriminator():
     inside the call, so there is no reconstruction of the surface state or
     the EMA to get wrong.
 
-    It is read on the B1 probe's configuration -- the reference
+    It is read on the probe configuration
+    ``cathode-warming-honest-resolve-circuit-bound`` uses -- the reference
     configuration at ``nx = 16`` with the Schottky closure cleared, the
     circuit voltage bound armed and the equilibration cleared, 5 us at
     2.5e-7 s cadence -- because that is a leg on which the sampled cells
