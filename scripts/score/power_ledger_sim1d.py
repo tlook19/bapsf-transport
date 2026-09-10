@@ -1057,7 +1057,7 @@ def selftest(path):
             failures.append((name, value, reference))
         print(f"{name:<36}{value:>18.5f}{reference:>18.5f}{digits:>6}"
               f"{('MATCH' if ok else 'DIFFER'):>10}")
-    print(f"{'circuit_projection_dropped presence-gate':<36}"
+    print(f"{'circuit_projection_dropped presence-gate':<52}"
           f"{'ABSENT (unarmed artifact)':>18}")
     assert not failures, (
         "power ledger selftest FAILED against the founding numbers: "
