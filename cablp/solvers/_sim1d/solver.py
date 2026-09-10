@@ -4113,10 +4113,10 @@ class LAPDSim1D:
                 "regime_vessel_node requires cathode_circuit_voltage_bound: "
                 "the climb V_cm is subtracted from the beam's birth energy, "
                 "and that energy must be the CIRCUIT-BOUNDED sheath drop. "
-                "Without the bound it is the raw cathode_phi_c_cap_V atomic-"
-                "data cap (~1000 V against a bank supplying ~178 V), so the "
-                "choke would be a small correction on a wrong number. "
-                "Accepted: cathode_circuit_voltage_bound on"
+                "Without the bound it is the raw cathode_phi_c_cap_V "
+                "atomic-data cap (far above what a bank supplying ~178 V "
+                "can carry), so the choke would be a small correction on a "
+                "wrong number. Accepted: cathode_circuit_voltage_bound on"
             )
         deposition_model = str(
             self._input_dict.get("beam_deposition_model")
@@ -7501,17 +7501,18 @@ class LAPDSim1D:
             # ``cathode_circuit_voltage_bound`` the ceiling the dispatched
             # solves were run against is the COMPOSED one -- the atomic-data
             # cap ``cathode_phi_c_cap_V`` and the loop's available voltage
-            # V_src - I*(R_comp + R_mesh_ohm), whichever is lower -- and it is
-            # the source voltage that carries the circuit member. Withholding
-            # it here would leave this re-solve on the data cap alone, so on
-            # every step whose imposed current sits above the emission wall it
-            # would book the surface's ion power at ~1000 V while the solve
-            # that actually ran sat on the load line. The value is read
-            # through the same expression the circuit advance below reads, at
-            # the same phase (this step's), so the two cannot disagree.
-            # ``None`` -- and with it the historical ceiling, bit for bit --
-            # whenever the flag is off, which is where
-            # ``circuit_available_voltage_V`` returns it.
+            # V_src - I*(R_comp + R_mesh_ohm), whichever is lower -- and it
+            # is the source voltage that carries the circuit member.
+            # Withholding it here would leave this re-solve on the data cap
+            # alone, so on every step whose imposed current sits above the
+            # emission wall it would book the surface's ion power at the data
+            # cap (``cathode_phi_c_cap_V``) while the solve that actually ran
+            # sat on the load line. The value is read through the same
+            # expression the circuit advance below reads, at the same phase
+            # (this step's), so the two cannot disagree.
+            # The circuit member of that ceiling is ``None`` -- and with it
+            # the historical ceiling, bit for bit -- whenever the flag is
+            # off, which is where ``circuit_available_voltage_V`` returns it.
             honest_result = idriven_result_evaluator(
                 state=self._smoothed_sample_state(self.state),
                 floors=self._floors,
@@ -9067,6 +9068,16 @@ class LAPDSim1D:
         flags["cathode_coupling"] = False
         flags["neutral_equilibration"] = False
         flags["launch_plasma_after_equilibration"] = False
+        # The circuit voltage bound, cleared for the SAME reason as
+        # cathode_coupling above: it lives inside the current-driven sheath
+        # solve and its construction guard requires exactly the cathode
+        # solve the line above has just switched off, so leaving it armed
+        # would refuse the INNER sim on a state where the device voltage it
+        # bounds cannot exist -- a guard firing on a state where the thing
+        # it protects cannot happen. Clearing it changes no configuration
+        # that constructed before: every config that reaches this line
+        # armed is one that raised.
+        flags["cathode_circuit_voltage_bound"] = False
         # The inner sim IS the equilibration -- it must never consult the seed
         # database itself. Leaving this ON contradicts the two flags just
         # cleared, so validate_neutral_seed_cache_config would reject the inner

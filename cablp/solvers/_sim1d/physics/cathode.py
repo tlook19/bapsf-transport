@@ -2749,9 +2749,10 @@ def beam_gap_ledger_mismatch(
 
     The tolerance is stated on the quantity that matters rather than on the
     survival fractions themselves. The circuit debits
-    ``eta * f_bypass * I_eth_star * V_b``, so ``eta * |left - right|`` is the
-    fraction of emitted beam power booked to a bypass the fluid never loses
-    (or vice versa) -- the ledger hole itself.
+    ``eta * f_bypass * beam_launched_current_A * V_b`` -- the launched current
+    ``I_eth_star + I_see``, not ``I_eth_star`` alone -- so
+    ``eta * |left - right|`` is the fraction of emitted beam power booked to a
+    bypass the fluid never loses (or vice versa) -- the ledger hole itself.
 
     The ceiling shortfall was long assumed to be a small benign floor that
     would stay below ``atol`` on its own -- saturation needs a transmitting
