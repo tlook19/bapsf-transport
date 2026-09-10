@@ -29199,6 +29199,364 @@ def _case_neutral_equilibration_clears_bound_flag():
 
 
 # ----------------------------------------------------------------------
+# circuit-sample-default-identity
+# ----------------------------------------------------------------------
+@_case("circuit-sample-default-identity", provides=())
+def _case_circuit_sample_default_identity():
+    """The shipped default is ``"raw"``, and naming it changes nothing.
+
+    ``cathode_circuit_sample`` selects which sampled electrode state the
+    current-driven circuit advance evaluates ``V_dis(I)`` on. The default
+    ``"raw"`` is the accepted end-of-step state -- the state the advance read
+    before the key existed -- so a configuration that never mentions the key
+    and one that names ``"raw"`` explicitly must be the SAME RUN to the byte,
+    trajectory and circuit trace alike. That is the bit-exactness of the
+    unarmed path, measured rather than argued from the expression.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from baseline_sim1d import build_baseline_config as _csd_baseline_config
+
+    _CSD_T_END = 2.0e-6
+
+    def _csd_run(param_overrides):
+        _p, _f = _csd_baseline_config(
+            param_overrides=dict(
+                {"nx": 16, "dt_save": 2.5e-7}, **param_overrides
+            ),
+            flag_overrides={
+                "cathode_schottky": False,
+                "neutral_equilibration": False,
+            },
+        )
+        assert _f["cathode_coupling"] is True
+        assert _p["cathode_solver_model"] == "current_driven"
+        return _p, LAPDSim1D(_p, _f).run(t_end=_CSD_T_END)
+
+    # The key resolves to "raw" without being named, and the solver stores
+    # exactly what it resolved.
+    _csd_absent_params, _csd_absent = _csd_run({})
+    assert _csd_absent_params["cathode_circuit_sample"] == "raw", (
+        _csd_absent_params["cathode_circuit_sample"]
+    )
+    _csd_named_params, _csd_named = _csd_run(
+        {"cathode_circuit_sample": "raw"}
+    )
+    assert _csd_named_params["cathode_circuit_sample"] == "raw"
+
+    assert (
+        np.asarray(_csd_absent.y, dtype=float).tobytes()
+        == np.asarray(_csd_named.y, dtype=float).tobytes()
+    )
+    assert (
+        np.asarray(_csd_absent.time, dtype=float).tobytes()
+        == np.asarray(_csd_named.time, dtype=float).tobytes()
+    )
+    for _csd_row in (
+        "circuit_I_loop", "circuit_V_dis_step", "circuit_V_dis_dt_integral",
+        "source_V_b", "source_I_tot", "source_phi_c",
+    ):
+        assert (
+            np.asarray(
+                _csd_absent.cathode_diagnostics[_csd_row], dtype=float
+            ).tobytes()
+            == np.asarray(
+                _csd_named.cathode_diagnostics[_csd_row], dtype=float
+            ).tobytes()
+        ), _csd_row
+
+
+# ----------------------------------------------------------------------
+# circuit-sample-smoothed-discriminator
+# ----------------------------------------------------------------------
+@_case("circuit-sample-smoothed-discriminator", provides=())
+def _case_circuit_sample_smoothed_discriminator():
+    """Under ``"smoothed"`` the circuit's wall IS the fluid's wall.
+
+    The EMA ``cathode_sample_smoothing`` maintains over the sampled electrode
+    cells already reaches the RHS-side sheath solve and the accepted-state
+    surface re-solve. ``cathode_circuit_sample = "smoothed"`` puts the
+    current-driven circuit's ``V_dis(I)`` relation on that same sample, so
+    within one accepted step the loop relation and the fluid's sheath are
+    evaluated from ONE (n, Te).
+
+    BOTH READERS OF THAT RELATION ARE CHECKED, because there are two and
+    they must not part company: the accepted-step circuit ADVANCE, and the
+    loop-relaxation TIMESTEP BOUND, whose own contract is that it carries
+    the same device relation the advance integrates. They are told apart by
+    the calling frame -- ``_accept_step_attempt`` and
+    ``_circuit_timestep_kwargs`` -- and the clause is asserted separately on
+    each, so a selector routed through one site and not the other fails here
+    rather than in a probe's residual.
+
+    The clause is an equality of evaluations: the ``V_dis(I)`` each reader's
+    own evaluator returns equals, to round-off, the value an evaluator built
+    in-process on the smoothed sample returns at the same current, ceiling
+    and phase -- read at every such call of the run, inside the call, so
+    there is no reconstruction of the surface state or the EMA to get wrong.
+    The reference is ``_smoothed_sample_state`` applied to the state the call
+    was handed, which is idempotent on the sampled cells, plus (at the
+    advance) the independent reading on ``self.state``.
+
+    It is read on the probe configuration
+    ``cathode-warming-honest-resolve-circuit-bound`` uses -- the reference
+    configuration at ``nx = 16`` with the Schottky closure cleared, the
+    circuit voltage bound armed and the equilibration cleared, 5 us at
+    2.5e-7 s cadence -- because that is a leg on which the sampled cells
+    move fast enough for the EMA to lag them, and because the bound is
+    presence-gated on that flag and so only exists to be checked there.
+
+    Two controls keep it from passing vacuously:
+
+    * the EMA must actually DEPART from raw on this leg, or "one sample" and
+      "two samples" name the same numbers and any comparison passes;
+    * a MUTATION CONTROL forces the raw accepted state back into BOTH
+      readers' evaluators, reconstructing the ``"raw"`` path, and the same
+      equalities must then FAIL by more than the measured threshold.
+
+    Measured on this probe (2026-09-10, linux-64): the shipped armed run
+    returns rel = 0 EXACTLY at all 950 of its advances and all 950 of its
+    bound calls; the mutation control returns median 0.822 / max 0.994 at the
+    advance and median 0.822 / max 0.990 at the bound; the EMA's departure
+    from raw reaches 0.236 in n. The thresholds below sit an order of
+    magnitude inside those margins.
+
+    A NOTE ON COST, because it is a property of the selector rather than of
+    this case: the armed run takes 950 accepted steps where the control and
+    the ``"raw"`` twin take 102. The bound reads the device SLOPE off the
+    relation it is handed, so putting it on the smoothed sample moves the dt
+    sequence -- which is the point, the bound and the step now describing one
+    relation, and is why the two arms are not step-for-step comparable.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from baseline_sim1d import build_baseline_config as _css_baseline_config
+    import cablp.solvers._sim1d.solver as _css_solver_mod
+
+    _CSS_T_END = 5.0e-6
+    #: Anti-vacuity thresholds, each an order of magnitude inside its
+    #: measurement (quoted in the docstring above).
+    _CSS_ROUNDOFF = 1.0e-12      # armed: measured exactly 0
+    _CSS_CONTROL_FLOOR = 0.10    # control: measured median 0.822
+    _CSS_EMA_FLOOR = 0.05        # EMA departure in n: measured 0.236
+
+    #: The two frames that build the circuit's V_dis(I): the accepted-step
+    #: advance and the loop-relaxation timestep bound. Named here so the spy
+    #: and the assertions below cannot drift apart about which is which.
+    _CSS_SITES = ("_accept_step_attempt", "_circuit_timestep_kwargs")
+
+    def _css_probe(force_raw):
+        """Run the probe; ``force_raw`` reconstructs the ``"raw"`` path.
+
+        The spy wraps ``idriven_vdis_evaluator`` at the module name and acts
+        on BOTH of its callers, keeping a separate reading per caller frame.
+        ``force_raw`` puts the raw accepted state back into whichever
+        evaluator is being built, which is the pre-selector code at either
+        site.
+        """
+        _p, _f = _css_baseline_config(
+            param_overrides={
+                "nx": 16,
+                "dt_save": 2.5e-7,
+                "cathode_circuit_sample": "smoothed",
+            },
+            flag_overrides={
+                "cathode_schottky": False,
+                "cathode_circuit_voltage_bound": True,
+                "neutral_equilibration": False,
+            },
+        )
+        assert _p["cathode_sample_smoothing"] == "presheath", (
+            _p["cathode_sample_smoothing"]
+        )
+        assert _f["cathode_circuit_voltage_bound"] is True
+        _sim = LAPDSim1D(_p, _f)
+        _orig = _css_solver_mod.idriven_vdis_evaluator
+        _rel = {_site: [] for _site in _CSS_SITES}
+        _dn = []
+
+        def _css_spy(**kw):
+            _site = _sys._getframe(1).f_code.co_name
+            if _site not in _rel:
+                return _orig(**kw)
+            if force_raw:
+                kw = dict(kw)
+                kw["state"] = _sim.state
+            _used = _orig(**kw)
+            _ref_kw = dict(kw)
+            # The smoothed sample of the state THIS call was handed. The
+            # substitution is idempotent on the sampled cells, so under the
+            # selector this is the same object the call already carries, and
+            # under the control it is what the call should have carried.
+            _ref_kw["state"] = _sim._smoothed_sample_state(kw["state"])
+            _ref = _orig(**_ref_kw)
+            _I = max(float(_sim._circuit_I_loop), 1.0)
+            _v_used = float(_used(_I))
+            _v_ref = float(_ref(_I))
+            _rel[_site].append(
+                abs(_v_used - _v_ref) / max(abs(_v_ref), 1e-12)
+            )
+            if _site == "_accept_step_attempt":
+                # At the advance the reference can also be taken
+                # INDEPENDENTLY of what the call was handed, off the accepted
+                # state itself -- which is the stronger reading, and the one
+                # that says the advance read self.state and not some other
+                # state that happens to smooth to the same thing.
+                _ind_kw = dict(kw)
+                _ind_kw["state"] = _sim._smoothed_sample_state(_sim.state)
+                _rel[_site][-1] = max(
+                    _rel[_site][-1],
+                    abs(_v_used - float(_orig(**_ind_kw)(_I)))
+                    / max(abs(_v_ref), 1e-12),
+                )
+                _derived = derive_state(
+                    _sim.state, _sim._floors, _sim._ion_mass_g
+                )
+                for _c in _sim._sample_smooth_cells:
+                    _n_ema = _sim._sample_ema[_c][0]
+                    _n_raw = float(_sim.state.n[_c])
+                    _dn.append(
+                        abs(_n_ema - _n_raw) / max(abs(_n_raw), 1e-30)
+                    )
+            return _used
+
+        _css_solver_mod.idriven_vdis_evaluator = _css_spy
+        try:
+            _sim.run(t_end=_CSS_T_END)
+        finally:
+            _css_solver_mod.idriven_vdis_evaluator = _orig
+        for _site in _CSS_SITES:
+            assert _rel[_site], (
+                f"{_site} built no V_dis(I) on this run; the clause would be "
+                "vacuous there"
+            )
+        return _rel, _dn
+
+    # (i) THE EQUALITY, at every advance AND every bound call of the run.
+    _css_rel, _css_dn = _css_probe(force_raw=False)
+    for _css_site in _CSS_SITES:
+        assert max(_css_rel[_css_site]) <= _CSS_ROUNDOFF, (
+            _css_site, len(_css_rel[_css_site]), max(_css_rel[_css_site])
+        )
+
+    # (ii) THE EMA ACTUALLY DEPARTS FROM RAW on this leg, so (i) and (iii)
+    # are comparisons between different numbers rather than the same one.
+    print(
+        "  circuit-sample: max |n_ema - n_raw| / n = "
+        f"{max(_css_dn):.4f} over {len(_css_dn)} sampled-cell readings"
+    )
+    assert max(_css_dn) > _CSS_EMA_FLOOR, max(_css_dn)
+
+    # (iii) THE MUTATION CONTROL, which must be CAUGHT AT BOTH SITES. Forcing
+    # the raw accepted state into either evaluator is the "raw" path there,
+    # and the equality above then fails by a wide margin at that site. Read
+    # per site, so a selector routed through only one of them cannot pass:
+    # the site that was not routed reads a CONTROL that no longer differs.
+    _css_ctrl_rel, _ = _css_probe(force_raw=True)
+    for _css_site in _CSS_SITES:
+        _css_vals = _css_ctrl_rel[_css_site]
+        print(
+            f"  circuit-sample control [{_css_site}]: median "
+            f"{float(np.median(_css_vals)):.4f}, max {max(_css_vals):.4f} "
+            f"over {len(_css_vals)} calls"
+        )
+        assert float(np.median(_css_vals)) > _CSS_CONTROL_FLOOR, (
+            _css_site, len(_css_vals), float(np.median(_css_vals))
+        )
+        assert max(_css_vals) > _CSS_CONTROL_FLOOR, (_css_site, max(_css_vals))
+
+
+# ----------------------------------------------------------------------
+# circuit-sample-refusals
+# ----------------------------------------------------------------------
+@_case("circuit-sample-refusals", provides=())
+def _case_circuit_sample_refusals():
+    """``cathode_circuit_sample`` refuses loudly at construction.
+
+    Four refusals, each naming the key that would have to change: an
+    unknown value; ``"smoothed"`` with no EMA to read
+    (``cathode_sample_smoothing = None``); ``"smoothed"`` under a
+    ``cathode_solver_model`` that performs no current-driven circuit advance;
+    and ``"smoothed"`` with the ``cathode_coupling`` flag off, where there is
+    no circuit advance at all.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from baseline_sim1d import build_baseline_config as _csr_baseline_config
+
+    def _csr_config(param_overrides):
+        return _csr_baseline_config(
+            param_overrides=dict({"nx": 8}, **param_overrides),
+            flag_overrides={"neutral_equilibration": False},
+        )
+
+    def _csr_refuses(params, flags, needle):
+        try:
+            LAPDSim1D(params, flags)
+        except ValueError as exc:
+            assert needle in str(exc), (needle, str(exc))
+            return
+        raise AssertionError(f"no refusal naming {needle!r}")
+
+    _csr_refuses(
+        *_csr_config({"cathode_circuit_sample": "ema"}),
+        "cathode_circuit_sample must be one of ['raw', 'smoothed'] "
+        "(got 'ema')",
+    )
+    _csr_refuses(
+        *_csr_config(
+            {
+                "cathode_circuit_sample": "smoothed",
+                "cathode_sample_smoothing": None,
+            }
+        ),
+        "cathode_circuit_sample='smoothed' requires "
+        "cathode_sample_smoothing to name a smoothing",
+    )
+    # The prescribed measured drive is the other accepted solver model, and
+    # it is refused BY NAME rather than by the trace resolution it would
+    # otherwise reach first.
+    _csr_refuses(
+        *_csr_config(
+            {
+                "cathode_circuit_sample": "smoothed",
+                "cathode_solver_model": "prescribed_measured",
+            }
+        ),
+        "cathode_circuit_sample='smoothed' requires "
+        "cathode_solver_model='current_driven' (got 'prescribed_measured')",
+    )
+    # cathode_coupling off. Read off the TEMPLATE rather than the reference
+    # configuration: clearing the coupling under the reference stance trips
+    # the surface channels that depend on the cathode solve first, and this
+    # clause is about this key's own refusal.
+    _csr_params, _csr_flags = default_config()
+    _csr_params["nx"] = 8
+    _csr_params["cathode_circuit_sample"] = "smoothed"
+    _csr_flags["cathode_coupling"] = False
+    _csr_refuses(
+        _csr_params, _csr_flags,
+        "cathode_circuit_sample='smoothed' requires the cathode_coupling "
+        "flag",
+    )
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -29207,7 +29565,7 @@ def _case_neutral_equilibration_clears_bound_flag():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 168, "historical_stance": 68}
+_CASE_CENSUS = {"total": 171, "historical_stance": 68}
 
 
 def _assert_case_census():

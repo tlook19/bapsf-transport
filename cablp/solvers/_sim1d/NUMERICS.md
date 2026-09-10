@@ -463,6 +463,16 @@ $V_\text{dis}$ evaluated at the frozen plasma state as a function of trial
 current and a modelled bank capacitor discharging trapezoidally alongside. Each
 stage is itself a `brentq` root at `xtol` $10^{-10}$ and `rtol` $10^{-12}$,
 bracketed by up to two hundred doublings, with the current clamped at $I\ge0$.
+WHICH sampled state that frozen $V_\text{dis}(I)$ is built on is selected by
+`cathode_circuit_sample`: `"raw"` (the default) the accepted end-of-step state
+itself, `"smoothed"` the supply-averaged EMA of the sampled electrode cells
+that `cathode_sample_smoothing` maintains — the same sample the RHS-side sheath
+solve and the accepted-state surface re-solve read, so under `"smoothed"` the
+loop and the fluid evaluate the sheath from one sample within an accepted step.
+The selection reaches BOTH readers of that relation — this advance and the
+`circuit` timestep bound of the adaptive-control table above, which reads the
+device slope off the same evaluator, so the bound and the step cannot be built
+on different samples.
 The fluid stages run at a loop current frozen over the step;
 `coupled_circuit_picard` re-runs the accepted step, at most
 `circuit_picard_max_iter` times in a driven phase, until the current a step

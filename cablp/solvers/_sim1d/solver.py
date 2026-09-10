@@ -573,6 +573,13 @@ _CATHODE_ION_SECONDARY_KEYS = (
 )
 
 
+#: The values ``cathode_circuit_sample`` accepts. It selects which sampled
+#: electrode state the current-driven circuit advance evaluates ``V_dis(I)``
+#: on: ``"raw"`` the accepted end-of-step state itself, ``"smoothed"`` the
+#: supply-averaged EMA ``cathode_sample_smoothing`` maintains.
+_CIRCUIT_SAMPLES = ("raw", "smoothed")
+
+
 def _cathode_result_keys(flags):
     """Return the cathode-result members this run exports, per key.
 
@@ -2775,6 +2782,46 @@ class LAPDSim1D:
         validate_cathode_ion_secondary_emission(
             self._input_dict, self._flags
         )
+        # WHICH SAMPLE THE CIRCUIT ADVANCE READS. Validated at construction --
+        # the advance runs once per accepted step deep inside the run, and a
+        # configuration that names a sample this run cannot supply must say so
+        # before it spends any time -- and, like the secondary-emission pair
+        # above, BEFORE the prescribed drive is resolved, so a configuration
+        # that names the smoothed sample under the measured drive is refused
+        # by name rather than by whatever the trace resolution happens to
+        # complain about first. "smoothed" names three things it needs -- an
+        # EMA to read, the current-driven advance that reads it, and the
+        # cathode coupling that runs that advance -- and each absence is
+        # refused by the name of the key that would have to change.
+        _circuit_sample = self._input_dict.get("cathode_circuit_sample")
+        if _circuit_sample not in _CIRCUIT_SAMPLES:
+            raise ValueError(
+                "cathode_circuit_sample must be one of "
+                f"{list(_CIRCUIT_SAMPLES)} (got {_circuit_sample!r})"
+            )
+        if _circuit_sample == "smoothed":
+            if self._input_dict.get("cathode_sample_smoothing") is None:
+                raise ValueError(
+                    "cathode_circuit_sample='smoothed' requires "
+                    "cathode_sample_smoothing to name a smoothing: with it "
+                    "None there is no supply-averaged sample for the circuit "
+                    "advance to read, and the mode would be a silent no-op"
+                )
+            if self._cathode_solver_model != "current_driven":
+                raise ValueError(
+                    "cathode_circuit_sample='smoothed' requires "
+                    "cathode_solver_model='current_driven' (got "
+                    f"{self._cathode_solver_model!r}): the sample it "
+                    "substitutes is read by the current-driven circuit "
+                    "advance, which no other solver model performs"
+                )
+            if not bool(self._flags.get("cathode_coupling")):
+                raise ValueError(
+                    "cathode_circuit_sample='smoothed' requires the "
+                    "cathode_coupling flag: with no cathode solve there is "
+                    "no circuit advance to evaluate V_dis(I) on any sample"
+                )
+        self._cathode_circuit_sample = _circuit_sample
         # PRESCRIBED MEASURED DRIVE (cathode_solver_model =
         # "prescribed_measured"). Resolved ONCE, here: the trace file is read,
         # its columns and clock validated, its bytes digested, and the hand-off
@@ -7718,7 +7765,16 @@ class LAPDSim1D:
                 )
             V_src = self._circuit_source_voltage_V(step_phase)
             vdis = idriven_vdis_evaluator(
-                state=self.state,
+                # ONE SAMPLE FOR BOTH WALLS, or the shipped two. Under
+                # cathode_circuit_sample = "smoothed" the loop relation is
+                # evaluated on the same supply-averaged sample the RHS-side
+                # sheath solve and the accepted-state re-solve read, so the
+                # circuit's wall and the fluid's wall are one object within
+                # an accepted step. "raw" (the default) reads the accepted
+                # state itself. Through ``_circuit_sample_state`` -- the same
+                # expression the timestep bound below uses, so the bound and
+                # this advance cannot be built on different samples.
+                state=self._circuit_sample_state(self.state),
                 floors=self._floors,
                 ion_mass_g=self._ion_mass_g,
                 mu=self._mu,
@@ -11544,8 +11600,10 @@ class LAPDSim1D:
         the circuit advance itself uses.
 
         The bundle carries the SAME ``vdis_of_I`` the advance integrates,
-        built at the state the step starts from, so the bound and the step
-        cannot disagree about the device relation.
+        built at the state the step starts from and -- through the one
+        ``_circuit_sample_state`` expression both readers go through -- on
+        the SAME sample of it, so the bound and the step cannot disagree
+        about the device relation under either ``cathode_circuit_sample``.
         """
         if not bool(self._flags.get("cathode_circuit_voltage_bound")):
             return None
@@ -11555,7 +11613,12 @@ class LAPDSim1D:
         if not step_phase["solve_enabled"] or step_phase["floating"]:
             return None
         vdis = idriven_vdis_evaluator(
-            state=self.state if state is None else state,
+            # Through the SAME selector the advance reads, which is what
+            # keeps the invariant in this docstring true under every
+            # cathode_circuit_sample: one device relation, one sample.
+            state=self._circuit_sample_state(
+                self.state if state is None else state
+            ),
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             mu=self._mu,
@@ -11660,24 +11723,29 @@ class LAPDSim1D:
         is seeded from the initial state (deterministic) and updated on
         accepted steps only, so dt-retries never move it.
 
-        KNOWN DEVIATION, deliberate and documented rather than unified: the
-        smoothed sample does NOT reach every consumer of those cells. The
-        substitution happens in ``_smoothed_sample_state``, and only its
-        callers see it --
+        WHICH CONSUMERS SEE IT. The substitution happens in
+        ``_smoothed_sample_state``, and only its callers see it --
 
         - the RHS/beam-side sheath solve (``solve_cathode_boundary``, which
           smooths the state it was handed before dispatching), and
         - the accepted-state re-solve that feeds the surface updates
           (cathode warming and the coverage model),
 
-        both consume the EMA sample. The current-driven CIRCUIT advance does
-        not: it builds its ``V_dis(I)`` evaluator on ``self.state``
-        directly, so the loop-current root-find reads the RAW accepted
-        (n, Te) in the same cells. With smoothing on, the two sides can
-        therefore evaluate the sheath from different (n, Te) within one
-        accepted step. Smoothing is off by default (``None``), where
-        ``_smoothed_sample_state`` returns its argument unchanged and the
-        two sides read the identical state bit for bit.
+        both consume the EMA sample unconditionally. The CIRCUIT's two
+        readers of the current-driven ``V_dis(I)`` relation -- the
+        accepted-step advance and the loop-relaxation timestep bound -- are
+        SELECTABLE, by ``cathode_circuit_sample`` (config.py), and they move
+        TOGETHER because both go through the one ``_circuit_sample_state``
+        expression: under ``"raw"`` -- the default -- both build on the raw
+        accepted sample, so the loop-current root-find reads the raw (n, Te)
+        of these cells and the two sides can evaluate the sheath from
+        different (n, Te) within one accepted step; under ``"smoothed"``
+        both build on the EMA sample instead, and the loop and the fluid
+        read one sample. Smoothing is off by default (``None``), where
+        ``_smoothed_sample_state`` returns its argument unchanged, every
+        consumer reads the identical state bit for bit, and
+        ``cathode_circuit_sample = "smoothed"`` is refused at construction
+        for want of a sample to read.
         """
         raw = self._input_dict.get("cathode_sample_smoothing")
         self._sample_smoothing = None
@@ -11734,6 +11802,23 @@ class LAPDSim1D:
                 Te_ema + alpha * (float(derived.Te[c]) - Te_ema),
             ]
 
+    def _circuit_sample_state(self, state):
+        """Return the state the CURRENT-DRIVEN circuit relation is built on.
+
+        The one expression both circuit readers of ``V_dis(I)`` go through --
+        the accepted-step advance and the loop-relaxation timestep bound --
+        so the bound and the step cannot be built on different samples.
+        ``cathode_circuit_sample`` selects: ``"raw"`` (the default) returns
+        ``state`` untouched and does not call the substitution at all, so
+        that path is what it was before the key existed; ``"smoothed"``
+        returns the supply-averaged sample ``cathode_sample_smoothing``
+        maintains, which is the sample the RHS-side sheath solve and the
+        accepted-state surface re-solve already read.
+        """
+        if self._cathode_circuit_sample != "smoothed":
+            return state
+        return self._smoothed_sample_state(state)
+
     def _smoothed_sample_state(self, state):
         """Return ``state`` with the sampled electrode cells' (n, Te)
         replaced by their supply-averaged EMA values (config.py:
@@ -11742,10 +11827,13 @@ class LAPDSim1D:
 
         This is the ONLY substitution site, so the smoothed sample reaches
         exactly its callers: the RHS/beam-side sheath solve and the
-        accepted-state surface-update re-solve. The current-driven circuit
-        advance bypasses it and reads the raw accepted state -- a known
-        deviation from "every sheath consumer sees the EMA", described in
-        full on ``_init_sample_smoothing``."""
+        accepted-state surface-update re-solve unconditionally, and the
+        current-driven circuit's two ``V_dis(I)`` readers -- the accepted-step
+        advance and the loop-relaxation timestep bound -- only under
+        ``cathode_circuit_sample = "smoothed"``, both through the single
+        ``_circuit_sample_state`` expression. Under ``"raw"`` (the default)
+        neither of those two calls this method at all and both read the raw
+        accepted state. Described in full on ``_init_sample_smoothing``."""
         if self._sample_ema is None:
             return state
         n = np.asarray(state.n, dtype=float).copy()
