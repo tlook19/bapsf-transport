@@ -7533,12 +7533,24 @@ class LAPDSim1D:
             # because the circuit advance that zeroes it runs later in this
             # same accept.
             #
-            # The flags stay the DRIVEN ones in both phases. This evaluator
-            # reads ``TwinCathode``, ``cathode_schottky``,
-            # ``cathode_emission_bridge`` and the ``cathode_Rp_model``
-            # validator from them and never reads ``cathode_coupling``, so the
-            # one expression serves both phases and the driven path is
-            # untouched.
+            # The flags are the PHASE'S OWN in both phases, and what makes
+            # this the driven or the open-circuit reading is the CURRENT
+            # below, which is the only thing that should. This evaluator reads
+            # ``TwinCathode``, ``cathode_schottky``,
+            # ``cathode_emission_bridge``, the ``cathode_Rp_model`` validator
+            # and the ion-secondary-emission validator from them, and the last
+            # of those asks whether the configuration SUPPLIES the cathode
+            # circuit solve -- a construction-time fact about the
+            # configuration, not a per-phase one. Asking here for the DRIVEN
+            # mapping (``active_only=False, floating=False``) as a way of
+            # saying "read the driven relation" cleared ``cathode_coupling``
+            # in the open-circuit afterglow, where a cathode solve does exist
+            # and is read at zero loop current: it told that validator the
+            # configuration had no cathode circuit at all, and refused a
+            # legally armed run at the first open-circuit step, having already
+            # spent the whole discharge. The phase's own reading says a solve
+            # is enabled in every phase this re-solve runs in, so it is both
+            # the truthful mapping and, in the driven phases, the same one.
             honest_I_A = (
                 0.0
                 if bool(solve.metadata.get("floating", False))
@@ -7567,9 +7579,7 @@ class LAPDSim1D:
                 mu=self._mu,
                 geometry=self._geometry,
                 input_dict=self._input_dict,
-                input_flags=self._effective_cathode_flags(
-                    active_only=False, floating=False
-                ),
+                input_flags=self._effective_cathode_flags(),
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
@@ -7831,7 +7841,20 @@ class LAPDSim1D:
                 mu=self._mu,
                 geometry=self._geometry,
                 input_dict=self._input_dict,
+                # AT THE STEP'S OWN PHASE -- ``step_phase``'s time, the same
+                # one the branch gate above and ``V_src`` beside it were read
+                # at. Left at the default (the CURRENT time, past the end of
+                # the step) the two disagreed on exactly one step per run: the
+                # one that CROSSES out of the drive. There the gate saw the
+                # driven step it is integrating and let the branch run, while
+                # the mapping saw the afterglow the step landed in, and the
+                # ``floating=False`` override -- inert wherever this branch
+                # actually runs -- then cleared ``cathode_coupling`` for a
+                # configuration that supplies one. The ion-secondary-emission
+                # validator reads that key as a construction-time fact and
+                # refused the crossing step of every armed run.
                 input_flags=self._effective_cathode_flags(
+                    time=self._time - float(attempt.dt),
                     active_only=False, floating=False
                 ),
                 beam_cross_prev=self._cathode_beam_cross,
@@ -11878,8 +11901,13 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             input_dict=self._input_dict,
+            # AT THE TIME THE GATE ABOVE WAS READ AT, for the reason the
+            # circuit advance carries: a mapping read at a different instant
+            # than the gate that let it be built can report a phase the gate
+            # already excluded, and the override below would then clear
+            # ``cathode_coupling`` on a configuration that has one.
             input_flags=self._effective_cathode_flags(
-                active_only=False, floating=False
+                time=time, active_only=False, floating=False
             ),
             beam_cross_prev=self._cathode_beam_cross,
             T_s_override_K=self._cathode_Ts_K,
@@ -11915,6 +11943,22 @@ class LAPDSim1D:
         The circuit advance and its device-relation evaluator pass
         ``active_only=False, floating=False`` to ask for the DRIVEN flags
         regardless of phase, which is what the loop they integrate needs.
+
+        WHAT THE OVERRIDE COSTS, and why it is not free. Overriding to
+        ``floating=False`` in a floating phase drops the disjunct that was
+        carrying that phase, so the mapping reports ``cathode_coupling``
+        FALSE -- "this configuration supplies no cathode circuit solve" --
+        for a phase that has one. Consumers reading the key as the phase
+        question ("does a solve run now") are asking the wrong one of the two
+        questions this key carries; consumers reading it as the CONFIGURATION
+        question, which is what the solve-site validators do, are handed a
+        configuration that does not exist and refuse it. So the override
+        belongs only where a floating phase cannot be reached: the circuit
+        advance and the bound's bundle both return before it on
+        ``step_phase["floating"]``, which is what keeps it inert there. A
+        caller that CAN be in a floating phase asks for the phase's own
+        reading and says which relation it wants some other way -- the
+        accepted-state re-solve says it with the current it evaluates at.
         """
         options = self._cathode_phase_options(time=time)
         use_floating = (
