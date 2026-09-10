@@ -7462,9 +7462,9 @@ class LAPDSim1D:
             # that actually ran sat on the load line. The value is read
             # through the same expression the circuit advance below reads, at
             # the same phase (this step's), so the two cannot disagree.
-            # ``None`` -- and with it the historical ceiling, bit for bit --
-            # whenever the flag is off, which is where
-            # ``circuit_available_voltage_V`` returns it.
+            # The circuit member of that ceiling is ``None`` -- and with it
+            # the historical ceiling, bit for bit -- whenever the flag is
+            # off, which is where ``circuit_available_voltage_V`` returns it.
             honest_result = idriven_result_evaluator(
                 state=self._smoothed_sample_state(self.state),
                 floors=self._floors,

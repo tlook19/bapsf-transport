@@ -27808,10 +27808,12 @@ def _case_end_wall_riemann_flux_unarmed_inert():
 # --------------------------------------------------------------------
 @_case("end-wall-riemann-flux-refusals", historical_stance=True)
 def _case_end_wall_riemann_flux_refusals():
-    # FIVE REFUSALS, all at construction. The flag must be a real bool; armed,
-    # it must name one of the two solvers AND find the one face it replaces;
-    # off, it must not carry a name, because a named solver behind a cleared
-    # flag is exactly the silent inert control the namespaces exist to forbid.
+    # FIVE REFUSALS: four at construction -- the flag must be a real bool;
+    # armed, it must name one of the two solvers AND find the one face it
+    # replaces; off, it must not carry a name, because a named solver behind
+    # a cleared flag is exactly the silent inert control the namespaces exist
+    # to forbid -- and a fifth one layer down, at the dispatcher in flux.py,
+    # which names the same accepted set again.
     _rf_params, _rf_flags = _base_config()
 
     def _rf_refuses(params_over, flags_over):

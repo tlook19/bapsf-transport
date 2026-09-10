@@ -558,10 +558,12 @@ def exact_isothermal_face_scalar(left, right, mu, ion_mass_g):
     the same ``sqrt(Te/m_i)`` the ghost state's Bohm velocity is set at. That
     pair carries no ion partial pressure, so where ``Ti`` is not negligible this
     momentum flux is smaller than the model's own ``n (Te + Ti)`` face pressure
-    by exactly ``n_f Ti`` -- the price of a closure whose Riemann problem has a
-    closed-form solution. Both sides must name the same ``Te`` (one Riemann
-    problem has one sound speed); a differing pair raises rather than picking a
-    side.
+    by ``n_f ((Te + Ti) - m_i c^2)`` -- exactly ``n_f Ti`` plus a small
+    mass-convention residual (``m_i c^2`` uses the true ion mass ``ion_mass_g``
+    against a sound speed built on ``mu`` proton masses; ~0.600% of Te at
+    mu=4) -- the price of a closure whose Riemann problem has a closed-form
+    solution. Both sides must name the same ``Te`` (one Riemann problem has one
+    sound speed); a differing pair raises rather than picking a side.
 
     The system has two genuinely nonlinear fields and no contact, so the star
     region is a SINGLE state ``(n*, u*)``. The wave curves are
