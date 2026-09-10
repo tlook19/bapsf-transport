@@ -7920,10 +7920,14 @@ class LAPDSim1D:
         projection census. Returns nothing.
 
         THE TRIGGER is the sheath's UNBOUNDED demand at the held current,
-        evaluated on ``state``: the caller passes the ONE
+        evaluated on ``state``: the caller passes the very
         ``_circuit_sample_state`` result the advance's own ``V_dis(I)``
-        evaluator and the loop-relaxation timestep bound are both built on,
-        so the trigger, the bound and the step read one sample. That
+        evaluator was built on, so within one accepted step the trigger and
+        the relation it projects onto are the SAME OBJECT -- and that
+        selector is the one the loop-relaxation timestep bound goes through
+        too, at the state its own step starts from, so all three read one
+        sample of the electrode cells under either
+        ``cathode_circuit_sample``. That
         evaluator carries no circuit member in its ceiling
         (``apply_circuit_bound=False``), so its composed ceiling IS the
         atomic-data cap ``cathode_phi_c_cap_V`` and a ``capability_limited``
