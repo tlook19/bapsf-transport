@@ -20221,6 +20221,113 @@ def _case_tracer_presence_gating():
 
 
 # --------------------------------------------------------------------
+# tracer-passive-anomalous-leak-phase-gated-solve
+# --------------------------------------------------------------------
+@_case("tracer-passive-anomalous-leak-phase-gated-solve", provides=())
+def _case_tracer_passive_anomalous_leak_phase_gated_solve():
+    """``tracer_passive_anomalous_leak`` must not dispatch off-phase.
+
+    Its sibling ``_tracer_prepare`` gates its own re-solve on
+    ``self._flags.get("cathode_coupling")`` before calling
+    ``solve_cathode_boundary``; ``tracer_passive_anomalous_leak`` called it
+    unconditionally when ``self._cathode_solve is None``. Fixed to build
+    ``cathode_flags = self._effective_cathode_flags(time=time,
+    active_only=True)`` first and dispatch only when
+    ``cathode_flags["cathode_coupling"]`` is True -- the same pattern
+    ``_jet_cathode_solve`` (:10411) and ``cathode_source_terms`` (:10980) use.
+
+    NOTE ON THE RECONSTRUCTED FAILURE MODE. In a ``neutral_prebreakdown``
+    phase (``tau_neutral_prebreakdown`` > 0, the tracer engaged,
+    ``cathode_ion_secondary_emission`` armed) the unconditional pre-fix call
+    does NOT reach the ion-secondary-emission validator and does NOT raise:
+    ``cathode_boundary_state.enabled`` (``physics/cathode.py``) reads the
+    SAME phase-aware ``cathode_coupling`` the gate above reads, and
+    ``solve_cathode_boundary``'s module function returns a disabled,
+    no-op ``CathodeSolve1D`` before the validator is ever reached
+    (``physics/cathode.py:1472``) -- measured directly below. So the
+    pre-fix call was silently WASTEFUL in this phase rather than a hard
+    refusal; the fix is for phase-consistency with the other solve sites,
+    not for avoiding a crash reachable here. What IS tested, both ways: the
+    fixed method dispatches a solve only in a phase that has one.
+    """
+    def _tpal_build():
+        params, flags = default_config()
+        params = dict(params)
+        flags = dict(flags)
+        params["nx"] = 16
+        params["cathode_solver_model"] = "current_driven"
+        flags["neutral_equilibration"] = False
+        flags["cathode_coupling"] = True
+        flags["regime_tracer"] = True
+        flags["cathode_ion_secondary_emission"] = True
+        params["cathode_ion_secondary_emission_yield"] = 0.375
+        params["phase_transition_mode"] = "scheduled"
+        params["tau_neutral_prebreakdown"] = 1.0e-6
+        params["tau_prebreakdown"] = 1.0e-6
+        params["tau_breakdown"] = 0.0
+        params["tau_discharge"] = 1.0e-6
+        params["tau_afterglow"] = 1.0e-6
+        _pin_pre_r2a_neutral_stance(params, flags)
+        return params, flags
+
+    _tpal_params, _tpal_flags = _tpal_build()
+    _tpal_sim = LAPDSim1D(_tpal_params, _tpal_flags)
+    assert _tpal_sim._tracer_engaged
+
+    _tpal_prebreak_t = 0.5 * float(_tpal_params["tau_neutral_prebreakdown"])
+    assert _tpal_sim.phase_at_time(_tpal_prebreak_t) == "neutral_prebreakdown"
+    _tpal_discharge_t = (
+        float(_tpal_params["tau_neutral_prebreakdown"])
+        + float(_tpal_params["tau_prebreakdown"])
+        + float(_tpal_params["tau_breakdown"])
+        + 0.5 * float(_tpal_params["tau_discharge"])
+    )
+    assert _tpal_sim.phase_at_time(_tpal_discharge_t) == "main_discharge"
+
+    def _tpal_call_with_spy(time):
+        calls = []
+        orig = _tpal_sim.solve_cathode_boundary
+
+        def _tpal_spy(**kw):
+            calls.append(kw)
+            return orig(**kw)
+
+        _tpal_sim.solve_cathode_boundary = _tpal_spy
+        try:
+            out = _tpal_sim.tracer_passive_anomalous_leak(time=time)
+        finally:
+            _tpal_sim.solve_cathode_boundary = orig
+        return out, calls
+
+    # (i) neutral_prebreakdown has no cathode solve: the fix must not
+    # dispatch one.
+    _tpal_out_pre, _tpal_calls_pre = _tpal_call_with_spy(_tpal_prebreak_t)
+    assert len(_tpal_calls_pre) == 0, (
+        "tracer_passive_anomalous_leak dispatched a cathode solve in a "
+        "phase with no cathode solve"
+    )
+    assert np.all(_tpal_out_pre == 0.0), _tpal_out_pre
+
+    # (ii) ANTI-VACUITY: main_discharge DOES have a cathode solve, so the
+    # gate must not suppress every dispatch -- only the phase-inappropriate
+    # one.
+    _tpal_out_main, _tpal_calls_main = _tpal_call_with_spy(_tpal_discharge_t)
+    assert len(_tpal_calls_main) == 1, (
+        "tracer_passive_anomalous_leak must still dispatch a cathode solve "
+        "in a phase that has one"
+    )
+
+    # (iii) THE RECONSTRUCTED PRE-FIX CALL, direct: unconditional dispatch
+    # in neutral_prebreakdown returns a disabled solve rather than raising,
+    # which is why this case tests call suppression rather than a refusal.
+    _tpal_recon = _tpal_sim.solve_cathode_boundary(
+        state=_tpal_sim.state, time=_tpal_prebreak_t, update_cache=False
+    )
+    assert _tpal_recon.metadata["enabled"] is False, _tpal_recon.metadata
+    assert _tpal_recon.beam_result is None
+
+
+# --------------------------------------------------------------------
 # tracer-construction-refusals
 # --------------------------------------------------------------------
 @_case(
@@ -30378,7 +30485,7 @@ def _case_circuit_projection_refusals():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 178, "historical_stance": 68}
+_CASE_CENSUS = {"total": 179, "historical_stance": 68}
 
 
 def _assert_case_census():

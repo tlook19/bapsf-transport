@@ -4624,9 +4624,13 @@ class LAPDSim1D:
             time = self._time
         cathode_solve = self._cathode_solve
         if cathode_solve is None:
-            cathode_solve = self.solve_cathode_boundary(
-                state=state, time=time, update_cache=False
+            cathode_flags = self._effective_cathode_flags(
+                time=time, active_only=True
             )
+            if cathode_flags.get("cathode_coupling", False):
+                cathode_solve = self.solve_cathode_boundary(
+                    state=state, time=time, update_cache=False
+                )
         _S, P_net, P_full = self._tracer_beam_rows(state, cathode_solve, time)
         return tracer_passive_anomalous_leak(
             P_beam_net_consumed=P_net,
