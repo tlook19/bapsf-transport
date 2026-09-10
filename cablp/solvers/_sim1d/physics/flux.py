@@ -19,7 +19,13 @@ class PlasmaFaceFluxes1D:
 
 
 def ion_sound_speed(Te, mu):
-    """Return the ion sound speed [cm/s] using the existing _sim3 convention."""
+    """Return the ion sound speed [cm/s] using the existing _sim3 convention.
+
+    Built on ``mu`` proton masses (``9.79e5 * sqrt(Te/mu)``, i.e. an implied
+    ion mass ``mu * m_p``), not the true ion mass ``ion_mass_g`` (m_He) that
+    other terms use directly -- a fixed ~0.600% residual in ``m_i c^2``
+    against ``Te`` at mu=4.
+    """
     return v_ion_speed(Te, mu)
 
 

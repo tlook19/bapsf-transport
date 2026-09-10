@@ -974,10 +974,11 @@ def model_mode_defaults():
         The ``cathode_phi_c_cap_V`` in that expression is the RAW atomic-data
         cap, taken because it is resolvable at construction; the circuit's
         own ``min(cap, V_avail(I))`` bound is tighter but current-dependent
-        and therefore is not. The same 1000 V allowance is applied to the
-        ANODE fall as a stated assumption about the band the construction
-        check covers -- ``phi_a`` carries no cap of its own and none is
-        implied here -- so the check is conservative on that side rather
+        and therefore is not. The same ``cathode_phi_c_cap_V`` allowance is
+        applied to the ANODE fall as a stated assumption about the band the
+        construction check covers -- ``phi_a`` carries no cap of its own and
+        none is implied here -- so the check is conservative on that side
+        rather
         than predictive, and the tick's own moment refusal remains the
         backstop for anything the band did not anticipate.
 
@@ -4296,9 +4297,10 @@ input_flags_template_1d = {
     # and the capability-limited device voltage V_b are all held at or below
     # the supply. Which quantity the available voltage bounds is
     # cathode_circuit_bound_object's choice. Without the flag the
-    # capability-limited branch floors V_b at the data cap, which on the
-    # pre-breakdown build leg reports ~1000 V and a ~keV beam against a bank
-    # supplying ~178 V. The cap itself is untouched and still composes as the
+    # capability-limited branch floors V_b at the data cap
+    # (``cathode_phi_c_cap_V``), which on the pre-breakdown build leg drives
+    # a ~keV beam against a bank supplying ~178 V. The cap itself is
+    # untouched and still composes as the
     # other upper bound (it is the He EII table top, an atomic-data domain
     # guard). The inductor's back-EMF is deliberately NOT counted as available
     # voltage. Requires cathode_solver_model='current_driven',

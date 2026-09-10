@@ -81,7 +81,9 @@ carries no ion partial pressure, so this face's momentum flux is smaller than
 the model's own $n(T_e+T_i)$ face pressure by $n_f((T_e+T_i)-m_ic^2)$ --
 exactly $n_fT_i$ plus a small mass-convention residual ($m_ic^2$ uses the true
 ion mass `ion_mass_g` against a sound speed built on $\mu$ proton masses;
-~0.600% of $T_e$ at $\mu=4$).
+~0.600% of $T_e$ at $\mu=4$). That residual reaches a delivered flux only
+under `end_wall_face_riemann_flux` with `"exact_isothermal"` selected, and is
+disclosed here rather than reconciled.
 
 `"hll"` is the HLL flux on the full $(n,M,E_e,E_i)$ vector with the face's own
 signal speeds $S_L=\min(u_L-c_L,\,u_R-c_R)$ and
