@@ -7450,6 +7450,21 @@ class LAPDSim1D:
                 if bool(solve.metadata.get("floating", False))
                 else self._circuit_I_loop
             )
+            # AT THE STEP'S OWN SHEATH CEILING. Under
+            # ``cathode_circuit_voltage_bound`` the ceiling the dispatched
+            # solves were run against is the COMPOSED one -- the atomic-data
+            # cap ``cathode_phi_c_cap_V`` and the loop's available voltage
+            # V_src - I*(R_comp + R_mesh_ohm), whichever is lower -- and it is
+            # the source voltage that carries the circuit member. Withholding
+            # it here would leave this re-solve on the data cap alone, so on
+            # every step whose imposed current sits above the emission wall it
+            # would book the surface's ion power at ~1000 V while the solve
+            # that actually ran sat on the load line. The value is read
+            # through the same expression the circuit advance below reads, at
+            # the same phase (this step's), so the two cannot disagree.
+            # ``None`` -- and with it the historical ceiling, bit for bit --
+            # whenever the flag is off, which is where
+            # ``circuit_available_voltage_V`` returns it.
             honest_result = idriven_result_evaluator(
                 state=self._smoothed_sample_state(self.state),
                 floors=self._floors,
@@ -7464,6 +7479,11 @@ class LAPDSim1D:
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
                 f_em_override=self._cathode_f_em,
+                circuit_V_src_V=self._circuit_source_voltage_V(
+                    self._cathode_phase_options(
+                        time=self._time - float(attempt.dt)
+                    )
+                ),
             )(honest_I_A)
         # B5: the backscatter row of the surface energy ledger, booked on
         # EVERY accepted step the channel counted on -- not only on the ones

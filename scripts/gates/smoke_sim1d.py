@@ -28896,6 +28896,187 @@ def _case_far_end_double_ratio_shared_keys_skip():
 
 
 # ----------------------------------------------------------------------
+# cathode-warming-honest-resolve-circuit-bound
+# ----------------------------------------------------------------------
+@_case("cathode-warming-honest-resolve-circuit-bound", provides=())
+def _case_cathode_warming_honest_resolve_circuit_bound():
+    """The warming re-solve's sheath ceiling is the COMPOSED one.
+
+    Under ``cathode_circuit_voltage_bound`` the ceiling every dispatched
+    per-step solve is run against is the minimum of the atomic-data cap
+    ``cathode_phi_c_cap_V`` and the loop's available voltage
+    ``V_src - I*(R_comp + R_mesh_ohm)``. The accepted-state re-solve that
+    feeds the power-balance surface energy balance carries the same ceiling,
+    because it is handed the same source voltage the circuit advance reads.
+    Withheld, that re-solve sits on the data cap alone, and on every step
+    whose imposed loop current is above the emission wall it books the
+    surface's ion power at ~1000 V while the solve that actually ran sat on
+    the load line -- which is the whole of ``warming_E_ion_J`` and, through
+    T_s, of the emission it drives.
+
+    So the clause is a LEDGER IDENTITY: the ion row's rate over the probe
+    equals the probe's mean ``P_cathode_i``. It is read on the reference
+    configuration with the Schottky closure cleared and the bound armed --
+    the state in which the sheath meets the wall, and meets it from the
+    first microsecond, so 5 us of run decides it -- at a coarse mesh and a
+    save cadence fine enough to resolve the over-wall leg. The window is the
+    leg itself, where the ceiling is the load line on nearly every save,
+    because that is where the identity has something to say.
+
+    Three controls keep the three ways it could pass vacuously shut:
+
+    * the probe must actually SIT on the circuit member of the ceiling, or
+      the identity is being read where nothing composes;
+    * the withheld value is put back by a spy, reconstructing the defect,
+      and the same identity must then FAIL by more than a factor of two;
+    * the flag-off twin must be byte-identical under both, trajectory and
+      surface ledger alike -- the bit-exactness of the unarmed path measured
+      end to end rather than argued from the expression.
+    """
+    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from baseline_sim1d import build_baseline_config as _wb_baseline_config
+    from cablp.solvers._sim1d.physics.cathode import (
+        circuit_available_voltage_V as _wb_available_V,
+    )
+    import cablp.solvers._sim1d.solver as _solver_mod
+
+    # The armed leg is 5 us at 2.5e-7 s cadence; the flag-off twin needs
+    # only enough accepted steps to have a ledger to compare.
+    _WB_T_END = 5.0e-6
+    _WB_OFF_T_END = 2.0e-6
+
+    def _wb_config(bound):
+        """The reference configuration, OFF closure, bound as asked.
+
+        ``nx`` and ``dt_save`` are the PROBE's: the clause is a ledger
+        identity, not a physics point. ``neutral_equilibration`` is cleared
+        because the equilibration inner sim runs without a cathode solve and
+        the bound refuses without one; the golden route already pins the
+        scalar fill the probe then starts from.
+        """
+        return _wb_baseline_config(
+            param_overrides={"nx": 16, "dt_save": 2.5e-7},
+            flag_overrides={
+                "cathode_schottky": False,
+                "cathode_circuit_voltage_bound": bool(bound),
+                "neutral_equilibration": False,
+            },
+        )
+
+    def _wb_run(bound, t_end, withhold):
+        """Run the probe; ``withhold`` reconstructs the defect.
+
+        ``idriven_result_evaluator`` is called from exactly one place in the
+        solver -- the accepted-state re-solve -- so forcing its
+        ``circuit_V_src_V`` to ``None`` at the module name IS the pre-fix
+        call site, and nothing else moves.
+        """
+        _wb_params, _wb_flags = _wb_config(bound)
+        _wb_orig = _solver_mod.idriven_result_evaluator
+
+        def _wb_withheld(**kw):
+            kw["circuit_V_src_V"] = None
+            return _wb_orig(**kw)
+
+        if withhold:
+            _solver_mod.idriven_result_evaluator = _wb_withheld
+        try:
+            return LAPDSim1D(_wb_params, _wb_flags).run(t_end=t_end)
+        finally:
+            _solver_mod.idriven_result_evaluator = _wb_orig
+
+    def _wb_identity(result):
+        """``(ion-row rate, mean P_cathode_i, over-wall share)`` [W, W, -]."""
+        _cd = result.cathode_diagnostics
+        _t = np.asarray(result.time, dtype=float)
+        _E = np.asarray(_cd["warming_E_ion_J"], dtype=float)
+        _P = np.asarray(_cd["source_P_cathode_i"], dtype=float)
+        _ba = np.asarray(_cd["source_bound_active"], dtype=float)
+        _span = _t[-1] - _t[0]
+        return (
+            (_E[-1] - _E[0]) / _span,
+            float(np.trapezoid(_P, _t) / _span),
+            float(np.mean(_ba == 2.0)),
+        )
+
+    # (i) THE IDENTITY, and that it is read somewhere it means something.
+    _wb_armed = _wb_run(True, _WB_T_END, withhold=False)
+    _wb_rate, _wb_mean_P, _wb_on_circuit = _wb_identity(_wb_armed)
+    assert _wb_on_circuit > 0.25, (
+        "probe never sat on the circuit member of the ceiling "
+        f"(share {_wb_on_circuit}); the identity below would be vacuous"
+    )
+    assert _wb_mean_P > 0.0, _wb_mean_P
+    assert abs(_wb_rate / _wb_mean_P - 1.0) <= 0.02, (
+        _wb_rate, _wb_mean_P, _wb_rate / _wb_mean_P
+    )
+
+    # (ii) THE RECONSTRUCTION, which must be CAUGHT. With the source voltage
+    # withheld the re-solve books the ion power against the data cap on the
+    # over-wall steps and the ion row runs away from the solve it is supposed
+    # to be measuring.
+    _wb_ctrl = _wb_run(True, _WB_T_END, withhold=True)
+    _wb_ctrl_rate, _wb_ctrl_mean_P, _ = _wb_identity(_wb_ctrl)
+    assert _wb_ctrl_rate / _wb_ctrl_mean_P > 3.0, (
+        _wb_ctrl_rate, _wb_ctrl_mean_P
+    )
+    assert (
+        np.asarray(
+            _wb_ctrl.cathode_diagnostics["warming_E_ion_J"], dtype=float
+        )[-1]
+        > 3.0 * np.asarray(
+            _wb_armed.cathode_diagnostics["warming_E_ion_J"], dtype=float
+        )[-1]
+    )
+
+    # (iii) BIT-EXACT OFF, end to end. With the bound unarmed the source
+    # voltage cannot reach the solve at all, so the shipped call and the
+    # withheld one are the same run to the byte -- trajectory, surface energy
+    # ledger and surface temperature.
+    _wb_off = _wb_run(False, _WB_OFF_T_END, withhold=False)
+    _wb_off_ctrl = _wb_run(False, _WB_OFF_T_END, withhold=True)
+    assert (
+        np.asarray(_wb_off.y, dtype=float).tobytes()
+        == np.asarray(_wb_off_ctrl.y, dtype=float).tobytes()
+    )
+    assert (
+        np.asarray(_wb_off.time, dtype=float).tobytes()
+        == np.asarray(_wb_off_ctrl.time, dtype=float).tobytes()
+    )
+    for _wb_row in (
+        "warming_E_heater_J", "warming_E_ion_J", "warming_E_rad_J",
+        "warming_E_emis_J", "warming_E_cond_J", "warming_E_backscatter_J",
+        "T_s_surface",
+    ):
+        assert (
+            np.asarray(
+                _wb_off.cathode_diagnostics[_wb_row], dtype=float
+            ).tobytes()
+            == np.asarray(
+                _wb_off_ctrl.cathode_diagnostics[_wb_row], dtype=float
+            ).tobytes()
+        ), _wb_row
+
+    # ...and the expression that makes it so: unarmed, the available voltage
+    # is ``None`` whatever source voltage and current it is handed, which is
+    # the convention the sheath solve reads as "no bound".
+    _wb_off_params, _wb_off_flags = _wb_config(False)
+    assert _wb_off_flags["cathode_circuit_voltage_bound"] is False
+    for _wb_I in (0.0, 5.0, 500.0, 1.0e5):
+        assert _wb_available_V(
+            _wb_off_params, _wb_off_flags,
+            float(_wb_off_params["V_bank"]), _wb_I,
+        ) is None, _wb_I
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -28904,7 +29085,7 @@ def _case_far_end_double_ratio_shared_keys_skip():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 166, "historical_stance": 68}
+_CASE_CENSUS = {"total": 167, "historical_stance": 68}
 
 
 def _assert_case_census():
