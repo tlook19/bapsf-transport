@@ -48,6 +48,17 @@ where the circuit lines would be; an energy row a channel does not carry is
 omitted rather than entered as a zero; and a channel with no entry in
 `CHANNEL_PHASE` is tabulated as UNTAGGED and named in a closing note rather
 than being silently absorbed into a subtotal.
+
+CIRCUIT PROJECTION. `circuit_projection_dropped` [W], in the circuit block,
+PRESENCE-GATED on `cathode_circuit_project_over_wall`: the window rate
+(endpoint slope) of the cumulative `circuit_projection_energy_J` counter, the
+inductor energy a projection event drops (`0.5 * L * (I_held**2 -
+I_root**2)`, non-negative by construction) rather than hands to any plasma
+channel. A named ledger row, not a residual, so the loop's I.V input and its
+`source_P_*` sinks do not carry it as an unexplained gap. In the DRIVE
+window only, printed beside a PRE-REGISTERED clause: the rate must sit under
+0.1% of the window-mean `source_P_prim`. Absent (not zero) on a run that
+never armed the key.
 """
 import argparse
 import json
@@ -574,6 +585,32 @@ def counter_slope(dg, key, i0, i1, dt_s):
     return (float(d[i1]) - float(d[i0])) / dt_s
 
 
+def projection_dropped_W(dg, i0, i1, dt_s):
+    """Window dropped-energy rate [W] of the over-wall projection counter.
+
+    PRESENCE-GATED on ``circuit_projection_energy_J``: returns ``None`` on an
+    artifact that carries no such row (the run was not armed with
+    ``cathode_circuit_project_over_wall``) -- never ``0.0``, which would read
+    as "armed and idle" rather than "not computed". Otherwise the endpoint
+    slope (:func:`counter_slope`) of the cumulative counter over the window,
+    the same convention as the WARMING COUNTER SLOPES block.
+
+    SIGN: positive = energy LEAVING the circuit loop. The counter accumulates
+    ``0.5 * L * (I_held**2 - I_root**2)`` at each projection event, where
+    ``I_root`` is a bisection root bracketed below ``I_held`` (never above
+    it), so the increment -- and this rate -- is non-negative by
+    construction. That matches every other row in the circuit block: each
+    ``source_P_*`` sink is likewise a positive power flowing OUT of the loop
+    into its named channel, and this row is that same kind of sink, named for
+    the inductor energy a projection event discards rather than hands to any
+    plasma channel. Without a named row for it, the loop's I.V input and its
+    source_P_* sinks would carry that energy as an unexplained gap.
+    """
+    if dg is None or "circuit_projection_energy_J" not in dg:
+        return None
+    return counter_slope(dg, "circuit_projection_energy_J", i0, i1, dt_s)
+
+
 def stored_energy_J(f, i0, i1, Vp):
     """Window-mean stored plasma energy 3/2 (pe + pi) . Vp [J]."""
     if "pe" not in f or "pi" not in f:
@@ -737,6 +774,35 @@ def report_window(f, label, lo, hi, geom, port_top):
         for key in sorted(k for k in dg.keys() if k.startswith("source_P_")):
             print(f"{'  ' + key:<44}"
                   f"{diagnostic_mean(dg, key, mask) / 1e3:>16.5f}  kW")
+        # Over-wall projection loss, PRESENCE-GATED on
+        # cathode_circuit_project_over_wall -- see projection_dropped_W.
+        # A LEDGER ROW, not a residual: the dropped inductor energy is named
+        # here so the loop's I.V input and its source_P_* sinks above do not
+        # carry it as an unexplained gap.
+        dropped_W = projection_dropped_W(dg, i0, i1, dt_s)
+        if dropped_W is not None:
+            print(f"{'  circuit_projection_dropped':<44}"
+                  f"{dropped_W:>16.5f}  W")
+            if label == "DRIVE":
+                # PRE-REGISTERED clause (the O6-B3 advisor read): the
+                # plateau-mean dropped rate must sit under 0.1% of the
+                # plateau-mean primary-beam power -- a genuine loss, not a
+                # material share of what the drive puts in. Gated to the
+                # DRIVE window alone: "plateau" names that window in this
+                # script (see the module docstring), and the AFTERGLOW
+                # window's source_P_prim is ~0 by construction, which would
+                # make the ratio meaningless there.
+                P_prim_W = diagnostic_mean(dg, "source_P_prim", mask)
+                if np.isfinite(P_prim_W) and P_prim_W != 0.0:
+                    share_pct = abs(dropped_W) / P_prim_W * 100.0
+                    ok = share_pct < 0.1
+                    print(f"    [{'PASS' if ok else 'FAIL'}] PRE-REGISTERED "
+                          "clause: plateau-mean circuit_projection_dropped "
+                          f"< 0.1% of plateau-mean source_P_prim "
+                          f"({share_pct:.4f}%)")
+                else:
+                    print("    clause n/a -- plateau-mean source_P_prim is "
+                          "zero or not finite in this window")
         if n_prescribed:
             # WHAT THE RESIDUAL IS on a prescribed frame. Nothing is
             # re-booked here: the row is what the circuit already computed
@@ -952,6 +1018,21 @@ def selftest(path):
         dt_s = (geom["t_ms"][i1] - geom["t_ms"][i0]) * 1e-3
         table, _ = integrate_rows(f, i0, i1, geom["vols"])
         dg = f["cathode_diagnostics"]
+        # PRESENCE-GATE check for circuit_projection_dropped: the founding
+        # artifact predates cathode_circuit_project_over_wall and carries no
+        # circuit_projection_energy_J row, so this is the one artifact on
+        # hand that can exercise the absent branch -- projection_dropped_W
+        # must read as ABSENT (None), never a measured 0.0 that would claim
+        # the run was armed and idle.
+        assert "circuit_projection_energy_J" not in dg, (
+            "power ledger selftest: the founding artifact now carries "
+            "circuit_projection_energy_J -- the presence-gate check below "
+            "needs an unarmed artifact to exercise the absent branch"
+        )
+        assert projection_dropped_W(dg, i0, i1, dt_s) is None, (
+            "power ledger selftest: circuit_projection_dropped must read "
+            "ABSENT (None) on an artifact without circuit_projection_energy_J"
+        )
         measured = {
             "cathode_jet_neutral_energy/En":
                 table[("cathode_jet_neutral_energy", "En")],
@@ -976,6 +1057,8 @@ def selftest(path):
             failures.append((name, value, reference))
         print(f"{name:<36}{value:>18.5f}{reference:>18.5f}{digits:>6}"
               f"{('MATCH' if ok else 'DIFFER'):>10}")
+    print(f"{'circuit_projection_dropped presence-gate':<52}"
+          f"{'ABSENT (unarmed artifact)':>18}")
     assert not failures, (
         "power ledger selftest FAILED against the founding numbers: "
         + "; ".join(f"{n}: measured {v!r} vs reference {r!r}"
