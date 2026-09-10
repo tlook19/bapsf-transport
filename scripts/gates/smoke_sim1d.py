@@ -29076,6 +29076,177 @@ def _case_cathode_warming_honest_resolve_circuit_bound():
         ) is None, _wb_I
 
 
+
+# ----------------------------------------------------------------------
+# cathode-ion-secondary-emission-survives-open-circuit
+# ----------------------------------------------------------------------
+@_case("cathode-ion-secondary-emission-survives-open-circuit", provides=())
+def _case_cathode_ion_secondary_emission_survives_open_circuit():
+    """An armed run crosses the open-circuit hand-off without refusing.
+
+    The ion-induced secondary emission term's construction guard requires the
+    cathode circuit solve, because the released current is the yield times the
+    ion current that solve draws. That guard is a question about the
+    CONFIGURATION and it is settled once, at construction. The solve sites ask
+    it again -- so that a caller who never builds a ``LAPDSim1D`` gets the same
+    refusals -- and they ask it of whatever flags mapping they were handed.
+
+    The mapping the accepted-state re-solve is handed is the phase's, and it
+    used to take a caller-supplied ``floating`` override: the re-solve asked
+    for the DRIVEN device relation, and the override cleared
+    ``cathode_coupling`` for the whole mapping. In the driven phases that is
+    the same value the phase reads anyway. In the OPEN-CIRCUIT afterglow --
+    where a cathode solve does exist, read at zero loop current -- it is not,
+    and the re-solve was told the configuration supplies no cathode circuit at
+    all. So a legally armed run died on a construction-class error at the
+    first open-circuit step, having already spent the whole discharge.
+
+    The configuration here is the scheduled-transition phase ladder run down
+    to fractions of a microsecond with a nanohenry loop, which is the cheapest
+    thing that still crosses the transition: the drive ends, the inductive
+    tail is empty in its first step, and the run is in the open circuit by
+    step three. What is under test is a phase transition, not a plasma.
+
+    Three clauses, and the middle one is what makes the other two mean
+    something:
+
+    * ARMED, the run reaches the open circuit and finishes there;
+    * with the OVERRIDE PUT BACK by a spy -- the pre-fix mapping,
+      reconstructed at the one call site that asked for it -- the same run
+      raises, in the ``afterglow`` phase, with the phase reading floating and
+      a solve enabled, on the refusal that names ``cathode_coupling``;
+    * UNARMED, the spy changes nothing: the defect was reachable only through
+      the armed term's validator, which is why every unarmed configuration --
+      the goldens included -- never saw it.
+    """
+    import cablp.solvers._sim1d.solver as _os_solver_mod
+
+    _OS_T_END = 4.0e-7
+
+    def _os_build(armed):
+        """The phase ladder, compressed, with the arm's own two keys.
+
+        ``phase_transition_mode="scheduled"`` because the current-triggered
+        ladder would have to build a real discharge first, and the transition
+        under test is the same one either way. ``L_parasitic_H`` is a
+        nanohenry so the inductive tail carries nothing into its first
+        afterglow step and the open circuit begins immediately; it stays
+        positive because the current-driven solver model requires it.
+        ``neutral_equilibration`` is cleared because the equilibration inner
+        sim runs without a cathode solve.
+        """
+        _os_params, _os_flags = default_config()
+        _os_params = dict(_os_params)
+        _os_flags = dict(_os_flags)
+        _os_flags["neutral_equilibration"] = False
+        _os_params["nx"] = 16
+        _os_params["phase_transition_mode"] = "scheduled"
+        _os_params["tau_prebreakdown"] = 1.0e-7
+        _os_params["tau_breakdown"] = 0.0
+        _os_params["tau_discharge"] = 1.0e-7
+        _os_params["L_parasitic_H"] = 1.0e-9
+        _os_flags["cathode_ion_secondary_emission"] = bool(armed)
+        _os_params["cathode_ion_secondary_emission_yield"] = (
+            0.375 if armed else None
+        )
+        return LAPDSim1D(_os_params, _os_flags)
+
+    def _os_run(armed, override):
+        """Run to ``_OS_T_END``; ``override`` reconstructs the defect.
+
+        ``idriven_result_evaluator`` is called from exactly one place in the
+        solver -- the accepted-state re-solve -- so re-deriving its
+        ``input_flags`` at the module name IS the pre-fix call site, and
+        nothing else moves. The value put back is the pre-fix expression
+        verbatim: the phase's driven disjuncts with the floating one dropped,
+        which is what ``floating=False`` used to mean.
+        """
+        _os_sim = _os_build(armed)
+        _os_orig = _os_solver_mod.idriven_result_evaluator
+        _os_seen = []
+
+        def _os_overridden(**kw):
+            _os_opts = _os_sim._cathode_phase_options()
+            _os_pre = bool(
+                _os_opts["cathode_enabled"] or _os_opts["inductive_tail"]
+            )
+            kw["input_flags"] = {
+                **kw["input_flags"], "cathode_coupling": _os_pre
+            }
+            _os_seen.append(_os_pre)
+            return _os_orig(**kw)
+
+        if override:
+            _os_solver_mod.idriven_result_evaluator = _os_overridden
+        _os_raised = None
+        try:
+            _os_sim.start_simulation(t_end=_OS_T_END)
+        except ValueError as exc:
+            _os_raised = exc
+        finally:
+            _os_solver_mod.idriven_result_evaluator = _os_orig
+        return (
+            _os_sim,
+            _os_raised,
+            dict(_os_sim._cathode_phase_options()),
+            _os_seen,
+        )
+
+    # (i) ARMED AND SHIPPED: across the hand-off and out the other side.
+    _os_sim, _os_exc, _os_opts, _ = _os_run(True, False)
+    assert _os_exc is None, _os_exc
+    assert _os_opts["floating"] is True, _os_opts
+    assert _os_opts["solve_enabled"] is True, _os_opts
+    assert _os_opts["configured"] is True, _os_opts
+    assert _os_sim.phase_at_time(_os_sim._time) == "afterglow", (
+        _os_sim.phase_at_time(_os_sim._time)
+    )
+    assert abs(_os_sim._time - _OS_T_END) <= 1.0e-15, _os_sim._time
+    # ...and in that phase the mapping the re-solve is handed still says the
+    # configuration supplies the cathode circuit solve, so the validator
+    # resolves the yield instead of refusing it.
+    _os_flags_at_end = _os_sim._effective_cathode_flags()
+    assert _os_flags_at_end["cathode_coupling"] is True, _os_flags_at_end
+    assert _cathode_mod.validate_cathode_ion_secondary_emission(
+        _os_sim._input_dict, _os_flags_at_end
+    ) == 0.375
+
+    # (ii) THE RECONSTRUCTION, which must be CAUGHT. With the override put
+    # back the armed run dies in the afterglow, on the refusal that names the
+    # flag, at a phase whose own reading says a solve is enabled and floating.
+    _os_ctrl_sim, _os_ctrl_exc, _os_ctrl_opts, _os_ctrl_seen = _os_run(
+        True, True
+    )
+    assert _os_ctrl_exc is not None, "the reconstruction did not raise"
+    assert "cathode_ion_secondary_emission cannot arm" in str(_os_ctrl_exc), (
+        str(_os_ctrl_exc)
+    )
+    assert "cathode_coupling" in str(_os_ctrl_exc), str(_os_ctrl_exc)
+    assert _os_ctrl_sim.phase_at_time(_os_ctrl_sim._time) == "afterglow", (
+        _os_ctrl_sim.phase_at_time(_os_ctrl_sim._time)
+    )
+    assert _os_ctrl_opts["floating"] is True, _os_ctrl_opts
+    assert _os_ctrl_opts["solve_enabled"] is True, _os_ctrl_opts
+    assert _os_ctrl_sim._time < _OS_T_END, _os_ctrl_sim._time
+    # ...and the spy was actually reached with the value cleared, so the
+    # clause above is the defect and not a coincidence of the run ending.
+    assert False in _os_ctrl_seen, _os_ctrl_seen
+
+    # (iii) UNARMED, THE OVERRIDE IS INERT. The same reconstruction over the
+    # same ladder with the term off runs to the end either way: nothing but
+    # the armed validator read the cleared flag, which is why no unarmed
+    # configuration -- the goldens included -- could ever have hit this.
+    _os_off_sim, _os_off_exc, _os_off_opts, _ = _os_run(False, False)
+    _os_off_ctrl_sim, _os_off_ctrl_exc, _, _os_off_seen = _os_run(False, True)
+    assert _os_off_exc is None, _os_off_exc
+    assert _os_off_ctrl_exc is None, _os_off_ctrl_exc
+    assert False in _os_off_seen, _os_off_seen
+    assert _os_off_opts["floating"] is True, _os_off_opts
+    assert abs(_os_off_sim._time - _OS_T_END) <= 1.0e-15, _os_off_sim._time
+    assert abs(_os_off_ctrl_sim._time - _OS_T_END) <= 1.0e-15, (
+        _os_off_ctrl_sim._time
+    )
+
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
@@ -29085,7 +29256,7 @@ def _case_cathode_warming_honest_resolve_circuit_bound():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 167, "historical_stance": 68}
+_CASE_CENSUS = {"total": 168, "historical_stance": 68}
 
 
 def _assert_case_census():
