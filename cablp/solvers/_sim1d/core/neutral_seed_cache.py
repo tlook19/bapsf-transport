@@ -92,6 +92,17 @@ INERT_PARAM_KEYS = frozenset({
     "cathode_phiwf_clean_eV", "cathode_sample_smoothing",
     "cathode_solver_model", "cathode_surface_model", "cathode_warming_model",
     "cathode_Rp_model",
+    # Which sampled state the CIRCUIT ADVANCE evaluates V_dis(I) on. Inert on
+    # the same ground as cathode_sample_smoothing and cathode_solver_model
+    # beside it, and more strongly: run_neutral_equilibration pins
+    # Plasma=False and cathode_coupling=False on the inner sim, so no circuit
+    # advance runs at all during an equilibration and the key selects between
+    # two states nothing reads. Categorised rather than left to fail closed
+    # for the reason spelled out for the prescribed cathode trace below --
+    # the fail-closed default would rotate every stored seed's signature the
+    # moment the key joined the template, an invalidation with no neutral
+    # content behind it.
+    "cathode_circuit_sample",
     # The prescribed measured drive, on the same ground as the solver model
     # itself: the equilibration runs with Plasma=False and
     # cathode_coupling=False, so no cathode solve happens and no trace is read.
