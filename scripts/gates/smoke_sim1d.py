@@ -2371,12 +2371,28 @@ def _case_cathode_boundary_beer_lambert(cathode_face):
     assert floating_cathode_solve.metadata["enabled"] is True
     assert floating_cathode_solve.metadata["floating"] is True
     assert floating_cathode_solve.beam_result is not None
-    inactive_afterglow_solve = cathode_sim.solve_cathode_boundary(
-        time=afterglow_time,
-        floating=False,
-        update_cache=False,
+    # ROW 1 ENFORCEMENT: overriding floating=False in a phase that IS
+    # floating (asserted above) is now a loud refusal at
+    # _effective_cathode_flags, not the silent "boundary.enabled=False"
+    # reading this case asserted before the enforcement landed -- that
+    # silent reading was exactly the class of mis-booking the enforcement
+    # closes (this override handed a configuration that does not exist).
+    _inactive_afterglow_raised = None
+    try:
+        cathode_sim.solve_cathode_boundary(
+            time=afterglow_time,
+            floating=False,
+            update_cache=False,
+        )
+    except ValueError as exc:
+        _inactive_afterglow_raised = exc
+    assert _inactive_afterglow_raised is not None, (
+        "solve_cathode_boundary(floating=False) in a floating phase must "
+        "refuse under the _effective_cathode_flags enforcement"
     )
-    assert not inactive_afterglow_solve.boundary.enabled
+    assert "active_only=False, floating=False" in str(
+        _inactive_afterglow_raised
+    ), str(_inactive_afterglow_raised)
     post_afterglow_solve = cathode_sim.solve_cathode_boundary(
         time=afterglow_time + params["tau_afterglow"],
         update_cache=False,
@@ -20221,6 +20237,113 @@ def _case_tracer_presence_gating():
 
 
 # --------------------------------------------------------------------
+# tracer-passive-anomalous-leak-phase-gated-solve
+# --------------------------------------------------------------------
+@_case("tracer-passive-anomalous-leak-phase-gated-solve", provides=())
+def _case_tracer_passive_anomalous_leak_phase_gated_solve():
+    """``tracer_passive_anomalous_leak`` must not dispatch off-phase.
+
+    Its sibling ``_tracer_prepare`` gates its own re-solve on
+    ``self._flags.get("cathode_coupling")`` before calling
+    ``solve_cathode_boundary``; ``tracer_passive_anomalous_leak`` called it
+    unconditionally when ``self._cathode_solve is None``. Fixed to build
+    ``cathode_flags = self._effective_cathode_flags(time=time,
+    active_only=True)`` first and dispatch only when
+    ``cathode_flags["cathode_coupling"]`` is True -- the same pattern
+    ``_jet_cathode_solve`` (:10411) and ``cathode_source_terms`` (:10980) use.
+
+    NOTE ON THE RECONSTRUCTED FAILURE MODE. In a ``neutral_prebreakdown``
+    phase (``tau_neutral_prebreakdown`` > 0, the tracer engaged,
+    ``cathode_ion_secondary_emission`` armed) the unconditional pre-fix call
+    does NOT reach the ion-secondary-emission validator and does NOT raise:
+    ``cathode_boundary_state.enabled`` (``physics/cathode.py``) reads the
+    SAME phase-aware ``cathode_coupling`` the gate above reads, and
+    ``solve_cathode_boundary``'s module function returns a disabled,
+    no-op ``CathodeSolve1D`` before the validator is ever reached
+    (``physics/cathode.py:1472``) -- measured directly below. So the
+    pre-fix call was silently WASTEFUL in this phase rather than a hard
+    refusal; the fix is for phase-consistency with the other solve sites,
+    not for avoiding a crash reachable here. What IS tested, both ways: the
+    fixed method dispatches a solve only in a phase that has one.
+    """
+    def _tpal_build():
+        params, flags = default_config()
+        params = dict(params)
+        flags = dict(flags)
+        params["nx"] = 16
+        params["cathode_solver_model"] = "current_driven"
+        flags["neutral_equilibration"] = False
+        flags["cathode_coupling"] = True
+        flags["regime_tracer"] = True
+        flags["cathode_ion_secondary_emission"] = True
+        params["cathode_ion_secondary_emission_yield"] = 0.375
+        params["phase_transition_mode"] = "scheduled"
+        params["tau_neutral_prebreakdown"] = 1.0e-6
+        params["tau_prebreakdown"] = 1.0e-6
+        params["tau_breakdown"] = 0.0
+        params["tau_discharge"] = 1.0e-6
+        params["tau_afterglow"] = 1.0e-6
+        _pin_pre_r2a_neutral_stance(params, flags)
+        return params, flags
+
+    _tpal_params, _tpal_flags = _tpal_build()
+    _tpal_sim = LAPDSim1D(_tpal_params, _tpal_flags)
+    assert _tpal_sim._tracer_engaged
+
+    _tpal_prebreak_t = 0.5 * float(_tpal_params["tau_neutral_prebreakdown"])
+    assert _tpal_sim.phase_at_time(_tpal_prebreak_t) == "neutral_prebreakdown"
+    _tpal_discharge_t = (
+        float(_tpal_params["tau_neutral_prebreakdown"])
+        + float(_tpal_params["tau_prebreakdown"])
+        + float(_tpal_params["tau_breakdown"])
+        + 0.5 * float(_tpal_params["tau_discharge"])
+    )
+    assert _tpal_sim.phase_at_time(_tpal_discharge_t) == "main_discharge"
+
+    def _tpal_call_with_spy(time):
+        calls = []
+        orig = _tpal_sim.solve_cathode_boundary
+
+        def _tpal_spy(**kw):
+            calls.append(kw)
+            return orig(**kw)
+
+        _tpal_sim.solve_cathode_boundary = _tpal_spy
+        try:
+            out = _tpal_sim.tracer_passive_anomalous_leak(time=time)
+        finally:
+            _tpal_sim.solve_cathode_boundary = orig
+        return out, calls
+
+    # (i) neutral_prebreakdown has no cathode solve: the fix must not
+    # dispatch one.
+    _tpal_out_pre, _tpal_calls_pre = _tpal_call_with_spy(_tpal_prebreak_t)
+    assert len(_tpal_calls_pre) == 0, (
+        "tracer_passive_anomalous_leak dispatched a cathode solve in a "
+        "phase with no cathode solve"
+    )
+    assert np.all(_tpal_out_pre == 0.0), _tpal_out_pre
+
+    # (ii) ANTI-VACUITY: main_discharge DOES have a cathode solve, so the
+    # gate must not suppress every dispatch -- only the phase-inappropriate
+    # one.
+    _tpal_out_main, _tpal_calls_main = _tpal_call_with_spy(_tpal_discharge_t)
+    assert len(_tpal_calls_main) == 1, (
+        "tracer_passive_anomalous_leak must still dispatch a cathode solve "
+        "in a phase that has one"
+    )
+
+    # (iii) THE RECONSTRUCTED PRE-FIX CALL, direct: unconditional dispatch
+    # in neutral_prebreakdown returns a disabled solve rather than raising,
+    # which is why this case tests call suppression rather than a refusal.
+    _tpal_recon = _tpal_sim.solve_cathode_boundary(
+        state=_tpal_sim.state, time=_tpal_prebreak_t, update_cache=False
+    )
+    assert _tpal_recon.metadata["enabled"] is False, _tpal_recon.metadata
+    assert _tpal_recon.beam_result is None
+
+
+# --------------------------------------------------------------------
 # tracer-construction-refusals
 # --------------------------------------------------------------------
 @_case(
@@ -29460,6 +29583,80 @@ def _case_cathode_ion_secondary_emission_survives_final_step_boundary():
 
 
 # ----------------------------------------------------------------------
+# effective-cathode-flags-refuses-driven-override-in-floating-phase
+# ----------------------------------------------------------------------
+@_case(
+    "effective-cathode-flags-refuses-driven-override-in-floating-phase",
+    provides=(),
+)
+def _case_effective_cathode_flags_refuses_driven_override_in_floating_phase():
+    """``_effective_cathode_flags`` refuses the driven override off-phase.
+
+    ``active_only=False, floating=False`` asks for the DRIVEN mapping
+    regardless of phase -- the circuit advance and the bound's bundle both
+    pass exactly this, and both return before reaching the call on
+    ``step_phase["floating"]``, so the override is inert for them by
+    construction. A caller that CAN reach a floating phase and still passes
+    this override is handed a configuration that does not exist (a floating
+    phase reported as ``cathode_coupling=False``), which is the same class
+    of silent mis-booking the hand-off and final-step-boundary fixes closed
+    (2026-09-10) -- so the method now refuses it loudly instead.
+
+    The sim is constructed but never run, so ``_circuit_I_prev`` stays at
+    its construction-time 0.0 and the inductive-tail exception (which needs
+    ``_circuit_I_prev > 1.0``) cannot fire regardless of ``L_parasitic_H``:
+    ``options["floating"]`` reads True exactly where the scheduled ladder
+    says ``afterglow``.
+    """
+    _ecf_params, _ecf_flags = default_config()
+    _ecf_params = dict(_ecf_params)
+    _ecf_flags = dict(_ecf_flags)
+    _ecf_flags["neutral_equilibration"] = False
+    _ecf_params["nx"] = 16
+    _ecf_params["phase_transition_mode"] = "scheduled"
+    _ecf_params["tau_prebreakdown"] = 1.0e-7
+    _ecf_params["tau_breakdown"] = 0.0
+    _ecf_params["tau_discharge"] = 1.0e-7
+    _ecf_params["tau_afterglow"] = 1.0e-7
+    _ecf_sim = LAPDSim1D(_ecf_params, _ecf_flags)
+    assert _ecf_sim._circuit_I_prev == 0.0, _ecf_sim._circuit_I_prev
+
+    _ecf_afterglow_time = (
+        _ecf_sim._plasma_phase_time_origin()
+        + float(_ecf_params["tau_prebreakdown"])
+        + float(_ecf_params["tau_breakdown"])
+        + float(_ecf_params["tau_discharge"])
+        + 0.5 * float(_ecf_params["tau_afterglow"])
+    )
+    _ecf_options = _ecf_sim._cathode_phase_options(time=_ecf_afterglow_time)
+    assert _ecf_options["floating"] is True, _ecf_options
+
+    # (i) active_only=False, floating=False in a floating phase: refused,
+    # naming the caller's request and the phase's own reading.
+    _ecf_raised = None
+    try:
+        _ecf_sim._effective_cathode_flags(
+            time=_ecf_afterglow_time, active_only=False, floating=False
+        )
+    except ValueError as exc:
+        _ecf_raised = exc
+    assert _ecf_raised is not None, (
+        "no refusal for the driven override in a floating phase"
+    )
+    assert "active_only=False, floating=False" in str(_ecf_raised), (
+        str(_ecf_raised)
+    )
+    assert "floating=True" in str(_ecf_raised), str(_ecf_raised)
+
+    # (ii) active_only=True at the same time: the phase's own reading, no
+    # refusal -- a floating, configured phase reports cathode_coupling True.
+    _ecf_flags_out = _ecf_sim._effective_cathode_flags(
+        time=_ecf_afterglow_time, active_only=True
+    )
+    assert _ecf_flags_out["cathode_coupling"] is True, _ecf_flags_out
+
+
+# ----------------------------------------------------------------------
 # neutral-equilibration-clears-bound-flag
 # ----------------------------------------------------------------------
 @_case("neutral-equilibration-clears-bound-flag", provides=())
@@ -30304,7 +30501,7 @@ def _case_circuit_projection_refusals():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 177, "historical_stance": 68}
+_CASE_CENSUS = {"total": 179, "historical_stance": 68}
 
 
 def _assert_case_census():

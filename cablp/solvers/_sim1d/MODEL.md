@@ -674,9 +674,14 @@ $$I_\text{tot}=I_\text{eth}^\star+I_\text{see}+I_i-I_{e,\text{ret}},$$
 
 and, being independent of $\psi_+$, it reaches the monotone current match as a
 reduction of the imposed target rather than as a change to $J_\text{tot}(\psi_+)$:
-the sheath and its thermionic release supply only $I_\text{tot}-I_\text{see}$,
-so an armed solve sits at a shallower fall and releases slightly less
-thermionic current at the same loop current. Secondaries leave the surface at a
+at any given $I_\text{tot}$ the sheath and its thermionic release need supply
+only $I_\text{tot}-I_\text{see}$, a smaller thermionic release for the same
+current match. On the current-driven circuit $I_\text{tot}$ is itself set
+self-consistently against the load line, and the added secondary current
+raises that equilibrium current (measured +12.7%, ~2967 -> ~3344 A, on the
+ES1 plateau); the shallower fall observed there ($\phi_c$ ~173.0 -> ~170.4 V)
+is the load line's response to that higher current, not a same-current
+sheath-root comparison. Secondaries leave the surface at a
 few eV and cross the SAME fall as the thermionic primaries, so they are part of
 the launched beam: $\Gamma_0=(I_\text{eth}^\star+I_\text{see})/e$ is the flux
 the deposition route launches, and $P_\text{prim}$, the gap bypass and the

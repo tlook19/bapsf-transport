@@ -782,7 +782,7 @@ def report_window(f, label, lo, hi, geom, port_top):
         dropped_W = projection_dropped_W(dg, i0, i1, dt_s)
         if dropped_W is not None:
             print(f"{'  circuit_projection_dropped':<44}"
-                  f"{dropped_W:>16.5f}  W")
+                  f"{dropped_W / 1e3:>16.5f}  kW")
             if label == "DRIVE":
                 # PRE-REGISTERED clause (the O6-B3 advisor read): the
                 # plateau-mean dropped rate must sit under 0.1% of the
