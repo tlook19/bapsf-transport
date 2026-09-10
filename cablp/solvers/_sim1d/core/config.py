@@ -4348,6 +4348,56 @@ input_flags_template_1d = {
     # bound_active census shows it, and the probe window reaches no plateau
     # decay, so reading the census on a run that does remains worthwhile.
     "cathode_circuit_voltage_bound": False,
+    # THE OVER-WALL PROJECTION of the current-driven circuit advance, default
+    # OFF. It edits ONE number: the loop current the TR-BDF2 advance starts
+    # its step from, and only on a step that starts ABOVE the emission wall.
+    #
+    # WHAT IT DOES. Before the advance, the sheath's UNBOUNDED demand is
+    # evaluated at the held loop current on the same sampled state the
+    # advance's own V_dis(I) evaluator is built on. When that solve comes back
+    # capability-limited -- sitting on the atomic-data ceiling
+    # cathode_phi_c_cap_V, the only ceiling the unbounded evaluator carries --
+    # the held current is above the wall and the step is replaced by the WALL
+    # ROOT: the current at which the loop equation balances,
+    # V_src - I*R_series - V_dis(I) = 0, found by a bracketed root find on
+    # [I - 2*kick, I] with kick = dt*(cap - V_src + I*R_loop)/L. The bracket is
+    # widened downward once if it does not straddle; if it still does not the
+    # current is left alone and the event is counted.
+    #
+    # WHY. The advance is TR-BDF2 and its explicit half is evaluated at the
+    # HELD current. On a falling leg -- where the wall has moved down under
+    # that current within the step -- the unbounded V_dis sits on the data cap,
+    # so the explicit half sees a device voltage of ~cap against a supply of
+    # ~V_avail and throws the loop dt*(cap - V_avail)/L below the wall in one
+    # step; the next step climbs back a fraction of that, and the loop rings
+    # instead of tracking. The sheath maps the excursion into the beam energy.
+    # Starting the step ON the wall root removes the excursion without
+    # touching the advance itself: from the root the same step lands on the
+    # root to within the electron-return tail.
+    #
+    # NOT THE LOAD LINE. The trigger is the DATA-CAP branch only. Under the
+    # circuit voltage bound the bounded solve's accepted root sits on the load
+    # line by construction, so a trigger keyed to the circuit member of the
+    # composed ceiling would fire on every plateau step and pull the inductor
+    # down each time. The unbounded evaluator the circuit integrates carries no
+    # circuit member at all, which is what makes "capability-limited" here mean
+    # "at the data cap" and nothing else.
+    #
+    # WHAT IT COSTS. Replacing the current is not conservative: the inductor
+    # energy difference 0.5*L*(I^2 - I_root^2) is booked per event and exported
+    # cumulatively, with the event count and the unbracketed count beside it,
+    # PRESENCE-GATED on this flag so an unarmed run's diagnostic set is
+    # unchanged. Those three counters ride the restart payload, also
+    # presence-gated.
+    #
+    # WHAT IT RAISES. Arming it refuses at construction without
+    # cathode_coupling (there is no circuit advance to project) and under any
+    # cathode_solver_model other than "current_driven" (no other model performs
+    # this advance); each refusal names this key and the requirement.
+    #
+    # Presence-gated: off, the projection block is not entered, no evaluator is
+    # built and no diagnostic appears. Bit-exact when off.
+    "cathode_circuit_project_over_wall": False,
     # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON while
     # tau_neutral_prebreakdown defaults to 0.0: the duration alone decides
     # whether the phase runs, so ON + zero duration is already inert
