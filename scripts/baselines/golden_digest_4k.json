@@ -8,7 +8,7 @@
     "3000": "e4d979fdc307da06556a4ef0d9aeba21bb16162631a327a11de606c2b9f7423b",
     "4000": "b938989555aeaa8d6512065537bfee2c1cfb7f83a48819183dea4a65e5a62b94"
   },
-  "config_identity": "457766fe7226f6603f253ccb19aba71fe4084e230c9041e96400a79a768100b1",
+  "config_identity": "02c8d4be468bd024e2b10438408ebbfdb3a6aca365f62e1152e6d8c871a5a05e",
   "digest": "b938989555aeaa8d6512065537bfee2c1cfb7f83a48819183dea4a65e5a62b94",
   "digest_format": "sim1d-golden-digest-v1",
   "fields_per_cell": 6,

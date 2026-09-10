@@ -90,7 +90,7 @@
     "file_sha256": [
       "a84b79436ac9d63d5b7f6867c3151ed0a71ed1f789c163c8fa5282493e2b6a6f"
     ],
-    "identity": "3790c1733d6ecd6a1bc407ce189f2a2cbbdf0e6a81035f75caf04e0658fb981a",
+    "identity": "eec2c7fa4b5a881df194af6dbf7aa80afa63ff3e9028ad346ed9970976b5ff84",
     "name": "g1atrim"
   },
   "description": "Golden baseline at the stance of record, re-cut to the gate mesh: default_config() plus the committed stance file scripts/stances/g1atrim.toml, minus that stance's mesh-sized package, plus the run-shape overrides in baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60).",
@@ -220,6 +220,7 @@
     "cathode_Ts_fwhm_cm": 28.0,
     "cathode_anode_gap_cm": 53.25,
     "cathode_circuit_bound_object": "device_voltage",
+    "cathode_circuit_sample": "raw",
     "cathode_cleaning_E_th_eV": 20.0,
     "cathode_cleaning_sigma_cm2": 3.5e-16,
     "cathode_conduction_W_per_K": 12058.0,
