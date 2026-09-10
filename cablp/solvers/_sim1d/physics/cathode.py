@@ -999,6 +999,16 @@ def idriven_result_evaluator(
     at 4.6-7.5x the accepted-state value at the same frozen current
     (2026-07-21; the stage state sits on the other side of the knee).
 
+    ``circuit_V_src_V`` is the loop's source voltage [V] at this step, the
+    quantity the circuit member of the composed sheath ceiling is built from
+    (``circuit_available_voltage_V``). Both consumers pass it, so under
+    ``cathode_circuit_voltage_bound`` the ceiling every evaluated solve is
+    run against is the same composed one -- the atomic-data cap
+    ``cathode_phi_c_cap_V`` and the loop's available voltage, whichever is
+    lower -- that the dispatched per-step solve carries. ``None`` withholds
+    the circuit member and leaves the solve on the data cap alone, which is
+    what every caller gets with the flag off.
+
     ``apply_circuit_bound`` selects whether the evaluated solves carry the
     ``cathode_circuit_voltage_bound`` ceiling. ``True`` (the default) is the
     bounded semantics every beam-facing consumer reads. ``False`` withholds
