@@ -1570,7 +1570,9 @@ def solve_beam_system(
     phi_c_0 = beam_launch_potential_V(result)
     if phi_c_0 > I_ion:
         v_beam[cathode_index] = math.sqrt(2.0 * phi_c_0 * _erg_per_eV / _me_cgs)
-        _I_beam_0 = result.I_eth_star * (1.0 - config.eta * result.beam_bypass_fraction)
+        _I_beam_0 = beam_launched_current_A(result) * (
+            1.0 - config.eta * result.beam_bypass_fraction
+        )
         n_beam[cathode_index] = _I_beam_0 / (_e_SI * plasma_cross[cathode_index] * v_beam[cathode_index])
         if gas_type == "He":
             beam_cross[cathode_index] = He_EII_cross_lkup(phi_c_0 / I_ion)
@@ -1608,7 +1610,7 @@ def solve_beam_system(
         phi_c_1 = beam_launch_potential_V(result_twin)
         if phi_c_1 > I_ion:
             v_beam[twin_index] = math.sqrt(2.0 * phi_c_1 * _erg_per_eV / _me_cgs)
-            _I_beam_1 = result_twin.I_eth_star * (
+            _I_beam_1 = beam_launched_current_A(result_twin) * (
                 1.0 - config.eta * result_twin.beam_bypass_fraction
             )
             n_beam[twin_index] = _I_beam_1 / (_e_SI * plasma_cross[twin_index] * v_beam[twin_index])

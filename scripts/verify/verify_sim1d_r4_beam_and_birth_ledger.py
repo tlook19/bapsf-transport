@@ -81,7 +81,10 @@ def analyze(f):
     P_ohmic = cm("P_ohmic")
     P_into_plasma = P_prim + P_ohmic
     anode_intercepted = P_beam_fluid - P_into_plasma
-    # Independent cross-check of the intercepted power: eta*bypass*I_eth_star*phi_c.
+    # Independent cross-check of the intercepted power: eta*bypass*I_beam*phi_c,
+    # where I_beam is the launched current (cathode.beam_launched_current_A):
+    # I_eth_star + I_see_A when the secondary-emission channel is armed and
+    # saved I_see_A, I_eth_star alone otherwise.
     import json
     eta = float(json.loads(f.attrs["params_json"]).get("eta", 0.0))
     # The intercepted beam removed from the PLASMA carries phi_c (the launch
@@ -95,6 +98,8 @@ def analyze(f):
             if pre + "I_eth_star" in cd:
                 b = np.asarray(cd[pre + "beam_bypass_fraction"])
                 I = np.asarray(cd[pre + "I_eth_star"])
+                if pre + "I_see_A" in cd:
+                    I = I + np.asarray(cd[pre + "I_see_A"])
                 v = np.asarray(cd[pre + volt_key])
                 stk.append(eta * b * I * v)
         return float(np.median(np.nansum(np.vstack(stk), axis=0)[sel]))

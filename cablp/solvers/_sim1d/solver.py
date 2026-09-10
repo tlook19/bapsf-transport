@@ -9010,6 +9010,16 @@ class LAPDSim1D:
         flags["cathode_coupling"] = False
         flags["neutral_equilibration"] = False
         flags["launch_plasma_after_equilibration"] = False
+        # The circuit voltage bound, cleared for the SAME reason as
+        # cathode_coupling above: it lives inside the current-driven sheath
+        # solve and its construction guard requires exactly the cathode
+        # solve the line above has just switched off, so leaving it armed
+        # would refuse the INNER sim on a state where the device voltage it
+        # bounds cannot exist -- a guard firing on a state where the thing
+        # it protects cannot happen. Clearing it changes no configuration
+        # that constructed before: every config that reaches this line
+        # armed is one that raised.
+        flags["cathode_circuit_voltage_bound"] = False
         # The inner sim IS the equilibration -- it must never consult the seed
         # database itself. Leaving this ON contradicts the two flags just
         # cleared, so validate_neutral_seed_cache_config would reject the inner

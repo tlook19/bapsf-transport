@@ -539,6 +539,23 @@ def volume_identity(res, geom):
     return lhs, rhs, abs(lhs - rhs) / scale
 
 
+def _launched_current_A(cd, index=None):
+    """Return the operator's I_beam [A] from a saved ``cathode_diagnostics``.
+
+    ``cathode.beam_launched_current_A``'s one definition, read off the saved
+    group: ``source_I_eth_star`` plus ``source_I_see_A`` when the secondary-
+    emission channel is armed and saved that key. ``index`` selects one saved
+    sample; omitted, the whole array. Presence-gated: unarmed,
+    ``source_I_see_A`` is not in the group and this is ``source_I_eth_star``
+    alone, bit for bit.
+    """
+    sel = slice(None) if index is None else index
+    I_beam = np.asarray(cd["source_I_eth_star"][sel], dtype=float)
+    if "source_I_see_A" in cd:
+        I_beam = I_beam + np.asarray(cd["source_I_see_A"][sel], dtype=float)
+    return I_beam
+
+
 def _window_mean_rows(h5, geom, t_lo, t_hi, charge_death, anode_handshake):
     """Average the operator's rows over every saved sample in a time window."""
     t = h5["time"][:]
@@ -549,7 +566,7 @@ def _window_mean_rows(h5, geom, t_lo, t_hi, charge_death, anode_handshake):
     n_all = h5["n"]
     u_all = h5["u"]
     I_tot_all = h5["cathode_diagnostics/circuit_I_loop"][:]
-    I_beam_all = h5["cathode_diagnostics/source_I_eth_star"][:]
+    I_beam_all = _launched_current_A(h5["cathode_diagnostics"])
 
     acc = None
     scal = {
@@ -756,7 +773,7 @@ def main(argv=None):
                 h5["Te"][i, :],
                 h5["n"][i, :],
                 float(cd["circuit_I_loop"][i]),
-                float(cd["source_I_eth_star"][i]),
+                float(_launched_current_A(cd, i)),
                 charge_death,
                 anode_handshake,
                 u=h5["u"][i, :],
@@ -764,7 +781,7 @@ def main(argv=None):
             c, last = geom.cathode_cell, geom.last_source_cell
             net = float(res["total_W"][c : last + 1].sum())
             I_now = float(cd["circuit_I_loop"][i])
-            I_b_now = float(cd["source_I_eth_star"][i])
+            I_b_now = float(_launched_current_A(cd, i))
             print(
                 f"  [{charge_death}/{anode_handshake}] net "
                 f"{net * 1e-3:+.4f} kW at I_tot={I_now:.1f} A, "
@@ -836,7 +853,7 @@ def main(argv=None):
         )
 
         I_tot_q2 = cd["circuit_I_loop"][:]
-        I_beam_q2 = cd["source_I_eth_star"][:]
+        I_beam_q2 = _launched_current_A(cd)
         Te_launch = h5["Te"][:, geom.cathode_cell]
         drift = I_beam_q2 - I_tot_q2
         export_W = Q2_EXPORT_COEFF * Te_launch * drift

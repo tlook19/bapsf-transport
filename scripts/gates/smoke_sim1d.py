@@ -17621,6 +17621,29 @@ elif scenario == "emitting_area":
     flags["cathode_circuit_voltage_bound"] = True
     flags["cathode_emitting_area"] = True
     t_end = 1.0e-6
+elif scenario == "emitting_area_secondary_emission":
+    # ea1se: the annular + Schottky branch, ARMED WITH ion-induced secondary
+    # emission on top of ea1's throttle. I_see subtracts from the imposed
+    # loop current (J_imposed = (I_tot - I_see)*R_p/T_e) before that current
+    # reaches the compiled root find -- the ONLY branch the compiled sheath
+    # root takes, and the one attachment point where the secondary-emission
+    # current reaches a compiled kernel at all. None of the other five
+    # scenarios arm it, so this is what says the I_see subtraction survives
+    # the kernel boundary rather than merely being correct in Python.
+    params.update({
+        "nx": 12,
+        "cathode_solver_model": "current_driven",
+        "cathode_emission_profile": "gaussian",
+        "beam_deposition_model": "csda",
+        "beam_anomalous_model": "quasilinear",
+        "cathode_ion_secondary_emission_yield": 0.1,
+    })
+    flags["neutral_equilibration"] = False
+    flags["cathode_coupling"] = True
+    flags["cathode_circuit_voltage_bound"] = True
+    flags["cathode_emitting_area"] = True
+    flags["cathode_ion_secondary_emission"] = True
+    t_end = 1.0e-6
 elif scenario == "landau":
     # pd1: the branched disposal ARMED. The split is applied post-march to the
     # withholding bank the compiled CSDA march itself fills, so this is the
@@ -17727,6 +17750,14 @@ print(json.dumps({
         None if "cathode_emitting_area_fraction" not in diag
         else float(diag["cathode_emitting_area_fraction"][0])
     ),
+    # ea1se anti-vacuity: the secondary-emission current the compiled root's
+    # J_imposed subtracts. Present only when cathode_ion_secondary_emission
+    # is armed; a nonzero value is proof the subtraction was live on the
+    # path being compared.
+    "I_see": (
+        None if "source_I_see_A" not in diag
+        else float(diag["source_I_see_A"][-1])
+    ),
     # pd1 anti-vacuity: the tail end ledger is identically zero unless a
     # disposal actually withheld and walked power, so a nonzero maximum is
     # proof the branched closure was live on the path being compared.
@@ -17745,11 +17776,11 @@ print(json.dumps({
 '''
         _ck_expected_steps = {
             "meanfield": 20, "coverage": 10, "landau": 10, "emitting_area": 10,
-            "initial_profile": 10,
+            "initial_profile": 10, "emitting_area_secondary_emission": 10,
         }
         _CK_SCENARIOS = (
             "meanfield", "coverage", "landau", "emitting_area",
-            "initial_profile",
+            "initial_profile", "emitting_area_secondary_emission",
         )
         _ck_results = {}
         with tempfile.TemporaryDirectory() as _ck_tmpdir:
@@ -17845,6 +17876,21 @@ print(json.dumps({
                         _ck_scenario, _ck_tag, _ck_res["f_em0"],
                         _ck_res["f_em"],
                     )
+                if _ck_scenario == "emitting_area_secondary_emission":
+                    # The throttle was armed (as in ea1) AND the secondary
+                    # current I_see was really nonzero: without this the
+                    # J_imposed subtraction the compiled root find receives
+                    # is 0.0, indistinguishable from the unarmed "emitting_
+                    # area" scenario already covered by another arm.
+                    assert _ck_res["f_em"] is not None, (_ck_scenario, _ck_tag)
+                    assert _ck_res["f_em"] > _ck_res["f_em0"] > 0.0, (
+                        _ck_scenario, _ck_tag, _ck_res["f_em0"],
+                        _ck_res["f_em"],
+                    )
+                    assert _ck_res["I_see"] is not None, (_ck_scenario, _ck_tag)
+                    assert _ck_res["I_see"] > 0.0, (
+                        _ck_scenario, _ck_tag, _ck_res["I_see"]
+                    )
             # Bit-identical, not merely close: the compiled path is a faithful
             # transcription, so the raw state bytes must match exactly -- the
             # same standard the golden holds on the compiled path.
@@ -17868,6 +17914,9 @@ print(json.dumps({
                 _ck_pure["tail_ledger_W"])
             assert _ck_compiled["f_em"] == _ck_pure["f_em"], (
                 _ck_scenario, _ck_compiled["f_em"], _ck_pure["f_em"]
+            )
+            assert _ck_compiled["I_see"] == _ck_pure["I_see"], (
+                _ck_scenario, _ck_compiled["I_see"], _ck_pure["I_see"]
             )
             assert _ck_compiled["nn0_spread"] == _ck_pure["nn0_spread"], (
                 _ck_scenario, _ck_compiled["nn0_spread"],
@@ -29079,6 +29128,77 @@ def _case_cathode_warming_honest_resolve_circuit_bound():
 
 
 # ----------------------------------------------------------------------
+# neutral-equilibration-clears-bound-flag
+# ----------------------------------------------------------------------
+@_case("neutral-equilibration-clears-bound-flag", provides=())
+def _case_neutral_equilibration_clears_bound_flag():
+    """``run_neutral_equilibration`` must clear the circuit voltage bound too.
+
+    The inner equilibration sim clears ``cathode_coupling`` (no cathode solve
+    for a ``Plasma=False`` pre-solve) and a run of other keys that guard on
+    it, but ``cathode_circuit_voltage_bound``'s own construction guard reads
+    ``cathode_coupling`` directly and was not on that list: an outer
+    configuration that arms the bound with ``neutral_equilibration = True``
+    -- the golden route's own shape -- refused the INNER sim, mid-run,
+    with "requires the cathode_coupling flag", on a state where the bound
+    protects nothing (no cathode solve, no device voltage to bound).
+
+    First, the REFUSAL: ``run_neutral_equilibration`` is called with a spy on
+    the module's ``LAPDSim1D`` name that reinstates the bound flag on every
+    call that has ``cathode_coupling`` off (the inner sim's own shape) --
+    reconstructing exactly what the pre-fix clear list handed to the
+    constructor. It must still raise, so this case is reading the guard the
+    fix works around, not one that stopped existing. Then the PASS: the same
+    call, spy removed, must build and run the inner equilibration without
+    raising.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from baseline_sim1d import build_baseline_config as _neb_baseline_config
+    import cablp.solvers._sim1d.solver as _neb_solver_mod
+
+    _neb_params, _neb_flags = _neb_baseline_config(
+        param_overrides={"nx": 16},
+        flag_overrides={"cathode_circuit_voltage_bound": True},
+    )
+
+    _neb_orig_ctor = _neb_solver_mod.LAPDSim1D
+
+    def _neb_reintroduce_defect(params, flags, *a, **kw):
+        """Undo the fix's clear on the inner sim's own call shape only."""
+        if flags.get("cathode_coupling") is False:
+            flags = dict(flags)
+            flags["cathode_circuit_voltage_bound"] = True
+        return _neb_orig_ctor(params, flags, *a, **kw)
+
+    _neb_outer_defect = _neb_orig_ctor(dict(_neb_params), dict(_neb_flags))
+    _neb_solver_mod.LAPDSim1D = _neb_reintroduce_defect
+    try:
+        try:
+            _neb_outer_defect.run_neutral_equilibration(cycles=1)
+            raise AssertionError(
+                "the reconstructed pre-fix call shape no longer refuses -- "
+                "the guard this case reproduces is gone; update or retire "
+                "the case"
+            )
+        except ValueError as _neb_exc:
+            assert "requires the cathode_coupling flag" in str(_neb_exc), (
+                _neb_exc
+            )
+    finally:
+        _neb_solver_mod.LAPDSim1D = _neb_orig_ctor
+
+    _neb_outer = _neb_orig_ctor(dict(_neb_params), dict(_neb_flags))
+    _neb_result = _neb_outer.run_neutral_equilibration(cycles=1)
+    assert len(_neb_result.time) > 0
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -29087,7 +29207,7 @@ def _case_cathode_warming_honest_resolve_circuit_bound():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 167, "historical_stance": 68}
+_CASE_CENSUS = {"total": 168, "historical_stance": 68}
 
 
 def _assert_case_census():
