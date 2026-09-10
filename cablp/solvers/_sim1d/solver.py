@@ -7551,6 +7551,23 @@ class LAPDSim1D:
             # spent the whole discharge. The phase's own reading says a solve
             # is enabled in every phase this re-solve runs in, so it is both
             # the truthful mapping and, in the driven phases, the same one.
+            #
+            # THE PHASE READ AT THE STEP'S OWN TIME, not the caller's default
+            # (``self._time``, which by here already holds the step's ACCEPTED
+            # END time -- the increment above precedes this block). On every
+            # step but one that makes no difference, since a step does not
+            # usually cross a phase boundary. The one exception is the step
+            # whose end lands exactly on a dynamic phase boundary (the
+            # current-driven route's dynamic end IS a phase boundary,
+            # ``post_afterglow_start``): read at the default end time, the
+            # mapping saw the phase the step landed IN, not the one the
+            # dispatched solve ran in, and reported no cathode circuit for a
+            # configuration that supplies one on the step it was dispatched
+            # on -- refusing the ion-secondary-emission validator on that
+            # step alone. Reading at the step's start time, exactly as the
+            # circuit advance below and its ``circuit_V_src_V`` already do,
+            # keeps this mapping describing the phase the solve was actually
+            # dispatched in.
             honest_I_A = (
                 0.0
                 if bool(solve.metadata.get("floating", False))
@@ -7579,7 +7596,9 @@ class LAPDSim1D:
                 mu=self._mu,
                 geometry=self._geometry,
                 input_dict=self._input_dict,
-                input_flags=self._effective_cathode_flags(),
+                input_flags=self._effective_cathode_flags(
+                    time=self._time - float(attempt.dt)
+                ),
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
