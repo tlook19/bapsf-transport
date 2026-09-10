@@ -17621,6 +17621,29 @@ elif scenario == "emitting_area":
     flags["cathode_circuit_voltage_bound"] = True
     flags["cathode_emitting_area"] = True
     t_end = 1.0e-6
+elif scenario == "emitting_area_secondary_emission":
+    # ea1se: the annular + Schottky branch, ARMED WITH ion-induced secondary
+    # emission on top of ea1's throttle. I_see subtracts from the imposed
+    # loop current (J_imposed = (I_tot - I_see)*R_p/T_e) before that current
+    # reaches the compiled root find -- the ONLY branch the compiled sheath
+    # root takes, and the one attachment point where the secondary-emission
+    # current reaches a compiled kernel at all. None of the other five
+    # scenarios arm it, so this is what says the I_see subtraction survives
+    # the kernel boundary rather than merely being correct in Python.
+    params.update({
+        "nx": 12,
+        "cathode_solver_model": "current_driven",
+        "cathode_emission_profile": "gaussian",
+        "beam_deposition_model": "csda",
+        "beam_anomalous_model": "quasilinear",
+        "cathode_ion_secondary_emission_yield": 0.1,
+    })
+    flags["neutral_equilibration"] = False
+    flags["cathode_coupling"] = True
+    flags["cathode_circuit_voltage_bound"] = True
+    flags["cathode_emitting_area"] = True
+    flags["cathode_ion_secondary_emission"] = True
+    t_end = 1.0e-6
 elif scenario == "landau":
     # pd1: the branched disposal ARMED. The split is applied post-march to the
     # withholding bank the compiled CSDA march itself fills, so this is the
@@ -17727,6 +17750,14 @@ print(json.dumps({
         None if "cathode_emitting_area_fraction" not in diag
         else float(diag["cathode_emitting_area_fraction"][0])
     ),
+    # ea1se anti-vacuity: the secondary-emission current the compiled root's
+    # J_imposed subtracts. Present only when cathode_ion_secondary_emission
+    # is armed; a nonzero value is proof the subtraction was live on the
+    # path being compared.
+    "I_see": (
+        None if "source_I_see_A" not in diag
+        else float(diag["source_I_see_A"][-1])
+    ),
     # pd1 anti-vacuity: the tail end ledger is identically zero unless a
     # disposal actually withheld and walked power, so a nonzero maximum is
     # proof the branched closure was live on the path being compared.
@@ -17745,11 +17776,11 @@ print(json.dumps({
 '''
         _ck_expected_steps = {
             "meanfield": 20, "coverage": 10, "landau": 10, "emitting_area": 10,
-            "initial_profile": 10,
+            "initial_profile": 10, "emitting_area_secondary_emission": 10,
         }
         _CK_SCENARIOS = (
             "meanfield", "coverage", "landau", "emitting_area",
-            "initial_profile",
+            "initial_profile", "emitting_area_secondary_emission",
         )
         _ck_results = {}
         with tempfile.TemporaryDirectory() as _ck_tmpdir:
@@ -17845,6 +17876,21 @@ print(json.dumps({
                         _ck_scenario, _ck_tag, _ck_res["f_em0"],
                         _ck_res["f_em"],
                     )
+                if _ck_scenario == "emitting_area_secondary_emission":
+                    # The throttle was armed (as in ea1) AND the secondary
+                    # current I_see was really nonzero: without this the
+                    # J_imposed subtraction the compiled root find receives
+                    # is 0.0, indistinguishable from the unarmed "emitting_
+                    # area" scenario already covered by another arm.
+                    assert _ck_res["f_em"] is not None, (_ck_scenario, _ck_tag)
+                    assert _ck_res["f_em"] > _ck_res["f_em0"] > 0.0, (
+                        _ck_scenario, _ck_tag, _ck_res["f_em0"],
+                        _ck_res["f_em"],
+                    )
+                    assert _ck_res["I_see"] is not None, (_ck_scenario, _ck_tag)
+                    assert _ck_res["I_see"] > 0.0, (
+                        _ck_scenario, _ck_tag, _ck_res["I_see"]
+                    )
             # Bit-identical, not merely close: the compiled path is a faithful
             # transcription, so the raw state bytes must match exactly -- the
             # same standard the golden holds on the compiled path.
@@ -17868,6 +17914,9 @@ print(json.dumps({
                 _ck_pure["tail_ledger_W"])
             assert _ck_compiled["f_em"] == _ck_pure["f_em"], (
                 _ck_scenario, _ck_compiled["f_em"], _ck_pure["f_em"]
+            )
+            assert _ck_compiled["I_see"] == _ck_pure["I_see"], (
+                _ck_scenario, _ck_compiled["I_see"], _ck_pure["I_see"]
             )
             assert _ck_compiled["nn0_spread"] == _ck_pure["nn0_spread"], (
                 _ck_scenario, _ck_compiled["nn0_spread"],
