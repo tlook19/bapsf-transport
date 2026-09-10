@@ -8038,7 +8038,19 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             input_dict=self._input_dict,
+            # AT THE STEP'S OWN PHASE -- ``self._time - dt``, which is the
+            # instant the caller read ``step_phase`` at and therefore the
+            # instant its branch gate excluded a floating phase at. ``dt_s``
+            # IS the caller's ``attempt.dt``, so this is that gate's time to
+            # the byte. Left at the default (the CURRENT time, past the end
+            # of the step) this asked for the driven mapping on the one step
+            # per run that crosses out of the drive, where the phase's own
+            # reading is already the floating afterglow -- the same
+            # gate-and-mapping disagreement the advance's own evaluator above
+            # carries a comment about, and the configuration
+            # ``_effective_cathode_flags`` now refuses outright.
             input_flags=self._effective_cathode_flags(
+                time=self._time - dt,
                 active_only=False, floating=False
             ),
             beam_cross_prev=self._cathode_beam_cross,
@@ -11977,11 +11989,14 @@ class LAPDSim1D:
         question, which is what the solve-site validators do, are handed a
         configuration that does not exist and refuse it. So the override
         belongs only where a floating phase cannot be reached: the circuit
-        advance and the bound's bundle both return before it on
-        ``step_phase["floating"]``, which is what keeps it inert there. A
-        caller that CAN be in a floating phase asks for the phase's own
-        reading and says which relation it wants some other way -- the
-        accepted-state re-solve says it with the current it evaluates at.
+        advance, its over-wall projection and the bound's bundle all return
+        before it on ``step_phase["floating"]``, which is what keeps it inert
+        there -- and all three therefore ask at THAT GATE'S OWN TIME, not at
+        the solver's current time, which past the end of a crossing step is
+        already the phase the gate excluded. A caller that CAN be in a
+        floating phase asks for the phase's own reading and says which
+        relation it wants some other way -- the accepted-state re-solve says
+        it with the current it evaluates at.
         """
         options = self._cathode_phase_options(time=time)
         if active_only is False and floating is False and options["floating"]:

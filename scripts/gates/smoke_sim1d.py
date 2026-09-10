@@ -29655,6 +29655,79 @@ def _case_effective_cathode_flags_refuses_driven_override_in_floating_phase():
     )
     assert _ecf_flags_out["cathode_coupling"] is True, _ecf_flags_out
 
+    # (iii) THE THIRD LITERAL CALL SITE, which is NOT inert by its caller's
+    # gate alone. ``_project_circuit_over_wall`` runs inside the branch that
+    # gate guards, so a floating phase cannot be reached at the gate's time
+    # -- but its own flags request must be READ at that time. Left at the
+    # caller default it read the solver's current time, which on the one
+    # step per run that crosses out of the drive is already the floating
+    # afterglow: the request the method above refuses. Armed over a ladder
+    # whose accepted step makes that crossing, the run completes.
+    def _ecf_projection_run(reconstruct):
+        _ecf_p, _ecf_f = default_config()
+        _ecf_p = dict(_ecf_p)
+        _ecf_f = dict(_ecf_f)
+        _ecf_f["neutral_equilibration"] = False
+        _ecf_p["nx"] = 16
+        _ecf_p["phase_transition_mode"] = "scheduled"
+        _ecf_p["tau_prebreakdown"] = 1.0e-7
+        _ecf_p["tau_breakdown"] = 0.0
+        _ecf_p["tau_discharge"] = 1.0e-7
+        # A nanohenry, for the sibling case's reason: the inductive tail
+        # carries nothing into the first afterglow step, so the phase's own
+        # reading there really is floating rather than a driven tail.
+        _ecf_p["L_parasitic_H"] = 1.0e-9
+        _ecf_f["cathode_circuit_project_over_wall"] = True
+        _ecf_proj = LAPDSim1D(_ecf_p, _ecf_f)
+        _ecf_seen = []
+        _ecf_orig = _ecf_proj._project_circuit_over_wall
+
+        def _ecf_wrapped(**kw):
+            # The method's own guard, mirrored: past it is where the flags
+            # request sits, so that is where the reconstruction belongs.
+            _ecf_live = (
+                float(kw["L_H"]) > 0.0
+                and float(kw["dt_s"]) > 0.0
+                and float(_ecf_proj._circuit_I_loop) > 0.0
+            )
+            _ecf_seen.append(
+                (_ecf_live, _ecf_proj._cathode_phase_options()["floating"])
+            )
+            if reconstruct and _ecf_live:
+                # THE PRE-FIX EXPRESSION, verbatim: the caller's default
+                # time, which by here is the step's accepted END time.
+                _ecf_proj._effective_cathode_flags(
+                    active_only=False, floating=False
+                )
+            return _ecf_orig(**kw)
+
+        _ecf_proj._project_circuit_over_wall = _ecf_wrapped
+        _ecf_exc = None
+        try:
+            _ecf_proj.start_simulation(t_end=4.0e-7)
+        except ValueError as exc:
+            _ecf_exc = exc
+        return _ecf_proj, _ecf_exc, _ecf_seen
+
+    _ecf_proj_sim, _ecf_proj_exc, _ecf_proj_seen = _ecf_projection_run(False)
+    assert _ecf_proj_exc is None, _ecf_proj_exc
+    assert abs(_ecf_proj_sim._time - 4.0e-7) <= 1.0e-15, _ecf_proj_sim._time
+    # ANTI-VACUITY: the site really was reached past its own guard on a step
+    # whose END time reads floating -- the step this clause is about.
+    assert (True, True) in _ecf_proj_seen, _ecf_proj_seen
+
+    # (iv) THE MUTATION CONTROL: the pre-fix expression put back at that ONE
+    # site kills the same run on that same step.
+    _ecf_ctrl_sim, _ecf_ctrl_exc, _ = _ecf_projection_run(True)
+    assert _ecf_ctrl_exc is not None, (
+        "the pre-fix expression at the projection site did not refuse"
+    )
+    assert "active_only=False, floating=False" in str(_ecf_ctrl_exc), (
+        str(_ecf_ctrl_exc)
+    )
+    assert "floating=True" in str(_ecf_ctrl_exc), str(_ecf_ctrl_exc)
+    assert _ecf_ctrl_sim._time < 4.0e-7, _ecf_ctrl_sim._time
+
 
 # ----------------------------------------------------------------------
 # neutral-equilibration-clears-bound-flag
