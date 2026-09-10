@@ -11980,6 +11980,17 @@ class LAPDSim1D:
         accepted-state re-solve says it with the current it evaluates at.
         """
         options = self._cathode_phase_options(time=time)
+        if active_only is False and floating is False and options["floating"]:
+            _resolved_time = self._time if time is None else time
+            raise ValueError(
+                "_effective_cathode_flags: caller requested the driven "
+                "mapping (active_only=False, floating=False) at time="
+                f"{_resolved_time!r}, but the phase's own reading at that "
+                "time is floating=True -- that configuration does not "
+                "exist. A caller that can be in a floating phase must read "
+                "the phase's own floating value instead of overriding it "
+                "to False."
+            )
         use_floating = (
             options["floating"]
             if (active_only or floating is None)

@@ -29460,6 +29460,80 @@ def _case_cathode_ion_secondary_emission_survives_final_step_boundary():
 
 
 # ----------------------------------------------------------------------
+# effective-cathode-flags-refuses-driven-override-in-floating-phase
+# ----------------------------------------------------------------------
+@_case(
+    "effective-cathode-flags-refuses-driven-override-in-floating-phase",
+    provides=(),
+)
+def _case_effective_cathode_flags_refuses_driven_override_in_floating_phase():
+    """``_effective_cathode_flags`` refuses the driven override off-phase.
+
+    ``active_only=False, floating=False`` asks for the DRIVEN mapping
+    regardless of phase -- the circuit advance and the bound's bundle both
+    pass exactly this, and both return before reaching the call on
+    ``step_phase["floating"]``, so the override is inert for them by
+    construction. A caller that CAN reach a floating phase and still passes
+    this override is handed a configuration that does not exist (a floating
+    phase reported as ``cathode_coupling=False``), which is the same class
+    of silent mis-booking the hand-off and final-step-boundary fixes closed
+    (2026-09-10) -- so the method now refuses it loudly instead.
+
+    The sim is constructed but never run, so ``_circuit_I_prev`` stays at
+    its construction-time 0.0 and the inductive-tail exception (which needs
+    ``_circuit_I_prev > 1.0``) cannot fire regardless of ``L_parasitic_H``:
+    ``options["floating"]`` reads True exactly where the scheduled ladder
+    says ``afterglow``.
+    """
+    _ecf_params, _ecf_flags = default_config()
+    _ecf_params = dict(_ecf_params)
+    _ecf_flags = dict(_ecf_flags)
+    _ecf_flags["neutral_equilibration"] = False
+    _ecf_params["nx"] = 16
+    _ecf_params["phase_transition_mode"] = "scheduled"
+    _ecf_params["tau_prebreakdown"] = 1.0e-7
+    _ecf_params["tau_breakdown"] = 0.0
+    _ecf_params["tau_discharge"] = 1.0e-7
+    _ecf_params["tau_afterglow"] = 1.0e-7
+    _ecf_sim = LAPDSim1D(_ecf_params, _ecf_flags)
+    assert _ecf_sim._circuit_I_prev == 0.0, _ecf_sim._circuit_I_prev
+
+    _ecf_afterglow_time = (
+        _ecf_sim._plasma_phase_time_origin()
+        + float(_ecf_params["tau_prebreakdown"])
+        + float(_ecf_params["tau_breakdown"])
+        + float(_ecf_params["tau_discharge"])
+        + 0.5 * float(_ecf_params["tau_afterglow"])
+    )
+    _ecf_options = _ecf_sim._cathode_phase_options(time=_ecf_afterglow_time)
+    assert _ecf_options["floating"] is True, _ecf_options
+
+    # (i) active_only=False, floating=False in a floating phase: refused,
+    # naming the caller's request and the phase's own reading.
+    _ecf_raised = None
+    try:
+        _ecf_sim._effective_cathode_flags(
+            time=_ecf_afterglow_time, active_only=False, floating=False
+        )
+    except ValueError as exc:
+        _ecf_raised = exc
+    assert _ecf_raised is not None, (
+        "no refusal for the driven override in a floating phase"
+    )
+    assert "active_only=False, floating=False" in str(_ecf_raised), (
+        str(_ecf_raised)
+    )
+    assert "floating=True" in str(_ecf_raised), str(_ecf_raised)
+
+    # (ii) active_only=True at the same time: the phase's own reading, no
+    # refusal -- a floating, configured phase reports cathode_coupling True.
+    _ecf_flags_out = _ecf_sim._effective_cathode_flags(
+        time=_ecf_afterglow_time, active_only=True
+    )
+    assert _ecf_flags_out["cathode_coupling"] is True, _ecf_flags_out
+
+
+# ----------------------------------------------------------------------
 # neutral-equilibration-clears-bound-flag
 # ----------------------------------------------------------------------
 @_case("neutral-equilibration-clears-bound-flag", provides=())
@@ -30304,7 +30378,7 @@ def _case_circuit_projection_refusals():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 177, "historical_stance": 68}
+_CASE_CENSUS = {"total": 178, "historical_stance": 68}
 
 
 def _assert_case_census():
