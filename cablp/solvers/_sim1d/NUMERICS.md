@@ -464,6 +464,29 @@ itself, `"smoothed"` the supply-averaged EMA of the sampled electrode cells
 that `cathode_sample_smoothing` maintains — the same sample the RHS-side sheath
 solve and the accepted-state surface re-solve read, so under `"smoothed"` the
 loop and the fluid evaluate the sheath from one sample within an accepted step.
+
+**The over-wall projection** (`cathode_circuit_project_over_wall`, default
+off) edits ONE input of that advance: the current it starts from. The explicit
+half of the TR-BDF2 stage is evaluated at the held current $I_n$, and above the
+emission wall the UNBOUNDED $V_\text{dis}$ the loop integrates sits on the
+atomic-data ceiling `cathode_phi_c_cap_V`, so that half sees the cap against a
+supply of $V_\text{src}-I_nR_\text{loop}$ and displaces the loop by of order
+$\Delta t\,(V_\text{cap}-V_\text{supply})/L$ in a single step. Armed, when the
+unbounded solve at $I_n$ — evaluated on the same sampled state the advance's
+own evaluator is built on — comes back `capability_limited` (which for that
+evaluator means at the data cap, it carrying no circuit member), $I_n$ is
+replaced by the WALL ROOT: the root of
+$V_\text{src}-I\,xR_\text{comp}-V_\text{dis}(I)=0$ found by `brentq` at `xtol`
+$10^{-9}$ A on $[I_n-2k,\,I_n]$ with $k=\Delta t\,(V_\text{cap}-V_\text{supply})/L$,
+the bracket widened downward once to $4k$ (floored at zero current) and
+otherwise left alone and counted. The load line is deliberately not a trigger:
+under `cathode_circuit_voltage_bound` the bounded solve's accepted root sits on
+it by construction. The replacement is not conservative — the inductor energy
+$\tfrac{1}{2}L(I_n^2-I_\text{root}^2)$ is dropped and booked cumulatively
+beside an event count — and it is confined to the advance's input: the advance
+overwrites the loop current with its own result immediately, so the timestep
+bound below and every other reader see the advance's OUTPUT as before.
+
 The fluid stages run at a loop current frozen over the step;
 `coupled_circuit_picard` re-runs the accepted step, at most
 `circuit_picard_max_iter` times in a driven phase, until the current a step

@@ -29370,6 +29370,413 @@ def _case_circuit_sample_refusals():
 
 
 # ----------------------------------------------------------------------
+# circuit-projection-default-identity
+# ----------------------------------------------------------------------
+@_case("circuit-projection-default-identity", provides=())
+def _case_circuit_projection_default_identity():
+    """The over-wall projection is OFF by default, and naming it off is inert.
+
+    ``cathode_circuit_project_over_wall`` replaces the loop current the
+    current-driven TR-BDF2 advance starts from, on steps whose held current is
+    above the emission wall. Default ``False`` is the advance the solver
+    performed before the flag existed, so a configuration that never mentions
+    the flag and one that states it ``False`` must be the SAME RUN to the byte
+    -- trajectory and circuit trace alike -- and neither may publish a
+    projection diagnostic.
+
+    That last clause is the presence gate, and it is the one a reader of an
+    unarmed run's file depends on: the three census members appear only when
+    the flag is armed, so an unarmed run's saved diagnostic set is exactly
+    what it always was.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from baseline_sim1d import build_baseline_config as _cpd_baseline_config
+
+    _CPD_T_END = 2.0e-6
+
+    def _cpd_run(flag_overrides):
+        _p, _f = _cpd_baseline_config(
+            param_overrides={"nx": 16, "dt_save": 2.5e-7},
+            flag_overrides=dict(
+                {
+                    "cathode_schottky": False,
+                    "cathode_circuit_voltage_bound": True,
+                    "neutral_equilibration": False,
+                },
+                **flag_overrides,
+            ),
+        )
+        assert _f["cathode_coupling"] is True
+        assert _p["cathode_solver_model"] == "current_driven"
+        return _f, LAPDSim1D(_p, _f).run(t_end=_CPD_T_END)
+
+    _cpd_absent_flags, _cpd_absent = _cpd_run({})
+    assert _cpd_absent_flags["cathode_circuit_project_over_wall"] is False, (
+        _cpd_absent_flags["cathode_circuit_project_over_wall"]
+    )
+    _cpd_named_flags, _cpd_named = _cpd_run(
+        {"cathode_circuit_project_over_wall": False}
+    )
+    assert _cpd_named_flags["cathode_circuit_project_over_wall"] is False
+
+    assert (
+        np.asarray(_cpd_absent.y, dtype=float).tobytes()
+        == np.asarray(_cpd_named.y, dtype=float).tobytes()
+    )
+    assert (
+        np.asarray(_cpd_absent.time, dtype=float).tobytes()
+        == np.asarray(_cpd_named.time, dtype=float).tobytes()
+    )
+    for _cpd_row in (
+        "circuit_I_loop", "circuit_V_dis_step", "circuit_V_dis_dt_integral",
+        "source_V_b", "source_I_tot", "source_phi_c",
+    ):
+        assert (
+            np.asarray(
+                _cpd_absent.cathode_diagnostics[_cpd_row], dtype=float
+            ).tobytes()
+            == np.asarray(
+                _cpd_named.cathode_diagnostics[_cpd_row], dtype=float
+            ).tobytes()
+        ), _cpd_row
+    # THE PRESENCE GATE: no census member on either unarmed run.
+    for _cpd_key in (
+        "circuit_projection_events",
+        "circuit_projection_energy_J",
+        "circuit_projection_unbracketed",
+    ):
+        assert _cpd_key not in _cpd_absent.cathode_diagnostics, _cpd_key
+        assert _cpd_key not in _cpd_named.cathode_diagnostics, _cpd_key
+
+
+# ----------------------------------------------------------------------
+# circuit-projection-over-wall-discriminator
+# ----------------------------------------------------------------------
+@_case("circuit-projection-over-wall-discriminator", provides=())
+def _case_circuit_projection_over_wall_discriminator():
+    """Armed, a step that starts above the wall lands ON the wall.
+
+    THE DEFECT. The current-driven advance is TR-BDF2 and its explicit half is
+    evaluated at the HELD loop current. Above the emission wall the sheath's
+    unbounded demand is on the atomic-data ceiling
+    ``cathode_phi_c_cap_V``, so that half sees ~cap against a supply of
+    ~``V_src - I*R``: it throws the loop of order ``dt*(cap - V_supply)/L``
+    BELOW the wall in one step, and the loop rings instead of tracking.
+
+    THE CLAUSE. One accepted circuit step taken from ``I* + 0.2 A``, where
+    ``I*`` is the wall root of that very advance's own ``V_dis(I)``
+    evaluator:
+
+    * WITHOUT the flag the step lands far below the wall (measured
+      -10.70 A at ``dt`` 0.42 us, -6.11 A at 0.24 us; asserted < -5 A);
+    * WITH the flag it lands ON the wall root (measured -0.000000 A;
+      asserted within 0.1 A), having been handed the projected current
+      rather than the held one, with exactly one projection event and no
+      unbracketed step;
+    * a MUTATION CONTROL -- the flag armed but the projection method
+      replaced by a no-op -- reproduces the unflagged landing to the byte,
+      so the clause is measuring the projection and not the arming.
+
+    THE STATE IS BUILT, not run to. The excursion is a falling-leg one, at a
+    plateau-scale loop current, and the reference configuration at ``nx = 16``
+    does not reach that state until well past breakdown. So the electrode
+    cells are seeded at the plateau's own ``(n, Te)`` and the step is taken at
+    a stated production-scale ``dt``: the wall root then lands at kilo-ampere
+    scale from the first accepted step, which is all the mechanism needs.
+
+    THE DRIVE is the REAL SITE. A spy on ``idriven_vdis_evaluator`` at the
+    solver module name fires on the accepted-step circuit advance only (the
+    module has a second caller, the timestep controller's bound bundle, and
+    the caller's own frame is what tells them apart). It roots that
+    evaluator, checks the unbounded demand at ``I* + 0.2`` really is on the
+    data cap, and forces the held current; the solver's own projection block
+    then runs on that value, unmodified. A second spy records what the
+    advance was handed and where it landed.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from scipy.optimize import brentq as _cpw_brentq
+    from baseline_sim1d import build_baseline_config as _cpw_baseline_config
+    import cablp.solvers._sim1d.solver as _cpw_solver_mod
+
+    _CPW_T_END = 2.0e-6
+    _CPW_DT = 4.2e-7        # production-scale step, the advisor's larger one
+    _CPW_EPS = 0.2          # amperes above the wall root the step starts from
+    _CPW_NE0 = 2.4e12       # plateau electrode-cell density [cm^-3]
+    _CPW_TE0 = 7.6          # plateau electrode-cell temperature [eV]
+    #: Registered thresholds. The unflagged landing is measured at -10.70 A
+    #: and the flagged one at -0.000000 A, so both sit far inside.
+    _CPW_UNFLAGGED_MAX = -5.0
+    _CPW_FLAGGED_TOL = 0.1
+
+    class _CpwStop(Exception):
+        pass
+
+    def _cpw_probe(arm):
+        _p, _f = _cpw_baseline_config(
+            param_overrides={
+                "nx": 16, "dt_save": 2.5e-7,
+                "ne0": _CPW_NE0, "Te0": _CPW_TE0,
+            },
+            flag_overrides={
+                "cathode_schottky": False,
+                "cathode_circuit_voltage_bound": True,
+                "neutral_equilibration": False,
+                "cathode_circuit_project_over_wall": arm in ("on", "control"),
+            },
+        )
+        _sim = LAPDSim1D(_p, _f)
+        if arm == "control":
+            _sim._project_circuit_over_wall = lambda **_kw: None
+        _R_series = float(_p["R_comp"]) * float(_p["R_comp_partition"])
+        _orig_eval = _cpw_solver_mod.idriven_vdis_evaluator
+        _orig_adv = _cpw_solver_mod.advance_circuit_current_driven
+        _rec = {}
+
+        def _cpw_spy_eval(**kw):
+            if _sys._getframe(1).f_code.co_name != "_accept_step_attempt":
+                return _orig_eval(**kw)
+            _vdis = _orig_eval(**kw)
+            if _rec:
+                return _vdis
+            _V_src = float(kw["circuit_V_src_V"])
+
+            def _g(I):
+                return _V_src - I * _R_series - float(_vdis(I))
+
+            if _g(1.0e-6) * _g(1.0e5) > 0.0:
+                return _vdis
+            _I_star = float(_cpw_brentq(_g, 1.0e-6, 1.0e5, xtol=1.0e-9))
+            if _I_star < 50.0:
+                return _vdis
+            # The trigger the projection reads: the UNBOUNDED demand just
+            # above the root must be on the data cap, or this step is not
+            # the one the clause is about.
+            _res = _cpw_solver_mod.idriven_result_evaluator(
+                state=kw["state"], floors=_sim._floors,
+                ion_mass_g=_sim._ion_mass_g, mu=_sim._mu,
+                geometry=_sim._geometry, input_dict=_sim._input_dict,
+                input_flags=_sim._effective_cathode_flags(
+                    active_only=False, floating=False
+                ),
+                beam_cross_prev=_sim._cathode_beam_cross,
+                T_s_override_K=_sim._cathode_Ts_K,
+                phi_wf_override_eV=_sim._cathode_phi_wf_eff(),
+                f_em_override=_sim._cathode_f_em,
+                circuit_V_src_V=_V_src, apply_circuit_bound=False,
+            )
+            if _res(_I_star + _CPW_EPS).regime != "capability_limited":
+                return _vdis
+            _rec["I_star"] = _I_star
+            _sim._circuit_I_loop = _I_star + _CPW_EPS
+            return _vdis
+
+        def _cpw_spy_adv(**kw):
+            if "I_star" not in _rec:
+                return _orig_adv(**kw)
+            _rec["I_handed"] = float(kw["I_prev_A"])
+            _out = _orig_adv(**kw)
+            _rec["I_new"] = float(_out[0])
+            raise _CpwStop
+
+        _cpw_solver_mod.idriven_vdis_evaluator = _cpw_spy_eval
+        _cpw_solver_mod.advance_circuit_current_driven = _cpw_spy_adv
+        try:
+            _sim.run(t_end=_CPW_T_END, dt=_CPW_DT)
+        except _CpwStop:
+            pass
+        finally:
+            _cpw_solver_mod.idriven_vdis_evaluator = _orig_eval
+            _cpw_solver_mod.advance_circuit_current_driven = _orig_adv
+        assert "I_new" in _rec, (
+            "no over-wall circuit advance was reached; the clause would be "
+            "vacuous"
+        )
+        _rec["events"] = int(_sim._circuit_projection_events)
+        _rec["unbracketed"] = int(_sim._circuit_projection_unbracketed)
+        _rec["energy_J"] = float(_sim._circuit_projection_energy_J)
+        return _rec
+
+    # (i) UNFLAGGED: the advance keeps the held current and lands below the
+    # wall by the explicit half's kick.
+    _cpw_off = _cpw_probe("off")
+    _cpw_off_land = _cpw_off["I_new"] - _cpw_off["I_star"]
+    assert _cpw_off["I_handed"] == _cpw_off["I_star"] + _CPW_EPS
+    assert _cpw_off["events"] == 0
+    assert _cpw_off_land < _CPW_UNFLAGGED_MAX, _cpw_off_land
+
+    # (ii) FLAGGED: the advance is handed the wall root and lands on it.
+    _cpw_on = _cpw_probe("on")
+    _cpw_on_land = _cpw_on["I_new"] - _cpw_on["I_star"]
+    print(
+        "  circuit-projection: I* = "
+        f"{_cpw_on['I_star']:.3f} A; landing - I* = {_cpw_off_land:+.4f} A "
+        f"unflagged, {_cpw_on_land:+.6f} A flagged; inductor energy dropped "
+        f"{_cpw_on['energy_J']:.4e} J over {_cpw_on['events']} event(s)"
+    )
+    assert _cpw_on["events"] == 1, _cpw_on["events"]
+    assert _cpw_on["unbracketed"] == 0, _cpw_on["unbracketed"]
+    assert abs(_cpw_on["I_handed"] - _cpw_on["I_star"]) <= _CPW_FLAGGED_TOL
+    assert abs(_cpw_on_land) <= _CPW_FLAGGED_TOL, _cpw_on_land
+    assert _cpw_on["energy_J"] > 0.0, _cpw_on["energy_J"]
+
+    # (iii) THE MUTATION CONTROL, which must be CAUGHT: arming the flag but
+    # disabling the projection reproduces the unflagged landing exactly.
+    _cpw_ctrl = _cpw_probe("control")
+    _cpw_ctrl_land = _cpw_ctrl["I_new"] - _cpw_ctrl["I_star"]
+    assert _cpw_ctrl["events"] == 0, _cpw_ctrl["events"]
+    assert _cpw_ctrl_land < _CPW_UNFLAGGED_MAX, _cpw_ctrl_land
+    assert _cpw_ctrl_land == _cpw_off_land, (_cpw_ctrl_land, _cpw_off_land)
+
+
+# ----------------------------------------------------------------------
+# circuit-projection-schottky-on-inert
+# ----------------------------------------------------------------------
+@_case("circuit-projection-schottky-on-inert", provides=())
+def _case_circuit_projection_schottky_on_inert():
+    """On the Schottky-ON closure the projection never fires.
+
+    The trigger is the sheath's unbounded demand sitting on the ATOMIC-DATA
+    cap. With barrier lowering on, the emitted current rises steeply enough
+    with the fall that the current-imposed solve reaches its target far below
+    that cap, so the trigger is inert by the emission slope -- not by a
+    configuration guard, which is why it is measured rather than argued.
+
+    Two clauses on one run: the event counter is exactly zero, and the
+    trajectory is byte-identical to the same configuration with the flag off.
+    The second is the stronger statement -- a flag that fires nothing has, by
+    construction, moved nothing -- and it is the one that would catch a
+    trigger keyed to the LOAD LINE instead, which under the circuit voltage
+    bound armed here would fire on every plateau step.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from baseline_sim1d import build_baseline_config as _cpi_baseline_config
+
+    _CPI_T_END = 5.0e-6
+
+    def _cpi_run(armed):
+        _p, _f = _cpi_baseline_config(
+            param_overrides={"nx": 16, "dt_save": 2.5e-7},
+            flag_overrides={
+                "cathode_schottky": True,
+                "cathode_circuit_voltage_bound": True,
+                "neutral_equilibration": False,
+                "cathode_circuit_project_over_wall": armed,
+            },
+        )
+        assert _f["cathode_schottky"] is True
+        _sim = LAPDSim1D(_p, _f)
+        return _sim, _sim.run(t_end=_CPI_T_END)
+
+    _cpi_sim_on, _cpi_on = _cpi_run(True)
+    _cpi_sim_off, _cpi_off = _cpi_run(False)
+    # The clause is not vacuous only if circuit advances actually ran.
+    assert float(
+        np.asarray(_cpi_on.cathode_diagnostics["circuit_I_loop"])[-1]
+    ) > 0.0
+    print(
+        "  circuit-projection: Schottky-on run fired "
+        f"{int(_cpi_sim_on._circuit_projection_events)} projection event(s)"
+    )
+    assert _cpi_sim_on._circuit_projection_events == 0, (
+        _cpi_sim_on._circuit_projection_events
+    )
+    assert _cpi_sim_on._circuit_projection_unbracketed == 0
+    assert _cpi_sim_on._circuit_projection_energy_J == 0.0
+    assert (
+        np.asarray(_cpi_on.y, dtype=float).tobytes()
+        == np.asarray(_cpi_off.y, dtype=float).tobytes()
+    )
+    assert (
+        np.asarray(_cpi_on.time, dtype=float).tobytes()
+        == np.asarray(_cpi_off.time, dtype=float).tobytes()
+    )
+    # ...and the armed run DOES publish the census, at zero.
+    assert (
+        _cpi_on.cathode_diagnostics["circuit_projection_events"][-1] == 0.0
+    )
+
+
+# ----------------------------------------------------------------------
+# circuit-projection-refusals
+# ----------------------------------------------------------------------
+@_case("circuit-projection-refusals", provides=())
+def _case_circuit_projection_refusals():
+    """``cathode_circuit_project_over_wall`` refuses loudly at construction.
+
+    Two refusals, each naming the flag and the key that would have to change:
+    armed with the ``cathode_coupling`` flag off, where there is no circuit
+    advance at all; and armed under a ``cathode_solver_model`` that performs
+    no current-driven advance. The second is read on the prescribed measured
+    drive -- the other accepted model -- and must come from THIS flag by name
+    rather than from whatever the trace resolution would otherwise reach
+    first, which is why the validator sits ahead of it.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from baseline_sim1d import build_baseline_config as _cpr_baseline_config
+
+    def _cpr_refuses(params, flags, needle):
+        try:
+            LAPDSim1D(params, flags)
+        except ValueError as exc:
+            assert needle in str(exc), (needle, str(exc))
+            return
+        raise AssertionError(f"no refusal naming {needle!r}")
+
+    # cathode_coupling off. Read off the TEMPLATE rather than the reference
+    # configuration, for the reason the sample selector's own coupling clause
+    # is: clearing the coupling under the reference stance trips the surface
+    # channels that depend on the cathode solve first, and this clause is
+    # about this flag's own refusal.
+    _cpr_params, _cpr_flags = default_config()
+    _cpr_params["nx"] = 8
+    _cpr_flags["cathode_circuit_project_over_wall"] = True
+    _cpr_flags["cathode_coupling"] = False
+    _cpr_refuses(
+        _cpr_params, _cpr_flags,
+        "cathode_circuit_project_over_wall requires the cathode_coupling "
+        "flag",
+    )
+    _cpr_params, _cpr_flags = _cpr_baseline_config(
+        param_overrides={
+            "nx": 8, "cathode_solver_model": "prescribed_measured",
+        },
+        flag_overrides={
+            "neutral_equilibration": False,
+            "cathode_circuit_project_over_wall": True,
+        },
+    )
+    _cpr_refuses(
+        _cpr_params, _cpr_flags,
+        "cathode_circuit_project_over_wall requires "
+        "cathode_solver_model='current_driven' (got 'prescribed_measured')",
+    )
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -29378,7 +29785,7 @@ def _case_circuit_sample_refusals():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 170, "historical_stance": 68}
+_CASE_CENSUS = {"total": 174, "historical_stance": 68}
 
 
 def _assert_case_census():

@@ -7957,6 +7957,19 @@ class LAPDSim1D:
 
         WHAT IT COSTS. The replacement is not conservative in the inductor:
         ``0.5*L*(I^2 - I_root^2)`` is dropped and booked cumulatively.
+
+        SCOPE OF THE MUTATION. The projected current is a TRANSIENT of the
+        advance's input: the advance overwrites ``_circuit_I_loop`` with its
+        own result on the next statement, and nothing reads the attribute in
+        between. Every reader outside this advance therefore sees the
+        advance's OUTPUT exactly as it did before -- the timestep bound's
+        bundle (``_circuit_timestep_kwargs``, built at the state the NEXT
+        step starts from) included, so that bundle's promise to carry the
+        same device relation the advance integrates is untouched. What DOES
+        change downstream is the value of that output: a projected step lands
+        on the wall root, so the bound reads a loop at its local equilibrium
+        and withdraws its candidate there, which is the honest reading of a
+        loop that has nothing left to relax.
         """
         from scipy.optimize import brentq
 
