@@ -29112,12 +29112,20 @@ def _case_cathode_ion_secondary_emission_survives_open_circuit():
 
     * ARMED, the run reaches the open circuit and finishes there;
     * with the OVERRIDE PUT BACK by a spy -- the pre-fix mapping,
-      reconstructed at the one call site that asked for it -- the same run
-      raises, in the ``afterglow`` phase, with the phase reading floating and
-      a solve enabled, on the refusal that names ``cathode_coupling``;
-    * UNARMED, the spy changes nothing: the defect was reachable only through
-      the armed term's validator, which is why every unarmed configuration --
-      the goldens included -- never saw it.
+      reconstructed at EACH of the two call sites that asked for it, one at a
+      time, because either alone was enough -- the same run raises, in the
+      ``afterglow`` phase, with the phase reading floating and a solve
+      enabled, on the refusal that names ``cathode_coupling``;
+    * UNARMED, the spy changes nothing at either site: the defect was
+      reachable only through the armed term's validator, which is why every
+      unarmed configuration -- the goldens included -- never saw it.
+
+    The second site is the circuit advance, and it reached a floating phase
+    for a reason worth stating: its branch gate reads the phase of the step
+    it is INTEGRATING, while its flags request read the solver's current
+    time, which on the one step that crosses out of the drive is already the
+    afterglow. A gate and a mapping read at two instants disagree exactly
+    once per run, on the step that matters.
     """
     import cablp.solvers._sim1d.solver as _os_solver_mod
 
@@ -29154,37 +29162,51 @@ def _case_cathode_ion_secondary_emission_survives_open_circuit():
     def _os_run(armed, override):
         """Run to ``_OS_T_END``; ``override`` reconstructs the defect.
 
-        ``idriven_result_evaluator`` is called from exactly one place in the
-        solver -- the accepted-state re-solve -- so re-deriving its
-        ``input_flags`` at the module name IS the pre-fix call site, and
-        nothing else moves. The value put back is the pre-fix expression
-        verbatim: the phase's driven disjuncts with the floating one dropped,
-        which is what ``floating=False`` used to mean.
+        TWO CALL SITES asked for the driven mapping and consumed it, and each
+        is reconstructed at its own module name: the accepted-state re-solve
+        (``idriven_result_evaluator``, the only place in the solver that name
+        is called) and the current-driven circuit advance
+        (``idriven_vdis_evaluator``). ``override`` names which to put back.
+
+        The value put back is the pre-fix expression verbatim, at the pre-fix
+        INSTANT: the phase read at the solver's current time -- past the end
+        of the step the advance is integrating -- with the floating disjunct
+        dropped, which is what ``floating=False`` used to mean.
         """
         _os_sim = _os_build(armed)
-        _os_orig = _os_solver_mod.idriven_result_evaluator
         _os_seen = []
 
-        def _os_overridden(**kw):
-            _os_opts = _os_sim._cathode_phase_options()
-            _os_pre = bool(
-                _os_opts["cathode_enabled"] or _os_opts["inductive_tail"]
-            )
-            kw["input_flags"] = {
-                **kw["input_flags"], "cathode_coupling": _os_pre
-            }
-            _os_seen.append(_os_pre)
-            return _os_orig(**kw)
+        def _os_wrap(_os_orig):
+            def _os_overridden(**kw):
+                _os_opts = _os_sim._cathode_phase_options()
+                _os_pre = bool(
+                    _os_opts["cathode_enabled"] or _os_opts["inductive_tail"]
+                )
+                kw["input_flags"] = {
+                    **kw["input_flags"], "cathode_coupling": _os_pre
+                }
+                _os_seen.append(_os_pre)
+                return _os_orig(**kw)
+            return _os_overridden
 
-        if override:
-            _os_solver_mod.idriven_result_evaluator = _os_overridden
+        _os_saved = {
+            _os_name: getattr(_os_solver_mod, _os_name)
+            for _os_name in (
+                "idriven_result_evaluator", "idriven_vdis_evaluator"
+            )
+        }
+        for _os_name in override:
+            setattr(
+                _os_solver_mod, _os_name, _os_wrap(_os_saved[_os_name])
+            )
         _os_raised = None
         try:
             _os_sim.start_simulation(t_end=_OS_T_END)
         except ValueError as exc:
             _os_raised = exc
         finally:
-            _os_solver_mod.idriven_result_evaluator = _os_orig
+            for _os_name, _os_fn in _os_saved.items():
+                setattr(_os_solver_mod, _os_name, _os_fn)
         return (
             _os_sim,
             _os_raised,
@@ -29192,8 +29214,11 @@ def _case_cathode_ion_secondary_emission_survives_open_circuit():
             _os_seen,
         )
 
+    _OS_RESOLVE = ("idriven_result_evaluator",)
+    _OS_ADVANCE = ("idriven_vdis_evaluator",)
+
     # (i) ARMED AND SHIPPED: across the hand-off and out the other side.
-    _os_sim, _os_exc, _os_opts, _ = _os_run(True, False)
+    _os_sim, _os_exc, _os_opts, _ = _os_run(True, ())
     assert _os_exc is None, _os_exc
     assert _os_opts["floating"] is True, _os_opts
     assert _os_opts["solve_enabled"] is True, _os_opts
@@ -29211,33 +29236,46 @@ def _case_cathode_ion_secondary_emission_survives_open_circuit():
         _os_sim._input_dict, _os_flags_at_end
     ) == 0.375
 
-    # (ii) THE RECONSTRUCTION, which must be CAUGHT. With the override put
-    # back the armed run dies in the afterglow, on the refusal that names the
-    # flag, at a phase whose own reading says a solve is enabled and floating.
-    _os_ctrl_sim, _os_ctrl_exc, _os_ctrl_opts, _os_ctrl_seen = _os_run(
-        True, True
-    )
-    assert _os_ctrl_exc is not None, "the reconstruction did not raise"
-    assert "cathode_ion_secondary_emission cannot arm" in str(_os_ctrl_exc), (
-        str(_os_ctrl_exc)
-    )
-    assert "cathode_coupling" in str(_os_ctrl_exc), str(_os_ctrl_exc)
-    assert _os_ctrl_sim.phase_at_time(_os_ctrl_sim._time) == "afterglow", (
-        _os_ctrl_sim.phase_at_time(_os_ctrl_sim._time)
-    )
-    assert _os_ctrl_opts["floating"] is True, _os_ctrl_opts
-    assert _os_ctrl_opts["solve_enabled"] is True, _os_ctrl_opts
-    assert _os_ctrl_sim._time < _OS_T_END, _os_ctrl_sim._time
-    # ...and the spy was actually reached with the value cleared, so the
-    # clause above is the defect and not a coincidence of the run ending.
-    assert False in _os_ctrl_seen, _os_ctrl_seen
+    # (ii) THE RECONSTRUCTION, which must be CAUGHT -- ONCE PER CALL SITE,
+    # because either one alone was enough to kill the run. With the override
+    # put back the armed run dies in the afterglow, on the refusal that names
+    # the flag, at a phase whose own reading says a solve is enabled and
+    # floating.
+    for _os_where in (_OS_RESOLVE, _OS_ADVANCE):
+        _os_ctrl_sim, _os_ctrl_exc, _os_ctrl_opts, _os_ctrl_seen = _os_run(
+            True, _os_where
+        )
+        assert _os_ctrl_exc is not None, (
+            f"the reconstruction at {_os_where} did not raise"
+        )
+        assert "cathode_ion_secondary_emission cannot arm" in str(
+            _os_ctrl_exc
+        ), (_os_where, str(_os_ctrl_exc))
+        assert "cathode_coupling" in str(_os_ctrl_exc), (
+            _os_where, str(_os_ctrl_exc)
+        )
+        assert _os_ctrl_sim.phase_at_time(_os_ctrl_sim._time) == "afterglow", (
+            _os_where, _os_ctrl_sim.phase_at_time(_os_ctrl_sim._time)
+        )
+        assert _os_ctrl_opts["floating"] is True, (_os_where, _os_ctrl_opts)
+        assert _os_ctrl_opts["solve_enabled"] is True, (
+            _os_where, _os_ctrl_opts
+        )
+        assert _os_ctrl_sim._time < _OS_T_END, (
+            _os_where, _os_ctrl_sim._time
+        )
+        # ...and the spy was actually reached with the value cleared, so the
+        # clauses above are the defect and not a coincidence of the run ending.
+        assert False in _os_ctrl_seen, (_os_where, _os_ctrl_seen)
 
     # (iii) UNARMED, THE OVERRIDE IS INERT. The same reconstruction over the
     # same ladder with the term off runs to the end either way: nothing but
     # the armed validator read the cleared flag, which is why no unarmed
     # configuration -- the goldens included -- could ever have hit this.
-    _os_off_sim, _os_off_exc, _os_off_opts, _ = _os_run(False, False)
-    _os_off_ctrl_sim, _os_off_ctrl_exc, _, _os_off_seen = _os_run(False, True)
+    _os_off_sim, _os_off_exc, _os_off_opts, _ = _os_run(False, ())
+    _os_off_ctrl_sim, _os_off_ctrl_exc, _, _os_off_seen = _os_run(
+        False, _OS_RESOLVE + _OS_ADVANCE
+    )
     assert _os_off_exc is None, _os_off_exc
     assert _os_off_ctrl_exc is None, _os_off_ctrl_exc
     assert False in _os_off_seen, _os_off_seen

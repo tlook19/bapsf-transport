@@ -7733,7 +7733,20 @@ class LAPDSim1D:
                 mu=self._mu,
                 geometry=self._geometry,
                 input_dict=self._input_dict,
+                # AT THE STEP'S OWN PHASE -- ``step_phase``'s time, the same
+                # one the branch gate above and ``V_src`` beside it were read
+                # at. Left at the default (the CURRENT time, past the end of
+                # the step) the two disagreed on exactly one step per run: the
+                # one that CROSSES out of the drive. There the gate saw the
+                # driven step it is integrating and let the branch run, while
+                # the mapping saw the afterglow the step landed in, and the
+                # ``floating=False`` override -- inert wherever this branch
+                # actually runs -- then cleared ``cathode_coupling`` for a
+                # configuration that supplies one. The ion-secondary-emission
+                # validator reads that key as a construction-time fact and
+                # refused the crossing step of every armed run.
                 input_flags=self._effective_cathode_flags(
+                    time=self._time - float(attempt.dt),
                     active_only=False, floating=False
                 ),
                 beam_cross_prev=self._cathode_beam_cross,
@@ -11560,8 +11573,13 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             input_dict=self._input_dict,
+            # AT THE TIME THE GATE ABOVE WAS READ AT, for the reason the
+            # circuit advance carries: a mapping read at a different instant
+            # than the gate that let it be built can report a phase the gate
+            # already excluded, and the override below would then clear
+            # ``cathode_coupling`` on a configuration that has one.
             input_flags=self._effective_cathode_flags(
-                active_only=False, floating=False
+                time=time, active_only=False, floating=False
             ),
             beam_cross_prev=self._cathode_beam_cross,
             T_s_override_K=self._cathode_Ts_K,
