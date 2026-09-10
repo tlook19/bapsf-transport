@@ -227,6 +227,19 @@ INERT_FLAG_KEYS = frozenset({
     # partner number is in INERT_PARAM_KEYS above; the two must be listed
     # together, because clearing one alone would refuse the inner sim.
     "cathode_ion_secondary_emission",
+    # The over-wall projection of the current-driven circuit advance, inert on
+    # the same ground as cathode_coupling and coupled_circuit_picard beside it,
+    # and more strongly: run_neutral_equilibration pins Plasma=False and
+    # cathode_coupling=False on the inner sim, so NO CIRCUIT ADVANCE RUNS at
+    # all during an equilibration and this flag edits the starting current of
+    # a step that is never taken. Its partner is cathode_circuit_sample in
+    # INERT_PARAM_KEYS above, which selects the sample the same advance reads;
+    # the two describe one advance and are listed for one reason. Categorised
+    # rather than left to fail closed for the reason spelled out for the
+    # prescribed cathode trace above: the fail-closed default rotates every
+    # stored seed's signature the moment such a key joins the template, an
+    # invalidation with no neutral content behind it.
+    "cathode_circuit_project_over_wall",
     # cache-control + equilibration-trigger flags (not seed content)
     "neutral_equilibration", "launch_plasma_after_equilibration",
     "use_cached_neutral_seed",
