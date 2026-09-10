@@ -974,11 +974,11 @@ def model_mode_defaults():
         The ``cathode_phi_c_cap_V`` in that expression is the RAW atomic-data
         cap, taken because it is resolvable at construction; the circuit's
         own ``min(cap, V_avail(I))`` bound is tighter but current-dependent
-        and therefore is not. The same 1000 V allowance is applied to the
-        ANODE fall as a stated assumption about the band the construction
-        check covers -- ``phi_a`` carries no cap of its own and none is
-        implied here -- so the check is conservative on that side rather
-        than predictive, and the tick's own moment refusal remains the
+        and therefore is not. The same ``cathode_phi_c_cap_V`` allowance is
+        applied to the ANODE fall as a stated assumption about the band the
+        construction check covers -- ``phi_a`` carries no cap of its own and
+        none is implied here -- so the check is conservative on that side
+        rather than predictive, and the tick's own moment refusal remains the
         backstop for anything the band did not anticipate.
 
         A positive float pins the extent instead, which is how the historical
@@ -1364,7 +1364,11 @@ def model_mode_defaults():
             the same speed the ghost's Bohm velocity is set at, so the ghost
             sits exactly at its own sonic point. The pair carries no ion
             partial pressure, so this face's momentum flux is smaller than the
-            model's own ``n (Te + Ti)`` face pressure by ``n_f Ti``.
+            model's own ``n (Te + Ti)`` face pressure by
+            ``n_f ((Te + Ti) - m_i c^2)`` -- exactly ``n_f Ti`` plus a small
+            mass-convention residual (``m_i c^2`` uses the true ion mass
+            ``ion_mass_g`` against a sound speed built on ``mu`` proton
+            masses; ~0.600% of Te at mu=4).
         ``"hll"``
             The HLL flux on the full ``(n, M, Ee, Ei)`` vector with the face's
             own signal speeds ``S_L = min(u_L - c_L, u_R - c_R)`` and
@@ -1373,9 +1377,13 @@ def model_mode_defaults():
             and reduces to the Rusanov flux term by term at
             ``S_R = -S_L = a_max``.
     cathode_circuit_sample:
-        Which sampled electrode state the CURRENT-DRIVEN circuit advance
-        evaluates its ``V_dis(I)`` relation on. Read only on the accepted-step
-        circuit advance; nothing else in the model reads it.
+        Which sampled electrode state the CURRENT-DRIVEN circuit's
+        ``V_dis(I)`` relation is built on. It has exactly two readers, and
+        they move together: the accepted-step circuit advance, and the
+        loop-relaxation timestep bound (read only under the
+        ``cathode_circuit_voltage_bound`` flag, and built on the same
+        relation as the advance precisely so the two cannot disagree).
+        Nothing else in the model reads this key.
 
         ``"raw"`` (default) evaluates the loop relation on the accepted
         end-of-step state itself, so the loop-current root sees the raw
@@ -1388,8 +1396,8 @@ def model_mode_defaults():
         an accepted step.
 
         Construction raises on any other value. ``"smoothed"`` additionally
-        requires the sample it names to exist and the advance it modifies to
-        run: it raises when ``cathode_sample_smoothing`` is ``None`` (there is
+        requires the sample it names to exist and the advance it selects for
+        to run: it raises when ``cathode_sample_smoothing`` is ``None`` (there is
         no EMA to read), when ``cathode_solver_model`` is not
         ``"current_driven"``, and when the ``cathode_coupling`` flag is off
         (there is no circuit advance).
@@ -4316,15 +4324,16 @@ input_flags_template_1d = {
     # and the capability-limited device voltage V_b are all held at or below
     # the supply. Which quantity the available voltage bounds is
     # cathode_circuit_bound_object's choice. Without the flag the
-    # capability-limited branch floors V_b at the data cap, which on the
-    # pre-breakdown build leg reports ~1000 V and a ~keV beam against a bank
-    # supplying ~178 V. The cap itself is untouched and still composes as the
-    # other upper bound (it is the He EII table top, an atomic-data domain
-    # guard). The inductor's back-EMF is deliberately NOT counted as available
-    # voltage. Requires cathode_solver_model='current_driven',
-    # cathode_coupling and V_bank > 0; inactive (ceiling falls back to the
-    # data cap) wherever the available voltage is not positive, notably the
-    # zero-bank inductive tail. Default OFF and bit-exact off.
+    # capability-limited branch floors V_b at the data cap
+    # (``cathode_phi_c_cap_V``), which on the pre-breakdown build leg drives
+    # a ~keV beam against a bank supplying ~178 V. The cap itself is
+    # untouched and still composes as the other upper bound (it is the He EII
+    # table top, an atomic-data domain guard). The inductor's back-EMF is
+    # deliberately NOT counted as available voltage. Requires
+    # cathode_solver_model='current_driven', cathode_coupling and V_bank > 0;
+    # inactive (ceiling falls back to the data cap) wherever the available
+    # voltage is not positive, notably the zero-bank inductive tail. Default
+    # OFF and bit-exact off.
     #
     # WHAT THE BOUND DOES NOT BOUND is the loop current. The circuit
     # integrates the sheath's UNBOUNDED demand, not this clamped V_b, so the

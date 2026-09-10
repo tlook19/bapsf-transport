@@ -78,7 +78,12 @@ $f_M=m_in_f(u_f^2+c^2)$. $E_e$ and $E_i$ ride the pair as passive scalars whose
 specific values are constant along the linearly degenerate $u$ field, so each is
 upwinded on the face velocity and transported by that same $f_n$. The pair
 carries no ion partial pressure, so this face's momentum flux is smaller than
-the model's own $n(T_e+T_i)$ face pressure by $n_fT_i$.
+the model's own $n(T_e+T_i)$ face pressure by $n_f((T_e+T_i)-m_ic^2)$ --
+exactly $n_fT_i$ plus a small mass-convention residual ($m_ic^2$ uses the true
+ion mass `ion_mass_g` against a sound speed built on $\mu$ proton masses;
+~0.600% of $T_e$ at $\mu=4$). That residual reaches a delivered flux only
+under `end_wall_face_riemann_flux` with `"exact_isothermal"` selected, and is
+disclosed here rather than reconciled.
 
 `"hll"` is the HLL flux on the full $(n,M,E_e,E_i)$ vector with the face's own
 signal speeds $S_L=\min(u_L-c_L,\,u_R-c_R)$ and
@@ -464,6 +469,10 @@ itself, `"smoothed"` the supply-averaged EMA of the sampled electrode cells
 that `cathode_sample_smoothing` maintains — the same sample the RHS-side sheath
 solve and the accepted-state surface re-solve read, so under `"smoothed"` the
 loop and the fluid evaluate the sheath from one sample within an accepted step.
+The selection reaches BOTH readers of that relation — this advance and the
+`circuit` timestep bound of the adaptive-control table above, which reads the
+device slope off the same evaluator, so the bound and the step cannot be built
+on different samples.
 
 **The over-wall projection** (`cathode_circuit_project_over_wall`, default
 off) edits ONE input of that advance: the current it starts from. The explicit
