@@ -2822,6 +2822,35 @@ class LAPDSim1D:
                     "no circuit advance to evaluate V_dis(I) on any sample"
                 )
         self._cathode_circuit_sample = _circuit_sample
+        # THE OVER-WALL PROJECTION, validated here for the reason the sample
+        # selector above is: it edits the circuit advance, the advance runs
+        # once per accepted step deep inside the run, and a configuration that
+        # arms an edit to an advance this run never performs must say so before
+        # it spends any time. Beside those refusals, and like them BEFORE the
+        # prescribed drive is resolved, so a configuration that arms the
+        # projection under the measured drive is refused by the name of the key
+        # that would have to change rather than by whatever the trace
+        # resolution happens to complain about first.
+        _project_over_wall = bool(
+            self._flags.get("cathode_circuit_project_over_wall", False)
+        )
+        if _project_over_wall:
+            if not bool(self._flags.get("cathode_coupling")):
+                raise ValueError(
+                    "cathode_circuit_project_over_wall requires the "
+                    "cathode_coupling flag: with no cathode solve there is no "
+                    "circuit advance whose starting current could be "
+                    "projected onto the emission wall"
+                )
+            if self._cathode_solver_model != "current_driven":
+                raise ValueError(
+                    "cathode_circuit_project_over_wall requires "
+                    "cathode_solver_model='current_driven' (got "
+                    f"{self._cathode_solver_model!r}): the projection edits "
+                    "the current-driven loop advance, which no other solver "
+                    "model performs"
+                )
+        self._circuit_project_over_wall = _project_over_wall
         # PRESCRIBED MEASURED DRIVE (cathode_solver_model =
         # "prescribed_measured"). Resolved ONCE, here: the trace file is read,
         # its columns and clock validated, its bytes digested, and the hand-off
@@ -2889,6 +2918,24 @@ class LAPDSim1D:
         # (time, integral) pair at the previous trajectory save anchors it.
         self._circuit_V_dis_time_integral = 0.0
         self._circuit_V_dis_prev_save = None
+        # THE OVER-WALL PROJECTION's census, seeded on every run and mutated
+        # only while ``cathode_circuit_project_over_wall`` is armed. Three
+        # counters, none of which any exported value is a function of:
+        #   events        accepted steps whose starting current was replaced
+        #                 by the wall root;
+        #   energy_J      cumulative 0.5*L*(I^2 - I_root^2) [J] over those
+        #                 events -- the inductor energy the replacement drops,
+        #                 which is the whole non-conservative cost of the edit
+        #                 and is therefore measured rather than argued;
+        #   unbracketed   steps that TRIGGERED but whose widened bracket still
+        #                 did not straddle the root, so the current was left
+        #                 alone. A non-zero count here is the statement that
+        #                 the kick estimate under-covered the excursion.
+        # Exported presence-gated on the flag, so an unarmed run's diagnostic
+        # set and restart payload are unchanged.
+        self._circuit_projection_events = 0
+        self._circuit_projection_energy_J = 0.0
+        self._circuit_projection_unbracketed = 0
 
     def _init_cathode_surface_state(self):
         """Arm the vessel node and the evolving cathode surface state.
@@ -7764,17 +7811,21 @@ class LAPDSim1D:
                     self._input_dict.get("V_bank")
                 )
             V_src = self._circuit_source_voltage_V(step_phase)
+            # ONE SAMPLE FOR EVERY CIRCUIT READER, or the shipped two. Under
+            # cathode_circuit_sample = "smoothed" the loop relation is
+            # evaluated on the same supply-averaged sample the RHS-side
+            # sheath solve and the accepted-state re-solve read, so the
+            # circuit's wall and the fluid's wall are one object within
+            # an accepted step. "raw" (the default) reads the accepted
+            # state itself. Through ``_circuit_sample_state`` -- the same
+            # expression the timestep bound uses, so the bound and this
+            # advance cannot be built on different samples -- and NAMED here
+            # rather than left inline, so the over-wall projection's trigger
+            # solve is built on that one sample too: one sample for the
+            # bound, the advance and the projection alike.
+            circuit_state = self._circuit_sample_state(self.state)
             vdis = idriven_vdis_evaluator(
-                # ONE SAMPLE FOR BOTH WALLS, or the shipped two. Under
-                # cathode_circuit_sample = "smoothed" the loop relation is
-                # evaluated on the same supply-averaged sample the RHS-side
-                # sheath solve and the accepted-state re-solve read, so the
-                # circuit's wall and the fluid's wall are one object within
-                # an accepted step. "raw" (the default) reads the accepted
-                # state itself. Through ``_circuit_sample_state`` -- the same
-                # expression the timestep bound below uses, so the bound and
-                # this advance cannot be built on different samples.
-                state=self._circuit_sample_state(self.state),
+                state=circuit_state,
                 floors=self._floors,
                 ion_mass_g=self._ion_mass_g,
                 mu=self._mu,
@@ -7789,6 +7840,20 @@ class LAPDSim1D:
                 f_em_override=self._cathode_f_em,
                 circuit_V_src_V=V_src,
             )
+            # THE OVER-WALL PROJECTION, presence-gated. Mutates the ONE
+            # number the advance below starts from, and only on a step whose
+            # held current is above the emission wall; off, the block is not
+            # entered and no evaluator is built.
+            if self._circuit_project_over_wall:
+                self._project_circuit_over_wall(
+                    state=circuit_state,
+                    dt_s=float(attempt.dt),
+                    V_src_V=V_src,
+                    R_series_ohm=float(self._input_dict.get("R_comp"))
+                    * float(self._input_dict.get("R_comp_partition")),
+                    L_H=float(self._input_dict.get("L_parasitic_H")),
+                    vdis_of_I=vdis,
+                )
             I_new, V_cap_new, V_dis_step = advance_circuit_current_driven(
                 I_prev_A=self._circuit_I_loop,
                 dt_s=float(attempt.dt),
@@ -7835,6 +7900,155 @@ class LAPDSim1D:
         self._vessel_advance(float(attempt.dt))
         return self.get_initial_snapshot()
 
+    #: Absolute tolerance [A] of the over-wall projection's bracketed root
+    #: find. NUMERICS, not physics: it is three orders of magnitude inside the
+    #: electron-return tail current that separates the wall root from the
+    #: capability branch, and well outside the sheath root-find's own xtol
+    #: (1e-10 A), so the projected current is the wall root to a precision the
+    #: relation itself supports.
+    _PROJECTION_ROOT_XTOL_A = 1.0e-9
+
+    def _project_circuit_over_wall(
+        self, state, dt_s, V_src_V, R_series_ohm, L_H, vdis_of_I
+    ):
+        """Start the circuit advance ON the emission wall, not above it.
+
+        Presence-gated on ``cathode_circuit_project_over_wall``; the caller is
+        the accepted-step circuit advance and this is its only call site.
+        Mutates ``_circuit_I_loop`` in place -- the advance below then starts
+        its TR-BDF2 step from the projected current -- and books the
+        projection census. Returns nothing.
+
+        THE TRIGGER is the sheath's UNBOUNDED demand at the held current,
+        evaluated on ``state``: the caller passes the very
+        ``_circuit_sample_state`` result the advance's own ``V_dis(I)``
+        evaluator was built on, so within one accepted step the trigger and
+        the relation it projects onto are the SAME OBJECT -- and that
+        selector is the one the loop-relaxation timestep bound goes through
+        too, at the state its own step starts from, so all three read one
+        sample of the electrode cells under either
+        ``cathode_circuit_sample``. That
+        evaluator carries no circuit member in its ceiling
+        (``apply_circuit_bound=False``), so its composed ceiling IS the
+        atomic-data cap ``cathode_phi_c_cap_V`` and a ``capability_limited``
+        regime there means "on the data cap" and nothing else. The load line
+        is deliberately NOT a trigger: under
+        ``cathode_circuit_voltage_bound`` the bounded solve's accepted root
+        sits on the load line by construction, so a trigger reading the
+        circuit member would fire on every plateau step.
+
+        THE PROJECTION is the root of the loop equation's own residual
+
+            g(I) = V_src - I*R_series - V_dis(I),
+
+        i.e. the current at which the inductor sees no net EMF -- the
+        emission wall. It is sought on ``[I - 2*kick, I]`` with
+
+            kick = dt*(cap - V_supply)/L,   V_supply = V_src - I*R_loop,
+
+        the distance the advance's explicit half would throw the loop from a
+        device voltage pinned at the cap against that supply (``V_supply`` is
+        the expression ``circuit_available_voltage_V`` returns under the
+        bound flag, read here whether or not that flag is armed because the
+        quantity this sizes is a property of the loop equation, not of the
+        bound). The bracket is deliberately loose: the explicit half's actual
+        throw carries a stage weight below one, so ``2*kick`` covers the
+        excursion with margin. If it still does not straddle, it is widened
+        downward ONCE to ``4*kick`` (floored at zero current); if that fails
+        the held current is LEFT ALONE and the step is counted as
+        unbracketed, because a projection onto a root that was not bracketed
+        would be a guess.
+
+        WHAT IT COSTS. The replacement is not conservative in the inductor:
+        ``0.5*L*(I^2 - I_root^2)`` is dropped and booked cumulatively.
+
+        SCOPE OF THE MUTATION. The projected current is a TRANSIENT of the
+        advance's input: the advance overwrites ``_circuit_I_loop`` with its
+        own result on the next statement, and nothing reads the attribute in
+        between. Every reader outside this advance therefore sees the
+        advance's OUTPUT exactly as it did before -- the timestep bound's
+        bundle (``_circuit_timestep_kwargs``, built at the state the NEXT
+        step starts from) included, so that bundle's promise to carry the
+        same device relation the advance integrates is untouched. What DOES
+        change downstream is the value of that output: a projected step lands
+        on the wall root, so the bound reads a loop at its local equilibrium
+        and withdraws its candidate there, which is the honest reading of a
+        loop that has nothing left to relax.
+        """
+        from scipy.optimize import brentq
+
+        L = float(L_H)
+        dt = float(dt_s)
+        I_held = float(self._circuit_I_loop)
+        if not (L > 0.0 and dt > 0.0 and I_held > 0.0):
+            return
+        # The sheath's unbounded demand at the held current. Built with the
+        # SAME arguments as the advance's own evaluator (the call above), so
+        # the regime tested and the relation rooted describe one sheath.
+        solve_at = idriven_result_evaluator(
+            state=state,
+            floors=self._floors,
+            ion_mass_g=self._ion_mass_g,
+            mu=self._mu,
+            geometry=self._geometry,
+            input_dict=self._input_dict,
+            input_flags=self._effective_cathode_flags(
+                active_only=False, floating=False
+            ),
+            beam_cross_prev=self._cathode_beam_cross,
+            T_s_override_K=self._cathode_Ts_K,
+            phi_wf_override_eV=self._cathode_phi_wf_eff(),
+            f_em_override=self._cathode_f_em,
+            circuit_V_src_V=V_src_V,
+            apply_circuit_bound=False,
+        )
+        if solve_at(I_held).regime != "capability_limited":
+            return
+        cap_V = float(self._input_dict.get("cathode_phi_c_cap_V", 1000.0))
+        R_loop_ohm = float(self._input_dict.get("R_comp", 0.0)) + float(
+            self._input_dict.get("R_mesh_ohm", 0.0)
+        )
+        V_supply = float(V_src_V) - I_held * R_loop_ohm
+        kick = dt * (cap_V - V_supply) / L
+        if not kick > 0.0:
+            # The cap is not above what the loop can supply, so the explicit
+            # half has no over-wall throw to undo and there is nothing to
+            # project. Not counted: no projection was attempted.
+            return
+
+        def residual(I_A):
+            return (
+                float(V_src_V)
+                - float(I_A) * float(R_series_ohm)
+                - float(vdis_of_I(I_A))
+            )
+
+        f_hi = residual(I_held)
+        I_root = None
+        for width in (2.0, 4.0):
+            I_lo = max(I_held - width * kick, 0.0)
+            if not I_lo < I_held:
+                break
+            if residual(I_lo) * f_hi > 0.0:
+                continue
+            I_root = float(
+                brentq(
+                    residual,
+                    I_lo,
+                    I_held,
+                    xtol=self._PROJECTION_ROOT_XTOL_A,
+                )
+            )
+            break
+        if I_root is None:
+            self._circuit_projection_unbracketed += 1
+            return
+        self._circuit_projection_energy_J += (
+            0.5 * L * (I_held * I_held - I_root * I_root)
+        )
+        self._circuit_projection_events += 1
+        self._circuit_I_loop = I_root
+
     def _update_jet_arming_latch(self, cathode_solve):
         """Advance the cathode-jet arming latch on one ACCEPTED step.
 
@@ -7878,6 +8092,13 @@ class LAPDSim1D:
         "_circuit_I_prev",
         "_circuit_V_dis_step",
         "_circuit_V_dis_time_integral",
+        # Over-wall projection census: three counters written on the accepted
+        # circuit advance, so a Picard re-run must start from the values the
+        # step started from -- otherwise the re-run's projection would be
+        # counted, and its dropped inductor energy booked, twice.
+        "_circuit_projection_events",
+        "_circuit_projection_energy_J",
+        "_circuit_projection_unbracketed",
         "_circuit_V_cap",
         "_cathode_Ts_K",
         "_cathode_theta",
@@ -8018,6 +8239,20 @@ class LAPDSim1D:
         "_circuit_V_dis_step",
         "_circuit_V_dis_time_integral",
     )
+    #: The over-wall projection's census, carried PRESENCE-GATED on
+    #: ``cathode_circuit_project_over_wall`` -- the vessel node's contract, not
+    #: the clamp census's -- so an unarmed run's payload is byte-unchanged by
+    #: the flag existing. They are counters: no exported value is a function of
+    #: them and restoring them moves no trajectory, so the flag is NOT a
+    #: structural restart key. A resume that changes the arming therefore
+    #: starts the census at its seed, and the resumed run's census covers its
+    #: own steps only, which is the honest reading of a payload whose producing
+    #: run projected nothing.
+    _RESTART_CIRCUIT_PROJECTION_ATTRS = (
+        "_circuit_projection_events",
+        "_circuit_projection_energy_J",
+        "_circuit_projection_unbracketed",
+    )
     # DELIBERATE OMISSION: the prescribed measured drive's two step members
     # (_prescribed_active, _circuit_V_dis_prescribed). Both are pure functions
     # of the resolved trace and the time, so the first accepted step after a
@@ -8089,6 +8324,12 @@ class LAPDSim1D:
         circuit = {
             name: getattr(self, name) for name in self._RESTART_CIRCUIT_ATTRS
         }
+        # Over-wall projection census, presence-gated on the flag exactly like
+        # the vessel node below: written only when the projection is armed, so
+        # a payload from a run without it is structurally what it always was.
+        if self._circuit_project_over_wall:
+            for name in self._RESTART_CIRCUIT_PROJECTION_ATTRS:
+                circuit[name] = getattr(self, name)
         prev_save = self._circuit_V_dis_prev_save
         circuit["V_dis_prev_save_t"] = (
             None if prev_save is None else float(prev_save[0])
@@ -8310,6 +8551,19 @@ class LAPDSim1D:
         circuit = payload["circuit"]
         for name in self._RESTART_CIRCUIT_ATTRS:
             setattr(self, name, circuit[name])
+        # Over-wall projection census: DEFAULTED, not required. A payload from
+        # a run that did not arm the projection carries none of these keys, and
+        # the resumed run's census then covers its own steps.
+        for name in self._RESTART_CIRCUIT_PROJECTION_ATTRS:
+            stored = circuit.get(name)
+            if stored is None:
+                continue
+            seed = getattr(self, name)
+            setattr(
+                self,
+                name,
+                int(stored) if isinstance(seed, int) else float(stored),
+            )
         prev_save_t = circuit["V_dis_prev_save_t"]
         self._circuit_V_dis_prev_save = (
             None
@@ -13314,6 +13568,28 @@ class LAPDSim1D:
             # snapshot cadence (and on pre-fix files).
             "circuit_V_dis_dt_integral": float(
                 self._circuit_V_dis_time_integral
+            ),
+            # Over-wall projection census, PRESENCE-GATED on
+            # cathode_circuit_project_over_wall: a run without it saves
+            # exactly the diagnostic set it always did. Cumulative over the
+            # run, so the difference between two saves is that interval's
+            # share. What they record cannot be recovered from the
+            # trajectory -- the projection replaces a loop current between
+            # two saves and leaves no other trace.
+            **(
+                {}
+                if not self._circuit_project_over_wall
+                else {
+                    "circuit_projection_events": float(
+                        self._circuit_projection_events
+                    ),
+                    "circuit_projection_energy_J": float(
+                        self._circuit_projection_energy_J
+                    ),
+                    "circuit_projection_unbracketed": float(
+                        self._circuit_projection_unbracketed
+                    ),
+                }
             ),
             # Vessel common-mode node. Present only when armed, so a run
             # without it saves exactly the diagnostic set it always did. This
