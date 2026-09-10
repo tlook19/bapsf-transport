@@ -4441,7 +4441,9 @@ class LAPDSim1D:
             "ion_mass_g": self._ion_mass_g,
             "geometry": self._geometry,
             "input_dict": self._input_dict,
-            "input_flags": self._effective_cathode_flags(time=time),
+            "input_flags": self._effective_cathode_flags(
+                time=time, active_only=True
+            ),
             "cathode_solve": cathode_solve,
         }
 
@@ -7437,18 +7439,24 @@ class LAPDSim1D:
             # because the circuit advance that zeroes it runs later in this
             # same accept.
             #
-            # The CURRENT is what makes this the driven or the open-circuit
-            # reading, and it is the only thing that does. The flags are the
-            # PHASE's own, in both phases: this evaluator reads
+            # The flags are the PHASE'S OWN in both phases, and what makes
+            # this the driven or the open-circuit reading is the CURRENT
+            # below, which is the only thing that should. This evaluator reads
             # ``TwinCathode``, ``cathode_schottky``,
             # ``cathode_emission_bridge``, the ``cathode_Rp_model`` validator
             # and the ion-secondary-emission validator from them, and the last
             # of those asks whether the configuration SUPPLIES the cathode
-            # circuit solve -- a construction-time fact. Asking here for a
-            # mapping with ``cathode_coupling`` cleared, as a way of saying
-            # "read the driven relation", told it the configuration had no
-            # cathode circuit and refused a legally armed run at the first
-            # open-circuit step.
+            # circuit solve -- a construction-time fact about the
+            # configuration, not a per-phase one. Asking here for the DRIVEN
+            # mapping (``active_only=False, floating=False``) as a way of
+            # saying "read the driven relation" cleared ``cathode_coupling``
+            # in the open-circuit afterglow, where a cathode solve does exist
+            # and is read at zero loop current: it told that validator the
+            # configuration had no cathode circuit at all, and refused a
+            # legally armed run at the first open-circuit step, having already
+            # spent the whole discharge. The phase's own reading says a solve
+            # is enabled in every phase this re-solve runs in, so it is both
+            # the truthful mapping and, in the driven phases, the same one.
             honest_I_A = (
                 0.0
                 if bool(solve.metadata.get("floating", False))
@@ -7725,7 +7733,9 @@ class LAPDSim1D:
                 mu=self._mu,
                 geometry=self._geometry,
                 input_dict=self._input_dict,
-                input_flags=self._effective_cathode_flags(),
+                input_flags=self._effective_cathode_flags(
+                    active_only=False, floating=False
+                ),
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
@@ -10045,7 +10055,7 @@ class LAPDSim1D:
         cathode consumers only when a jet needs it and none was passed."""
         if cathode_solve is not None or not jet_enabled:
             return cathode_solve
-        cathode_flags = self._effective_cathode_flags(time=time)
+        cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
         if not cathode_flags.get("cathode_coupling", False):
             return None
         return self.solve_cathode_boundary(
@@ -10614,7 +10624,7 @@ class LAPDSim1D:
         """Return opt-in cathode conservative source placeholders/terms."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
-        cathode_flags = self._effective_cathode_flags(time=time)
+        cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
         if cathode_solve is None and cathode_flags.get("cathode_coupling", False):
             cathode_solve = self.solve_cathode_boundary(
                 state=state,
@@ -10714,7 +10724,7 @@ class LAPDSim1D:
         """Return conservative beam ionization birth terms."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
-        cathode_flags = self._effective_cathode_flags(time=time)
+        cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
         if cathode_solve is None and cathode_flags.get("cathode_coupling", False):
             cathode_solve = self.solve_cathode_boundary(
                 state=state,
@@ -10743,7 +10753,7 @@ class LAPDSim1D:
         """Return split beam particle birth, deposited power, and ionization cost."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
-        cathode_flags = self._effective_cathode_flags(time=time)
+        cathode_flags = self._effective_cathode_flags(time=time, active_only=True)
         if cathode_solve is None and cathode_flags.get("cathode_coupling", False):
             cathode_solve = self.solve_cathode_boundary(
                 state=state,
@@ -10869,7 +10879,11 @@ class LAPDSim1D:
         cathode_phase = self._cathode_phase_options(time=time)
         if floating is None:
             floating = cathode_phase["floating"]
-        input_flags = self._effective_cathode_flags(time=time)
+        input_flags = self._effective_cathode_flags(
+            time=time,
+            active_only=False,
+            floating=bool(floating),
+        )
         phi_wf_override_eV = self._cathode_phi_wf_eff()
         circuit_V_src_V = self._circuit_source_voltage_V(cathode_phase)
         coverage = self._coverage_view(state, time)
@@ -11546,7 +11560,9 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._geometry,
             input_dict=self._input_dict,
-            input_flags=self._effective_cathode_flags(),
+            input_flags=self._effective_cathode_flags(
+                active_only=False, floating=False
+            ),
             beam_cross_prev=self._cathode_beam_cross,
             T_s_override_K=self._cathode_Ts_K,
             phi_wf_override_eV=self._cathode_phi_wf_eff(),
@@ -11565,7 +11581,7 @@ class LAPDSim1D:
             * float(self._input_dict.get("R_comp_partition")),
         }
 
-    def _effective_cathode_flags(self, time=None):
+    def _effective_cathode_flags(self, time=None, active_only=True, floating=None):
         """Return ``self._flags`` with ``cathode_coupling`` set for this phase.
 
         Every configured phase in which a cathode solve exists counts as
@@ -11574,25 +11590,43 @@ class LAPDSim1D:
         same current-driven solve read at ``I_tot = 0``. The electrode rows
         are therefore CONTINUOUS across the hand-off out of the tail: the same
         formulas, evaluated at zero loop current, instead of dropping to zero
-        because the phase changed name. That set of phases is exactly the
-        phase options' ``solve_enabled``, and this reads it rather than
-        rebuilding it, so the mapping and the phase cannot disagree about
-        whether a solve exists.
+        because the phase changed name.
 
-        THE ONE QUESTION THIS KEY ANSWERS HERE is "does a cathode solve run in
-        this phase". It is NOT a per-caller quantity: a caller that wants the
-        DRIVEN device relation in a floating phase asks for that with the
-        current it evaluates at (zero) and with the ``floating`` argument of
-        :meth:`solve_cathode_boundary`, never by telling this mapping that the
-        configuration has no cathode circuit. Reading it as the latter is what
-        the solve-site validators do -- they ask whether the configuration
-        SUPPLIES the circuit solve, which is a construction-time fact -- so a
-        mapping that answered a caller's branch preference here handed them a
-        false configuration and refused a legally armed run mid-flight.
+        ``active_only`` no longer selects WHICH phases are enabled; it selects
+        whether the caller may override the phase's own ``floating`` reading.
+        The circuit advance and its device-relation evaluator pass
+        ``active_only=False, floating=False`` to ask for the DRIVEN flags
+        regardless of phase, which is what the loop they integrate needs.
+
+        WHAT THE OVERRIDE COSTS, and why it is not free. Overriding to
+        ``floating=False`` in a floating phase drops the disjunct that was
+        carrying that phase, so the mapping reports ``cathode_coupling``
+        FALSE -- "this configuration supplies no cathode circuit solve" --
+        for a phase that has one. Consumers reading the key as the phase
+        question ("does a solve run now") are asking the wrong one of the two
+        questions this key carries; consumers reading it as the CONFIGURATION
+        question, which is what the solve-site validators do, are handed a
+        configuration that does not exist and refuse it. So the override
+        belongs only where a floating phase cannot be reached: the circuit
+        advance and the bound's bundle both return before it on
+        ``step_phase["floating"]``, which is what keeps it inert there. A
+        caller that CAN be in a floating phase asks for the phase's own
+        reading and says which relation it wants some other way -- the
+        accepted-state re-solve says it with the current it evaluates at.
         """
         options = self._cathode_phase_options(time=time)
+        use_floating = (
+            options["floating"]
+            if (active_only or floating is None)
+            else bool(floating)
+        )
+        enabled = (
+            options["cathode_enabled"]
+            or options.get("inductive_tail", False)
+            or (options["configured"] and use_floating)
+        )
         flags = dict(self._flags)
-        flags["cathode_coupling"] = bool(options["solve_enabled"])
+        flags["cathode_coupling"] = bool(enabled)
         return flags
 
     def _neutral_source_kwargs(self, time=None):
