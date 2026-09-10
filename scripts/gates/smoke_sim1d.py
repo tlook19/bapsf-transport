@@ -27808,10 +27808,12 @@ def _case_end_wall_riemann_flux_unarmed_inert():
 # --------------------------------------------------------------------
 @_case("end-wall-riemann-flux-refusals", historical_stance=True)
 def _case_end_wall_riemann_flux_refusals():
-    # FIVE REFUSALS, all at construction. The flag must be a real bool; armed,
-    # it must name one of the two solvers AND find the one face it replaces;
-    # off, it must not carry a name, because a named solver behind a cleared
-    # flag is exactly the silent inert control the namespaces exist to forbid.
+    # FIVE REFUSALS: four at construction -- the flag must be a real bool;
+    # armed, it must name one of the two solvers AND find the one face it
+    # replaces; off, it must not carry a name, because a named solver behind
+    # a cleared flag is exactly the silent inert control the namespaces exist
+    # to forbid -- and a fifth one layer down, at the dispatcher in flux.py,
+    # which names the same accepted set again.
     _rf_params, _rf_flags = _base_config()
 
     def _rf_refuses(params_over, flags_over):
@@ -28910,9 +28912,9 @@ def _case_cathode_warming_honest_resolve_circuit_bound():
     because it is handed the same source voltage the circuit advance reads.
     Withheld, that re-solve sits on the data cap alone, and on every step
     whose imposed loop current is above the emission wall it books the
-    surface's ion power at ~1000 V while the solve that actually ran sat on
-    the load line -- which is the whole of ``warming_E_ion_J`` and, through
-    T_s, of the emission it drives.
+    surface's ion power at the data cap (``cathode_phi_c_cap_V``) while the
+    solve that actually ran sat on the load line -- which is the whole of
+    ``warming_E_ion_J`` and, through T_s, of the emission it drives.
 
     So the clause is a LEDGER IDENTITY: the ion row's rate over the probe
     equals the probe's mean ``P_cathode_i``. It is read on the reference

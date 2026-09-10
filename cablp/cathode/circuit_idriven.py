@@ -1083,11 +1083,12 @@ def solve_idriven(
         if circuit_V_avail_V is not None:
             # ...and no larger than what the loop can supply. Without this the
             # kick above is a device voltage the circuit never sourced: with
-            # the historical cap as the floor the build leg reports ~1000 V
-            # against a bank supplying ~178 V (measured V_b/V_dis ~ 5.1). The
-            # floor and this clamp compose without fighting, because the floor
-            # value phi_c_ceiling_V is itself <= circuit_V_avail_V whenever the
-            # circuit bound is the binding member of the composition.
+            # the historical cap (``phi_c_cap_V``) as the floor, which the
+            # build leg reports against a bank supplying ~178 V (measured
+            # V_b/V_dis ~ 5.1). The floor and this clamp compose without
+            # fighting, because the floor value phi_c_ceiling_V is itself <=
+            # circuit_V_avail_V whenever the circuit bound is the binding
+            # member of the composition.
             #
             # THIS CLAMPED V_b IS NOT WHAT THE CIRCUIT INTEGRATES, and that
             # separation is load-bearing (2026-08-12). Were it, the clamped
@@ -1469,14 +1470,14 @@ def assemble_beam_arrays(
             # The tabulated He EII cross section ends at eps = E/I_ion =
             # HE_EII_EPS_TOP, and the lookup CLAMPS to its last node above
             # that. On a capability-limited step the beam energy is the sheath
-            # ceiling, which at the shipped cap (1000 V) sits on the table's
-            # last node to within a ULP -- so the edge is INCLUSIVE within
-            # HE_EII_EDGE_REL_TOL, exactly as the tail walk's guard has it
-            # (K7c): at the edge the clamped value IS the endpoint node and
-            # nothing is extrapolated. A larger excess is refused rather than
-            # silently clamped, which is what this call did before. Since the
-            # sheath root is now capped, reaching the refusal requires a cap
-            # configured above the table top.
+            # ceiling, which at the shipped cap (``cathode_phi_c_cap_V``) sits
+            # on the table's last node to within a ULP -- so the edge is
+            # INCLUSIVE within HE_EII_EDGE_REL_TOL, exactly as the tail walk's
+            # guard has it (K7c): at the edge the clamped value IS the
+            # endpoint node and nothing is extrapolated. A larger excess is
+            # refused rather than silently clamped, which is what this call
+            # did before. Since the sheath root is now capped, reaching the
+            # refusal requires a cap configured above the table top.
             _beam_eps = phi_c_0 / I_ion
             _beam_edge_excess = (
                 _beam_eps - HE_EII_EPS_TOP

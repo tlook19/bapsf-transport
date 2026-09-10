@@ -4066,10 +4066,10 @@ class LAPDSim1D:
                 "regime_vessel_node requires cathode_circuit_voltage_bound: "
                 "the climb V_cm is subtracted from the beam's birth energy, "
                 "and that energy must be the CIRCUIT-BOUNDED sheath drop. "
-                "Without the bound it is the raw cathode_phi_c_cap_V atomic-"
-                "data cap (~1000 V against a bank supplying ~178 V), so the "
-                "choke would be a small correction on a wrong number. "
-                "Accepted: cathode_circuit_voltage_bound on"
+                "Without the bound it is the raw cathode_phi_c_cap_V "
+                "atomic-data cap (far above what a bank supplying ~178 V "
+                "can carry), so the choke would be a small correction on a "
+                "wrong number. Accepted: cathode_circuit_voltage_bound on"
             )
         deposition_model = str(
             self._input_dict.get("beam_deposition_model")
@@ -7454,17 +7454,18 @@ class LAPDSim1D:
             # ``cathode_circuit_voltage_bound`` the ceiling the dispatched
             # solves were run against is the COMPOSED one -- the atomic-data
             # cap ``cathode_phi_c_cap_V`` and the loop's available voltage
-            # V_src - I*(R_comp + R_mesh_ohm), whichever is lower -- and it is
-            # the source voltage that carries the circuit member. Withholding
-            # it here would leave this re-solve on the data cap alone, so on
-            # every step whose imposed current sits above the emission wall it
-            # would book the surface's ion power at ~1000 V while the solve
-            # that actually ran sat on the load line. The value is read
-            # through the same expression the circuit advance below reads, at
-            # the same phase (this step's), so the two cannot disagree.
-            # ``None`` -- and with it the historical ceiling, bit for bit --
-            # whenever the flag is off, which is where
-            # ``circuit_available_voltage_V`` returns it.
+            # V_src - I*(R_comp + R_mesh_ohm), whichever is lower -- and it
+            # is the source voltage that carries the circuit member.
+            # Withholding it here would leave this re-solve on the data cap
+            # alone, so on every step whose imposed current sits above the
+            # emission wall it would book the surface's ion power at the data
+            # cap (``cathode_phi_c_cap_V``) while the solve that actually ran
+            # sat on the load line. The value is read through the same
+            # expression the circuit advance below reads, at the same phase
+            # (this step's), so the two cannot disagree.
+            # The circuit member of that ceiling is ``None`` -- and with it
+            # the historical ceiling, bit for bit -- whenever the flag is
+            # off, which is where ``circuit_available_voltage_V`` returns it.
             honest_result = idriven_result_evaluator(
                 state=self._smoothed_sample_state(self.state),
                 floors=self._floors,
