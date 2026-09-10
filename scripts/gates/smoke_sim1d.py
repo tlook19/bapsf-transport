@@ -29336,6 +29336,129 @@ def _case_cathode_ion_secondary_emission_survives_open_circuit():
         _os_off_ctrl_sim._time
     )
 
+
+# ----------------------------------------------------------------------
+# cathode-ion-secondary-emission-survives-final-step-boundary
+# ----------------------------------------------------------------------
+@_case(
+    "cathode-ion-secondary-emission-survives-final-step-boundary",
+    provides=(),
+)
+def _case_cathode_ion_secondary_emission_survives_final_step_boundary():
+    """An armed run survives the step that LANDS ON the dynamic end boundary.
+
+    The sibling case above crosses OUT of the drive into the open-circuit
+    afterglow and stops well short of ``post_afterglow`` -- so it never
+    exercises the boundary this case is for. The run loop clips its last
+    accepted step's ``dt`` to ``t_end - self._time``, so on a run whose
+    ``t_end`` sits exactly on a phase boundary (as the current-driven
+    route's dynamic end sits on ``post_afterglow_start``, by construction --
+    both are ``t_breakdown_trigger + tau_discharge + tau_afterglow``) the
+    LAST accepted step's end time lands EXACTLY there. The honest
+    accepted-state re-solve reads its cathode flags at ``self._time``, which
+    by that point in the step already holds the step's ACCEPTED END time --
+    the very instant that just crossed the boundary -- so a caller asking
+    for the phase's own reading with the caller's default time is really
+    asking for the phase the step LANDED in, not the one the dispatched
+    solve ran in. On this one step the two disagree: the step was
+    dispatched ``afterglow`` (floating, a solve enabled), and the mapping
+    read at the default time reports ``post_afterglow`` (not configured as
+    floating), so ``cathode_coupling`` reads False for a configuration that
+    supplies one, and the ion-secondary-emission validator refuses the
+    legally armed run on its own final step.
+
+    This case exercises the SCHEDULED phase ladder (cheap, deterministic)
+    rather than the current-triggered route: ``_phase_info`` computes
+    ``post_afterglow_start`` from the same four scheduled taus regardless of
+    ``phase_transition_mode``, so setting the run's own ``t_end`` to that sum
+    reproduces the same landing-exactly-on-the-boundary step the dynamic-end
+    route hits, at a fraction of the cost.
+
+    * ARMED, ended exactly at ``post_afterglow_start``: the run completes and
+      its last phase is ``post_afterglow``.
+    * THE RECONSTRUCTION: a spy re-installs the pre-fix expression --
+      ``self._effective_cathode_flags()`` at its caller-default time, i.e.
+      ``time=None`` resolving to the accepted END time -- at the re-solve's
+      flags call, and ONLY there. The same run then raises the
+      ``cathode_coupling`` refusal on its final step.
+    """
+    import cablp.solvers._sim1d.solver as _fsb_solver_mod
+
+    _FSB_TAU = 1.0e-7
+
+    def _fsb_build():
+        _fsb_params, _fsb_flags = default_config()
+        _fsb_params = dict(_fsb_params)
+        _fsb_flags = dict(_fsb_flags)
+        _fsb_flags["neutral_equilibration"] = False
+        _fsb_params["nx"] = 16
+        _fsb_params["phase_transition_mode"] = "scheduled"
+        _fsb_params["tau_prebreakdown"] = _FSB_TAU
+        _fsb_params["tau_breakdown"] = 0.0
+        _fsb_params["tau_discharge"] = _FSB_TAU
+        _fsb_params["tau_afterglow"] = _FSB_TAU
+        _fsb_params["L_parasitic_H"] = 1.0e-9
+        _fsb_flags["cathode_ion_secondary_emission"] = True
+        _fsb_params["cathode_ion_secondary_emission_yield"] = 0.375
+        return LAPDSim1D(_fsb_params, _fsb_flags)
+
+    def _fsb_t_end(_fsb_sim):
+        return (
+            _fsb_sim._plasma_phase_time_origin()
+            + max(float(_fsb_sim._input_dict.get("tau_prebreakdown")), 0.0)
+            + max(float(_fsb_sim._input_dict.get("tau_breakdown")), 0.0)
+            + max(float(_fsb_sim._input_dict.get("tau_discharge")), 0.0)
+            + max(float(_fsb_sim._input_dict.get("tau_afterglow")), 0.0)
+        )
+
+    def _fsb_run(spy):
+        _fsb_sim = _fsb_build()
+        _fsb_t_end_s = _fsb_t_end(_fsb_sim)
+        _fsb_saved = _fsb_solver_mod.idriven_result_evaluator
+
+        def _fsb_spy(**kw):
+            # THE PRE-FIX EXPRESSION, verbatim: the caller's default time,
+            # which by here is the step's accepted END time, not its start.
+            kw = dict(kw)
+            kw["input_flags"] = _fsb_sim._effective_cathode_flags()
+            return _fsb_saved(**kw)
+
+        if spy:
+            _fsb_solver_mod.idriven_result_evaluator = _fsb_spy
+        _fsb_raised = None
+        try:
+            _fsb_sim.start_simulation(t_end=_fsb_t_end_s)
+        except ValueError as exc:
+            _fsb_raised = exc
+        finally:
+            _fsb_solver_mod.idriven_result_evaluator = _fsb_saved
+        return _fsb_sim, _fsb_raised, _fsb_t_end_s
+
+    # (i) ARMED AND SHIPPED: the step that lands exactly on the dynamic end
+    # boundary survives, and the run finishes in ``post_afterglow``.
+    _fsb_sim, _fsb_exc, _fsb_t_end_s = _fsb_run(False)
+    assert _fsb_exc is None, _fsb_exc
+    assert abs(_fsb_sim._time - _fsb_t_end_s) <= 1.0e-15, (
+        _fsb_sim._time, _fsb_t_end_s
+    )
+    assert _fsb_sim.phase_at_time(_fsb_sim._time) == "post_afterglow", (
+        _fsb_sim.phase_at_time(_fsb_sim._time)
+    )
+
+    # (ii) THE RECONSTRUCTION, caught: with the pre-fix expression put back
+    # at the re-solve's flags call ONLY, the same run dies on the same final
+    # step, refusing on the coupling key.
+    _fsb_ctrl_sim, _fsb_ctrl_exc, _ = _fsb_run(True)
+    assert _fsb_ctrl_exc is not None, "the reconstruction did not raise"
+    assert "cathode_ion_secondary_emission cannot arm" in str(
+        _fsb_ctrl_exc
+    ), str(_fsb_ctrl_exc)
+    assert "cathode_coupling" in str(_fsb_ctrl_exc), str(_fsb_ctrl_exc)
+    assert abs(_fsb_ctrl_sim._time - _fsb_t_end_s) <= 1.0e-15, (
+        _fsb_ctrl_sim._time, _fsb_t_end_s
+    )
+
+
 # ----------------------------------------------------------------------
 # neutral-equilibration-clears-bound-flag
 # ----------------------------------------------------------------------
@@ -30181,7 +30304,7 @@ def _case_circuit_projection_refusals():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 176, "historical_stance": 68}
+_CASE_CENSUS = {"total": 177, "historical_stance": 68}
 
 
 def _assert_case_census():
