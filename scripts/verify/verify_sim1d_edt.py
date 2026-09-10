@@ -363,6 +363,7 @@ from edt_consult_pins import (  # noqa: E402
     ANODE_HANDSHAKE_CHOICES,
     CHARGE_DEATH_CHOICES,
     SavedGeometry,
+    _launched_current_A,
     _window_mean_rows,
     evaluate,
 )
@@ -647,7 +648,7 @@ def gate2_es1(report, geom, h5):
                 h5["Te"][index, :],
                 h5["n"][index, :],
                 float(cd["circuit_I_loop"][index]),
-                float(cd["source_I_eth_star"][index]),
+                float(_launched_current_A(cd, index)),
                 charge_death,
                 anode_handshake,
                 u=h5["u"][index, :],
@@ -1205,7 +1206,7 @@ def gate12(report, geom, h5):
     index = int(np.argmin(np.abs(h5["time"][:] - 1.0e-2)))
     cd = h5["cathode_diagnostics"]
     I_tot = float(cd["circuit_I_loop"][index])
-    I_beam = float(cd["source_I_eth_star"][index])
+    I_beam = float(_launched_current_A(cd, index))
     Te = np.asarray(h5["Te"][index, :], dtype=float)
     n = np.asarray(h5["n"][index, :], dtype=float)
     u = np.asarray(h5["u"][index, :], dtype=float)
@@ -1331,7 +1332,7 @@ def gate6(report, geom, h5, afterglow_lo=2.01e-2):
                 h5["Te"][index, :],
                 h5["n"][index, :],
                 float(cd["circuit_I_loop"][index]),
-                float(cd["source_I_eth_star"][index]),
+                float(_launched_current_A(cd, index)),
                 charge_death,
                 handshake,
                 u=h5["u"][index, :],
