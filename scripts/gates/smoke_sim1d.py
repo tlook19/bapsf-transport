@@ -28912,9 +28912,9 @@ def _case_cathode_warming_honest_resolve_circuit_bound():
     because it is handed the same source voltage the circuit advance reads.
     Withheld, that re-solve sits on the data cap alone, and on every step
     whose imposed loop current is above the emission wall it books the
-    surface's ion power at ~1000 V while the solve that actually ran sat on
-    the load line -- which is the whole of ``warming_E_ion_J`` and, through
-    T_s, of the emission it drives.
+    surface's ion power at the data cap (``cathode_phi_c_cap_V``) while the
+    solve that actually ran sat on the load line -- which is the whole of
+    ``warming_E_ion_J`` and, through T_s, of the emission it drives.
 
     So the clause is a LEDGER IDENTITY: the ion row's rate over the probe
     equals the probe's mean ``P_cathode_i``. It is read on the reference

@@ -24,7 +24,9 @@ def ion_sound_speed(Te, mu):
     Built on ``mu`` proton masses (``9.79e5 * sqrt(Te/mu)``, i.e. an implied
     ion mass ``mu * m_p``), not the true ion mass ``ion_mass_g`` (m_He) that
     other terms use directly -- a fixed ~0.600% residual in ``m_i c^2``
-    against ``Te`` at mu=4.
+    against ``Te`` at mu=4. That 0.600% nets two effects: the mu*m_p-vs-
+    ion_mass_g mass mismatch alone is ~0.658%, partly offset by the rounded
+    ``9.79e5`` coefficient's own implied proton mass, itself ~0.058% low.
     """
     return v_ion_speed(Te, mu)
 
