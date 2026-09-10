@@ -29077,6 +29077,77 @@ def _case_cathode_warming_honest_resolve_circuit_bound():
 
 
 # ----------------------------------------------------------------------
+# neutral-equilibration-clears-bound-flag
+# ----------------------------------------------------------------------
+@_case("neutral-equilibration-clears-bound-flag", provides=())
+def _case_neutral_equilibration_clears_bound_flag():
+    """``run_neutral_equilibration`` must clear the circuit voltage bound too.
+
+    The inner equilibration sim clears ``cathode_coupling`` (no cathode solve
+    for a ``Plasma=False`` pre-solve) and a run of other keys that guard on
+    it, but ``cathode_circuit_voltage_bound``'s own construction guard reads
+    ``cathode_coupling`` directly and was not on that list: an outer
+    configuration that arms the bound with ``neutral_equilibration = True``
+    -- the golden route's own shape -- refused the INNER sim, mid-run,
+    with "requires the cathode_coupling flag", on a state where the bound
+    protects nothing (no cathode solve, no device voltage to bound).
+
+    First, the REFUSAL: ``run_neutral_equilibration`` is called with a spy on
+    the module's ``LAPDSim1D`` name that reinstates the bound flag on every
+    call that has ``cathode_coupling`` off (the inner sim's own shape) --
+    reconstructing exactly what the pre-fix clear list handed to the
+    constructor. It must still raise, so this case is reading the guard the
+    fix works around, not one that stopped existing. Then the PASS: the same
+    call, spy removed, must build and run the inner equilibration without
+    raising.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from baseline_sim1d import build_baseline_config as _neb_baseline_config
+    import cablp.solvers._sim1d.solver as _neb_solver_mod
+
+    _neb_params, _neb_flags = _neb_baseline_config(
+        param_overrides={"nx": 16},
+        flag_overrides={"cathode_circuit_voltage_bound": True},
+    )
+
+    _neb_orig_ctor = _neb_solver_mod.LAPDSim1D
+
+    def _neb_reintroduce_defect(params, flags, *a, **kw):
+        """Undo the fix's clear on the inner sim's own call shape only."""
+        if flags.get("cathode_coupling") is False:
+            flags = dict(flags)
+            flags["cathode_circuit_voltage_bound"] = True
+        return _neb_orig_ctor(params, flags, *a, **kw)
+
+    _neb_outer_defect = _neb_orig_ctor(dict(_neb_params), dict(_neb_flags))
+    _neb_solver_mod.LAPDSim1D = _neb_reintroduce_defect
+    try:
+        try:
+            _neb_outer_defect.run_neutral_equilibration(cycles=1)
+            raise AssertionError(
+                "the reconstructed pre-fix call shape no longer refuses -- "
+                "the guard this case reproduces is gone; update or retire "
+                "the case"
+            )
+        except ValueError as _neb_exc:
+            assert "requires the cathode_coupling flag" in str(_neb_exc), (
+                _neb_exc
+            )
+    finally:
+        _neb_solver_mod.LAPDSim1D = _neb_orig_ctor
+
+    _neb_outer = _neb_orig_ctor(dict(_neb_params), dict(_neb_flags))
+    _neb_result = _neb_outer.run_neutral_equilibration(cycles=1)
+    assert len(_neb_result.time) > 0
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -29085,7 +29156,7 @@ def _case_cathode_warming_honest_resolve_circuit_bound():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 167, "historical_stance": 68}
+_CASE_CENSUS = {"total": 168, "historical_stance": 68}
 
 
 def _assert_case_census():
