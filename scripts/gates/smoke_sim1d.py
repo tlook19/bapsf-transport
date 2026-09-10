@@ -2371,12 +2371,28 @@ def _case_cathode_boundary_beer_lambert(cathode_face):
     assert floating_cathode_solve.metadata["enabled"] is True
     assert floating_cathode_solve.metadata["floating"] is True
     assert floating_cathode_solve.beam_result is not None
-    inactive_afterglow_solve = cathode_sim.solve_cathode_boundary(
-        time=afterglow_time,
-        floating=False,
-        update_cache=False,
+    # ROW 1 ENFORCEMENT: overriding floating=False in a phase that IS
+    # floating (asserted above) is now a loud refusal at
+    # _effective_cathode_flags, not the silent "boundary.enabled=False"
+    # reading this case asserted before the enforcement landed -- that
+    # silent reading was exactly the class of mis-booking the enforcement
+    # closes (this override handed a configuration that does not exist).
+    _inactive_afterglow_raised = None
+    try:
+        cathode_sim.solve_cathode_boundary(
+            time=afterglow_time,
+            floating=False,
+            update_cache=False,
+        )
+    except ValueError as exc:
+        _inactive_afterglow_raised = exc
+    assert _inactive_afterglow_raised is not None, (
+        "solve_cathode_boundary(floating=False) in a floating phase must "
+        "refuse under the _effective_cathode_flags enforcement"
     )
-    assert not inactive_afterglow_solve.boundary.enabled
+    assert "active_only=False, floating=False" in str(
+        _inactive_afterglow_raised
+    ), str(_inactive_afterglow_raised)
     post_afterglow_solve = cathode_sim.solve_cathode_boundary(
         time=afterglow_time + params["tau_afterglow"],
         update_cache=False,
