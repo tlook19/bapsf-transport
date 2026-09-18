@@ -45,8 +45,14 @@ THE CONSTRUCTION (leg 3a of the sp campaign):
   from the repo's ``puff_rate`` rather than restated here. The ledger also
   prints the per-valve-nominal half, because both conventions are on the
   campaign record and a quoted number is incomplete without its convention.
-* ``dt_foot`` -- the duration of the current foot the model forecloses. A
-  DISCLOSED BRACKET, not a fit: ``{2.0e-3, 4.5e-3}`` s.
+* ``dt_foot`` -- the duration of the current foot the model forecloses.
+  MEASURED, not fitted, and registered PER RUNG: the machine's own
+  circuit-on -> 1 kA lead minus the model's own circuit-on -> 1 kA time
+  (``MEASURED_LEAD_S`` - ``MODEL_1KA_S``). The model reaches 1 kA sooner than
+  the machine does, and the gas that flows during the difference is the foot
+  the model never sees. Its bracket is the measurement's own spread, the
+  shot-to-shot standard deviation of the lead (``MEASURED_LEAD_SD_S``), so
+  ``foot +- sd`` per rung -- an error bar, not a pair of modelling choices.
 * ``spread`` -- a 1D kernel carrying the deposited inventory away from the
   lobe over ``dt_foot``. A DISCLOSED BRACKET, not a fit:
 
@@ -56,10 +62,14 @@ THE CONSTRUCTION (leg 3a of the sp campaign):
   Both conserve the injected inventory on the grid exactly (asserted).
 
 NOTHING HERE IS FITTED. Every input is hardware-anchored (S_gp, valves, the
-puff placement), code-anchored (the lobe, the throughput constant, the base
-fill), or literature-boxed (the He-He collision cross section, printed with
-its source and overridable from the command line). The two brackets are the
-claim's declared spread, and both members are run.
+puff placement, the measured 1 kA lead), code-anchored (the lobe, the
+throughput constant, the base fill, the model's own 1 kA time), or
+literature-boxed (the He-He collision cross section, printed with its source
+and overridable from the command line). The declared spread has two parts and
+they are different kinds of thing: the ``dt_foot`` bracket is the measured
+lead's error bar, so the registered foot is the value and the bracket is its
+uncertainty, while the KERNEL bracket is a closure the data cannot pin, so
+both of its members are run.
 
 The kernels are stated, not assumed to be right:
 
@@ -93,7 +103,10 @@ a file rather than a kilobyte of argv, via ``--extra-npz KEY=path.npz:array``.
 Usage:
 
     python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
-        --dt-foot-s 4.5e-3 --kernel ballistic --out scripts/sp3_nn0_b45.npz
+        --kernel ballistic --out nn0_foot_es1.npz
+
+(``--dt-foot-s`` omitted takes the requested rung's registered foot; pass it
+to walk that rung's bracket.)
 """
 
 import argparse
@@ -149,10 +162,40 @@ SIGMA_HE_HE_SOURCE = (
     "Lightfoot App. E): sigma_c = pi sigma_LJ^2"
 )
 
-#: The registered sp3 brackets, printed with every ledger so a run always
-#: shows which corner of the 2x2 it is.
-DT_FOOT_BRACKET_S = (2.0e-3, 4.5e-3)
+#: The MEASURED circuit-on -> 1 kA lead of each ES rung [s], and the
+#: shot-to-shot standard deviation of that lead over the rung's shots [s].
+#: Machine quantities, read off the discharge-current records, never fitted.
+MEASURED_LEAD_S = {1: 5.95e-3, 2: 6.75e-3, 3: 6.77e-3}
+MEASURED_LEAD_SD_S = {1: 0.09e-3, 2: 0.02e-3, 3: 0.09e-3}
+
+#: The MODEL's own circuit-on -> 1 kA time at each rung's operating point [s],
+#: measured off the model's discharge current. Code-anchored, not fitted.
+MODEL_1KA_S = {1: 0.118e-3, 2: 0.171e-3, 3: 0.316e-3}
+
 KERNELS = ("diffusive", "ballistic")
+
+
+def registered_foot_s(es):
+    """Return the registered ``dt_foot`` for ES rung ``es`` [s].
+
+    The foot is the gas the model never sees: the machine's measured
+    circuit-on -> 1 kA lead minus the model's own circuit-on -> 1 kA time at
+    the same rung. A difference of two measured times, so MEASURED, not a fit.
+    """
+    return MEASURED_LEAD_S[es] - MODEL_1KA_S[es]
+
+
+def dt_foot_bracket_s(es):
+    """Return ``(low, high)`` = registered foot +- the measured lead's sd [s].
+
+    The rung's error bar on ``dt_foot``, printed with every ledger so a run
+    always shows where in it the corner sits. It is an uncertainty, not a pair
+    of modelling choices: the registered foot is the value, and the two ends
+    are what the shot-to-shot spread of the lead allows.
+    """
+    foot = registered_foot_s(es)
+    sd = MEASURED_LEAD_SD_S[es]
+    return (foot - sd, foot + sd)
 
 #: Axial band the sp1 response map named as the required-source location
 #: [cm]; reported for orientation only, nothing keys off it.
@@ -540,7 +583,7 @@ def build(args):
         "Tn_K": Tn_K,
         "vbar_cm_s": vbar,
         "dt_foot_s": float(args.dt_foot_s),
-        "dt_foot_bracket_s": list(DT_FOOT_BRACKET_S),
+        "dt_foot_bracket_s": list(dt_foot_bracket_s(args.es)),
         "kernel": args.kernel,
         "kernel_bracket": list(KERNELS),
         "kernel_width_cm": width,
@@ -707,11 +750,25 @@ def main(argv=None):
                         "Mutually exclusive with the uniform base by "
                         "construction -- passing this replaces it, and the "
                         "ledger records which was used")
-    p.add_argument("--dt-foot-s", type=float, default=4.5e-3,
-                   help=f"foot duration [s]; registered bracket "
-                        f"{DT_FOOT_BRACKET_S} (default: the pedestal-floor "
-                        f"end). 0 is the explicit NULL CONTROL: no foot "
-                        f"addition at all, so the output is the base itself")
+    p.add_argument("--dt-foot-s", type=float, default=None,
+                   help="foot duration [s]. DEFAULT: the requested rung's "
+                        "REGISTERED foot, the measured circuit-on -> 1 kA "
+                        "lead minus the model's own circuit-on -> 1 kA time "
+                        "-- "
+                        + ", ".join(
+                            f"ES{es} {registered_foot_s(es):.6g}"
+                            for es in sorted(MEASURED_LEAD_S)
+                        )
+                        + " s. The registered bracket is that foot +- the "
+                        "shot-to-shot sd of the lead ("
+                        + ", ".join(
+                            f"ES{es} +-{MEASURED_LEAD_SD_S[es]:.6g}"
+                            for es in sorted(MEASURED_LEAD_SD_S)
+                        )
+                        + " s), so passing a value walks the measurement's "
+                        "own error bar. 0 is the explicit NULL CONTROL: no "
+                        "foot addition at all, so the output is the base "
+                        "itself")
     p.add_argument("--kernel", choices=KERNELS, default="diffusive",
                    help="spreading kernel; registered bracket is both members "
                         "(default: the short-reach end)")
@@ -767,6 +824,11 @@ def main(argv=None):
                         "file-sourced one")
     p.add_argument("--out", required=True, help="output .npz path")
     args = p.parse_args(argv)
+
+    # The default foot is the requested rung's registered one, so it cannot be
+    # an argparse default (it is not known until --es is read).
+    if args.dt_foot_s is None:
+        args.dt_foot_s = registered_foot_s(args.es)
 
     if args.dt_foot_s < 0.0 or not math.isfinite(args.dt_foot_s):
         p.error("--dt-foot-s must be finite and >= 0 (0 is the null control)")
