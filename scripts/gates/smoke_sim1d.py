@@ -21765,18 +21765,22 @@ def _case_shaped_initial_neutral_fill_sp3():
             raise AssertionError("spread_matrix must refuse a non-positive width")
 
     # THE FOOT REGISTRATION. dt_foot is MEASURED per rung -- the machine's
-    # circuit-on -> 1 kA lead minus the model's own circuit-on -> 1 kA time --
-    # and its bracket is that lead's shot-to-shot sd, so the bracket is an
-    # error bar centred on the registered foot rather than a pair of choices.
-    # Both properties are asserted off the registered constants, so a rung
-    # added or a time re-measured cannot silently break the arithmetic.
+    # circuit-on -> 1 kA lead minus the model's own circuit-on -> 1 kA time,
+    # rounded to the 10 us the leads are quoted at -- and its bracket is that
+    # lead's shot-to-shot sd, so the bracket is an error bar centred on the
+    # registered foot rather than a pair of choices. Both properties are
+    # asserted off the registered constants, so a rung added or a time
+    # re-measured cannot silently break the arithmetic. The ROUNDING is pinned
+    # too, because it is what lets an omitted --dt-foot-s reproduce a
+    # committed fill: the raw subtraction would miss it in the last digits.
     for _sp3_es in (1, 2, 3):
         _sp3_foot = _sp3_mod.registered_foot_s(_sp3_es)
         _sp3_lo, _sp3_hi = _sp3_mod.dt_foot_bracket_s(_sp3_es)
         _sp3_sd = _sp3_mod.MEASURED_LEAD_SD_S[_sp3_es]
-        assert _sp3_foot == (
+        assert _sp3_foot == round(
             _sp3_mod.MEASURED_LEAD_S[_sp3_es]
-            - _sp3_mod.MODEL_1KA_S[_sp3_es]
+            - _sp3_mod.MODEL_1KA_S[_sp3_es],
+            _sp3_mod.FOOT_QUANTUM_DECIMALS,
         ), (_sp3_es, _sp3_foot)
         assert _sp3_foot > 0.0, (_sp3_es, _sp3_foot)
         assert abs((_sp3_lo + _sp3_hi) / 2.0 - _sp3_foot) < 1e-15, _sp3_es

@@ -48,7 +48,8 @@ THE CONSTRUCTION (leg 3a of the sp campaign):
 * ``dt_foot`` -- the duration of the current foot the model forecloses.
   MEASURED, not fitted, and registered PER RUNG: the machine's own
   circuit-on -> 1 kA lead minus the model's own circuit-on -> 1 kA time
-  (``MEASURED_LEAD_S`` - ``MODEL_1KA_S``). The model reaches 1 kA sooner than
+  (``MEASURED_LEAD_S`` - ``MODEL_1KA_S``, rounded to the 10 us the leads are
+  quoted at). The model reaches 1 kA sooner than
   the machine does, and the gas that flows during the difference is the foot
   the model never sees. Its bracket is the measurement's own spread, the
   shot-to-shot standard deviation of the lead (``MEASURED_LEAD_SD_S``), so
@@ -175,14 +176,27 @@ MODEL_1KA_S = {1: 0.118e-3, 2: 0.171e-3, 3: 0.316e-3}
 KERNELS = ("diffusive", "ballistic")
 
 
+#: The resolution the measured leads are quoted at [s]: 10 us, the number of
+#: decimal places ``round`` takes to get there.
+FOOT_QUANTUM_DECIMALS = 5
+
+
 def registered_foot_s(es):
     """Return the registered ``dt_foot`` for ES rung ``es`` [s].
 
     The foot is the gas the model never sees: the machine's measured
     circuit-on -> 1 kA lead minus the model's own circuit-on -> 1 kA time at
     the same rung. A difference of two measured times, so MEASURED, not a fit.
+
+    The difference is ROUNDED to 10 us, the resolution the measured leads are
+    quoted at: carrying the raw subtraction's trailing digits would state a
+    foot to a precision the measurement does not have. The rounded values are
+    the feet OF RECORD -- ES1 0.00583, ES2 0.00658, ES3 0.00645 s -- and they
+    are what an omitted ``--dt-foot-s`` supplies, so the builder reproduces a
+    committed fill without being told the number.
     """
-    return MEASURED_LEAD_S[es] - MODEL_1KA_S[es]
+    raw = MEASURED_LEAD_S[es] - MODEL_1KA_S[es]
+    return round(raw, FOOT_QUANTUM_DECIMALS)
 
 
 def dt_foot_bracket_s(es):
@@ -191,7 +205,8 @@ def dt_foot_bracket_s(es):
     The rung's error bar on ``dt_foot``, printed with every ledger so a run
     always shows where in it the corner sits. It is an uncertainty, not a pair
     of modelling choices: the registered foot is the value, and the two ends
-    are what the shot-to-shot spread of the lead allows.
+    are what the shot-to-shot spread of the lead allows. It centres on the
+    ROUNDED foot, because that is the registered value; the sd is not rounded.
     """
     foot = registered_foot_s(es)
     sd = MEASURED_LEAD_SD_S[es]
