@@ -605,13 +605,13 @@ none_valued = ["anode_jet_energy_convention"]
 # seed would overwrite the shaped foot, and the solver refuses the pair. The
 # equilibration cycle count, its dt and the cached-seed modifier are config
 # defaults, inert while the route is off, and are stated because a block is an
-# inventory. equilibration_gas_puff_on_s is NOT inert -- the 25 ms puff window
+# inventory. equilibration_gas_puff_on_s is NOT inert -- the 27 ms puff window
 # is a stance value the golden's own re-cut re-arms the route to use.
 neutral_equilibration = false
 launch_plasma_after_equilibration = true
 neutral_equilibration_cycles = 100
 neutral_equilibration_dt = 0.01
-equilibration_gas_puff_on_s = 0.025
+equilibration_gas_puff_on_s = 0.027
 use_cached_neutral_seed = false
 
 # INITIAL NEUTRAL FILL. Shaped foot profile, REGENERATED 2026-08-24 with the
