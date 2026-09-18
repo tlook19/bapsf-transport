@@ -21764,27 +21764,52 @@ def _case_shaped_initial_neutral_fill_sp3():
         else:
             raise AssertionError("spread_matrix must refuse a non-positive width")
 
-    # vbar at 300 K helium, and the reaches the sp3 registration quotes.
+    # THE FOOT REGISTRATION. dt_foot is MEASURED per rung -- the machine's
+    # circuit-on -> 1 kA lead minus the model's own circuit-on -> 1 kA time,
+    # rounded to the 10 us the leads are quoted at -- and its bracket is that
+    # lead's shot-to-shot sd, so the bracket is an error bar centred on the
+    # registered foot rather than a pair of choices. Both properties are
+    # asserted off the registered constants, so a rung added or a time
+    # re-measured cannot silently break the arithmetic. The ROUNDING is pinned
+    # too, because it is what lets an omitted --dt-foot-s reproduce a
+    # committed fill: the raw subtraction would miss it in the last digits.
+    for _sp3_es in (1, 2, 3):
+        _sp3_foot = _sp3_mod.registered_foot_s(_sp3_es)
+        _sp3_lo, _sp3_hi = _sp3_mod.dt_foot_bracket_s(_sp3_es)
+        _sp3_sd = _sp3_mod.MEASURED_LEAD_SD_S[_sp3_es]
+        assert _sp3_foot == round(
+            _sp3_mod.MEASURED_LEAD_S[_sp3_es]
+            - _sp3_mod.MODEL_1KA_S[_sp3_es],
+            _sp3_mod.FOOT_QUANTUM_DECIMALS,
+        ), (_sp3_es, _sp3_foot)
+        assert _sp3_foot > 0.0, (_sp3_es, _sp3_foot)
+        assert abs((_sp3_lo + _sp3_hi) / 2.0 - _sp3_foot) < 1e-15, _sp3_es
+        assert abs((_sp3_hi - _sp3_lo) - 2.0 * _sp3_sd) < 1e-15, _sp3_es
+    # vbar at 300 K helium, and the ballistic reach of the ES1 registered foot.
     _sp3_vbar = _sp3_mod.mean_speed_cm_s(300.0, m_He_cgs)
     assert 1.25e5 < _sp3_vbar < 1.27e5, _sp3_vbar
-    assert 5.6e2 < _sp3_vbar * 4.5e-3 < 5.8e2, _sp3_vbar * 4.5e-3
-    # The sp2 bridge numbers, 4.7e18--2.1e19 atoms, are the two ENDS of the
-    # registered bracket in the two throughput conventions: the low end is
-    # per-valve-nominal at the 2 ms foot, the high end as-applied at 4.5 ms.
-    # puff_rate(..., 1.0) is the repo's own throughput constant per unit
-    # volume, so this is the solver's arithmetic and not a restatement of it.
-    # The 5200 sccm the sp2 leg ran is a FITTED-FLUX quantity: it was fitted
-    # under the retired 0 C sccm convention, so the 2026-08-21 meter changeover
-    # rescales its digits by 1.0734834 (-> 5582.11 meter-sccm) to hold the
-    # delivered particle flux fixed. The banked ATOM counts below are physical
-    # and do not move.
-    _sp3_nominal = puff_rate(5582.11, 1, 1.0) * min(_sp3_mod.DT_FOOT_BRACKET_S)
-    _sp3_applied = puff_rate(5582.11, 2, 1.0) * max(_sp3_mod.DT_FOOT_BRACKET_S)
+    _sp3_reach = _sp3_vbar * _sp3_mod.registered_foot_s(1)
+    assert 7.2e2 < _sp3_reach < 7.5e2, _sp3_reach
+    # The sp2 bridge numbers, 4.7e18--2.1e19 atoms, are HISTORICAL: they are
+    # the sp2 leg's own foot times, 2.0 ms and 4.5 ms, read under the two
+    # throughput conventions -- the low end per-valve-nominal at 2.0 ms, the
+    # high end as-applied at 4.5 ms. Those foot times are properties of that
+    # banked leg and are written here rather than read from the live
+    # registration, which no longer carries them. puff_rate(..., 1.0) is the
+    # repo's own throughput constant per unit volume, so this is the solver's
+    # arithmetic and not a restatement of it. The 5200 sccm the sp2 leg ran is
+    # a FITTED-FLUX quantity: it was fitted under the retired 0 C sccm
+    # convention, so the 2026-08-21 meter changeover rescales its digits by
+    # 1.0734834 (-> 5582.11 meter-sccm) to hold the delivered particle flux
+    # fixed. The banked ATOM counts below are physical and do not move.
+    _sp3_sp2_feet_s = (2.0e-3, 4.5e-3)
+    _sp3_nominal = puff_rate(5582.11, 1, 1.0) * min(_sp3_sp2_feet_s)
+    _sp3_applied = puff_rate(5582.11, 2, 1.0) * max(_sp3_sp2_feet_s)
     assert abs(_sp3_nominal / 4.7e18 - 1.0) < 0.02, _sp3_nominal
     assert abs(_sp3_applied / 2.1e19 - 1.0) < 0.02, _sp3_applied
     # The two ends differ by exactly the valve factor times the foot ratio, so
-    # the pair is one bracket read under two conventions and not two
-    # independent numbers.
+    # the pair is one leg read under two conventions and not two independent
+    # numbers.
     assert abs(_sp3_applied / _sp3_nominal - (2.0 * 4.5) / 2.0) < 1e-12
 
 

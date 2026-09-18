@@ -111,7 +111,7 @@ PRODUCTION_STANCE = "g1atrim"
 #   * the two radius profiles are built offline by scripts/stance/g1_build_profiles.py
 #     from a measured field census, and the vessel profile is a STAIRCASE whose
 #     steps interpolation would smear into a bore the machine does not have;
-#   * the two nn0 profiles are an equilibrated 4.5 ms foot computed for that
+#   * the two nn0 profiles are an equilibrated 5.83 ms foot computed for that
 #     mesh -- resampling them changes the neutral inventory and the near-source
 #     structure, so it is a new initial condition, not the stance's.
 #
@@ -174,7 +174,7 @@ BASELINE_PARAM_OVERRIDES = {
 # input_flags overrides beyond the stance. The shaped initial fill is gone with
 # the mesh-sized package, and the solver refuses a profile and an equilibration
 # together, so the equilibrated seed fills the machine again -- at the stance's
-# own 25 ms puff window, which is a scalar and travels. This is the substitute
+# own 27 ms puff window, which is a scalar and travels. This is the substitute
 # for the foot, and it is why the gap fills.
 BASELINE_FLAG_OVERRIDES = {
     "neutral_equilibration": True,
