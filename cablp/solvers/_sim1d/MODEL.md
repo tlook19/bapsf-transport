@@ -233,9 +233,9 @@ $$\partial_tn+\nabla_\parallel\!\cdot(nu)=S_{iz}+S_{iz}^\text{beam}-S_\text{rec}
 
 $$\partial_tM+\nabla_\parallel\!\cdot(Mu+p)=F^{n}-m_iu\,S_\text{an}+F^\text{geom}+F^\text{out}$$
 
-$$\partial_tE_e+\nabla_\parallel\!\cdot(E_eu)=-u\,\partial_zp_e+\nabla_\parallel\!\cdot\!\left(\kappa_{\parallel e}\partial_zT_e\right)-Q_{ie}-C_e+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_eS_\text{rec}-\tfrac12T_eS_\text{an}+Q_e^\text{elec}+Q_e^\text{out}$$
+$$\partial_tE_e+\nabla_\parallel\!\cdot(E_eu)=-p_e\,\nabla_\parallel\!\cdot u+\nabla_\parallel\!\cdot\!\left(\kappa_{\parallel e}\partial_zT_e\right)-Q_{ie}-C_e+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_eS_\text{rec}-\tfrac12T_eS_\text{an}+Q_e^\text{elec}+Q_e^\text{out}$$
 
-$$\partial_tE_i+\nabla_\parallel\!\cdot(E_iu)=-u\,\partial_zp_i+\nabla_\parallel\!\cdot\!\left(\kappa_{\parallel i}\partial_zT_i\right)+Q_{ie}+Q_i^{n}+Q_\text{diss}-\tfrac52T_iS_\text{an}+Q_i^\text{out}$$
+$$\partial_tE_i+\nabla_\parallel\!\cdot(E_iu)=-p_i\,\nabla_\parallel\!\cdot u+\nabla_\parallel\!\cdot\!\left(\kappa_{\parallel i}\partial_zT_i\right)+Q_{ie}+Q_i^{n}+Q_\text{diss}-\tfrac52T_iS_\text{an}+Q_i^\text{out}$$
 
 The ionization birth and the recombination sink are absent from the $M$ and
 $E_i$ equations for the reason given above — they are inside $F^n$ and
@@ -243,29 +243,47 @@ $Q_i^n$. On $n$ both are explicit, and on $E_e$ the recombination sink is
 explicit while the ionization birth adds nothing at all, the electron being
 born cold.
 
-**The pressure work is the one term whose discretisation is not the literal
-transcription of the primitive one.** The Braginskii form carries
-$-p_s\,\nabla_\parallel\!\cdot u$; under `hyperbolic_energy_consistent` the
-solver applies the kinetic-energy-preserving $-u\,\partial_zp_s$ instead,
-reached by adding $p_s\,\nabla_\parallel\!\cdot u-u\,\partial_zp_s$ to the
-uncorrected term, so the two differ by exactly that increment. The choice is a
-discrete one: it puts the internal energy and the kinetic energy on the SAME
-face pressure the momentum flux uses, so the two close against each other
-rather than against two different discretisations of one term. The same
-correction supplies $Q_\text{diss}$: the ion kinetic energy that the Rusanov
-face flux's numerical dissipation removes from the momentum equation, measured
-each step and returned to the ion internal energy so that total kinetic plus
-thermal energy is conserved to roundoff. **It is a property of the
+**The pressure work is the literal transcription of the primitive term**,
+$-p_{s,i}\left.\nabla_\parallel\!\cdot u\right|_i$ with
+
+$$\left.\nabla_\parallel\!\cdot u\right|_i=\frac{A_{i+1/2}u_{i+1/2}-A_{i-1/2}u_{i-1/2}}{V_{\text{col},i}},$$
+
+and the `hyperbolic_energy_consistent` selector does not move it. What the
+selector changes is the convective momentum flux (the kinetic-energy-preserving
+$\{u\}\{M\}$ form) and the booking of $Q_\text{diss}$; it adds nothing to the
+energy rows' pressure term.
+
+**Energy consistency is a PAIRING identity, and it is local.** With the face
+velocity $\bar u_f=\tfrac12(u_L+u_R)$ that $\nabla_\parallel\!\cdot u$ uses and
+the face pressure $\bar p_f=\tfrac12(p_L+p_R)$ that the momentum flux carries,
+
+$$-p_iV_i\left.\nabla_\parallel\!\cdot u\right|_i+u_i\cdot\left(\text{net pressure force}\right)_i=-\left[A_{i+1/2}\Pi_{i+1/2}-A_{i-1/2}\Pi_{i-1/2}\right],\qquad\Pi_f=\tfrac12\left(p_Lu_R+u_Lp_R\right),$$
+
+for general states and a varying area, the net pressure force being the
+momentum flux divergence together with $F^\text{geom}$. So the discrete
+total-energy face flux
+
+$$G_f=A_f\left[F^{E_e}_f+F^{E_i}_f+\tfrac12\{M\}_f\,u_Lu_R+\Pi_f\right]\ \cong\ Au\left(K+E_e+E_i+p\right)$$
+
+carries the ENTHALPY, and $\sum V(K+E_e+E_i)$ telescopes cell by cell, not
+merely over a closed domain. **There is no $p\,\partial_zA$ member in any
+energy equation** — a static flux-tube wall does no work, and the area part of
+the pressure-flux divergence cancels against $F^\text{geom}$ in the kinetic
+energy. At a plasma-ABSORBING face the stores pay $p_su_iA_f$ and the kinetic
+energy receives exactly that, because the advective momentum flux carries
+nothing there; at any other closed face the face velocity is zero and no
+pressure work crosses.
+
+$Q_\text{diss}$ is the selector's other half: the ion kinetic energy that the
+Rusanov face flux's numerical dissipation removes from the momentum equation,
+measured each step and returned to the ion internal energy so that total
+kinetic plus thermal energy is conserved to roundoff. **It is a property of the
 discretisation, not a physical process** — no collision, no viscosity of the
 plasma itself — and it is distinct from the physical ion–neutral friction.
-Clearing the selector restores
-$-p_s\,\nabla_\parallel\!\cdot u$ literally, with
 
-$$\left.\nabla_\parallel\!\cdot u\right|_i=\frac{A_{i+1/2}u_{i+1/2}-A_{i-1/2}u_{i-1/2}}{V_{\text{col},i}}.$$
-
-Either way expansion cooling through a flare is carried by the same term that
-carries compression heating in a straight tube; there is no separate
-mirror-cooling source.
+Expansion cooling through a flare is carried by the same term that carries
+compression heating in a straight tube; there is no separate mirror-cooling
+source.
 
 With a varying area the momentum law is quasi-1D,
 $\partial_t(A\rho u)+\partial_z[A(\rho u^2+p)]=p\,\partial_zA+AF$, and the
@@ -973,6 +991,39 @@ of the end wall role.
 Cathode faces are untouched — the accelerated species there is the ion. The
 row is absent entirely when the flag is off.
 
+**Two books for the cathode ion current, and they do not agree.** The circuit's
+ion current $I_i$ (saved as `source_I_i`) is the analytic Bohm collection on
+the cathode's own emitting area, $I_i=A_cen_ec_s\alpha_\text{se}$, read from
+the cathode-adjacent cell. The fluid's delivered ion current at the cathode
+face is a different number: the ghost-flux particle flux the boundary operator
+actually removes there, through the face area and the face kernel rather than
+from that analytic expression. The fluid's is the LARGER, by a factor of order
+1.6 at the reference operating points. The two are never reconciled, and the
+current-driven path's thermionic remainder — the emission the cathode Kirchhoff
+$I_\text{eth}^\star+I_\text{see}+I_i-I_{e,\text{ret}}=I_\text{tot}$ leaves to be
+supplied — is built on the CIRCUIT's number. The anode carries no such split:
+`anode_circuit_sample` hands the circuit the very Bohm collection
+`anode_collection_rhs` removes from the fluid, one expression shared, and the
+two books agree to about 1 %. This is the same class of item as the
+ghost-face sampling mismatch above: disclosed, not reconciled.
+
+**The sheath ROWS are not the whole of what each store pays at an absorbing
+face.** The rows above are the boundary operator's bookings per collected
+particle: $(2+\Lambda_\text{eff})T_e$ on the electron store at the end wall,
+and the cathode face's own rows. Beside them, the fluid pressure work exports
+$p_su_iA_f$ per species through the absorbing face — the face velocity there is
+the live cell's, so each store does that much work on the kinetic energy, which
+the advective momentum flux then carries nowhere because it is zeroed at that
+face. The electron store therefore pays its sheath row PLUS $p_eu_iA_f$, and
+the ion store its row plus $p_iu_iA_f$; the ion export is the fluid form of the
+enthalpy ions genuinely carry across, while the electron one is a fluid work
+term with no electron loss row beside it at the cathode face, where the
+electron thermal channel is owned by the circuit. Both are properties of the
+operator, one-sided in the same (upward) direction as the barrier mismatch
+above, and both faces carry them. Making the electron export vanish would take
+a species-specific face velocity in `velocity_divergence`, which the solver
+does not have and which no configuration key reaches.
+
 ### Wall return and jet rebirth spectra
 
 Flux reaching a surface is neutralized and reborn as gas. The thermal rebirth
@@ -1112,7 +1163,7 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `plasma_advective_flux` | `physics/flux.py:plasma_flux_rhs_terms` |
 | `plasma_front_flux` | `physics/flux.py:front_filling_fluxes` |
 | `characteristic_boundary` | `physics/sources.py:characteristic_boundary_rhs` |
-| `pressure_work` | `physics/sources.py:pressure_work_rhs`, `velocity_divergence`, with the pressure half of `hyperbolic_energy_correction_rhs` |
+| `pressure_work` | `physics/sources.py:pressure_work_rhs`, `velocity_divergence` |
 | `hyperbolic_dissipation_heating` | `physics/sources.py:hyperbolic_energy_correction_rhs` |
 | `flux_tube_geometry` | `physics/sources.py:flux_tube_geometry_rhs` |
 | `heat_conduction` | `physics/conduction.py:heat_conduction_rhs`; on the split path `implicit_heat_conduction_step` |

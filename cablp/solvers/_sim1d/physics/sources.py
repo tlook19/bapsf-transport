@@ -28,14 +28,34 @@ from ..core.state import (
 def velocity_divergence(
     state, floors, ion_mass_g, geometry, active_plasma_topology=False
 ):
-    """Return finite-volume axial velocity divergence [s^-1]."""
+    """Return finite-volume axial velocity divergence [s^-1].
+
+    The face velocity rule, which is what makes the ``-p_s div u`` row the
+    exact energy partner of the momentum equation's net pressure force:
+
+    * an OPEN face carries the arithmetic mean ``0.5*(u_L + u_R)``;
+    * a face that is closed AND plasma-ABSORBING carries its one live cell's
+      ``u``: the plasma really does leave through it, at the velocity the
+      momentum flux's wall pressure ``p[live]`` acts on, so the store pays
+      ``p_s u A_f`` there and the kinetic energy receives it;
+    * ANY OTHER closed face carries zero. A reflecting wall does no work: the
+      fluid does not move through it, so no pressure work crosses it and the
+      wall reaction in the momentum flux is cancelled by the quasi-1D
+      geometric source at the same face.
+
+    The last rule is reachable only with ``active_plasma_topology``, and only
+    at a closed face that is not a plasma-terminating surface.
+    """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     face_u = np.zeros(geometry.cells + 1, dtype=float)
     face_u[1:-1] = 0.5 * (derived.u[:-1] + derived.u[1:])
     if active_plasma_topology:
+        absorbing = np.asarray(geometry.plasma_absorbing, dtype=bool)
         for face in np.flatnonzero(~np.asarray(geometry.plasma_open, dtype=bool)):
             live = int(geometry.plasma_face_live_cell[face])
-            face_u[face] = 0.0 if live < 0 else derived.u[live]
+            face_u[face] = (
+                derived.u[live] if (live >= 0 and absorbing[face]) else 0.0
+            )
     inventory_rate = geometry.plasma_face_area_cm2 * face_u
     return (inventory_rate[1:] - inventory_rate[:-1]) / geometry.plasma_volume_cm3
 
@@ -125,13 +145,13 @@ ELECTRON_DRIFT_DIAGNOSTIC_SCALARS = (
 def _drift_face_values(values, geometry):
     """Carry a cell-centred quantity to faces, on the typed-topology rule.
 
-    Exactly :func:`velocity_divergence`'s convention and for the same reason:
-    an interior face takes the arithmetic mean of its two neighbours, and a
+    An interior face takes the arithmetic mean of its two neighbours, and a
     face the topology has closed takes its one live cell (or zero, where there
-    is none). Sharing the rule is what makes the drift operator's boundary
-    terms come out as ``T_e`` of the live cell -- which is what the volume
-    identity's ``3.21 T_e I / e`` means -- instead of an average against a
-    plasma-dead plenum.
+    is none) -- :func:`velocity_divergence`'s rule at the absorbing faces that
+    bound this operator's support. Sharing the rule is what makes the drift
+    operator's boundary terms come out as ``T_e`` of the live cell -- which is
+    what the volume identity's ``3.21 T_e I / e`` means -- instead of an
+    average against a plasma-dead plenum.
     """
     values = np.asarray(values, dtype=float)
     face = np.zeros(geometry.cells + 1, dtype=float)
@@ -425,33 +445,6 @@ def electron_drift_transport_rhs(
     return rhs, rows
 
 
-def _pressure_flux_divergence(p, geometry, active_plasma_topology):
-    """Divergence of the momentum pressure flux {p} for one species pressure.
-
-    Interior faces carry the arithmetic-mean pressure ``0.5*(p_L+p_R)``; closed
-    faces carry the live-side cell pressure, matching
-    ``flux._apply_plasma_walls`` for the momentum row. Transmission is applied on
-    partially blocked (anode-mesh) faces.
-    """
-    p = np.asarray(p, dtype=float)
-    cells = geometry.cells
-    face = np.zeros(cells + 1, dtype=float)
-    face[1:-1] = 0.5 * (p[:-1] + p[1:])
-    face = face * np.asarray(geometry.plasma_transmission, dtype=float)
-    dead = ~np.asarray(geometry.plasma_active, dtype=bool)
-    for f in np.flatnonzero(~np.asarray(geometry.plasma_open, dtype=bool)):
-        f = int(f)
-        if active_plasma_topology:
-            live = int(geometry.plasma_face_live_cell[f])
-            face[f] = 0.0 if live < 0 else p[live]
-        else:
-            left, right = f - 1, f
-            live_is_right = left < 0 or (right < cells and not dead[right])
-            live = right if live_is_right else left
-            face[f] = p[live]
-    return _flux_divergence(face, geometry)
-
-
 def hyperbolic_energy_correction_rhs(
     state,
     floors,
@@ -459,36 +452,39 @@ def hyperbolic_energy_correction_rhs(
     mu,
     geometry,
     wave_speed="isothermal",
-    active_plasma_topology=False,
-    electron_scale=1.0,
-    ion_scale=1.0,
 ):
-    """Return the R2 KEP energy-consistency correction as its TWO bookings.
+    """Return the Rusanov numerical-dissipation deposit, into ``Ei`` alone.
 
-    ``(pressure_correction, dissipation_heating)``. The correction does two
-    unrelated things, and they are returned separately because they belong to
-    two different ledger rows:
+    The ``(n, M)`` numerical kinetic-energy dissipation the Rusanov face flux
+    removes from the momentum equation is measured each evaluation and returned
+    to the ion internal energy as
 
-    ``pressure_correction`` (Ee and Ei)
-        converts the electron and ion pressure work from ``-p_s div u`` to the
-        kinetic-energy-preserving ``-u dM_press_s`` form. It is the
-        re-discretization of a term the ledger already has, so it is booked
-        INTO ``pressure_work``, which then IS the energy-consistent pressure
-        work rather than a form that needs a correction elsewhere to be read.
+        ``Q_diss,i = -[u_i dM_diss,i - 0.5 m_i u_i^2 dn_diss,i]``,
 
-    ``dissipation_heating`` (Ei only)
-        deposits the Rusanov ``(n, M)`` numerical kinetic-energy dissipation
-        into the ion internal energy. That is a numerical-dissipation channel,
-        not pressure work, and it is booked as its own row. Per cell it is a
-        flux divergence contracted with the local velocity and is NOT
-        sign-definite; the dissipation is non-negative in the volume-weighted
-        total.
+    the exact partner of what the (n, M) dissipation took from ``K``. It is a
+    NUMERICAL channel, not pressure work and not a physical viscosity, so it is
+    booked as its own ledger row (``hyperbolic_dissipation_heating``) rather
+    than folded into any physical term. All of it goes to the ions: the
+    dissipation acts on ion momentum, and the electrons carry pressure but no
+    inertia. Per cell it is a flux divergence contracted with the local
+    velocity and is NOT sign-definite; the dissipation is non-negative in the
+    volume-weighted total.
 
-    Combined with the KEP convective momentum flux
-    (``flux._rusanov_raw_faces(energy_consistent=True)``) the flux plus
-    pressure-work operator conserves the closed-domain total plasma energy
-    ``K + Ee + Ei`` to machine precision. Off-path callers never build it, so
-    the operator is structurally inert when the selector is off.
+    It rides the SAME ``a_max``, transmission and closed-face zeroing as the
+    flux whose dissipation it returns, and it is not extended to the ghost
+    faces the boundary operator owns.
+
+    **Pressure work is not here.** The ``pressure_work`` row is
+    :func:`pressure_work_rhs` literally, ``-p_s (div u)_i``, and that row is
+    already the exact energy partner of the momentum equation's net pressure
+    force: with the face velocity of :func:`velocity_divergence` and the face
+    pressure the momentum flux carries,
+
+        ``-p_i V_i (div u)_i + u_i * (net pressure force)_i
+             = -[A_f Pi_f]_{i-1/2}^{i+1/2},  Pi_f = 0.5 (p_L u_R + u_L p_R)``,
+
+    for general states and variable area. Off-path callers never build this
+    operator, so it is structurally inert when the selector is off.
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     u = derived.u
@@ -512,36 +508,13 @@ def hyperbolic_energy_correction_rhs(
     dM_diss = _dissipative_divergence(M)
     dK_diss = u * dM_diss - 0.5 * ion_mass_g * u**2 * dn_diss
 
-    dK_press_e = u * _pressure_flux_divergence(
-        derived.pe, geometry, active_plasma_topology
-    )
-    dK_press_i = u * _pressure_flux_divergence(
-        derived.pi, geometry, active_plasma_topology
-    )
-
-    div_u = velocity_divergence(
-        state, floors, ion_mass_g, geometry,
-        active_plasma_topology=active_plasma_topology,
-    )
-
     zeros = np.zeros(cells, dtype=float)
-    d_Ee = float(electron_scale) * (derived.pe * div_u - dK_press_e)
-    d_Ei = float(ion_scale) * (derived.pi * div_u - dK_press_i)
-    return (
-        ConservativeState1D(
-            n=zeros.copy(),
-            nn=zeros.copy(),
-            M=zeros.copy(),
-            Ee=d_Ee,
-            Ei=d_Ei,
-        ),
-        ConservativeState1D(
-            n=zeros.copy(),
-            nn=zeros.copy(),
-            M=zeros.copy(),
-            Ee=zeros.copy(),
-            Ei=-dK_diss,
-        ),
+    return ConservativeState1D(
+        n=zeros.copy(),
+        nn=zeros.copy(),
+        M=zeros.copy(),
+        Ee=zeros.copy(),
+        Ei=-dK_diss,
     )
 
 

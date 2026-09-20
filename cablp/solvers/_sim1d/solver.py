@@ -5965,19 +5965,18 @@ class LAPDSim1D:
             cathode_solve=cathode_solve,
             time=time,
         )
-        # The KEP correction is booked in TWO places, so it is resolved here
-        # rather than inline: its pressure half folds into "pressure_work",
-        # which then IS the energy-consistent pressure work, and its Rusanov
-        # dissipation half is the "hyperbolic_dissipation_heating" row. Both
-        # rows are always present -- unarmed, the pressure row is the
-        # uncorrected one and the dissipation row is the zero state, so the
-        # saved term structure does not move with the flag.
+        # The "pressure_work" row is pressure_work_rhs, whatever the selector
+        # says: -p_s div u is ALREADY the exact energy partner of the momentum
+        # equation's net pressure force, so nothing is folded onto it. What the
+        # energy-consistent selector adds is the Rusanov numerical-dissipation
+        # deposit, and that is its own row. Both rows are always present --
+        # unarmed, the dissipation row is the zero state -- so the saved term
+        # structure does not move with the flag.
         pressure_work = self.pressure_work_rhs(state=state)
         if self._hyperbolic_energy_consistent:
-            kep_pressure, hyperbolic_dissipation = (
-                self.hyperbolic_energy_correction_rhs(state=state)
+            hyperbolic_dissipation = self.hyperbolic_energy_correction_rhs(
+                state=state
             )
-            pressure_work = add_state_rhs(pressure_work, kep_pressure)
         else:
             hyperbolic_dissipation = self._zero_rhs_state()
         terms = {
@@ -10389,10 +10388,10 @@ class LAPDSim1D:
         )
 
     def hyperbolic_energy_correction_rhs(self, y=None, state=None):
-        """Return the R2 KEP correction as ``(pressure, dissipation)``.
+        """Return the Rusanov numerical-dissipation deposit (``Ei`` only).
 
-        The first folds into the ``pressure_work`` ledger row and the second
-        IS the ``hyperbolic_dissipation_heating`` row; see
+        This IS the ``hyperbolic_dissipation_heating`` row; nothing it returns
+        is folded into ``pressure_work``. See
         :func:`sources.hyperbolic_energy_correction_rhs`.
         """
         if state is None:
@@ -10404,9 +10403,6 @@ class LAPDSim1D:
             mu=self._mu,
             geometry=self._plasma_geometry(),
             wave_speed=self._hyperbolic_wave_speed,
-            active_plasma_topology=self._active_plasma_topology,
-            electron_scale=1.0,  # b_pressure_work_elec removed (hardwired 1.0)
-            ion_scale=1.0,       # b_pressure_work_ions removed (hardwired 1.0)
         )
 
     def flux_tube_geometry_rhs(self, y=None, state=None):

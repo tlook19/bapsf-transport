@@ -99,22 +99,50 @@ the same physical upwind flux, up to that closure difference in $f_M$.
 
 **Energy-consistent hyperbolic core** (`hyperbolic_energy_consistent`). The
 convective momentum flux becomes the kinetic-energy-preserving $\{u\}\{M\}$
-form, the pressure work a kinetic-energy-preserving
-$-u\,\partial_zp_s$ per species folded into the `pressure_work`
-term, and the Rusanov $(n,M)$ numerical kinetic-energy dissipation is deposited
+form, and the Rusanov $(n,M)$ numerical kinetic-energy dissipation is deposited
 into $E_i$ as `hyperbolic_dissipation_heating` — a flux divergence contracted
 with the local velocity, so non-negative only in the volume-weighted total. The
-operator is CONSTRUCTED so that the semi-discrete flux and pressure-work pair
-conserves $\sum V(K+E_e+E_i)$ on a closed domain, the explicit integration
-leaving a time-integration drift of the nonlinear kinetic energy; the size of
-that drift is a property of the step, not of this operator. What exercises the
-claim is the smoke suite: the `helium-only-reaction-rates` case pins
-`pressure_work` and `hyperbolic_dissipation_heating` as required rows of the
-term enumeration and asserts the terms sum back to the full RHS, and the
-`variable-area-well-balancedness` case covers the stationary-uniform limit in
-which the KEP convective term and the Rusanov dissipation vanish at every
-interior face. Over a saved trajectory the rows are read by
-`scripts/score/power_ledger_sim1d.py`.
+selector does NOT touch the `pressure_work` term: that row is
+$-p_{s,i}\left.\nabla_\parallel\!\cdot u\right|_i$ on either side of the flag.
+
+The conservation statement is LOCAL. With the face velocity
+$\bar u_f=\tfrac12(u_L+u_R)$ of $\nabla_\parallel\!\cdot u$ and the face
+pressure $\bar p_f$ the momentum flux carries,
+
+$$-p_iV_i\left.\nabla_\parallel\!\cdot u\right|_i+u_i\cdot\left(\text{net pressure force}\right)_i=-\left[A_f\Pi_f\right]_{i-1/2}^{\,i+1/2},\qquad\Pi_f=\tfrac12\left(p_Lu_R+u_Lp_R\right),$$
+
+identically, for general states and a VARYING area — the $p_iu_iA$ pieces of
+the two members cancel cell by cell, so no $p\,\partial_zA$ term survives in
+any energy row. Hence for every cell with two open faces
+
+$$V_i\frac{d}{dt}\left(K+E_e+E_i\right)_i+G_{i+1/2}-G_{i-1/2}=0,\qquad G_f=A_f\left[F^{E_e}_f+F^{E_i}_f+\tfrac12\{M\}_f\,u_Lu_R+\Pi_f\right],$$
+
+i.e. the discrete total-energy flux carries the ENTHALPY,
+$Au(K+E_e+E_i+p)$. The closed-domain sum follows, but is strictly weaker: it is
+blind to a non-telescoping per-cell source and to what crosses a terminating
+face. At a plasma-ABSORBING face the face velocity is the live cell's, the
+stores pay $p_su_iA_f$, and the kinetic energy receives exactly that because
+the advective momentum flux carries nothing there — so the hyperbolic operator
+passes NO total energy through it and everything that crosses is the
+terminating boundary operator's. At any other closed face the face velocity is
+zero: a reflecting wall does no work. The explicit integration leaves a
+time-integration drift of the nonlinear kinetic energy; the size of that drift
+is a property of the step, not of this operator.
+
+What exercises the claim is the smoke suite, five cases:
+`kep-pressure-work-closure` (the per-cell identity above on the real flared
+mesh, on a smooth sign-changing state and a seeded rough one, with a power
+guard on $u\,p\,\Delta A$), `kep-constant-area-discriminators` (the two states
+that separate $-p_s\,\partial_zu$ from $+u\,\partial_zp_s$),
+`kep-flare-adiabat` (uniform pressure drifting through a flare COOLS, at
+$-\tfrac23Tu\,\Delta A/V$), `kep-terminating-cells` (the absorbing-face and
+reflecting-face statements above) and `kep-acoustic-symbol` (the Fourier symbol
+of the assembled core has phase speeds $u_0\pm\sqrt{(5/3)(T_e+T_i)/m_i}$ and
+$u_0$ twice — the only case that sees Galilean invariance). The
+`helium-only-reaction-rates` case pins `pressure_work` and
+`hyperbolic_dissipation_heating` as required rows of the term enumeration and
+asserts the terms sum back to the full RHS. Over a saved trajectory the rows
+are read by `scripts/score/power_ledger_sim1d.py`.
 
 **Geometry source and conduction.** With a varying area the momentum ledger
 carries
@@ -815,7 +843,8 @@ bookkeeping.
 | Absorbing-face ghost state | `physics/sources.py:absorbing_face_states` |
 | Sheath-edge sampling | `physics/sources.py:presheath_alpha`, `electrode_sheath_alpha` |
 | Geometric momentum source | `physics/sources.py:flux_tube_geometry_rhs` |
-| Pressure work, velocity divergence | `physics/sources.py:pressure_work_rhs`, `velocity_divergence`, `hyperbolic_energy_correction_rhs` |
+| Pressure work, velocity divergence | `physics/sources.py:pressure_work_rhs`, `velocity_divergence` |
+| Rusanov numerical-dissipation deposit | `physics/sources.py:hyperbolic_energy_correction_rhs` |
 | SSPRK2 | `core/integrator.py:ssprk2_step` |
 | Operator split | `solver.py:operator_split_step` |
 | Neutral-only backward-Euler step | `solver.py:_implicit_neutral_step`, `_implicit_neutral_step_two_zone` |
