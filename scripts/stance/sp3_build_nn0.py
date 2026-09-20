@@ -269,7 +269,25 @@ MEASURED_LEAD_SD_S = {1: 0.09e-3, 2: 0.02e-3, 3: 0.09e-3}
 
 #: The MODEL's own circuit-on -> 1 kA time at each rung's operating point [s],
 #: measured off the model's discharge current. Code-anchored, not fitted.
-MODEL_1KA_S = {1: 0.118e-3, 2: 0.171e-3, 3: 0.316e-3}
+#:
+#: What the subtraction in :func:`registered_foot_s` does with these is a CLOCK
+#: ALIGNMENT: the same 1 kA threshold is read on the machine's discharge
+#: current and on the model's, and the foot is the interval between the two
+#: crossings. These times are therefore where the model's clock sits relative
+#: to the machine's, not a property of the gas.
+#:
+#: THE TOLERANCE RULE THE REGISTRATION FOLLOWS. The model's 1 kA time is read
+#: ONCE, at the REGISTERED FILL -- the initial fill the reference configuration
+#: carries -- and is RE-REGISTERED only when it moves by MORE than that rung's
+#: measured lead sd (:data:`MEASURED_LEAD_SD_S`) at any rung. A smaller move
+#: sits inside the foot's own error bar, where the foot it would produce is
+#: indistinguishable from the registered one; re-reading on such a move would
+#: also make the fill and the time it is built from chase each other, since the
+#: fill changes the model's approach to 1 kA and the time then changes the
+#: fill. A move larger than the sd is outside the bracket the foot is stated
+#: with, and all three rungs are then re-read together so one registration
+#: holds across the ladder.
+MODEL_1KA_S = {1: 0.067e-3, 2: 0.089e-3, 3: 0.139e-3}
 
 #: The two LEGACY MATRIX kernels: the stencil members ``spread_matrix``
 #: builds, retained as the reproduction route for rows built before the
@@ -377,7 +395,7 @@ def registered_foot_s(es):
     The difference is ROUNDED to 10 us, the resolution the measured leads are
     quoted at: carrying the raw subtraction's trailing digits would state a
     foot to a precision the measurement does not have. The rounded values are
-    the feet OF RECORD -- ES1 0.00583, ES2 0.00658, ES3 0.00645 s -- and they
+    the feet OF RECORD -- ES1 0.00588, ES2 0.00666, ES3 0.00663 s -- and they
     are what an omitted ``--dt-foot-s`` supplies, so the builder reproduces a
     committed fill without being told the number.
     """

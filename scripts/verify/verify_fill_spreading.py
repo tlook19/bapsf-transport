@@ -67,7 +67,8 @@ neither the default run nor the smoke suite depends on it:
     REGISTERED member, naming no kernel, which is the gate that says a change
     to the builder moved nothing that is committed. ``G0b`` rebuilds the
     LEGACY rows in :data:`LEGACY_ROWS_FIXTURE` through ``--kernel
-    ballistic``, which is the gate that says the legacy reproduction route
+    ballistic`` at :data:`LEGACY_ROWS_FOOT_S`, the fixed foot that fixture
+    was built at, which is the gate that says the legacy reproduction route
     still reproduces. Both legs need the equilibrated base and the per-cell
     geometry profiles, which do not live in this repository, so both ride
     this optional mode rather than the default run.
@@ -81,7 +82,10 @@ neither the default run nor the smoke suite depends on it:
     G7 TPMC PRODUCTION COMPARISON. Scores the REGISTERED members -- the
     reference, the two ends of its bracket and the instrument-match member --
     against a reduced test-particle record of the same puff on the PRODUCTION
-    geometry, at each of the three rungs' registered feet. The operator runs
+    geometry, at one NAMED comparison time per rung
+    (:data:`TPMC_PRODUCTION_COMPARISON_TIMES_S`), which both sides are built
+    at because the record holds snapshots only where it was reduced. The
+    operator runs
     gap-coupled with a continuous source and with the neutral baffle's face
     opened, because the record's instrument carries no baffle; the production
     rows keep it. Seven reductions of the two profiles (the near-field and
@@ -138,6 +142,13 @@ LEGACY_ROWS_FIXTURE = (
     Path(__file__).resolve().parents[1]
     / "data" / "nn0_legacy_ballistic_reference.npz"
 )
+#: G0b: the foot [s] the LEGACY rows in :data:`LEGACY_ROWS_FIXTURE` were built
+#: at. A legacy reproduction route carries its OWN foot: the fixture is a fixed
+#: set of numbers, so the argument that reproduces it is fixed too and cannot
+#: be read from the live per-rung registration, which moves whenever the
+#: model's 1 kA time is re-registered. G0a, which rebuilds the configuration's
+#: CURRENT rows, names no foot and so follows the registration.
+LEGACY_ROWS_FOOT_S = 5.83e-3
 #: Neutral temperature the gates evaluate the mean speed at [K].
 GATE_TN_K = 300.0
 #: Foot duration the transport gates integrate over [s]. Any positive time
@@ -195,8 +206,26 @@ TPMC_GEOMETRY_NAME = "eqmap_demo_es1_nx240.npz"
 #: neither of which enters the mesh, the zone volumes or the puff row, so the
 #: three feet are compared on ONE geometry and differ only in duration.
 TPMC_PRODUCTION_GEOMETRY_ES = 1
-#: G7: the ES rungs compared, each at its own registered foot.
+#: G7: the ES rungs compared.
 TPMC_PRODUCTION_RUNGS = (1, 2, 3)
+#: G7 COMPARISON TIMES [s], one per rung: the time BOTH sides of the
+#: comparison are built at.
+#:
+#: The record is a banked test-particle run and holds snapshots only at the
+#: times it was reduced at, so the comparison can only be made at one of
+#: those. These are those times, named here rather than read from the live
+#: foot registration, and the builder's rows are integrated to the SAME time
+#: as the snapshot they are scored against -- which is what makes each metric
+#: a like-for-like reduction of two profiles of the same age, and what the
+#: pre-registered bins in :data:`TPMC_PRODUCTION_BINS` were measured on.
+#:
+#: They are the durations the record carries near each rung's foot, not the
+#: registered feet themselves: a registered foot moves whenever the model's
+#: 1 kA time is re-registered, while the record's snapshot times are fixed by
+#: the banked file. Every transcript prints both, and the gate refuses to
+#: score if a named time is not an exact sample of the record's own grid --
+#: it never interpolates and never falls back to the nearest snapshot.
+TPMC_PRODUCTION_COMPARISON_TIMES_S = {1: 5.83e-3, 2: 6.58e-3, 3: 6.45e-3}
 #: G7: the axial split the near-field total-variation distance is taken over
 #: [cm]. Everything past it is an upper bound in the record, so the profile
 #: below it is where the comparison carries weight; the full-domain distance is
@@ -672,14 +701,16 @@ def _differing_uint64(got, want):
     return int(np.count_nonzero(got != want))
 
 
-def _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, kernel):
+def _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, kernel, dt_foot_s=None):
     """Return ``(column, annulus)`` rebuilt by the builder through ``kernel``.
 
     Every input the committed rows were built on, stated here once: the
-    operating point, the rung's REGISTERED foot, the equilibrated base, the
-    per-cell geometry profiles and the orifice puff row. ``kernel`` is the
-    one thing that varies between the two legs -- ``None`` leaves it at the
-    builder's own registered member, which is the point of G0a.
+    operating point, the foot, the equilibrated base, the per-cell geometry
+    profiles and the orifice puff row. Two things vary between the legs.
+    ``kernel`` -- ``None`` leaves it at the builder's own registered member,
+    which is the point of G0a. ``dt_foot_s`` -- ``None`` takes the rung's
+    REGISTERED foot, which is what G0a wants; G0b names
+    :data:`LEGACY_ROWS_FOOT_S`, the foot its fixed fixture was built at.
     """
     keys = [str(geometry_npz) + ":" + name for name in (
         "plasma_radius_profile_cm", "machine_radius_profile_cm",
@@ -688,7 +719,8 @@ def _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, kernel):
     args = SimpleNamespace(
         es=int(es), nx=int(nx), sgp=float(sgp), two_zone=True, zone="chamber",
         base_from_h5=str(base_h5),
-        dt_foot_s=sp3.registered_foot_s(int(es)),
+        dt_foot_s=(sp3.registered_foot_s(int(es)) if dt_foot_s is None
+                   else float(dt_foot_s)),
         kernel=sp3.KERNEL_REGISTERED if kernel is None else str(kernel),
         knudsen_kappa=sp3.KNUDSEN_KAPPA_REFERENCE,
         knudsen_substeps=sp3.KNUDSEN_SUBSTEPS_DEFAULT,
@@ -738,9 +770,10 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
 
     ``G0b`` rebuilds the LEGACY rows the configuration carried before the
     finite-volume member was registered, through ``--kernel ballistic`` at
-    the same registered foot, and requires raw-uint64 identity against the
-    committed fixture :data:`LEGACY_ROWS_FIXTURE`. That is the gate that says
-    the legacy reproduction route still reproduces.
+    :data:`LEGACY_ROWS_FOOT_S` -- the fixture's OWN foot, named because the
+    fixture is a fixed set of numbers -- and requires raw-uint64 identity
+    against the committed fixture :data:`LEGACY_ROWS_FIXTURE`. That is the
+    gate that says the legacy reproduction route still reproduces.
 
     Both legs need the equilibrated base result and the per-cell geometry
     profiles, neither of which lives in this repository, so both ride the
@@ -766,8 +799,10 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
             np.asarray(fixture["nn0_annulus_profile"], dtype=float),
         )
     ok_b, lines_b = _compare_rows(
-        f"G0b --kernel ballistic vs {LEGACY_ROWS_FIXTURE.name}:",
-        _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, "ballistic"),
+        f"G0b --kernel ballistic at the fixture's own foot "
+        f"{LEGACY_ROWS_FOOT_S * 1e3:.2f} ms vs {LEGACY_ROWS_FIXTURE.name}:",
+        _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, "ballistic",
+                      dt_foot_s=LEGACY_ROWS_FOOT_S),
         legacy,
     )
     return ok and ok_b, lines + lines_b
@@ -1077,11 +1112,15 @@ def gate_tpmc_production(record_path, geometry_npz, nx, sgp, vbar_cm_s):
     """Return ``(ok, lines)`` for the production-geometry record comparison.
 
     The operator is run gap-coupled with a continuous source, at each rung's
-    REGISTERED foot, against the record's snapshot at that same time, with the
-    neutral baffle's face opened for the comparison only -- the record's
-    instrument has no baffle, and the production rows keep it. The builder's
-    added inventory is restricted to the record's own domain, which drops the
-    plenum cell behind the cathode.
+    NAMED COMPARISON TIME (:data:`TPMC_PRODUCTION_COMPARISON_TIMES_S`),
+    against the record's snapshot at that same time, with the neutral baffle's
+    face opened for the comparison only -- the record's instrument has no
+    baffle, and the production rows keep it. Both sides are therefore built at
+    one time per rung, which is the like-for-like reduction the bins describe;
+    that time is an exact sample of the record's own grid or the gate refuses,
+    and the rung's registered foot is printed beside it. The builder's added
+    inventory is restricted to the record's own domain, which drops the plenum
+    cell behind the cathode.
 
     Seven reductions of the two profiles: the total-variation distance of the
     normalised inventory over the full domain and over the near field
@@ -1146,20 +1185,23 @@ def gate_tpmc_production(record_path, geometry_npz, nx, sgp, vbar_cm_s):
 
     ok = True
     for es in TPMC_PRODUCTION_RUNGS:
-        foot = sp3.registered_foot_s(es)
+        foot = TPMC_PRODUCTION_COMPARISON_TIMES_S[es]
+        registered = sp3.registered_foot_s(es)
         sample = int(np.argmin(np.abs(record_times - foot)))
         if abs(float(record_times[sample]) - foot) > 1.0e-9:
             raise ValueError(
-                f"the record carries no snapshot at ES{es}'s registered foot "
-                f"t = {foot:g} s; it reports "
+                f"the record carries no snapshot at ES{es}'s named comparison "
+                f"time t = {foot:g} s; it reports "
                 f"{np.round(record_times * 1e3, 6).tolist()} ms"
             )
         reference = record_inventory[sample]
         record = _production_metrics(reference, mesh)
         deposit = _lobe(geometry, params, foot)
         lines.append(
-            f"  ES{es} registered foot {foot * 1e3:.2f} ms against the "
-            f"record's {float(record_times[sample]) * 1e3:.2f} ms snapshot: "
+            f"  ES{es} comparison time {foot * 1e3:.2f} ms (both sides; the "
+            f"record's own {float(record_times[sample]) * 1e3:.2f} ms "
+            f"snapshot; ES{es}'s registered foot is "
+            f"{registered * 1e3:.2f} ms and is NOT what this scores): "
             f"record z50 {record['z50']:.1f}, z90 {record['z90']:.1f}, z99 "
             f"{record['z99']:.1f} cm, bore {record['bore']:.4f}, gap "
             f"{record['gap']:.4f}, behind the mesh {record['behind']:.4f}"
