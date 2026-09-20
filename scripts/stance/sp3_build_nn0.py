@@ -36,10 +36,12 @@ THE CONSTRUCTION (leg 3a of the sp campaign):
   The two are mutually exclusive: passing ``--base-from-h5`` replaces the
   uniform base entirely, and the ledger records which was used.
 * the lobe -- the gas puff's first-flight axial deposition, taken from the
-  repo's own ``gas_puff_rate_profile`` at the stance's own puff keys
-  (``cosine_pipe``, its centre and throw). It is imported, never re-derived,
-  so the accumulated shape is by construction the shape the running model
-  deposits.
+  repo's own ``gas_puff_rate_profile`` at the named configuration's own puff
+  keys: whichever ``gas_puff_profile`` that configuration resolves, together
+  with its centre, width, throw and orifice bore and length. PROFILE-AGNOSTIC
+  -- nothing here names or assumes a shape; it imports whatever puff row the
+  configuration carries, never re-deriving one, so the accumulated shape is
+  by construction the shape the running model deposits.
 * the throughput -- AS-APPLIED, valves included: the same
   ``4.171431e17 * sccm * valves`` [particles/s] the solver applies, obtained
   from the repo's ``puff_rate`` rather than restated here. The ledger also
