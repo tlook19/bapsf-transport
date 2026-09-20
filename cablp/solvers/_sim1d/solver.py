@@ -105,6 +105,7 @@ from .physics.kinetic_dvm import (
     LEDGER_FLIGHT_CELL_KEY as KINETIC_DVM_FLIGHT_CELL_KEY,
     LEDGER_PARTICLE_FLOW_KEYS as KINETIC_DVM_PARTICLE_FLOW_KEYS,
     LEDGER_SAVED_FRAME_KEYS as KINETIC_DVM_SAVED_FRAME_KEYS,
+    NEUTRAL_MOMENT_SAVED_FRAME_KEYS as KINETIC_DVM_NEUTRAL_MOMENT_KEYS,
     TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
     WALL_REFLECTION_MODELS as KINETIC_DVM_WALL_REFLECTION_MODELS,
     TransientDVM,
@@ -12871,6 +12872,9 @@ class LAPDSim1D:
             snapshot["dvm_particle_ledger"] = (
                 self._dvm_particle_ledger_sample(time=time)
             )
+            snapshot["dvm_neutral_moments"] = (
+                self._dvm_neutral_moment_sample(time=time)
+            )
         return snapshot
 
     def _gas_puff_diagnostic_snapshot(self, time):
@@ -13256,6 +13260,9 @@ class LAPDSim1D:
             result.dvm_transfer_ledger = self._dvm_ledger_census(saved)
             result.dvm_particle_ledger = (
                 self._dvm_particle_ledger_frames(saved)
+            )
+            result.dvm_neutral_moments = (
+                self._dvm_neutral_moment_frames(saved)
             )
             result.dvm_tick_count = int(self._dvm_tick_count)
         # Cathode clamp census: how many accepted cathode solves were clamped
@@ -15405,6 +15412,47 @@ class LAPDSim1D:
                 dtype=float,
             )
             for name in names
+        }
+
+    def _dvm_neutral_moment_sample(self, time):
+        """Return this save frame's NEUTRAL VELOCITY-MOMENT record.
+
+        The neutral gas's own moments, read off the distributions at the
+        frame -- density, parallel particle flux, mean parallel velocity and
+        the parallel/perpendicular temperatures about that mean, per cell and
+        for BOTH zones. Rows, units and the sign convention are
+        :data:`KINETIC_DVM_NEUTRAL_MOMENT_KEYS` and the engine's row
+        documentation; the flux and the velocity are positive towards the end
+        wall.
+
+        Instantaneous, like the particle ledger's two state rows and for the
+        same reason: the distributions change only on a neutral tick, and the
+        frame is where the reading belongs. This is what the saved trajectory
+        cannot otherwise answer -- the only velocity-shaped neutral row a DVM
+        run carried was the transfer ledger's collision-pair drift, which is
+        the mean velocity of the neutrals LOST to collisions in the column,
+        not the gas flow.
+
+        Pure reading: every value comes from the engine's own moment method,
+        nothing is written back to the distributions, the state vector or any
+        cache, so a run that records this is bit-exact against one that does
+        not.
+        """
+        return {"time": float(time), **self._dvm.zone_velocity_moments()}
+
+    def _dvm_neutral_moment_frames(self, saved):
+        """Return the saved run's neutral moments as one array per row.
+
+        Each array runs over save frames in trajectory order. ``time`` is
+        ``(frames,)``; every other row is ``(frames, cells)``, because every
+        moment here is read per cell.
+        """
+        return {
+            name: np.asarray(
+                [snapshot["dvm_neutral_moments"][name] for snapshot in saved],
+                dtype=float,
+            )
+            for name in KINETIC_DVM_NEUTRAL_MOMENT_KEYS
         }
 
     def _dvm_ledger_census(self, saved):
