@@ -54,11 +54,17 @@ OPTIONAL MODES -- each reads data that does not live in this repository, so
 neither the default run nor the smoke suite depends on it:
 
 ``--legacy-rows FILE --base-h5 FILE``
-    G0 LEGACY BIT-IDENTITY. Rebuilds the committed initial-fill rows of a
-    configuration file through the legacy ballistic route and compares them at
-    RAW UINT64 -- float64 bit patterns read as integers, so a one-ulp move is
-    a difference. The bar is zero differing values on both rows. This is the
-    gate that says a change to the builder moved nothing that is committed.
+    G0 ROW BIT-IDENTITY, two legs, both compared at RAW UINT64 -- float64 bit
+    patterns read as integers, so a one-ulp move is a difference, and the bar
+    is zero differing values on both rows. ``G0a`` rebuilds the committed
+    initial-fill rows of a configuration file through the builder's
+    REGISTERED member, naming no kernel, which is the gate that says a change
+    to the builder moved nothing that is committed. ``G0b`` rebuilds the
+    LEGACY rows in :data:`LEGACY_ROWS_FIXTURE` through ``--kernel
+    ballistic``, which is the gate that says the legacy reproduction route
+    still reproduces. Both legs need the equilibrated base and the per-cell
+    geometry profiles, which do not live in this repository, so both ride
+    this optional mode rather than the default run.
 ``--tpmc-record FILE``
     G6 TPMC RECORD GATE. Scores candidate members against a banked
     test-particle Monte Carlo record of the same puff on the same geometry, by
@@ -118,6 +124,14 @@ from cablp.solvers._sim1d.physics.neutrals import (  # noqa: E402
 
 #: The configuration the production legs of G1, G2 and G5 run on.
 PRODUCTION_STANCE = "g1atrim"
+#: G0b: the committed fixture holding the LEGACY initial-fill rows -- the two
+#: rows the reference configuration carried before the finite-volume member
+#: became the builder's registered one, with the z grid they sit on and a
+#: provenance string naming the builder arguments that reproduce them.
+LEGACY_ROWS_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "data" / "nn0_legacy_ballistic_reference.npz"
+)
 #: Neutral temperature the gates evaluate the mean speed at [K].
 GATE_TN_K = 300.0
 #: Foot duration the transport gates integrate over [s]. Any positive time
@@ -652,13 +666,15 @@ def _differing_uint64(got, want):
     return int(np.count_nonzero(got != want))
 
 
-def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
-    """Return ``(ok, lines)`` for the committed-row bit-identity gate."""
-    import tomllib
+def _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, kernel):
+    """Return ``(column, annulus)`` rebuilt by the builder through ``kernel``.
 
-    with open(rows_path, "rb") as handle:
-        document = tomllib.load(handle)
-    block = document["models"]["initial_neutral_state"]
+    Every input the committed rows were built on, stated here once: the
+    operating point, the rung's REGISTERED foot, the equilibrated base, the
+    per-cell geometry profiles and the orifice puff row. ``kernel`` is the
+    one thing that varies between the two legs -- ``None`` leaves it at the
+    builder's own registered member, which is the point of G0a.
+    """
     keys = [str(geometry_npz) + ":" + name for name in (
         "plasma_radius_profile_cm", "machine_radius_profile_cm",
         "neutral_baffle_positions_cm", "neutral_baffle_clear_radii_cm",
@@ -667,7 +683,11 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
         es=int(es), nx=int(nx), sgp=float(sgp), two_zone=True, zone="chamber",
         base_from_h5=str(base_h5),
         dt_foot_s=sp3.registered_foot_s(int(es)),
-        kernel="ballistic",
+        kernel=sp3.KERNEL_REGISTERED if kernel is None else str(kernel),
+        knudsen_kappa=sp3.KNUDSEN_KAPPA_REFERENCE,
+        knudsen_substeps=sp3.KNUDSEN_SUBSTEPS_DEFAULT,
+        knudsen_gap_coupling=sp3.KNUDSEN_GAP_COUPLING_REGISTERED,
+        knudsen_source_convention=sp3.KNUDSEN_SOURCE_CONVENTIONS[0],
         sigma_hehe_cm2=sp3.SIGMA_HE_HE_CM2, mfp_cm=None, tn_k=None,
         extra=["gas_puff_profile=orifice", "gas_puff_orifice_id_cm=3.95",
                "gas_puff_orifice_length_cm=22.0"],
@@ -679,21 +699,72 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
             "neutral_baffle_clear_radii_cm=" + keys[3],
         ],
     )
-    column, annulus = sp3.build(args)[:2]
+    return sp3.build(args)[:2]
+
+
+def _compare_rows(label, got_pair, want_pair):
+    """Return ``(ok, lines)`` for one raw-uint64 comparison of the two rows."""
     lines = []
     ok = True
-    for name, got in (("nn0_profile", column),
-                      ("nn0_annulus_profile", annulus)):
-        want = np.asarray(block[name], dtype=float)
+    for name, got, want in (
+        ("nn0_profile", got_pair[0], want_pair[0]),
+        ("nn0_annulus_profile", got_pair[1], want_pair[1]),
+    ):
+        want = np.asarray(want, dtype=float)
         differing = _differing_uint64(got, want)
         good = differing == 0
         ok = ok and good
         lines.append(
-            f"  [{'ok' if good else 'FAIL'}] {name}: {differing} of "
+            f"  [{'ok' if good else 'FAIL'}] {label} {name}: {differing} of "
             f"{want.size} raw uint64 values differ, max |delta| "
             f"{float(np.max(np.abs(np.asarray(got, dtype=float) - want))):.3e}"
         )
     return ok, lines
+
+
+def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
+    """Return ``(ok, lines)`` for the two committed-row bit-identity legs.
+
+    ``G0a`` rebuilds the configuration's own committed rows through the
+    builder's REGISTERED member -- no kernel named, exactly as the committed
+    rows were built -- and requires raw-uint64 identity. That is the gate
+    that says a change to the builder moved nothing that is committed.
+
+    ``G0b`` rebuilds the LEGACY rows the configuration carried before the
+    finite-volume member was registered, through ``--kernel ballistic`` at
+    the same registered foot, and requires raw-uint64 identity against the
+    committed fixture :data:`LEGACY_ROWS_FIXTURE`. That is the gate that says
+    the legacy reproduction route still reproduces.
+
+    Both legs need the equilibrated base result and the per-cell geometry
+    profiles, neither of which lives in this repository, so both ride the
+    optional ``--legacy-rows`` mode rather than the default run.
+    """
+    import tomllib
+
+    with open(rows_path, "rb") as handle:
+        document = tomllib.load(handle)
+    block = document["models"]["initial_neutral_state"]
+    committed = (
+        np.asarray(block["nn0_profile"], dtype=float),
+        np.asarray(block["nn0_annulus_profile"], dtype=float),
+    )
+    ok, lines = _compare_rows(
+        "G0a registered route vs the committed rows:",
+        _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, None),
+        committed,
+    )
+    with np.load(LEGACY_ROWS_FIXTURE, allow_pickle=False) as fixture:
+        legacy = (
+            np.asarray(fixture["nn0_profile"], dtype=float),
+            np.asarray(fixture["nn0_annulus_profile"], dtype=float),
+        )
+    ok_b, lines_b = _compare_rows(
+        f"G0b --kernel ballistic vs {LEGACY_ROWS_FIXTURE.name}:",
+        _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, "ballistic"),
+        legacy,
+    )
+    return ok and ok_b, lines + lines_b
 
 
 # ----------------------------------------------------------------------
@@ -1254,7 +1325,9 @@ def main(argv=None):
     parser.add_argument(
         "--legacy-rows", type=Path, default=None,
         help="G0: a configuration file whose committed initial-fill rows the "
-             "legacy ballistic route must reproduce at raw uint64",
+             "builder's REGISTERED member must reproduce at raw uint64 "
+             "(G0a), and against which the legacy ballistic route is checked "
+             "at raw uint64 on the committed legacy fixture (G0b)",
     )
     parser.add_argument(
         "--base-h5", type=Path, default=None,
@@ -1309,7 +1382,8 @@ def main(argv=None):
             args.legacy_rows, args.base_h5, args.legacy_es, args.legacy_nx,
             args.legacy_sgp, args.legacy_geometry_npz,
         )
-        results.insert(0, ("G0 legacy bit-identity", ok, lines))
+        results.insert(0, ("G0 row bit-identity (G0a registered, G0b legacy)",
+                           ok, lines))
 
     if args.tpmc_record:
         geometry = args.tpmc_geometry
