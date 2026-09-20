@@ -26,7 +26,10 @@ from ..core.config import ConfigurationLineage, resolve_config
 from ..core.geometry import CELL_ROLES
 from ..core.timestep import TimestepDiagnostics
 from ..physics.hot_neutrals import HOT_CHANNEL_DIAGNOSTIC_FIELDS
-from ..physics.kinetic_dvm import LEDGER_PARTICLE_ROW_DOC
+from ..physics.kinetic_dvm import (
+    LEDGER_PARTICLE_ROW_DOC,
+    NEUTRAL_MOMENT_ROW_DOC,
+)
 from ..physics.sources import (
     IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS,
 )
@@ -233,7 +236,10 @@ def save_result_hdf5(path, result, params=None, flags=None):
     losses, pump, end returns and inventory, the ENERGY each birth channel
     arrived with, and under the flight transport the per-cell radial refill;
     one dataset per row and the row documentation in the group's own
-    attributes), ``jet_arming``,
+    attributes), ``dvm_neutral_moments`` (that arm's per-save neutral
+    velocity moments -- density, parallel flux, mean parallel velocity and
+    the parallel/perpendicular temperatures about that mean, per cell for
+    both zones, documented the same way), ``jet_arming``,
     ``atomic_rate_domain``, ``floor_ledger`` and the diagnostics groups.
     """
     result_params = getattr(result, "params", None)
@@ -411,8 +417,26 @@ def save_result_hdf5(path, result, params=None, flags=None):
         # group existed still loads with the attribute simply absent.
         dvm_particle_ledger = getattr(result, "dvm_particle_ledger", None)
         if dvm_particle_ledger:
-            _write_dvm_particle_ledger(
-                h5.create_group("dvm_particle_ledger"), dvm_particle_ledger
+            _write_documented_rows(
+                h5.create_group("dvm_particle_ledger"),
+                dvm_particle_ledger,
+                LEDGER_PARTICLE_ROW_DOC,
+            )
+        # The DVM arm's neutral VELOCITY MOMENTS, at save cadence and on the
+        # same presence gate: the gas's own density, parallel flux, mean
+        # parallel velocity and the two temperatures about that mean, per
+        # cell and for both zones. Distinct from the transfer ledger's
+        # ``sample_u_n_eff`` / ``sample_T_eff_eV``, which are the collision
+        # pair's targets in the column and not the gas flow. Additive and
+        # read by name like every group above it, so the format version does
+        # not move and a file written before it still loads with the
+        # attribute simply absent.
+        dvm_neutral_moments = getattr(result, "dvm_neutral_moments", None)
+        if dvm_neutral_moments:
+            _write_documented_rows(
+                h5.create_group("dvm_neutral_moments"),
+                dvm_neutral_moments,
+                NEUTRAL_MOMENT_ROW_DOC,
             )
         # How many times the neutral clock ticked. Presence-gated on the same
         # condition as the census above -- only a run that built the DVM arm
@@ -646,8 +670,12 @@ def load_result_hdf5(path):
         if "dvm_transfer_ledger" in h5:
             result.dvm_transfer_ledger = _read_census(h5["dvm_transfer_ledger"])
         if "dvm_particle_ledger" in h5:
-            result.dvm_particle_ledger = _read_dvm_particle_ledger(
+            result.dvm_particle_ledger = _read_documented_rows(
                 h5["dvm_particle_ledger"]
+            )
+        if "dvm_neutral_moments" in h5:
+            result.dvm_neutral_moments = _read_documented_rows(
+                h5["dvm_neutral_moments"]
             )
         if "dvm_tick_count" in h5:
             result.dvm_tick_count = int(h5["dvm_tick_count"][()])
@@ -734,16 +762,17 @@ def _write_census(group, census):
             group.attrs[name] = float(value)
 
 
-def _write_dvm_particle_ledger(group, ledger):
-    """Write the DVM particle ledger: one dataset per row, plus its own docs.
+def _write_documented_rows(group, rows, row_doc):
+    """Write a per-save-frame row group: one dataset per row, plus its docs.
 
     Every row runs over save frames in trajectory order, so the group is
-    aligned with the file's ``time`` dataset. Rows are one value per frame,
-    with ONE exception: the presence-gated per-cell row (absent unless the
-    flight transport computed it) is ``(frames, cells)``. The three string
-    attributes are aligned by index and make the artifact self-describing:
-    ``channels`` names the rows in the group's own order, ``channel_units``
-    gives each row's unit, and ``channel_meanings`` says what each row counts.
+    aligned with the file's ``time`` dataset. A row is one value per frame or
+    ``(frames, cells)``, depending on what the producing group carries. The
+    three string attributes are aligned by index and make the artifact
+    self-describing: ``channels`` names the rows in the group's own order,
+    ``channel_units`` gives each row's unit, and ``channel_meanings`` says
+    what each row holds; ``row_doc`` is the producing module's own
+    ``name -> (unit, meaning)`` table.
 
     It gets its own writer rather than the shared census one because the
     census writer's rule is "arrays are datasets, everything else is a scalar
@@ -751,14 +780,12 @@ def _write_dvm_particle_ledger(group, ledger):
     that reader would try to read back as numbers. It keeps that writer's
     other rule: it writes the rows it is HANDED, in the order it is handed
     them, so re-saving a result loaded from a file that predates a row does
-    not fail on the row that file never carried. A fresh run hands them in
-    :data:`LEDGER_PARTICLE_FRAME_KEYS` order, which is therefore the order a
-    new file carries.
+    not fail on the row that file never carried.
     """
     str_dtype = h5py.string_dtype(encoding="utf-8")
-    names = tuple(ledger)
+    names = tuple(rows)
     for name in names:
-        group.create_dataset(name, data=np.asarray(ledger[name], dtype=float))
+        group.create_dataset(name, data=np.asarray(rows[name], dtype=float))
     group.attrs.create(
         "channels", np.asarray(names, dtype=object), dtype=str_dtype
     )
@@ -766,21 +793,20 @@ def _write_dvm_particle_ledger(group, ledger):
         group.attrs.create(
             attr,
             np.asarray(
-                [LEDGER_PARTICLE_ROW_DOC[name][index] for name in names],
-                dtype=object,
+                [row_doc[name][index] for name in names], dtype=object
             ),
             dtype=str_dtype,
         )
 
 
-def _read_dvm_particle_ledger(group):
-    """Read a :func:`_write_dvm_particle_ledger` group back into its rows.
+def _read_documented_rows(group):
+    """Read a :func:`_write_documented_rows` group back into its rows.
 
     By NAME, over the rows the file actually holds, so a file written when the
-    engine booked fewer channels loads with those rows simply absent rather
-    than failing. The documentation attributes are not returned: they describe
-    the artifact for a reader of the file, and the caller has the live
-    declarations.
+    producing group carried fewer rows loads with those rows simply absent
+    rather than failing. The documentation attributes are not returned: they
+    describe the artifact for a reader of the file, and the caller has the
+    live declarations.
     """
     return {name: _read_dataset(dataset) for name, dataset in group.items()}
 
