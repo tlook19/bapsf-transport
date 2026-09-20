@@ -302,7 +302,6 @@ KNUDSEN_MEMBERS = {
     "slow": KNUDSEN_KAPPA_SLOW,
     "fast": KNUDSEN_KAPPA_FAST,
 }
-KNUDSEN_KAPPA_DEFAULT = KNUDSEN_KAPPA_REFERENCE
 #: The member name an omitted ``--knudsen-member`` and an omitted
 #: ``--knudsen-kappa`` together resolve to, and the name the ledger records for
 #: a coefficient that is not one of the registered three.
@@ -726,7 +725,7 @@ def _thomas_sweep(lower, diag, upper, rhs):
 def knudsen_spread(
     z_cm, length_cm, neutral_volume_cm3, face_open_area_cm2, active,
     deposited, dt_foot_s, vbar_cm_s,
-    kappa=KNUDSEN_KAPPA_DEFAULT,
+    kappa=KNUDSEN_KAPPA_REFERENCE,
     substeps=KNUDSEN_SUBSTEPS_DEFAULT,
     source_convention=KNUDSEN_SOURCE_CONVENTIONS[0],
 ):

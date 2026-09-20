@@ -361,7 +361,7 @@ def gate_uniform_source(vbar_cm_s, production=True):
             ):
                 continue
             deposit = _volume_uniform_source(mesh, active)
-            for kappa in (sp3.KNUDSEN_KAPPA_DEFAULT, 0.5):
+            for kappa in (sp3.KNUDSEN_KAPPA_REFERENCE, 0.5):
                 accumulated, _ = sp3.knudsen_spread(
                     mesh.z_cm, mesh.length_cm, mesh.neutral_volume_cm3,
                     mesh.neutral_face_area_cm2, active, deposit,
@@ -472,7 +472,7 @@ def gate_reciprocity(vbar_cm_s):
     index, conductance = sp3.knudsen_face_conductances(
         mesh.z_cm, mesh.length_cm, mesh.neutral_volume_cm3,
         mesh.neutral_face_area_cm2, active, vbar_cm_s,
-        sp3.KNUDSEN_KAPPA_DEFAULT,
+        sp3.KNUDSEN_KAPPA_REFERENCE,
     )
     volume = np.asarray(mesh.neutral_volume_cm3, dtype=float)[index]
     size = int(index.size)
@@ -521,9 +521,9 @@ def gate_free_space(vbar_cm_s):
     # out, where the reflecting ends cannot reach the second moment.
     duration = (
         (cells * cell_length / 12.0) ** 2
-        / (2.0 * sp3.KNUDSEN_KAPPA_DEFAULT * radius * vbar_cm_s)
+        / (2.0 * sp3.KNUDSEN_KAPPA_REFERENCE * radius * vbar_cm_s)
     )
-    for kappa in (sp3.KNUDSEN_KAPPA_DEFAULT, 0.5):
+    for kappa in (sp3.KNUDSEN_KAPPA_REFERENCE, 0.5):
         diffusivity = kappa * radius * vbar_cm_s
         accumulated, _ = sp3.knudsen_spread(
             mesh.z_cm, mesh.length_cm, mesh.neutral_volume_cm3,
@@ -757,7 +757,7 @@ def gate_tpmc(record_paths, geometry_path, vbar_cm_s):
         deposit = rate * map_volume * duration
         members = {}
         disclosed = {}
-        for label, kappa in (("knudsen kappa=2/3", sp3.KNUDSEN_KAPPA_DEFAULT),
+        for label, kappa in (("knudsen kappa=2/3", sp3.KNUDSEN_KAPPA_REFERENCE),
                              ("knudsen kappa=0.5", 0.5)):
             members[label], _ = sp3.knudsen_spread(
                 mesh.z_cm, mesh.length_cm, mesh.neutral_volume_cm3,
