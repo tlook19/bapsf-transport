@@ -676,6 +676,16 @@ NEUTRAL_MOMENT_QUANTITY_DOC = {
         "parallel neutral particle flux int(v_z f d3v), positive towards "
         "the end wall",
     ),
+    "abs_flux_n_z": (
+        "cm^-2 s^-1",
+        "unsigned parallel neutral flux int(|v_z| f d3v) over the bins "
+        "flux_n_z sums, i.e. the one-way traffic in both directions added "
+        "rather than cancelled; non-negative, and the denominator the "
+        "signed flux's cancellation is read against, so that "
+        "|flux_n_z| / abs_flux_n_z is the share of that traffic surviving "
+        "as net drift and tells a resolved drift from the quadrature's "
+        "roundoff; 0.0 where n_n is at or below zero",
+    ),
     "u_n": (
         "cm/s",
         "mean parallel neutral velocity flux_n_z / n_n, positive towards "
@@ -1704,9 +1714,10 @@ class TransientDVM:
 
         One entry per :data:`NEUTRAL_MOMENT_SAVED_FRAME_KEYS` row but
         ``time``, each a ``(cells,)`` array: the density, the parallel
-        particle flux (signed +z, towards the end wall), the mean parallel
-        velocity, and the parallel and perpendicular temperatures about that
-        mean. Units and meanings are :data:`NEUTRAL_MOMENT_ROW_DOC`.
+        particle flux (signed +z, towards the end wall) with the unsigned
+        flux it cancels out of, the mean parallel velocity, and the parallel
+        and perpendicular temperatures about that mean. Units and meanings
+        are :data:`NEUTRAL_MOMENT_ROW_DOC`.
 
         These are moments of the DISTRIBUTIONS, taken on the quadrature the
         density moment uses, and are distinct from the collision-pair
@@ -1719,12 +1730,15 @@ class TransientDVM:
         """
         moments = {}
         for zone, f in zip(NEUTRAL_MOMENT_ZONES, (self.f_c, self.f_a)):
-            n, flux, u = _axial_moments(f, self.g)
+            n, flux, u, abs_flux = _axial_moments(
+                f, self.g, with_abs_flux=True
+            )
             T_par, T_perp = _directional_temperatures_eV(f, self.g, n, u)
             moments.update(
                 {
                     f"{zone}_n_n": n,
                     f"{zone}_flux_n_z": flux,
+                    f"{zone}_abs_flux_n_z": abs_flux,
                     f"{zone}_u_n": u,
                     f"{zone}_T_n_par_eV": T_par,
                     f"{zone}_T_n_perp_eV": T_perp,
@@ -5041,7 +5055,7 @@ def _cosine_wall_spectra(g, s):
     return f
 
 
-def _axial_moments(f, g):
+def _axial_moments(f, g, with_abs_flux=False):
     """Return ``(n, flux, u)`` of a distribution on the velocity grid.
 
     ``f`` carries BIN MASSES -- a bin holds the density it owns, not a phase
@@ -5050,12 +5064,25 @@ def _axial_moments(f, g):
     moment already is. ``n`` is the density [cm^-3], ``flux`` the parallel
     particle flux ``<v_z> n`` [cm^-2 s^-1] signed +z, and ``u`` their ratio
     [cm/s], defined as ``0.0`` where the density is at or below zero.
+
+    ``with_abs_flux`` appends ``abs_flux``, the UNSIGNED sum
+    ``sum |f v_z|`` over the same bins [cm^-2 s^-1]: the magnitude scale
+    ``flux`` is a signed sum against, non-negative and ``0.0`` where the
+    density is at or below zero. It is a DIAGNOSTIC reading only, and it is
+    behind the argument so that a caller which does not ask for it performs
+    exactly the reductions, in exactly the order, that it performed before
+    the row existed -- the drift this returns feeds the dynamics.
     """
     n = f.sum(axis=(1, 2))
     with np.errstate(invalid="ignore", divide="ignore"):
         flux = (f * g.VZ[None, :, :]).sum(axis=(1, 2))
         u = np.where(n > 0.0, flux / np.maximum(n, 1e-300), 0.0)
-    return n, flux, u
+    if not with_abs_flux:
+        return n, flux, u
+    abs_flux = np.where(
+        n > 0.0, np.abs(f * g.VZ[None, :, :]).sum(axis=(1, 2)), 0.0
+    )
+    return n, flux, u, abs_flux
 
 
 def _drift(f, g):

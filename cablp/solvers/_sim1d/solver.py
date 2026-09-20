@@ -15422,12 +15422,14 @@ class LAPDSim1D:
         """Return this save frame's NEUTRAL VELOCITY-MOMENT record.
 
         The neutral gas's own moments, read off the distributions at the
-        frame -- density, parallel particle flux, mean parallel velocity and
-        the parallel/perpendicular temperatures about that mean, per cell and
+        frame -- density, parallel particle flux with the unsigned flux that
+        flux cancels out of, mean parallel velocity and the
+        parallel/perpendicular temperatures about that mean, per cell and
         for BOTH zones. Rows, units and the sign convention are
         :data:`KINETIC_DVM_NEUTRAL_MOMENT_KEYS` and the engine's row
         documentation; the flux and the velocity are positive towards the end
-        wall.
+        wall, and the unsigned flux is the scale against which the signed
+        one's cancellation is read.
 
         Instantaneous, like the particle ledger's two state rows and for the
         same reason: the distributions change only on a neutral tick, and the

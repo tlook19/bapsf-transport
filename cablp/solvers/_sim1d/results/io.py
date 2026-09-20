@@ -237,9 +237,10 @@ def save_result_hdf5(path, result, params=None, flags=None):
     arrived with, and under the flight transport the per-cell radial refill;
     one dataset per row and the row documentation in the group's own
     attributes), ``dvm_neutral_moments`` (that arm's per-save neutral
-    velocity moments -- density, parallel flux, mean parallel velocity and
-    the parallel/perpendicular temperatures about that mean, per cell for
-    both zones, documented the same way), ``jet_arming``,
+    velocity moments -- density, parallel flux and the unsigned flux it
+    cancels out of, mean parallel velocity and the parallel/perpendicular
+    temperatures about that mean, per cell for both zones, documented the
+    same way), ``jet_arming``,
     ``atomic_rate_domain``, ``floor_ledger`` and the diagnostics groups.
     """
     result_params = getattr(result, "params", None)
@@ -423,9 +424,10 @@ def save_result_hdf5(path, result, params=None, flags=None):
                 LEDGER_PARTICLE_ROW_DOC,
             )
         # The DVM arm's neutral VELOCITY MOMENTS, at save cadence and on the
-        # same presence gate: the gas's own density, parallel flux, mean
-        # parallel velocity and the two temperatures about that mean, per
-        # cell and for both zones. Distinct from the transfer ledger's
+        # same presence gate: the gas's own density, parallel flux with the
+        # unsigned flux that flux cancels out of, mean parallel velocity and
+        # the two temperatures about that mean, per cell and for both zones.
+        # Distinct from the transfer ledger's
         # ``sample_u_n_eff`` / ``sample_T_eff_eV``, which are the collision
         # pair's targets in the column and not the gas flow. Additive and
         # read by name like every group above it, so the format version does

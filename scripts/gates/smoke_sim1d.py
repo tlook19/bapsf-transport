@@ -25189,6 +25189,16 @@ def _case_dvm_neutral_moment_export(kd_flags, kd_params):
     # as its own drift and temperature inside the GRID's quadrature error,
     # every value is finite and is zero exactly where the floor convention
     # says, and the group round-trips while a file without it still loads.
+    #
+    # The UNSIGNED flux row rides all four. The gas is near-isotropic, so the
+    # signed flux is a cancellation to the summation's roundoff floor over
+    # most cells and a reader cannot tell a resolved drift from noise without
+    # the traffic it cancelled out of: the unsigned row is that denominator,
+    # so it is pinned against its own independent direct sum (which, having
+    # no cancellation, admits the row-relative statement the signed flux
+    # cannot support), it must bound the signed flux everywhere and coincide
+    # with it on a one-sided distribution, it is non-negative and zero on an
+    # empty zone, and a file written before it existed must still load.
     from cablp.solvers._sim1d.physics.kinetic_dvm import (
         NEUTRAL_MOMENT_QUANTITY_DOC as _NM_QUANTITY_DOC,
         NEUTRAL_MOMENT_ROW_DOC as _NM_ROW_DOC,
@@ -25233,6 +25243,12 @@ def _case_dvm_neutral_moment_export(kd_flags, kd_params):
         for nm_zone in _NM_ZONES
         for nm_q in _NM_QUANTITY_DOC
     }
+    # The unsigned row sits immediately after the signed one it is the
+    # denominator for, within each zone.
+    for nm_zone in _NM_ZONES:
+        assert _NM_KEYS.index(f"{nm_zone}_abs_flux_n_z") == (
+            _NM_KEYS.index(f"{nm_zone}_flux_n_z") + 1
+        ), nm_zone
     nm_frames = len(nm_result.time)
     nm_cells = nm_sim.geometry.cells
     assert nm_frames > 1
@@ -25249,10 +25265,28 @@ def _case_dvm_neutral_moment_export(kd_flags, kd_params):
         assert np.all(nm[f"{nm_zone}_n_n"] >= 0.0), nm_zone
         assert np.all(nm[f"{nm_zone}_T_n_par_eV"] >= 0.0), nm_zone
         assert np.all(nm[f"{nm_zone}_T_n_perp_eV"] >= 0.0), nm_zone
+        assert np.all(nm[f"{nm_zone}_abs_flux_n_z"] >= 0.0), nm_zone
+        # (ii) THE UNSIGNED ROW BOUNDS THE SIGNED ONE, on every cell of every
+        # frame: a net drift cannot exceed the traffic it is the residue of,
+        # so the ratio the row exists to supply lies in [0, 1] by
+        # construction and a reader can read it as one.
+        assert np.all(
+            nm[f"{nm_zone}_abs_flux_n_z"]
+            >= np.abs(nm[f"{nm_zone}_flux_n_z"])
+        ), nm_zone
     # NON-VACUOUS: the column carries gas, and it is moving.
     assert nm["column_n_n"].max() > 0.0
     assert np.abs(nm["column_u_n"]).max() > 0.0
     assert nm["column_T_n_par_eV"].max() > 0.0
+    # NON-VACUOUS for the unsigned row too: wherever the column holds gas
+    # there is traffic to measure, and the bound above is not an identity --
+    # somewhere the signed flux really has cancelled.
+    nm_col_on = nm["column_n_n"] > 0.0
+    assert nm_col_on.any()
+    assert np.all(nm["column_abs_flux_n_z"][nm_col_on] > 0.0)
+    assert np.any(
+        nm["column_abs_flux_n_z"] > np.abs(nm["column_flux_n_z"])
+    )
 
     # (i) THE ROWS ARE THE QUADRATURE. An independent direct sum over the
     # velocity bins -- flattened and contracted, a different summation order
@@ -25287,9 +25321,22 @@ def _case_dvm_neutral_moment_export(kd_flags, kd_params):
             nm_live[f"{nm_zone}_u_n"] * nm_live[f"{nm_zone}_n_n"],
             nm_got, rtol=1.0e-12, atol=0.0,
         ), nm_zone
+        # (i) THE UNSIGNED ROW IS THAT SAME QUADRATURE, UNCANCELLED. The
+        # magnitude scale the signed flux was just judged against IS the
+        # exported unsigned row, computed here by the independent
+        # contraction rather than the export's axis reduction. This sum has
+        # no cancellation, so the row's OWN magnitude is a well-posed
+        # normalization for it -- 1e-12 relative to the row itself.
+        nm_abs_got = nm_live[f"{nm_zone}_abs_flux_n_z"]
+        assert np.allclose(
+            nm_abs_got, nm_scale, rtol=1.0e-12, atol=0.0
+        ), nm_zone
         # The save frame is the ENGINE's reading, not a re-derivation.
         assert np.array_equal(
             nm[f"{nm_zone}_flux_n_z"][-1], nm_got
+        ), nm_zone
+        assert np.array_equal(
+            nm[f"{nm_zone}_abs_flux_n_z"][-1], nm_abs_got
         ), nm_zone
 
     # (ii) A KNOWN DRIFTING MAXWELLIAN COMES BACK. The grid's own projection
@@ -25332,19 +25379,41 @@ def _case_dvm_neutral_moment_export(kd_flags, kd_params):
         assert abs(nm_T_par[0] - nm_T_eV) <= nm_tol_par, (nm_T_eV, nm_u)
         assert abs(nm_T_perp[0] - nm_T_eV) <= nm_tol_perp, (nm_T_eV, nm_u)
 
-    # (iii) ZERO WHERE DOCUMENTED. An empty zone has no drift and no
-    # temperature to report, and the export says 0.0 rather than a NaN.
+    # (ii) ON A ONE-SIDED DISTRIBUTION THE TWO COINCIDE. With every bin mass
+    # at ``v_z > 0`` there is nothing to cancel, so the unsigned sum and the
+    # signed one are the same sum and the ratio the row supplies is exactly
+    # 1: the bound above is tight, not merely true.
+    nm_os_spec = nm_g.maxwellian(0.30, 0.0).copy()
+    nm_os_spec[nm_g.vz <= 0.0, :] = 0.0
+    nm_os = (2.0e12 * nm_os_spec)[None, :, :].copy()
+    nm_os_n, nm_os_flux, nm_os_u, nm_os_abs = _nm_axial_moments(
+        nm_os, nm_g, with_abs_flux=True
+    )
+    # NON-VACUOUS: the one-sided construction kept mass, and it is moving.
+    assert nm_os_n[0] > 0.0
+    assert nm_os_flux[0] > 0.0
+    assert nm_os_u[0] > 0.0
+    assert np.isclose(
+        nm_os_abs[0], abs(nm_os_flux[0]), rtol=1.0e-12, atol=0.0
+    )
+
+    # (iii) ZERO WHERE DOCUMENTED. An empty zone has no drift, no traffic and
+    # no temperature to report, and the export says 0.0 rather than a NaN.
     nm_empty = np.zeros((2, nm_g.nvz, nm_g.nvp))
-    nm_e_n, nm_e_flux, nm_e_u = _nm_axial_moments(nm_empty, nm_g)
+    nm_e_n, nm_e_flux, nm_e_u, nm_e_abs = _nm_axial_moments(
+        nm_empty, nm_g, with_abs_flux=True
+    )
     nm_e_par, nm_e_perp = _nm_directional_T_eV(
         nm_empty, nm_g, nm_e_n, nm_e_u
     )
-    for nm_e_row in (nm_e_n, nm_e_flux, nm_e_u, nm_e_par, nm_e_perp):
+    for nm_e_row in (
+        nm_e_n, nm_e_flux, nm_e_u, nm_e_abs, nm_e_par, nm_e_perp
+    ):
         assert np.all(nm_e_row == 0.0)
     # And on the run itself, wherever a zone is empty.
     for nm_zone in _NM_ZONES:
         nm_off = nm[f"{nm_zone}_n_n"] <= 0.0
-        for nm_q in ("u_n", "T_n_par_eV", "T_n_perp_eV"):
+        for nm_q in ("u_n", "T_n_par_eV", "T_n_perp_eV", "abs_flux_n_z"):
             assert np.all(nm[f"{nm_zone}_{nm_q}"][nm_off] == 0.0), nm_zone
 
     with tempfile.TemporaryDirectory() as nm_dir:
@@ -25381,6 +25450,7 @@ def _case_dvm_neutral_moment_export(kd_flags, kd_params):
             for nm_zone in _NM_ZONES:
                 assert nm_units[f"{nm_zone}_n_n"] == "cm^-3"
                 assert nm_units[f"{nm_zone}_flux_n_z"] == "cm^-2 s^-1"
+                assert nm_units[f"{nm_zone}_abs_flux_n_z"] == "cm^-2 s^-1"
                 assert nm_units[f"{nm_zone}_u_n"] == "cm/s"
                 assert nm_units[f"{nm_zone}_T_n_par_eV"] == "eV"
                 assert nm_units[f"{nm_zone}_T_n_perp_eV"] == "eV"
@@ -25402,6 +25472,25 @@ def _case_dvm_neutral_moment_export(kd_flags, kd_params):
             nm_result.dvm_particle_ledger
         )
         assert np.array_equal(nm_old.time, nm_result.time)
+
+        # (iv) once more, on a file written by the layout that carried the
+        # group WITHOUT the unsigned rows: the same file with just those two
+        # datasets removed loads with every row it does carry and the two it
+        # does not simply absent. The group is read by NAME, so adding a row
+        # to it does not invalidate a file written before that row existed.
+        nm_pre_path = Path(nm_dir) / "dvm_moments_pre_abs_flux.h5"
+        shutil.copyfile(nm_path, nm_pre_path)
+        nm_abs_names = {
+            f"{nm_zone}_abs_flux_n_z" for nm_zone in _NM_ZONES
+        }
+        with h5py.File(nm_pre_path, "r+") as nm_pre_h5:
+            nm_pre_group = nm_pre_h5["dvm_neutral_moments"]
+            for nm_abs_name in nm_abs_names:
+                del nm_pre_group[nm_abs_name]
+        nm_pre = load_result_hdf5(nm_pre_path).dvm_neutral_moments
+        assert set(nm_pre) == set(_NM_KEYS) - nm_abs_names
+        for nm_name, nm_row in nm_pre.items():
+            assert np.array_equal(nm_row, nm[nm_name]), nm_name
 
 
 # --------------------------------------------------------------------
