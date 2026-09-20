@@ -114,11 +114,10 @@ The kernels are stated, not assumed to be right:
   conductance [cm^3/s] formula for every face:
 
       1/c_f = L_i/(2 D_i A_i) + L_j/(2 D_j A_j)
-              + (1 - A_open/A_max) / (A_open vbar / 4)
+              + 1/2 [(1 - A_open/A_i) + (1 - A_open/A_j)] / (A_open vbar / 4)
       D_i   = kappa R_i vbar        [cm^2/s], the cell diffusivity
       A_i   = V_i / L_i             [cm^2],   the cell's open cross section
       R_i   = sqrt(A_i / pi)        [cm],     the local vessel radius
-      A_max = max(A_i, A_j)         [cm^2]
 
   The first two terms are the two half-cells' series resistance and the third
   is the thin-restriction (aperture) series resistance, which vanishes
@@ -129,6 +128,15 @@ The kernels are stated, not assumed to be right:
   The aperture term is a free-molecular form and states the wide end of a
   step's resistance.
 
+  That third term is SYMMETRIC in the two cells, which books half of a
+  restriction's resistance against each side, and it therefore has two
+  limits. At a plain AREA CHANGE the face is open to the smaller of the two
+  cells, one bracket vanishes, and the face carries HALF the aperture term.
+  At a THIN RESTRICTION between equal areas -- an anode mesh, a neutral
+  baffle -- both brackets are the same non-zero number and the face carries
+  the FULL term. Being symmetric, the conductance does not depend on which
+  side of the face is read first.
+
   Because the measure is VOLUME and the two half-cell resistances are
   symmetric, a uniform DENSITY is in the operator's null space exactly: a
   source uniform per unit volume relaxes to a density continuous across a
@@ -136,21 +144,31 @@ The kernels are stated, not assumed to be right:
   a uniform LINE density, so their added density steps by the area ratio at a
   bore change.
 
-  ``kappa`` is stated on the command line (``--knudsen-kappa``), so a
-  diffusivity member is an invocation rather than a code edit; the registered
-  default is :data:`KNUDSEN_KAPPA_DEFAULT`. The time integration is backward
-  Euler over ``--knudsen-substeps`` fixed substeps, each solved by an
-  explicit tridiagonal (Thomas) sweep in plain arithmetic rather than a
-  library factorization, so the rows it writes do not depend on which BLAS
-  the environment linked. Backward Euler with this operator preserves
-  positivity and conserves the inventory exactly; both are asserted at build.
+  ``kappa`` carries a REGISTRATION of three named members -- the reference
+  :data:`KNUDSEN_KAPPA_REFERENCE` and the two ends of its closure bracket,
+  :data:`KNUDSEN_KAPPA_SLOW` and :data:`KNUDSEN_KAPPA_FAST`. A member is
+  requested by name (``--knudsen-member``), so walking the bracket is an
+  invocation rather than a code edit and a row records which member it is;
+  ``--knudsen-kappa`` still states a coefficient the registration does not
+  carry, and the two are mutually exclusive. Naming neither runs the
+  reference. The time integration is backward Euler over
+  ``--knudsen-substeps`` fixed substeps (:data:`KNUDSEN_SUBSTEPS_DEFAULT`),
+  each solved by an explicit tridiagonal (Thomas) sweep in plain arithmetic
+  rather than a library factorization, so the rows it writes do not depend on
+  which BLAS the environment linked. Backward Euler with this operator
+  preserves positivity and conserves the inventory exactly; both are asserted
+  at build.
 
   Which cells the operator transports through is the puff's own eligibility
   mask, as for the matrix members, so faces the puff gas cannot cross today
-  stay closed. ``--knudsen-gap-coupling`` additionally opens the cathode and
-  gap cells, coupled to the column through the anode mesh face at the
-  transparency the configuration carries; the plenum and the obstruction are
-  never opened. Deposit landing outside the active set is re-homed to the
+  stay closed -- except behind the anode mesh, where GAP COUPLING is part of
+  the member's registration (:data:`KNUDSEN_GAP_COUPLING_REGISTERED`): the
+  cathode and gap cells are carried too, coupled to the column through the
+  anode mesh face at the transparency the configuration carries.
+  ``--no-knudsen-gap-coupling`` selects the disclosed alternate that leaves
+  that region empty; a stance carrying no anode face to couple through is
+  refused unless it asks for the alternate. The plenum and the obstruction
+  are never opened. Deposit landing outside the active set is re-homed to the
   nearest active cell before the solve, and the ledger reports the share.
   The domain ends are zero-flux: end pumping is not represented here.
 
@@ -173,11 +191,11 @@ Usage:
         --kernel ballistic --out nn0_foot_es1.npz
 
     python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
-        --kernel knudsen --knudsen-kappa 0.5 --out nn0_foot_es1_knudsen.npz
+        --kernel knudsen --knudsen-member slow --out nn0_foot_es1_knudsen.npz
 
 (``--dt-foot-s`` omitted takes the requested rung's registered foot; pass it
-to walk that rung's bracket. ``--knudsen-kappa`` omitted takes
-:data:`KNUDSEN_KAPPA_DEFAULT`.)
+to walk that rung's bracket. ``--knudsen-member`` and ``--knudsen-kappa`` both
+omitted take the reference member, :data:`KNUDSEN_KAPPA_REFERENCE`.)
 """
 
 import argparse
@@ -255,12 +273,41 @@ SELECTABLE_KERNELS = KERNELS + (KNUDSEN_KERNEL,)
 
 #: THE WALL-LIMITED OPERATOR'S REGISTRATION.
 #:
-#: ``KNUDSEN_KAPPA_DEFAULT`` is the dimensionless coefficient in the cell
-#: diffusivity ``D_i = kappa R_i vbar`` [cm^2/s] that an omitted
-#: ``--knudsen-kappa`` supplies, so the builder reproduces a member without
-#: being told the number. Any other value is stated on the command line and
-#: recorded in the ledger; none is written here.
-KNUDSEN_KAPPA_DEFAULT = 2.0 / 3.0
+#: ``kappa`` is the dimensionless coefficient in the cell diffusivity
+#: ``D_i = kappa R_i vbar`` [cm^2/s]. Three values are REGISTERED and carry
+#: names, so a member is requested by what it is rather than by a number
+#: retyped on each invocation:
+#:
+#: ``KNUDSEN_KAPPA_REFERENCE``
+#:     the reference member, the long-tube Knudsen diffusivity's own
+#:     coefficient. This is the value an omitted ``--knudsen-kappa`` supplies,
+#:     so the builder reproduces the reference member without being told the
+#:     number.
+#: ``KNUDSEN_KAPPA_SLOW`` / ``KNUDSEN_KAPPA_FAST``
+#:     the two ends of the registered closure bracket, the shortest and the
+#:     longest reach the coefficient is allowed to take. They are ALTERNATIVES
+#:     to the reference and to each other -- a result names which member
+#:     produced it -- and they are ends of a bracket, not error bars.
+#:
+#: ``KNUDSEN_MEMBERS`` maps the name ``--knudsen-member`` accepts to the value
+#: it selects. A member name and an explicit ``--knudsen-kappa`` are mutually
+#: exclusive: they are two ways of saying the same thing, and accepting both
+#: would let them disagree. Any coefficient outside this table is stated on the
+#: command line and recorded in the ledger; none is written here.
+KNUDSEN_KAPPA_REFERENCE = 2.0 / 3.0
+KNUDSEN_KAPPA_SLOW = 0.45
+KNUDSEN_KAPPA_FAST = 0.90
+KNUDSEN_MEMBERS = {
+    "reference": KNUDSEN_KAPPA_REFERENCE,
+    "slow": KNUDSEN_KAPPA_SLOW,
+    "fast": KNUDSEN_KAPPA_FAST,
+}
+KNUDSEN_KAPPA_DEFAULT = KNUDSEN_KAPPA_REFERENCE
+#: The member name an omitted ``--knudsen-member`` and an omitted
+#: ``--knudsen-kappa`` together resolve to, and the name the ledger records for
+#: a coefficient that is not one of the registered three.
+KNUDSEN_MEMBER_DEFAULT = "reference"
+KNUDSEN_MEMBER_UNREGISTERED = "unregistered"
 #: Fixed number of equal backward-Euler substeps the foot is integrated over
 #: when ``--knudsen-substeps`` is omitted [1]. Fixed rather than adaptive so
 #: that a rebuild of the same invocation writes the same bytes.
@@ -270,9 +317,16 @@ KNUDSEN_SUBSTEPS_DEFAULT = 600
 #: releases it whole at t = 0, which is what the matrix kernels do and is the
 #: control the free-space variance check needs.
 KNUDSEN_SOURCE_CONVENTIONS = ("continuous", "deposit_t0")
-#: The cell roles ``--knudsen-gap-coupling`` adds to the active set, on top of
-#: the puff's own eligible roles.
+#: The cell roles gap coupling adds to the active set, on top of the puff's own
+#: eligible roles.
 KNUDSEN_GAP_COUPLED_ROLES = ("cathode", "gap")
+#: The REGISTERED setting of gap coupling for the wall-limited member: whether
+#: the region behind the anode mesh is carried, and so whether the operator can
+#: place gas there at all. It is part of the member's registration rather than
+#: an option with a convenient default, which is why it is named here and why
+#: turning it off is an explicit switch (``--no-knudsen-gap-coupling``) that
+#: selects a DISCLOSED ALTERNATE rather than a quieter default.
+KNUDSEN_GAP_COUPLING_REGISTERED = True
 #: The cell roles the operator never transports through, in either mode.
 KNUDSEN_BLOCKED_ROLES = ("plenum", "obstruction")
 #: Axial stations the ledger reports the added density at [cm]: the puff
@@ -524,6 +578,21 @@ def spread_matrix(geometry, kernel, width_cm):
     )
 
 
+def knudsen_member_name(kappa):
+    """Return the registered member name of a spreading coefficient [str].
+
+    One of the keys of :data:`KNUDSEN_MEMBERS` when ``kappa`` is exactly that
+    member's value, and :data:`KNUDSEN_MEMBER_UNREGISTERED` otherwise. The
+    ledger records the name beside the number so a row says which member of
+    the registration produced it, whether the invocation asked for the member
+    by name or stated its coefficient.
+    """
+    for name, value in KNUDSEN_MEMBERS.items():
+        if float(kappa) == float(value):
+            return name
+    return KNUDSEN_MEMBER_UNREGISTERED
+
+
 def knudsen_active_mask(cell_role, gap_coupling=False):
     """Return the boolean mask of cells the wall-limited operator carries gas in.
 
@@ -556,6 +625,19 @@ def knudsen_face_conductances(
     are numbered as the mesh numbers them, so the face between cells ``k`` and
     ``k + 1`` is entry ``k + 1`` of ``face_open_area_cm2``, whose length is
     one more than the number of cells.
+
+    The restriction member of that formula is SYMMETRIC in the two cells,
+
+        1/2 [(1 - A_open/A_lo) + (1 - A_open/A_hi)] / (A_open vbar / 4)
+
+    so it books half of a restriction's resistance against each side. It has
+    two limits, and they are the two things a face can be. At a plain AREA
+    CHANGE the face is open to the smaller of the two cells, ``A_open`` equals
+    that area, one bracket vanishes and the face carries HALF the aperture
+    term. At a THIN RESTRICTION between equal areas -- a mesh, a baffle -- both
+    brackets are the same non-zero number and the face carries the FULL term.
+    Because the expression is symmetric under exchanging the two cells, the
+    conductance does not depend on which side is read first.
 
     The active set must be CONTIGUOUS. A hole in it would put two cells that
     do not share a face on either side of one conductance, and the half-cell
@@ -594,17 +676,19 @@ def knudsen_face_conductances(
     diffusivity = float(kappa) * radius * float(vbar_cm_s)
     lo, hi = index[:-1], index[1:]
     open_area = face_open[hi]
-    max_area = np.maximum(area[lo], area[hi])
     if np.any(open_area <= 0.0):
         raise ValueError(
             "a face inside the active set has no open area, so the aperture "
             "resistance is infinite; such a face is closed and its cells "
             "must not both be active"
         )
+    restriction = 0.5 * (
+        (1.0 - open_area / area[lo]) + (1.0 - open_area / area[hi])
+    )
     resistance = (
         length[lo] / (2.0 * diffusivity[lo] * area[lo])
         + length[hi] / (2.0 * diffusivity[hi] * area[hi])
-        + (1.0 - open_area / max_area) / (open_area * float(vbar_cm_s) / 4.0)
+        + restriction / (open_area * float(vbar_cm_s) / 4.0)
     )
     return index, 1.0 / resistance
 
@@ -728,6 +812,7 @@ def knudsen_spread(
     )
     report = {
         "kappa": float(kappa),
+        "member": knudsen_member_name(kappa),
         "substeps": substeps,
         "substep_s": step,
         "source_convention": str(source_convention),
@@ -916,9 +1001,12 @@ def build(args):
         gap_coupling = bool(args.knudsen_gap_coupling)
         if gap_coupling and np.asarray(geometry.anode_face_indices).size == 0:
             raise ValueError(
-                "--knudsen-gap-coupling couples the region behind the anode "
-                "mesh to the column THROUGH that mesh face, and this stance "
-                "carries no anode face to couple through"
+                "gap coupling carries the region behind the anode mesh to the "
+                "column THROUGH that mesh face, and this stance carries no "
+                "anode face to couple through; it is the wall-limited "
+                "member's REGISTERED setting, so a stance without that face "
+                "must ask for the disclosed alternate explicitly with "
+                "--no-knudsen-gap-coupling"
             )
         active = knudsen_active_mask(geometry.cell_role, gap_coupling)
         accumulated, knudsen_report = knudsen_spread(
@@ -1130,7 +1218,10 @@ def print_ledger(
     if "knudsen" in ledger:
         k = ledger["knudsen"]
         print(
-            f"knudsen operator: kappa={k['kappa']:.6g}, "
+            f"knudsen operator: member={k['member']!r} "
+            f"kappa={k['kappa']:.6g} of "
+            f"[{KNUDSEN_KAPPA_SLOW:.6g}, {KNUDSEN_KAPPA_REFERENCE:.6g}, "
+            f"{KNUDSEN_KAPPA_FAST:.6g}], "
             f"substeps={k['substeps']} of {k['substep_s']:.6g} s, "
             f"source={k['source_convention']}, "
             f"gap_coupling={k['gap_coupling']}"
@@ -1270,26 +1361,46 @@ def main(argv=None):
                         "bracket; it is configured by the --knudsen-* options "
                         "below and ignores --sigma-hehe-cm2 / --mfp-cm, which "
                         "set the matrix diffusive member's width")
-    p.add_argument("--knudsen-kappa", type=float,
-                   default=KNUDSEN_KAPPA_DEFAULT,
+    p.add_argument("--knudsen-member", choices=sorted(KNUDSEN_MEMBERS),
+                   default=None,
+                   help="the REGISTERED member of the wall-limited spreading "
+                        "coefficient to run: "
+                        + ", ".join(
+                            f"{name} (kappa {KNUDSEN_MEMBERS[name]:.6g})"
+                            for name in sorted(KNUDSEN_MEMBERS)
+                        )
+                        + f". Omitting both this and --knudsen-kappa runs "
+                        f"{KNUDSEN_MEMBER_DEFAULT!r}. Mutually exclusive with "
+                        "--knudsen-kappa: the two say the same thing and would "
+                        "be free to disagree")
+    p.add_argument("--knudsen-kappa", type=float, default=None,
                    help="dimensionless coefficient in the wall-limited cell "
-                        "diffusivity D_i = kappa R_i vbar [1] (default "
-                        f"{KNUDSEN_KAPPA_DEFAULT:.6g}). A diffusivity member "
-                        "is stated here rather than named in the code, so "
-                        "walking the closure is an invocation")
+                        "diffusivity D_i = kappa R_i vbar [1], stated as a "
+                        "number instead of named with --knudsen-member. This "
+                        "is the route to a coefficient the registration does "
+                        "not carry; the ledger records such a value as "
+                        f"{KNUDSEN_MEMBER_UNREGISTERED!r}")
     p.add_argument("--knudsen-substeps", type=int,
                    default=KNUDSEN_SUBSTEPS_DEFAULT,
                    help="number of equal backward-Euler substeps the foot is "
                         f"integrated over (default {KNUDSEN_SUBSTEPS_DEFAULT}"
                         "). Fixed, never adaptive, so a rebuild of the same "
                         "invocation writes the same bytes")
-    p.add_argument("--knudsen-gap-coupling", action="store_true",
-                   help="also carry gas through the cathode and gap cells, "
+    p.add_argument("--knudsen-gap-coupling", dest="knudsen_gap_coupling",
+                   action="store_true", default=None,
+                   help="carry gas through the cathode and gap cells as well, "
                         "coupled to the column through the anode mesh face at "
-                        "the transparency the configuration carries. OFF by "
-                        "default: those faces are ones the puff gas cannot "
-                        "cross today, and opening them is a separable "
-                        "modelling decision")
+                        "the transparency the configuration carries. This is "
+                        "the REGISTERED setting of the wall-limited member "
+                        f"({'ON' if KNUDSEN_GAP_COUPLING_REGISTERED else 'OFF'}"
+                        "), so passing it restates the registration rather "
+                        "than changing anything")
+    p.add_argument("--no-knudsen-gap-coupling", dest="knudsen_gap_coupling",
+                   action="store_false",
+                   help="leave the region behind the anode mesh uncoupled, so "
+                        "the operator places no gas there at all. This is the "
+                        "DISCLOSED ALTERNATE to the registered setting above, "
+                        "not a lighter default; a row built with it says so")
     p.add_argument("--knudsen-source-convention",
                    choices=KNUDSEN_SOURCE_CONVENTIONS,
                    default=KNUDSEN_SOURCE_CONVENTIONS[0],
@@ -1365,9 +1476,10 @@ def main(argv=None):
     # this campaign refuses at construction rather than discovering in a
     # ledger.
     if args.kernel != KNUDSEN_KERNEL and (
-        args.knudsen_kappa != KNUDSEN_KAPPA_DEFAULT
+        args.knudsen_member is not None
+        or args.knudsen_kappa is not None
         or args.knudsen_substeps != KNUDSEN_SUBSTEPS_DEFAULT
-        or args.knudsen_gap_coupling
+        or args.knudsen_gap_coupling is not None
         or args.knudsen_source_convention != KNUDSEN_SOURCE_CONVENTIONS[0]
     ):
         p.error(
@@ -1375,10 +1487,28 @@ def main(argv=None):
             f"member and are inert under --kernel {args.kernel}; pass "
             f"--kernel {KNUDSEN_KERNEL} or drop them"
         )
+    # THE MEMBER. A registered name and an explicit coefficient are two
+    # spellings of one quantity, so taking both would let an invocation carry
+    # two answers; taking neither is the reference member.
+    if args.knudsen_member is not None and args.knudsen_kappa is not None:
+        p.error(
+            "--knudsen-member and --knudsen-kappa both state the spreading "
+            "coefficient; pass one. "
+            f"--knudsen-member {args.knudsen_member} is kappa "
+            f"{KNUDSEN_MEMBERS[args.knudsen_member]:.6g}"
+        )
+    if args.knudsen_kappa is None:
+        member = args.knudsen_member or KNUDSEN_MEMBER_DEFAULT
+        args.knudsen_kappa = KNUDSEN_MEMBERS[member]
     if not (math.isfinite(args.knudsen_kappa) and args.knudsen_kappa > 0.0):
         p.error("--knudsen-kappa must be finite and > 0")
     if args.knudsen_substeps < 1:
         p.error("--knudsen-substeps must be at least 1")
+    # GAP COUPLING. Neither switch passed takes the member's REGISTERED
+    # setting, which is a decision this module owns rather than an argparse
+    # default that happens to be convenient.
+    if args.knudsen_gap_coupling is None:
+        args.knudsen_gap_coupling = KNUDSEN_GAP_COUPLING_REGISTERED
     if args.selfcheck and (
         args.base_from_h5 is None or args.dt_foot_s != 0.0
     ):
