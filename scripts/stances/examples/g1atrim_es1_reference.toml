@@ -1,0 +1,107 @@
+# THE ES1 REFERENCE CONFIGURATION: the reference configuration driven by the
+# ES1 rung's MEASURED discharge-current trace, imposed from the model's 1 kA
+# instant, on the rung's own initial fill.
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: the measured machine, the operating point, the beam closure and
+# the neutral closure are all inherited from the reference, so this file cannot
+# drift from it and a reader can see the whole difference at a glance.
+#
+# WHAT IT IS FOR. The operator sets each rung's discharge current by hand, so
+# the drive LEVEL is a machine INPUT rather than something the model should be
+# predicting. This file is the ES1 member of the three-rung set that removes
+# the drive calibration from the comparison entirely and scores the column --
+# transport, fuelling, the neutral closure -- at a drive that is measured
+# rather than fitted. The three files differ in exactly two things: which
+# rung's overlay drives them, and the instant the drive is imposed from.
+#
+# THE INITIAL FILL. ES1 is the rung the reference configuration itself is
+# registered at, so this file states NO initial-fill block: it INHERITS the
+# reference's own nn0_profile / nn0_annulus_profile, which are that rung's
+# registered fill at its registered foot -- the machine's circuit-on -> 1 kA
+# lead at the ES1 rung (5.95 ms) minus the model's own circuit-on -> 1 kA time
+# at that rung (0.067 ms), rounded to the 10 us the leads are quoted at:
+# 5.88 ms. The ES2 and ES3 members of this set restate the block because their
+# rungs carry different feet.
+#
+# WHAT MOVES: four keys, one namespace, no flags.
+#
+# HOW THE ROWS ARE REPRODUCED. The REGISTERED route: the builder named with
+# this rung and nothing else about the spreading, so it supplies its own
+# registered member and this rung's own registered foot.
+#
+#     python scripts/stance/sp3_build_nn0.py \
+#         --es 1 --nx 268 --sgp 9010 --two-zone --zone chamber \
+#         --base-from-h5 <the equilibrated base result of this configuration,
+#                         run at the 27 ms puff window declared above> \
+#         --extra gas_puff_profile=orifice gas_puff_orifice_id_cm=3.95 \
+#                 gas_puff_orifice_length_cm=22.0 \
+#         --extra-flag prescribed_area_geometry=true neutral_baffles=true \
+#         --extra-npz plasma_radius_profile_cm=<geometry>:plasma_radius_profile_cm \
+#                     machine_radius_profile_cm=<geometry>:machine_radius_profile_cm \
+#                     neutral_baffle_positions_cm=<geometry>:neutral_baffle_positions_cm \
+#                     neutral_baffle_clear_radii_cm=<geometry>:neutral_baffle_clear_radii_cm \
+#         --out <output>.npz
+#
+# NO --kernel and NO --dt-foot-s: naming either would state a member or a foot
+# rather than take the registered one, and these rows are what the registered
+# ones build. <the equilibrated base result> and <geometry> are the two inputs
+# that are not in this repository -- an equilibrated run of this configuration
+# and the per-cell geometry profiles the reference's own rows were built on --
+# and scripts/verify/verify_fill_spreading.py's G0a leg rebuilds the rows this file inherits
+# through this route, at raw uint64, when it is given them.
+#
+# HOW TO RUN IT. The campaign drivers resolve `--stance <name>` against
+# scripts/stances/, so copy this file there first; `run_sim1d.py` takes the
+# path directly and needs no copy:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/g1atrim_es1_reference.toml \
+#         --output g1atrim_es1_reference.h5
+base = "g1atrim"
+
+[input_dict]
+# THE DRIVE, PRESCRIBED. Both loop quantities become measurements: the
+# discharge current I(t) and the discharge voltage V_dis(t) are interpolated
+# from this rung's committed overlay, and the cathode fall follows from the
+# loop bookkeeping the result is already assembled with,
+# phi_c = V_dis + phi_a - V_p. The emitted electron current is
+# max(I - I_i, 0) against the plasma's own Bohm ion current at the cathode
+# cell. Richardson emission, the surface temperature and the bank are not
+# consulted from the hand-off instant on.
+#
+# WHAT THIS DOES NOT DELETE. The reference's drive calibration -- C_R, the
+# bank, the heater package -- is INHERITED and still live, and is what the
+# solve carries before the hand-off instant below.
+#
+# BRACKET AXIS. Under this mode the beam's birth energy is e*phi_c with phi_c
+# assembled from the measured V_dis and the model's OWN anode fall and gap
+# drop, so phi_a and V_p become load-bearing on the beam energy in a way they
+# are not under the reference. No new control is exposed for either. A beam
+# energy quoted from this arm is to be quoted as a BRACKET over both, never as
+# a single number.
+cathode_solver_model = "prescribed_measured"
+
+# THE TRACE. The committed ES1 overlay -- the same artifact the scorer's
+# stage-(i) current comparison and the circuit fits read, so the arm is driven
+# by exactly the product it is scored against. Three columns are read:
+# discharge_time_ms [ms], discharge_current_mean_a [A] and
+# discharge_voltage_positive_mean_v [V], the last in the overlay's POSITIVE
+# convention, which is the sign the model's own V_dis carries.
+cathode_prescribed_trace_path = "scripts/data/es1_sim1d_overlay.npz"
+
+# THE CLOCK AND THE HAND-OFF, set to one instant: the model time that the
+# trace's own t = 0 names (t_trace_ms = (t_model_s - t0)*1e3), and the instant
+# from which the measured trace takes the drive over. Both sit at the SCORER
+# ORIGIN of this rung, 0.07 ms -- the model's 1 kA instant, the same crossing
+# the rung's registered fill foot is measured to. Prescribing from that instant
+# means the trace and the fill agree about where the machine's clock and the
+# model's clock meet, so the run carries no interval that is fuelled as if the
+# model were behind the machine and driven as if it were not. Nothing is
+# smoothed across the switch -- the switch time and the two currents on either
+# side of it are printed and written into the saved trajectory's root
+# attributes, and a large discontinuity is announced rather than hidden,
+# because its SIZE measures how far the calibrated cathode sat from this rung's
+# measured drive at the moment the measurement took over.
+cathode_prescribed_t0_s = 0.00007
+cathode_prescribed_start_s = 0.00007

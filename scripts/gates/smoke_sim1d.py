@@ -21781,6 +21781,98 @@ def _case_shaped_initial_neutral_fill_sp3():
         assert _sp3_foot > 0.0, (_sp3_es, _sp3_foot)
         assert abs((_sp3_lo + _sp3_hi) / 2.0 - _sp3_foot) < 1e-15, _sp3_es
         assert abs((_sp3_hi - _sp3_lo) - 2.0 * _sp3_sd) < 1e-15, _sp3_es
+
+    # ------------------------------------------------------------------
+    # THE REGISTRATION ITSELF, PINNED AS LITERALS.
+    #
+    # Everything above checks the registration is SELF-CONSISTENT: the foot is
+    # the rounded subtraction, the bracket is centred on it. That says nothing
+    # about WHICH numbers are registered, and the committed initial-fill rows
+    # are built from exactly those numbers -- so restoring a superseded time,
+    # or flipping the builder's registered spreading member back, moves the
+    # fill of every rung while every self-consistency check above still passes.
+    # The only instrument that catches either otherwise needs an equilibrated
+    # base and a per-cell geometry that do not live in this repository, so it
+    # cannot ride a per-merge gate.
+    #
+    # These literals are therefore the per-merge gate on the registration.
+    # EVERY ONE OF THEM IS A STANCE EVENT TO MOVE: the committed
+    # nn0_profile / nn0_annulus_profile rows are rebuilt with it, the
+    # configuration identity rotates, and the golden is re-anchored. Changing a
+    # number here without doing that is the mistake this block exists to make
+    # loud.
+    # ------------------------------------------------------------------
+    # The REGISTERED spreading member. Moving it rebuilds every committed fill
+    # row through a different operator: a stance event.
+    assert _sp3_mod.KERNEL_REGISTERED == "knudsen", _sp3_mod.KERNEL_REGISTERED
+    assert _sp3_mod.KNUDSEN_KERNEL == "knudsen"
+    # ...and the CLI's own default, which is what an omitted --kernel builds and
+    # therefore what every reproduction invocation relies on. argparse carries
+    # it separately from the constant above, so it is read from the parser the
+    # builder actually constructs -- captured by standing in for parse_args, so
+    # main() gets no further and nothing is built. Moving it: a stance event.
+    _sp3_parsers = []
+    _sp3_real_parse_args = argparse.ArgumentParser.parse_args
+
+    def _sp3_capture_parser(self, *args, **kwargs):
+        _sp3_parsers.append(self)
+        raise SystemExit(0)
+
+    argparse.ArgumentParser.parse_args = _sp3_capture_parser
+    try:
+        _sp3_mod.main([])
+    except SystemExit:
+        pass
+    finally:
+        argparse.ArgumentParser.parse_args = _sp3_real_parse_args
+    assert len(_sp3_parsers) == 1, len(_sp3_parsers)
+    assert _sp3_parsers[0].get_default("kernel") == "knudsen", (
+        _sp3_parsers[0].get_default("kernel")
+    )
+    # The registered coefficient and the two ends of its closure bracket, in
+    # D_i = kappa R_i vbar. Moving the reference rebuilds every row; moving
+    # either end restates the bracket a result is quoted with. Stance events.
+    assert _sp3_mod.KNUDSEN_KAPPA_REFERENCE == 2.0 / 3.0
+    assert _sp3_mod.KNUDSEN_KAPPA_SLOW == 0.45
+    assert _sp3_mod.KNUDSEN_KAPPA_FAST == 0.90
+    assert _sp3_mod.KNUDSEN_MEMBERS == {
+        "reference": 2.0 / 3.0, "slow": 0.45, "fast": 0.90
+    }, _sp3_mod.KNUDSEN_MEMBERS
+    assert _sp3_mod.KNUDSEN_MEMBER_DEFAULT == "reference"
+    # The substep count the foot is integrated over. Fixed so a rebuild writes
+    # the same bytes, so moving it moves those bytes: a stance event.
+    assert _sp3_mod.KNUDSEN_SUBSTEPS_DEFAULT == 600
+    # Gap coupling is REGISTERED ON: the region behind the anode mesh is
+    # carried, and the operator may place gas there. Turning it off is a
+    # disclosed alternate, not a default -- flipping the registration is a
+    # stance event.
+    assert _sp3_mod.KNUDSEN_GAP_COUPLING_REGISTERED is True
+    # The registered source convention is the FIRST of the two, the deposit
+    # released continuously over the foot. Swapping the order would silently
+    # re-register it, so the order is pinned too: a stance event either way.
+    assert _sp3_mod.KNUDSEN_SOURCE_CONVENTIONS == (
+        "continuous", "deposit_t0"
+    ), _sp3_mod.KNUDSEN_SOURCE_CONVENTIONS
+    # THE THREE REGISTERED FEET [s] and their brackets. The foot is what an
+    # omitted --dt-foot-s supplies, so these three numbers ARE the committed
+    # fills' durations; a superseded measured lead or model 1 kA time restored
+    # upstream lands here. Each is a stance event.
+    assert _sp3_mod.registered_foot_s(1) == 0.00588
+    assert _sp3_mod.registered_foot_s(2) == 0.00666
+    assert _sp3_mod.registered_foot_s(3) == 0.00663
+    # The brackets are the registered foot +- the lead's shot-to-shot sd. They
+    # are compared to their literals within 1e-15 s rather than exactly,
+    # because the addition is done in float64 and one end is not representable.
+    for _sp3_es, _sp3_want in (
+        (1, (0.00579, 0.00597)),
+        (2, (0.00664, 0.00668)),
+        (3, (0.00654, 0.00672)),
+    ):
+        _sp3_got = _sp3_mod.dt_foot_bracket_s(_sp3_es)
+        assert all(abs(g - w) < 1e-15 for g, w in zip(_sp3_got, _sp3_want)), (
+            _sp3_es, _sp3_got, _sp3_want
+        )
+
     # vbar at 300 K helium, and the ballistic reach of the ES1 registered foot.
     _sp3_vbar = _sp3_mod.mean_speed_cm_s(300.0, m_He_cgs)
     assert 1.25e5 < _sp3_vbar < 1.27e5, _sp3_vbar
@@ -24580,6 +24672,93 @@ def _case_configuration_fluid_comparator_example():
     _fc_short_f.update(_fc_extra_flags)
     assert _fc_short_p["neutral_model"] == "kinetic_dvm"
     assert _fc_lineage.identity != config_identity(_fc_short_p, _fc_short_f)
+
+
+@_case("configuration-every-committed-example-constructs")
+def _case_configuration_every_committed_example_constructs():
+    # EVERY COMMITTED EXAMPLE, not a chosen one. scripts/stances/examples/ is
+    # where the campaign's derived configurations live -- the alternate
+    # closures, the per-rung reference arms, the comparators -- and until this
+    # case existed almost none of them was loaded by anything that runs: a
+    # renamed config key, a retired selector or a block whose family gained a
+    # member would leave a committed file that no longer resolves, and nothing
+    # would say so until somebody tried to run that arm.
+    #
+    # The case GLOBS the directory rather than listing it, so a file added
+    # without a thought for this gate is covered the moment it lands. For each
+    # file it resolves the configuration through the repo's own loader, checks
+    # the lineage a saved trajectory would record, and CONSTRUCTS LAPDSim1D
+    # from it. Construction, not a run: construction-time validation is where
+    # a misconfigured arm raises, and a run would cost minutes per file.
+    #
+    # THE DISPOSITION TABLE below is the only way a file escapes either check,
+    # and an entry is a SENTENCE, never a silent pass. Two kinds:
+    #
+    #   ("skip", "<why>")     construction needs an input that is not in this
+    #                         repository (a measured trace, a per-cell profile
+    #                         file). The file is still RESOLVED and its lineage
+    #                         still checked; only the construction is skipped,
+    #                         and the reason names the missing input.
+    #   ("fails", "<text>")   the file does NOT construct today. This is a
+    #                         FINDING, recorded here with the error text it
+    #                         raises so the failure stays visible and the suite
+    #                         stays green. The entry asserts the failure still
+    #                         happens and still says that, so repairing the
+    #                         file breaks this case until the row is removed --
+    #                         a known failure cannot quietly become a mystery.
+    #
+    # The table is EMPTY: as it stands every committed example resolves and
+    # constructs. A stale row is refused below, so a row cannot outlive the
+    # file it names.
+    from stance_config import available_stances, load_configuration
+
+    _ex_dispositions = {}
+
+    _ex_dir = Path(__file__).resolve().parents[1] / "stances" / "examples"
+    _ex_files = sorted(_ex_dir.glob("*.toml"))
+    assert _ex_files, f"no committed examples under {_ex_dir}"
+    _ex_names = {path.name for path in _ex_files}
+    _ex_stale = sorted(set(_ex_dispositions) - _ex_names)
+    assert not _ex_stale, (
+        f"the disposition table names files that are not in {_ex_dir}: "
+        f"{_ex_stale}. A row outliving its file is a row nobody re-reads"
+    )
+    _ex_committed = set(available_stances())
+
+    for _ex_path in _ex_files:
+        _ex_params, _ex_flags, _ex_lineage = load_configuration(str(_ex_path))
+        # THE LINEAGE a run built from this file would write into its HDF5
+        # root: the file's own name, a base chain that bottoms out in a
+        # COMMITTED stance (a derived file whose base chain ended anywhere else
+        # would name a configuration a reader cannot resolve), and at least one
+        # delta, because a derived file that moves nothing declares nothing.
+        assert _ex_lineage.name == _ex_path.stem, (
+            _ex_path.name, _ex_lineage.name
+        )
+        assert _ex_lineage.base_chain, _ex_path.name
+        assert _ex_lineage.base_chain[-1] in _ex_committed, (
+            _ex_path.name, _ex_lineage.base_chain
+        )
+        assert _ex_lineage.delta_keys, _ex_path.name
+        assert len(_ex_lineage.file_sha256) == len(_ex_lineage.base_chain) + 1
+
+        _ex_kind, _ex_why = _ex_dispositions.get(_ex_path.name, (None, None))
+        if _ex_kind == "skip":
+            continue
+        if _ex_kind == "fails":
+            try:
+                LAPDSim1D(dict(_ex_params), dict(_ex_flags))
+            except Exception as _ex_error:
+                assert _ex_why in str(_ex_error), (
+                    _ex_path.name, _ex_why, str(_ex_error)
+                )
+                continue
+            raise AssertionError(
+                f"{_ex_path.name} is recorded as a KNOWN FAILURE ({_ex_why}) "
+                "and now constructs; delete its disposition row"
+            )
+        assert _ex_kind is None, (_ex_path.name, _ex_kind)
+        LAPDSim1D(dict(_ex_params), dict(_ex_flags))
 
 
 @_case("configuration-restated-block-refusal")
@@ -31354,7 +31533,7 @@ def _case_kep_acoustic_symbol(_kep_flat, _kep_rows, _kep_state):
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 186, "historical_stance": 69}
+_CASE_CENSUS = {"total": 187, "historical_stance": 69}
 
 
 def _assert_case_census():
