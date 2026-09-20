@@ -21781,6 +21781,98 @@ def _case_shaped_initial_neutral_fill_sp3():
         assert _sp3_foot > 0.0, (_sp3_es, _sp3_foot)
         assert abs((_sp3_lo + _sp3_hi) / 2.0 - _sp3_foot) < 1e-15, _sp3_es
         assert abs((_sp3_hi - _sp3_lo) - 2.0 * _sp3_sd) < 1e-15, _sp3_es
+
+    # ------------------------------------------------------------------
+    # THE REGISTRATION ITSELF, PINNED AS LITERALS.
+    #
+    # Everything above checks the registration is SELF-CONSISTENT: the foot is
+    # the rounded subtraction, the bracket is centred on it. That says nothing
+    # about WHICH numbers are registered, and the committed initial-fill rows
+    # are built from exactly those numbers -- so restoring a superseded time,
+    # or flipping the builder's registered spreading member back, moves the
+    # fill of every rung while every self-consistency check above still passes.
+    # The only instrument that catches either otherwise needs an equilibrated
+    # base and a per-cell geometry that do not live in this repository, so it
+    # cannot ride a per-merge gate.
+    #
+    # These literals are therefore the per-merge gate on the registration.
+    # EVERY ONE OF THEM IS A STANCE EVENT TO MOVE: the committed
+    # nn0_profile / nn0_annulus_profile rows are rebuilt with it, the
+    # configuration identity rotates, and the golden is re-anchored. Changing a
+    # number here without doing that is the mistake this block exists to make
+    # loud.
+    # ------------------------------------------------------------------
+    # The REGISTERED spreading member. Moving it rebuilds every committed fill
+    # row through a different operator: a stance event.
+    assert _sp3_mod.KERNEL_REGISTERED == "knudsen", _sp3_mod.KERNEL_REGISTERED
+    assert _sp3_mod.KNUDSEN_KERNEL == "knudsen"
+    # ...and the CLI's own default, which is what an omitted --kernel builds and
+    # therefore what every reproduction invocation relies on. argparse carries
+    # it separately from the constant above, so it is read from the parser the
+    # builder actually constructs -- captured by standing in for parse_args, so
+    # main() gets no further and nothing is built. Moving it: a stance event.
+    _sp3_parsers = []
+    _sp3_real_parse_args = argparse.ArgumentParser.parse_args
+
+    def _sp3_capture_parser(self, *args, **kwargs):
+        _sp3_parsers.append(self)
+        raise SystemExit(0)
+
+    argparse.ArgumentParser.parse_args = _sp3_capture_parser
+    try:
+        _sp3_mod.main([])
+    except SystemExit:
+        pass
+    finally:
+        argparse.ArgumentParser.parse_args = _sp3_real_parse_args
+    assert len(_sp3_parsers) == 1, len(_sp3_parsers)
+    assert _sp3_parsers[0].get_default("kernel") == "knudsen", (
+        _sp3_parsers[0].get_default("kernel")
+    )
+    # The registered coefficient and the two ends of its closure bracket, in
+    # D_i = kappa R_i vbar. Moving the reference rebuilds every row; moving
+    # either end restates the bracket a result is quoted with. Stance events.
+    assert _sp3_mod.KNUDSEN_KAPPA_REFERENCE == 2.0 / 3.0
+    assert _sp3_mod.KNUDSEN_KAPPA_SLOW == 0.45
+    assert _sp3_mod.KNUDSEN_KAPPA_FAST == 0.90
+    assert _sp3_mod.KNUDSEN_MEMBERS == {
+        "reference": 2.0 / 3.0, "slow": 0.45, "fast": 0.90
+    }, _sp3_mod.KNUDSEN_MEMBERS
+    assert _sp3_mod.KNUDSEN_MEMBER_DEFAULT == "reference"
+    # The substep count the foot is integrated over. Fixed so a rebuild writes
+    # the same bytes, so moving it moves those bytes: a stance event.
+    assert _sp3_mod.KNUDSEN_SUBSTEPS_DEFAULT == 600
+    # Gap coupling is REGISTERED ON: the region behind the anode mesh is
+    # carried, and the operator may place gas there. Turning it off is a
+    # disclosed alternate, not a default -- flipping the registration is a
+    # stance event.
+    assert _sp3_mod.KNUDSEN_GAP_COUPLING_REGISTERED is True
+    # The registered source convention is the FIRST of the two, the deposit
+    # released continuously over the foot. Swapping the order would silently
+    # re-register it, so the order is pinned too: a stance event either way.
+    assert _sp3_mod.KNUDSEN_SOURCE_CONVENTIONS == (
+        "continuous", "deposit_t0"
+    ), _sp3_mod.KNUDSEN_SOURCE_CONVENTIONS
+    # THE THREE REGISTERED FEET [s] and their brackets. The foot is what an
+    # omitted --dt-foot-s supplies, so these three numbers ARE the committed
+    # fills' durations; a superseded measured lead or model 1 kA time restored
+    # upstream lands here. Each is a stance event.
+    assert _sp3_mod.registered_foot_s(1) == 0.00588
+    assert _sp3_mod.registered_foot_s(2) == 0.00666
+    assert _sp3_mod.registered_foot_s(3) == 0.00663
+    # The brackets are the registered foot +- the lead's shot-to-shot sd. They
+    # are compared to their literals within 1e-15 s rather than exactly,
+    # because the addition is done in float64 and one end is not representable.
+    for _sp3_es, _sp3_want in (
+        (1, (0.00579, 0.00597)),
+        (2, (0.00664, 0.00668)),
+        (3, (0.00654, 0.00672)),
+    ):
+        _sp3_got = _sp3_mod.dt_foot_bracket_s(_sp3_es)
+        assert all(abs(g - w) < 1e-15 for g, w in zip(_sp3_got, _sp3_want)), (
+            _sp3_es, _sp3_got, _sp3_want
+        )
+
     # vbar at 300 K helium, and the ballistic reach of the ES1 registered foot.
     _sp3_vbar = _sp3_mod.mean_speed_cm_s(300.0, m_He_cgs)
     assert 1.25e5 < _sp3_vbar < 1.27e5, _sp3_vbar
