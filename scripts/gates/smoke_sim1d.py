@@ -30761,7 +30761,6 @@ def _case_kep_pressure_work_closure():
     _kep_cells = int(_kep_flare.geometry.cells)
     _kep_geom = _kep_flare._plasma_geometry()
     _kep_area = np.asarray(_kep_geom.plasma_face_area_cm2, dtype=float)
-    _kep_vol = np.asarray(_kep_geom.plasma_volume_cm3, dtype=float)
     _kep_dA = _kep_area[1:] - _kep_area[:-1]
     assert np.count_nonzero(_kep_dA) >= 20, np.count_nonzero(_kep_dA)
 
