@@ -25324,9 +25324,8 @@ def _case_dvm_neutral_moment_export(kd_flags, kd_params):
         nm_wp = nm_spec.sum(axis=0)
         nm_dvz = np.diff(nm_g.vz_edges)
         nm_dvp = np.diff(nm_g.vp_edges)
-        nm_tol_par = (_NM_M_HE / _NM_EV) * float(
-            (nm_wz * (0.25 * nm_dvz**2 + np.abs(nm_g.vz - nm_u) * nm_dvz)).sum()
-        )
+        nm_spread_z = 0.25 * nm_dvz**2 + np.abs(nm_g.vz - nm_u) * nm_dvz
+        nm_tol_par = (_NM_M_HE / _NM_EV) * float((nm_wz * nm_spread_z).sum())
         nm_tol_perp = (_NM_M_HE / (2.0 * _NM_EV)) * float(
             (nm_wp * (0.25 * nm_dvp**2 + nm_g.vp * nm_dvp)).sum()
         )
