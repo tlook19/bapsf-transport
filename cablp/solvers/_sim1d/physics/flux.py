@@ -114,8 +114,10 @@ def _rusanov_raw_faces(
         # the convective part {u}{M} = 0.25(u_L+u_R)(M_L+M_R) replaces the
         # divergence-form 0.5(M_L u_L + M_R u_R). The pressure {p} and the
         # Rusanov dissipation are unchanged. This makes the discrete advective
-        # kinetic energy conserved; the R2 energy-correction term then closes
-        # the total-energy identity (deposit + KEP pressure work).
+        # kinetic energy conserved; the dissipation deposit then returns to Ei
+        # what the Rusanov dissipation took from K, and the -p_s div u
+        # pressure-work row pairs with the net pressure force, so the
+        # total-energy identity closes per cell.
         u = derived.u
         conv = 0.25 * (u[:-1] + u[1:]) * (state.M[:-1] + state.M[1:])
         pbar = 0.5 * (derived.p[:-1] + derived.p[1:])
