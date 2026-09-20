@@ -39,8 +39,12 @@ def plasma_wave_speed(Te, Ti, mu, wave_speed="isothermal"):
     this branch is a bit-exact passthrough of ``ion_sound_speed``.
     ``"adiabatic"`` is the exact linear acoustic speed of the implemented
     gamma=5/3 two-species ideal-gas energy system,
-    ``sqrt((5/3)(Te+Ti)/m_i)`` -- the R2 spectral-radius repair (audit A3),
-    which also restores the wave bound Rusanov positivity relies on.
+    ``sqrt((5/3)(Te+Ti)/m_i)``, and it restores the wave bound Rusanov
+    positivity relies on. The implemented system is the gamma=5/3 one because
+    the energy rows carry ``-p_s div u`` and the discrete total-energy flux
+    carries the enthalpy; the Fourier symbol of the assembled hyperbolic core
+    has phase speeds ``u +- sqrt((5/3)(Te+Ti)/m_i)`` and ``u`` twice, which is
+    what the ``kep-acoustic-symbol`` smoke case measures.
     """
     if wave_speed == "isothermal":
         return ion_sound_speed(Te, mu)

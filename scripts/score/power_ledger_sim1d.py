@@ -274,8 +274,8 @@ CHANNEL_PHASE = {
     "hyperbolic_dissipation_heating":
         ("BOTH",
          "Rusanov numerical kinetic-energy dissipation deposited into the "
-         "ion internal energy; the pressure half of the old combined "
-         "correction now rides pressure_work"),
+         "ion internal energy; this row IS the energy-consistent selector's "
+         "whole energy booking, and nothing rides pressure_work"),
     "hyperbolic_energy_correction":
         ("BOTH",
          "the COMBINED correction row, in artifacts written before it was "
@@ -363,7 +363,7 @@ CHANNEL_PHASE = {
          "energy carried across the propagating plasma front"),
     "pressure_work":
         ("BOTH",
-         "pdV work done by the plasma flow"),
+         "pdV work done by the plasma flow, -p_s div u per species"),
     "recombination_3b_loss":
         ("AFTERGLOW-ACTIVE",
          "three-body recombination, ungated but steep in 1/Te, so it is "

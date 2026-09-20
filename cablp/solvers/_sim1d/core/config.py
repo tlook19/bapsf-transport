@@ -1439,8 +1439,10 @@ def model_mode_defaults():
     return {
         # --- ACTIVE ---
         "front_flux_model": "sonic_relaxation",
-        # "adiabatic" PAIRS with hyperbolic_energy_consistent: same gamma=5/3
-        # energy system, so the signal speed matches the flux.
+        # "adiabatic" is the exact linear acoustic speed of the implemented
+        # energy system: its pressure work is -p_s div u, so the system is the
+        # gamma=5/3 one and sqrt((5/3)(Te+Ti)/m_i) is the speed the Rusanov
+        # a_max and the CFL must use for the flux to bound its own signals.
         "hyperbolic_wave_speed": "adiabatic",
         "end_mode": "end_wall",
         "Ti_birth_ionization": "neutral",
@@ -4014,11 +4016,13 @@ input_flags_template_1d = {
     # to be a numerical artifact (its L1 activity and Rusanov numerical
     # diffusion vanish under refinement). OFF renders alpha_front inert.
     "front_flux": False,
-    # Conservative hyperbolic core (R2):
-    # kinetic-energy-preserving convective momentum flux, plus deposit of the
-    # Rusanov (n,M) numerical kinetic-energy dissipation into ion internal
-    # energy, plus a KEP pressure-work discretization -- so the closed-domain
-    # total plasma energy K+Ee+Ei is conserved to machine precision.
+    # Conservative hyperbolic core: kinetic-energy-preserving convective
+    # momentum flux, plus deposit of the Rusanov (n,M) numerical kinetic-energy
+    # dissipation into the ion internal energy. The pressure work is the
+    # literal -p_s div u either way, and it is what pairs the energy rows with
+    # the momentum equation's net pressure force cell by cell -- so the total
+    # plasma energy K+Ee+Ei telescopes LOCALLY, against a face flux that
+    # carries the enthalpy.
     "hyperbolic_energy_consistent": True,
     # Riemann flux at the END WALL ghost face, DEFAULT OFF. The plasma-
     # terminating faces evaluate the interior's KEP/Rusanov kernel between the
