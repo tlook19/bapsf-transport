@@ -427,8 +427,8 @@ def save_result_hdf5(path, result, params=None, flags=None):
         # same presence gate: the gas's own density, parallel flux with the
         # unsigned flux that flux cancels out of, mean parallel velocity and
         # the two temperatures about that mean, per cell and for both zones.
-        # Distinct from the transfer ledger's
-        # ``sample_u_n_eff`` / ``sample_T_eff_eV``, which are the collision
+        # Distinct from the transfer ledger's ``sample_u_n_eff`` /
+        # ``sample_T_eff_eV``, which are the collision
         # pair's targets in the column and not the gas flow. Additive and
         # read by name like every group above it, so the format version does
         # not move and a file written before it still loads with the
