@@ -149,10 +149,9 @@ def _drift_face_values(values, geometry):
     face the topology has closed takes its one live cell (or zero, where there
     is none) -- :func:`velocity_divergence`'s rule at the absorbing faces that
     bound this operator's support. Sharing the rule is what makes the drift
-    operator's boundary
-    terms come out as ``T_e`` of the live cell -- which is what the volume
-    identity's ``3.21 T_e I / e`` means -- instead of an average against a
-    plasma-dead plenum.
+    operator's boundary terms come out as ``T_e`` of the live cell -- which is
+    what the volume identity's ``3.21 T_e I / e`` means -- instead of an
+    average against a plasma-dead plenum.
     """
     values = np.asarray(values, dtype=float)
     face = np.zeros(geometry.cells + 1, dtype=float)
