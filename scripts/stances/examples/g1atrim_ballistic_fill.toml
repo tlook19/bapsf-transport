@@ -15,9 +15,15 @@
 # files' sha256, the delta keys below and the resolved configuration's
 # identity -- so an earlier arm's fill is nameable rather than describable.
 #
-# WHAT MOVES, AND WHAT DOES NOT. The foot inventory is the same 4.38e19 atoms
-# at the same measured 5.83 ms foot on the same 27 ms equilibrated base; only
-# WHERE that inventory lands moves. The legacy top-hat is a matrix kernel: a
+# WHAT MOVES, AND WHAT DOES NOT. These rows are a FIXED set of numbers: the
+# measured 5.83 ms foot this member was built at, carrying 4.38e19 atoms, on
+# the same 27 ms equilibrated base the reference uses. The base's own foot has
+# since been re-registered, so against the reference as it stands today this
+# file moves the foot as well as WHERE that foot's inventory lands; against
+# the reference as it stood when these rows were the fill, only the landing
+# moved, and that is the difference the rest of this note describes. The
+# reproduction route therefore names this foot explicitly rather than taking
+# the rung's registered one. The legacy top-hat is a matrix kernel: a
 # stencil in z, its targets weighted by cell LENGTH and its columns
 # normalized, applied to an inventory deposited whole at the start of the
 # foot, so it fills the interval the gas can free-stream to flatly and steps
