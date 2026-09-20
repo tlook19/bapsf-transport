@@ -24582,6 +24582,93 @@ def _case_configuration_fluid_comparator_example():
     assert _fc_lineage.identity != config_identity(_fc_short_p, _fc_short_f)
 
 
+@_case("configuration-every-committed-example-constructs")
+def _case_configuration_every_committed_example_constructs():
+    # EVERY COMMITTED EXAMPLE, not a chosen one. scripts/stances/examples/ is
+    # where the campaign's derived configurations live -- the alternate
+    # closures, the per-rung reference arms, the comparators -- and until this
+    # case existed almost none of them was loaded by anything that runs: a
+    # renamed config key, a retired selector or a block whose family gained a
+    # member would leave a committed file that no longer resolves, and nothing
+    # would say so until somebody tried to run that arm.
+    #
+    # The case GLOBS the directory rather than listing it, so a file added
+    # without a thought for this gate is covered the moment it lands. For each
+    # file it resolves the configuration through the repo's own loader, checks
+    # the lineage a saved trajectory would record, and CONSTRUCTS LAPDSim1D
+    # from it. Construction, not a run: construction-time validation is where
+    # a misconfigured arm raises, and a run would cost minutes per file.
+    #
+    # THE DISPOSITION TABLE below is the only way a file escapes either check,
+    # and an entry is a SENTENCE, never a silent pass. Two kinds:
+    #
+    #   ("skip", "<why>")     construction needs an input that is not in this
+    #                         repository (a measured trace, a per-cell profile
+    #                         file). The file is still RESOLVED and its lineage
+    #                         still checked; only the construction is skipped,
+    #                         and the reason names the missing input.
+    #   ("fails", "<text>")   the file does NOT construct today. This is a
+    #                         FINDING, recorded here with the error text it
+    #                         raises so the failure stays visible and the suite
+    #                         stays green. The entry asserts the failure still
+    #                         happens and still says that, so repairing the
+    #                         file breaks this case until the row is removed --
+    #                         a known failure cannot quietly become a mystery.
+    #
+    # The table is EMPTY: as it stands every committed example resolves and
+    # constructs. A stale row is refused below, so a row cannot outlive the
+    # file it names.
+    from stance_config import available_stances, load_configuration
+
+    _ex_dispositions = {}
+
+    _ex_dir = Path(__file__).resolve().parents[1] / "stances" / "examples"
+    _ex_files = sorted(_ex_dir.glob("*.toml"))
+    assert _ex_files, f"no committed examples under {_ex_dir}"
+    _ex_names = {path.name for path in _ex_files}
+    _ex_stale = sorted(set(_ex_dispositions) - _ex_names)
+    assert not _ex_stale, (
+        f"the disposition table names files that are not in {_ex_dir}: "
+        f"{_ex_stale}. A row outliving its file is a row nobody re-reads"
+    )
+    _ex_committed = set(available_stances())
+
+    for _ex_path in _ex_files:
+        _ex_params, _ex_flags, _ex_lineage = load_configuration(str(_ex_path))
+        # THE LINEAGE a run built from this file would write into its HDF5
+        # root: the file's own name, a base chain that bottoms out in a
+        # COMMITTED stance (a derived file whose base chain ended anywhere else
+        # would name a configuration a reader cannot resolve), and at least one
+        # delta, because a derived file that moves nothing declares nothing.
+        assert _ex_lineage.name == _ex_path.stem, (
+            _ex_path.name, _ex_lineage.name
+        )
+        assert _ex_lineage.base_chain, _ex_path.name
+        assert _ex_lineage.base_chain[-1] in _ex_committed, (
+            _ex_path.name, _ex_lineage.base_chain
+        )
+        assert _ex_lineage.delta_keys, _ex_path.name
+        assert len(_ex_lineage.file_sha256) == len(_ex_lineage.base_chain) + 1
+
+        _ex_kind, _ex_why = _ex_dispositions.get(_ex_path.name, (None, None))
+        if _ex_kind == "skip":
+            continue
+        if _ex_kind == "fails":
+            try:
+                LAPDSim1D(dict(_ex_params), dict(_ex_flags))
+            except Exception as _ex_error:
+                assert _ex_why in str(_ex_error), (
+                    _ex_path.name, _ex_why, str(_ex_error)
+                )
+                continue
+            raise AssertionError(
+                f"{_ex_path.name} is recorded as a KNOWN FAILURE ({_ex_why}) "
+                "and now constructs; delete its disposition row"
+            )
+        assert _ex_kind is None, (_ex_path.name, _ex_kind)
+        LAPDSim1D(dict(_ex_params), dict(_ex_flags))
+
+
 @_case("configuration-restated-block-refusal")
 def _case_configuration_restated_block_refusal():
     # THE UNIT OF THE RESTATEMENT CHECK IS THE DELTA THE FILE WROTE, and a
@@ -31354,7 +31441,7 @@ def _case_kep_acoustic_symbol(_kep_flat, _kep_rows, _kep_state):
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 186, "historical_stance": 69}
+_CASE_CENSUS = {"total": 187, "historical_stance": 69}
 
 
 def _assert_case_census():
