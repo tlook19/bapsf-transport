@@ -72,7 +72,7 @@ neither the default run nor the smoke suite depends on it:
     geometry, at each of the three rungs' registered feet. The operator runs
     gap-coupled with a continuous source and with the neutral baffle's face
     opened, because the record's instrument carries no baffle; the production
-    rows keep it. Six reductions of the two profiles (the near-field and
+    rows keep it. Seven reductions of the two profiles (the near-field and
     full-domain total-variation distances, the three quantile ratios, the bore
     ratio across the source-bore step and the gap ratio behind the anode mesh)
     are measured; :data:`TPMC_PRODUCTION_BINS` says which of them are GATED for
@@ -993,7 +993,7 @@ def gate_tpmc_production(record_path, geometry_npz, nx, sgp, vbar_cm_s):
     added inventory is restricted to the record's own domain, which drops the
     plenum cell behind the cathode.
 
-    Six reductions of the two profiles: the total-variation distance of the
+    Seven reductions of the two profiles: the total-variation distance of the
     normalised inventory over the full domain and over the near field
     (``z < TPMC_PRODUCTION_SPLIT_Z_CM``, renormalised there), the z50/z90/z99
     quantiles as ratios to the record's, the bore ratio across the source-bore
