@@ -1,12 +1,18 @@
 """Verify the initial-fill builder's spreading members against their stated properties.
 
-``scripts/stance/sp3_build_nn0.py`` offers three spreading members: two MATRIX
-kernels (``diffusive``, ``ballistic``), whose targets are weighted by cell
-LENGTH and which are applied to an inventory deposited whole at the start of
-the foot, and ``knudsen``, a conservative finite-volume axial diffusion solve
-on the builder's own mesh and zone volumes, weighted by cell VOLUME, with the
-source spread over the foot. This script is the acceptance instrument for the
-finite-volume member and for the property that separates the two families.
+``scripts/stance/sp3_build_nn0.py`` offers three spreading members. The
+REGISTERED one, which an omitted ``--kernel`` builds, is ``knudsen``: a
+conservative finite-volume axial diffusion of the foot inventory away from the
+puff row on the builder's own mesh and zone volumes, weighted by cell VOLUME,
+with the source released continuously over the foot, gap-coupled through the
+anode mesh face, at the registered coefficient
+``sp3.KNUDSEN_KAPPA_REFERENCE``; its own registration is the three named
+coefficient members. The other two, ``diffusive`` and ``ballistic``, are
+MATRIX kernels, whose targets are weighted by cell LENGTH and which are
+applied to an inventory deposited whole at the start of the foot; they are
+retained, by explicit ``--kernel``, as the legacy reproduction route. This
+script is the acceptance instrument for the finite-volume member and for the
+property that separates the two families.
 
 Each gate names the instrument that decides it; every gate prints its own
 numbers, and the script exits non-zero if any selected gate fails.
