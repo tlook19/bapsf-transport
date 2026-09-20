@@ -991,6 +991,22 @@ of the end wall role.
 Cathode faces are untouched — the accelerated species there is the ion. The
 row is absent entirely when the flag is off.
 
+**Two books for the cathode ion current, and they do not agree.** The circuit's
+ion current $I_i$ (saved as `source_I_i`) is the analytic Bohm collection on
+the cathode's own emitting area, $I_i=A_cen_ec_s\alpha_\text{se}$, read from
+the cathode-adjacent cell. The fluid's delivered ion current at the cathode
+face is a different number: the ghost-flux particle flux the boundary operator
+actually removes there, through the face area and the face kernel rather than
+from that analytic expression. The fluid's is the LARGER, by a factor of order
+1.6 at the reference operating points. The two are never reconciled, and the
+current-driven path's thermionic remainder — the emission the cathode Kirchhoff
+$I_\text{eth}^\star+I_\text{see}+I_i-I_{e,\text{ret}}=I_\text{tot}$ leaves to be
+supplied — is built on the CIRCUIT's number. The anode carries no such split:
+`anode_circuit_sample` hands the circuit the very Bohm collection
+`anode_collection_rhs` removes from the fluid, one expression shared, and the
+two books agree to about 1 %. This is the same class of item as the
+ghost-face sampling mismatch above: disclosed, not reconciled.
+
 **The sheath ROWS are not the whole of what each store pays at an absorbing
 face.** The rows above are the boundary operator's bookings per collected
 particle: $(2+\Lambda_\text{eff})T_e$ on the electron store at the end wall,
