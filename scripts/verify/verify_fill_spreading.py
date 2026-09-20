@@ -64,7 +64,7 @@ neither the default run nor the smoke suite depends on it:
     test-particle Monte Carlo record of the same puff on the same geometry, by
     the total-variation distance of the normalized inventory profile and by
     ``z90``. The pre-registered bins are :data:`TPMC_BINS`; the legacy top-hat
-    is scored on the same instrument and must fail them.
+    is scored on the same instrument and must miss EVERY one of them.
 ``--tpmc-production FILE --tpmc-production-geometry-npz FILE``
     G7 TPMC PRODUCTION COMPARISON. Scores the REGISTERED members -- the
     reference, the two ends of its bracket and the instrument-match member --
@@ -162,7 +162,7 @@ TPMC_BINS = {
     "knudsen kappa=2/3": (0.09, 1.00, 1.12),
     "knudsen kappa=0.5": (0.06, 0.95, 1.05),
 }
-#: G6: the member that must FAIL every bin above.
+#: G6: the member that must MISS every bin above -- all of them, not one.
 TPMC_NEGATIVE_MEMBER = "legacy ballistic top-hat"
 #: G6 report times [s]. Both are exact samples of the record's own grid.
 TPMC_REPORT_TIMES_S = (4.5e-3, 7.0e-3)
@@ -825,18 +825,31 @@ def gate_tpmc(record_paths, geometry_path, vbar_cm_s):
                 ratio = z90 / reference_z90
                 bins = TPMC_BINS.get(label)
                 if bins is None:
-                    passes = all(
-                        distance <= limit and low <= ratio <= high
-                        for limit, low, high in TPMC_BINS.values()
+                    # THE NEGATIVE CONTROL, held to the bar G7 holds its own
+                    # to: it must miss EVERY bin it is scored against, not
+                    # merely one of them. Satisfying one member's bin means
+                    # the control scores like that member on the instrument
+                    # that is supposed to separate them, and a control that
+                    # is only required to miss one bin would pass anyway on
+                    # the strength of the others.
+                    satisfied = [
+                        member
+                        for member, (limit, low, high) in TPMC_BINS.items()
+                        if distance <= limit and low <= ratio <= high
+                    ]
+                    good = not satisfied
+                    verdict = (
+                        f"misses all {len(TPMC_BINS)} bins"
+                        if good
+                        else "SATISFIES " + ", ".join(sorted(satisfied))
                     )
-                    good = not passes
-                    verdict = "FAILS the bins" if good else "PASSES a bin"
                     ok = ok and good
                     lines.append(
                         f"  [{'ok' if good else 'FAIL'}] t={duration * 1e3:g} "
                         f"ms {name} {label}: TV {distance:.4f}, z90 "
                         f"{z90:.1f} cm = {ratio:.4f} x record "
-                        f"{reference_z90:.1f} cm -- {verdict} (it must fail)"
+                        f"{reference_z90:.1f} cm -- {verdict} (it must miss "
+                        f"every one)"
                     )
                     continue
                 limit, low, high = bins
