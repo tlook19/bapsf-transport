@@ -30591,6 +30591,562 @@ def _case_circuit_projection_refusals():
 
 
 # ----------------------------------------------------------------------
+# kep-pressure-work-closure
+# ----------------------------------------------------------------------
+@_case(
+    "kep-pressure-work-closure",
+    provides=(
+        "_kep_flare", "_kep_flat", "_kep_state", "_kep_rows", "_kep_faces",
+        "_kep_closure",
+    ),
+)
+def _case_kep_pressure_work_closure():
+    """G1. The energy-consistent core closes PER CELL, in moving flow, in a flare.
+
+    The claim the ``hyperbolic_energy_consistent`` selector makes is LOCAL, not
+    merely global: for every cell with two open faces the hyperbolic operator's
+    total-energy rate equals the net total-energy flux through that cell's two
+    faces, where the discrete total-energy face flux is
+
+        ``G_f = A_f [ F^Ee_f + F^Ei_f + 0.5{M}_f u_L u_R + Pi_f ]``,
+        ``Pi_f = 0.5 (p_L u_R + u_L p_R)``,
+
+    i.e. the flux carries the ENTHALPY, ``A u (K + E_e + E_i + p)``. The
+    pressure member ``Pi`` is what the ``-p_s div u`` row pairs with, cell by
+    cell, for general states and variable area; a closed-domain sum is blind to
+    the difference and closes either way.
+
+    The deciding instrument is the FOLDED rows the solver integrates --
+    ``rhs_terms(...)["pressure_work"]`` and ``["hyperbolic_dissipation_heating"]``
+    -- never the bare ``sources.pressure_work_rhs``, because what is at stake
+    is exactly what the fold puts in the row.
+
+    Two states on the real flared geometry: a smooth one whose velocity changes
+    sign, and a seeded rough one (log-normal n, T_e, T_i; normal u). The POWER
+    GUARD on each asserts the state actually exercises the variable area, so a
+    vacuously satisfied closure cannot pass.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+                 "verify"):
+        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
+        if _dir not in _sys.path:
+            _sys.path.insert(0, _dir)
+    from stance_config import (  # noqa: E402
+        load_configuration as _kep_load,
+        without_mesh_sized_package as _kep_drop_mesh,
+    )
+    from cablp.solvers._sim1d.physics.flux import (  # noqa: E402
+        rusanov_fluxes as _kep_rusanov,
+    )
+
+    #: The scalar neutral fill the golden runs, which stands in for the
+    #: mesh-sized fill profile on the constant-area twin. Neutrals are inert in
+    #: every clause below; the fill only has to be a legal one.
+    _KEP_FLAT_NN0 = 2725059978765.871
+
+    def _kep_build(flared):
+        """The reference configuration, flared or with the mesh package dropped."""
+        params, flags, _ = _kep_load("g1atrim")
+        params, flags = dict(params), dict(flags)
+        if not flared:
+            params, flags = _kep_drop_mesh(params, flags)
+            params, flags = dict(params), dict(flags)
+            params["nn0"] = _KEP_FLAT_NN0
+        # Named explicitly: this case is ABOUT the armed selector, and the
+        # stance carrying it is not what is being tested.
+        flags["hyperbolic_energy_consistent"] = True
+        return LAPDSim1D(params, flags)
+
+    def _kep_state(sim, n, u, Te, Ti):
+        """A conservative state on ``sim``'s mesh from primitive profiles."""
+        m = sim.ion_mass_g
+        n = np.asarray(n, dtype=float)
+        u = np.asarray(u, dtype=float)
+        return dataclasses.replace(
+            sim.state,
+            n=n.copy(),
+            M=m * n * u,
+            Ee=1.5 * n * np.asarray(Te, dtype=float) * ev_to_erg,
+            Ei=1.5 * n * np.asarray(Ti, dtype=float) * ev_to_erg,
+        )
+
+    def _kep_rows(sim, state):
+        """The FOLDED hyperbolic rows, from the solver's own term ledger."""
+        terms = sim.rhs_terms(y=pack_state(state))
+        zero = np.zeros(sim.geometry.cells, dtype=float)
+        return {
+            "adv": terms["plasma_advective_flux"],
+            "geomM": (
+                terms["flux_tube_geometry"].M
+                if "flux_tube_geometry" in terms else zero
+            ),
+            "pw": terms["pressure_work"],
+            "diss": terms["hyperbolic_dissipation_heating"],
+            "cb": terms["characteristic_boundary"],
+        }
+
+    def _kep_faces(sim, state):
+        """``G_f``: the discrete total-energy face flux, area-weighted [erg/s]."""
+        geom = sim._plasma_geometry()
+        cells = geom.cells
+        area = np.asarray(geom.plasma_face_area_cm2, dtype=float)
+        derived = derive_state(
+            state, floors=sim.floors, ion_mass_g=sim.ion_mass_g
+        )
+        u = derived.u
+        fluxes = _kep_rusanov(
+            state, sim.floors, sim.ion_mass_g, sim._mu, geom,
+            active_plasma_topology=sim._active_plasma_topology,
+            wave_speed=sim._hyperbolic_wave_speed,
+            energy_consistent=True,
+        )
+        internal = area * (fluxes.Ee + fluxes.Ei)
+        kinetic = np.zeros(cells + 1, dtype=float)
+        kinetic[1:-1] = (
+            area[1:-1] * 0.5 * (state.M[:-1] + state.M[1:])
+            * 0.5 * u[:-1] * u[1:]
+        )
+        pressure = np.zeros(cells + 1, dtype=float)
+        pressure[1:-1] = area[1:-1] * 0.5 * (
+            u[:-1] * derived.p[1:] + derived.p[:-1] * u[1:]
+        )
+        closed = ~np.asarray(geom.plasma_open, dtype=bool)
+        kinetic[closed] = 0.0
+        pressure[closed] = 0.0
+        return internal + kinetic + pressure
+
+    def _kep_closure(sim, state, with_boundary=False):
+        """Per-cell ``V d(K+Ee+Ei)/dt + G_out - G_in`` [erg/s], and the row scale.
+
+        With ``with_boundary`` the terminating boundary operator is included;
+        without it, only the hyperbolic operator is, which is what makes the
+        terminating-cell reading a statement about this fix rather than a
+        restatement of what the boundary row books.
+        """
+        geom = sim._plasma_geometry()
+        volume = np.asarray(geom.plasma_volume_cm3, dtype=float)
+        mass = sim.ion_mass_g
+        derived = derive_state(
+            state, floors=sim.floors, ion_mass_g=mass
+        )
+        u = derived.u
+        rows = _kep_rows(sim, state)
+        adv, pw, diss = rows["adv"], rows["pw"], rows["diss"]
+        dM = adv.M + rows["geomM"]
+        dn = np.asarray(adv.n, dtype=float)
+        dEe = np.asarray(adv.Ee, dtype=float) + pw.Ee
+        dEi = np.asarray(adv.Ei, dtype=float) + pw.Ei + diss.Ei
+        if with_boundary:
+            cb = rows["cb"]
+            dM = dM + cb.M
+            dn = dn + cb.n
+            dEe = dEe + cb.Ee
+            dEi = dEi + cb.Ei
+        rate = volume * (
+            u * dM - 0.5 * mass * u**2 * dn + dEe + dEi
+        )
+        faces = _kep_faces(sim, state)
+        scale = np.abs(volume * (pw.Ee + pw.Ei))
+        return rate + faces[1:] - faces[:-1], scale
+
+    _kep_flare = _kep_build(flared=True)
+    _kep_flat = _kep_build(flared=False)
+
+    # The two meshes are what the clauses below assume: the flare has a
+    # varying area and an armed quasi-1D momentum source, the twin neither.
+    assert _kep_flare._variable_area_geometry
+    assert not _kep_flat._variable_area_geometry
+    _kep_cells = int(_kep_flare.geometry.cells)
+    _kep_geom = _kep_flare._plasma_geometry()
+    _kep_area = np.asarray(_kep_geom.plasma_face_area_cm2, dtype=float)
+    _kep_vol = np.asarray(_kep_geom.plasma_volume_cm3, dtype=float)
+    _kep_dA = _kep_area[1:] - _kep_area[:-1]
+    assert np.count_nonzero(_kep_dA) >= 20, np.count_nonzero(_kep_dA)
+
+    # Cells with two OPEN faces: the closure below is theirs. The terminating
+    # cells are G4's.
+    _kep_open = np.asarray(_kep_geom.plasma_open, dtype=bool)
+    _kep_interior = np.flatnonzero(_kep_open[:-1] & _kep_open[1:])
+    assert _kep_interior.size > 200, _kep_interior.size
+
+    _kep_zz = np.arange(_kep_cells, dtype=float) / _kep_cells
+    _kep_smooth = _kep_state(
+        _kep_flare,
+        1.0e13 * (1.0 + 0.3 * np.sin(2.0 * np.pi * 3.0 * _kep_zz)),
+        3.0e5 + 4.0e5 * np.cos(2.0 * np.pi * 5.0 * _kep_zz),
+        4.0 + 2.0 * np.sin(2.0 * np.pi * 3.0 * _kep_zz),
+        2.0 + np.cos(2.0 * np.pi * 5.0 * _kep_zz),
+    )
+    # The velocity really does change sign, so the smooth state is a moving
+    # one in both directions rather than a one-way drift.
+    _kep_u_smooth = derive_state(
+        _kep_smooth, _kep_flare.floors, _kep_flare.ion_mass_g
+    ).u
+    assert _kep_u_smooth.max() > 0.0 > _kep_u_smooth.min()
+
+    _kep_rng = np.random.default_rng(7)
+    _kep_rough = _kep_state(
+        _kep_flare,
+        1.0e13 * np.exp(_kep_rng.normal(0.0, 0.5, _kep_cells)),
+        _kep_rng.normal(0.0, 6.0e5, _kep_cells),
+        np.exp(_kep_rng.normal(np.log(3.0), 0.6, _kep_cells)),
+        np.exp(_kep_rng.normal(np.log(1.5), 0.6, _kep_cells)),
+    )
+
+    for _kep_label, _kep_st in (
+        ("smooth", _kep_smooth), ("rough", _kep_rough)
+    ):
+        _kep_resid, _kep_scale = _kep_closure(_kep_flare, _kep_st)
+        _kep_tol = 1.0e-11 * _kep_scale[_kep_interior].max()
+        _kep_worst = np.abs(_kep_resid[_kep_interior]).max()
+        assert _kep_worst <= _kep_tol, (_kep_label, _kep_worst, _kep_tol)
+        # POWER GUARD. The non-telescoping source the folded form used to
+        # carry is ``u p dA`` per cell; the closure is only meaningful where
+        # that is enormous against the tolerance it is asserted at.
+        _kep_dp = derive_state(
+            _kep_st, _kep_flare.floors, _kep_flare.ion_mass_g
+        )
+        _kep_guard = np.abs(
+            _kep_dp.u * _kep_dp.p * _kep_dA
+        )[_kep_interior].max()
+        assert _kep_guard >= 1.0e6 * _kep_tol, (
+            _kep_label, _kep_guard, _kep_tol
+        )
+
+    # And the fold that makes the closure above a statement about the ROW the
+    # solver integrates: with the selector armed, "pressure_work" IS
+    # pressure_work_rhs, bit for bit, on the plasma-ACTIVE cells. (The term
+    # ledger masks the typed plasma-dead plenum, which is a property of the
+    # ledger and not of this row.) Everything the later cases read off
+    # sources-level helpers rests on this.
+    _kep_folded = _kep_rows(_kep_flare, _kep_smooth)["pw"]
+    _kep_bare = _kep_flare.pressure_work_rhs(state=_kep_smooth)
+    _kep_live = np.flatnonzero(
+        np.asarray(_kep_geom.plasma_active, dtype=bool)
+    )
+    assert _kep_live.size == _kep_cells - 1, _kep_live.size
+    for _kep_field in ("Ee", "Ei"):
+        assert (
+            np.asarray(getattr(_kep_folded, _kep_field))[_kep_live].tobytes()
+            == np.asarray(getattr(_kep_bare, _kep_field))[_kep_live].tobytes()
+        ), _kep_field
+    return locals()
+
+
+# ----------------------------------------------------------------------
+# kep-constant-area-discriminators
+# ----------------------------------------------------------------------
+@_case("kep-constant-area-discriminators")
+def _case_kep_constant_area_discriminators(_kep_flat, _kep_rows, _kep_state):
+    """G2. Two constant-area states that tell ``-p div u`` from ``+u dz p``.
+
+    They are the whole difference between the two forms, in a column where no
+    area term can hide it:
+
+    (A) uniform ``n`` and ``T`` with a LINEAR velocity. ``dz p_s = 0``, so
+        ``+u dz p_s`` reads exactly zero while ``-p_s dz u`` is a strictly
+        negative expansion cooling whose implied rate is the adiabatic
+        ``-(2/3) T dz u``.
+    (B) uniform ``n`` and ``u`` with a LINEAR temperature. ``dz u = 0``, so
+        ``-p_s dz u`` is exactly zero while ``+u dz p_s`` reads a per-cell
+        ``V u dz p_s`` that is not small.
+    """
+    geom = _kep_flat._plasma_geometry()
+    z = np.asarray(geom.z_cm, dtype=float)
+    volume = np.asarray(geom.plasma_volume_cm3, dtype=float)
+    cells = int(geom.cells)
+    ones = np.ones(cells, dtype=float)
+    column = slice(50, 201)
+    n0, T0 = 1.0e13, 5.0
+
+    # (A) linear u.
+    _g2_s = (8.0e5 - 2.0e5) / (z[-1] - z[0])
+    _g2_a = _kep_state(
+        _kep_flat, n0 * ones, 2.0e5 + _g2_s * (z - z[0]), T0 * ones, T0 * ones
+    )
+    _g2_row_a = _kep_rows(_kep_flat, _g2_a)["pw"]
+    _g2_p = n0 * T0 * ev_to_erg
+    _g2_want_a = -_g2_p * _g2_s
+    assert _g2_want_a < 0.0
+    for _g2_side in (_g2_row_a.Ee, _g2_row_a.Ei):
+        _g2_got = np.asarray(_g2_side, dtype=float)[column]
+        assert np.all(_g2_got < 0.0)
+        assert np.allclose(_g2_got, _g2_want_a, rtol=1.0e-12, atol=0.0), (
+            _g2_got.min(), _g2_got.max(), _g2_want_a
+        )
+    # The implied temperature rate is the adiabatic one. The row is the only
+    # term that touches E_s here that the advective dilution does not, so the
+    # rate is read off the row against the local n.
+    _g2_dTdt = (2.0 / 3.0) * _g2_row_a.Ee[100] / (n0 * ev_to_erg)
+    assert np.isclose(
+        _g2_dTdt, -(2.0 / 3.0) * T0 * _g2_s, rtol=1.0e-12, atol=0.0
+    ), (_g2_dTdt, -(2.0 / 3.0) * T0 * _g2_s)
+
+    # (B) linear T at a uniform velocity.
+    _g2_u0 = 5.0e5
+    _g2_gT = (2.0 - 8.0) / (z[-1] - z[0])
+    _g2_T = 8.0 + _g2_gT * (z - z[0])
+    _g2_b = _kep_state(_kep_flat, n0 * ones, _g2_u0 * ones, _g2_T, _g2_T)
+    _g2_row_b = _kep_rows(_kep_flat, _g2_b)["pw"]
+    # The scale the zero is asserted against is the magnitude the OTHER form
+    # would have put in this row: u p / dz, per unit volume.
+    _g2_dz = float(z[101] - z[100])
+    _g2_scale = _g2_u0 * (n0 * 8.0 * ev_to_erg) / _g2_dz
+    for _g2_side in (_g2_row_b.Ee, _g2_row_b.Ei):
+        _g2_got = np.asarray(_g2_side, dtype=float)[column]
+        assert np.all(np.abs(_g2_got) <= 1.0e-12 * _g2_scale), (
+            np.abs(_g2_got).max(), _g2_scale
+        )
+    # Non-vacuity: what the row would have carried is far above that bound.
+    _g2_would = abs(_g2_u0 * n0 * _g2_gT * ev_to_erg * volume[100])
+    assert _g2_would >= 1.0e6 * (1.0e-12 * _g2_scale * volume[100]), _g2_would
+
+
+# ----------------------------------------------------------------------
+# kep-flare-adiabat
+# ----------------------------------------------------------------------
+@_case("kep-flare-adiabat")
+def _case_kep_flare_adiabat(_kep_flare, _kep_rows, _kep_state):
+    """G3. Through a flare, at uniform pressure, the row COOLS.
+
+    A uniform state drifting at ``u > 0`` into an expanding tube does
+    ``-u p_s dA/V`` of work per unit volume -- expansion cooling, sign pinned
+    -- and the implied temperature rate is the quasi-1D adiabat
+    ``-(2/3) T u dA/V``. The sign is the reading: the pre-fix row carried the
+    same magnitude with the opposite sign, which reads as a flare that HEATS.
+    """
+    geom = _kep_flare._plasma_geometry()
+    area = np.asarray(geom.plasma_face_area_cm2, dtype=float)
+    volume = np.asarray(geom.plasma_volume_cm3, dtype=float)
+    cells = int(geom.cells)
+    ones = np.ones(cells, dtype=float)
+    n0, T0, u0 = 1.0e13, 5.0, 5.0e5
+    dA = area[1:] - area[:-1]
+
+    _g3_state = _kep_state(
+        _kep_flare, n0 * ones, u0 * ones, T0 * ones, T0 * ones
+    )
+    _g3_row = _kep_rows(_kep_flare, _g3_state)["pw"]
+    _g3_p = n0 * T0 * ev_to_erg
+    _g3_want = -u0 * _g3_p * dA / volume
+
+    # The expanding cells only: dA > 0 is where the adiabat cools.
+    _g3_flare = np.flatnonzero(dA > 0.0)
+    assert _g3_flare.size >= 20, _g3_flare.size
+    for _g3_side in (_g3_row.Ee, _g3_row.Ei):
+        _g3_got = np.asarray(_g3_side, dtype=float)[_g3_flare]
+        assert np.all(_g3_got < 0.0), _g3_got.max()
+        assert np.allclose(
+            _g3_got, _g3_want[_g3_flare], rtol=1.0e-12, atol=0.0
+        )
+    # The implied adiabat, at the cell where the area step is largest.
+    _g3_cell = int(_g3_flare[np.argmax(dA[_g3_flare])])
+    _g3_dTdt = (2.0 / 3.0) * _g3_row.Ee[_g3_cell] / (n0 * ev_to_erg)
+    _g3_adiabat = -(2.0 / 3.0) * T0 * u0 * dA[_g3_cell] / volume[_g3_cell]
+    assert _g3_adiabat < 0.0
+    assert np.isclose(_g3_dTdt, _g3_adiabat, rtol=1.0e-12, atol=0.0), (
+        _g3_dTdt, _g3_adiabat
+    )
+
+
+# ----------------------------------------------------------------------
+# kep-terminating-cells
+# ----------------------------------------------------------------------
+@_case("kep-terminating-cells")
+def _case_kep_terminating_cells(
+    _kep_flare, _kep_closure, _kep_rows, _kep_state
+):
+    """G4. Nothing but the boundary operator crosses a terminating face.
+
+    At an absorbing face the advective momentum flux carries nothing, so the
+    only total energy that may cross is what ``characteristic_boundary_rhs``
+    books. Three clauses:
+
+    (a) with the boundary row EXCLUDED, the hyperbolic operator's own
+        total-energy rate in each terminating cell closes against that cell's
+        ONE open face -- residual zero, at a guard of ``|p u A_f|`` at the
+        absorbing face, which is the power the pre-fix pressure member passed
+        through it unpaid;
+    (b) with the boundary row INCLUDED, the whole difference between the cell's
+        rate and its open-face influx IS that row's own booking, and it is a
+        net sink;
+    (c) a SYNTHETIC reflecting face -- closed, with a live cell, but NOT
+        plasma-absorbing, which the stance geometry has none of -- carries a
+        face velocity of zero, so no pressure work crosses a wall the fluid
+        does not move through.
+    """
+    geom = _kep_flare._plasma_geometry()
+    area = np.asarray(geom.plasma_face_area_cm2, dtype=float)
+    volume = np.asarray(geom.plasma_volume_cm3, dtype=float)
+    mass = _kep_flare.ion_mass_g
+    cells = int(geom.cells)
+    absorbing = np.asarray(geom.plasma_absorbing, dtype=bool)
+    live = np.asarray(geom.plasma_face_live_cell, dtype=int)
+
+    _g4_faces = np.flatnonzero(absorbing)
+    assert _g4_faces.size == 2, _g4_faces
+    _g4_cells = [int(live[f]) for f in _g4_faces]
+    assert all(c >= 0 for c in _g4_cells), _g4_cells
+
+    _g4_rng = np.random.default_rng(11)
+    _g4_state = _kep_state(
+        _kep_flare,
+        1.0e13 * np.exp(_g4_rng.normal(0.0, 0.5, cells)),
+        _g4_rng.normal(0.0, 6.0e5, cells),
+        np.exp(_g4_rng.normal(np.log(3.0), 0.6, cells)),
+        np.exp(_g4_rng.normal(np.log(1.5), 0.6, cells)),
+    )
+    _g4_derived = derive_state(_g4_state, _kep_flare.floors, mass)
+
+    # (a) the hyperbolic operator alone.
+    _g4_resid, _g4_scale = _kep_closure(_kep_flare, _g4_state)
+    _g4_open = np.asarray(geom.plasma_open, dtype=bool)
+    _g4_interior = np.flatnonzero(_g4_open[:-1] & _g4_open[1:])
+    _g4_tol = 1.0e-11 * _g4_scale[_g4_interior].max()
+    for _g4_face, _g4_cell in zip(_g4_faces, _g4_cells):
+        assert abs(_g4_resid[_g4_cell]) <= _g4_tol, (
+            _g4_cell, _g4_resid[_g4_cell], _g4_tol
+        )
+        _g4_guard = abs(
+            _g4_derived.p[_g4_cell] * _g4_derived.u[_g4_cell] * area[_g4_face]
+        )
+        assert _g4_guard >= 1.0e6 * _g4_tol, (_g4_cell, _g4_guard, _g4_tol)
+
+    # (b) with the boundary row in, the difference is that row and nothing else.
+    _g4_full, _ = _kep_closure(_kep_flare, _g4_state, with_boundary=True)
+    _g4_cb = _kep_rows(_kep_flare, _g4_state)["cb"]
+    _g4_cb_energy = volume * (
+        _g4_derived.u * _g4_cb.M
+        - 0.5 * mass * _g4_derived.u**2 * _g4_cb.n
+        + _g4_cb.Ee + _g4_cb.Ei
+    )
+    for _g4_cell in _g4_cells:
+        assert abs(
+            _g4_full[_g4_cell] - _g4_cb_energy[_g4_cell]
+        ) <= _g4_tol, (_g4_cell, _g4_full[_g4_cell], _g4_cb_energy[_g4_cell])
+        # It is a SINK, and not a small one: the terminating faces are where
+        # the plasma leaves.
+        assert _g4_cb_energy[_g4_cell] < -1.0e6 * _g4_tol, _g4_cell
+
+    # (c) the synthetic reflecting face. Built by clearing ABSORBING on a face
+    # that stays closed and keeps its live cell -- the one topology the
+    # reference geometry does not contain.
+    _g4_reflect_face = int(_g4_faces[0])
+    _g4_reflect_cell = int(live[_g4_reflect_face])
+    _g4_absorb = absorbing.copy()
+    _g4_absorb[_g4_reflect_face] = False
+    _g4_geom = dataclasses.replace(geom, plasma_absorbing=_g4_absorb)
+    _g4_divu = velocity_divergence(
+        _g4_state, _kep_flare.floors, mass, _g4_geom,
+        active_plasma_topology=True,
+    )
+    # A reflecting face passes no inventory: the cell's divergence is its one
+    # open face alone.
+    _g4_other = _g4_reflect_face + 1
+    # Built with the operator's own association (face velocity, then area,
+    # then the zero the reflecting face contributes) so the reading is exact
+    # rather than within an ulp.
+    _g4_face_u = 0.5 * (
+        _g4_derived.u[_g4_reflect_cell] + _g4_derived.u[_g4_reflect_cell + 1]
+    )
+    _g4_want = (
+        area[_g4_other] * _g4_face_u - 0.0
+    ) / volume[_g4_reflect_cell]
+    assert _g4_divu[_g4_reflect_cell] == _g4_want, (
+        _g4_divu[_g4_reflect_cell], _g4_want
+    )
+    # Non-vacuity: the live cell is moving, so the absorbing rule would have
+    # put a materially different number here.
+    assert abs(_g4_derived.u[_g4_reflect_cell]) > 1.0e4
+    _g4_absorbing_rule = (
+        area[_g4_other] * _g4_face_u
+        - area[_g4_reflect_face] * _g4_derived.u[_g4_reflect_cell]
+    ) / volume[_g4_reflect_cell]
+    assert not np.isclose(
+        _g4_want, _g4_absorbing_rule, rtol=1.0e-6, atol=0.0
+    ), (_g4_want, _g4_absorbing_rule)
+
+
+# ----------------------------------------------------------------------
+# kep-acoustic-symbol
+# ----------------------------------------------------------------------
+@_case("kep-acoustic-symbol")
+def _case_kep_acoustic_symbol(_kep_flat, _kep_rows, _kep_state):
+    """G5. The assembled operator's sound speed is the ADIABATIC one, and it
+    is Galilean invariant.
+
+    The Fourier symbol of the semi-discrete hyperbolic core on a uniform
+    constant-area state must have eigen-phase-speeds ``u0 +- c_ad`` and ``u0``
+    twice, with ``c_ad = sqrt((5/3)(T_e+T_i)/m_i)`` -- the same gamma the
+    ``adiabatic`` wave speed the Rusanov ``a_max`` and the CFL use assumes.
+    Measured at 80 cells per wavelength, at rest and in a moving frame. This is
+    the only clause that sees Galilean invariance: a form whose modes are not
+    ``u0 +- c`` for ANY single ``c`` fails it at ``u0 != 0`` while passing at
+    rest.
+    """
+    geom = _kep_flat._plasma_geometry()
+    z = np.asarray(geom.z_cm, dtype=float)
+    cells = int(geom.cells)
+    mass = _kep_flat.ion_mass_g
+    n0, Te0, Ti0 = 1.0e13, 5.0, 2.0
+    c_ad = math.sqrt((5.0 / 3.0) * (Te0 + Ti0) * ev_to_erg / mass)
+    assert _kep_flat._hyperbolic_wave_speed == "adiabatic"
+
+    def _g5_rhs(fields):
+        """The four hyperbolic rows, as the solver folds them."""
+        n, M, Ee, Ei = fields
+        state = dataclasses.replace(
+            _kep_flat.state, n=n.copy(), M=M.copy(), Ee=Ee.copy(), Ei=Ei.copy()
+        )
+        rows = _kep_rows(_kep_flat, state)
+        adv, pw, diss = rows["adv"], rows["pw"], rows["diss"]
+        return np.array([
+            adv.n, adv.M, adv.Ee + pw.Ee, adv.Ei + pw.Ei + diss.Ei
+        ])
+
+    window = slice(60, 220)
+    k = 2.0 * math.pi / (80.0 * float(z[101] - z[100]))
+    cosine, sine = np.cos(k * z), np.sin(k * z)
+    scales = np.array([
+        n0, mass * n0 * 1.0e6,
+        1.5 * n0 * Te0 * ev_to_erg, 1.5 * n0 * Ti0 * ev_to_erg,
+    ])
+    for u0 in (0.0, 4.0e5):
+        base = np.array([
+            np.full(cells, n0), np.full(cells, mass * n0 * u0),
+            np.full(cells, 1.5 * n0 * Te0 * ev_to_erg),
+            np.full(cells, 1.5 * n0 * Ti0 * ev_to_erg),
+        ])
+        symbol = np.zeros((4, 4), dtype=complex)
+        for col in range(4):
+            eps = 1.0e-5 * scales[col]
+            response = []
+            for shape in (cosine, sine):
+                bump = np.zeros((4, cells), dtype=float)
+                bump[col] = eps * shape
+                response.append(
+                    (_g5_rhs(base + bump) - _g5_rhs(base - bump)) / (2.0 * eps)
+                )
+            real, imag = response
+            for row in range(4):
+                projected = (
+                    (real[row] + 1j * imag[row])[window]
+                    * np.exp(-1j * k * z[window])
+                )
+                symbol[row, col] = (
+                    projected.mean() * scales[col] / scales[row]
+                )
+        speeds = np.sort(-np.linalg.eigvals(symbol).imag / k)
+        want = np.sort(np.array([u0 - c_ad, u0, u0, u0 + c_ad]))
+        # 0.5% of the fastest signal in the frame -- an absolute bound, since
+        # the two contact modes sit at u0 = 0 in the rest frame.
+        tol = 0.005 * (abs(u0) + c_ad)
+        assert np.all(np.abs(speeds - want) <= tol), (u0, speeds, want, tol)
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -30599,7 +31155,7 @@ def _case_circuit_projection_refusals():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 179, "historical_stance": 68}
+_CASE_CENSUS = {"total": 184, "historical_stance": 68}
 
 
 def _assert_case_census():
