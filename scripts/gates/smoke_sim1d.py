@@ -21814,6 +21814,39 @@ def _case_shaped_initial_neutral_fill_sp3():
 
 
 # --------------------------------------------------------------------
+# fill-spreading-knudsen-operator
+# --------------------------------------------------------------------
+@_case("fill-spreading-knudsen-operator")
+def _case_fill_spreading_knudsen_operator():
+    # ---- the initial fill's wall-limited spreading operator ----------------
+    # sp3_build_nn0.py's third spreading member is a conservative
+    # finite-volume diffusion solve rather than a stencil, and its acceptance
+    # instrument is scripts/verify/verify_fill_spreading.py, which carries the
+    # whole gate set. What runs HERE is that instrument's own FAST SUBSET --
+    # the gates decidable on a synthetic mesh in milliseconds: that a source
+    # uniform per unit volume produces a density continuous across a bore step
+    # (with the legacy length-weighted route as the negative control that must
+    # miss it by the area ratio), that the long-time limit is the uniform
+    # density the inventory allows, that the one-substep propagator obeys
+    # detailed balance with respect to VOLUME, and that a free-space spread
+    # carries the diffusivity it was given. The gates that need a production
+    # configuration built, or a file from outside the repository, are the
+    # verifier's own to run.
+    #
+    # The verifier is an instrument in scripts/, not repo physics, so it is
+    # imported HERE rather than at module scope, following the sp3 precedent
+    # above. Its subset is called rather than re-implemented: one statement of
+    # each property, in the file that owns it.
+    import verify_fill_spreading as _fill_mod
+
+    _fill_results = _fill_mod.fast_gates()
+    assert _fill_results, "the fast subset must run at least one gate"
+    for _fill_name, _fill_ok, _fill_lines in _fill_results:
+        assert _fill_ok, (_fill_name, _fill_lines)
+        assert _fill_lines, _fill_name
+
+
+# --------------------------------------------------------------------
 # equilibration-map-slicer
 # --------------------------------------------------------------------
 @_case("equilibration-map-slicer")
@@ -31473,7 +31506,7 @@ def _case_kep_acoustic_symbol(_kep_flat, _kep_rows, _kep_state):
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 185, "historical_stance": 69}
+_CASE_CENSUS = {"total": 186, "historical_stance": 69}
 
 
 def _assert_case_census():

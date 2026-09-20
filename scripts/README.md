@@ -87,7 +87,13 @@ into four kinds: read-only audits/censuses of a saved run or build
 `verify_sim1d_*.py` (`k2_dvm_exchange_acceptance.py`,
 `k2_dvm_exchange_measure.py`, `k7cbuild_frozen_bitexact.py`,
 `verify_beam_deposition.py`, `verify_hbd_momentum.py`,
-`verify_phase3_source_capture.py`). These differ from `gates/` in cadence, not
+`verify_phase3_source_capture.py`,
+`verify_fill_spreading.py` — the initial fill's spreading members: density
+continuity across a bore step against the length-weighted route as negative
+control, the equilibrium and free-space limits, propagator reciprocity in
+volume, convergence, and two optional modes reading data from outside the
+repo, a committed-row bit-identity check and a comparison against a banked
+test-particle record). These differ from `gates/` in cadence, not
 in rigor: a `gates/` check runs on every merge, a `verify/` instrument runs
 for the build that owns it and stays runnable afterwards so its verdict can be
 re-derived.
