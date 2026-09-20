@@ -339,8 +339,8 @@ KNUDSEN_PROBE_Z_CM = (60.0, 98.0, 107.0, 200.0, 300.0, 470.0)
 #: accumulates over them as a random walk rather than to a fixed figure. It is
 #: set where every substep count and march length the operator accepts stays
 #: inside it; at the registered substep count over a foot the error measures
-#: four orders of magnitude smaller, and the build's own conservation check
-#: downstream of this one holds the rows a builder actually writes to the
+#: about three orders of magnitude smaller, and the build's own conservation
+#: check downstream of this one holds the rows a builder actually writes to the
 #: tighter bar the builder has always used.
 KNUDSEN_CONSERVATION_REL_TOL = 1.0e-10
 
