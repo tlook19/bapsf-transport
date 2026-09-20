@@ -56,13 +56,24 @@ THE CONSTRUCTION (leg 3a of the sp campaign):
   the model never sees. Its bracket is the measurement's own spread, the
   shot-to-shot standard deviation of the lead (``MEASURED_LEAD_SD_S``), so
   ``foot +- sd`` per rung -- an error bar, not a pair of modelling choices.
-* ``spread`` -- a 1D kernel carrying the deposited inventory away from the
-  lobe over ``dt_foot``. A DISCLOSED BRACKET, not a fit:
+* ``spread`` -- carries the deposited inventory away from the lobe over
+  ``dt_foot``. Three selectable members, of which the first two are the
+  DISCLOSED BRACKET:
 
       diffusive  gaussian, sigma = sqrt(2 D dt),  D = lambda vbar / 3
       ballistic  top-hat,  half-width = vbar dt
+      knudsen    a conservative finite-volume axial diffusion SOLVE
 
-  Both conserve the injected inventory on the grid exactly (asserted).
+  ``diffusive`` and ``ballistic`` are MATRIX kernels: a stencil in ``z``
+  evaluated once, its targets weighted by cell LENGTH and its columns
+  normalized, applied to an inventory deposited whole at the start of the
+  foot. ``knudsen`` is not a stencil at all -- it integrates a diffusion
+  equation on the builder's own mesh and zone volumes, weighted by cell
+  VOLUME, with the source spread over the foot. All three conserve the
+  injected inventory on the grid exactly (asserted).
+
+  The two matrix members are the registered bracket ``KERNELS``; ``knudsen``
+  is SELECTABLE and is not a member of it.
 
 NOTHING HERE IS FITTED. Every input is hardware-anchored (S_gp, valves, the
 puff placement, the measured 1 kA lead), code-anchored (the lobe, the
@@ -89,6 +100,59 @@ The kernels are stated, not assumed to be right:
   onto a gaussian of sigma ``t sqrt(kT/m)`` = 0.63 ``vbar t``, a narrower core
   with tails past the top-hat edge. The top-hat is the flatter, more
   spread-out member and so is the honest opposite end of the bracket.
+* KNUDSEN is the wall-limited limit -- the gas meets the vessel wall far more
+  often than it meets another atom, so the wall, not a gas-phase collision,
+  is what randomizes it. Its statement is a conservation law rather than a
+  displacement:
+
+      dN_i/dt = S_i - sum_faces c_f (n_i - n_neighbour),   n_i = N_i / V_i
+
+  on the builder's own cells, with ``V_i`` the TOTAL neutral volume of cell
+  ``i``, ``S_i`` the deposit released at a constant rate over ``dt_foot``
+  (``--knudsen-source-convention deposit_t0`` releases it whole at t = 0
+  instead, which is the matrix members' convention), and ONE face
+  conductance [cm^3/s] formula for every face:
+
+      1/c_f = L_i/(2 D_i A_i) + L_j/(2 D_j A_j)
+              + (1 - A_open/A_max) / (A_open vbar / 4)
+      D_i   = kappa R_i vbar        [cm^2/s], the cell diffusivity
+      A_i   = V_i / L_i             [cm^2],   the cell's open cross section
+      R_i   = sqrt(A_i / pi)        [cm],     the local vessel radius
+      A_max = max(A_i, A_j)         [cm^2]
+
+  The first two terms are the two half-cells' series resistance and the third
+  is the thin-restriction (aperture) series resistance, which vanishes
+  identically where nothing restricts the face. ``A_open`` is the
+  configuration's OWN per-face open area, which already carries the bore
+  step, the anode mesh's transparency and any neutral baffle's clear
+  aperture, so this reads one number per face rather than re-deriving three.
+  The aperture term is a free-molecular form and states the wide end of a
+  step's resistance.
+
+  Because the measure is VOLUME and the two half-cell resistances are
+  symmetric, a uniform DENSITY is in the operator's null space exactly: a
+  source uniform per unit volume relaxes to a density continuous across a
+  bore step. The matrix members' length weighting has the other fixed point,
+  a uniform LINE density, so their added density steps by the area ratio at a
+  bore change.
+
+  ``kappa`` is stated on the command line (``--knudsen-kappa``), so a
+  diffusivity member is an invocation rather than a code edit; the registered
+  default is :data:`KNUDSEN_KAPPA_DEFAULT`. The time integration is backward
+  Euler over ``--knudsen-substeps`` fixed substeps, each solved by an
+  explicit tridiagonal (Thomas) sweep in plain arithmetic rather than a
+  library factorization, so the rows it writes do not depend on which BLAS
+  the environment linked. Backward Euler with this operator preserves
+  positivity and conserves the inventory exactly; both are asserted at build.
+
+  Which cells the operator transports through is the puff's own eligibility
+  mask, as for the matrix members, so faces the puff gas cannot cross today
+  stay closed. ``--knudsen-gap-coupling`` additionally opens the cathode and
+  gap cells, coupled to the column through the anode mesh face at the
+  transparency the configuration carries; the plenum and the obstruction are
+  never opened. Deposit landing outside the active set is re-homed to the
+  nearest active cell before the solve, and the ledger reports the share.
+  The domain ends are zero-flux: end pumping is not represented here.
 
 THE STANCE IS OVERRIDABLE. ``--extra k=v`` / ``--extra-flag k=v`` carry
 arbitrary ``input_dict`` / ``input_flags`` overrides into the stance the
@@ -108,8 +172,12 @@ Usage:
     python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
         --kernel ballistic --out nn0_foot_es1.npz
 
+    python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
+        --kernel knudsen --knudsen-kappa 0.5 --out nn0_foot_es1_knudsen.npz
+
 (``--dt-foot-s`` omitted takes the requested rung's registered foot; pass it
-to walk that rung's bracket.)
+to walk that rung's bracket. ``--knudsen-kappa`` omitted takes
+:data:`KNUDSEN_KAPPA_DEFAULT`.)
 """
 
 import argparse
@@ -176,6 +244,52 @@ MEASURED_LEAD_SD_S = {1: 0.09e-3, 2: 0.02e-3, 3: 0.09e-3}
 MODEL_1KA_S = {1: 0.118e-3, 2: 0.171e-3, 3: 0.316e-3}
 
 KERNELS = ("diffusive", "ballistic")
+
+#: The wall-limited finite-volume spreading member's ``--kernel`` name, and
+#: the full set of selectable members. ``KERNELS`` stays the REGISTERED
+#: bracket -- the two matrix kernels, which are what ``spread_matrix`` builds
+#: and what the ledger's ``kernel_bracket`` names -- and ``knudsen`` is a
+#: selectable member outside it.
+KNUDSEN_KERNEL = "knudsen"
+SELECTABLE_KERNELS = KERNELS + (KNUDSEN_KERNEL,)
+
+#: THE WALL-LIMITED OPERATOR'S REGISTRATION.
+#:
+#: ``KNUDSEN_KAPPA_DEFAULT`` is the dimensionless coefficient in the cell
+#: diffusivity ``D_i = kappa R_i vbar`` [cm^2/s] that an omitted
+#: ``--knudsen-kappa`` supplies, so the builder reproduces a member without
+#: being told the number. Any other value is stated on the command line and
+#: recorded in the ledger; none is written here.
+KNUDSEN_KAPPA_DEFAULT = 2.0 / 3.0
+#: Fixed number of equal backward-Euler substeps the foot is integrated over
+#: when ``--knudsen-substeps`` is omitted [1]. Fixed rather than adaptive so
+#: that a rebuild of the same invocation writes the same bytes.
+KNUDSEN_SUBSTEPS_DEFAULT = 600
+#: The two source conventions, in the order argparse offers them. ``continuous``
+#: releases the deposit at a constant rate over ``dt_foot``; ``deposit_t0``
+#: releases it whole at t = 0, which is what the matrix kernels do and is the
+#: control the free-space variance check needs.
+KNUDSEN_SOURCE_CONVENTIONS = ("continuous", "deposit_t0")
+#: The cell roles ``--knudsen-gap-coupling`` adds to the active set, on top of
+#: the puff's own eligible roles.
+KNUDSEN_GAP_COUPLED_ROLES = ("cathode", "gap")
+#: The cell roles the operator never transports through, in either mode.
+KNUDSEN_BLOCKED_ROLES = ("plenum", "obstruction")
+#: Axial stations the ledger reports the added density at [cm]: the puff
+#: station, the two cells flanking the source-bore step, and four cells down
+#: the column. Reporting only; nothing keys off them.
+KNUDSEN_PROBE_Z_CM = (60.0, 98.0, 107.0, 200.0, 300.0, 470.0)
+#: Bar on the operator's own relative inventory error [1]. The march is
+#: exactly conservative in exact arithmetic -- each face's two contributions
+#: are equal and opposite, so the face sum telescopes -- and what this bounds
+#: is therefore the ROUNDOFF of the substeps' tridiagonal solves, which
+#: accumulates over them as a random walk rather than to a fixed figure. It is
+#: set where every substep count and march length the operator accepts stays
+#: inside it; at the registered substep count over a foot the error measures
+#: four orders of magnitude smaller, and the build's own conservation check
+#: downstream of this one holds the rows a builder actually writes to the
+#: tighter bar the builder has always used.
+KNUDSEN_CONSERVATION_REL_TOL = 1.0e-10
 
 
 #: The resolution the measured leads are quoted at [s]: 10 us, the number of
@@ -410,6 +524,283 @@ def spread_matrix(geometry, kernel, width_cm):
     )
 
 
+def knudsen_active_mask(cell_role, gap_coupling=False):
+    """Return the boolean mask of cells the wall-limited operator carries gas in.
+
+    The puff's own eligible roles, which is what makes the operator's reach
+    the reach the source itself is allowed -- plus, under ``gap_coupling``,
+    the roles in :data:`KNUDSEN_GAP_COUPLED_ROLES`, which opens the region
+    behind the anode mesh to the column through that face. The roles in
+    :data:`KNUDSEN_BLOCKED_ROLES` are never active in either mode.
+
+    Cells outside the mask keep the base exactly: nothing is transported into
+    or out of them, and deposit landing in one is re-homed before the solve.
+    """
+    roles = [str(role) for role in cell_role]
+    active_roles = set(_PUFF_ELIGIBLE_ROLES)
+    if gap_coupling:
+        active_roles |= set(KNUDSEN_GAP_COUPLED_ROLES)
+    active_roles -= set(KNUDSEN_BLOCKED_ROLES)
+    return np.array([role in active_roles for role in roles], dtype=bool)
+
+
+def knudsen_face_conductances(
+    z_cm, length_cm, neutral_volume_cm3, face_open_area_cm2, active,
+    vbar_cm_s, kappa,
+):
+    """Return ``(index, conductance)`` for the active chain [1], [cm^3/s].
+
+    ``index`` is the ascending array of active cell indices and
+    ``conductance[a]`` is the conductance of the face between ``index[a]`` and
+    ``index[a + 1]``, from the one formula the module docstring states. Faces
+    are numbered as the mesh numbers them, so the face between cells ``k`` and
+    ``k + 1`` is entry ``k + 1`` of ``face_open_area_cm2``, whose length is
+    one more than the number of cells.
+
+    The active set must be CONTIGUOUS. A hole in it would put two cells that
+    do not share a face on either side of one conductance, and the half-cell
+    resistances would then understate the distance between them by the whole
+    hole; rather than invent a bridging rule this raises.
+    """
+    z = np.asarray(z_cm, dtype=float)
+    length = np.asarray(length_cm, dtype=float)
+    volume = np.asarray(neutral_volume_cm3, dtype=float)
+    face_open = np.asarray(face_open_area_cm2, dtype=float)
+    if face_open.size != z.size + 1:
+        raise ValueError(
+            f"the per-face open area has {face_open.size} entries for "
+            f"{z.size} cells; a mesh has one more face than cells"
+        )
+    if not (math.isfinite(kappa) and float(kappa) > 0.0):
+        raise ValueError(
+            f"the wall-limited operator needs a finite kappa > 0 (got "
+            f"{kappa!r}); kappa scales the cell diffusivity D = kappa R vbar"
+        )
+    index = np.flatnonzero(np.asarray(active, dtype=bool))
+    if index.size < 2:
+        raise ValueError(
+            f"the wall-limited operator needs at least two active cells to "
+            f"have a face (got {index.size}); check the cell roles"
+        )
+    if not np.array_equal(index, np.arange(index[0], index[-1] + 1)):
+        raise ValueError(
+            "the wall-limited operator needs a CONTIGUOUS active set, and "
+            f"this one has {int(index[-1] - index[0] + 1 - index.size)} "
+            "inactive cells inside its span; a face between two cells that "
+            "do not touch has no half-cell resistance this can state"
+        )
+    area = volume / length
+    radius = np.sqrt(area / math.pi)
+    diffusivity = float(kappa) * radius * float(vbar_cm_s)
+    lo, hi = index[:-1], index[1:]
+    open_area = face_open[hi]
+    max_area = np.maximum(area[lo], area[hi])
+    if np.any(open_area <= 0.0):
+        raise ValueError(
+            "a face inside the active set has no open area, so the aperture "
+            "resistance is infinite; such a face is closed and its cells "
+            "must not both be active"
+        )
+    resistance = (
+        length[lo] / (2.0 * diffusivity[lo] * area[lo])
+        + length[hi] / (2.0 * diffusivity[hi] * area[hi])
+        + (1.0 - open_area / max_area) / (open_area * float(vbar_cm_s) / 4.0)
+    )
+    return index, 1.0 / resistance
+
+
+def _thomas_sweep(lower, diag, upper, rhs):
+    """Return the solution of a tridiagonal system by the Thomas sweep.
+
+    ``diag`` is the main diagonal, ``lower[a]`` the entry of row ``a + 1`` in
+    column ``a`` and ``upper[a]`` the entry of row ``a`` in column ``a + 1``.
+    Written out rather than handed to a library so the arithmetic is fixed by
+    this source and not by which BLAS the environment linked.
+    """
+    n = int(diag.size)
+    sweep_upper = [0.0] * n
+    sweep_rhs = [0.0] * n
+    low = lower.tolist()
+    up = upper.tolist()
+    dia = diag.tolist()
+    right = rhs.tolist()
+    pivot = dia[0]
+    sweep_upper[0] = up[0] / pivot
+    sweep_rhs[0] = right[0] / pivot
+    for k in range(1, n):
+        pivot = dia[k] - low[k - 1] * sweep_upper[k - 1]
+        if k < n - 1:
+            sweep_upper[k] = up[k] / pivot
+        sweep_rhs[k] = (right[k] - low[k - 1] * sweep_rhs[k - 1]) / pivot
+    solution = [0.0] * n
+    solution[n - 1] = sweep_rhs[n - 1]
+    for k in range(n - 2, -1, -1):
+        solution[k] = sweep_rhs[k] - sweep_upper[k] * solution[k + 1]
+    return np.array(solution, dtype=float)
+
+
+def knudsen_spread(
+    z_cm, length_cm, neutral_volume_cm3, face_open_area_cm2, active,
+    deposited, dt_foot_s, vbar_cm_s,
+    kappa=KNUDSEN_KAPPA_DEFAULT,
+    substeps=KNUDSEN_SUBSTEPS_DEFAULT,
+    source_convention=KNUDSEN_SOURCE_CONVENTIONS[0],
+):
+    """Return ``(accumulated, report)`` for the wall-limited spreading solve.
+
+    ``accumulated`` is the inventory per cell [particles] after ``dt_foot_s``,
+    zero outside the active set, and ``report`` is a dict of the quantities
+    the ledger prints: the re-homed share of the deposit, the substep, the
+    smallest and largest face conductance, and the two asserted properties.
+
+    The solve is the module docstring's conservation law, integrated by
+    backward Euler over ``substeps`` equal substeps. Each substep solves
+    ``(I + h K V^-1) N = N + h S`` -- a tridiagonal M-matrix system, so the
+    step is positivity-preserving -- and the face sum telescopes, so the
+    inventory is conserved to roundoff. Both are asserted here rather than
+    left to the caller.
+    """
+    volume = np.asarray(neutral_volume_cm3, dtype=float)
+    deposit = np.array(deposited, dtype=float).reshape(-1).copy()
+    mask = np.asarray(active, dtype=bool)
+    if str(source_convention) not in KNUDSEN_SOURCE_CONVENTIONS:
+        raise ValueError(
+            f"source convention must be one of "
+            f"{list(KNUDSEN_SOURCE_CONVENTIONS)} (got {source_convention!r})"
+        )
+    substeps = int(substeps)
+    if substeps < 1:
+        raise ValueError(
+            f"the wall-limited operator needs at least one substep (got "
+            f"{substeps}); the substep count is fixed, never adaptive"
+        )
+    index, conductance = knudsen_face_conductances(
+        z_cm, length_cm, volume, face_open_area_cm2, mask, vbar_cm_s, kappa,
+    )
+    # RE-HOMING. The lobe can deposit into a cell the operator does not carry
+    # gas in -- behind the anode mesh under the default active set. Such gas
+    # is placed in the nearest active cell BEFORE the solve, so it is spread
+    # rather than deleted, and the share is reported because it is a
+    # modelling choice and not an arithmetic detail.
+    z = np.asarray(z_cm, dtype=float)
+    injected = float(np.sum(deposit))
+    rehomed = 0.0
+    for cell in np.flatnonzero(~mask):
+        stranded = float(deposit[cell])
+        if stranded == 0.0:
+            continue
+        nearest = int(index[int(np.argmin(np.abs(z[index] - z[cell])))])
+        deposit[nearest] += stranded
+        deposit[cell] = 0.0
+        rehomed += stranded
+
+    cell_volume = volume[index]
+    size = int(index.size)
+    step = float(dt_foot_s) / substeps
+    diag = np.ones(size, dtype=float)
+    diag[:-1] += step * conductance / cell_volume[:-1]
+    diag[1:] += step * conductance / cell_volume[1:]
+    upper = -step * conductance / cell_volume[1:]
+    lower = -step * conductance / cell_volume[:-1]
+
+    if str(source_convention) == "continuous":
+        state = np.zeros(size, dtype=float)
+        source = deposit[index] / float(dt_foot_s)
+    else:
+        state = deposit[index].copy()
+        source = np.zeros(size, dtype=float)
+    for _ in range(substeps):
+        state = _thomas_sweep(lower, diag, upper, state + step * source)
+
+    accumulated = np.zeros(z.size, dtype=float)
+    accumulated[index] = state
+    minimum = float(np.min(state))
+    assert minimum >= 0.0, (
+        f"the wall-limited solve went negative: min {minimum:.9e} particles. "
+        "Backward Euler on this operator is positivity-preserving, so a "
+        "negative cell means the operator is not the one documented"
+    )
+    held = float(np.sum(state))
+    conservation_rel = abs(held - injected) / max(injected, 1e-300)
+    assert conservation_rel < KNUDSEN_CONSERVATION_REL_TOL, (
+        f"the wall-limited solve lost inventory: in {injected:.9e}, out "
+        f"{held:.9e}, rel {conservation_rel:.3e}"
+    )
+    report = {
+        "kappa": float(kappa),
+        "substeps": substeps,
+        "substep_s": step,
+        "source_convention": str(source_convention),
+        "active_cells": size,
+        "active_span_cells": [int(index[0]), int(index[-1])],
+        "rehomed_fraction": (
+            0.0 if injected == 0.0 else rehomed / injected
+        ),
+        "face_conductance_min_cm3_s": float(np.min(conductance)),
+        "face_conductance_max_cm3_s": float(np.max(conductance)),
+        "min_cell_particles": minimum,
+        "conservation_rel": conservation_rel,
+    }
+    return accumulated, report
+
+
+def knudsen_added_rows(z_cm, length_cm, neutral_volume_cm3, accumulated, active):
+    """Return the ledger rows describing where the added inventory landed.
+
+    Three readings of one array. ``z50``/``z90``/``z99`` are the axial
+    positions [cm] below which that fraction of the ADDED inventory sits, so
+    they say how far the operator carried the foot; they are quantiles of the
+    added inventory in ``z``, interpolated on its cumulative sum. The bore-step
+    row is the added DENSITY on each side of a bore step, and their ratio,
+    which is the number a length-weighted kernel fixes at the area ratio and a
+    volume-consistent one drives to 1 for a uniform source. The step reported
+    is the largest area change among the faces the added inventory reaches --
+    those at or below ``z90`` -- so it is the step the fill actually crosses
+    rather than whichever change happens to be the largest on the whole mesh.
+    The probe row is the added density at :data:`KNUDSEN_PROBE_Z_CM`, each at
+    its nearest cell.
+    """
+    z = np.asarray(z_cm, dtype=float)
+    volume = np.asarray(neutral_volume_cm3, dtype=float)
+    added = np.asarray(accumulated, dtype=float)
+    density = added / volume
+    total = float(np.sum(added))
+    cumulative = np.cumsum(added) / max(total, 1e-300)
+    z50 = float(np.interp(0.5, cumulative, z))
+    z90 = float(np.interp(0.9, cumulative, z))
+    z99 = float(np.interp(0.99, cumulative, z))
+    index = np.flatnonzero(np.asarray(active, dtype=bool))
+    area = volume / np.asarray(length_cm, dtype=float)
+    lo, hi = index[:-1], index[1:]
+    ratio = np.maximum(area[lo], area[hi]) / np.minimum(area[lo], area[hi])
+    reached = z[hi] <= z90
+    if not np.any(reached):
+        reached = np.ones(ratio.size, dtype=bool)
+    step = int(np.flatnonzero(reached)[int(np.argmax(ratio[reached]))])
+    narrow, wide = (lo[step], hi[step]) if area[lo[step]] < area[hi[step]] else (
+        hi[step], lo[step]
+    )
+    return {
+        "added_z50_cm": z50,
+        "added_z90_cm": z90,
+        "added_z99_cm": z99,
+        "bore_step_area_ratio": float(ratio[step]),
+        "bore_step_narrow_z_cm": float(z[narrow]),
+        "bore_step_wide_z_cm": float(z[wide]),
+        "bore_step_narrow_added_cm3": float(density[narrow]),
+        "bore_step_wide_added_cm3": float(density[wide]),
+        "bore_step_added_density_ratio": float(
+            density[narrow] / density[wide]
+            if density[wide] != 0.0 else float("inf")
+        ),
+        "probe_added_density_cm3": [
+            [float(station), float(z[int(np.argmin(np.abs(z - station)))]),
+             float(density[int(np.argmin(np.abs(z - station)))])]
+            for station in KNUDSEN_PROBE_Z_CM
+        ],
+    }
+
+
 def build(args):
     """Return (profiles, ledger) for the requested corner of the bracket."""
     # npz-sourced values first, so an inline --extra can still override any of
@@ -499,18 +890,57 @@ def build(args):
             f"sigma = {args.sigma_hehe_cm2:.6g} cm^2 [{SIGMA_HE_HE_SOURCE}]"
         )
     D_cm2_s = mfp * vbar / 3.0
-    if args.kernel == "diffusive":
+    knudsen_report = None
+    if args.kernel == KNUDSEN_KERNEL:
+        # The wall-limited member has no single width: its reach is set by a
+        # per-cell diffusivity and the mesh's own face areas, so the ledger
+        # names the operator instead of a number it does not have.
+        width = None
+        width_label = (
+            "no single width: a finite-volume solve with D_i = kappa R_i vbar"
+        )
+    elif args.kernel == "diffusive":
         width = math.sqrt(2.0 * D_cm2_s * float(args.dt_foot_s))
         width_label = "gaussian sigma = sqrt(2 D dt)"
     else:
         width = vbar * float(args.dt_foot_s)
         width_label = "top-hat half-width = vbar dt"
 
-    if width == 0.0:
+    if float(args.dt_foot_s) == 0.0:
         # THE NULL CONTROL (dt_foot = 0): nothing was deposited, so there is
         # nothing to spread and no kernel is built. Short-circuited rather
-        # than passed through a zero-width kernel, which is undefined.
+        # than passed through a zero-width kernel or a zero-length solve,
+        # neither of which is defined.
         accumulated = np.zeros(cells, dtype=float)
+    elif args.kernel == KNUDSEN_KERNEL:
+        gap_coupling = bool(args.knudsen_gap_coupling)
+        if gap_coupling and np.asarray(geometry.anode_face_indices).size == 0:
+            raise ValueError(
+                "--knudsen-gap-coupling couples the region behind the anode "
+                "mesh to the column THROUGH that mesh face, and this stance "
+                "carries no anode face to couple through"
+            )
+        active = knudsen_active_mask(geometry.cell_role, gap_coupling)
+        accumulated, knudsen_report = knudsen_spread(
+            geometry.z_cm,
+            geometry.length_cm,
+            V_chamber,
+            geometry.neutral_face_area_cm2,
+            active,
+            deposited,
+            float(args.dt_foot_s),
+            vbar,
+            kappa=float(args.knudsen_kappa),
+            substeps=int(args.knudsen_substeps),
+            source_convention=args.knudsen_source_convention,
+        )
+        knudsen_report["gap_coupling"] = gap_coupling
+        knudsen_report.update(
+            knudsen_added_rows(
+                geometry.z_cm, geometry.length_cm, V_chamber, accumulated,
+                active,
+            )
+        )
     else:
         spread = spread_matrix(geometry, args.kernel, width)
         # A source cell the kernel cannot carry out of is only safe if it
@@ -625,6 +1055,11 @@ def build(args):
     # on the command line, versus a named array in a named file (recorded as
     # source, shape and dtype; the values themselves would bloat the ledger
     # the output npz carries, and they are already IN the output's own grid).
+    # The wall-limited member's own parameters and readings, PRESENCE-GATED
+    # the same way: a matrix-kernel invocation writes exactly the ledger it
+    # always wrote, and so exactly the same output bytes.
+    if knudsen_report is not None:
+        ledger["knudsen"] = knudsen_report
     if inline_params:
         ledger["extra_params"] = inline_params
     if npz_provenance:
@@ -684,10 +1119,51 @@ def print_ledger(
         f"mfp={ledger['mfp_cm']:.6g} cm ({ledger['mfp_source']}); "
         f"D={ledger['D_cm2_s']:.6g} cm^2/s"
     )
-    print(
-        f"kernel width: {ledger['kernel_width_cm']:.6g} cm "
-        f"({ledger['kernel_width_label']})"
-    )
+    if ledger["kernel_width_cm"] is None:
+        print(f"kernel width: {ledger['kernel_width_label']}")
+    else:
+        print(
+            f"kernel width: {ledger['kernel_width_cm']:.6g} cm "
+            f"({ledger['kernel_width_label']})"
+        )
+    # Presence-gated exactly as the ledger entry is.
+    if "knudsen" in ledger:
+        k = ledger["knudsen"]
+        print(
+            f"knudsen operator: kappa={k['kappa']:.6g}, "
+            f"substeps={k['substeps']} of {k['substep_s']:.6g} s, "
+            f"source={k['source_convention']}, "
+            f"gap_coupling={k['gap_coupling']}"
+        )
+        print(
+            f"  active cells: {k['active_cells']} "
+            f"(mesh {k['active_span_cells'][0]}..{k['active_span_cells'][1]}); "
+            f"deposit re-homed into the active set: "
+            f"{k['rehomed_fraction']:.6g}"
+        )
+        print(
+            f"  face conductance: {k['face_conductance_min_cm3_s']:.6g}..."
+            f"{k['face_conductance_max_cm3_s']:.6g} cm^3/s; "
+            f"min cell {k['min_cell_particles']:.6g} atoms; "
+            f"inventory rel err {k['conservation_rel']:.3e}"
+        )
+        print(
+            f"  added inventory reach: z50={k['added_z50_cm']:.6g} "
+            f"z90={k['added_z90_cm']:.6g} z99={k['added_z99_cm']:.6g} cm"
+        )
+        print(
+            f"  bore step (area ratio {k['bore_step_area_ratio']:.6g}) at "
+            f"z={k['bore_step_narrow_z_cm']:.6g}|"
+            f"{k['bore_step_wide_z_cm']:.6g} cm: added "
+            f"{k['bore_step_narrow_added_cm3']:.6g} / "
+            f"{k['bore_step_wide_added_cm3']:.6g} cm^-3 = "
+            f"ratio {k['bore_step_added_density_ratio']:.6g}"
+        )
+        print("  added density at the probe stations [cm^-3]:")
+        for station, z_cell, value in k["probe_added_density_cm3"]:
+            print(
+                f"     z={station:8.2f} (cell z={z_cell:8.2f}): {value:.6g}"
+            )
     print("--- inventory ledger ---")
     print(
         f"throughput as-applied (valves in): "
@@ -786,9 +1262,42 @@ def main(argv=None):
                         "own error bar. 0 is the explicit NULL CONTROL: no "
                         "foot addition at all, so the output is the base "
                         "itself")
-    p.add_argument("--kernel", choices=KERNELS, default="diffusive",
-                   help="spreading kernel; registered bracket is both members "
-                        "(default: the short-reach end)")
+    p.add_argument("--kernel", choices=SELECTABLE_KERNELS, default="diffusive",
+                   help="spreading member; the registered bracket is the two "
+                        "MATRIX kernels (default: the short-reach end of it). "
+                        f"{KNUDSEN_KERNEL!r} is the volume-consistent "
+                        "finite-volume solve, selectable and outside that "
+                        "bracket; it is configured by the --knudsen-* options "
+                        "below and ignores --sigma-hehe-cm2 / --mfp-cm, which "
+                        "set the matrix diffusive member's width")
+    p.add_argument("--knudsen-kappa", type=float,
+                   default=KNUDSEN_KAPPA_DEFAULT,
+                   help="dimensionless coefficient in the wall-limited cell "
+                        "diffusivity D_i = kappa R_i vbar [1] (default "
+                        f"{KNUDSEN_KAPPA_DEFAULT:.6g}). A diffusivity member "
+                        "is stated here rather than named in the code, so "
+                        "walking the closure is an invocation")
+    p.add_argument("--knudsen-substeps", type=int,
+                   default=KNUDSEN_SUBSTEPS_DEFAULT,
+                   help="number of equal backward-Euler substeps the foot is "
+                        f"integrated over (default {KNUDSEN_SUBSTEPS_DEFAULT}"
+                        "). Fixed, never adaptive, so a rebuild of the same "
+                        "invocation writes the same bytes")
+    p.add_argument("--knudsen-gap-coupling", action="store_true",
+                   help="also carry gas through the cathode and gap cells, "
+                        "coupled to the column through the anode mesh face at "
+                        "the transparency the configuration carries. OFF by "
+                        "default: those faces are ones the puff gas cannot "
+                        "cross today, and opening them is a separable "
+                        "modelling decision")
+    p.add_argument("--knudsen-source-convention",
+                   choices=KNUDSEN_SOURCE_CONVENTIONS,
+                   default=KNUDSEN_SOURCE_CONVENTIONS[0],
+                   help="how the deposit enters the solve: 'continuous' "
+                        "(default) releases it at a constant rate over "
+                        "dt_foot, 'deposit_t0' releases it whole at t = 0, "
+                        "which is the matrix kernels' convention and is the "
+                        "control a free-space reach check needs")
     p.add_argument("--sigma-hehe-cm2", type=float, default=SIGMA_HE_HE_CM2,
                    help="He-He collision cross section [cm^2] setting the mean "
                         f"free path (default {SIGMA_HE_HE_CM2:g}: "
@@ -851,6 +1360,25 @@ def main(argv=None):
         p.error("--dt-foot-s must be finite and >= 0 (0 is the null control)")
     if args.zone != "chamber" and not args.two_zone:
         p.error("--zone is a two-zone routing choice; pass --two-zone or drop it")
+    # The --knudsen-* options configure ONE member. Under a matrix kernel they
+    # would be silent inert controls, which is exactly the class of mistake
+    # this campaign refuses at construction rather than discovering in a
+    # ledger.
+    if args.kernel != KNUDSEN_KERNEL and (
+        args.knudsen_kappa != KNUDSEN_KAPPA_DEFAULT
+        or args.knudsen_substeps != KNUDSEN_SUBSTEPS_DEFAULT
+        or args.knudsen_gap_coupling
+        or args.knudsen_source_convention != KNUDSEN_SOURCE_CONVENTIONS[0]
+    ):
+        p.error(
+            f"the --knudsen-* options configure the {KNUDSEN_KERNEL!r} "
+            f"member and are inert under --kernel {args.kernel}; pass "
+            f"--kernel {KNUDSEN_KERNEL} or drop them"
+        )
+    if not (math.isfinite(args.knudsen_kappa) and args.knudsen_kappa > 0.0):
+        p.error("--knudsen-kappa must be finite and > 0")
+    if args.knudsen_substeps < 1:
+        p.error("--knudsen-substeps must be at least 1")
     if args.selfcheck and (
         args.base_from_h5 is None or args.dt_foot_s != 0.0
     ):
