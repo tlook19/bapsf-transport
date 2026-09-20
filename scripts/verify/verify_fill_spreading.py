@@ -60,18 +60,24 @@ OPTIONAL MODES -- each reads data that does not live in this repository, so
 neither the default run nor the smoke suite depends on it:
 
 ``--legacy-rows FILE --base-h5 FILE``
-    G0 ROW BIT-IDENTITY, two legs, both compared at RAW UINT64 -- float64 bit
+    G0 ROW BIT-IDENTITY, three legs, all compared at RAW UINT64 -- float64 bit
     patterns read as integers, so a one-ulp move is a difference, and the bar
-    is zero differing values on both rows. ``G0a`` rebuilds the committed
+    is zero differing values on every row. ``G0a`` rebuilds the committed
     initial-fill rows of a configuration file through the builder's
     REGISTERED member, naming no kernel, which is the gate that says a change
     to the builder moved nothing that is committed. ``G0b`` rebuilds the
     LEGACY rows in :data:`LEGACY_ROWS_FIXTURE` through ``--kernel
     ballistic`` at :data:`LEGACY_ROWS_FOOT_S`, the fixed foot that fixture
     was built at, which is the gate that says the legacy reproduction route
-    still reproduces. Both legs need the equilibrated base and the per-cell
-    geometry profiles, which do not live in this repository, so both ride
-    this optional mode rather than the default run.
+    still reproduces. ``G0c`` does what ``G0a`` does for the OTHER two rungs:
+    the committed reference configurations of ES2 and ES3
+    (:data:`ES_REFERENCE_CONFIGURATIONS`) carry their own initial-fill rows,
+    built at their own registered feet, and each is rebuilt through the
+    registered ``--es N`` route -- no kernel, no foot -- so all three rungs'
+    committed fills are covered rather than only the one the reference
+    configuration itself carries. All three legs need the equilibrated base
+    and the per-cell geometry profiles, which do not live in this repository,
+    so they ride this optional mode rather than the default run.
 ``--tpmc-record FILE``
     G6 TPMC RECORD GATE. Scores candidate members against a banked
     test-particle Monte Carlo record of the same puff on the same geometry, by
@@ -149,6 +155,19 @@ LEGACY_ROWS_FIXTURE = (
 #: model's 1 kA time is re-registered. G0a, which rebuilds the configuration's
 #: CURRENT rows, names no foot and so follows the registration.
 LEGACY_ROWS_FOOT_S = 5.83e-3
+#: G0c: the committed reference configuration of each ES rung that carries its
+#: OWN initial-fill rows. ES1's fill is the reference configuration's own, and
+#: is what G0a covers through ``--legacy-rows``; ES2 and ES3 run at different
+#: registered feet, so each states its rows in its own derived configuration
+#: file, and those files are what this leg rebuilds. Keyed by rung, because the
+#: rung is the only argument the registered route needs.
+ES_REFERENCE_CONFIGURATIONS = {
+    es: (
+        Path(__file__).resolve().parents[1]
+        / "stances" / "examples" / f"g1atrim_es{es}_reference.toml"
+    )
+    for es in (2, 3)
+}
 #: Neutral temperature the gates evaluate the mean speed at [K].
 GATE_TN_K = 300.0
 #: Foot duration the transport gates integrate over [s]. Any positive time
@@ -760,8 +779,21 @@ def _compare_rows(label, got_pair, want_pair):
     return ok, lines
 
 
+def _committed_rows(path):
+    """Return a configuration file's ``(column, annulus)`` initial-fill rows."""
+    import tomllib
+
+    with open(path, "rb") as handle:
+        document = tomllib.load(handle)
+    block = document["models"]["initial_neutral_state"]
+    return (
+        np.asarray(block["nn0_profile"], dtype=float),
+        np.asarray(block["nn0_annulus_profile"], dtype=float),
+    )
+
+
 def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
-    """Return ``(ok, lines)`` for the two committed-row bit-identity legs.
+    """Return ``(ok, lines)`` for the three committed-row bit-identity legs.
 
     ``G0a`` rebuilds the configuration's own committed rows through the
     builder's REGISTERED member -- no kernel named, exactly as the committed
@@ -775,23 +807,22 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
     against the committed fixture :data:`LEGACY_ROWS_FIXTURE`. That is the
     gate that says the legacy reproduction route still reproduces.
 
-    Both legs need the equilibrated base result and the per-cell geometry
-    profiles, neither of which lives in this repository, so both ride the
+    ``G0c`` is ``G0a`` for the other two rungs. ES2 and ES3 run at their own
+    registered feet, so each states its own initial-fill rows in the committed
+    reference configuration named in :data:`ES_REFERENCE_CONFIGURATIONS`, and
+    each is rebuilt through the registered ``--es N`` route -- no kernel, no
+    foot -- against those rows at raw uint64. Without it, two of the three
+    committed fills have no instrument at all: a change to the builder or to
+    the foot registration that moved them would pass every other gate.
+
+    All three legs need the equilibrated base result and the per-cell geometry
+    profiles, neither of which lives in this repository, so they ride the
     optional ``--legacy-rows`` mode rather than the default run.
     """
-    import tomllib
-
-    with open(rows_path, "rb") as handle:
-        document = tomllib.load(handle)
-    block = document["models"]["initial_neutral_state"]
-    committed = (
-        np.asarray(block["nn0_profile"], dtype=float),
-        np.asarray(block["nn0_annulus_profile"], dtype=float),
-    )
     ok, lines = _compare_rows(
         "G0a registered route vs the committed rows:",
         _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, None),
-        committed,
+        _committed_rows(rows_path),
     )
     with np.load(LEGACY_ROWS_FIXTURE, allow_pickle=False) as fixture:
         legacy = (
@@ -805,7 +836,18 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
                       dt_foot_s=LEGACY_ROWS_FOOT_S),
         legacy,
     )
-    return ok and ok_b, lines + lines_b
+    lines = lines + lines_b
+    ok = ok and ok_b
+    for rung in sorted(ES_REFERENCE_CONFIGURATIONS):
+        path = ES_REFERENCE_CONFIGURATIONS[rung]
+        ok_c, lines_c = _compare_rows(
+            f"G0c registered route --es {rung} vs {path.name}:",
+            _rebuild_rows(base_h5, rung, nx, sgp, geometry_npz, None),
+            _committed_rows(path),
+        )
+        ok = ok and ok_c
+        lines = lines + lines_c
+    return ok, lines
 
 
 # ----------------------------------------------------------------------
@@ -1375,7 +1417,10 @@ def main(argv=None):
         help="G0: a configuration file whose committed initial-fill rows the "
              "builder's REGISTERED member must reproduce at raw uint64 "
              "(G0a), and against which the legacy ballistic route is checked "
-             "at raw uint64 on the committed legacy fixture (G0b)",
+             "at raw uint64 on the committed legacy fixture (G0b). Naming it "
+             "also runs G0c, the same registered-route check on the committed "
+             "ES2 and ES3 reference configurations, which carry their rungs' "
+             "own rows at their own registered feet",
     )
     parser.add_argument(
         "--base-h5", type=Path, default=None,
@@ -1430,8 +1475,8 @@ def main(argv=None):
             args.legacy_rows, args.base_h5, args.legacy_es, args.legacy_nx,
             args.legacy_sgp, args.legacy_geometry_npz,
         )
-        results.insert(0, ("G0 row bit-identity (G0a registered, G0b legacy)",
-                           ok, lines))
+        results.insert(0, ("G0 row bit-identity (G0a registered, G0b legacy, "
+                           "G0c the other two rungs)", ok, lines))
 
     if args.tpmc_record:
         geometry = args.tpmc_geometry
