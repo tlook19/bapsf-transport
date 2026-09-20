@@ -663,6 +663,55 @@ LEDGER_PARTICLE_ROW_DOC[LEDGER_FLIGHT_CELL_KEY] = (
     "here, and present only under the bounded-chord flight transport",
 )
 
+#: The two zones the kinetic path carries a distribution for, in the order
+#: the moment export writes them.
+NEUTRAL_MOMENT_ZONES = ("column", "annulus")
+#: The per-zone velocity moments the export carries, each keyed
+#: ``<zone>_<quantity>`` and each a value PER CELL. The parallel direction is
+#: the grid's ``v_z`` and is signed +z, i.e. TOWARDS THE END WALL.
+NEUTRAL_MOMENT_QUANTITY_DOC = {
+    "n_n": ("cm^-3", "neutral density, the zeroth moment of this zone's f"),
+    "flux_n_z": (
+        "cm^-2 s^-1",
+        "parallel neutral particle flux int(v_z f d3v), positive towards "
+        "the end wall",
+    ),
+    "u_n": (
+        "cm/s",
+        "mean parallel neutral velocity flux_n_z / n_n, positive towards "
+        "the end wall; 0.0 where n_n is at or below zero",
+    ),
+    "T_n_par_eV": (
+        "eV",
+        "parallel neutral temperature m <(v_z - u_n)^2> / e about this "
+        "zone's OWN drift; 0.0 where n_n is at or below zero",
+    ),
+    "T_n_perp_eV": (
+        "eV",
+        "perpendicular neutral temperature m <v_perp^2> / (2 e), the two "
+        "perpendicular degrees of freedom about the vanishing axisymmetric "
+        "perpendicular mean; 0.0 where n_n is at or below zero",
+    ),
+}
+#: Every row the neutral velocity-moment group carries, in its own order:
+#: the frame time first, then each zone's quantities in declaration order.
+NEUTRAL_MOMENT_SAVED_FRAME_KEYS = ("time",) + tuple(
+    f"{zone}_{quantity}"
+    for zone in NEUTRAL_MOMENT_ZONES
+    for quantity in NEUTRAL_MOMENT_QUANTITY_DOC
+)
+#: Unit and meaning per row, the table the saved group documents itself with.
+#: ``time`` is the frame's own clock and is the group's only scalar row;
+#: every other row is one value PER CELL.
+NEUTRAL_MOMENT_ROW_DOC = {"time": ("s", "save-frame time")}
+NEUTRAL_MOMENT_ROW_DOC.update(
+    {
+        f"{zone}_{quantity}": (unit, f"{zone}: {meaning}")
+        for zone in NEUTRAL_MOMENT_ZONES
+        for quantity, (unit, meaning) in NEUTRAL_MOMENT_QUANTITY_DOC.items()
+    }
+)
+
 
 class TransientDVM:
     """Live transient two-zone velocity-grid neutral state.
@@ -1649,6 +1698,39 @@ class TransientDVM:
         separate switch on the solver side.
         """
         return _temperature_eV(self.f_c, self.g)
+
+    def zone_velocity_moments(self):
+        """Return the neutral GAS's own velocity moments, per zone per cell.
+
+        One entry per :data:`NEUTRAL_MOMENT_SAVED_FRAME_KEYS` row but
+        ``time``, each a ``(cells,)`` array: the density, the parallel
+        particle flux (signed +z, towards the end wall), the mean parallel
+        velocity, and the parallel and perpendicular temperatures about that
+        mean. Units and meanings are :data:`NEUTRAL_MOMENT_ROW_DOC`.
+
+        These are moments of the DISTRIBUTIONS, taken on the quadrature the
+        density moment uses, and are distinct from the collision-pair
+        targets the transfer ledger samples: ``u_n_eff`` is the mean velocity
+        of the neutrals LOST to collisions on a tick and ``T_eff_eV`` a second
+        moment about the ION drift, neither of which is the gas flow.
+
+        Pure reading -- nothing here is written back to the distributions, to
+        any cached spectrum or to the ledgers.
+        """
+        moments = {}
+        for zone, f in zip(NEUTRAL_MOMENT_ZONES, (self.f_c, self.f_a)):
+            n, flux, u = _axial_moments(f, self.g)
+            T_par, T_perp = _directional_temperatures_eV(f, self.g, n, u)
+            moments.update(
+                {
+                    f"{zone}_n_n": n,
+                    f"{zone}_flux_n_z": flux,
+                    f"{zone}_u_n": u,
+                    f"{zone}_T_n_par_eV": T_par,
+                    f"{zone}_T_n_perp_eV": T_perp,
+                }
+            )
+        return moments
 
     def f_inventory(self):
         """Particles carried by the distributions themselves."""
@@ -4959,14 +5041,48 @@ def _cosine_wall_spectra(g, s):
     return f
 
 
-def _drift(f, g):
+def _axial_moments(f, g):
+    """Return ``(n, flux, u)`` of a distribution on the velocity grid.
+
+    ``f`` carries BIN MASSES -- a bin holds the density it owns, not a phase
+    space density -- so every moment here is a plain sum over the two bin
+    axes weighted by the bin CENTRES, which is the quadrature the zeroth
+    moment already is. ``n`` is the density [cm^-3], ``flux`` the parallel
+    particle flux ``<v_z> n`` [cm^-2 s^-1] signed +z, and ``u`` their ratio
+    [cm/s], defined as ``0.0`` where the density is at or below zero.
+    """
     n = f.sum(axis=(1, 2))
     with np.errstate(invalid="ignore", divide="ignore"):
-        return np.where(
-            n > 0.0,
-            (f * g.VZ[None, :, :]).sum(axis=(1, 2)) / np.maximum(n, 1e-300),
-            0.0,
-        )
+        flux = (f * g.VZ[None, :, :]).sum(axis=(1, 2))
+        u = np.where(n > 0.0, flux / np.maximum(n, 1e-300), 0.0)
+    return n, flux, u
+
+
+def _drift(f, g):
+    return _axial_moments(f, g)[2]
+
+
+def _directional_temperatures_eV(f, g, n, u):
+    """Return ``(T_par, T_perp)`` [eV] about the distribution's OWN drift.
+
+    Second central moments on the quadrature :func:`_axial_moments` uses:
+    ``T_par = m <(v_z - u)^2> / e`` carries the single parallel degree of
+    freedom, and ``T_perp = m <v_perp^2> / (2 e)`` the two perpendicular
+    ones. The perpendicular moment is taken about zero because the grid's
+    ``v_perp`` axis is a SPEED with the two-dimensional measure, so the mean
+    perpendicular velocity vector vanishes by the axisymmetry the grid is
+    built on. Both are ``0.0`` where the density is at or below zero.
+
+    ``n`` and ``u`` are the caller's, so the temperature is about the drift
+    the caller reports rather than one recomputed here.
+    """
+    inv_n = np.where(n > 0.0, 1.0 / np.maximum(n, 1e-300), 0.0)
+    cz2 = (g.VZ[None, :, :] - u[:, None, None]) ** 2
+    T_par = M_HE * (f * cz2).sum(axis=(1, 2)) * inv_n / EV
+    T_perp = M_HE * (f * (g.VP**2)[None, :, :]).sum(axis=(1, 2)) * inv_n / (
+        2.0 * EV
+    )
+    return T_par, T_perp
 
 
 def _temperature_eV(f, g):

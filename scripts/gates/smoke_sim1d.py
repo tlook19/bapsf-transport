@@ -25175,6 +25175,237 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
 
 
 # --------------------------------------------------------------------
+# dvm-neutral-moment-export
+# --------------------------------------------------------------------
+@_case("dvm-neutral-moment-export", historical_stance=True)
+def _case_dvm_neutral_moment_export(kd_flags, kd_params):
+    # THE NEUTRAL GAS'S OWN FLOW, at save cadence. The only velocity-shaped
+    # neutral row a saved DVM run carried was the transfer ledger's
+    # ``sample_u_n_eff``, which is the mean velocity of the neutrals LOST to
+    # collisions in the column -- not the gas flow -- so a z-t map of the
+    # neutral flow could not be drawn from any saved run. Four statements:
+    # the rows ARE the quadrature (an independent direct sum over the bins
+    # reproduces the exported flux), a known drifting Maxwellian comes back
+    # as its own drift and temperature inside the GRID's quadrature error,
+    # every value is finite and is zero exactly where the floor convention
+    # says, and the group round-trips while a file without it still loads.
+    from cablp.solvers._sim1d.physics.kinetic_dvm import (
+        NEUTRAL_MOMENT_QUANTITY_DOC as _NM_QUANTITY_DOC,
+        NEUTRAL_MOMENT_ROW_DOC as _NM_ROW_DOC,
+        NEUTRAL_MOMENT_SAVED_FRAME_KEYS as _NM_KEYS,
+        NEUTRAL_MOMENT_ZONES as _NM_ZONES,
+        _axial_moments as _nm_axial_moments,
+        _directional_temperatures_eV as _nm_directional_T_eV,
+    )
+    from cablp.solvers._sim1d.physics.kinetic_neutrals import (
+        EV as _NM_EV,
+        M_HE as _NM_M_HE,
+    )
+    from cablp.solvers._sim1d.results.io import (
+        save_result_hdf5 as _save_result_hdf5_nm,
+    )
+
+    nm_params = dict(kd_params)
+    nm_params["dt_save"] = 5.0e-9
+    nm_flags = dict(kd_flags)
+
+    # The moment control, differing in neutral_model and nothing else: the
+    # group is presence-gated on the arm, so a moment run must carry neither
+    # the attribute nor the group.
+    nm_mom_params = dict(nm_params)
+    nm_mom_params["neutral_model"] = "moment"
+    nm_mom_sim = LAPDSim1D(nm_mom_params, dict(nm_flags))
+    assert nm_mom_sim._dvm is None
+    nm_mom_result = nm_mom_sim.run(t_end=2.0e-8, dt=1.0e-9)
+    assert not hasattr(nm_mom_result, "dvm_neutral_moments")
+
+    nm_sim = LAPDSim1D(dict(nm_params), dict(nm_flags))
+    nm_result = nm_sim.run(t_end=4.0e-8, dt=1.0e-9)
+    assert nm_sim._dvm_engaged
+    nm = nm_result.dvm_neutral_moments
+
+    # Every declared row, and nothing else. Both zones, because the kinetic
+    # path carries a distribution for each.
+    assert set(nm) == set(_NM_KEYS)
+    assert set(_NM_ROW_DOC) == set(_NM_KEYS)
+    assert set(_NM_KEYS) == {"time"} | {
+        f"{nm_zone}_{nm_q}"
+        for nm_zone in _NM_ZONES
+        for nm_q in _NM_QUANTITY_DOC
+    }
+    nm_frames = len(nm_result.time)
+    nm_cells = nm_sim.geometry.cells
+    assert nm_frames > 1
+    # (iii) FINITE EVERYWHERE -- no NaN or inf reaches a saved file -- and
+    # per cell on every row but the frame's own clock.
+    assert nm["time"].shape == (nm_frames,)
+    assert np.array_equal(nm["time"], nm_result.time)
+    for nm_name in _NM_KEYS:
+        if nm_name == "time":
+            continue
+        assert nm[nm_name].shape == (nm_frames, nm_cells), nm_name
+        assert np.all(np.isfinite(nm[nm_name])), nm_name
+    for nm_zone in _NM_ZONES:
+        assert np.all(nm[f"{nm_zone}_n_n"] >= 0.0), nm_zone
+        assert np.all(nm[f"{nm_zone}_T_n_par_eV"] >= 0.0), nm_zone
+        assert np.all(nm[f"{nm_zone}_T_n_perp_eV"] >= 0.0), nm_zone
+    # NON-VACUOUS: the column carries gas, and it is moving.
+    assert nm["column_n_n"].max() > 0.0
+    assert np.abs(nm["column_u_n"]).max() > 0.0
+    assert nm["column_T_n_par_eV"].max() > 0.0
+
+    # (i) THE ROWS ARE THE QUADRATURE. An independent direct sum over the
+    # velocity bins -- flattened and contracted, a different summation order
+    # from the export's own axis reduction -- reproduces the exported flux
+    # to 1e-12 of the quadrature's OWN magnitude, the sum of its term
+    # magnitudes. That normalization, not the flux itself, is the only
+    # well-posed one here: the flux is a signed sum over a near-isotropic
+    # distribution, so it cancels to the summation's roundoff floor in
+    # almost every cell, and a flux-relative statement is undefined exactly
+    # where the flux is smallest. The density and the velocity are pinned
+    # against the same direct sum, and both are cancellation-free.
+    nm_g = nm_sim._dvm.g
+    nm_live = nm_sim._dvm.zone_velocity_moments()
+    nm_vz_flat = np.broadcast_to(nm_g.VZ, (nm_g.nvz, nm_g.nvp)).reshape(-1)
+    for nm_zone, nm_f in (
+        ("column", nm_sim._dvm.f_c), ("annulus", nm_sim._dvm.f_a)
+    ):
+        nm_flat = nm_f.reshape(nm_cells, -1)
+        nm_direct = nm_flat @ nm_vz_flat
+        nm_got = nm_live[f"{nm_zone}_flux_n_z"]
+        nm_scale = np.abs(nm_flat) @ np.abs(nm_vz_flat)
+        nm_err = np.abs(nm_got - nm_direct)
+        # NON-VACUOUS: there are terms to sum in every cell.
+        assert np.all(nm_scale > 0.0), nm_zone
+        assert np.all(nm_err <= 1.0e-12 * nm_scale), nm_zone
+        # The exported density is that same sum, and the velocity their ratio.
+        nm_n_direct = nm_flat @ np.ones(nm_g.nvz * nm_g.nvp)
+        assert np.allclose(
+            nm_live[f"{nm_zone}_n_n"], nm_n_direct, rtol=1.0e-12, atol=0.0
+        ), nm_zone
+        assert np.allclose(
+            nm_live[f"{nm_zone}_u_n"] * nm_live[f"{nm_zone}_n_n"],
+            nm_got, rtol=1.0e-12, atol=0.0,
+        ), nm_zone
+        # The save frame is the ENGINE's reading, not a re-derivation.
+        assert np.array_equal(
+            nm[f"{nm_zone}_flux_n_z"][-1], nm_got
+        ), nm_zone
+
+    # (ii) A KNOWN DRIFTING MAXWELLIAN COMES BACK. The grid's own projection
+    # pins its DISCRETE drift and its discrete <v^2> to 1e-10 of the target
+    # (that is the projection's own convergence criterion), so the drift and
+    # the three-degree-of-freedom temperature are recovered to that. The
+    # SPLIT between the parallel and perpendicular temperatures is not pinned
+    # by the projection and carries the grid's midpoint quadrature error
+    # instead: summing a second moment with the bin masses placed at the bin
+    # CENTRES misses, per bin, at most the within-bin spread
+    # ``dv^2/4 + |v - u| dv``, so the tolerance below is that bound summed
+    # over the run's OWN grid with the projection's OWN bin masses -- a
+    # number read off the grid, not chosen.
+    for nm_T_eV, nm_u in ((0.30, 0.15 * nm_g.vz[-1]), (0.30, 0.0),
+                          (1.0, 0.30 * nm_g.vz[-1])):
+        nm_spec = nm_g.maxwellian(nm_T_eV, nm_u)
+        nm_n0 = 3.0e12
+        nm_fm = (nm_n0 * nm_spec)[None, :, :].copy()
+        nm_n, nm_flux, nm_u_got = _nm_axial_moments(nm_fm, nm_g)
+        nm_T_par, nm_T_perp = _nm_directional_T_eV(
+            nm_fm, nm_g, nm_n, nm_u_got
+        )
+        nm_s = np.sqrt(nm_T_eV * _NM_EV / _NM_M_HE)
+        assert np.isclose(nm_n[0], nm_n0, rtol=1.0e-12, atol=0.0)
+        assert abs(nm_u_got[0] - nm_u) <= 1.0e-10 * max(abs(nm_u), nm_s)
+        assert np.isclose(nm_flux[0], nm_n0 * nm_u_got[0],
+                          rtol=1.0e-12, atol=0.0)
+        assert abs(
+            (nm_T_par[0] + 2.0 * nm_T_perp[0]) / 3.0 - nm_T_eV
+        ) <= 1.0e-10 * nm_T_eV
+        nm_wz = nm_spec.sum(axis=1)
+        nm_wp = nm_spec.sum(axis=0)
+        nm_dvz = np.diff(nm_g.vz_edges)
+        nm_dvp = np.diff(nm_g.vp_edges)
+        nm_tol_par = (_NM_M_HE / _NM_EV) * float(
+            (nm_wz * (0.25 * nm_dvz**2 + np.abs(nm_g.vz - nm_u) * nm_dvz)).sum()
+        )
+        nm_tol_perp = (_NM_M_HE / (2.0 * _NM_EV)) * float(
+            (nm_wp * (0.25 * nm_dvp**2 + nm_g.vp * nm_dvp)).sum()
+        )
+        assert abs(nm_T_par[0] - nm_T_eV) <= nm_tol_par, (nm_T_eV, nm_u)
+        assert abs(nm_T_perp[0] - nm_T_eV) <= nm_tol_perp, (nm_T_eV, nm_u)
+
+    # (iii) ZERO WHERE DOCUMENTED. An empty zone has no drift and no
+    # temperature to report, and the export says 0.0 rather than a NaN.
+    nm_empty = np.zeros((2, nm_g.nvz, nm_g.nvp))
+    nm_e_n, nm_e_flux, nm_e_u = _nm_axial_moments(nm_empty, nm_g)
+    nm_e_par, nm_e_perp = _nm_directional_T_eV(
+        nm_empty, nm_g, nm_e_n, nm_e_u
+    )
+    for nm_e_row in (nm_e_n, nm_e_flux, nm_e_u, nm_e_par, nm_e_perp):
+        assert np.all(nm_e_row == 0.0)
+    # And on the run itself, wherever a zone is empty.
+    for nm_zone in _NM_ZONES:
+        nm_off = nm[f"{nm_zone}_n_n"] <= 0.0
+        for nm_q in ("u_n", "T_n_par_eV", "T_n_perp_eV"):
+            assert np.all(nm[f"{nm_zone}_{nm_q}"][nm_off] == 0.0), nm_zone
+
+    with tempfile.TemporaryDirectory() as nm_dir:
+        # (iv) A FILE WITHOUT THE GROUP STILL LOADS -- the moment control,
+        # which never wrote one.
+        nm_mom_path = Path(nm_dir) / "dvm_moments_moment.h5"
+        _save_result_hdf5_nm(nm_mom_path, nm_mom_result)
+        with h5py.File(nm_mom_path, "r") as nm_mom_h5:
+            assert "dvm_neutral_moments" not in nm_mom_h5
+        assert not hasattr(
+            load_result_hdf5(nm_mom_path), "dvm_neutral_moments"
+        )
+
+        nm_path = Path(nm_dir) / "dvm_moments.h5"
+        _save_result_hdf5_nm(
+            nm_path, nm_result, params=nm_params, flags=nm_flags
+        )
+        with h5py.File(nm_path, "r") as nm_h5:
+            nm_group = nm_h5["dvm_neutral_moments"]
+            assert set(nm_group) == set(_NM_KEYS)
+            # The group documents itself, the way the particle ledger does.
+            nm_channels = tuple(nm_group.attrs["channels"])
+            assert nm_channels == tuple(_NM_KEYS)
+            for nm_attr, nm_index in (
+                ("channel_units", 0), ("channel_meanings", 1)
+            ):
+                assert list(nm_group.attrs[nm_attr]) == [
+                    _NM_ROW_DOC[nm_name][nm_index] for nm_name in nm_channels
+                ], nm_attr
+            nm_units = dict(
+                zip(nm_channels, nm_group.attrs["channel_units"])
+            )
+            assert nm_units["time"] == "s"
+            for nm_zone in _NM_ZONES:
+                assert nm_units[f"{nm_zone}_n_n"] == "cm^-3"
+                assert nm_units[f"{nm_zone}_flux_n_z"] == "cm^-2 s^-1"
+                assert nm_units[f"{nm_zone}_u_n"] == "cm/s"
+                assert nm_units[f"{nm_zone}_T_n_par_eV"] == "eV"
+                assert nm_units[f"{nm_zone}_T_n_perp_eV"] == "eV"
+        nm_back = load_result_hdf5(nm_path).dvm_neutral_moments
+        assert set(nm_back) == set(nm)
+        for nm_name, nm_row in nm.items():
+            assert np.array_equal(nm_back[nm_name], nm_row), nm_name
+
+        # (iv) again, on a DVM file in the OLD format: the same file with the
+        # group removed loads with the attribute simply absent, and every
+        # other group it carries is untouched.
+        nm_old_path = Path(nm_dir) / "dvm_moments_old_format.h5"
+        shutil.copyfile(nm_path, nm_old_path)
+        with h5py.File(nm_old_path, "r+") as nm_old_h5:
+            del nm_old_h5["dvm_neutral_moments"]
+        nm_old = load_result_hdf5(nm_old_path)
+        assert not hasattr(nm_old, "dvm_neutral_moments")
+        assert set(nm_old.dvm_particle_ledger) == set(
+            nm_result.dvm_particle_ledger
+        )
+        assert np.array_equal(nm_old.time, nm_result.time)
+
+
+# --------------------------------------------------------------------
 # parallel-momentum-sink-refusals
 # --------------------------------------------------------------------
 @_case("parallel-momentum-sink-refusals")
@@ -30599,7 +30830,7 @@ def _case_circuit_projection_refusals():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 179, "historical_stance": 68}
+_CASE_CENSUS = {"total": 180, "historical_stance": 69}
 
 
 def _assert_case_census():
