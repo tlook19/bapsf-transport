@@ -65,12 +65,30 @@ neither the default run nor the smoke suite depends on it:
     the total-variation distance of the normalized inventory profile and by
     ``z90``. The pre-registered bins are :data:`TPMC_BINS`; the legacy top-hat
     is scored on the same instrument and must fail them.
+``--tpmc-production FILE --tpmc-production-geometry-npz FILE``
+    G7 TPMC PRODUCTION COMPARISON. Scores the REGISTERED members -- the
+    reference, the two ends of its bracket and the instrument-match member --
+    against a reduced test-particle record of the same puff on the PRODUCTION
+    geometry, at each of the three rungs' registered feet. The operator runs
+    gap-coupled with a continuous source and with the neutral baffle's face
+    opened, because the record's instrument carries no baffle; the production
+    rows keep it. Six reductions of the two profiles (the near-field and
+    full-domain total-variation distances, the three quantile ratios, the bore
+    ratio across the source-bore step and the gap ratio behind the anode mesh)
+    are measured; :data:`TPMC_PRODUCTION_BINS` says which of them are GATED for
+    which member, and the rest are printed. The legacy top-hat must miss
+    :data:`TPMC_PRODUCTION_NEGATIVE_BINS`, ``z90`` must rise with the
+    coefficient, the record's ``z90`` must fall between the slow member and the
+    reference, and the gap-CLOSED set is disclosed beside its own failure.
 
 Usage (from the repo root, PYTHONPATH set to the repo root):
 
     python scripts/verify/verify_fill_spreading.py
     python scripts/verify/verify_fill_spreading.py --fast
     python scripts/verify/verify_fill_spreading.py --tpmc-record RECORD.npz
+    python scripts/verify/verify_fill_spreading.py \\
+        --tpmc-production PROFILES.npz \\
+        --tpmc-production-geometry-npz GEOMETRY.npz
 """
 
 import argparse
@@ -150,6 +168,70 @@ TPMC_NEGATIVE_MEMBER = "legacy ballistic top-hat"
 TPMC_REPORT_TIMES_S = (4.5e-3, 7.0e-3)
 #: G6: the geometry file the record was produced on, found beside the record.
 TPMC_GEOMETRY_NAME = "eqmap_demo_es1_nx240.npz"
+
+#: G7: the ES rung whose configuration the production test-particle run was
+#: made on, and therefore the one the comparison builds its geometry from. The
+#: three rungs differ only in bank voltage and standby surface temperature,
+#: neither of which enters the mesh, the zone volumes or the puff row, so the
+#: three feet are compared on ONE geometry and differ only in duration.
+TPMC_PRODUCTION_GEOMETRY_ES = 1
+#: G7: the ES rungs compared, each at its own registered foot.
+TPMC_PRODUCTION_RUNGS = (1, 2, 3)
+#: G7: the axial split the near-field total-variation distance is taken over
+#: [cm]. Everything past it is an upper bound in the record, so the profile
+#: below it is where the comparison carries weight; the full-domain distance is
+#: reported beside it.
+TPMC_PRODUCTION_SPLIT_Z_CM = 342.65
+#: G7: the two 20 cm bands whose mean added densities form the bore ratio
+#: [cm] -- the narrow-bore side of the source-bore step and the wide side.
+TPMC_PRODUCTION_BORE_BANDS_CM = ((83.25, 103.25), (103.25, 123.25))
+#: G7: the members scored, as ``(label, kappa)``. ``kappa=0.50`` is the
+#: INSTRUMENT-MATCH member -- the one required to reproduce a collisionless
+#: test-particle run -- and the other three are the registered reference and
+#: the two ends of its bracket, which are required to sit around it by a
+#: bounded amount rather than to match.
+TPMC_PRODUCTION_MEMBERS = (
+    ("knudsen kappa=0.50", 0.50),
+    ("knudsen kappa=0.45", sp3.KNUDSEN_KAPPA_SLOW),
+    ("knudsen kappa=2/3", sp3.KNUDSEN_KAPPA_REFERENCE),
+    ("knudsen kappa=0.90", sp3.KNUDSEN_KAPPA_FAST),
+)
+#: G7 PRE-REGISTERED BINS, keyed by member label and then by metric. Each entry
+#: is ``(low, high)`` with ``None`` for an open end, and applies at every rung.
+#: A metric absent from a member's entry is REPORTED, not gated.
+TPMC_PRODUCTION_BINS = {
+    "knudsen kappa=0.50": {
+        "TV<342": (None, 0.038),
+        "z50 ratio": (0.99, 1.05),
+        "z90 ratio": (0.97, 1.03),
+        "bore ratio": (0.91, 0.98),
+    },
+    "knudsen kappa=0.45": {
+        "z90 ratio": (0.93, 0.99),
+    },
+    "knudsen kappa=2/3": {
+        "TV<342": (None, 0.063),
+        "z50 ratio": (1.06, 1.13),
+        "z90 ratio": (1.08, 1.15),
+    },
+    "knudsen kappa=0.90": {
+        "z90 ratio": (1.21, 1.29),
+    },
+}
+#: G7: the member that must MISS its bins, and the bins it must miss. A
+#: negative control that passes is not controlling anything.
+TPMC_PRODUCTION_NEGATIVE_MEMBER = "legacy ballistic top-hat"
+TPMC_PRODUCTION_NEGATIVE_BINS = {
+    "TV<342": (0.25, None),
+    "TV full": (0.50, None),
+    "z90 ratio": (2.0, None),
+}
+#: G7: how close the gap-CLOSED set's near-field total-variation distance is
+#: expected to sit to the share of the record's inventory that set leaves
+#: empty [1]. Reported, never gated: it is the statement that the gap-closed
+#: failure is a fixed missing region rather than a diffusivity that could be
+#: retuned.
+TPMC_PRODUCTION_GAP_CLOSED_TOL = 0.015
 
 
 def _face_open_from_areas(area_cm2):
@@ -770,6 +852,345 @@ def gate_tpmc(record_paths, geometry_path, vbar_cm_s):
 
 
 # ----------------------------------------------------------------------
+# G7 -- the production-geometry test-particle comparison
+# ----------------------------------------------------------------------
+def _production_geometry(geometry_npz, es, nx, sgp):
+    """Return ``(geometry, params)`` for the configuration the record was run on.
+
+    The same configuration the legacy-row gate rebuilds: the stance at the
+    named operating point, with the per-cell radius and baffle profiles read
+    out of ``geometry_npz`` and the orifice puff row the record's source was
+    sampled from.
+    """
+    values, _ = sp3.parse_npz_overrides([
+        f"{name}={geometry_npz}:{name}" for name in (
+            "plasma_radius_profile_cm", "machine_radius_profile_cm",
+            "neutral_baffle_positions_cm", "neutral_baffle_clear_radii_cm",
+        )
+    ])
+    values.update(sp3.parse_extra_overrides(
+        ["gas_puff_profile=orifice", "gas_puff_orifice_id_cm=3.95",
+         "gas_puff_orifice_length_cm=22.0"], "--extra",
+    ))
+    params, flags = sp3.stance_config(
+        int(es), int(nx), float(sgp), True,
+        extra_params=values,
+        extra_flags=sp3.parse_extra_overrides(
+            ["prescribed_area_geometry=true", "neutral_baffles=true"],
+            "--extra-flag",
+        ),
+    )
+    return LAPDSim1D(dict(params), dict(flags)).geometry, params
+
+
+def _baffle_opened_faces(geometry, params):
+    """Return ``(face_open_area, opened)`` with the baffle faces unthrottled.
+
+    The record's instrument carries no neutral baffle, so scoring the operator
+    against it with one in the way would be comparing two different vessels.
+    Every face that is throttled below the smaller of the two cell areas AND
+    sits at a registered baffle position is opened to that smaller area, which
+    is what the face would carry with nothing in it. The anode mesh, which the
+    record DOES carry, is throttled at no baffle position and so is untouched.
+    ``opened`` lists the faces changed, as ``(index, z)``, for the printout.
+    """
+    z = np.asarray(geometry.z_cm, dtype=float)
+    length = np.asarray(geometry.length_cm, dtype=float)
+    area = np.asarray(geometry.neutral_volume_cm3, dtype=float) / length
+    face_open = np.asarray(geometry.neutral_face_area_cm2, dtype=float).copy()
+    positions = np.atleast_1d(
+        np.asarray(params["neutral_baffle_positions_cm"], dtype=float)
+    )
+    opened = []
+    for face in range(1, z.size):
+        smaller = min(area[face - 1], area[face])
+        if face_open[face] >= smaller * (1.0 - 1.0e-9):
+            continue
+        edge = z[face - 1] + 0.5 * length[face - 1]
+        if np.min(np.abs(positions - edge)) <= 0.5 * length[face - 1]:
+            face_open[face] = smaller
+            opened.append((face, edge))
+    return face_open, opened
+
+
+def _edge_quantile_z(edges_cm, inventory, fraction):
+    """Return the z below which ``fraction`` of the inventory sits [cm].
+
+    The record's own convention: the cumulative sum of the per-cell inventory
+    carried on the cell EDGES, which starts at zero on the domain's left edge
+    and reaches one on its right, linearly interpolated inside the straddling
+    cell. It differs from the cell-centre reading by half a cell and is what
+    the record's quantiles were reduced with.
+    """
+    inventory = np.asarray(inventory, dtype=float)
+    cumulative = np.concatenate(([0.0], np.cumsum(inventory)))
+    cumulative = cumulative / cumulative[-1]
+    return float(
+        np.interp(fraction, cumulative, np.asarray(edges_cm, dtype=float))
+    )
+
+
+def _band_mean_density(edges_cm, area_cm2, density_cm3, low_cm, high_cm):
+    """Return the volume-weighted mean density over ``[low, high]`` [cm^-3].
+
+    Cells are split at the band edges -- the weight of a cell is its own open
+    cross section times the length of its overlap with the band -- so the band
+    is the interval named rather than whichever cells happen to fall inside it.
+    """
+    edges_cm = np.asarray(edges_cm, dtype=float)
+    overlap = np.clip(
+        np.minimum(edges_cm[1:], high_cm) - np.maximum(edges_cm[:-1], low_cm),
+        0.0, None,
+    )
+    weight = overlap * np.asarray(area_cm2, dtype=float)
+    return float(np.sum(np.asarray(density_cm3, dtype=float) * weight)
+                 / np.sum(weight))
+
+
+def _production_metrics(inventory, mesh):
+    """Return the reduced comparison metrics of one inventory profile."""
+    density = np.asarray(inventory, dtype=float) / mesh.volume
+    (bore_low, bore_high) = TPMC_PRODUCTION_BORE_BANDS_CM
+    return {
+        "z50": _edge_quantile_z(mesh.edges, inventory, 0.5),
+        "z90": _edge_quantile_z(mesh.edges, inventory, 0.9),
+        "z99": _edge_quantile_z(mesh.edges, inventory, 0.99),
+        "bore": (
+            _band_mean_density(mesh.edges, mesh.area, density, *bore_low)
+            / _band_mean_density(mesh.edges, mesh.area, density, *bore_high)
+        ),
+        "gap": float(density[mesh.gap].mean() / density[mesh.first_chamber]),
+        "behind": float(
+            np.sum(np.asarray(inventory, dtype=float)[mesh.behind_mesh])
+            / np.sum(np.asarray(inventory, dtype=float))
+        ),
+    }
+
+
+def _in_bin(value, bounds):
+    """Return whether ``value`` lies in ``(low, high)``, either end open."""
+    low, high = bounds
+    return (low is None or value >= low) and (high is None or value <= high)
+
+
+def _bin_text(bounds):
+    """Return the human reading of a ``(low, high)`` bin."""
+    low, high = bounds
+    if low is None:
+        return f"<= {high:g}"
+    if high is None:
+        return f">= {low:g}"
+    return f"[{low:g}, {high:g}]"
+
+
+def gate_tpmc_production(record_path, geometry_npz, nx, sgp, vbar_cm_s):
+    """Return ``(ok, lines)`` for the production-geometry record comparison.
+
+    The operator is run gap-coupled with a continuous source, at each rung's
+    REGISTERED foot, against the record's snapshot at that same time, with the
+    neutral baffle's face opened for the comparison only -- the record's
+    instrument has no baffle, and the production rows keep it. The builder's
+    added inventory is restricted to the record's own domain, which drops the
+    plenum cell behind the cathode.
+
+    Six reductions of the two profiles: the total-variation distance of the
+    normalised inventory over the full domain and over the near field
+    (``z < TPMC_PRODUCTION_SPLIT_Z_CM``, renormalised there), the z50/z90/z99
+    quantiles as ratios to the record's, the bore ratio across the source-bore
+    step and the gap ratio behind the anode mesh. The bins in
+    :data:`TPMC_PRODUCTION_BINS` are pre-registered; a metric no member's entry
+    names is printed and not gated.
+    """
+    with np.load(record_path, allow_pickle=True) as data:
+        record_z = np.asarray(data["z_abs_cm"], dtype=float)
+        record_edges = np.asarray(data["z_edges_abs_cm"], dtype=float)
+        record_roles = np.array([str(role) for role in data["roles"]])
+        record_inventory = np.asarray(
+            data["inventory_atoms_per_seed"], dtype=float
+        ).mean(axis=0)
+        record_times = np.asarray(data["report_times_s"], dtype=float)
+
+    geometry, params = _production_geometry(
+        geometry_npz, TPMC_PRODUCTION_GEOMETRY_ES, nx, sgp,
+    )
+    z = np.asarray(geometry.z_cm, dtype=float)
+    length = np.asarray(geometry.length_cm, dtype=float)
+    volume = np.asarray(geometry.neutral_volume_cm3, dtype=float)
+    offset = z.size - record_z.size
+    if offset < 0 or np.max(np.abs(z[offset:] - record_z)) > 1.0e-9:
+        raise ValueError(
+            f"the record's {record_z.size} cells do not sit on the last "
+            f"{record_z.size} of the configuration's {z.size}; the comparison "
+            "has no common domain"
+        )
+    face_open, opened = _baffle_opened_faces(geometry, params)
+    gap = record_roles == "gap"
+    if not np.any(gap):
+        raise ValueError(
+            "the record carries no gap-role cell, so the gap ratio the bins "
+            "are stated in has no denominator"
+        )
+    mesh = SimpleNamespace(
+        edges=record_edges,
+        volume=volume[offset:],
+        area=volume[offset:] / length[offset:],
+        gap=gap,
+        first_chamber=int(np.flatnonzero(gap)[-1] + 1),
+        behind_mesh=record_z < record_z[int(np.flatnonzero(gap)[-1] + 1)],
+        near=record_z < TPMC_PRODUCTION_SPLIT_Z_CM,
+    )
+    lines = [
+        f"  configuration: ES{TPMC_PRODUCTION_GEOMETRY_ES} operating point, "
+        f"nx={nx}, S_gp={sgp:g} sccm, geometry profiles from "
+        f"{Path(geometry_npz).name}; {z.size} cells against the record's "
+        f"{record_z.size} ({offset} dropped: "
+        f"{', '.join(str(role) for role in geometry.cell_role[:offset])})",
+        f"  operator: gap-coupled, continuous source, "
+        f"{sp3.KNUDSEN_SUBSTEPS_DEFAULT} substeps, vbar {vbar_cm_s:.6g} cm/s "
+        f"at Tn {params['Tn_K']:g} K",
+        "  baffle faces OPENED for the comparison only (the record's "
+        "instrument carries none; the production rows keep them): "
+        + (", ".join(f"face {face} at z={edge:.2f} cm"
+                     for face, edge in opened) or "none"),
+    ]
+
+    ok = True
+    for es in TPMC_PRODUCTION_RUNGS:
+        foot = sp3.registered_foot_s(es)
+        sample = int(np.argmin(np.abs(record_times - foot)))
+        if abs(float(record_times[sample]) - foot) > 1.0e-9:
+            raise ValueError(
+                f"the record carries no snapshot at ES{es}'s registered foot "
+                f"t = {foot:g} s; it reports "
+                f"{np.round(record_times * 1e3, 6).tolist()} ms"
+            )
+        reference = record_inventory[sample]
+        record = _production_metrics(reference, mesh)
+        deposit = _lobe(geometry, params, foot)
+        lines.append(
+            f"  ES{es} registered foot {foot * 1e3:.2f} ms against the "
+            f"record's {float(record_times[sample]) * 1e3:.2f} ms snapshot: "
+            f"record z50 {record['z50']:.1f}, z90 {record['z90']:.1f}, z99 "
+            f"{record['z99']:.1f} cm, bore {record['bore']:.4f}, gap "
+            f"{record['gap']:.4f}, behind the mesh {record['behind']:.4f}"
+        )
+        z90_by_kappa = []
+        for label, kappa in TPMC_PRODUCTION_MEMBERS:
+            active = sp3.knudsen_active_mask(geometry.cell_role, True)
+            accumulated, _ = sp3.knudsen_spread(
+                z, length, volume, face_open, active, deposit, foot,
+                vbar_cm_s, kappa=kappa,
+            )
+            candidate = accumulated[offset:]
+            model = _production_metrics(candidate, mesh)
+            z90_by_kappa.append((kappa, model["z90"]))
+            measured = {
+                "TV<342": _total_variation(
+                    candidate[mesh.near], reference[mesh.near]
+                ),
+                "TV full": _total_variation(candidate, reference),
+                "z50 ratio": model["z50"] / record["z50"],
+                "z90 ratio": model["z90"] / record["z90"],
+                "z99 ratio": model["z99"] / record["z99"],
+                "bore ratio": model["bore"] / record["bore"],
+                "gap ratio": model["gap"] / record["gap"],
+            }
+            bins = TPMC_PRODUCTION_BINS[label]
+            for metric, value in measured.items():
+                if metric not in bins:
+                    lines.append(
+                        f"       (reported, not gated) ES{es} {label} "
+                        f"{metric}: {value:.4f}"
+                    )
+                    continue
+                good = _in_bin(value, bins[metric])
+                ok = ok and good
+                lines.append(
+                    f"  [{'ok' if good else 'FAIL'}] ES{es} {label} {metric}: "
+                    f"{value:.4f} against bin {_bin_text(bins[metric])}"
+                )
+            lines.append(
+                f"       ES{es} {label} raw: z50 {model['z50']:.1f}, z90 "
+                f"{model['z90']:.1f}, z99 {model['z99']:.1f} cm, bore "
+                f"{model['bore']:.4f}, gap {model['gap']:.4f}, behind the "
+                f"mesh {model['behind']:.4f}"
+            )
+        # THE NEGATIVE CONTROL, on the same instrument and the same bins it
+        # must miss.
+        candidate = (
+            sp3.spread_matrix(geometry, "ballistic", vbar_cm_s * foot)
+            @ deposit
+        )[offset:]
+        model = _production_metrics(candidate, mesh)
+        measured = {
+            "TV<342": _total_variation(
+                candidate[mesh.near], reference[mesh.near]
+            ),
+            "TV full": _total_variation(candidate, reference),
+            "z90 ratio": model["z90"] / record["z90"],
+        }
+        for metric, bounds in TPMC_PRODUCTION_NEGATIVE_BINS.items():
+            good = _in_bin(measured[metric], bounds)
+            ok = ok and good
+            lines.append(
+                f"  [{'ok' if good else 'FAIL'}] ES{es} "
+                f"{TPMC_PRODUCTION_NEGATIVE_MEMBER} {metric}: "
+                f"{measured[metric]:.4f} must be {_bin_text(bounds)} -- it is "
+                f"the control and has to miss the members' bins"
+            )
+        # THE ORDERING the bracket asserts, and where the record falls in it.
+        # A bracket whose ends do not straddle its reference in reach is not a
+        # bracket, whatever its members individually score.
+        by_reach = sorted(z90_by_kappa)
+        ordered = all(
+            lower[1] < upper[1] for lower, upper in zip(by_reach, by_reach[1:])
+        )
+        by_kappa = dict(z90_by_kappa)
+        ok = ok and ordered
+        lines.append(
+            f"  [{'ok' if ordered else 'FAIL'}] ES{es} z90 rises with kappa: "
+            + " < ".join(
+                f"{value:.1f} (kappa {kappa:.4g})" for kappa, value in by_reach
+            )
+        )
+        bracketed = (
+            by_kappa[sp3.KNUDSEN_KAPPA_SLOW] < record["z90"]
+            < by_kappa[sp3.KNUDSEN_KAPPA_REFERENCE]
+        )
+        ok = ok and bracketed
+        lines.append(
+            f"  [{'ok' if bracketed else 'FAIL'}] ES{es} the record's z90 "
+            f"{record['z90']:.1f} cm lies between the kappa="
+            f"{sp3.KNUDSEN_KAPPA_SLOW:g} member "
+            f"({by_kappa[sp3.KNUDSEN_KAPPA_SLOW]:.1f} cm) and the reference "
+            f"({by_kappa[sp3.KNUDSEN_KAPPA_REFERENCE]:.1f} cm)"
+        )
+        # THE GAP-CLOSED DISCLOSURE. Reported, never gated: the set that leaves
+        # the region behind the mesh empty misses by about the share of the
+        # record that sits there, whatever the diffusivity.
+        for label, kappa in TPMC_PRODUCTION_MEMBERS:
+            active = sp3.knudsen_active_mask(geometry.cell_role, False)
+            accumulated, _ = sp3.knudsen_spread(
+                z, length, volume, face_open, active, deposit, foot,
+                vbar_cm_s, kappa=kappa,
+            )
+            candidate = accumulated[offset:]
+            distance = _total_variation(
+                candidate[mesh.near], reference[mesh.near]
+            )
+            miss = distance - record["behind"]
+            lines.append(
+                f"       (disclosed, not gated) ES{es} {label} on the "
+                f"GAP-CLOSED set: TV<342 {distance:.4f} against the record's "
+                f"{record['behind']:.4f} behind the mesh, "
+                f"{miss:+.4f} away -- "
+                f"{'inside' if abs(miss) <= TPMC_PRODUCTION_GAP_CLOSED_TOL else 'OUTSIDE'}"
+                f" +-{TPMC_PRODUCTION_GAP_CLOSED_TOL:g}"
+            )
+    return ok, lines
+
+
+# ----------------------------------------------------------------------
 # the subsets
 # ----------------------------------------------------------------------
 def fast_gates():
@@ -845,6 +1266,20 @@ def main(argv=None):
         help=f"G6: the geometry the record was produced on (default: "
              f"{TPMC_GEOMETRY_NAME} beside the first record)",
     )
+    parser.add_argument(
+        "--tpmc-production", type=Path, default=None,
+        help="G7: a reduced test-particle record of the same puff on the "
+             "PRODUCTION geometry, carrying its per-seed inventory profiles "
+             "and its own cell edges, to score the registered members against "
+             "at each rung's registered foot",
+    )
+    parser.add_argument(
+        "--tpmc-production-geometry-npz", type=Path, default=None,
+        help="G7: the .npz carrying the per-cell geometry profiles that "
+             "record was produced on",
+    )
+    parser.add_argument("--tpmc-production-nx", type=int, default=268)
+    parser.add_argument("--tpmc-production-sgp", type=float, default=9010.0)
     args = parser.parse_args(argv)
 
     # --fast chooses which of the IN-REPO gates run; the optional modes below
@@ -877,6 +1312,21 @@ def main(argv=None):
             sp3.mean_speed_cm_s(GATE_TN_K, m_He_cgs),
         )
         results.append(("G6 TPMC record gate", ok, lines))
+
+    if args.tpmc_production is not None:
+        if args.tpmc_production_geometry_npz is None:
+            parser.error(
+                "--tpmc-production needs --tpmc-production-geometry-npz: the "
+                "comparison runs the operator on the configuration the record "
+                "was produced on, and that configuration's per-cell profiles "
+                "are named"
+            )
+        ok, lines = gate_tpmc_production(
+            args.tpmc_production, args.tpmc_production_geometry_npz,
+            args.tpmc_production_nx, args.tpmc_production_sgp,
+            sp3.mean_speed_cm_s(GATE_TN_K, m_He_cgs),
+        )
+        results.append(("G7 TPMC production comparison", ok, lines))
 
     print("=== initial-fill spreading verification ===")
     failures = 0
