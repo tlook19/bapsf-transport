@@ -57,23 +57,30 @@ THE CONSTRUCTION (leg 3a of the sp campaign):
   shot-to-shot standard deviation of the lead (``MEASURED_LEAD_SD_S``), so
   ``foot +- sd`` per rung -- an error bar, not a pair of modelling choices.
 * ``spread`` -- carries the deposited inventory away from the lobe over
-  ``dt_foot``. Three selectable members, of which the first two are the
-  DISCLOSED BRACKET:
+  ``dt_foot``. Three selectable kernels:
 
+      knudsen    a conservative finite-volume axial diffusion SOLVE
       diffusive  gaussian, sigma = sqrt(2 D dt),  D = lambda vbar / 3
       ballistic  top-hat,  half-width = vbar dt
-      knudsen    a conservative finite-volume axial diffusion SOLVE
+
+  ``knudsen`` is the REGISTERED member and is what an omitted ``--kernel``
+  runs: the wall-limited finite-volume solve at
+  :data:`KNUDSEN_KAPPA_REFERENCE`, gap-coupled, with the deposit released
+  continuously over the foot across :data:`KNUDSEN_SUBSTEPS_DEFAULT`
+  substeps. Its own registration is the three NAMED coefficient members
+  below -- the reference and the two ends of its closure bracket -- and a
+  member is requested by name with ``--knudsen-member``.
 
   ``diffusive`` and ``ballistic`` are MATRIX kernels: a stencil in ``z``
   evaluated once, its targets weighted by cell LENGTH and its columns
   normalized, applied to an inventory deposited whole at the start of the
-  foot. ``knudsen`` is not a stencil at all -- it integrates a diffusion
-  equation on the builder's own mesh and zone volumes, weighted by cell
-  VOLUME, with the source spread over the foot. All three conserve the
-  injected inventory on the grid exactly (asserted).
-
-  The two matrix members are the registered bracket ``KERNELS``; ``knudsen``
-  is SELECTABLE and is not a member of it.
+  foot. They are RETAINED, reachable only by an explicit ``--kernel``, as
+  the LEGACY REPRODUCTION ROUTE for rows built before the finite-volume
+  member was registered, and they compute what they always computed.
+  ``knudsen`` is not a stencil at all -- it integrates a diffusion equation
+  on the builder's own mesh and zone volumes, weighted by cell VOLUME, with
+  the source spread over the foot. All three conserve the injected
+  inventory on the grid exactly (asserted).
 
 NOTHING HERE IS FITTED. Every input is hardware-anchored (S_gp, valves, the
 puff placement, the measured 1 kA lead), code-anchored (the lobe, the
@@ -82,24 +89,22 @@ literature-boxed (the He-He collision cross section, printed with its source
 and overridable from the command line). The declared spread has two parts and
 they are different kinds of thing: the ``dt_foot`` bracket is the measured
 lead's error bar, so the registered foot is the value and the bracket is its
-uncertainty, while the KERNEL bracket is a closure the data cannot pin, so
-both of its members are run.
+uncertainty, while the spreading COEFFICIENT's bracket is a closure the data
+cannot pin, so the reference member is the value and its two named ends are
+the bracket.
 
 The kernels are stated, not assumed to be right:
 
 * DIFFUSIVE is the random-walk limit -- the foot gas is collisional against
   the background fill, so it spreads as sqrt(t) with the elementary kinetic
-  self-diffusion coefficient ``D = lambda vbar / 3``. Its reach is the
-  SHORT end of the bracket.
+  self-diffusion coefficient ``D = lambda vbar / 3``.
 * BALLISTIC is the collisionless limit -- the foot gas free-streams for
   ``dt_foot``, so its support is the interval it can physically reach,
-  ``vbar dt``. A TOP-HAT fills that interval flatly, which makes the
-  registered reach literally the profile's support and keeps the bracket's
-  "short-of-trough vs trough-reaching" reading checkable off the array. It is
-  a deliberate idealization: an exactly free-streaming 3D Maxwellian projects
-  onto a gaussian of sigma ``t sqrt(kT/m)`` = 0.63 ``vbar t``, a narrower core
-  with tails past the top-hat edge. The top-hat is the flatter, more
-  spread-out member and so is the honest opposite end of the bracket.
+  ``vbar dt``. A TOP-HAT fills that interval flatly, which makes the reach
+  literally the profile's support and so readable straight off the array. It
+  is a deliberate idealization: an exactly free-streaming 3D Maxwellian
+  projects onto a gaussian of sigma ``t sqrt(kT/m)`` = 0.63 ``vbar t``, a
+  narrower core with tails past the top-hat edge.
 * KNUDSEN is the wall-limited limit -- the gas meets the vessel wall far more
   often than it meets another atom, so the wall, not a gas-phase collision,
   is what randomizes it. Its statement is a conservation law rather than a
@@ -188,14 +193,19 @@ a file rather than a kilobyte of argv, via ``--extra-npz KEY=path.npz:array``.
 Usage:
 
     python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
-        --kernel ballistic --out nn0_foot_es1.npz
+        --out nn0_foot_es1.npz
 
     python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
-        --kernel knudsen --knudsen-member slow --out nn0_foot_es1_knudsen.npz
+        --knudsen-member slow --out nn0_foot_es1_slow.npz
 
-(``--dt-foot-s`` omitted takes the requested rung's registered foot; pass it
-to walk that rung's bracket. ``--knudsen-member`` and ``--knudsen-kappa`` both
-omitted take the reference member, :data:`KNUDSEN_KAPPA_REFERENCE`.)
+    python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
+        --kernel ballistic --out nn0_foot_es1_legacy.npz
+
+(No kernel argument builds the REGISTERED member: the Knudsen reference at
+the requested rung's registered foot. ``--dt-foot-s`` omitted takes that
+foot; pass it to walk that rung's bracket. ``--knudsen-member`` and
+``--knudsen-kappa`` both omitted take the reference member,
+:data:`KNUDSEN_KAPPA_REFERENCE`.)
 """
 
 import argparse
@@ -259,17 +269,42 @@ MEASURED_LEAD_SD_S = {1: 0.09e-3, 2: 0.02e-3, 3: 0.09e-3}
 
 #: The MODEL's own circuit-on -> 1 kA time at each rung's operating point [s],
 #: measured off the model's discharge current. Code-anchored, not fitted.
-MODEL_1KA_S = {1: 0.118e-3, 2: 0.171e-3, 3: 0.316e-3}
+#:
+#: What the subtraction in :func:`registered_foot_s` does with these is a CLOCK
+#: ALIGNMENT: the same 1 kA threshold is read on the machine's discharge
+#: current and on the model's, and the foot is the interval between the two
+#: crossings. These times are therefore where the model's clock sits relative
+#: to the machine's, not a property of the gas.
+#:
+#: THE TOLERANCE RULE THE REGISTRATION FOLLOWS. The model's 1 kA time is read
+#: ONCE, at the REGISTERED FILL -- the initial fill the reference configuration
+#: carries -- and is RE-REGISTERED only when it moves by MORE than that rung's
+#: measured lead sd (:data:`MEASURED_LEAD_SD_S`) at any rung. A smaller move
+#: sits inside the foot's own error bar, where the foot it would produce is
+#: indistinguishable from the registered one; re-reading on such a move would
+#: also make the fill and the time it is built from chase each other, since the
+#: fill changes the model's approach to 1 kA and the time then changes the
+#: fill. A move larger than the sd is outside the bracket the foot is stated
+#: with, and all three rungs are then re-read together so one registration
+#: holds across the ladder.
+MODEL_1KA_S = {1: 0.067e-3, 2: 0.089e-3, 3: 0.139e-3}
 
+#: The two LEGACY MATRIX kernels: the stencil members ``spread_matrix``
+#: builds, retained as the reproduction route for rows built before the
+#: finite-volume member was registered. They are reachable only by an
+#: explicit ``--kernel``, and the ledger's ``kernel_bracket`` field names
+#: this pair.
 KERNELS = ("diffusive", "ballistic")
 
-#: The wall-limited finite-volume spreading member's ``--kernel`` name, and
-#: the full set of selectable members. ``KERNELS`` stays the REGISTERED
-#: bracket -- the two matrix kernels, which are what ``spread_matrix`` builds
-#: and what the ledger's ``kernel_bracket`` names -- and ``knudsen`` is a
-#: selectable member outside it.
+#: The wall-limited finite-volume spreading member's ``--kernel`` name, the
+#: full set of selectable members, and the member an omitted ``--kernel``
+#: builds. ``knudsen`` is the REGISTERED spreading member: its coefficient's
+#: own registration is :data:`KNUDSEN_MEMBERS` below, and the settings that
+#: complete it -- gap coupling, the source convention and the substep count --
+#: are named in this module rather than left to argparse defaults.
 KNUDSEN_KERNEL = "knudsen"
-SELECTABLE_KERNELS = KERNELS + (KNUDSEN_KERNEL,)
+SELECTABLE_KERNELS = (KNUDSEN_KERNEL,) + KERNELS
+KERNEL_REGISTERED = KNUDSEN_KERNEL
 
 #: THE WALL-LIMITED OPERATOR'S REGISTRATION.
 #:
@@ -302,7 +337,6 @@ KNUDSEN_MEMBERS = {
     "slow": KNUDSEN_KAPPA_SLOW,
     "fast": KNUDSEN_KAPPA_FAST,
 }
-KNUDSEN_KAPPA_DEFAULT = KNUDSEN_KAPPA_REFERENCE
 #: The member name an omitted ``--knudsen-member`` and an omitted
 #: ``--knudsen-kappa`` together resolve to, and the name the ledger records for
 #: a coefficient that is not one of the registered three.
@@ -340,8 +374,8 @@ KNUDSEN_PROBE_Z_CM = (60.0, 98.0, 107.0, 200.0, 300.0, 470.0)
 #: accumulates over them as a random walk rather than to a fixed figure. It is
 #: set where every substep count and march length the operator accepts stays
 #: inside it; at the registered substep count over a foot the error measures
-#: four orders of magnitude smaller, and the build's own conservation check
-#: downstream of this one holds the rows a builder actually writes to the
+#: about three orders of magnitude smaller, and the build's own conservation
+#: check downstream of this one holds the rows a builder actually writes to the
 #: tighter bar the builder has always used.
 KNUDSEN_CONSERVATION_REL_TOL = 1.0e-10
 
@@ -361,7 +395,7 @@ def registered_foot_s(es):
     The difference is ROUNDED to 10 us, the resolution the measured leads are
     quoted at: carrying the raw subtraction's trailing digits would state a
     foot to a precision the measurement does not have. The rounded values are
-    the feet OF RECORD -- ES1 0.00583, ES2 0.00658, ES3 0.00645 s -- and they
+    the feet OF RECORD -- ES1 0.00588, ES2 0.00666, ES3 0.00663 s -- and they
     are what an omitted ``--dt-foot-s`` supplies, so the builder reproduces a
     committed fill without being told the number.
     """
@@ -726,7 +760,7 @@ def _thomas_sweep(lower, diag, upper, rhs):
 def knudsen_spread(
     z_cm, length_cm, neutral_volume_cm3, face_open_area_cm2, active,
     deposited, dt_foot_s, vbar_cm_s,
-    kappa=KNUDSEN_KAPPA_DEFAULT,
+    kappa=KNUDSEN_KAPPA_REFERENCE,
     substeps=KNUDSEN_SUBSTEPS_DEFAULT,
     source_convention=KNUDSEN_SOURCE_CONVENTIONS[0],
 ):
@@ -1199,8 +1233,9 @@ def print_ledger(
     )
     print(
         f"bracket corner: dt_foot={ledger['dt_foot_s']:.6g} s of "
-        f"{ledger['dt_foot_bracket_s']}, kernel={ledger['kernel']!r} of "
-        f"{ledger['kernel_bracket']}"
+        f"{ledger['dt_foot_bracket_s']}, kernel={ledger['kernel']!r} "
+        f"(registered {KERNEL_REGISTERED!r}; legacy matrix "
+        f"{ledger['kernel_bracket']})"
     )
     print(
         f"thermal: Tn={ledger['Tn_K']:g} K, vbar={ledger['vbar_cm_s']:.6g} cm/s; "
@@ -1353,14 +1388,16 @@ def main(argv=None):
                         "own error bar. 0 is the explicit NULL CONTROL: no "
                         "foot addition at all, so the output is the base "
                         "itself")
-    p.add_argument("--kernel", choices=SELECTABLE_KERNELS, default="diffusive",
-                   help="spreading member; the registered bracket is the two "
-                        "MATRIX kernels (default: the short-reach end of it). "
-                        f"{KNUDSEN_KERNEL!r} is the volume-consistent "
-                        "finite-volume solve, selectable and outside that "
-                        "bracket; it is configured by the --knudsen-* options "
-                        "below and ignores --sigma-hehe-cm2 / --mfp-cm, which "
-                        "set the matrix diffusive member's width")
+    p.add_argument("--kernel", choices=SELECTABLE_KERNELS,
+                   default=KERNEL_REGISTERED,
+                   help="spreading member. OMITTED builds the REGISTERED "
+                        f"member {KERNEL_REGISTERED!r}, the volume-consistent "
+                        "finite-volume solve, configured by the --knudsen-* "
+                        "options below; it ignores --sigma-hehe-cm2 / "
+                        "--mfp-cm, which set the matrix diffusive member's "
+                        f"width. {list(KERNELS)} are the LEGACY MATRIX "
+                        "kernels, retained to reproduce rows built before the "
+                        "finite-volume member was registered")
     p.add_argument("--knudsen-member", choices=sorted(KNUDSEN_MEMBERS),
                    default=None,
                    help="the REGISTERED member of the wall-limited spreading "

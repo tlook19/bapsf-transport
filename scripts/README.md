@@ -88,12 +88,18 @@ into four kinds: read-only audits/censuses of a saved run or build
 `k2_dvm_exchange_measure.py`, `k7cbuild_frozen_bitexact.py`,
 `verify_beam_deposition.py`, `verify_hbd_momentum.py`,
 `verify_phase3_source_capture.py`,
-`verify_fill_spreading.py` — the initial fill's spreading members: density
-continuity across a bore step against the length-weighted route as negative
-control, the equilibrium and free-space limits, propagator reciprocity in
-volume, convergence, and two optional modes reading data from outside the
-repo, a committed-row bit-identity check and a comparison against a banked
-test-particle record). These differ from `gates/` in cadence, not
+`verify_fill_spreading.py` — the initial fill's spreading members. The
+registered member is a finite-volume Knudsen diffusion of the foot inventory
+from the puff row, with a continuous source over the foot, gap-coupled
+through the anode mesh, on the equilibrated base; its coefficient carries
+three named members, and the matrix kernels the builder also offers are
+retained to reproduce earlier rows. The in-repo gates are density continuity
+across a bore step against the length-weighted route as negative control, the
+equilibrium and free-space limits, propagator reciprocity in volume, and
+convergence; three optional modes read data from outside the repo — a
+two-leg row bit-identity check, and comparisons against a banked
+test-particle record and against one on the production geometry). These
+differ from `gates/` in cadence, not
 in rigor: a `gates/` check runs on every merge, a `verify/` instrument runs
 for the build that owns it and stays runnable afterwards so its verdict can be
 re-derived.

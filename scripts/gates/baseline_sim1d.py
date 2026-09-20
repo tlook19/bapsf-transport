@@ -111,7 +111,7 @@ PRODUCTION_STANCE = "g1atrim"
 #   * the two radius profiles are built offline by scripts/stance/g1_build_profiles.py
 #     from a measured field census, and the vessel profile is a STAIRCASE whose
 #     steps interpolation would smear into a bore the machine does not have;
-#   * the two nn0 profiles are an equilibrated 5.83 ms foot computed for that
+#   * the two nn0 profiles are an equilibrated 5.88 ms foot computed for that
 #     mesh -- resampling them changes the neutral inventory and the near-source
 #     structure, so it is a new initial condition, not the stance's.
 #

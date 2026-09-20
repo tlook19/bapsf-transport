@@ -1,12 +1,18 @@
 """Verify the initial-fill builder's spreading members against their stated properties.
 
-``scripts/stance/sp3_build_nn0.py`` offers three spreading members: two MATRIX
-kernels (``diffusive``, ``ballistic``), whose targets are weighted by cell
-LENGTH and which are applied to an inventory deposited whole at the start of
-the foot, and ``knudsen``, a conservative finite-volume axial diffusion solve
-on the builder's own mesh and zone volumes, weighted by cell VOLUME, with the
-source spread over the foot. This script is the acceptance instrument for the
-finite-volume member and for the property that separates the two families.
+``scripts/stance/sp3_build_nn0.py`` offers three spreading members. The
+REGISTERED one, which an omitted ``--kernel`` builds, is ``knudsen``: a
+conservative finite-volume axial diffusion of the foot inventory away from the
+puff row on the builder's own mesh and zone volumes, weighted by cell VOLUME,
+with the source released continuously over the foot, gap-coupled through the
+anode mesh face, at the registered coefficient
+``sp3.KNUDSEN_KAPPA_REFERENCE``; its own registration is the three named
+coefficient members. The other two, ``diffusive`` and ``ballistic``, are
+MATRIX kernels, whose targets are weighted by cell LENGTH and which are
+applied to an inventory deposited whole at the start of the foot; they are
+retained, by explicit ``--kernel``, as the legacy reproduction route. This
+script is the acceptance instrument for the finite-volume member and for the
+property that separates the two families.
 
 Each gate names the instrument that decides it; every gate prints its own
 numbers, and the script exits non-zero if any selected gate fails.
@@ -54,25 +60,35 @@ OPTIONAL MODES -- each reads data that does not live in this repository, so
 neither the default run nor the smoke suite depends on it:
 
 ``--legacy-rows FILE --base-h5 FILE``
-    G0 LEGACY BIT-IDENTITY. Rebuilds the committed initial-fill rows of a
-    configuration file through the legacy ballistic route and compares them at
-    RAW UINT64 -- float64 bit patterns read as integers, so a one-ulp move is
-    a difference. The bar is zero differing values on both rows. This is the
-    gate that says a change to the builder moved nothing that is committed.
+    G0 ROW BIT-IDENTITY, two legs, both compared at RAW UINT64 -- float64 bit
+    patterns read as integers, so a one-ulp move is a difference, and the bar
+    is zero differing values on both rows. ``G0a`` rebuilds the committed
+    initial-fill rows of a configuration file through the builder's
+    REGISTERED member, naming no kernel, which is the gate that says a change
+    to the builder moved nothing that is committed. ``G0b`` rebuilds the
+    LEGACY rows in :data:`LEGACY_ROWS_FIXTURE` through ``--kernel
+    ballistic`` at :data:`LEGACY_ROWS_FOOT_S`, the fixed foot that fixture
+    was built at, which is the gate that says the legacy reproduction route
+    still reproduces. Both legs need the equilibrated base and the per-cell
+    geometry profiles, which do not live in this repository, so both ride
+    this optional mode rather than the default run.
 ``--tpmc-record FILE``
     G6 TPMC RECORD GATE. Scores candidate members against a banked
     test-particle Monte Carlo record of the same puff on the same geometry, by
     the total-variation distance of the normalized inventory profile and by
     ``z90``. The pre-registered bins are :data:`TPMC_BINS`; the legacy top-hat
-    is scored on the same instrument and must fail them.
+    is scored on the same instrument and must miss EVERY one of them.
 ``--tpmc-production FILE --tpmc-production-geometry-npz FILE``
     G7 TPMC PRODUCTION COMPARISON. Scores the REGISTERED members -- the
     reference, the two ends of its bracket and the instrument-match member --
     against a reduced test-particle record of the same puff on the PRODUCTION
-    geometry, at each of the three rungs' registered feet. The operator runs
+    geometry, at one NAMED comparison time per rung
+    (:data:`TPMC_PRODUCTION_COMPARISON_TIMES_S`), which both sides are built
+    at because the record holds snapshots only where it was reduced. The
+    operator runs
     gap-coupled with a continuous source and with the neutral baffle's face
     opened, because the record's instrument carries no baffle; the production
-    rows keep it. Six reductions of the two profiles (the near-field and
+    rows keep it. Seven reductions of the two profiles (the near-field and
     full-domain total-variation distances, the three quantile ratios, the bore
     ratio across the source-bore step and the gap ratio behind the anode mesh)
     are measured; :data:`TPMC_PRODUCTION_BINS` says which of them are GATED for
@@ -118,6 +134,21 @@ from cablp.solvers._sim1d.physics.neutrals import (  # noqa: E402
 
 #: The configuration the production legs of G1, G2 and G5 run on.
 PRODUCTION_STANCE = "g1atrim"
+#: G0b: the committed fixture holding the LEGACY initial-fill rows -- the two
+#: rows the reference configuration carried before the finite-volume member
+#: became the builder's registered one, with the z grid they sit on and a
+#: provenance string naming the builder arguments that reproduce them.
+LEGACY_ROWS_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "data" / "nn0_legacy_ballistic_reference.npz"
+)
+#: G0b: the foot [s] the LEGACY rows in :data:`LEGACY_ROWS_FIXTURE` were built
+#: at. A legacy reproduction route carries its OWN foot: the fixture is a fixed
+#: set of numbers, so the argument that reproduces it is fixed too and cannot
+#: be read from the live per-rung registration, which moves whenever the
+#: model's 1 kA time is re-registered. G0a, which rebuilds the configuration's
+#: CURRENT rows, names no foot and so follows the registration.
+LEGACY_ROWS_FOOT_S = 5.83e-3
 #: Neutral temperature the gates evaluate the mean speed at [K].
 GATE_TN_K = 300.0
 #: Foot duration the transport gates integrate over [s]. Any positive time
@@ -162,7 +193,7 @@ TPMC_BINS = {
     "knudsen kappa=2/3": (0.09, 1.00, 1.12),
     "knudsen kappa=0.5": (0.06, 0.95, 1.05),
 }
-#: G6: the member that must FAIL every bin above.
+#: G6: the member that must MISS every bin above -- all of them, not one.
 TPMC_NEGATIVE_MEMBER = "legacy ballistic top-hat"
 #: G6 report times [s]. Both are exact samples of the record's own grid.
 TPMC_REPORT_TIMES_S = (4.5e-3, 7.0e-3)
@@ -175,8 +206,26 @@ TPMC_GEOMETRY_NAME = "eqmap_demo_es1_nx240.npz"
 #: neither of which enters the mesh, the zone volumes or the puff row, so the
 #: three feet are compared on ONE geometry and differ only in duration.
 TPMC_PRODUCTION_GEOMETRY_ES = 1
-#: G7: the ES rungs compared, each at its own registered foot.
+#: G7: the ES rungs compared.
 TPMC_PRODUCTION_RUNGS = (1, 2, 3)
+#: G7 COMPARISON TIMES [s], one per rung: the time BOTH sides of the
+#: comparison are built at.
+#:
+#: The record is a banked test-particle run and holds snapshots only at the
+#: times it was reduced at, so the comparison can only be made at one of
+#: those. These are those times, named here rather than read from the live
+#: foot registration, and the builder's rows are integrated to the SAME time
+#: as the snapshot they are scored against -- which is what makes each metric
+#: a like-for-like reduction of two profiles of the same age, and what the
+#: pre-registered bins in :data:`TPMC_PRODUCTION_BINS` were measured on.
+#:
+#: They are the durations the record carries near each rung's foot, not the
+#: registered feet themselves: a registered foot moves whenever the model's
+#: 1 kA time is re-registered, while the record's snapshot times are fixed by
+#: the banked file. Every transcript prints both, and the gate refuses to
+#: score if a named time is not an exact sample of the record's own grid --
+#: it never interpolates and never falls back to the nearest snapshot.
+TPMC_PRODUCTION_COMPARISON_TIMES_S = {1: 5.83e-3, 2: 6.58e-3, 3: 6.45e-3}
 #: G7: the axial split the near-field total-variation distance is taken over
 #: [cm]. Everything past it is an upper bound in the record, so the profile
 #: below it is where the comparison carries weight; the full-domain distance is
@@ -361,7 +410,7 @@ def gate_uniform_source(vbar_cm_s, production=True):
             ):
                 continue
             deposit = _volume_uniform_source(mesh, active)
-            for kappa in (sp3.KNUDSEN_KAPPA_DEFAULT, 0.5):
+            for kappa in (sp3.KNUDSEN_KAPPA_REFERENCE, 0.5):
                 accumulated, _ = sp3.knudsen_spread(
                     mesh.z_cm, mesh.length_cm, mesh.neutral_volume_cm3,
                     mesh.neutral_face_area_cm2, active, deposit,
@@ -472,7 +521,7 @@ def gate_reciprocity(vbar_cm_s):
     index, conductance = sp3.knudsen_face_conductances(
         mesh.z_cm, mesh.length_cm, mesh.neutral_volume_cm3,
         mesh.neutral_face_area_cm2, active, vbar_cm_s,
-        sp3.KNUDSEN_KAPPA_DEFAULT,
+        sp3.KNUDSEN_KAPPA_REFERENCE,
     )
     volume = np.asarray(mesh.neutral_volume_cm3, dtype=float)[index]
     size = int(index.size)
@@ -521,9 +570,9 @@ def gate_free_space(vbar_cm_s):
     # out, where the reflecting ends cannot reach the second moment.
     duration = (
         (cells * cell_length / 12.0) ** 2
-        / (2.0 * sp3.KNUDSEN_KAPPA_DEFAULT * radius * vbar_cm_s)
+        / (2.0 * sp3.KNUDSEN_KAPPA_REFERENCE * radius * vbar_cm_s)
     )
-    for kappa in (sp3.KNUDSEN_KAPPA_DEFAULT, 0.5):
+    for kappa in (sp3.KNUDSEN_KAPPA_REFERENCE, 0.5):
         diffusivity = kappa * radius * vbar_cm_s
         accumulated, _ = sp3.knudsen_spread(
             mesh.z_cm, mesh.length_cm, mesh.neutral_volume_cm3,
@@ -652,13 +701,17 @@ def _differing_uint64(got, want):
     return int(np.count_nonzero(got != want))
 
 
-def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
-    """Return ``(ok, lines)`` for the committed-row bit-identity gate."""
-    import tomllib
+def _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, kernel, dt_foot_s=None):
+    """Return ``(column, annulus)`` rebuilt by the builder through ``kernel``.
 
-    with open(rows_path, "rb") as handle:
-        document = tomllib.load(handle)
-    block = document["models"]["initial_neutral_state"]
+    Every input the committed rows were built on, stated here once: the
+    operating point, the foot, the equilibrated base, the per-cell geometry
+    profiles and the orifice puff row. Two things vary between the legs.
+    ``kernel`` -- ``None`` leaves it at the builder's own registered member,
+    which is the point of G0a. ``dt_foot_s`` -- ``None`` takes the rung's
+    REGISTERED foot, which is what G0a wants; G0b names
+    :data:`LEGACY_ROWS_FOOT_S`, the foot its fixed fixture was built at.
+    """
     keys = [str(geometry_npz) + ":" + name for name in (
         "plasma_radius_profile_cm", "machine_radius_profile_cm",
         "neutral_baffle_positions_cm", "neutral_baffle_clear_radii_cm",
@@ -666,8 +719,13 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
     args = SimpleNamespace(
         es=int(es), nx=int(nx), sgp=float(sgp), two_zone=True, zone="chamber",
         base_from_h5=str(base_h5),
-        dt_foot_s=sp3.registered_foot_s(int(es)),
-        kernel="ballistic",
+        dt_foot_s=(sp3.registered_foot_s(int(es)) if dt_foot_s is None
+                   else float(dt_foot_s)),
+        kernel=sp3.KERNEL_REGISTERED if kernel is None else str(kernel),
+        knudsen_kappa=sp3.KNUDSEN_KAPPA_REFERENCE,
+        knudsen_substeps=sp3.KNUDSEN_SUBSTEPS_DEFAULT,
+        knudsen_gap_coupling=sp3.KNUDSEN_GAP_COUPLING_REGISTERED,
+        knudsen_source_convention=sp3.KNUDSEN_SOURCE_CONVENTIONS[0],
         sigma_hehe_cm2=sp3.SIGMA_HE_HE_CM2, mfp_cm=None, tn_k=None,
         extra=["gas_puff_profile=orifice", "gas_puff_orifice_id_cm=3.95",
                "gas_puff_orifice_length_cm=22.0"],
@@ -679,21 +737,75 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
             "neutral_baffle_clear_radii_cm=" + keys[3],
         ],
     )
-    column, annulus = sp3.build(args)[:2]
+    return sp3.build(args)[:2]
+
+
+def _compare_rows(label, got_pair, want_pair):
+    """Return ``(ok, lines)`` for one raw-uint64 comparison of the two rows."""
     lines = []
     ok = True
-    for name, got in (("nn0_profile", column),
-                      ("nn0_annulus_profile", annulus)):
-        want = np.asarray(block[name], dtype=float)
+    for name, got, want in (
+        ("nn0_profile", got_pair[0], want_pair[0]),
+        ("nn0_annulus_profile", got_pair[1], want_pair[1]),
+    ):
+        want = np.asarray(want, dtype=float)
         differing = _differing_uint64(got, want)
         good = differing == 0
         ok = ok and good
         lines.append(
-            f"  [{'ok' if good else 'FAIL'}] {name}: {differing} of "
+            f"  [{'ok' if good else 'FAIL'}] {label} {name}: {differing} of "
             f"{want.size} raw uint64 values differ, max |delta| "
             f"{float(np.max(np.abs(np.asarray(got, dtype=float) - want))):.3e}"
         )
     return ok, lines
+
+
+def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
+    """Return ``(ok, lines)`` for the two committed-row bit-identity legs.
+
+    ``G0a`` rebuilds the configuration's own committed rows through the
+    builder's REGISTERED member -- no kernel named, exactly as the committed
+    rows were built -- and requires raw-uint64 identity. That is the gate
+    that says a change to the builder moved nothing that is committed.
+
+    ``G0b`` rebuilds the LEGACY rows the configuration carried before the
+    finite-volume member was registered, through ``--kernel ballistic`` at
+    :data:`LEGACY_ROWS_FOOT_S` -- the fixture's OWN foot, named because the
+    fixture is a fixed set of numbers -- and requires raw-uint64 identity
+    against the committed fixture :data:`LEGACY_ROWS_FIXTURE`. That is the
+    gate that says the legacy reproduction route still reproduces.
+
+    Both legs need the equilibrated base result and the per-cell geometry
+    profiles, neither of which lives in this repository, so both ride the
+    optional ``--legacy-rows`` mode rather than the default run.
+    """
+    import tomllib
+
+    with open(rows_path, "rb") as handle:
+        document = tomllib.load(handle)
+    block = document["models"]["initial_neutral_state"]
+    committed = (
+        np.asarray(block["nn0_profile"], dtype=float),
+        np.asarray(block["nn0_annulus_profile"], dtype=float),
+    )
+    ok, lines = _compare_rows(
+        "G0a registered route vs the committed rows:",
+        _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, None),
+        committed,
+    )
+    with np.load(LEGACY_ROWS_FIXTURE, allow_pickle=False) as fixture:
+        legacy = (
+            np.asarray(fixture["nn0_profile"], dtype=float),
+            np.asarray(fixture["nn0_annulus_profile"], dtype=float),
+        )
+    ok_b, lines_b = _compare_rows(
+        f"G0b --kernel ballistic at the fixture's own foot "
+        f"{LEGACY_ROWS_FOOT_S * 1e3:.2f} ms vs {LEGACY_ROWS_FIXTURE.name}:",
+        _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, "ballistic",
+                      dt_foot_s=LEGACY_ROWS_FOOT_S),
+        legacy,
+    )
+    return ok and ok_b, lines + lines_b
 
 
 # ----------------------------------------------------------------------
@@ -757,7 +869,7 @@ def gate_tpmc(record_paths, geometry_path, vbar_cm_s):
         deposit = rate * map_volume * duration
         members = {}
         disclosed = {}
-        for label, kappa in (("knudsen kappa=2/3", sp3.KNUDSEN_KAPPA_DEFAULT),
+        for label, kappa in (("knudsen kappa=2/3", sp3.KNUDSEN_KAPPA_REFERENCE),
                              ("knudsen kappa=0.5", 0.5)):
             members[label], _ = sp3.knudsen_spread(
                 mesh.z_cm, mesh.length_cm, mesh.neutral_volume_cm3,
@@ -825,18 +937,31 @@ def gate_tpmc(record_paths, geometry_path, vbar_cm_s):
                 ratio = z90 / reference_z90
                 bins = TPMC_BINS.get(label)
                 if bins is None:
-                    passes = all(
-                        distance <= limit and low <= ratio <= high
-                        for limit, low, high in TPMC_BINS.values()
+                    # THE NEGATIVE CONTROL, held to the bar G7 holds its own
+                    # to: it must miss EVERY bin it is scored against, not
+                    # merely one of them. Satisfying one member's bin means
+                    # the control scores like that member on the instrument
+                    # that is supposed to separate them, and a control that
+                    # is only required to miss one bin would pass anyway on
+                    # the strength of the others.
+                    satisfied = [
+                        member
+                        for member, (limit, low, high) in TPMC_BINS.items()
+                        if distance <= limit and low <= ratio <= high
+                    ]
+                    good = not satisfied
+                    verdict = (
+                        f"misses all {len(TPMC_BINS)} bins"
+                        if good
+                        else "SATISFIES " + ", ".join(sorted(satisfied))
                     )
-                    good = not passes
-                    verdict = "FAILS the bins" if good else "PASSES a bin"
                     ok = ok and good
                     lines.append(
                         f"  [{'ok' if good else 'FAIL'}] t={duration * 1e3:g} "
                         f"ms {name} {label}: TV {distance:.4f}, z90 "
                         f"{z90:.1f} cm = {ratio:.4f} x record "
-                        f"{reference_z90:.1f} cm -- {verdict} (it must fail)"
+                        f"{reference_z90:.1f} cm -- {verdict} (it must miss "
+                        f"every one)"
                     )
                     continue
                 limit, low, high = bins
@@ -987,13 +1112,17 @@ def gate_tpmc_production(record_path, geometry_npz, nx, sgp, vbar_cm_s):
     """Return ``(ok, lines)`` for the production-geometry record comparison.
 
     The operator is run gap-coupled with a continuous source, at each rung's
-    REGISTERED foot, against the record's snapshot at that same time, with the
-    neutral baffle's face opened for the comparison only -- the record's
-    instrument has no baffle, and the production rows keep it. The builder's
-    added inventory is restricted to the record's own domain, which drops the
-    plenum cell behind the cathode.
+    NAMED COMPARISON TIME (:data:`TPMC_PRODUCTION_COMPARISON_TIMES_S`),
+    against the record's snapshot at that same time, with the neutral baffle's
+    face opened for the comparison only -- the record's instrument has no
+    baffle, and the production rows keep it. Both sides are therefore built at
+    one time per rung, which is the like-for-like reduction the bins describe;
+    that time is an exact sample of the record's own grid or the gate refuses,
+    and the rung's registered foot is printed beside it. The builder's added
+    inventory is restricted to the record's own domain, which drops the plenum
+    cell behind the cathode.
 
-    Six reductions of the two profiles: the total-variation distance of the
+    Seven reductions of the two profiles: the total-variation distance of the
     normalised inventory over the full domain and over the near field
     (``z < TPMC_PRODUCTION_SPLIT_Z_CM``, renormalised there), the z50/z90/z99
     quantiles as ratios to the record's, the bore ratio across the source-bore
@@ -1056,20 +1185,23 @@ def gate_tpmc_production(record_path, geometry_npz, nx, sgp, vbar_cm_s):
 
     ok = True
     for es in TPMC_PRODUCTION_RUNGS:
-        foot = sp3.registered_foot_s(es)
+        foot = TPMC_PRODUCTION_COMPARISON_TIMES_S[es]
+        registered = sp3.registered_foot_s(es)
         sample = int(np.argmin(np.abs(record_times - foot)))
         if abs(float(record_times[sample]) - foot) > 1.0e-9:
             raise ValueError(
-                f"the record carries no snapshot at ES{es}'s registered foot "
-                f"t = {foot:g} s; it reports "
+                f"the record carries no snapshot at ES{es}'s named comparison "
+                f"time t = {foot:g} s; it reports "
                 f"{np.round(record_times * 1e3, 6).tolist()} ms"
             )
         reference = record_inventory[sample]
         record = _production_metrics(reference, mesh)
         deposit = _lobe(geometry, params, foot)
         lines.append(
-            f"  ES{es} registered foot {foot * 1e3:.2f} ms against the "
-            f"record's {float(record_times[sample]) * 1e3:.2f} ms snapshot: "
+            f"  ES{es} comparison time {foot * 1e3:.2f} ms (both sides; the "
+            f"record's own {float(record_times[sample]) * 1e3:.2f} ms "
+            f"snapshot; ES{es}'s registered foot is "
+            f"{registered * 1e3:.2f} ms and is NOT what this scores): "
             f"record z50 {record['z50']:.1f}, z90 {record['z90']:.1f}, z99 "
             f"{record['z99']:.1f} cm, bore {record['bore']:.4f}, gap "
             f"{record['gap']:.4f}, behind the mesh {record['behind']:.4f}"
@@ -1241,7 +1373,9 @@ def main(argv=None):
     parser.add_argument(
         "--legacy-rows", type=Path, default=None,
         help="G0: a configuration file whose committed initial-fill rows the "
-             "legacy ballistic route must reproduce at raw uint64",
+             "builder's REGISTERED member must reproduce at raw uint64 "
+             "(G0a), and against which the legacy ballistic route is checked "
+             "at raw uint64 on the committed legacy fixture (G0b)",
     )
     parser.add_argument(
         "--base-h5", type=Path, default=None,
@@ -1296,7 +1430,8 @@ def main(argv=None):
             args.legacy_rows, args.base_h5, args.legacy_es, args.legacy_nx,
             args.legacy_sgp, args.legacy_geometry_npz,
         )
-        results.insert(0, ("G0 legacy bit-identity", ok, lines))
+        results.insert(0, ("G0 row bit-identity (G0a registered, G0b legacy)",
+                           ok, lines))
 
     if args.tpmc_record:
         geometry = args.tpmc_geometry

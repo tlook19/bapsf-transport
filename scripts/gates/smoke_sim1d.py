@@ -95,7 +95,19 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 
-from cablp.cathode import kernels as _kernel_selector
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+# Installed at MODULE scope, once, so that every case importing a scripts/
+# sibling can do so whether it runs in the full suite or alone under --only.
+# Per-case copies of this block only reach the cases that run after them, so
+# a case whose own body carried none raised ModuleNotFoundError under --only
+# while passing in the suite.
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = str(Path(__file__).resolve().parents[1] / _sub)
+    if _dir not in sys.path:
+        sys.path.insert(0, _dir)
+
+from cablp.cathode import kernels as _kernel_selector  # noqa: E402
 from cablp.cathode import circuit as _cathode_solver_mod
 from cablp.cathode import circuit_idriven as _cathode_solver_idriven_mod
 from cablp.cathode import beam_deposition as _beam_deposition_mod
@@ -11203,14 +11215,6 @@ def _case_non_ignition_guards(
 
     # Scorer hard-fail (scripts): a non-ignited run must raise, an ignited one
     # must score its origin from the first main_discharge sample.
-    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import compare_sim1d_es1 as _cmp_es1
     import fingerprints_sim1d as _fingerprints
 
@@ -14122,14 +14126,6 @@ def _case_gas_puff_orifice_profile():
     # total inflow exactly, and every misconfiguration raises at CONSTRUCTION.
     from cablp.solvers._sim1d.core.geometry import build_geometry
 
-    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import puff_orifice as _porf
 
     orf_params, orf_flags = default_config()
@@ -23332,14 +23328,6 @@ def _case_golden_digest_gate_deterministic():
     # process would report every merge as a divergence. A deliberately tiny
     # config (nx=12, no neutral equilibration, 25 steps) makes that a
     # sub-second check.
-    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import golden_digest_gate as _gdg
 
     assert _gdg.DIGEST_STEPS == 4000
@@ -23808,14 +23796,6 @@ def _case_cathode_closed_audit_export():
 @contextlib.contextmanager
 def _derived_fixture_dir():
     """Yield a temporary stance directory holding a copy of the reference."""
-    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import stance_config as _sc
 
     original = _sc.STANCE_DIR
@@ -24250,14 +24230,6 @@ def _case_configuration_drivers_refuse_rung_owned_supersession():
     # temporary stance directory: the refusal fires before anything is
     # constructed, and the positive controls stop at a patched run_model, so no
     # case here reaches a solve.
-    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import run_m6_point as _ro_m6
     import run_mechanism_ladder as _ro_ladder
 
@@ -24540,14 +24512,6 @@ def _case_configuration_fluid_comparator_example():
     # a hand-written --extra list forgets.
     from cablp.solvers._sim1d import config_identity, default_config
 
-    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from stance_config import load_configuration, load_stance
 
     _fc_path = (
@@ -26450,14 +26414,6 @@ def _case_floor_audit_names_its_configuration():
     # The floor-activation audit is a run entry point, so it names the
     # configuration it measures: no bare mode, and the golden route resolves
     # to the golden's OWN configuration rather than to a hand-kept copy of it.
-    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import audit_sim1d_floor_activation as _fa
 
     # REFUSALS. argparse exits 2 on each; the message names what to pass.
@@ -28177,18 +28133,10 @@ def _case_far_end_double_ratio_area_cancels():
     of one probe and must move D by exactly the factor, so a version of this
     case that compared nothing would fail it.
     """
-    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import far_end_double_ratio as _fedr
 
     overlay_npz = np.load(
-        _Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
+        Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
         allow_pickle=False,
     )
     base_overlay = {key: overlay_npz[key] for key in overlay_npz.files}
@@ -28762,17 +28710,10 @@ def _case_far_end_double_ratio_per_family_gating():
     directions on synthetic overlays built from the real ES1 overlay's key
     set with one family's keys deleted.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import far_end_double_ratio as _fedr
 
     overlay_npz = np.load(
-        _Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
+        Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
         allow_pickle=False,
     )
     base_overlay = {key: overlay_npz[key] for key in overlay_npz.files}
@@ -28851,17 +28792,10 @@ def _case_far_end_double_ratio_empty_legend_guard():
     forms zero rows, and the report call must print the skip line and raise
     nothing.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import far_end_double_ratio as _fedr
 
     overlay_npz = np.load(
-        _Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
+        Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
         allow_pickle=False,
     )
     base_overlay = {key: overlay_npz[key] for key in overlay_npz.files}
@@ -28929,14 +28863,6 @@ def _case_cathode_ion_secondary_emission_unarmed():
     )
     from cablp.cathode.circuit import beam_launched_current_A
 
-    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import audit_sim1d_configs as _se_audit
 
     # (i) THE KEYS ARE OWNED, AND BY THE RIGHT NAMESPACE. A params key filed
@@ -29413,17 +29339,10 @@ def _case_far_end_double_ratio_shared_keys_skip():
     'port'`` instead of returning a clean skip. This overlay keeps every
     other key (both families' own fields intact) and removes only ``port``.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     import far_end_double_ratio as _fedr
 
     overlay_npz = np.load(
-        _Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
+        Path(__file__).resolve().parents[1] / "data" / "es1_sim1d_overlay.npz",
         allow_pickle=False,
     )
     base_overlay = {key: overlay_npz[key] for key in overlay_npz.files}
@@ -29484,14 +29403,6 @@ def _case_cathode_warming_honest_resolve_circuit_bound():
       surface ledger alike -- the bit-exactness of the unarmed path measured
       end to end rather than argued from the expression.
     """
-    # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from baseline_sim1d import build_baseline_config as _wb_baseline_config
     from cablp.solvers._sim1d.physics.cathode import (
         circuit_available_voltage_V as _wb_available_V,
@@ -30131,13 +30042,6 @@ def _case_neutral_equilibration_clears_bound_flag():
     call, spy removed, must build and run the inner equilibration without
     raising.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from baseline_sim1d import build_baseline_config as _neb_baseline_config
     import cablp.solvers._sim1d.solver as _neb_solver_mod
 
@@ -30192,13 +30096,6 @@ def _case_circuit_sample_default_identity():
     trajectory and circuit trace alike. That is the bit-exactness of the
     unarmed path, measured rather than argued from the expression.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from baseline_sim1d import build_baseline_config as _csd_baseline_config
 
     _CSD_T_END = 2.0e-6
@@ -30312,13 +30209,6 @@ def _case_circuit_sample_smoothed_discriminator():
     sequence -- which is the point, the bound and the step now describing one
     relation, and is why the two arms are not step-for-step comparable.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from baseline_sim1d import build_baseline_config as _css_baseline_config
     import cablp.solvers._sim1d.solver as _css_solver_mod
 
@@ -30365,7 +30255,7 @@ def _case_circuit_sample_smoothed_discriminator():
         _dn = []
 
         def _css_spy(**kw):
-            _site = _sys._getframe(1).f_code.co_name
+            _site = sys._getframe(1).f_code.co_name
             if _site not in _rel:
                 return _orig(**kw)
             if force_raw:
@@ -30469,13 +30359,6 @@ def _case_circuit_sample_refusals():
     and ``"smoothed"`` with the ``cathode_coupling`` flag off, where there is
     no circuit advance at all.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from baseline_sim1d import build_baseline_config as _csr_baseline_config
 
     def _csr_config(param_overrides):
@@ -30555,13 +30438,6 @@ def _case_circuit_projection_default_identity():
     the flag is armed, so an unarmed run's saved diagnostic set is exactly
     what it always was.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from baseline_sim1d import build_baseline_config as _cpd_baseline_config
 
     _CPD_T_END = 2.0e-6
@@ -30665,13 +30541,6 @@ def _case_circuit_projection_over_wall_discriminator():
     then runs on that value, unmodified. A second spy records what the
     advance was handed and where it landed.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from scipy.optimize import brentq as _cpw_brentq
     from baseline_sim1d import build_baseline_config as _cpw_baseline_config
     import cablp.solvers._sim1d.solver as _cpw_solver_mod
@@ -30711,7 +30580,7 @@ def _case_circuit_projection_over_wall_discriminator():
         _rec = {}
 
         def _cpw_spy_eval(**kw):
-            if _sys._getframe(1).f_code.co_name != "_accept_step_attempt":
+            if sys._getframe(1).f_code.co_name != "_accept_step_attempt":
                 return _orig_eval(**kw)
             _vdis = _orig_eval(**kw)
             if _rec:
@@ -30826,13 +30695,6 @@ def _case_circuit_projection_schottky_on_inert():
     trigger keyed to the LOAD LINE instead, which under the circuit voltage
     bound armed here would fire on every plateau step.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from baseline_sim1d import build_baseline_config as _cpi_baseline_config
 
     _CPI_T_END = 5.0e-6
@@ -30895,13 +30757,6 @@ def _case_circuit_projection_refusals():
     rather than from whatever the trace resolution would otherwise reach
     first, which is why the validator sits ahead of it.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from baseline_sim1d import build_baseline_config as _cpr_baseline_config
 
     def _cpr_refuses(params, flags, needle):
@@ -30978,13 +30833,6 @@ def _case_kep_pressure_work_closure():
     GUARD on each asserts the state actually exercises the variable area, so a
     vacuously satisfied closure cannot pass.
     """
-    import sys as _sys
-    from pathlib import Path as _Path
-    for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
-                 "verify"):
-        _dir = str(_Path(__file__).resolve().parents[1] / _sub)
-        if _dir not in _sys.path:
-            _sys.path.insert(0, _dir)
     from stance_config import (  # noqa: E402
         load_configuration as _kep_load,
         without_mesh_sized_package as _kep_drop_mesh,
