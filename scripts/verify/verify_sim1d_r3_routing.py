@@ -71,6 +71,7 @@ def main():
         sim._input_dict,
         sim._effective_cathode_flags(time=None, active_only=False),
         sim._mu,
+        sim.ion_mass_g,
     )
     Te = 4.0
     pl = PlasmaState(T_e=Te, n_e=5.0e12, n_n=1.0e12, sigma_b=0.0)
@@ -127,9 +128,9 @@ def main():
 
     # G5 fluid boundary electron routing: cathode 0, end wall 2Te.
     geo = sim.geometry
-    mu, mi = sim._mu, sim.ion_mass_g
+    mi = sim.ion_mass_g
     roles = np.asarray(geo.cell_role)
-    cs = ion_sound_speed(Te, mu)
+    cs = ion_sound_speed(Te, mi)
     cells = geo.cells
     u = np.zeros(cells)
     edges = {}
@@ -142,7 +143,7 @@ def main():
         n=np.full(cells, 5.0e12), nn=np.full(cells, 1.0e12), u=u,
         Te=np.full(cells, Te), Ti=np.full(cells, 1.0), ion_mass_g=mi,
     )
-    kw = dict(state=st, floors=sim._floors, ion_mass_g=mi, mu=mu, geometry=geo,
+    kw = dict(state=st, floors=sim._floors, ion_mass_g=mi, geometry=geo,
               alpha_isat=np.exp(-0.5), b_surface_loss=1.0,
               gas_type=sim._gas_type)
     routed = characteristic_boundary_rhs(**kw)

@@ -4506,7 +4506,6 @@ class LAPDSim1D:
                 state=probe,
                 floors=self._floors,
                 ion_mass_g=self._ion_mass_g,
-                mu=self._mu,
                 geometry=self._plasma_geometry(),
                 cathode_jet=None,
                 wave_speed=self._hyperbolic_wave_speed,
@@ -4917,7 +4916,7 @@ class LAPDSim1D:
             "transport_ratio": tracer_transport_ratio(
                 gamma=gamma,
                 Te_eV=Te,
-                mu=self._mu,
+                ion_mass_g=self._ion_mass_g,
                 L_n_cm=0.5 * L_plasma_cm,
             ),
             "passive": new_passive.copy(),
@@ -10238,7 +10237,6 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            mu=self._mu,
             geometry=self._plasma_geometry(),
             include_front=use_front,
             alpha_front=float(self._input_dict.get("alpha_front")),
@@ -10258,7 +10256,6 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            mu=self._mu,
             geometry=self._plasma_geometry(),
             include_front=use_front,
             alpha_front=float(self._input_dict.get("alpha_front")),
@@ -10400,7 +10397,6 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            mu=self._mu,
             geometry=self._plasma_geometry(),
             wave_speed=self._hyperbolic_wave_speed,
         )
@@ -10634,7 +10630,6 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            mu=self._mu,
             geometry=self._plasma_geometry(),
             alpha_isat=surface_kwargs["alpha_isat"],
             b_surface_loss=surface_kwargs["b_surface_loss"],
@@ -10666,7 +10661,6 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            mu=self._mu,
             geometry=self._plasma_geometry(),
             eta=float(self._input_dict.get("eta")),
             anode_jet=self._anode_jet_spec(cathode_solve),
@@ -12136,7 +12130,9 @@ class LAPDSim1D:
             if self._sample_smoothing == "presheath":
                 # Ion transit across the sampled cell at the (smoothed)
                 # sound speed: the physical supply-averaging time.
-                cs = ion_sound_speed(max(Te_ema, self._floors["Te"]), self._mu)
+                cs = ion_sound_speed(
+                    max(Te_ema, self._floors["Te"]), self._ion_mass_g
+                )
                 tau = float(self._geometry.length_cm[c]) / max(cs, 1.0)
             else:
                 tau = float(self._sample_smoothing)

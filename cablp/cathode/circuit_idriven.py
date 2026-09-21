@@ -121,6 +121,7 @@ from cablp.cathode.circuit import (
     beam_launch_potential_V,
     beam_launched_current_A,
 )
+from cablp.plasma.params import bohm_sound_speed as _bohm_sound_speed
 from cablp.atomic.cross_sections import H_EII_cross_lkup, He_EII_cross_lkup
 from cablp.cathode.kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 
@@ -638,7 +639,7 @@ def solve_idriven(
             f"{CATHODE_LNL_MODELS} (got {config.lnL_model!r})"
         )
     R_p = config.L_cath / (math.pi * config.R_cath**2 * sigma_par)
-    C_s = math.sqrt(T_e * _e_SI * 1.0e7 / (config.mu * _mp_cgs))
+    C_s = float(_bohm_sound_speed(T_e, config.ion_mass_g))
     # Sheath-edge sampling (R3.2 / A16): the ion Bohm
     # current is drawn at the sheath-edge density n_se = alpha_sheath * n_e. The
     # historical flat exp(-1/2) is the Boltzmann drop across a presheath that

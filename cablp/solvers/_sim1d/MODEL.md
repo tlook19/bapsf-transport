@@ -18,7 +18,7 @@ erg cm<sup>-3</sup>, cm<sup>-3</sup> s<sup>-1</sup>, A, V.
 | $M=m_inu$ | parallel plasma momentum density |
 | $E_e=\tfrac32nT_e$, $E_i=\tfrac32nT_i$ | electron and ion energy densities |
 | $p_e=nT_e$, $p_i=nT_i$, $p=p_e+p_i$ | pressures, formed on the floored $n$ |
-| $c_s=9.79\times10^5\sqrt{T_e/\mu}$ cm s<sup>-1</sup> | Bohm speed — the sound speed every boundary, collection and presheath term uses, on $\mu$ PROTON masses (a disclosed convention, below) |
+| $c_s=\sqrt{T_e/m_i}$ cm s<sup>-1</sup> | Bohm speed — the sound speed every boundary, collection and presheath term uses |
 | $a=\sqrt{\tfrac53(T_e+T_i)/m_i}$ | the Rusanov signal speed, a scheme quantity ([`NUMERICS.md`](NUMERICS.md)) |
 | $\mathbf r$, $\mathbf v$ | position and velocity vector of a neutral |
 | $z=\mathbf r\!\cdot\!\hat z$ | axial coordinate; $\hat z$ along the axis and $\mathbf B$ |
@@ -82,14 +82,11 @@ superscript — $n_n^\text{col}$, $n_n^\text{ann}$, $u_n^\text{col}$,
 $T_n^\text{col}$ — and because the plasma occupies the column, every
 plasma-side rate below couples to the COLUMN gas.
 
-**The sound speed is a disclosed convention.** Every $c_s$ in this document is
-the code's `ion_sound_speed`, $9.79\times10^5\sqrt{T_e/\mu}$ cm s<sup>-1</sup>
-on $\mu$ PROTON masses ($\mu=4$ for helium), not
-$\sqrt{T_e/m_i}$ on the true ion mass $m_i=m_\text{He}$ that every other term
-uses. The two differ by a fixed 0.600 % in $m_ic_s^2$ against $T_e$ — $c_s$
-about 0.30 % LOW — at every site that reads it: the anode-mesh collection,
-the absorbing-face ghost velocity and the presheath depth. The residual is
-stated in the docstring of `ion_sound_speed` in `physics/flux.py`.
+**One sound speed, one ion mass.** Every $c_s$ in this document is the code's
+`ion_sound_speed`, $\sqrt{T_e/m_i}$ on the true ion mass $m_i=m_\text{He}$ that
+every other term of the model carries — the anode-mesh collection, the
+material-face sheath-edge state, the presheath depth and the cathode circuit's
+ion current all read one number.
 
 **The two velocity coordinates are not the same kind of quantity:**
 $v_\parallel$ is a SIGNED component along $\hat z$, so the discrete grid spans
@@ -1056,7 +1053,7 @@ $-\Lambda_\text{eff}T_e\Gamma_\text{coll}$ is booked at each end wall cell,
 making the face debit the sheath-edge $\gamma_e=2+\Lambda_\text{eff}$ per
 collected electron rather than the thermal $2T_e$ alone. The barrier is
 $\Lambda_\text{eff}=\Lambda+\ln(1/\alpha_\text{se})$: the sheath lift
-$\Lambda=\ln\sqrt{\mu m_p/2\pi m_e}$ for the configured gas, plus the presheath
+$\Lambda=\ln\sqrt{m_i/2\pi m_e}$ for the configured gas, plus the presheath
 drop implied by the same $\alpha_\text{se}$ that face samples its Bohm flux at,
 so the flux and the barrier describe one sheath edge. That holds only in the
 RESOLVED limit: at production resolution the delivered ghost-face flux

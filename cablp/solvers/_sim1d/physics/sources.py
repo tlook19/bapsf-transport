@@ -449,7 +449,6 @@ def hyperbolic_energy_correction_rhs(
     state,
     floors,
     ion_mass_g,
-    mu,
     geometry,
     wave_speed="isothermal",
 ):
@@ -492,7 +491,7 @@ def hyperbolic_energy_correction_rhs(
     n = np.asarray(state.n, dtype=float)
     M = np.asarray(state.M, dtype=float)
 
-    cs = plasma_wave_speed(derived.Te, derived.Ti, mu, wave_speed)
+    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g, wave_speed)
     amax = np.maximum(np.abs(u[:-1]) + cs[:-1], np.abs(u[1:]) + cs[1:])
     open_faces = np.asarray(geometry.plasma_open, dtype=bool)
     transmission = np.asarray(geometry.plasma_transmission, dtype=float)
@@ -555,7 +554,6 @@ def presheath_length_cm(
     nn,
     Te,
     Ti,
-    mu,
     ion_mass_g,
     gas_type=None,
     Tn_eV=None,
@@ -583,7 +581,7 @@ def presheath_length_cm(
     )
     if nu_in <= 0.0 or not np.isfinite(nu_in):
         return np.inf
-    return float(ion_sound_speed(Te, mu) / nu_in)
+    return float(ion_sound_speed(Te, ion_mass_g) / nu_in)
 
 
 def presheath_alpha(alpha_isat, cell_length_cm, presheath_cm):
@@ -621,7 +619,6 @@ def electrode_sheath_alpha(
     Te,
     Ti,
     cell_length_cm,
-    mu,
     ion_mass_g,
     alpha_isat=np.exp(-0.5),
     b_presheath_length=1.0,
@@ -643,7 +640,6 @@ def electrode_sheath_alpha(
         nn=nn,
         Te=Te,
         Ti=Ti,
-        mu=mu,
         ion_mass_g=ion_mass_g,
         gas_type=gas_type,
     )
@@ -800,7 +796,6 @@ def absorbing_face_states(
     geometry,
     live,
     outward,
-    mu,
     ion_mass_g,
     alpha_isat=np.exp(-0.5),
     b_presheath_length=1.0,
@@ -827,7 +822,7 @@ def absorbing_face_states(
     """
     Te_l = float(derived.Te[live])
     Ti_l = float(derived.Ti[live])
-    cs = float(ion_sound_speed(Te_l, mu))
+    cs = float(ion_sound_speed(Te_l, ion_mass_g))
 
     # Shared mesh-independent sheath-edge sampling (presheath_alpha): the
     # SAME factor the circuit reads in R3.2 (via electrode_sheath_alpha).
@@ -836,7 +831,6 @@ def absorbing_face_states(
         Te=Te_l,
         Ti=Ti_l,
         cell_length_cm=float(geometry.length_cm[live]),
-        mu=mu,
         ion_mass_g=ion_mass_g,
         alpha_isat=alpha_isat,
         b_presheath_length=b_presheath_length,
@@ -873,7 +867,6 @@ def characteristic_boundary_rhs(
     state,
     floors,
     ion_mass_g,
-    mu,
     geometry,
     alpha_isat=np.exp(-0.5),
     b_surface_loss=1.0,
@@ -929,7 +922,7 @@ def characteristic_boundary_rhs(
     row keeps its unconditional ``2 Te`` meaning. ``Lambda_eff = Lambda +
     ln(1/alpha)`` is the barrier those electrons climb at a surface drawing
     no net current: ``Lambda`` (:func:`~cablp.cathode.circuit.sheath_lift_lambda`
-    at this call's ``mu``, the same lift the circuit's sheath currents ride)
+    at this call's ion mass, the same lift the circuit's sheath currents ride)
     plus the presheath drop implied by the very ``alpha`` this face samples
     its Bohm flux at, so the two cannot describe different sheath edges. The
     fall is taken from the plasma electron store and handed to the ions,
@@ -1045,7 +1038,7 @@ def characteristic_boundary_rhs(
     # The sheath lift is a property of the ion mass alone, so it is read once
     # here rather than per face -- and read from the circuit, which is where
     # the same barrier sets the sheath currents.
-    lambda_lift = sheath_lift_lambda(mu) if climb_active else None
+    lambda_lift = sheath_lift_lambda(ion_mass_g) if climb_active else None
     if jet_active:
         v_eff = np.sqrt(
             np.pi * kb_cgs * max(float(cathode_jet["T_s_K"]), 0.0)
@@ -1068,7 +1061,6 @@ def characteristic_boundary_rhs(
             geometry=geometry,
             live=live,
             outward=outward,
-            mu=mu,
             ion_mass_g=ion_mass_g,
             alpha_isat=alpha_isat,
             b_presheath_length=b_presheath_length,
@@ -1094,7 +1086,6 @@ def characteristic_boundary_rhs(
                 left_state,
                 right_state,
                 solver=end_wall_face_riemann_solver,
-                mu=mu,
                 ion_mass_g=ion_mass_g,
                 wave_speed=wave_speed,
                 energy_consistent=energy_consistent,
@@ -1103,7 +1094,6 @@ def characteristic_boundary_rhs(
             f_n, f_M, f_Ee, f_Ei = kep_rusanov_face_scalar(
                 left_state,
                 right_state,
-                mu=mu,
                 ion_mass_g=ion_mass_g,
                 wave_speed=wave_speed,
                 energy_consistent=energy_consistent,
@@ -1211,7 +1201,6 @@ def anode_collection_rhs(
     state,
     floors,
     ion_mass_g,
-    mu,
     geometry,
     eta,
     alpha_isat=np.exp(-0.5),
@@ -1298,7 +1287,7 @@ def anode_collection_rhs(
             loss = _cell_surface_particle_loss(
                 n=state.n[cell],
                 Te=derived.Te[cell],
-                mu=mu,
+                ion_mass_g=ion_mass_g,
                 area_cm2=float(eta) * geometry.plasma_area_cm2[cell],
                 alpha_isat=alpha_isat,
             )
@@ -1361,8 +1350,8 @@ def anode_collection_rhs(
     )
 
 
-def _cell_surface_particle_loss(n, Te, mu, area_cm2, alpha_isat):
-    return float(alpha_isat) * n * ion_sound_speed(Te, mu) * area_cm2
+def _cell_surface_particle_loss(n, Te, ion_mass_g, area_cm2, alpha_isat):
+    return float(alpha_isat) * n * ion_sound_speed(Te, ion_mass_g) * area_cm2
 
 
 def ion_neutral_collision_frequency(

@@ -102,7 +102,7 @@ def summarize(sim, result, name):
     edge_ok = True
     for face, (live, outward) in edges.items():
         u_edge = float(u[idx, live])
-        cs = float(ion_sound_speed(float(Te[idx, live]), sim._mu)) if Te is not None else float("nan")
+        cs = float(ion_sound_speed(float(Te[idx, live]), sim.ion_mass_g)) if Te is not None else float("nan")
         into_wall = (np.sign(u_edge) == np.sign(outward)) and abs(u_edge) > 0.3 * cs
         edge_ok &= into_wall
         role = "cathode " if outward < 0 else "end_wall"

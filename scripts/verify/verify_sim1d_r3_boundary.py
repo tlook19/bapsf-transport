@@ -75,12 +75,12 @@ def _uniform_state(sim, n0, Te0, Ti0, u_edge_frac):
     """
     geo = sim.geometry
     cells = geo.cells
-    mu = sim._mu
+    m_i = sim.ion_mass_g
     n = np.full(cells, n0)
     Te = np.full(cells, Te0)
     Ti = np.full(cells, Ti0)
     u = np.zeros(cells)
-    cs = ion_sound_speed(Te0, mu)
+    cs = ion_sound_speed(Te0, m_i)
     edges = {}
     for face in np.flatnonzero(np.asarray(geo.plasma_absorbing, bool)):
         live = int(geo.plasma_face_live_cell[face])
@@ -110,7 +110,6 @@ def main():
     ok = True
     sim = _resolved_sim()
     geo = sim.geometry
-    mu = sim._mu
     m_i = sim.ion_mass_g
     Vp = np.asarray(geo.plasma_volume_cm3)
     n0, Te0, Ti0 = 5.0e12, 4.0, 1.0

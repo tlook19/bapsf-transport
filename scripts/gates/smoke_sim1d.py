@@ -488,13 +488,14 @@ def _cathode_unit_config():
 # tail-walk arm, the solve whose beam energy the EII table-edge guard then
 # refused (scripts/capfix_escape_case.txt). At this state, and at THIS imposed
 # current, the bracket ladder's first grid point sat below the cap in NET phi_c
-# (psi_minus > 0), the ladder doubled once, and the J-root came back at 1854.195
-# V -- 1.85x the 1000 V cap, tagged virtual_cathode. It is kept as literals
+# (psi_minus > 0), the ladder doubled once, and the J-root came back FAR above
+# the 1000 V cap, tagged virtual_cathode. It is kept as literals
 # rather than re-derived: reproducing it needs a 39-step production march, and
 # post-fix that march no longer visits this state at all.
 _CAPFIX_ESCAPE_CONFIG = dict(
     A_c=706.8583470577034,
     mu=4,
+    ion_mass_g=m_He_cgs,
     V_bank=177.843,
     T_s=1910.0000073162657,
     phi_wf=2.8689998037499964,
@@ -543,12 +544,15 @@ _CAPFIX_ESCAPE_KWARGS = dict(
     alpha_sheath_anode=None,
 )
 # The imposed current at capture, and the currents that bracket the escape
-# window measured there: below ~5.4518 A the sheath carries the current under
+# window measured there: below ~5.4698 A the sheath carries the current under
 # the ceiling; above it, every current must come back capability_limited AT the
-# ceiling. Pre-fix, 5.46 A through 5.57 A returned 1038.9 V .. 1884.2 V.
+# ceiling. The threshold is a property of this frozen state and of the ion
+# current the sheath balance carries, so it moves with the sound speed and the
+# sheath lift; what is gated is the ceiling binding the RETURNED ROOT on both
+# sides of it, never the threshold's own value.
 _CAPFIX_ESCAPE_I_A = 5.5674329614887945
-_CAPFIX_BELOW_I_A = (5.0, 5.44, 5.45)
-_CAPFIX_WINDOW_I_A = (5.46, 5.5, _CAPFIX_ESCAPE_I_A, 5.57, 5.58, 6.0, 8.0)
+_CAPFIX_BELOW_I_A = (5.0, 5.45, 5.46)
+_CAPFIX_WINDOW_I_A = (5.47, 5.5, _CAPFIX_ESCAPE_I_A, 5.57, 5.58, 6.0, 8.0)
 
 # Every attribute the RETIRED ``results/compat.py`` used to attach to a result
 # namespace, on both the run and the load path. The module aliased sim1d
@@ -2628,7 +2632,9 @@ def _case_cathode_annular_emission_profile():
                         "cathode_surface_model": "none",
                         "cathode_phiwf_clean_eV": None,
                         "phi_wf": 3.0})
-    uni_cfg = cathode_device_config(knee_params, knee_flags, sim.mu)
+    uni_cfg = cathode_device_config(
+        knee_params, knee_flags, sim.mu, sim.ion_mass_g
+    )
     plasma_probe = PlasmaState(T_e=8.0, n_e=4e12, n_n=1.5e13, sigma_b=4e-17)
     # single annulus, fully wetted, at T_s: identical emission physics
     one_annulus = _dc.replace(
@@ -2654,10 +2660,14 @@ def _case_cathode_annular_emission_profile():
     assert Ts_k[0] - Ts_k[-1] > 100.0  # the knee-softening spread
     assert np.isclose(np.sum(area_k), np.pi * 19.0**2, rtol=1e-12)
     assert frac_k[0] == 1.0 and frac_k[-1] == 0.0
-    gauss_cfg = cathode_device_config(gauss_params, knee_flags, sim.mu)
+    gauss_cfg = cathode_device_config(
+        gauss_params, knee_flags, sim.mu, sim.ion_mass_g
+    )
     assert gauss_cfg.I_eth < uni_cfg.I_eth * (np.pi * 19.0**2) / uni_cfg.A_c
     hot_params = dict(gauss_params, cathode_Ts_base_K=2110.0)
-    hot_cfg = cathode_device_config(hot_params, knee_flags, sim.mu)
+    hot_cfg = cathode_device_config(
+        hot_params, knee_flags, sim.mu, sim.ion_mass_g
+    )
     return locals()
 
 
@@ -2783,7 +2793,7 @@ def _case_cathode_current_driven_sheath_solve(
     # The ceiling binds the RETURNED ROOT, not just the ladder's grid points
     # (2026-08-09). At the frozen escaping state the pre-fix ladder doubled
     # once, found the J-root inside the doubled bracket and returned a net
-    # phi_c of 1854.195 V at a 1000 V cap -- unclamped, tagged
+    # phi_c far above a 1000 V cap -- unclamped, tagged
     # virtual_cathode, and independent of the cap. Post-fix: phi_c(I) rises to
     # the cap and stays there, so the whole window is capability_limited AT
     # the ceiling and the escape signature (phi_c above the cap in any other
@@ -2811,7 +2821,7 @@ def _case_cathode_current_driven_sheath_solve(
         )
         assert _cap_r.V_b >= 1000.0, (_cap_I, _cap_r.V_b)
         assert _cap_r.I_tot >= 0.0, (_cap_I, _cap_r.I_tot)
-    # Cap-dependence restored: pre-fix the escaped root was the SAME 1854.195 V
+    # Cap-dependence restored: pre-fix the escaped root was the SAME voltage
     # at every cap from 950 V to 1500 V. Post-fix the answer is the cap, until
     # the cap rises above what the sheath would have reached on its own.
     for _cap_V in (500.0, 900.0, 1000.0, 1500.0):
@@ -2830,9 +2840,13 @@ def _case_cathode_current_driven_sheath_solve(
         **{**_CAPFIX_ESCAPE_KWARGS, "phi_c_cap_V": 2000.0},
     )
     assert _cap_free.regime == "virtual_cathode", _cap_free.regime
-    assert 1854.0 < _cap_free.phi_c < 1855.0, _cap_free.phi_c
+    # The free root is a property of this frozen state and of the ion current
+    # the sheath balance carries, so it moves with the sound speed and the
+    # sheath lift; the clause gates that it sits ABOVE every cap above, which
+    # is what makes the caps binding rather than incidental.
+    assert 1658.0 < _cap_free.phi_c < 1660.0, _cap_free.phi_c
     # The beam-side lookup keeps its no-extrapolation contract at that raised
-    # cap: the He EII table ends at 1000 eV, so a 1854 V sheath is refused
+    # cap: the He EII table ends at 1000 eV, so a sheath past it is refused
     # rather than silently clamped to the last node.
     try:
         _cathode_solver_idriven_mod.solve_beam_system_idriven(
@@ -7823,7 +7837,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         state=ramp_state,
         floors=sim.floors,
         ion_mass_g=sim.ion_mass_g,
-        mu=sim.mu,
         geometry=geom,
         alpha_front=params["alpha_front"],
     )
@@ -9120,7 +9133,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             # through solve_idriven with the compiled root find bound and then
             # with the pure ladder. The two must agree BIT for bit -- the
             # transcription is faithful or it is not -- and both must report
-            # the ceiling rather than the 1854.195 V the pre-fix ladder
+            # the ceiling rather than the far higher root the pre-fix ladder
             # returned. Also run at a current BELOW the window, so the
             # comparison covers the ordinary J-root path through the same
             # frozen state.
@@ -9334,7 +9347,19 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.allclose(cathode_diag["has_twin_solution"], 0.0)
     assert np.all(np.isfinite(cathode_diag["source_phi_c"]))
     assert np.all(cathode_diag["source_I_i"] >= 0.0)
-    assert np.all(cathode_diag["source_I_tot"] >= 0.0)
+    # source_I_tot's first sample is the pre-breakdown FLOATING balance, where
+    # the net current is zero by construction: what is stored there is the
+    # residual of the root the solve returned, so the no-backwards-current
+    # clause is bounded by the solve's own current scale rather than by the
+    # sign of an epsilon.
+    _ns_I_scale = np.maximum(
+        np.abs(np.asarray(cathode_diag["source_I_i"], dtype=float)),
+        np.abs(np.asarray(cathode_diag["source_I_e"], dtype=float)),
+    )
+    assert np.all(
+        np.asarray(cathode_diag["source_I_tot"], dtype=float)
+        >= -1.0e-12 * _ns_I_scale
+    ), cathode_diag["source_I_tot"]
     assert np.all(np.isfinite(cathode_diag["source_P_prim"]))
     assert np.all(np.isfinite(cathode_diag["source_P_ohmic"]))
     # The pre-closure ``source_P_loss`` this once checked is retired from the
@@ -9523,7 +9548,10 @@ def _case_cathode_power_balance_warming(
     ):
         assert np.all(np.isfinite(cathode_run_result.rhs_terms[_beam_key]["Ee"]))
     assert np.all(
-        cathode_run_result.cathode_diagnostics["source_I_tot"][:4] >= 0.0
+        cathode_run_result.cathode_diagnostics["source_I_tot"][:4]
+        >= -1.0e-12 * np.abs(
+            cathode_run_result.cathode_diagnostics["source_I_e"][:4]
+        )
     )
     # A claim about the SOLVER, over the terms a retired _sim3 alias summed.
     # It used to read "np.any(sum > 0)" -- these channels deposit net POSITIVE
@@ -9635,7 +9663,12 @@ def _case_cathode_power_balance_warming(
                 4,
                 geom.cells,
             )
-            assert np.all(h5["cathode_diagnostics/source_I_tot"][()] >= 0.0)
+            assert np.all(
+                h5["cathode_diagnostics/source_I_tot"][()]
+                >= -1.0e-12 * np.abs(
+                    h5["cathode_diagnostics/source_I_e"][()]
+                )
+            )
             assert all(
                 value.decode("utf-8")
                 in {"classical", "virtual_cathode", "capability_limited"}
@@ -10575,9 +10608,18 @@ def _case_breakdown_retry_near_vacuum(
         current_phase_result.phase_floating,
         [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     )
-    assert np.all(
-        current_phase_result.cathode_diagnostics["source_I_tot"][:4] > 0.0
+    # Sample 0 is the PRE-BREAKDOWN solve, whose net current is zero by
+    # construction, so what is stored there is the residual of the root the
+    # solve returned rather than a current: it is bounded by the solve's own
+    # current scale. Samples 1-3 are driven and carry a real forward current.
+    _bd_I_tot = np.asarray(
+        current_phase_result.cathode_diagnostics["source_I_tot"], dtype=float
     )
+    _bd_I_e = np.asarray(
+        current_phase_result.cathode_diagnostics["source_I_e"], dtype=float
+    )
+    assert _bd_I_tot[0] >= -1.0e-12 * abs(_bd_I_e[0]), _bd_I_tot[0]
+    assert np.all(_bd_I_tot[1:4] > 0.0), _bd_I_tot[1:4]
     assert np.all(
         np.isnan(current_phase_result.cathode_diagnostics["source_I_tot"][5:])
     )
@@ -16483,7 +16525,7 @@ def _case_electrode_sample_smoothing(m3_params):
     ss_sim._update_sample_smoothing(ss_dt)
     from cablp.solvers._sim1d.physics.flux import ion_sound_speed as _ss_cs
     ss_tau = float(ss_sim.geometry.length_cm[ss_cath]) / _ss_cs(
-        max(ss_Te_old, ss_sim.floors["Te"]), ss_sim._mu
+        max(ss_Te_old, ss_sim.floors["Te"]), ss_sim.ion_mass_g
     )
     ss_alpha = 1.0 - np.exp(-ss_dt / ss_tau)
     assert np.isclose(
@@ -21222,9 +21264,11 @@ def _case_cathode_emitting_area_percolation_ea1():
     # condition -- the direct build and the runs sat at different
     # temperatures here while two keys carried them.
     _ea1_dp, _ea1_df = _ea1_stance(cathode_Ts_base_K=1998.15)
-    _ea1_dev_full = _cathode_mod.cathode_device_config(_ea1_dp, _ea1_df, 4.002602)
+    _ea1_dev_full = _cathode_mod.cathode_device_config(
+        _ea1_dp, _ea1_df, 4.002602, m_He_cgs
+    )
     _ea1_dev_thr = _cathode_mod.cathode_device_config(
-        _ea1_dp, _ea1_df, 4.002602, f_em=_ea1_default_f0
+        _ea1_dp, _ea1_df, 4.002602, m_He_cgs, f_em=_ea1_default_f0
     )
     assert _ea1_dev_full.emission_area_fraction == 1.0
     assert _ea1_dev_thr.emission_area_fraction == _ea1_default_f0
@@ -21429,7 +21473,9 @@ def _case_cathode_emitting_area_percolation_ea1():
         cathode_emission_profile="uniform", cathode_Ts_base_K=1998.15,
     )
     try:
-        _cathode_mod.cathode_device_config(_ea1_up, _ea1_uf, 4.002602, f_em=0.5)
+        _cathode_mod.cathode_device_config(
+            _ea1_up, _ea1_uf, 4.002602, m_He_cgs, f_em=0.5
+        )
     except ValueError:
         pass
     else:
@@ -26716,6 +26762,7 @@ def _case_floating_open_circuit_current_balance():
     _fb_cfg_kw = dict(
         A_c=math.pi * 18.415 ** 2,
         mu=4.0026,
+        ion_mass_g=m_He_cgs,
         V_bank=177.843,
         phi_wf=2.869,
         C_R=9.3,
@@ -26933,6 +26980,7 @@ def _case_tail_handoff_surface_continuity():
     _sc_cfg_kw = dict(
         A_c=math.pi * 18.415 ** 2,
         mu=4.0026,
+        ion_mass_g=m_He_cgs,
         V_bank=177.843,
         phi_wf=2.869,
         C_R=9.3,
@@ -27111,13 +27159,14 @@ def _case_end_face_full_debit_split():
         Te=float(_es_derived.Te[_es_coll]),
         Ti=float(_es_derived.Ti[_es_coll]),
         cell_length_cm=float(_es_geom.length_cm[_es_coll]),
-        mu=_es_both.mu,
         ion_mass_g=_es_both.ion_mass_g,
         alpha_isat=float(_es_params["alpha_isat"]),
         b_presheath_length=float(_es_params["b_presheath_length"]),
         gas_type=_es_params.get("gas_type"),
     )
-    _es_lambda_eff = sheath_lift_lambda(_es_both.mu) - math.log(_es_alpha)
+    _es_lambda_eff = (
+        sheath_lift_lambda(_es_both.ion_mass_g) - math.log(_es_alpha)
+    )
     _es_gamma = float(_es_on_terms["characteristic_boundary"].n[_es_coll])
     _es_booked = (
         float(_es_on_terms["characteristic_boundary"].Ee[_es_coll])
@@ -27331,7 +27380,7 @@ def _case_end_wall_lambda_eff_barrier_bracket():
     _le_sim = LAPDSim1D(dict(_le_params), _le_flags)
     _le_result = _le_sim.run(t_end=4.0e-10, dt=1.0e-10)
 
-    _le_lambda = sheath_lift_lambda(_le_sim.mu)
+    _le_lambda = sheath_lift_lambda(_le_sim.ion_mass_g)
     _le_geom = _le_sim.geometry
     _le_roles = np.asarray(_le_geom.cell_role)
     _le_coll = int(np.flatnonzero(_le_roles == "end_wall")[0])
@@ -27365,7 +27414,6 @@ def _case_end_wall_lambda_eff_barrier_bracket():
             Te=float(_le_Te[_le_i]),
             Ti=float(_le_Ti[_le_i]),
             cell_length_cm=_le_len,
-            mu=_le_sim.mu,
             ion_mass_g=_le_sim.ion_mass_g,
             alpha_isat=float(_le_params["alpha_isat"]),
             b_presheath_length=float(_le_params["b_presheath_length"]),
@@ -28457,7 +28505,6 @@ def _case_end_wall_riemann_flux_unarmed_inert():
         state=_rq_unnamed.state,
         floors=_rq_unnamed.floors,
         ion_mass_g=_rq_unnamed.ion_mass_g,
-        mu=_rq_unnamed._mu,
         geometry=_rq_unnamed._plasma_geometry(),
         alpha_isat=_rq_surface["alpha_isat"],
         b_surface_loss=_rq_surface["b_surface_loss"],
@@ -28576,7 +28623,7 @@ def _case_end_wall_riemann_flux_refusals():
     }
     try:
         end_wall_riemann_face_scalar(
-            _rf_state, dict(_rf_state), solver="roe", mu=4.0,
+            _rf_state, dict(_rf_state), solver="roe",
             ion_mass_g=m_He_cgs,
         )
     except ValueError as _rf_dexc:
@@ -28614,21 +28661,19 @@ def _case_end_wall_riemann_face_fluxes():
     _rx_live_is_right = _rx_live == _rx_face
     _rx_outward = -1.0 if _rx_live_is_right else 1.0
 
-    _rx_mu = _rx_sim._mu
     _rx_m = _rx_sim.ion_mass_g
     _rx_Te = 4.0
     # Ti/Te here is not a stance: it is the ratio at which the adiabatic
     # signal speed makes a_max exactly 2.9 c_iso on this pair, which is the
     # reading the flag exists to answer, so the case measures it below.
     _rx_Ti = 1.166 * _rx_Te
-    _rx_c = _rx_flux.ion_sound_speed(_rx_Te, _rx_mu)
+    _rx_c = _rx_flux.ion_sound_speed(_rx_Te, _rx_m)
     _rx_n0 = 1.0e13
     # The face kernels are compared on the SHIPPED hyperbolic arms, named
     # explicitly rather than read off this fixture: the fixture pins the
     # historical operator algebra, and the dissipation reading this case
     # measures is a property of the adiabatic signal speed.
     _rx_kw = dict(
-        mu=_rx_mu,
         ion_mass_g=_rx_m,
         wave_speed="adiabatic",
         energy_consistent=True,
@@ -28656,7 +28701,6 @@ def _case_end_wall_riemann_face_fluxes():
             geometry=_rx_geom,
             live=_rx_live,
             outward=_rx_outward,
-            mu=_rx_mu,
             ion_mass_g=_rx_m,
             alpha_isat=float(np.exp(-0.5)),
             b_presheath_length=1.0,
@@ -28668,7 +28712,7 @@ def _case_end_wall_riemann_face_fluxes():
             _rx_flux.kep_rusanov_face_scalar(left, right, **_rx_kw),
             _rx_flux.hll_face_scalar(left, right, **_rx_kw),
             _rx_flux.exact_isothermal_face_scalar(
-                left, right, mu=_rx_mu, ion_mass_g=_rx_m
+                left, right, ion_mass_g=_rx_m
             ),
         )
 
@@ -28715,7 +28759,7 @@ def _case_end_wall_riemann_face_fluxes():
     assert abs(_rx_alpha / float(np.exp(-0.5)) - 1.0) <= 1.0e-12, _rx_alpha
     assert abs(_rx_ghost["u"] / (_rx_outward * _rx_c) - 1.0) <= 1.0e-12
     _rx_amax = abs(_rx_ghost["u"]) + _rx_flux.plasma_wave_speed(
-        _rx_Te, _rx_Ti, _rx_mu, "adiabatic"
+        _rx_Te, _rx_Ti, _rx_m, "adiabatic"
     )
     assert abs(_rx_amax / _rx_c - 2.9) <= 0.01, _rx_amax / _rx_c
     if _rx_live_is_right:
@@ -28792,7 +28836,7 @@ def _case_end_wall_riemann_armed_bookings():
     # run() is called directly (no equilibration pre-solve is wanted here --
     # the point is a stepped plasma state, not a seeded neutral profile).
     _rb_flags["neutral_equilibration"] = False
-    _rb_lambda = sheath_lift_lambda(4)
+    _rb_lambda = sheath_lift_lambda(m_He_cgs)
 
     def _rb_build(solver):
         return LAPDSim1D(
@@ -29248,7 +29292,7 @@ def _case_cathode_ion_secondary_emission_refusals():
         cathode_device_config as _se_device_config,
     )
     _se_dp, _se_df = default_config()
-    _se_cfg = _se_device_config(_se_dp, _se_df, 4.0)
+    _se_cfg = _se_device_config(_se_dp, _se_df, 4.0, m_He_cgs)
     _se_plasma = _se_PlasmaState(
         T_e=8.0, n_e=4.0e12, n_n=1.5e13, sigma_b=4.0e-17
     )
@@ -31076,7 +31120,7 @@ def _case_kep_pressure_work_closure():
         )
         u = derived.u
         fluxes = _kep_rusanov(
-            state, sim.floors, sim.ion_mass_g, sim._mu, geom,
+            state, sim.floors, sim.ion_mass_g, geom,
             active_plasma_topology=sim._active_plasma_topology,
             wave_speed=sim._hyperbolic_wave_speed,
             energy_consistent=True,
@@ -31525,6 +31569,64 @@ def _case_kep_acoustic_symbol(_kep_flat, _kep_rows, _kep_state):
 
 
 # ----------------------------------------------------------------------
+# sound-speed-true-ion-mass
+# ----------------------------------------------------------------------
+@_case("sound-speed-true-ion-mass")
+def _case_sound_speed_true_ion_mass():
+    """The sound speed is sqrt(Te/m_i) on the TRUE ion mass, everywhere.
+
+    Two clauses. (i) The fluid's ``ion_sound_speed`` is the closed form
+    ``sqrt(Te [erg] / m_He)`` to round-off, and the adiabatic branch of
+    ``plasma_wave_speed`` is the same construction at gamma = 5/3 on the same
+    mass. (ii) The cathode circuit's own sound speed is that IDENTICAL number
+    at the same Te -- not a second expression that agrees to a tolerance --
+    which is what lets the circuit's ion current and the fluid's face loss be
+    one book. The sheath lift rides the same mass.
+    """
+    from cablp.solvers._sim1d.physics.flux import (
+        ion_sound_speed as _ss_cs_fn,
+        plasma_wave_speed as _ss_wave,
+    )
+    from cablp.cathode.circuit import sheath_lift_lambda as _ss_lambda
+
+    for _ss_Te in (0.05, 1.0, 4.0, 17.5, 120.0):
+        _ss_want = math.sqrt(_ss_Te * ev_to_erg / m_He_cgs)
+        _ss_got = float(_ss_cs_fn(_ss_Te, m_He_cgs))
+        assert abs(_ss_got / _ss_want - 1.0) <= 1.0e-15, (_ss_Te, _ss_got)
+        # The isothermal branch is a passthrough; the adiabatic branch is the
+        # same mass with gamma = 5/3 on (Te + Ti).
+        assert _ss_wave(_ss_Te, 0.3 * _ss_Te, m_He_cgs) == _ss_got
+        _ss_ad = float(_ss_wave(_ss_Te, 0.3 * _ss_Te, m_He_cgs, "adiabatic"))
+        _ss_ad_want = math.sqrt(
+            (5.0 / 3.0) * 1.3 * _ss_Te * ev_to_erg / m_He_cgs
+        )
+        assert abs(_ss_ad / _ss_ad_want - 1.0) <= 1.0e-15, (_ss_Te, _ss_ad)
+
+    # The circuit reads the same spec, so the two sound speeds are the same
+    # float -- asserted with == rather than a tolerance.
+    _ss_dev = _cathode_solver_mod.DeviceConfig(
+        A_c=706.8583470577034,
+        mu=4,
+        ion_mass_g=m_He_cgs,
+        V_bank=150.0,
+        T_s=1910.0,
+    )
+    for _ss_Te in (0.05, 1.0, 4.0, 17.5, 120.0):
+        _ss_circuit = float(
+            _cathode_solver_mod._bohm_sound_speed(_ss_Te, _ss_dev.ion_mass_g)
+        )
+        assert _ss_circuit == float(_ss_cs_fn(_ss_Te, m_He_cgs)), _ss_Te
+
+    # Lambda = ln sqrt(m_i / 2 pi m_e), on the same ion mass the collection
+    # currents it throttles are built from.
+    _ss_lam_want = math.log(
+        math.sqrt(m_He_cgs / (2.0 * math.pi * 9.1093837015e-28))
+    )
+    assert abs(_ss_lambda(m_He_cgs) - _ss_lam_want) <= 1.0e-15
+    assert _ss_dev.Lambda == _ss_lambda(m_He_cgs)
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -31533,7 +31635,7 @@ def _case_kep_acoustic_symbol(_kep_flat, _kep_rows, _kep_state):
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 187, "historical_stance": 69}
+_CASE_CENSUS = {"total": 188, "historical_stance": 69}
 
 
 def _assert_case_census():

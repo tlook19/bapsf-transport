@@ -1365,10 +1365,8 @@ def model_mode_defaults():
             sits exactly at its own sonic point. The pair carries no ion
             partial pressure, so this face's momentum flux is smaller than the
             model's own ``n (Te + Ti)`` face pressure by
-            ``n_f ((Te + Ti) - m_i c^2)`` -- exactly ``n_f Ti`` plus a small
-            mass-convention residual (``m_i c^2`` uses the true ion mass
-            ``ion_mass_g`` against a sound speed built on ``mu`` proton
-            masses; ~0.600% of Te at mu=4).
+            ``n_f ((Te + Ti) - m_i c^2)`` -- exactly ``n_f Ti``, since
+            ``m_i c^2`` is ``Te`` on the one ion mass both carry.
         ``"hll"``
             The HLL flux on the full ``(n, M, Ee, Ei)`` vector with the face's
             own signal speeds ``S_L = min(u_L - c_L, u_R - c_R)`` and
