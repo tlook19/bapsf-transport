@@ -414,7 +414,7 @@ histories are stored for post-run diagnostics.
 
 `raw_stage_validation` additionally inspects both SSPRK candidates, the implicit
 heat candidate and the neutral-only candidate *before* floors are applied,
-covering $n$, $n_n$, $n_{n,a}$, $E_e$ and $E_i$, with non-finiteness scanned
+covering $n$, $n_n^\text{col}$, $n_n^\text{ann}$, $E_e$ and $E_i$, with non-finiteness scanned
 over the whole packed vector; a failed candidate carries its raw rejection
 evidence but cannot mutate accepted state, the circuit or surface caches,
 kinetic targets, time, or the cumulative floor ledger.
