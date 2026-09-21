@@ -43,55 +43,25 @@ thermal-energy flux and keeps the live cell's pressure as its momentum flux
 (zero where there is no live cell at all). At the plasma-terminating subset the
 advective flux carries nothing: the ghost-cell Bohm flux
 (`sources.characteristic_boundary_rhs`) supplies particle, momentum and energy
-flux with its own pressure term, using the same face kernel as the interior
-(`flux.kep_rusanov_face_scalar`) between the interior cell and the ghost state,
-applied as a one-sided divergence $\pm\,\text{area}\cdot\Gamma/V$ on the live
-cell.
+flux with its own pressure term, applied as a one-sided divergence
+$\pm\,\text{area}\cdot\Gamma/V$ on the live cell.
 
-**Riemann flux at the end wall ghost face** (`end_wall_face_riemann_flux`,
-default off). The ghost state's density step across the face drives the
-Rusanov dissipation $-\tfrac12a_\text{max}(n_R-n_L)$, so the delivered flux
-carries a dissipative share the resolved solution does not have. Armed, the
-faces whose live cell has the `end_wall` role — and only those; the cathode
-face and every interior face keep the kernel above — take all four fluxes from
-one face state supplied by the solver `end_wall_face_riemann_solver` names
-(`flux.end_wall_riemann_face_scalar`), so the particle flux the boundary books
-and every energy flux riding it come from the same face state.
+At a face whose live cell has the `end_wall` role the flux removed is the
+PHYSICAL flux at the sheath-edge state alone (`flux.physical_face_scalar` on
+the ghost),
 
-`"exact_isothermal"` solves the isothermal Euler pair
-$\partial_tn+\partial_z(nu)=0$, $\partial_tM+\partial_z(Mu+p)=0$ with
-$p=n\,m_ic^2$ and $c$ the face's isothermal sound speed — the same speed the
-ghost's Bohm velocity is set at, so the ghost sits on its own sonic point. The
-pair has two genuinely nonlinear fields and no contact, so the star region is a
-single state $(n_*,u_*)$ where the two wave curves meet,
+$$\Gamma_n=n_\text{se}u_\text{se},\qquad
+\Gamma_M=m_in_\text{se}u_\text{se}^2+n_\text{se}(T_e+T_i),\qquad
+\Gamma_{E_s}=E_s^\text{se}u_\text{se},$$
 
-$$u=u_K\mp c\ln\frac{n_*}{n_K}\quad(\text{rarefaction}),\qquad
-u=u_K\mp c\,\frac{n_*-n_K}{\sqrt{n_*n_K}}\quad(\text{shock}),$$
-
-the upper sign the 1-wave off the left state and the lower the 2-wave off the
-right; the intersection is found by a bracketed Newton iteration in $\ln n_*$
-started from the two-rarefaction solution, which is exact whenever both waves
-expand. The self-similar solution is sampled at $x/t=0$ — landing in either
-initial state, in the star state, or inside a fan at $u=\pm c$ — and the flux is
-that face state's physical flux, $f_n=n_fu_f$ and
-$f_M=m_in_f(u_f^2+c^2)$. $E_e$ and $E_i$ ride the pair as passive scalars whose
-specific values are constant along the linearly degenerate $u$ field, so each is
-upwinded on the face velocity and transported by that same $f_n$. The pair
-carries no ion partial pressure, so this face's momentum flux is smaller than
-the model's own $n(T_e+T_i)$ face pressure by $n_f((T_e+T_i)-m_ic^2)$ --
-exactly $n_fT_i$, since $m_ic^2$ is $T_e$ on the one ion mass both carry.
-
-`"hll"` is the HLL flux on the full $(n,M,E_e,E_i)$ vector with the face's own
-signal speeds $S_L=\min(u_L-c_L,\,u_R-c_R)$ and
-$S_R=\max(u_L+c_L,\,u_R+c_R)$, $c$ from `plasma_wave_speed` at the configured
-`hyperbolic_wave_speed`: the upwind physical flux where $S_L\ge0$ or
-$S_R\le0$, and $(S_RF_L-S_LF_R+S_LS_R(U_R-U_L))/(S_R-S_L)$ otherwise. It keeps
-the model's full face pressure, follows `hyperbolic_energy_consistent` by
-forming the convective momentum flux as the product of the two weighted means
-the HLL average applies to $M$ and $u$, and at $S_R=-S_L=a_\text{max}$ reduces
-to the Rusanov kernel term by term. In the resolved limit, where the ghost
-equals the interior, the Rusanov dissipation vanishes and all three fluxes are
-the same physical upwind flux, up to that closure difference in $f_M$.
+with $n_\text{se}=\alpha_\text{se}n$ and $u_\text{se}=\pm c_s$ into the
+surface. This is the pure-upwind limit of the interior kernel: no live-cell
+central half and no dissipation term. The density step from the live cell to
+$n_\text{se}$ is the sub-grid presheath model, not a discontinuity, and a
+sheath sends no wave back into the plasma, so there is no Riemann problem at
+the surface to average across. Every other absorbing face takes the interior's
+own face kernel (`flux.kep_rusanov_face_scalar`) between the interior cell and
+the ghost.
 
 **Energy-consistent hyperbolic core** (`hyperbolic_energy_consistent`). The
 convective momentum flux becomes the kinetic-energy-preserving $\{u\}\{M\}$
@@ -832,8 +802,7 @@ bookkeeping.
 | Cell-centred physical fluxes; wall closure | `physics/flux.py:physical_fluxes`, `_apply_plasma_walls` |
 | Front-filling flux | `physics/flux.py:front_filling_fluxes` |
 | KEP single-face flux (boundary) | `physics/flux.py:kep_rusanov_face_scalar` |
-| End wall Riemann face flux | `physics/flux.py:end_wall_riemann_face_scalar`, `exact_isothermal_face_scalar`, `hll_face_scalar` |
-| Isothermal star state and $x/t=0$ sampling | `physics/flux.py:_isothermal_star_state`, `_isothermal_wave`, `_isothermal_face_state` |
+| Material-face physical flux (boundary) | `physics/flux.py:physical_face_scalar` |
 | Flux divergence | `physics/flux.py:_flux_divergence` |
 | Ghost-cell Bohm outflow | `physics/sources.py:characteristic_boundary_rhs` |
 | Absorbing-face ghost state | `physics/sources.py:absorbing_face_states` |

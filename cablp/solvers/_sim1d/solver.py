@@ -173,7 +173,6 @@ from .physics.energy import (
     ion_charge_exchange_rhs,
 )
 from .physics.flux import (
-    END_WALL_FACE_RIEMANN_SOLVERS,
     ion_sound_speed,
     plasma_flux_rhs,
     plasma_flux_rhs_terms,
@@ -2187,57 +2186,6 @@ class LAPDSim1D:
                 "sheath fall."
             )
         self._end_wall_sheath_full_debit = _end_wall_sheath_full_debit
-        # The end wall face's flux operator. The flag arms the substitution and
-        # the params key names WHICH Riemann solver makes it; the two are read
-        # together because neither is meaningful alone -- an armed flag with no
-        # solver has nothing to install, and a named solver with the flag off
-        # would be a control that changes nothing. The face is resolved through
-        # the same role helper the boundary operator itself resolves it by, so
-        # a configuration that would arm the key onto no face is refused rather
-        # than left reading as armed.
-        _end_wall_face_riemann_flux = self._flags.get(
-            "end_wall_face_riemann_flux"
-        )
-        if not isinstance(_end_wall_face_riemann_flux, bool):
-            raise ValueError(
-                "end_wall_face_riemann_flux must be a bool (got "
-                f"{_end_wall_face_riemann_flux!r})"
-            )
-        _end_wall_face_riemann_solver = self._input_dict.get(
-            "end_wall_face_riemann_solver"
-        )
-        if _end_wall_face_riemann_flux:
-            if (
-                _end_wall_face_riemann_solver
-                not in END_WALL_FACE_RIEMANN_SOLVERS
-            ):
-                raise ValueError(
-                    "end_wall_face_riemann_flux is armed but "
-                    "end_wall_face_riemann_solver names no solver to install: "
-                    "it must be one of "
-                    f"{END_WALL_FACE_RIEMANN_SOLVERS} (got "
-                    f"{_end_wall_face_riemann_solver!r})"
-                )
-            if not absorbing_live_cells_by_role(self._geometry).get("end_wall"):
-                raise ValueError(
-                    "end_wall_face_riemann_flux cannot arm: this "
-                    "configuration does not supply an end-wall-role "
-                    "plasma-absorbing face, which is the only face whose flux "
-                    "this key replaces."
-                )
-        elif _end_wall_face_riemann_solver is not None:
-            raise ValueError(
-                "end_wall_face_riemann_solver names "
-                f"{_end_wall_face_riemann_solver!r} while "
-                "end_wall_face_riemann_flux is off, where it would be a "
-                "silent inert control; arm the flag or leave the solver "
-                "unnamed (None)."
-            )
-        self._end_wall_face_riemann_solver = (
-            _end_wall_face_riemann_solver
-            if _end_wall_face_riemann_flux
-            else None
-        )
         _cathode_face_full_debit = self._flags.get("cathode_face_full_debit")
         if not isinstance(_cathode_face_full_debit, bool):
             raise ValueError(
@@ -4510,9 +4458,6 @@ class LAPDSim1D:
                 cathode_jet=None,
                 wave_speed=self._hyperbolic_wave_speed,
                 energy_consistent=self._hyperbolic_energy_consistent,
-                end_wall_face_riemann_solver=(
-                    self._end_wall_face_riemann_solver
-                ),
                 **surface_kwargs,
             )
 
@@ -10604,12 +10549,12 @@ class LAPDSim1D:
 
         THE plasma-terminating boundary operator, and the only one since the
         legacy volumetric absorber was retired (see commit 1fc05c9): a
-        one-sided ghost-cell KEP/Rusanov flux against the Bohm outflow state
-        at each absorbing face. Reads the surface kwargs and cathode jet, and
-        follows the interior's momentum-flux form and wave speed so the
-        boundary and the interior stay consistent. Under
-        ``end_wall_face_riemann_flux`` the END WALL face alone takes its flux
-        from the named Riemann solver instead; every other face is unchanged.
+        one-sided ghost-cell flux against the Bohm outflow state at each
+        absorbing face -- the physical flux AT that state where the face is
+        the end wall, the KEP/Rusanov flux between the live cell and the ghost
+        elsewhere. Reads the surface kwargs and cathode jet, and follows the
+        interior's momentum-flux form and wave speed so the boundary and the
+        interior stay consistent.
 
         ``carrier_out`` is the directed hot surface carrier's launch channel;
         ``None`` is the historical call and is unchanged bit for bit.
@@ -10645,7 +10590,6 @@ class LAPDSim1D:
             ),
             cathode_carrier_out=carrier_out,
             end_wall_sheath_climb_out=end_wall_climb_out,
-            end_wall_face_riemann_solver=self._end_wall_face_riemann_solver,
         )
 
     def anode_collection_rhs(

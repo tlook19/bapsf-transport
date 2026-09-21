@@ -15,8 +15,8 @@ from .flux import (
     ion_sound_speed,
     plasma_wave_speed,
     _flux_divergence,
-    end_wall_riemann_face_scalar,
     kep_rusanov_face_scalar,
+    physical_face_scalar,
 )
 from ..core.state import (
     ConservativeState1D,
@@ -878,7 +878,6 @@ def characteristic_boundary_rhs(
     end_recycle_annulus_volume_cm3=None,
     cathode_carrier_out=None,
     end_wall_sheath_climb_out=None,
-    end_wall_face_riemann_solver=None,
 ):
     """Return the characteristic ghost-cell Bohm outflow at absorbing faces.
 
@@ -891,9 +890,16 @@ def characteristic_boundary_rhs(
 
         n_se = n * presheath_alpha,  u = c_s directed into the wall,  Te, Ti
 
-    and the committed R2 KEP/Rusanov flux (``flux.kep_rusanov_face_scalar``) is
-    evaluated between the interior live cell and the ghost. The ghost flux
-    DRIVES the interior toward the Bohm state and is a net energy sink.
+    At an END WALL face the flux removed is the PHYSICAL flux at that
+    sheath-edge state alone (``flux.physical_face_scalar`` on the ghost): the
+    pure-upwind limit, with no live-cell central half and no dissipation term.
+    A sheath sends no wave back into the plasma, and the density step from the
+    live cell to ``n_se`` is a sub-grid presheath model rather than a
+    discontinuity, so there is no Riemann problem at the surface to average
+    across. Every other absorbing face takes the committed R2 KEP/Rusanov flux
+    (``flux.kep_rusanov_face_scalar``) between the interior live cell and the
+    ghost. Either way the face flux DRIVES the interior toward the Bohm state
+    and is a net energy sink.
 
     The flux is applied **one-sidedly to the live cell**: the shared face-flux
     array telescopes, so an interior absorbing face would otherwise hand the
@@ -931,22 +937,6 @@ def characteristic_boundary_rhs(
     driven electrodes above. CATHODE faces are untouched: the accelerated
     species there is the ion. ``None`` -- the default -- computes nothing and
     is the historical call, bit for bit.
-
-    ``end_wall_face_riemann_solver``: when given (one of
-    ``flux.END_WALL_FACE_RIEMANN_SOLVERS``, supplied only under the
-    ``end_wall_face_riemann_flux`` closure), the faces whose live cell has the
-    ``end_wall`` role take their flux from
-    :func:`~.flux.end_wall_riemann_face_scalar` instead of the KEP/Rusanov
-    kernel. It is ONE substitution and it reaches ONE face: the cathode faces
-    and every interior face are untouched, and because the four rows this
-    function books all ride the single ``f_n`` the substitution returns, the
-    particle sink, the ``2 Te`` electron row, the sheath-climb row and the
-    neutral rebirth continue to describe the same face flux. The Rusanov
-    dissipation ``-a_max (n_R - n_L)/2`` that the ghost's density step drives
-    is what it removes; in the resolved limit, where the ghost equals the
-    interior, that dissipation vanishes and both solvers and the Rusanov
-    kernel are the same physical upwind flux. ``None`` -- the default -- never
-    enters the branch and is the historical call, bit for bit.
 
     ``end_recycle_annulus_volume_cm3``: when given (the per-cell annulus
     volume [cm^3], supplied only under the ``end_recycle_to_annulus``
@@ -1075,21 +1065,14 @@ def characteristic_boundary_rhs(
         else:
             left_state, right_state, signL = interior, ghost, -1.0
 
-        if (
-            end_wall_face_riemann_solver is not None
-            and roles[live] == "end_wall"
-        ):
-            # end_wall_face_riemann_flux. ONE face -- the END WALL's -- and
-            # one face state, from which all four fluxes come; the cathode
-            # face below and every interior face keep the R2 kernel.
-            f_n, f_M, f_Ee, f_Ei = end_wall_riemann_face_scalar(
-                left_state,
-                right_state,
-                solver=end_wall_face_riemann_solver,
-                ion_mass_g=ion_mass_g,
-                wave_speed=wave_speed,
-                energy_consistent=energy_consistent,
-            )
+        if roles[live] == "end_wall":
+            # A MATERIAL surface removes the physical flux at the sheath-edge
+            # state, evaluated at the ghost ALONE: the pure-upwind limit, with
+            # no live-cell central half and no dissipation term. Every one of
+            # the four rows this function books rides the single ``f_n`` that
+            # returns, so the particle sink, the electron rows and the neutral
+            # rebirth describe one face flux.
+            f_n, f_M, f_Ee, f_Ei = physical_face_scalar(ghost)
         else:
             f_n, f_M, f_Ee, f_Ei = kep_rusanov_face_scalar(
                 left_state,
