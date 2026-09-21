@@ -216,7 +216,8 @@ tail electrons slow down, wherever that happens to be.
 per-cell anomalous power ``P_QL(z)`` is WITHHELD from its birth cell and
 re-expressed as a population of tail electrons at a single energy
 ``tail_energy_eV`` (``E_tail``), i.e. an equivalent tail flux
-``P_QL(z) / E_tail`` launched from that cell, split 50/50 along +B and -B
+``P_QL(z) / E_tail`` launched from that cell, split between +B and -B by
+``tail_forward_fraction`` -- 50/50 by default, and up to wholly forward
 (the QL plateau is driven along B and the bump-on-tail resonance is genuinely
 ONE-SIDED; the split does not claim otherwise, and it is NOT particle
 scattering — the very Coulomb decoupling stated two paragraphs above makes
@@ -416,7 +417,7 @@ damping rate at the beam-resonant phase velocity
 (:func:`landau_branching_fraction`, which carries the formula and its
 validity caveat). A fraction ``f_Landau`` of each cell's extracted power is
 withheld and walked exactly as ``"tail_walk"`` walks all of it -- same birth
-energy, same 50/50 launch, same Coulomb machinery, same cathode and end wall
+energy, same launch split, same Coulomb machinery, same cathode and end wall
 conventions, same tail end ledger -- and the remaining ``1 - f_Landau`` is
 banked as local bulk heat, exactly as ``"local"`` banks all of it. The two
 existing values are therefore the ``f_Landau ≡ 1`` and ``f_Landau ≡ 0``
@@ -496,7 +497,7 @@ same edges are uniform in the CLASSICAL RANGE (which goes as ``E^2``) -- one
 edge set that is simultaneously equal-power and equal-reach. Each group is
 represented by the arithmetic midpoint ``Ehat_i = (E_i + E_i+1)/2`` and
 launched at ``gamma_i = (P_stream/N) / (e * Ehat_i)``, then marched by the
-EXISTING walk machinery at its own ``Ehat_i``: same 50/50 +-B split, same
+EXISTING walk machinery at its own ``Ehat_i``: same +-B launch split, same
 reflection convention, same ionization channel, same tail end ledger. No walk
 physics is added -- only ``N`` populations where there was one.
 ``PLATEAU_GROUP_COUNT`` is the shipped ``N = 8``.
@@ -1261,14 +1262,54 @@ def _tail_anode_take(culled_flux, W_cross, R_e, eta_E):
     )
 
 
+def _tail_launch_fluxes(walk_power_eV, E_walk, forward_fraction):
+    """Split ONE tail population's launched flux between the two directions.
+
+    ``walk_power_eV`` is the per-cell withheld QL power [eV/s] and ``E_walk``
+    the launch energy [eV], so ``walk_power_eV / E_walk`` is the population's
+    total launched flux [1/s] and ``flux * E_walk`` returns the power to
+    roundoff whatever the split. Returns ``(flux_forward, flux_backward)``:
+    the share ``forward_fraction`` of that flux launched along +z (INCREASING
+    cell index, the end the ``_high`` end-loss rows book) and the remainder
+    ``1 - forward_fraction`` along -z. ``flux_backward`` is ``None`` at
+    ``forward_fraction == 1.0``, where no -z walker is launched at all.
+
+    ``forward_fraction`` is expected in ``[0.5, 1.0]``; the caller's
+    configuration refuses anything else. At the symmetric default ``0.5`` the
+    two returned arrays are the SAME object, built by the expression the
+    symmetric launch has always used, so that launch is unchanged bit for bit.
+    """
+    if forward_fraction == 0.5:
+        half = 0.5 * (walk_power_eV / E_walk)
+        return half, half
+    total = walk_power_eV / E_walk
+    forward = forward_fraction * total
+    if forward_fraction == 1.0:
+        return forward, None
+    return forward, (1.0 - forward_fraction) * total
+
+
+def _tail_launch_legs(flux_forward, flux_backward):
+    """One population's ``(direction, flux)`` launches, +z first.
+
+    The +z leg always launches; the -z leg is absent exactly when
+    :func:`_tail_launch_fluxes` returned ``None`` for it.
+    """
+    if flux_backward is None:
+        return ((1, flux_forward),)
+    return ((1, flux_forward), (-1, flux_backward))
+
+
 def _tail_lane_chains(
     plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo, tail_hi,
     reflect_face, E_reflect, cull=None,
 ):
     """The ionizing tail-walk legs of every population, in the legs' own order.
 
-    ``plans`` is one ``(E_walk_eV, half_flux, ionizes)`` per launched
-    population. Returns ``(layout, tally)``. ``layout`` is a list parallel to
+    ``plans`` is one ``(E_walk_eV, flux_forward, flux_backward, ionizes)`` per
+    launched population, the two fluxes as
+    :func:`_tail_launch_fluxes` forms them (``flux_backward`` ``None`` when no
+    -z walker is launched). Returns ``(layout, tally)``. ``layout`` is a list parallel to
     ``plans``: ``None`` for a population that does not ionize, otherwise a list
     of CHAINS -- one per (birth cell, direction) walker, each chain holding the
     legs that walker marched (one, or two when it reflected at the walk
@@ -1296,16 +1337,18 @@ def _tail_lane_chains(
     lanes_launch = []
     lanes_dir = []
     layout = []
-    for slot, (E_walk, half_flux, ionizes) in enumerate(plans):
+    for slot, (E_walk, flux_fwd, flux_bwd, ionizes) in enumerate(plans):
         if not ionizes:
             layout.append(None)
             continue
         chains = []
-        for birth in np.flatnonzero(half_flux > 0.0):
-            for walk_direction in (1, -1):
+        for birth in np.flatnonzero(flux_fwd > 0.0):
+            for walk_direction, dir_flux in _tail_launch_legs(
+                flux_fwd, flux_bwd
+            ):
                 chains.append(len(lanes_E0))
                 lanes_E0.append(float(E_walk))
-                lanes_flux.append(float(half_flux[birth]))
+                lanes_flux.append(float(dir_flux[birth]))
                 lanes_launch.append(int(birth) - tail_lo)
                 lanes_dir.append(walk_direction)
         layout.append(chains)
@@ -1450,17 +1493,19 @@ def _tail_recursive_chains(
             anode_cross_index=int(cull_local), anode_eta=float(cull_eta)
         )
     n_w = tail_hi - tail_lo + 1
-    for E_walk, half_flux, ionizes in plans:
+    for E_walk, flux_fwd, flux_bwd, ionizes in plans:
         if not ionizes:
             out.append(None)
             continue
         built = []
-        for birth in np.flatnonzero(half_flux > 0.0):
-            for walk_direction in (1, -1):
+        for birth in np.flatnonzero(flux_fwd > 0.0):
+            for walk_direction, dir_flux in _tail_launch_legs(
+                flux_fwd, flux_bwd
+            ):
                 leg_dir = walk_direction
                 armed = cull is not None
                 leg = deposit_beam(
-                    E_walk, float(half_flux[birth]), nn_w, ne_w, Te_w,
+                    E_walk, float(dir_flux[birth]), nn_w, ne_w, Te_w,
                     int(birth) - tail_lo, leg_dir, dz_w, **march_kwargs,
                     **(cull_kwargs if armed else {}),
                 )
@@ -1966,6 +2011,7 @@ def deposit_beam(
     anomalous_transport: str = "local",
     anomalous_disposal: str = "local",
     tail_energy_eV: float | None = None,
+    tail_forward_fraction: float = 0.5,
     tail_ionization: str = "off",
     tail_walk_window: tuple[int, int] | None = None,
     tail_reflect_face: int | None = None,
@@ -2071,13 +2117,25 @@ def deposit_beam(
     historical one with ``end_loss_tail_*`` identically zero. On, the
     anomalous channel's power is withheld from its birth cell, re-expressed as
     tail electrons at ``tail_energy_eV`` (required, finite, > 0) launched
-    50/50 along +-B, and walked on the same Coulomb machinery as the WP-D
-    products; escapes go to the SEPARATE tail end ledger. ``"tail_walk"``
+    along +-B (``tail_forward_fraction``), and walked on the same Coulomb
+    machinery as the WP-D products; escapes go to the SEPARATE tail end ledger. ``"tail_walk"``
     requires an active anomalous channel (``anomalous_model="quasilinear"``) --
     with no anomalous drag there is no power to carry and the setting would be
     a silent no-op. Energy-only, exactly like WP-D. The two closures are
     independent and compose: with both on, the event products walk on the WP-D
     ledger and the QL tails on the WP-E one.
+
+    **Launch-direction split.** ``tail_forward_fraction`` is the share of each
+    launched tail population sent along +z (increasing cell index, the end the
+    ``end_loss_tail_high`` row books); the remainder ``1 - f`` goes along -z.
+    It applies to every walked-tail route -- the ionizing march, the
+    energy-only walk and its reflecting-face arms, and every plateau group --
+    and to nothing else: the launched POWER is ``flux * E`` either way, so the
+    split moves where the tail power goes and never how much of it there is.
+    ``0.5`` (default, bit-exact: the symmetric launch runs the floats it always
+    did) through ``1.0``, at which no -z walker is launched at all. Values
+    outside ``[0.5, 1.0]``, non-finite values, and a non-default value with no
+    walked tail to launch all raise.
 
     **Branched disposal (pd1).** ``anomalous_disposal`` is ``"local"``
     (default, bit-exact -- not one branch below changes) or
@@ -2293,6 +2351,28 @@ def deposit_beam(
                 "drag there is no power to carry and the setting would do "
                 "nothing"
             )
+    # The launch-direction split. The DOMAIN is checked unconditionally (a
+    # value outside the bracket is wrong whether or not the walk is engaged),
+    # and a non-symmetric split with no walk to apply it to is refused rather
+    # than accepted and ignored.
+    tail_forward = float(tail_forward_fraction)
+    if not math.isfinite(tail_forward) or not 0.5 <= tail_forward <= 1.0:
+        raise ValueError(
+            "tail_forward_fraction must be finite and in [0.5, 1.0] (got "
+            f"{tail_forward_fraction!r}): it is the share of each launched "
+            "tail population sent along +z, and the remainder goes along -z, "
+            "so a value below 0.5 would launch the beam-driven plateau "
+            "backward-biased"
+        )
+    if tail_forward != 0.5 and not walk_tail:
+        raise ValueError(
+            f"tail_forward_fraction={tail_forward_fraction!r} was supplied "
+            "with no walked tail to launch: it is read only under "
+            "anomalous_transport='tail_walk', "
+            "anomalous_transport='plateau_multigroup' or "
+            "anomalous_disposal='landau_branched', and without one of them it "
+            "would do nothing"
+        )
     if multigroup:
         # The birth spectrum is DERIVED (module docstring), so the single-line
         # rung is not merely unused here -- it is a different closure, and
@@ -3067,8 +3147,8 @@ def deposit_beam(
         if walk_tail and np.any(anom_power_eV > 0.0):
             # WP-E: re-express each cell's withheld anomalous POWER as a flux
             # of tail electrons (flux = P / E, so flux*E returns the power to
-            # roundoff), split 50/50 along +-B, and walk them on the shared
-            # machinery above. The escape goes to the tail-only ledger, and
+            # roundoff), split between +-B by tail_forward_fraction, and
+            # walk them on the shared machinery above. The escape goes to the tail-only ledger, and
             # the deposition profile becomes the anomalous diagnostic split --
             # heating_anomalous now reports where the QL energy LANDS.
             #
@@ -3107,7 +3187,9 @@ def deposit_beam(
             # refusal still raises on the population it always raised on.
             tail_plans = []
             for E_walk, walk_power_eV in tail_populations:
-                half_flux = 0.5 * (walk_power_eV / E_walk)
+                flux_fwd, flux_bwd = _tail_launch_fluxes(
+                    walk_power_eV, E_walk, tail_forward
+                )
                 if multigroup:
                     # Each group is banded on its OWN energy: the bars are
                     # properties of the walker, and this ray launches several.
@@ -3133,7 +3215,7 @@ def deposit_beam(
                     # Both WINDOWED closures stand on the same statement: the
                     # window must contain every cell the QL channel drives, or
                     # that cell's tail power would be dropped on the floor.
-                    for birth in np.flatnonzero(half_flux > 0.0):
+                    for birth in np.flatnonzero(flux_fwd > 0.0):
                         if not tail_lo <= birth <= tail_hi:
                             raise ValueError(
                                 f"anomalous power in cell {int(birth)} lies "
@@ -3142,7 +3224,7 @@ def deposit_beam(
                                 "channel drives, or that cell's tail power would "
                                 "be silently dropped"
                             )
-                tail_plans.append((E_walk, half_flux, ionize_walk))
+                tail_plans.append((E_walk, flux_fwd, flux_bwd, ionize_walk))
 
             # K6: the walkers attenuate INELASTICALLY on the column gas as well
             # as Coulomb-slowing, so the closed-form integral above (which
@@ -3221,7 +3303,7 @@ def deposit_beam(
             tail_anode_culled_erg += _take[1] * _ERG_PER_EV
             tail_anode_returned_flux += _take[2]
             tail_anode_returned_erg += _take[3] * _ERG_PER_EV
-            for (E_walk, half_flux, ionize_walk), chains in zip(
+            for (E_walk, flux_fwd, flux_bwd, ionize_walk), chains in zip(
                 tail_plans, tail_chains
             ):
                 if ionize_walk:
@@ -3262,7 +3344,20 @@ def deposit_beam(
                     coeff_w = coeff[win]
                     dz_w = dz_cm[win]
                     floor_w = floor_eV[win]
-                    flux_w = half_flux[win]
+                    # The two arms carry the launch split: the arm heading INTO
+                    # the reflecting face travels -z when that face is the low
+                    # one and +z when it is the high one. ``None`` is an arm
+                    # that is not launched at all.
+                    if reflect_face > 0:
+                        _flux_hit_src, _flux_away_src = flux_fwd, flux_bwd
+                    else:
+                        _flux_hit_src, _flux_away_src = flux_bwd, flux_fwd
+                    flux_w_hit = (
+                        None if _flux_hit_src is None else _flux_hit_src[win]
+                    )
+                    flux_w_away = (
+                        None if _flux_away_src is None else _flux_away_src[win]
+                    )
                     W0_w = np.full(n_w, E_walk)
                     # Window-local cell indices in traversal order for the arm that
                     # heads INTO the reflecting face, and for the arm that heads
@@ -3336,59 +3431,63 @@ def deposit_beam(
                         tail_anode_culled_erg += g_eV * _ERG_PER_EV
 
                     # The arm walking AWAY from the reflecting face never meets it.
-                    dep_a, exit_a, _, cull_a = _leg(
-                        order_away, W0_w, flux_w, cull=_cull_at(order_away)
-                    )
-                    _bank_tail_walk(dep_a, order_away)
-                    escape_opposite += exit_a
-                    if tail_cull:
-                        _bank_cull(cull_a)
+                    if flux_w_away is not None:
+                        dep_a, exit_a, _, cull_a = _leg(
+                            order_away, W0_w, flux_w_away,
+                            cull=_cull_at(order_away),
+                        )
+                        _bank_tail_walk(dep_a, order_away)
+                        escape_opposite += exit_a
+                        if tail_cull:
+                            _bank_cull(cull_a)
                     # The arm walking INTO it: test each population's ARRIVAL
                     # energy against the threshold. Populations born in different
                     # cells arrive with different energies, so this is a per-birth
                     # split, not a whole-arm switch.
-                    dep_h, exit_h, (act_h, W_face, stop_h), cull_h = _leg(
-                        order_hit, W0_w, flux_w, cull=_cull_at(order_hit)
-                    )
-                    bounced = (~stop_h) & (W_face < E_reflect)
-                    if not bounced.any():
-                        _bank_tail_walk(dep_h, order_hit)
-                        escape_at_face += exit_h
-                        if tail_cull:
-                            _bank_cull(cull_h)
-                    else:
-                        flux_hit = flux_w[order_hit]
-                        flux_bounce = np.zeros(n_w)
-                        flux_escape = np.zeros(n_w)
-                        flux_bounce[act_h[bounced]] = flux_hit[act_h[bounced]]
-                        flux_escape[act_h[~bounced]] = flux_hit[act_h[~bounced]]
-                        if np.any(flux_escape > 0.0):
-                            dep_e, exit_e, _, cull_e = _walk_products_forward(
-                                W0_w[order_hit], flux_escape, coeff_w[order_hit],
-                                dz_w[order_hit], floor_w[order_hit], q,
-                                cull=_cull_at(order_hit),
-                            )
-                            _bank_tail_walk(dep_e, order_hit)
-                            escape_at_face += exit_e
-                            if tail_cull:
-                                _bank_cull(cull_e)
-                        # The unfolded two-leg path. The face cell appears at the
-                        # end of the first leg and again at the start of the second
-                        # -- the reflected walker re-crosses it, the same
-                        # cell-resolution granularity the marched walk has.
-                        dep_u, exit_u, _, cull_u = _walk_products_forward(
-                            np.concatenate([W0_w[order_hit], np.zeros(n_w)]),
-                            np.concatenate([flux_bounce, np.zeros(n_w)]),
-                            np.concatenate([coeff_w[order_hit], coeff_w[order_away]]),
-                            np.concatenate([dz_w[order_hit], dz_w[order_away]]),
-                            np.concatenate([floor_w[order_hit], floor_w[order_away]]),
-                            q,
-                            cull=_cull_at(order_hit, order_away),
+                    if flux_w_hit is not None:
+                        dep_h, exit_h, (act_h, W_face, stop_h), cull_h = _leg(
+                            order_hit, W0_w, flux_w_hit,
+                            cull=_cull_at(order_hit),
                         )
-                        _bank_tail_walk(dep_u, order_hit, order_away)
-                        escape_opposite += exit_u
-                        if tail_cull:
-                            _bank_cull(cull_u)
+                        bounced = (~stop_h) & (W_face < E_reflect)
+                        if not bounced.any():
+                            _bank_tail_walk(dep_h, order_hit)
+                            escape_at_face += exit_h
+                            if tail_cull:
+                                _bank_cull(cull_h)
+                        else:
+                            flux_hit = flux_w_hit[order_hit]
+                            flux_bounce = np.zeros(n_w)
+                            flux_escape = np.zeros(n_w)
+                            flux_bounce[act_h[bounced]] = flux_hit[act_h[bounced]]
+                            flux_escape[act_h[~bounced]] = flux_hit[act_h[~bounced]]
+                            if np.any(flux_escape > 0.0):
+                                dep_e, exit_e, _, cull_e = _walk_products_forward(
+                                    W0_w[order_hit], flux_escape, coeff_w[order_hit],
+                                    dz_w[order_hit], floor_w[order_hit], q,
+                                    cull=_cull_at(order_hit),
+                                )
+                                _bank_tail_walk(dep_e, order_hit)
+                                escape_at_face += exit_e
+                                if tail_cull:
+                                    _bank_cull(cull_e)
+                            # The unfolded two-leg path. The face cell appears at the
+                            # end of the first leg and again at the start of the second
+                            # -- the reflected walker re-crosses it, the same
+                            # cell-resolution granularity the marched walk has.
+                            dep_u, exit_u, _, cull_u = _walk_products_forward(
+                                np.concatenate([W0_w[order_hit], np.zeros(n_w)]),
+                                np.concatenate([flux_bounce, np.zeros(n_w)]),
+                                np.concatenate([coeff_w[order_hit], coeff_w[order_away]]),
+                                np.concatenate([dz_w[order_hit], dz_w[order_away]]),
+                                np.concatenate([floor_w[order_hit], floor_w[order_away]]),
+                                q,
+                                cull=_cull_at(order_hit, order_away),
+                            )
+                            _bank_tail_walk(dep_u, order_hit, order_away)
+                            escape_opposite += exit_u
+                            if tail_cull:
+                                _bank_cull(cull_u)
                     if reflect_face > 0:
                         end_loss_tail_high += escape_at_face * _ERG_PER_EV
                         end_loss_tail_low += escape_opposite * _ERG_PER_EV
@@ -3404,9 +3503,11 @@ def deposit_beam(
                         else (np.array([tail_anode_local + tail_lo],
                                        dtype=np.intp), tail_anode_eta)
                     )
-                    for walk_direction in (1, -1):
+                    for walk_direction, dir_flux in _tail_launch_legs(
+                        flux_fwd, flux_bwd
+                    ):
                         exit_erg, _exit_flux, _tally = _walk_and_deposit(
-                            tail_W, half_flux, walk_direction, heat_anomalous,
+                            tail_W, dir_flux, walk_direction, heat_anomalous,
                             cull=_cull_plain,
                         )
                         if walk_direction > 0:
@@ -3530,6 +3631,7 @@ def deposit_beam_two_stream(
     anomalous_transport: str = "local",
     anomalous_disposal: str = "local",
     tail_energy_eV: float | None = None,
+    tail_forward_fraction: float = 0.5,
     tail_walk_window: tuple[int, int] | None = None,
     tail_ionization: str = "off",
     tail_reflect_face: int | None = None,
@@ -3602,7 +3704,9 @@ def deposit_beam_two_stream(
     which are per-arm per-cell by construction, so birth LOCATIONS are the
     march's own -- feed the ONE post-march walk stage, and that stage runs on
     the mean plasma state: neither the channel view ``n/f_cov`` nor the
-    reservoir floor.
+    reservoir floor. ``tail_forward_fraction`` splits that stage's launch
+    between +z and -z on ``deposit_beam``'s own terms and with its own
+    refusals.
 
     That is the same patch-decorrelation closure the re-mix above stands on,
     applied to a product instead of a primary. A field-aligned product's path
@@ -3843,6 +3947,25 @@ def deposit_beam_two_stream(
             raise ValueError(
                 f"tail_energy_eV must be finite and > 0 (got {tail_energy_eV})"
             )
+    # The launch-direction split, on deposit_beam's own terms: the DOMAIN is
+    # checked unconditionally and a non-symmetric split with no walk to apply
+    # it to is refused rather than accepted and ignored.
+    tail_forward = float(tail_forward_fraction)
+    if not math.isfinite(tail_forward) or not 0.5 <= tail_forward <= 1.0:
+        raise ValueError(
+            "tail_forward_fraction must be finite and in [0.5, 1.0] (got "
+            f"{tail_forward_fraction!r}): it is the share of each launched "
+            "tail population sent along +z, and the remainder goes along -z, "
+            "so a value below 0.5 would launch the beam-driven plateau "
+            "backward-biased"
+        )
+    if tail_forward != 0.5 and not walk_tail:
+        raise ValueError(
+            f"tail_forward_fraction={tail_forward_fraction!r} was supplied "
+            "with no walked tail to launch: it is read only under "
+            "anomalous_transport='tail_walk', and without it the setting "
+            "would do nothing"
+        )
     reflect_face = None
     E_reflect = 0.0
     if tail_reflect_face is not None:
@@ -4366,13 +4489,15 @@ def deposit_beam_two_stream(
         if walk_tail and np.any(anom_power_eV > 0.0):
             # WP-E: re-express each cell's withheld anomalous POWER as a flux of
             # tail electrons at the single plateau energy E_tail
-            # (flux*E_tail returns the power to roundoff), split 50/50 along
-            # +-B, and walk them. The deposition profile becomes the anomalous
+            # (flux*E_tail returns the power to roundoff), split between +-B
+            # by tail_forward_fraction, and walk them. The deposition profile becomes the anomalous
             # diagnostic split: heating_anomalous reports where the QL energy
             # LANDS. This self-limits on the mean density -- machine-length at
             # pedestal densities, collapsing onto local banking once the mean
             # has built -- which is the emergent transition the closure claims.
-            half_flux = 0.5 * (anom_power_eV / E_tail)
+            flux_fwd, flux_bwd = _tail_launch_fluxes(
+                anom_power_eV, E_tail, tail_forward
+            )
             tail_power = float(anom_power_eV.sum()) * _ERG_PER_EV
             if tail_sub_threshold:
                 tail_sub_threshold_power = tail_power
@@ -4382,7 +4507,7 @@ def deposit_beam_two_stream(
                 # The windowed closure's standing requirement: the window must
                 # contain every cell the QL channel drives, or that cell's tail
                 # power would be dropped on the floor.
-                for birth in np.flatnonzero(half_flux > 0.0):
+                for birth in np.flatnonzero(flux_fwd > 0.0):
                     if not tail_lo <= birth <= tail_hi:
                         raise ValueError(
                             f"anomalous power in cell {int(birth)} lies "
@@ -4475,13 +4600,15 @@ def deposit_beam_two_stream(
                               anode_eta=float(tail_anode_eta))
                 )
                 _rider_launches = []
-                for birth in np.flatnonzero(half_flux > 0.0):
-                    for walk_direction in (1, -1):
+                for birth in np.flatnonzero(flux_fwd > 0.0):
+                    for walk_direction, dir_flux in _tail_launch_legs(
+                        flux_fwd, flux_bwd
+                    ):
                         leg_dir = walk_direction
                         armed = tail_cull
                         leg = deposit_beam(
                             E_tail,
-                            float(half_flux[birth]),
+                            float(dir_flux[birth]),
                             nn_w,
                             ne_w,
                             Te_w,
@@ -4584,7 +4711,20 @@ def deposit_beam_two_stream(
                 coeff_w = coeff[win]
                 dz_w = dz_cm[win]
                 floor_w = floor_eV[win]
-                flux_w = half_flux[win]
+                # The two arms carry the launch split: the arm heading INTO the
+                # reflecting face travels -z when that face is the low one and
+                # +z when it is the high one. ``None`` is an arm that is not
+                # launched at all.
+                if reflect_face > 0:
+                    _flux_hit_src, _flux_away_src = flux_fwd, flux_bwd
+                else:
+                    _flux_hit_src, _flux_away_src = flux_bwd, flux_fwd
+                flux_w_hit = (
+                    None if _flux_hit_src is None else _flux_hit_src[win]
+                )
+                flux_w_away = (
+                    None if _flux_away_src is None else _flux_away_src[win]
+                )
                 W0_w = np.full(n_w, E_tail)
                 order_hit = (
                     np.arange(n_w)[::-1] if reflect_face < 0 else np.arange(n_w)
@@ -4635,58 +4775,61 @@ def deposit_beam_two_stream(
                     tail_anode_culled_erg += g_eV * _ERG_PER_EV
 
                 # The arm walking AWAY from the reflecting face never meets it.
-                dep_a, exit_a, _, cull_a = _leg(
-                    order_away, W0_w, flux_w, cull=_cull_at(order_away)
-                )
-                _bank_tail_walk(dep_a, order_away)
-                escape_opposite += exit_a
-                if tail_cull:
-                    _bank_cull(cull_a)
+                if flux_w_away is not None:
+                    dep_a, exit_a, _, cull_a = _leg(
+                        order_away, W0_w, flux_w_away,
+                        cull=_cull_at(order_away),
+                    )
+                    _bank_tail_walk(dep_a, order_away)
+                    escape_opposite += exit_a
+                    if tail_cull:
+                        _bank_cull(cull_a)
                 # The arm walking INTO it: populations born in different cells
                 # arrive with different energies, so the threshold test is a
                 # per-birth split, not a whole-arm switch.
-                dep_h, exit_h, (act_h, W_face, stop_h), cull_h = _leg(
-                    order_hit, W0_w, flux_w, cull=_cull_at(order_hit)
-                )
-                bounced = (~stop_h) & (W_face < E_reflect)
-                if not bounced.any():
-                    _bank_tail_walk(dep_h, order_hit)
-                    escape_at_face += exit_h
-                    if tail_cull:
-                        _bank_cull(cull_h)
-                else:
-                    flux_hit = flux_w[order_hit]
-                    flux_bounce = np.zeros(n_w)
-                    flux_escape = np.zeros(n_w)
-                    flux_bounce[act_h[bounced]] = flux_hit[act_h[bounced]]
-                    flux_escape[act_h[~bounced]] = flux_hit[act_h[~bounced]]
-                    if np.any(flux_escape > 0.0):
-                        dep_e, exit_e, _, cull_e = _walk_products_forward(
-                            W0_w[order_hit], flux_escape, coeff_w[order_hit],
-                            dz_w[order_hit], floor_w[order_hit], q,
-                            cull=_cull_at(order_hit),
-                        )
-                        _bank_tail_walk(dep_e, order_hit)
-                        escape_at_face += exit_e
-                        if tail_cull:
-                            _bank_cull(cull_e)
-                    dep_u, exit_u, _, cull_u = _walk_products_forward(
-                        np.concatenate([W0_w[order_hit], np.zeros(n_w)]),
-                        np.concatenate([flux_bounce, np.zeros(n_w)]),
-                        np.concatenate(
-                            [coeff_w[order_hit], coeff_w[order_away]]
-                        ),
-                        np.concatenate([dz_w[order_hit], dz_w[order_away]]),
-                        np.concatenate(
-                            [floor_w[order_hit], floor_w[order_away]]
-                        ),
-                        q,
-                        cull=_cull_at(order_hit, order_away),
+                if flux_w_hit is not None:
+                    dep_h, exit_h, (act_h, W_face, stop_h), cull_h = _leg(
+                        order_hit, W0_w, flux_w_hit, cull=_cull_at(order_hit)
                     )
-                    _bank_tail_walk(dep_u, order_hit, order_away)
-                    escape_opposite += exit_u
-                    if tail_cull:
-                        _bank_cull(cull_u)
+                    bounced = (~stop_h) & (W_face < E_reflect)
+                    if not bounced.any():
+                        _bank_tail_walk(dep_h, order_hit)
+                        escape_at_face += exit_h
+                        if tail_cull:
+                            _bank_cull(cull_h)
+                    else:
+                        flux_hit = flux_w_hit[order_hit]
+                        flux_bounce = np.zeros(n_w)
+                        flux_escape = np.zeros(n_w)
+                        flux_bounce[act_h[bounced]] = flux_hit[act_h[bounced]]
+                        flux_escape[act_h[~bounced]] = flux_hit[act_h[~bounced]]
+                        if np.any(flux_escape > 0.0):
+                            dep_e, exit_e, _, cull_e = _walk_products_forward(
+                                W0_w[order_hit], flux_escape, coeff_w[order_hit],
+                                dz_w[order_hit], floor_w[order_hit], q,
+                                cull=_cull_at(order_hit),
+                            )
+                            _bank_tail_walk(dep_e, order_hit)
+                            escape_at_face += exit_e
+                            if tail_cull:
+                                _bank_cull(cull_e)
+                        dep_u, exit_u, _, cull_u = _walk_products_forward(
+                            np.concatenate([W0_w[order_hit], np.zeros(n_w)]),
+                            np.concatenate([flux_bounce, np.zeros(n_w)]),
+                            np.concatenate(
+                                [coeff_w[order_hit], coeff_w[order_away]]
+                            ),
+                            np.concatenate([dz_w[order_hit], dz_w[order_away]]),
+                            np.concatenate(
+                                [floor_w[order_hit], floor_w[order_away]]
+                            ),
+                            q,
+                            cull=_cull_at(order_hit, order_away),
+                        )
+                        _bank_tail_walk(dep_u, order_hit, order_away)
+                        escape_opposite += exit_u
+                        if tail_cull:
+                            _bank_cull(cull_u)
                 if reflect_face > 0:
                     end_loss_tail_high += escape_at_face * _ERG_PER_EV
                     end_loss_tail_low += escape_opposite * _ERG_PER_EV
@@ -4702,9 +4845,11 @@ def deposit_beam_two_stream(
                     else (np.array([tail_anode_local + tail_lo], dtype=np.intp),
                           tail_anode_eta)
                 )
-                for walk_direction in (1, -1):
+                for walk_direction, dir_flux in _tail_launch_legs(
+                    flux_fwd, flux_bwd
+                ):
                     exit_erg, _exit_flux, _tally = _walk_and_deposit(
-                        tail_W, half_flux, walk_direction, "heat_anomalous",
+                        tail_W, dir_flux, walk_direction, "heat_anomalous",
                         cull=_cull_plain,
                     )
                     if walk_direction > 0:

@@ -3340,6 +3340,32 @@ class LAPDSim1D:
                 "heating_anomalous_tail_cathode_boundary must be 'reflect' or "
                 f"'escape' (got {_cath_bnd!r})"
             )
+        # The launch-direction split. Its DOMAIN is checked unconditionally --
+        # a value off the range is wrong whether or not the walk is engaged --
+        # and the inert-use refusal below keeps the "read only when the tail is
+        # walked" contract its siblings have.
+        _fwd_frac = self._input_dict.get(
+            "heating_anomalous_tail_forward_fraction"
+        )
+        _fwd = float(_fwd_frac)
+        if not math.isfinite(_fwd) or not 0.5 <= _fwd <= 1.0:
+            raise ValueError(
+                "heating_anomalous_tail_forward_fraction must be finite and "
+                f"in [0.5, 1.0] (got {_fwd_frac!r}): it is the share of each "
+                "launched tail population sent along +z, the remainder goes "
+                "along -z, and a beam-driven plateau is never launched "
+                "backward-biased"
+            )
+        if _fwd != 0.5 and not _tail_walking:
+            raise ValueError(
+                "heating_anomalous_tail_forward_fraction="
+                f"{_fwd_frac!r} was supplied with no walked tail to launch: "
+                "it is read only under "
+                "heating_anomalous_transport='tail_walk', "
+                "heating_anomalous_transport='plateau_multigroup' or "
+                "heating_anomalous_disposal='landau_branched' (without them "
+                "the setting would be a silent no-op)"
+            )
         # f is a DECLARED BRACKET, never a fitted number, so a value off the
         # bracket is refused everywhere rather than only where it is read.
         _phi_frac = self._input_dict.get(

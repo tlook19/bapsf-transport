@@ -2387,8 +2387,9 @@ def cathode_defaults():
         (Coulomb range ~km at n_e ~ 1e10, hundreds of machine lengths) and
         free-streams along B. Under ``"tail_walk"`` each cell's QL power is
         withheld and carried by tail electrons at
-        ``heating_anomalous_tail_energy_eV``, launched 50/50 along +-B and
-        walked on the SAME closed-form Coulomb machinery the
+        ``heating_anomalous_tail_energy_eV``, launched along +-B on the split
+        ``heating_anomalous_tail_forward_fraction`` states (50/50 by default)
+        and walked on the SAME closed-form Coulomb machinery the
         ``beam_product_transport`` product walks use (the ray's own
         ``beam_coulomb_model``, the same ``1.5*Te`` thermalization floor) — no
         new physics parameters beyond the tail energy. Energy still hot at a
@@ -2482,6 +2483,24 @@ def cathode_defaults():
         independent of it. The plateau energy is a kinetic quantity a fluid
         model cannot pin, so this is an ASSUMED value and a run that uses it
         must report a bracket rather than a single number.
+    heating_anomalous_tail_forward_fraction:
+        The share of each launched tail population sent along +z -- the
+        direction from the cathode toward the end wall, the one the beam
+        itself travels and the one the ``_tail_high`` end-loss row books. The
+        remaining ``1 - f`` is launched along -z. **Read ONLY when the QL tail
+        is WALKED** (``heating_anomalous_transport="tail_walk"`` or
+        ``"plateau_multigroup"``, or
+        ``heating_anomalous_disposal="landau_branched"``) -- inert otherwise,
+        and a non-default value without one of them raises rather than being
+        silently ignored. Dimensionless, in ``[0.5, 1.0]``; anything outside
+        that range, and any non-finite value, raises at construction. ``0.5``
+        (default, bit-exact): the symmetric launch. ``1.0``: no -z walker is
+        launched at all. It applies to every walked-tail route -- the ionizing
+        march, the energy-only walk and its reflecting-face arms, and every
+        plateau group. The launched POWER is ``flux * E_tail`` at any split, so
+        this key moves where the tail power is delivered and never how much of
+        it there is; the cathode-boundary, ionization and end-ledger
+        conventions are untouched.
     heating_anomalous_tail_energy_keying:
         How the tail birth energy ``E_tail`` is set. **Read ONLY when the QL
         tail is WALKED** (``heating_anomalous_transport="tail_walk"`` or
@@ -2927,6 +2946,9 @@ def cathode_defaults():
         # (bit-exact). Inert under "local"; see the docstring above.
         "heating_anomalous_disposal": "local",
         "heating_anomalous_tail_energy_eV": 75.0,
+        # Launch-direction split of the walked tail: DEFAULT SYMMETRIC
+        # (bit-exact). Inert unless the tail is walked.
+        "heating_anomalous_tail_forward_fraction": 0.5,
         "heating_anomalous_tail_ionization": "off",
         # K7 sheath-aware tail closure. Both keys are inert unless the walk is
         # engaged, and when it is they DEFAULT TO THE CORRECTED closure; the
