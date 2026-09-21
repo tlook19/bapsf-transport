@@ -55,7 +55,10 @@ DENSITY, a rate per unit volume, and its subscript says of what: a PROCESS
 subscript (ion, rec, an, …) makes it a particle rate
 (cm<sup>-3</sup> s<sup>-1</sup>), while a FIELD subscript ($n$, $M$, $E_e$,
 $E_i$) makes it that field's NET source in that field's own units — so
-$S_M$ is a momentum source density and is correct as it stands. A lowercase
+$S_M$ is a momentum source density and is correct as it stands. The ionization
+source always carries its channel superscript, $S_\text{ion}^\text{bulk}$ or
+$S_\text{ion}^\text{beam}$, and where both act the sum is spelled out; there is
+deliberately no bare $S_\text{ion}$. A lowercase
 $s$ is the corresponding source density in phase space, per unit
 $dv_\parallel dc_\perp$: $s_\text{gp}$ is the only one. $F$ is reserved for
 force densities (dyn cm<sup>-3</sup> = g cm<sup>-2</sup> s<sup>-2</sup>), and
@@ -203,7 +206,7 @@ local $u$ and $T_i$.
 
 **$u_n^\text{col}$ and $T_n^\text{col}$ are not separate inputs to these two
 terms.** What is booked are the MEASURED first and second moments of the
-population ionization removed from $f_n^\text{col}$ over the tick, so
+population ionization removes from $f_n^\text{col}$ over the tick, so
 $u_n^\text{col}$ and $T_n^\text{col}$ above name those moments rather than
 diagnostics of the gas computed beside them. The removal is taken from the
 marched $f_n^\text{col}$, and the remainder that reconciles it to the particle
