@@ -90,7 +90,7 @@
     "file_sha256": [
       "084fab878959bc411aba5cfa5e189efb371eb0e00ae406dbc31ac21ff6a73ff2"
     ],
-    "identity": "e9c73f7a638fc407f9c6e72eaf14ad3f9e8f4d535e683f25d849e136f006b9e7",
+    "identity": "ff094ab99998d86f87043ff33c8858c1fc77808fc5438689d5342e4f8fc2f684",
     "name": "g1atrim"
   },
   "description": "Golden baseline at the stance of record, re-cut to the gate mesh: default_config() plus the committed stance file scripts/stances/g1atrim.toml, minus that stance's mesh-sized package, plus the run-shape overrides in baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60).",
@@ -302,6 +302,7 @@
     "heating_anomalous_tail_cathode_boundary": "reflect",
     "heating_anomalous_tail_energy_eV": 75.0,
     "heating_anomalous_tail_energy_keying": "phi_c",
+    "heating_anomalous_tail_forward_fraction": 0.5,
     "heating_anomalous_tail_ionization": "on",
     "heating_anomalous_tail_phi_c_fraction": null,
     "heating_anomalous_transport": "plateau_multigroup",
