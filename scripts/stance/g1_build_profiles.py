@@ -18,14 +18,13 @@ way down. The ~156 cm "coil-location disagreement" reported against
 ``droop_min`` earlier that day was an artifact of a mirror-imaged coordinate
 assumption in the MSI build and is retired.
 
-G1 adopts the measured CAD machine geometry at the l2a7b operating point.
-The solver takes the geometry as RADII, one entry per mesh cell, under the
-``prescribed_area_geometry`` flag: ``plasma_radius_profile_cm`` (the flux-tube
-radius, so the flux-tube AREA is ``pi r^2``) and ``machine_radius_profile_cm``
-(the vessel bore). This script emits both, for the two end-field cases the
-census re-solve resolved, plus the mesh comparison against the l2a7b
-reference and the construction validation that must pass before any arm
-launches. The annulus figure that validation prints is the smallest PER-CELL
+G1 is the measured CAD machine geometry. The solver takes the geometry as
+RADII, one entry per mesh cell, under the ``prescribed_area_geometry`` flag:
+``plasma_radius_profile_cm`` (the flux-tube radius, so the flux-tube AREA is
+``pi r^2``) and ``machine_radius_profile_cm`` (the vessel bore). This script
+emits both, for the two end-field cases the census re-solve resolved, plus the
+mesh comparison against the reference configuration and the construction
+validation that must pass before any arm launches. The annulus figure that validation prints is the smallest PER-CELL
 share ``(V_m - V_p)/V_m`` over the cells that have an annulus, cap-bound cells
 included and ``V_ann == 0`` cells excluded -- the same per-cell quantity the
 solver's ``neutral_annulus_volume_fraction_min`` guard refuses on, NOT a
@@ -33,29 +32,32 @@ column-integrated share.
 
 Inputs
 ------
-``scripts/lapd_end_field_1400G_rp18p415_census2026.npz``
-    The measured-census field re-solve. Per case ``c`` in
-    ``{droop_min, off}`` it carries ``c_z_flux_m`` / ``c_flux_radius_m``
+``--census-npz PATH``
+    The measured-census field re-solve, an out-of-repo table. Per case ``c``
+    in ``{droop_min, off}`` it carries ``c_z_flux_m`` / ``c_flux_radius_m``
     (the traced flux-surface radius of the 18.415 cm column), the trace
     terminus ``c_trace_end_z_m``, and the vessel-wall crossings
     ``c_crossing_z_m`` / ``c_crossing_radii_m``.
-``scripts/l2a7b_foot45_cr6p94.h5``
-    The l2a7b operating point, read for its resolved config only. It is the
-    comparison base for the mesh report, NOT an identity target: it was one
-    until the 2026-08-24 CAD-span gap adoption moved
-    ``cathode_anode_gap_cm`` 50.0 -> 53.25, which moves the anode face and
-    with it every cell downstream of the cathode face. The grid of record
-    is ``Lm = 2117.8, end_wall_length_cm = 7.8, nx = 268``, and the
-    terminal cell is the 7.8 cm end wall at the flange. BEHIND the
-    cathode face the mesh deliberately changes, under the fidelity
-    package that replaced the guessed cathode box with the measured
-    source chamber: the
+``scripts/stances/g1atrim.toml``
+    The LAPD reference configuration, resolved through
+    ``scripts/stance/stance_config.py``, read for the MESH it defines. The
+    mesh-sized package (the two radius profiles and the flags that require
+    them) is dropped before the geometry is built, because the mesh probe's
+    job is to resolve the cell centres those very profiles are evaluated on.
+    It is the comparison base for the mesh report: the grid of record is
+    ``Lm = 2117.8, end_wall_length_cm = 7.8, nx = 268``, the terminal cell is
+    the 7.8 cm end wall at the flange, the anode face sits at
+    ``cathode_anode_gap_cm = 53.25`` and the fixed source region rides it.
+    BEHIND the cathode face the mesh carries the fidelity package that
+    replaced the guessed cathode box with the measured source chamber: the
     guessed ``Rcs 40 / Lcs 25`` obstruction is RETIRED (the obstruction cell
     is omitted at ``Lcs = 0``) and the plenum is the measured source chamber,
     ``plenum_length_cm = 166`` at machine radius 40 cm (reservoir volume
     8.34e5 cm^3 exactly). The measured cathode box enters solely as the
     machine-radius stages at the cathode/gap cells (annulus areas
-    1350.1 / 1847.6 cm^2 exact) -- the abstracted faithful conductance.
+    1350.1 / 1847.6 cm^2 exact) -- the abstracted faithful conductance. The
+    grid constants below restate that configuration's own values, so the mesh
+    report reads zero cell movement whenever the two still agree.
 
 Plasma profile (per case)
 -------------------------
@@ -79,14 +81,15 @@ the first gap cell) against the 18.415 cm column. The plenum cell sits at
 negative z inside the first bore stage, so it carries the measured source
 chamber's 40.0 cm directly.
 
-Outputs (all in ``scripts/``)
------------------------------
+Outputs (all in ``--outdir``, which must lie outside the repository)
+-------------------------------------------------------------------
 ``g1_profiles.npz``  the two plasma profiles, the vessel profile, the mesh.
 ``g1_profiles.txt``  the human-readable tables and validation report.
 ``g1a_extra_args.txt`` / ``g1b_extra_args.txt``  the literal
     ``--extra key=value`` JSON the arm commands paste in.
 """
 
+import argparse
 import json
 import os
 import sys
@@ -94,15 +97,29 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(HERE))
+REPO_ROOT = os.path.dirname(HERE)
+sys.path.insert(0, REPO_ROOT)
+# scripts/ sibling imports: the seven purpose subdirectories on sys.path.
+for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
+             "verify"):
+    _dir = os.path.join(HERE, _sub)
+    if _dir not in sys.path:
+        sys.path.insert(0, _dir)
 
-from cablp.solvers._sim1d.core.config import (  # noqa: E402
-    apply_legacy_config_key_aliases,
+from stance_config import (  # noqa: E402
+    stance_config,
+    without_mesh_sized_package,
 )
+
 from cablp.solvers._sim1d.core.geometry import build_geometry  # noqa: E402
 
-CENSUS_NPZ = os.path.join(HERE, "lapd_end_field_1400G_rp18p415_census2026.npz")
-REFERENCE_H5 = os.path.join(HERE, "l2a7b_foot45_cr6p94.h5")
+#: The measured-census field re-solve. Not in the repository: the path is
+#: supplied per run through ``--census-npz`` and assigned here, so a caller
+#: that imports this module (the MSI profile build does) reads one name.
+CENSUS_NPZ = None
+#: The configuration whose mesh the profiles are built on: the LAPD reference
+#: configuration, by committed stance name.
+REFERENCE_STANCE = "g1atrim"
 
 #: The G1 grid of record, superseding an earlier draft that put the
 #: end wall at 217.8: the end flange is the wall, the outer column runs
@@ -165,19 +182,16 @@ CASES = ("droop_min", "off")
 
 
 def _reference_config():
-    """Return the l2a7b (params, flags) pair, read from the archived run."""
-    import h5py
+    """Return the reference configuration's (params, flags) pair, mesh only.
 
-    with h5py.File(REFERENCE_H5, "r") as handle:
-        # Addressed under CURRENT key names: the archived run predates the
-        # end-wall rename and spells the far-end keys the old way.
-        params = apply_legacy_config_key_aliases(
-            json.loads(handle.attrs["params_json"])
-        )
-        flags = apply_legacy_config_key_aliases(
-            json.loads(handle.attrs["flags_json"])
-        )
-    return params, flags
+    The committed stance named by :data:`REFERENCE_STANCE`, resolved on top of
+    ``default_config()``, with the MESH-SIZED PACKAGE dropped: the two radius
+    profiles and the flags that require them are exactly what this script
+    emits, so carrying them into the mesh probe would feed the build its own
+    previous output. Every mesh-independent key is kept, so the grid this pair
+    resolves is the configuration's own.
+    """
+    return without_mesh_sized_package(*stance_config(REFERENCE_STANCE))
 
 
 def _g1_config(params, flags):
@@ -260,7 +274,42 @@ def _fmt_array(values):
     return json.dumps([float(v) for v in values], separators=(",", ":"))
 
 
-def main():
+def _parse_args(argv=None):
+    """Return the parsed CLI: the out-of-repo census table and output dir."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--census-npz",
+        required=True,
+        help="path to the measured-census field re-solve (not in the repo)",
+    )
+    parser.add_argument(
+        "--outdir",
+        required=True,
+        help=(
+            "directory the build writes its report, tables and payloads to; "
+            "it must lie outside the repository, which holds code only"
+        ),
+    )
+    args = parser.parse_args(argv)
+    args.census_npz = os.path.abspath(args.census_npz)
+    if not os.path.isfile(args.census_npz):
+        parser.error(f"--census-npz is not a file: {args.census_npz}")
+    args.outdir = os.path.abspath(args.outdir)
+    if os.path.commonpath([args.outdir, REPO_ROOT]) == REPO_ROOT:
+        parser.error(
+            f"--outdir {args.outdir} is inside the repository {REPO_ROOT}; "
+            "run artifacts belong outside it"
+        )
+    os.makedirs(args.outdir, exist_ok=True)
+    return args
+
+
+def main(argv=None):
+    global CENSUS_NPZ
+
+    args = _parse_args(argv)
+    CENSUS_NPZ = args.census_npz
+    outdir = args.outdir
     census = np.load(CENSUS_NPZ, allow_pickle=True)
     ref_params, ref_flags = _reference_config()
     ref_geometry = build_geometry(ref_params, ref_flags)
@@ -276,7 +325,8 @@ def main():
 
     say("=== G1 prescribed-geometry profile build ===")
     say(f"census   : {CENSUS_NPZ}")
-    say(f"reference: {REFERENCE_H5}")
+    say(f"reference: configuration {REFERENCE_STANCE} (mesh-sized package dropped)")
+    say(f"outdir   : {outdir}")
     say(
         f"grid     : Lm {ref_params['Lm']} -> {LM_CM} cm, end wall "
         f"{ref_params['end_wall_length_cm']} -> {END_WALL_LENGTH_CM} cm, "
@@ -292,23 +342,20 @@ def main():
     )
     say()
 
-    # --- mesh comparison against l2a7b ---------------------------------------
-    # THE BIT-IDENTITY CLAIM IS RETIRED (2026-08-24 CAD-span gap adoption).
-    # Until the gap moved, the G1 mesh reproduced l2a7b's cell centres and
-    # edges bit-for-bit over 0 <= z <= 1900 cm, and this block ASSERTED it.
-    # ``cathode_anode_gap_cm`` 50.0 -> 53.25 moves the anode face, so every
-    # cell downstream of the cathode face moves with it and no such identity
-    # can hold: the gap cells stretch 10.0 -> 10.65 cm, the fixed source
-    # region rides the face (+3.25 cm, span and cell count unchanged), and the
-    # far column re-divides the shortened remainder. The comparison is kept
-    # and REPORTED so the size and shape of the shift are on the record, but
-    # asserting the old identity would now be asserting something the ruling
-    # deliberately broke.
+    # --- mesh comparison against the reference configuration ----------------
+    # The comparison is REPORTED, never asserted to an identity. The grid
+    # constants above restate the reference configuration's own machine
+    # scalars, so every delta this block prints reads zero while the two
+    # agree, and any non-zero reading is the builder and the shipped
+    # configuration having drifted apart -- which is what the block is for.
     shared = np.flatnonzero((mesh.z_cm >= 0.0) & (mesh.z_cm <= 1900.0))
     ref_shared = np.flatnonzero(
         (ref_geometry.z_cm >= 0.0) & (ref_geometry.z_cm <= 1900.0)
     )
-    say("--- mesh comparison vs l2a7b (cells 0 <= z <= 1900 cm) ---")
+    say(
+        f"--- mesh comparison vs configuration {REFERENCE_STANCE} "
+        f"(cells 0 <= z <= 1900 cm) ---"
+    )
     say(f"reference cells {ref_geometry.cells}, G1 cells {mesh.cells}")
     ref_behind = np.flatnonzero(ref_geometry.z_cm < 0.0)
     g1_behind = np.flatnonzero(mesh.z_cm < 0.0)
@@ -638,7 +685,7 @@ def main():
             "neutral_baffles=true",
             "end_expansion_geometry=false",
         ]
-        path = os.path.join(HERE, f"{arm.lower()}_extra_args.txt")
+        path = os.path.join(outdir, f"{arm.lower()}_extra_args.txt")
         with open(path, "w") as handle:
             handle.write("--extra " + " ".join(payload) + "\n\n")
             handle.write("--extra-flag " + " ".join(flag_payload) + "\n")
@@ -647,7 +694,7 @@ def main():
         say(f"  --extra {' '.join(payload[:8])} <profile arrays in the file>")
     say()
 
-    npz_path = os.path.join(HERE, "g1_profiles.npz")
+    npz_path = os.path.join(outdir, "g1_profiles.npz")
     np.savez(
         npz_path,
         z_cm=mesh.z_cm,
@@ -670,7 +717,7 @@ def main():
     )
     say(f"saved {npz_path}")
 
-    with open(os.path.join(HERE, "g1_profiles.txt"), "w") as handle:
+    with open(os.path.join(outdir, "g1_profiles.txt"), "w") as handle:
         handle.write("\n".join(lines) + "\n")
 
 
