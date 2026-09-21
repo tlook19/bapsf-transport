@@ -1101,9 +1101,17 @@ removes there, $eA_f\alpha_\text{se}nc_s$ — the same expression, on the same
 sheath-edge factor, the same sound speed and the same area, since the emitting
 disc IS the face the plasma terminates on ($A_f=A_c=\pi R_\text{cath}^2$,
 asserted at construction). What separates the two numbers is the SAMPLING and
-nothing else: the boundary operator reads the live cell's raw state while the
-circuit reads the exponential moving average `cathode_sample_smoothing`
-maintains, a sub-percent difference in the same formula. The
+nothing else: the boundary operator reads the live cell's RAW state, the
+circuit the exponential moving average `cathode_sample_smoothing` maintains.
+The residual between them is therefore that filter's lag and nothing but it —
+largest while the sampled cell is moving fast, since the EMA's time constant
+is the ion transit across it and a breakdown transient crosses that cell far
+faster, and falling toward zero as the sample settles. It is a property of how
+hard the plasma is being driven rather than of the boundary, so the
+`cathode-face-one-ion-current` smoke case PRINTS the spread instead of bounding
+it, and gates the thing the model asserts: that the circuit's $I_i$ is the one
+expression above evaluated on the smoothed sample, to round-off, at every
+sampled step. The
 current-driven path's thermionic remainder — the emission the cathode Kirchhoff
 $I_\text{eth}^\star+I_\text{see}+I_i-I_{e,\text{ret}}=I_\text{tot}$ leaves to be
 supplied — is built on that one number, and so is the ion power

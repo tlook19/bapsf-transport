@@ -9347,19 +9347,15 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.allclose(cathode_diag["has_twin_solution"], 0.0)
     assert np.all(np.isfinite(cathode_diag["source_phi_c"]))
     assert np.all(cathode_diag["source_I_i"] >= 0.0)
-    # source_I_tot's first sample is the pre-breakdown FLOATING balance, where
-    # the net current is zero by construction: what is stored there is the
-    # residual of the root the solve returned, so the no-backwards-current
-    # clause is bounded by the solve's own current scale rather than by the
-    # sign of an epsilon.
-    _ns_I_scale = np.maximum(
-        np.abs(np.asarray(cathode_diag["source_I_i"], dtype=float)),
-        np.abs(np.asarray(cathode_diag["source_I_e"], dtype=float)),
-    )
-    assert np.all(
-        np.asarray(cathode_diag["source_I_tot"], dtype=float)
-        >= -1.0e-12 * _ns_I_scale
-    ), cathode_diag["source_I_tot"]
+    # source_I_tot's FIRST sample is the initial state's solve, whose net
+    # current is zero by construction: what is stored there is the residual of
+    # the root the solve returned, so it is bounded by the solve's own current
+    # scale rather than by the sign of an epsilon. Every LATER sample has been
+    # stepped and carries a real forward current, and keeps the strict clause.
+    _ns_I_tot = np.asarray(cathode_diag["source_I_tot"], dtype=float)
+    _ns_I_e = np.asarray(cathode_diag["source_I_e"], dtype=float)
+    assert _ns_I_tot[0] >= -1.0e-12 * abs(_ns_I_e[0]), _ns_I_tot[0]
+    assert np.all(_ns_I_tot[1:] > 0.0), _ns_I_tot[1:]
     assert np.all(np.isfinite(cathode_diag["source_P_prim"]))
     assert np.all(np.isfinite(cathode_diag["source_P_ohmic"]))
     # The pre-closure ``source_P_loss`` this once checked is retired from the
@@ -9547,12 +9543,14 @@ def _case_cathode_power_balance_warming(
         "beam_ionization_cost",
     ):
         assert np.all(np.isfinite(cathode_run_result.rhs_terms[_beam_key]["Ee"]))
-    assert np.all(
-        cathode_run_result.cathode_diagnostics["source_I_tot"][:4]
-        >= -1.0e-12 * np.abs(
-            cathode_run_result.cathode_diagnostics["source_I_e"][:4]
-        )
-    )
+    _ns_rt_I_tot = np.asarray(
+        cathode_run_result.cathode_diagnostics["source_I_tot"], dtype=float
+    )[:4]
+    _ns_rt_I_e = np.asarray(
+        cathode_run_result.cathode_diagnostics["source_I_e"], dtype=float
+    )[:4]
+    assert _ns_rt_I_tot[0] >= -1.0e-12 * abs(_ns_rt_I_e[0]), _ns_rt_I_tot[0]
+    assert np.all(_ns_rt_I_tot[1:] > 0.0), _ns_rt_I_tot[1:]
     # A claim about the SOLVER, over the terms a retired _sim3 alias summed.
     # It used to read "np.any(sum > 0)" -- these channels deposit net POSITIVE
     # electron power somewhere -- which was true only because this fixture
@@ -9663,12 +9661,12 @@ def _case_cathode_power_balance_warming(
                 4,
                 geom.cells,
             )
-            assert np.all(
-                h5["cathode_diagnostics/source_I_tot"][()]
-                >= -1.0e-12 * np.abs(
-                    h5["cathode_diagnostics/source_I_e"][()]
-                )
-            )
+            _ns_h5_I_tot = h5["cathode_diagnostics/source_I_tot"][()]
+            _ns_h5_I_e = h5["cathode_diagnostics/source_I_e"][()]
+            assert (
+                _ns_h5_I_tot[0] >= -1.0e-12 * abs(_ns_h5_I_e[0])
+            ), _ns_h5_I_tot[0]
+            assert np.all(_ns_h5_I_tot[1:] > 0.0), _ns_h5_I_tot[1:]
             assert all(
                 value.decode("utf-8")
                 in {"classical", "virtual_cathode", "capability_limited"}

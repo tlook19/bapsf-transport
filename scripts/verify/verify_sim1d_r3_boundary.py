@@ -1,8 +1,8 @@
 """R3.1 characteristic ghost-cell Bohm outflow: pre-registered unit gates.
 
-Static gates for the ghost-cell Bohm outflow boundary (audit A1/A16): a
-one-sided ghost-cell KEP/Rusanov flux against the Bohm outflow state
-(n_se = n*presheath_alpha, u = c_s into the wall, Te, Ti). These gates check the
+Static gates for the ghost-cell Bohm outflow boundary (audit A1/A16): the
+PHYSICAL flux at the sheath-edge state (n_se = alpha_se * n, u = c_s into the
+wall, Te, Ti), applied one-sidedly to the live cell. These gates check the
 boundary in isolation on a controlled state; the *dynamics* (u -> c_s
 established, the settled boundary as a net energy sink) are validated by the
 separate short startup run (verify_sim1d_r3_boundary_startup.py), NOT here.
@@ -10,12 +10,14 @@ separate short startup run (verify_sim1d_r3_boundary_startup.py), NOT here.
 Gates:
   G1 both outward normals drain their live cell (Bohm particle SINK, source-left
      and end-wall-right), and only the live cell (the plenum is untouched);
-  G2 the particle sink is the sonic flux ~ n * c_s * A to the flux's KEP
-     dissipation band (the ghost n_se = alpha*n plus Rusanov upwinding);
-  G3 restoring momentum: at the A1 ANOMALY state (interior flowing AWAY from each
-     wall) the boundary's momentum flux is well below the reflecting closed-wall
-     pressure p_live, so the interior is pulled toward the wall -- the mechanism
-     that drives u -> c_s;
+  G2 the particle sink is that state's own Bohm flux through the face,
+     alpha_se * n * c_s * A, to round-off -- an identity, not a band -- with
+     the ratio to the interior sonic flux n * c_s * A printed beside it;
+  G3 the face momentum flux is the sheath-edge state's own physical flux,
+     n_se (m_i c_s^2 + Te + Ti), to round-off -- an identity, not a bound --
+     measured at a state with the interior flowing AWAY from each wall, so the
+     live cell's velocity is shown not to enter it; the ratio to the
+     reflecting closed-wall pressure p_live is printed beside it;
   G4 at the physical Bohm outflow state (u = outward*c_s) the boundary is a net
      energy sink (electron internal + ion internal + reconstructed kinetic < 0),
      i.e. NOT the A1 +18.5 kW kinetic source.
@@ -24,8 +26,8 @@ RETIRED with the legacy volumetric absorber they compared
 against: G5 (off-path presence and flag perturbation) in full, and G3's
 "reconstructed-kinetic source smaller than the old volumetric sink's" half.
 Neither is constructible now that the absorber and its flag are gone -- G3's
-restoring-momentum statement, which is measured against the reflecting-wall
-pressure rather than against the other operator, is unaffected and still runs.
+surviving half reads the face's own flux rather than the other operator, so it
+is unaffected and still runs.
 
 The SETTLED-window net sink and u -> c_s establishment are the RUN gate
 (verify_sim1d_r3_boundary_startup.py), NOT this static probe.
@@ -37,12 +39,13 @@ import sys
 import numpy as np
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config
-from cablp.solvers._sim1d.core.state import conservative_from_primitives
-from cablp.solvers._sim1d.physics.flux import ion_sound_speed
-from cablp.solvers._sim1d.physics.sources import (
-    presheath_alpha,
-    presheath_length_cm,
+from cablp.solvers._sim1d.core.state import (
+    conservative_from_primitives,
+    derive_state,
 )
+from cablp.solvers._sim1d.physics.flux import ion_sound_speed
+from cablp.solvers._sim1d.physics.sources import absorbing_face_states
+from cablp.constants import ev_to_erg
 # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
 import sys as _sys
 from pathlib import Path as _Path
@@ -132,23 +135,36 @@ def main():
     print(f"G1 plenum (plasma-dead) untouched               : {g1_plenum}")
 
     g2 = True
+    dv = derive_state(state, floors=sim._floors, ion_mass_g=m_i)
     for face, live in edges.items():
-        # The removal rate is the sonic Bohm flux at the sheath-edge density,
-        # broadened by the Rusanov/KEP dissipation across the ghost jump. Compare
-        # to the interior sonic flux n c_s A (band, not equality: the dissipation
-        # term is a genuine part of the numerical flux, not an error).
-        sonic = n0 * cs * float(geo.plasma_face_area_cm2[face])
+        # What the surface removes is the PHYSICAL flux at the state at its
+        # sheath edge, so the removal rate is that state's own Bohm flux
+        # through the face -- alpha_se n c_s A, at the sampling factor THIS
+        # face's ghost was built at. It is an IDENTITY, not a band: there is
+        # no dissipative share on top of it. The ratio to the interior sonic
+        # flux n c_s A is printed beside it and is alpha_se itself.
+        outward = -1.0 if live == face else 1.0
+        _, ghost, alpha_eff = absorbing_face_states(
+            state=state, derived=dv, geometry=geo, live=live,
+            outward=outward, ion_mass_g=m_i,
+            alpha_isat=float(np.exp(-0.5)),
+            b_presheath_length=float(sim._input_dict["b_presheath_length"]),
+            gas_type=sim._gas_type,
+        )
+        area = float(geo.plasma_face_area_cm2[face])
+        sonic = n0 * cs * area
+        want = float(ghost["n"]) * abs(float(ghost["u"])) * area
         actual = -ch.n[live] * Vp[live]  # particles/s removed
-        ratio = actual / sonic
-        g2 &= 0.6 < ratio < 1.6 and actual > 0.0
-        print(f"G2 face {face:3d}: Bohm sink {actual:.3e} vs n c_s A {sonic:.3e}"
-              f"  (ratio {ratio:.3f})")
+        g2 &= abs(actual / want - 1.0) <= 1.0e-12 and actual > 0.0
+        print(f"G2 face {face:3d}: Bohm sink {actual:.6e} vs "
+              f"alpha_se n c_s A {want:.6e} (rel {actual / want - 1.0:+.2e}); "
+              f"sink / n c_s A {actual / sonic:.3f} "
+              f"(= alpha_se {alpha_eff:.3f})")
 
-    # --- G3: restoring momentum at the A1 anomaly state -------------------
-    from cablp.solvers._sim1d.core.state import derive_state
-    anom_state, anom_edges, _ = _uniform_state(
+    # --- G3: the face momentum flux is the sheath-edge state's own --------
+    anom_state, anom_edges, cs_a = _uniform_state(
         sim, n0, Te0, Ti0, u_edge_frac=-1.0
-    )  # interior flowing AWAY from each wall (the A1 pathology)
+    )  # interior flowing AWAY from each wall
     dv_a = derive_state(anom_state, floors=sim._floors, ion_mass_g=m_i)
     ch_a = sim.characteristic_boundary_rhs(state=anom_state)
     g3 = True
@@ -161,10 +177,28 @@ def main():
         u_l = float(dv_a.u[live])
         dK_new = float((u_l * ch_a.M[live] - 0.5 * m_i * u_l**2 * ch_a.n[live])
                        * Vp[live] * ERG_TO_W)
-        restoring = f_M < 0.5 * p_live  # far below the reflecting wall it replaces
-        g3 &= restoring
-        print(f"G3 face {face:3d}: anomaly Γ_M {f_M:.3e} vs p_live {p_live:.3e} "
-              f"(ratio {f_M/p_live:.3f}<0.5); reconstructed KE {dK_new:+.2e} W")
+        # What the surface removes is the PHYSICAL momentum flux of the state
+        # at its sheath edge -- n_se (m_i c_s^2 + Te + Ti), with
+        # n_se = alpha_se n and the ghost's velocity the sound speed into the
+        # surface -- whatever the live cell is doing. It is an IDENTITY, not
+        # a bound: there is no dissipative share on top of it and no
+        # live-cell half under it, so the interior state enters only through
+        # alpha_se, Te and Ti.
+        outward = -1.0 if live == face else 1.0
+        _, ghost_a, _ = absorbing_face_states(
+            state=anom_state, derived=dv_a, geometry=geo, live=live,
+            outward=outward, ion_mass_g=m_i,
+            alpha_isat=float(np.exp(-0.5)),
+            b_presheath_length=float(sim._input_dict["b_presheath_length"]),
+            gas_type=sim._gas_type,
+        )
+        n_se = float(ghost_a["n"])
+        f_M_want = n_se * (m_i * cs_a**2 + (Te0 + Ti0) * ev_to_erg)
+        g3 &= abs(f_M / f_M_want - 1.0) <= 1.0e-12
+        print(f"G3 face {face:3d}: Γ_M {f_M:.6e} vs n_se (m_i c_s^2 + Te + Ti) "
+              f"{f_M_want:.6e} (rel {f_M / f_M_want - 1.0:+.2e}); "
+              f"Γ_M / p_live {f_M / p_live:.3f}; "
+              f"reconstructed KE {dK_new:+.2e} W")
 
     # --- G4: net energy sink at the physical Bohm outflow state -----------
     def reconstructed_kinetic(term, u):
