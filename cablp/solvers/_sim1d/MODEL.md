@@ -87,7 +87,7 @@ the code's `ion_sound_speed`, $9.79\times10^5\sqrt{T_e/\mu}$ cm s<sup>-1</sup>
 on $\mu$ PROTON masses ($\mu=4$ for helium), not
 $\sqrt{T_e/m_i}$ on the true ion mass $m_i=m_\text{He}$ that every other term
 uses. The two differ by a fixed 0.600 % in $m_ic_s^2$ against $T_e$ — $c_s$
-about 0.30 % high — at every site that reads it: the anode-mesh collection,
+about 0.30 % LOW — at every site that reads it: the anode-mesh collection,
 the absorbing-face ghost velocity and the presheath depth. The residual is
 stated in the docstring of `ion_sound_speed` in `physics/flux.py`.
 
@@ -624,7 +624,7 @@ smoothed by a conservative Gaussian of width `beam_deposition_smoothing_cm`
 before they are written, which spreads the beam-range deposition without moving
 its total; and the OHMIC GAP HEATING $Q_\text{ohm}$ — the circuit's
 $I_\text{tot}V_p$ — is added afterwards, distributed over the cathode–anode gap
-cells by Spitzer weights $\propto\Delta z/\sigma_\parallel(n,T_e)$ built from
+cells by Spitzer weights $\propto\Delta z/\sigma_\parallel(T_e,n)$ built from
 the same conductivity the gap resistance uses. Both live inside the
 `beam_power_deposition` term.
 
@@ -635,7 +635,7 @@ under `"beer_lambert"`.
 | selector | value | equation selected |
 |---|---|---|
 | `beam_coulomb_model` | `"fast_electron"` | $L_\text{coul}=2\pi e^4n_e\ln\Lambda/E$, the CSDA electron–electron stopping power |
-| | `"legacy_tau_ei"` | $L_\text{coul}=E/(v(E)\,\tau_{ei}(n_e,T_e))$ on the thermal collision time |
+| | `"legacy_tau_ei"` | $L_\text{coul}=E/(v(E)\,\tau_{ei}(T_e,n_e))$ on the thermal collision time |
 | `beam_anomalous_model` | `"none"` | $L_\text{anom}\equiv0$ |
 | | `"quasilinear"` | $L_\text{anom}=E/l_{QL}$, $l_{QL}=(n_e/n_b)(v_b/\omega_{pe})\ln(n_e/n_b)$, $n_b=\Gamma/(Av_b)$; the length is taken infinite for $n_b\ge n_e/10$, outside the weak-beam domain |
 | | `"ql_relaxation"` | $L_\text{anom}=f_\text{ext}E/L_\text{rel}$, $L_\text{rel}=c(n_e/n_b)v_b/\omega_{pe}$, trapped fraction $f_\text{ext}=C_\text{trap}\min(n_b/2n_e,1)^{1/3}$, gated per cell on $0.687\,\omega_{pe}\min(n_b/n_e,1)^{1/3}>\nu_{en}/2$ with $\omega_{pe}>\nu_{en}$ |
