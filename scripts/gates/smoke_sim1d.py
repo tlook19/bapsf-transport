@@ -31292,6 +31292,275 @@ def _case_end_wall_face_sheath_edge_flux():
 
 
 # ----------------------------------------------------------------------
+# cathode-face-one-ion-current
+# ----------------------------------------------------------------------
+@_case("cathode-face-one-ion-current", historical_stance=True)
+def _case_cathode_face_one_ion_current():
+    """The fluid's cathode-face ion loss and the circuit's I_i are ONE number.
+
+    (i) With the electrode sample smoothing off, the current the boundary
+    operator removes through the cathode face equals the ``I_i`` both circuit
+    adapters return at the same state, to 1e-12 relative.
+    (ii) With ``presheath`` smoothing the circuit's ``I_i`` is that SAME
+    expression evaluated on the smoothed sample, to roundoff, on every
+    sampled step -- the EMA is a sampling of the one formula, not a second
+    formula. The raw-vs-smoothed spread is a property of the filter and of
+    how fast the sample is moving, so it is REPORTED rather than bounded: the
+    EMA's time constant is the ion transit across the sampled cell (tens of
+    microseconds here) and a nanosecond-scale breakdown transient moves the
+    raw sample straight through it.
+    (iii) A short run stays positive and finite.
+    """
+    from cablp.cathode.circuit import PlasmaState as _cf_PlasmaState
+    from cablp.cathode.circuit_idriven import solve_idriven as _cf_idriven
+    from cablp.cathode.circuit_prescribed import (
+        solve_prescribed as _cf_prescribed,
+    )
+    from cablp.solvers._sim1d.physics import flux as _cf_flux
+    from cablp.solvers._sim1d.physics.cathode import (
+        cathode_circuit_alpha_sheath,
+        cathode_device_config,
+    )
+
+    _cf_params, _cf_flags = _base_config()
+    _cf_params = dict(_cf_params, max_steps_action="stop")
+    _cf_flags = dict(_cf_flags)
+    _cf_flags["cathode_coupling"] = True
+    _cf_flags["neutral_equilibration"] = False
+
+    def _cf_face_current(sim):
+        """Return ``(I_fluid_A, cell, n, Te, alpha_eff)`` at the cathode face."""
+        geom = sim.geometry
+        cell = int(absorbing_live_cells_by_role(geom)["cathode"][0])
+        Vp = float(np.asarray(geom.plasma_volume_cm3)[cell])
+        bnd = sim.characteristic_boundary_rhs(state=sim.state)
+        removed = -float(np.asarray(bnd.n)[cell]) * Vp
+        derived = derive_state(
+            sim.state, floors=sim.floors, ion_mass_g=sim.ion_mass_g
+        )
+        alpha = cathode_circuit_alpha_sheath(
+            sim.state, derived, geom, cell, sim.ion_mass_g, sim._input_dict
+        )
+        return (
+            removed * qe_SI,
+            cell,
+            float(sim.state.n[cell]),
+            float(derived.Te[cell]),
+            alpha,
+        )
+
+    # (i) SMOOTHING OFF: one number, to roundoff, on BOTH adapters.
+    _cf_raw = LAPDSim1D(
+        dict(_cf_params, cathode_sample_smoothing=None), dict(_cf_flags)
+    )
+    _cf_I, _cf_cell, _cf_n, _cf_Te, _cf_alpha = _cf_face_current(_cf_raw)
+    # The face area and the emitting area are asserted equal at construction,
+    # so the only thing left to check is that the two expressions agree.
+    _cf_dev = cathode_device_config(
+        _cf_raw._input_dict,
+        _cf_raw._effective_cathode_flags(time=None, active_only=False),
+        _cf_raw.mu,
+        _cf_raw.ion_mass_g,
+    )
+    _cf_pl = _cf_PlasmaState(T_e=_cf_Te, n_e=_cf_n, n_n=0.0, sigma_b=0.0)
+    _cf_id = _cf_idriven(
+        _cf_dev, _cf_pl, I_tot_A=1200.0, anode_current_A=200.0,
+        anode_T_e=_cf_Te, alpha_sheath=_cf_alpha,
+    )
+    _cf_pr = _cf_prescribed(
+        _cf_dev, _cf_pl, I_tot_A=1200.0, V_dis_V=60.0,
+        anode_current_A=200.0, anode_T_e=_cf_Te, alpha_sheath=_cf_alpha,
+    )
+    for _cf_label, _cf_res in (("idriven", _cf_id), ("prescribed", _cf_pr)):
+        assert abs(_cf_res.I_i / _cf_I - 1.0) <= 1.0e-12, (
+            _cf_label, _cf_res.I_i, _cf_I
+        )
+    # ...and it is the analytic Bohm current on the emitting area.
+    _cf_want = (
+        qe_SI * _cf_dev.A_c * _cf_alpha * _cf_n
+        * float(_cf_flux.ion_sound_speed(_cf_Te, _cf_raw.ion_mass_g))
+    )
+    assert abs(_cf_I / _cf_want - 1.0) <= 1.0e-12, (_cf_I, _cf_want)
+
+    # (ii) SMOOTHING ON: ONE formula, two samples.
+    _cf_sim = LAPDSim1D(
+        dict(_cf_params, cathode_sample_smoothing="presheath"), dict(_cf_flags)
+    )
+    _cf_worst = 0.0
+    _cf_first = None
+    _cf_samples = 0
+    for _ in range(12):
+        _cf_sim.run(t_end=None, dt=None, max_steps=2)
+        _cf_step_I = _cf_face_current(_cf_sim)[0]
+        _cf_sim.rhs_terms()
+        _cf_solve = _cf_sim._cathode_solve
+        if _cf_solve is None or _cf_solve.beam_result is None:
+            continue
+        _cf_circuit_I = float(_cf_solve.beam_result.result.I_i)
+        # The circuit's own number, rebuilt from the SMOOTHED sample by the
+        # one expression the face uses on the raw one.
+        _cf_sm = _cf_sim._smoothed_sample_state(_cf_sim.state)
+        _cf_sm_der = derive_state(
+            _cf_sm, floors=_cf_sim.floors, ion_mass_g=_cf_sim.ion_mass_g
+        )
+        _cf_sm_cell = int(
+            absorbing_live_cells_by_role(_cf_sim.geometry)["cathode"][0]
+        )
+        _cf_sm_alpha = cathode_circuit_alpha_sheath(
+            _cf_sm, _cf_sm_der, _cf_sim.geometry, _cf_sm_cell,
+            _cf_sim.ion_mass_g, _cf_sim._input_dict,
+        )
+        _cf_sm_I = (
+            qe_SI
+            * math.pi * float(_cf_sim._input_dict["R_cath"]) ** 2
+            * _cf_sm_alpha
+            * float(_cf_sm.n[_cf_sm_cell])
+            * float(
+                _cf_flux.ion_sound_speed(
+                    float(_cf_sm_der.Te[_cf_sm_cell]), _cf_sim.ion_mass_g
+                )
+            )
+        )
+        assert abs(_cf_circuit_I / _cf_sm_I - 1.0) <= 1.0e-14, (
+            _cf_circuit_I, _cf_sm_I
+        )
+        _cf_spread = abs(_cf_circuit_I / _cf_step_I - 1.0)
+        if _cf_first is None:
+            _cf_first = _cf_spread
+        _cf_worst = max(_cf_worst, _cf_spread)
+        _cf_samples += 1
+    assert _cf_samples >= 10, _cf_samples
+
+    # (iii) POSITIVITY AND FINITENESS over the same run, with the wall-side
+    # ratio and the Mach number at the cathode-adjacent cell reported.
+    _cf_n_arr = np.asarray(_cf_sim.state.n, dtype=float)
+    assert np.all(np.isfinite(_cf_n_arr)) and np.all(_cf_n_arr > 0.0)
+    _cf_der = derive_state(
+        _cf_sim.state, floors=_cf_sim.floors, ion_mass_g=_cf_sim.ion_mass_g
+    )
+    assert np.all(np.isfinite(np.asarray(_cf_der.Te, dtype=float)))
+    _cf_c1 = int(absorbing_live_cells_by_role(_cf_sim.geometry)["cathode"][0])
+    _cf_mach = float(_cf_der.u[_cf_c1]) / float(
+        _cf_flux.ion_sound_speed(
+            float(_cf_der.Te[_cf_c1]), _cf_sim.ion_mass_g
+        )
+    )
+    print(
+        "  cathode face: n1/n2 = "
+        f"{_cf_n_arr[_cf_c1] / _cf_n_arr[_cf_c1 + 1]:.6f}, "
+        f"Mach(cell {_cf_c1}) = {_cf_mach:.6f}; "
+        f"raw-vs-smoothed |I_circuit/I_fluid - 1| over {_cf_samples} samples: "
+        f"first {_cf_first:.3e}, worst {_cf_worst:.3e}"
+    )
+
+
+# ----------------------------------------------------------------------
+# cathode-jet-incident-power-one-book
+# ----------------------------------------------------------------------
+@_case("cathode-jet-incident-power-one-book", historical_stance=True)
+def _case_cathode_jet_incident_power_one_book():
+    """The jet's incident power and the surface's ion credit are one book.
+
+    The DVM cathode jet's incident-energy row is the circuit's own per-ion
+    incident energy ``phi_c + Te/2`` on the fluid's delivered count, so the
+    power the surface is debited (``R_E`` of that row) is a share of the very
+    power ``P_cathode_i`` credits it with.
+    """
+    _cp_params, _cp_flags = _base_config()
+    _cp_params = dict(_cp_params, max_steps_action="stop")
+    _cp_flags = dict(_cp_flags)
+    _cp_flags["cathode_coupling"] = True
+    _cp_flags["neutral_equilibration"] = False
+    # Sample smoothing off, so the circuit and the row read ONE state and the
+    # only thing the comparison can see is the per-ion ENERGY.
+    _cp_sim = LAPDSim1D(
+        dict(_cp_params, cathode_sample_smoothing=None), _cp_flags
+    )
+    _cp_cell = int(
+        absorbing_live_cells_by_role(_cp_sim.geometry)["cathode"][0]
+    )
+    _cp_row = np.zeros(_cp_sim.geometry.cells, dtype=float)
+    _cp_row[_cp_cell] = 1.0
+
+    def _cp_read():
+        """Return ``(result, Te, per_ion_erg)`` at the current state."""
+        _cp_sim.rhs_terms()
+        solve = _cp_sim._cathode_solve
+        assert solve is not None and solve.beam_result is not None
+        der = derive_state(
+            _cp_sim.state, floors=_cp_sim.floors,
+            ion_mass_g=_cp_sim.ion_mass_g,
+        )
+        per_ion = float(
+            _cp_sim._dvm_cathode_jet_incident_energy_row(
+                _cp_row, _cp_sim.state, solve
+            )[_cp_cell]
+        )
+        return solve.beam_result.result, float(der.Te[_cp_cell]), per_ion
+
+    # (a) AN INVERTED SHEATH accelerates no ion into the surface, so the row
+    # clamps the fall at zero and carries the presheath half-Te alone. The
+    # circuit's own P_cathode_i does NOT clamp -- it is a signed power, and
+    # this is the one state at which the two per-ion numbers differ.
+    _cp_res, _cp_Te, _cp_per_ion = _cp_read()
+    assert _cp_res.phi_c < 0.0, _cp_res.phi_c
+    assert abs(
+        _cp_per_ion / (0.5 * _cp_Te * ev_to_erg) - 1.0
+    ) <= 1.0e-14, _cp_per_ion
+
+    # (b) AT AN ACCELERATING SHEATH the two are ONE number: the row's per-ion
+    # incident energy is exactly P_cathode_i per collected ion.
+    for _ in range(12):
+        _cp_sim.run(t_end=None, dt=None, max_steps=4)
+        _cp_res, _cp_Te, _cp_per_ion = _cp_read()
+        if _cp_res.phi_c > 0.0:
+            break
+    assert _cp_res.phi_c > 0.0, _cp_res.phi_c
+    _cp_circuit_eV = float(_cp_res.P_cathode_i) / float(_cp_res.I_i)
+    assert abs(
+        _cp_circuit_eV / (float(_cp_res.phi_c) + 0.5 * _cp_Te) - 1.0
+    ) <= 1.0e-12, (_cp_circuit_eV, _cp_res.phi_c, _cp_Te)
+    assert abs(
+        _cp_per_ion / (_cp_circuit_eV * ev_to_erg) - 1.0
+    ) <= 1.0e-12, (_cp_per_ion, _cp_circuit_eV)
+
+    # THE SURFACE DEBIT IS R_E OF THAT BOOKED POWER, exactly. Armed, with a
+    # cadence no step of this run reaches, the cathode ledger's backscatter
+    # row and the accumulator the next tick has not yet been given are the
+    # same booking read twice -- the created-once identity with the tick term
+    # at zero.
+    _cp_jp, _cp_jf = default_config()
+    _cp_jf["neutral_two_zone"] = True
+    for _cp_space, _cp_key, _cp_value, _cp_why in (
+        KINETIC_DVM_INCOMPATIBLE_DEFAULTS
+    ):
+        (_cp_jf if _cp_space == "flags" else _cp_jp)[_cp_key] = _cp_value
+    _cp_jf["neutral_equilibration"] = False
+    _cp_jf["neutral_prebreakdown"] = False
+    _cp_jf["cathode_coupling"] = True
+    _cp_jp.update({
+        "neutral_model": "kinetic_dvm",
+        # A cadence no step of this run reaches, so the accumulator the row
+        # is compared against is never handed to a tick and reset.
+        "neutral_kinetic_dvm_cadence_s": 1.0,
+        # The shipped velocity grid, pinned wide enough to carry the launch
+        # band this jet's coefficients can produce.
+        "neutral_kinetic_dvm_vmax_cm_s": 3.0e7,
+        "neutral_kinetic_dvm_cathode_jet": True,
+        "max_steps_action": "stop",
+    })
+    _cp_jet = LAPDSim1D(_cp_jp, _cp_jf)
+    _cp_jet.run(t_end=None, dt=1.0e-9, max_steps=8)
+    _cp_R_E = float(_cp_jet._dvm_cathode_jet["R_E"])
+    _cp_ledger = float(_cp_jet._cathode_energy_ledger_J["backscatter"])
+    _cp_accum = float(np.sum(_cp_jet._dvm_cathode_jet_energy_booked))
+    assert _cp_accum > 0.0, _cp_accum
+    assert abs(
+        _cp_ledger / (_cp_R_E * _cp_accum * 1.0e-7) - 1.0
+    ) <= 1.0e-14, (_cp_ledger, _cp_accum, _cp_R_E)
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -31300,7 +31569,7 @@ def _case_end_wall_face_sheath_edge_flux():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 185, "historical_stance": 66}
+_CASE_CENSUS = {"total": 187, "historical_stance": 68}
 
 
 def _assert_case_census():

@@ -46,9 +46,8 @@ advective flux carries nothing: the ghost-cell Bohm flux
 flux with its own pressure term, applied as a one-sided divergence
 $\pm\,\text{area}\cdot\Gamma/V$ on the live cell.
 
-At a face whose live cell has the `end_wall` role the flux removed is the
-PHYSICAL flux at the sheath-edge state alone (`flux.physical_face_scalar` on
-the ghost),
+The flux removed at a MATERIAL face is the PHYSICAL flux at the sheath-edge
+state alone (`flux.physical_face_scalar` on the ghost),
 
 $$\Gamma_n=n_\text{se}u_\text{se},\qquad
 \Gamma_M=m_in_\text{se}u_\text{se}^2+n_\text{se}(T_e+T_i),\qquad
@@ -59,9 +58,9 @@ surface. This is the pure-upwind limit of the interior kernel: no live-cell
 central half and no dissipation term. The density step from the live cell to
 $n_\text{se}$ is the sub-grid presheath model, not a discontinuity, and a
 sheath sends no wave back into the plasma, so there is no Riemann problem at
-the surface to average across. Every other absorbing face takes the interior's
-own face kernel (`flux.kep_rusanov_face_scalar`) between the interior cell and
-the ghost.
+the surface to average across. Every plasma-terminating face is a material
+surface and is treated this way; the two-state kernel
+(`flux.kep_rusanov_face_scalar`) is the INTERIOR's.
 
 **Energy-consistent hyperbolic core** (`hyperbolic_energy_consistent`). The
 convective momentum flux becomes the kinetic-energy-preserving $\{u\}\{M\}$

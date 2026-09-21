@@ -838,15 +838,15 @@ def refuse_dvm_cathode_jet_without_cathode_coupling(input_dict, flags):
     """Raise when the DVM cathode jet is armed with no cathode solve behind it.
 
     The channel launches backscattered atoms at the energy an ion arrives
-    with, ``phi_c + Ti`` per collected ion. ``phi_c`` is the CATHODE SOLVE's
-    sheath potential; without the ``cathode_coupling`` flag there is no such
-    solve anywhere in the run, so the incident energy collapses to the
-    thermal ``Ti`` alone for the whole run and the channel silently stops
-    being the energetic recycle it was armed to be. That is a configuration
+    with, ``phi_c + Te/2`` per collected ion. ``phi_c`` is the CATHODE
+    SOLVE's sheath potential; without the ``cathode_coupling`` flag there is
+    no such solve anywhere in the run, so the incident energy collapses to
+    the presheath ``Te/2`` alone for the whole run and the channel silently
+    stops being the energetic recycle it was armed to be. That is a configuration
     with no physical reading rather than a degraded one: an unconfigured
     cathode is not a cathode at zero sheath drop.
 
-    The Ti-only launch remains REACHABLE, and deliberately so -- a configured
+    The Te/2-only launch remains REACHABLE, and deliberately so -- a configured
     run whose cathode solve has not started, or whose solve returned a
     non-finite ``phi_c``, still books the ions that arrive with what the
     plasma gave them. What this refuses is the one corner where that reading
@@ -858,10 +858,11 @@ def refuse_dvm_cathode_jet_without_cathode_coupling(input_dict, flags):
         return
     raise ValueError(
         "neutral_kinetic_dvm_cathode_jet launches the cathode recycle at the "
-        "incident ion energy phi_c + Ti, and phi_c comes from the cathode "
+        "incident ion energy phi_c + Te/2, and phi_c comes from the cathode "
         "solve the cathode_coupling flag configures. With cathode_coupling "
         "off there is no solve for the whole run, so every backscattered "
-        "atom would launch at the thermal Ti alone -- the channel would be "
+        "atom would launch at the presheath Te/2 alone -- the channel would "
+        "be "
         "armed and silently carry no sheath energy. Accepted: "
         "neutral_kinetic_dvm_cathode_jet=True with cathode_coupling=True, "
         "or neutral_kinetic_dvm_cathode_jet=False"

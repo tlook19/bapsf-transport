@@ -1522,7 +1522,7 @@ class LAPDSim1D:
         # the recycle count accrues on every step, the incident energy only
         # on armed ones -- and the directed share has to be drawn from the
         # armed counts for the per-atom launch energy to be the (R_E/R_N)
-        # (phi_c + Ti) the channel asserts. Zero here is what makes a fully
+        # (phi_c + Te/2) the channel asserts. Zero here is what makes a fully
         # censored tick route its whole stream thermally.
         self._dvm_cathode_jet_count_booked = np.zeros(
             self._geometry.cells, dtype=float
@@ -2164,6 +2164,40 @@ class LAPDSim1D:
         # deposited at ``cathode_adjacent_cells`` exactly as the electrode
         # rows are. A guard on a second view of the topology could pass while
         # the booking still found nowhere to land.
+        # ONE ION CURRENT AT THE CATHODE. The fluid removes
+        # ``A_face alpha_se n c_s`` through the cathode face and the circuit
+        # books ``e A_c alpha_se n c_s`` as its ion current: the same
+        # expression, the same sheath-edge factor and the same sound speed, so
+        # the two are one number only while the two AREAS are one number too.
+        # The emitting disc IS the face the plasma terminates on, so a
+        # configuration whose mesh gives that face a different area would put
+        # a silent factor between the fluid's sink and the circuit's current.
+        if self._flags.get("cathode_coupling"):
+            _A_c_cm2 = math.pi * float(self._input_dict["R_cath"]) ** 2
+            _absorbing = np.asarray(
+                getattr(self._geometry, "plasma_absorbing", np.zeros(0)),
+                dtype=bool,
+            )
+            _roles = np.asarray(self._geometry.cell_role)
+            _face_area = np.asarray(
+                self._geometry.plasma_face_area_cm2, dtype=float
+            )
+            for _face in np.flatnonzero(_absorbing):
+                _live = int(self._geometry.plasma_face_live_cell[int(_face)])
+                if _live < 0 or _roles[_live] != "cathode":
+                    continue
+                _A_face = float(_face_area[int(_face)])
+                if abs(_A_face / _A_c_cm2 - 1.0) > 1.0e-12:
+                    raise ValueError(
+                        "the cathode face area and the cathode emitting area "
+                        "must be one area: the fluid removes "
+                        "A_face * alpha_se * n * c_s through the face while "
+                        "the circuit books e * A_c * alpha_se * n * c_s as "
+                        f"its ion current, and this configuration has A_face "
+                        f"= {_A_face!r} cm^2 against A_c = pi R_cath^2 = "
+                        f"{_A_c_cm2!r} cm^2 (R_cath = "
+                        f"{float(self._input_dict['R_cath'])!r} cm)."
+                    )
         _end_wall_sheath_full_debit = self._flags.get(
             "end_wall_sheath_full_debit"
         )
@@ -4456,8 +4490,6 @@ class LAPDSim1D:
                 ion_mass_g=self._ion_mass_g,
                 geometry=self._plasma_geometry(),
                 cathode_jet=None,
-                wave_speed=self._hyperbolic_wave_speed,
-                energy_consistent=self._hyperbolic_energy_consistent,
                 **surface_kwargs,
             )
 
@@ -5367,12 +5399,16 @@ class LAPDSim1D:
         surface.
 
         The band. ``e_max`` is the largest per-atom launch energy the
-        CONFIGURATION can ask for: ``(R_E/R_N)(phi + Ti)`` at the raw
-        ``cathode_phi_c_cap_V`` -- resolvable here, unlike the circuit's
+        CONFIGURATION can ask for. The CATHODE's per-ion arrival energy is
+        ``phi_c + Te/2``, so its ``e_max`` is ``(R_E/R_N)(phi + Te/2)`` at the
+        raw ``cathode_phi_c_cap_V`` -- resolvable here, unlike the circuit's
         tighter ``min(cap, V_avail(I))`` bound, which is current-dependent --
-        plus the engine's own 10 eV ion-temperature allowance. The anode jet
-        borrows that same cathode ceiling as a stated allowance rather than as
-        a bound on ``phi_a``, which has no cap and is given none here.
+        with the engine's own 10 eV allowance read as the electron
+        temperature, and its ``e_min`` is the ``Te`` floor's own half. The
+        ANODE's arrival energy is ``phi_a + Ti``, so its band is formed on the
+        ion-temperature allowance and the ``Ti`` floor, and it borrows the
+        cathode ceiling as a stated allowance rather than as a bound on
+        ``phi_a``, which has no cap and is given none here.
 
         THE END WALL BAND IS FORMED THE SAME WAY ON A DIFFERENT ARRIVAL
         ENERGY. Its per-ion arrival energy is not a sheath fall but the
@@ -5392,8 +5428,9 @@ class LAPDSim1D:
         remains the backstop, and this band only decides what construction
         time can rule out.
 
-        ``e_min`` is the SMALLEST such energy, and it is set by the ``Ti``
-        floor alone: ``phi`` is clamped non-negative before the sum is formed
+        ``e_min`` is the SMALLEST such energy, and it is set by the
+        temperature floor alone: ``phi`` is clamped non-negative before the
+        sum is formed
         (:meth:`_dvm_cathode_jet_incident_energy_row`), and the arming latch
         gates the channel on the booked ion CURRENT, not on the sheath, so no
         current threshold puts a floor under the potential -- the
@@ -5414,6 +5451,7 @@ class LAPDSim1D:
         # neutral-closure selection runs ahead of; it is the same number, and
         # this is the one point of the run where it is not yet resolved.
         Ti_floor_eV = float(p["Ti_floor"])
+        Te_floor_eV = float(p["Te_floor"])
         phi_cap_V = float(p.get("cathode_phi_c_cap_V"))
         Ti_allowance_eV = 10.0
         # The documented electron-temperature allowance the end wall band is
@@ -5430,6 +5468,15 @@ class LAPDSim1D:
                 ratio * (phi_cap_V + Ti_allowance_eV),
             )
 
+        def cathode_band_eV(spec):
+            if spec is None:
+                return None
+            ratio = float(spec["R_E"]) / float(spec["R_N"])
+            return (
+                ratio * 0.5 * Te_floor_eV,
+                ratio * (phi_cap_V + 0.5 * Te_allowance_eV),
+            )
+
         def end_wall_band_eV(spec):
             if spec is None:
                 return None
@@ -5443,7 +5490,7 @@ class LAPDSim1D:
                 ),
             )
 
-        cathode_band = band(cathode_jet)
+        cathode_band = cathode_band_eV(cathode_jet)
         anode_band = band(anode_jet)
         end_wall_band = end_wall_band_eV(end_wall_jet)
         bands = [
@@ -10550,11 +10597,8 @@ class LAPDSim1D:
         THE plasma-terminating boundary operator, and the only one since the
         legacy volumetric absorber was retired (see commit 1fc05c9): a
         one-sided ghost-cell flux against the Bohm outflow state at each
-        absorbing face -- the physical flux AT that state where the face is
-        the end wall, the KEP/Rusanov flux between the live cell and the ghost
-        elsewhere. Reads the surface kwargs and cathode jet, and follows the
-        interior's momentum-flux form and wave speed so the boundary and the
-        interior stay consistent.
+        absorbing face -- the PHYSICAL flux at that state, which is what a
+        material surface removes. Reads the surface kwargs and cathode jet.
 
         ``carrier_out`` is the directed hot surface carrier's launch channel;
         ``None`` is the historical call and is unchanged bit for bit.
@@ -10583,8 +10627,6 @@ class LAPDSim1D:
             ),
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
-            wave_speed=self._hyperbolic_wave_speed,
-            energy_consistent=self._hyperbolic_energy_consistent,
             end_recycle_annulus_volume_cm3=(
                 self._end_recycle_annulus_volume()
             ),
@@ -14588,14 +14630,17 @@ class LAPDSim1D:
     ):
         """Return the cathode recycle's INCIDENT ion-energy row [erg/s].
 
-        ``phi_c + Ti`` per collected ion, clamped at zero, times the counted
-        recycle rate -- the same per-particle incident energy the fluid
-        channel's
-        :func:`~cablp.solvers._sim1d.physics.sources.cathode_jet_backscatter_speed`
-        reads, so the two arms describe ions arriving with one energy.
+        ``phi_c + Te/2`` per collected ion, clamped at zero, times the counted
+        recycle rate. That is the CIRCUIT's per-ion incident energy -- a Bohm
+        ion enters the sheath with the half-``Te`` directed energy the
+        presheath gave it and falls through the cathode drop
+        (:func:`~cablp.cathode.circuit._P_ion`) -- so the power this row books
+        and the power ``P_cathode_i`` credits the surface with are ONE
+        per-ion energy on ONE count, and the backscatter debit taken from
+        this row is the share of the very power the surface was credited.
 
         ``phi_c`` comes from the solve THIS evaluation built, clamped at
-        zero exactly as :meth:`_cathode_jet_spec` clamps it. The ``Ti``-only
+        zero exactly as :meth:`_cathode_jet_spec` clamps it. The ``Te``-only
         branch is reachable only where there is no solve to read: a
         configuration with cathode coupling unconfigured -- which
         :func:`~cablp.solvers._sim1d.core.validation.refuse_dvm_cathode_jet_without_cathode_coupling`
@@ -14610,8 +14655,8 @@ class LAPDSim1D:
         zero to slightly inverted, rather than the classical non-emitting
         ``Lambda * Te``. The channel therefore self-extinguishes in afterglow
         twice over: by FLUX, since the counted recycle rate follows
-        ``n * Te^1.5``, and by LAUNCH ENERGY, since ``phi_c + Ti`` falls to
-        the ``Ti`` scale on its own. Both limits are the physics, not a
+        ``n * Te^1.5``, and by LAUNCH ENERGY, since ``phi_c + Te/2`` falls to
+        the ``Te`` scale on its own. Both limits are the physics, not a
         fallback path.
 
         The row is a RATE because its partner (the counted source row) is,
@@ -14624,12 +14669,12 @@ class LAPDSim1D:
             candidate = float(cathode_solve.beam_result.result.phi_c)
             if np.isfinite(candidate):
                 phi_c = max(candidate, 0.0)
-        Ti = derive_state(
+        Te = derive_state(
             state, floors=self._floors, ion_mass_g=self._ion_mass_g
-        ).Ti
-        per_ion_erg = np.maximum(phi_c + np.asarray(Ti, dtype=float), 0.0) * (
-            ev_to_erg
-        )
+        ).Te
+        per_ion_erg = np.maximum(
+            phi_c + 0.5 * np.asarray(Te, dtype=float), 0.0
+        ) * ev_to_erg
         return np.asarray(cathode_row, dtype=float) * per_ion_erg
 
     def _dvm_anode_jet_incident_energy_row(

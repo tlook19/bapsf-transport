@@ -984,15 +984,23 @@ shortfall on top of $P_{c,e,\phi}$. A hand-off time
 that runs before it.
 
 **Plasma-terminating boundary.** At each absorbing face a ghost state is set to
-the Bohm outflow — $n_\text{se}=\alpha_\text{se}n$, $u=c_s$ into
-the wall, the live cell's $T_e$ and $T_i$ — and the face flux between the
-interior cell and that ghost is applied one-sidedly to the live cell. Those
+the sheath edge — $n_\text{se}=\alpha_\text{se}n$, $u=c_s$ into
+the wall, the live cell's $T_e$ and $T_i$ — and the material surface removes
+the PHYSICAL flux at that state,
+
+$$\Gamma_n=n_\text{se}u,\qquad \Gamma_M=m_in_\text{se}u^2+n_\text{se}(T_e+T_i),
+\qquad \Gamma_{E_s}=E_s^\text{se}u,$$
+
+applied one-sidedly to the live cell. There is no two-state kernel and no
+dissipation term at a material face: the step from the live cell to
+$n_\text{se}$ is the sub-grid presheath model, not a discontinuity, and a
+sheath sends no wave back into the plasma. Those
 terms are the $S_n^\text{out}$, $F^\text{out}$, $Q_e^\text{out}$ and
 $Q_i^\text{out}$ of the conservation laws. $S_n^\text{out}$, $F^\text{out}$ and
-$Q_i^\text{out}$ are the ghost-face fluxes themselves, but **$Q_e^\text{out}$
-is not**: the face kernel does compute a ghost-face electron-energy flux and
-the operator DISCARDS it, booking instead $2T_e$ per collected electron on the
-face's own particle flux, $2T_e\Gamma_n$, at the end wall and zero at the
+$Q_i^\text{out}$ are the face fluxes themselves, but **$Q_e^\text{out}$
+is not**: the face's electron-energy flux is DISCARDED and the operator books
+instead $2T_e$ per collected electron on the face's own particle flux,
+$2T_e\Gamma_n$, at the end wall and zero at the
 cathode, where the electron thermal channel belongs to the circuit. When
 `end_wall_sheath_full_debit` is armed, $Q_e^\text{out}$ at the end wall
 additionally carries the sheath climb $-\Lambda_\text{eff}T_e\Gamma_\text{coll}$
@@ -1085,30 +1093,34 @@ of the end wall role.
 Cathode faces are untouched — the accelerated species there is the ion. The
 row is absent entirely when the flag is off.
 
-**Two books for the cathode ion current, and they do not agree.** The circuit's
-ion current $I_i$ (saved as `source_I_i`) is the analytic Bohm collection on
-the cathode's own emitting area, $I_i=A_cen_ec_s\alpha_\text{se}$, read from
-the cathode-adjacent cell. The fluid's delivered ion current at the cathode
-face is a different number: the ghost-flux particle flux the boundary operator
-actually removes there, through the face area and the face kernel rather than
-from that analytic expression. The fluid's is the LARGER, by a factor of order
-1.6 at the reference operating points. The two are never reconciled, and the
+**ONE book for the cathode ion current.** The circuit's ion current $I_i$
+(saved as `source_I_i`) is the Bohm collection on the cathode's own emitting
+area, $I_i=A_cen_ec_s\alpha_\text{se}$, and the fluid's delivered ion current
+at the cathode face is $e$ times the particle flux the boundary operator
+removes there, $eA_f\alpha_\text{se}nc_s$ — the same expression, on the same
+sheath-edge factor, the same sound speed and the same area, since the emitting
+disc IS the face the plasma terminates on ($A_f=A_c=\pi R_\text{cath}^2$,
+asserted at construction). What separates the two numbers is the SAMPLING and
+nothing else: the boundary operator reads the live cell's raw state while the
+circuit reads the exponential moving average `cathode_sample_smoothing`
+maintains, a sub-percent difference in the same formula. The
 current-driven path's thermionic remainder — the emission the cathode Kirchhoff
 $I_\text{eth}^\star+I_\text{see}+I_i-I_{e,\text{ret}}=I_\text{tot}$ leaves to be
-supplied — is built on the CIRCUIT's number. The anode carries no such split:
-`anode_circuit_sample` hands the circuit the very Bohm collection
-`anode_collection_rhs` removes from the fluid, one expression shared, and the
-two books agree to about 1 %. This is the same class of item as the
-ghost-face sampling mismatch above: disclosed, not reconciled.
+supplied — is built on that one number, and so is the ion power
+$I_i(T_e/2+\phi_c)$ the surface balance is credited with and the incident
+power the cathode recycle jet carries away from it. The anode is booked the
+same way: `anode_circuit_sample` hands the circuit the very Bohm collection
+`anode_collection_rhs` removes from the fluid.
 
 **The sheath ROWS are not the whole of what each store pays at an absorbing
 face.** The rows above are the boundary operator's bookings per collected
 particle: $(2+\Lambda_\text{eff})T_e$ on the electron store at the end wall,
 and the cathode face's own rows. Beside them, the fluid pressure work exports
-$p_su_iA_f$ per species through the absorbing face — the face velocity there is
-the live cell's, so each store does that much work on the kinetic energy, which
-the advective momentum flux then carries nowhere because it is zeroed at that
-face. The electron store therefore pays its sheath row PLUS $p_eu_iA_f$, and
+$p_su_iA_f$ per species through the absorbing face — that export is a
+`velocity_divergence` term built on the LIVE CELL's face velocity $u_i$, not on
+the sheath-edge $c_s$ the boundary flux above is evaluated at, so each store
+does that much work on the kinetic energy, which the advective momentum flux
+then carries nowhere because it is zeroed at that face. The electron store therefore pays its sheath row PLUS $p_eu_iA_f$, and
 the ion store its row plus $p_iu_iA_f$; the ion export is the fluid form of the
 enthalpy ions genuinely carry across, while the electron one is a fluid work
 term with no electron loss row beside it at the cathode face, where the
