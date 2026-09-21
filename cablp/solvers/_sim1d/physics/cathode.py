@@ -149,7 +149,10 @@ class CathodeSourceTerms1D:
         on ``n``/``nn``/``M``, those ions' thermal energy on ``Ei``, and the
         CATHODE's electron sheath share on ``Ee`` -- ``P_cathode_e_thermal``
         under the repaired routing, which is milliwatts in discharge because
-        the cathode sheath repels plasma electrons.
+        the cathode sheath repels plasma electrons. Under a plasma-ABSORBING
+        cathode face the first four members are EXACTLY ZERO: the boundary
+        operator owns that face's particle, recycle, momentum and ion-thermal
+        bookings, and this row is then the ``Ee`` member alone.
     ``anode_rhs`` (``anode_e_sheath_loss``)
         The ANODE electron sheath deposit, on ``Ee`` alone: every other field
         is zero. ``P_anode_e_thermal`` plus, when ``anode_sheath_full_debit``
@@ -2952,11 +2955,16 @@ def cathode_source_terms(
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     dN_loss = zeros.copy()
-    # An absorbing cathode face already drains the plasma at the Bohm flux, which
-    # is the same criterion the circuit's I_i is built from (A_c*e*n*c_s*exp(-0.5)
-    # on this cell's n and Te), so the face and the circuit agree on the current.
-    # Applying this volumetric loss as well would remove it twice. The electron
-    # power loss below is a separate channel and still applies.
+    # An absorbing cathode face already drains the plasma at the Bohm flux, the
+    # same criterion the circuit's I_i is built from (A_c*e*n*c_s*exp(-0.5) on
+    # this cell's n and Te), so applying this volumetric loss as well would
+    # remove the same population twice. The two books are NOT equal, however:
+    # the face removes particles through the face area with the face kernel,
+    # while I_i is that analytic expression on the emitting area, and the
+    # face's delivered current is the larger, by a factor of order 1.6 at the
+    # reference operating points -- a disclosed, unreconciled split (MODEL.md,
+    # "Two books for the cathode ion current"). The electron power loss below
+    # is a separate channel and still applies.
     face_absorbs = bool(
         np.any(np.asarray(getattr(geometry, "plasma_absorbing", ()), dtype=bool))
     )
