@@ -1,0 +1,51 @@
+# THE WHOLLY FORWARD TAIL LAUNCH: the reference configuration with every
+# quasilinear tail walker launched along +z, the direction the beam itself
+# travels, instead of half of them being sent back toward the cathode.
+#
+# A DERIVED configuration. It names its base and states what it moves, and
+# nothing else: the measured machine, the operating point, the drive
+# calibration, the velocity mesh, the neutral closure and the initial neutral
+# state are all inherited, so this file cannot drift from the reference and a
+# reader can see the whole difference between the two arms at a glance.
+#
+# WHAT IT IS FOR. The reference splits each launched tail population 50/50
+# between +z and -z. That split stands in for Langmuir-wave backscatter, whose
+# return share is a kinetic quantity the fluid model cannot compute, so the
+# honest statement is a bracket rather than a number. This file is the FORWARD
+# END MEMBER of that bracket: the bump-on-tail resonance is one-sided, and at
+# f = 1.0 nothing is returned to the opposite direction at all. The reference's
+# symmetric launch is the other end member, and the difference between the two
+# arms is what the return share is worth.
+#
+# WHAT IT DOES NOT CHANGE. The launched POWER is unchanged: the equivalent tail
+# flux is P_QL / E, so the two directions' fluxes sum to the same total at any
+# split and flux * E returns the withheld power to roundoff either way. The
+# birth energies, the cathode-face reflection convention, the tail-ionization
+# channel, the anode cull and both tail end-ledger rows are the reference's.
+# Only where the tail power is delivered moves.
+#
+# READ THE COLUMN, NOT ONLY THE PROFILE. With no -z walkers the cathode-face
+# reflection has nothing to turn around, so the recovered power that arm books
+# is absent here by construction rather than by omission, and the column
+# re-equilibrates as a whole through the far-end neutral field.
+#
+# HOW TO RUN IT. The campaign drivers resolve `--stance <name>` against
+# `scripts/stances/`, so copy this file there first; `run_sim1d.py` takes the
+# path directly and needs no copy:
+#
+#     python scripts/run/run_sim1d.py \
+#         --config scripts/stances/examples/g1atrim_tail_forward.toml \
+#         --output g1atrim_tail_forward.h5
+#
+# The saved trajectory records the lineage -- this file's name, "g1atrim" as
+# its base, both files' sha256, the delta key below, and the resolved
+# configuration's identity -- so the arm is identifiable from its artifact
+# alone.
+base = "g1atrim"
+
+
+[input_dict]
+# The selection, and the whole of it. The reference already walks the tail
+# (heating_anomalous_transport = "plateau_multigroup"), which is what this key
+# is read under; it needs no other input the reference does not supply.
+heating_anomalous_tail_forward_fraction = 1.0

@@ -6346,6 +6346,236 @@ def _case_beam_sheath_aware_tail_k7(
 
 
 # --------------------------------------------------------------------
+# tail-forward-* : the walked tail's launch-direction split
+# --------------------------------------------------------------------
+#: The three walked-tail ROUTES the split has to reach, as
+#: ``(label, extra params)`` over ``k7_params`` + ``tail_walk``: the
+#: energy-only walk bounded by the reflecting cathode face, the ionizing CSDA
+#: march, and the unbounded energy-only walk that free-escapes at both ends.
+_TF_ROUTES = (
+    ("reflect-energy-only", {}),
+    ("reflect-ionizing", {"heating_anomalous_tail_ionization": "on"}),
+    ("escape-plain", {"heating_anomalous_tail_cathode_boundary": "escape"}),
+)
+#: Every per-cell row a tail launch can move.
+_TF_ARRAYS = (
+    "plasma_heating_erg_s", "heating_anomalous_erg_s",
+    "heating_coulomb_erg_s", "heating_secondary_erg_s",
+    "heating_terminal_erg_s", "radiated_erg_s", "ionization_cost_erg_s",
+    "ionization_events", "excitation_events", "E_entry_eV",
+    "ionization_events_tail", "excitation_events_tail",
+    "ionization_cost_tail_erg_s", "radiated_tail_erg_s",
+)
+_TF_SCALARS = (
+    "end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s",
+    "end_loss_low_erg_s", "end_loss_high_erg_s",
+    "transmitted_flux", "transmitted_energy_eV",
+)
+_TF_KEY = "heating_anomalous_tail_forward_fraction"
+
+
+def _tf_dep(k7_params, route_extra, forward=None):
+    """One walked-tail deposition at this route, optionally at a stated split.
+
+    ``forward=None`` leaves the key out of the supplied params entirely, which
+    is the arm the default-inert case compares against.
+    """
+    tf_p = dict(k7_params, heating_anomalous_transport="tail_walk")
+    tf_p.update(route_extra)
+    if forward is not None:
+        tf_p[_TF_KEY] = forward
+    tf_sim = LAPDSim1D(tf_p, dict(_cathode_flags()))
+    tf_sim._circuit_I_loop = 3000.0
+    return tf_sim.solve_cathode_boundary().beam_deposition[0]
+
+
+def _tf_identical(dep_a, dep_b):
+    """Byte-for-byte on every row and scalar a tail launch can move."""
+    for tf_arr in _TF_ARRAYS:
+        if not np.array_equal(getattr(dep_a, tf_arr), getattr(dep_b, tf_arr)):
+            return tf_arr
+    for tf_sc in _TF_SCALARS:
+        if getattr(dep_a, tf_sc) != getattr(dep_b, tf_sc):
+            return tf_sc
+    return None
+
+
+def _tf_centroid(row):
+    """Cell-index centroid of a per-cell deposition row."""
+    return float((np.arange(row.size) * row).sum() / row.sum())
+
+
+# --------------------------------------------------------------------
+# tail-forward-default-inert
+# --------------------------------------------------------------------
+@_case(
+    "tail-forward-default-inert",
+    historical_stance=True,
+    provides=("tf_launched",),
+)
+def _case_tail_forward_default_inert(
+    k7_ion_dep, k7_local_dep, k7_on_dep, k7_params
+):
+    # --- The launch-direction split at its symmetric default is INERT, byte
+    # for byte, on every route that launches a tail walker. The default path
+    # takes the historical branch verbatim (the same 0.5*flux expression, the
+    # same two legs in the same order), so this is an equality on raw floats
+    # and not a tolerance.
+    for tf_label, tf_extra in _TF_ROUTES:
+        tf_absent = _tf_dep(k7_params, tf_extra)
+        tf_stated = _tf_dep(k7_params, tf_extra, forward=0.5)
+        tf_diff = _tf_identical(tf_absent, tf_stated)
+        assert tf_diff is None, (tf_label, tf_diff)
+    # ... and the two arms the K7 block already built are the same runs, which
+    # ties this case's "absent" arms to depositions asserted about above
+    # rather than to fresh ones only this case has seen.
+    assert _tf_identical(_tf_dep(k7_params, {}), k7_on_dep) is None
+    assert _tf_identical(
+        _tf_dep(k7_params, {"heating_anomalous_tail_ionization": "on"}),
+        k7_ion_dep,
+    ) is None
+    # The launched power, for the closure case below: what the "local" arm
+    # banks in the extraction cells is exactly what the walked arms launch,
+    # because the ray integration is bit-identical in both modes.
+    tf_launched = float(k7_local_dep.heating_anomalous_erg_s.sum())
+    assert tf_launched > 0.0, "the scenario drives no QL power to split"
+    return locals()
+
+
+# --------------------------------------------------------------------
+# tail-forward-energy-closure
+# --------------------------------------------------------------------
+@_case("tail-forward-energy-closure", historical_stance=True)
+def _case_tail_forward_energy_closure(k7_params, tf_launched):
+    # --- THE SPLIT MOVES NO POWER. The equivalent tail flux is P_QL / E, so
+    # the two directions' fluxes sum to the same total at any split and
+    # flux * E returns the withheld power to roundoff. Every eV launched still
+    # ends in exactly one of {bulk heat via thermalization, ionization
+    # investment, radiation, the tail end ledger} -- the same closure the
+    # WP-E/K6/K7 blocks assert at the symmetric launch, now at the two
+    # asymmetric arms.
+    for tf_f in (0.75, 1.0):
+        for tf_label, tf_extra in _TF_ROUTES:
+            tf_dep = _tf_dep(k7_params, tf_extra, forward=tf_f)
+            tf_ledger = (
+                float(tf_dep.end_loss_tail_low_erg_s)
+                + float(tf_dep.end_loss_tail_high_erg_s)
+            )
+            tf_delivered = (
+                float(tf_dep.heating_anomalous_erg_s.sum())
+                + float(tf_dep.ionization_cost_tail_erg_s.sum())
+                + float(tf_dep.radiated_tail_erg_s.sum())
+                + tf_ledger
+            )
+            assert abs(tf_delivered - tf_launched) / tf_launched < 1e-12, (
+                tf_f, tf_label, tf_launched, tf_delivered
+            )
+    return locals()
+
+
+# --------------------------------------------------------------------
+# tail-forward-direction
+# --------------------------------------------------------------------
+@_case("tail-forward-direction", historical_stance=True)
+def _case_tail_forward_direction(k7_local_dep, k7_params):
+    # --- WHERE the power lands is what the split moves. At f = 1.0 nothing
+    # travels -z at all, so on the free-escape route no tail power is
+    # deposited upstream of the lowest QL-driven cell and the cathode-face row
+    # of the tail end ledger is EXACTLY zero -- both non-vacuously, because at
+    # the symmetric launch both are positive.
+    tf_b0 = int(
+        np.flatnonzero(k7_local_dep.heating_anomalous_erg_s > 0.0).min()
+    )
+    assert tf_b0 > 0, "no cell upstream of the driven range to test"
+    tf_escape = {"heating_anomalous_tail_cathode_boundary": "escape"}
+    tf_esc_half = _tf_dep(k7_params, tf_escape, forward=0.5)
+    tf_esc_full = _tf_dep(k7_params, tf_escape, forward=1.0)
+    assert float(tf_esc_half.heating_anomalous_erg_s[:tf_b0].sum()) > 0.0
+    assert float(tf_esc_full.heating_anomalous_erg_s[:tf_b0].sum()) == 0.0
+    assert float(tf_esc_half.end_loss_tail_low_erg_s) > 0.0
+    assert float(tf_esc_full.end_loss_tail_low_erg_s) == 0.0
+    # THE CATHODE FACE IS NEVER REACHED. Under "reflect" there is no
+    # reflection counter to read, and the cathode-face ledger row is zero at
+    # every split by construction (that is what reflecting means), so the
+    # statement is made where it is observable: at f = 1.0 the reflecting and
+    # free-escaping arms are the SAME RUN, byte for byte, because no walker
+    # arrives at that face for the convention to act on. At the symmetric
+    # launch they differ, so the equality is a measurement and not an
+    # identity.
+    tf_ref_full = _tf_dep(k7_params, {}, forward=1.0)
+    assert _tf_identical(tf_ref_full, tf_esc_full) is None
+    assert _tf_identical(
+        _tf_dep(k7_params, {}, forward=0.5), tf_esc_half
+    ) is not None
+    # ... and the deposited-power centroid moves toward +z as f rises, on both
+    # the energy-only and the ionizing route.
+    for tf_label, tf_extra in (
+        ("reflect-energy-only", {}),
+        ("reflect-ionizing", {"heating_anomalous_tail_ionization": "on"}),
+    ):
+        tf_centroids = [
+            _tf_centroid(
+                _tf_dep(k7_params, tf_extra, forward=tf_f)
+                .heating_anomalous_erg_s
+            )
+            for tf_f in (0.5, 0.75, 1.0)
+        ]
+        assert (
+            tf_centroids[0] < tf_centroids[1] < tf_centroids[2]
+        ), (tf_label, tf_centroids)
+    return locals()
+
+
+# --------------------------------------------------------------------
+# tail-forward-refusals
+# --------------------------------------------------------------------
+@_case("tail-forward-refusals", historical_stance=True)
+def _case_tail_forward_refusals(k7_params):
+    # --- Misconfiguration is loud at CONSTRUCTION, and every refusal names
+    # the key. The domain is checked whether or not the walk is engaged (a
+    # value off the range is wrong either way); the inert-use refusal is what
+    # keeps the key from being a silent no-op under a stance that never walks.
+    tf_walk = dict(k7_params, heating_anomalous_transport="tail_walk")
+    for tf_bad in (
+        dict(k7_params, **{_TF_KEY: 1.0}),
+        dict(k7_params, **{_TF_KEY: 0.75}),
+        dict(tf_walk, **{_TF_KEY: 0.4}),
+        dict(tf_walk, **{_TF_KEY: 0.0}),
+        dict(tf_walk, **{_TF_KEY: -1.0}),
+        dict(tf_walk, **{_TF_KEY: 1.1}),
+        dict(tf_walk, **{_TF_KEY: float("nan")}),
+        dict(tf_walk, **{_TF_KEY: float("inf")}),
+    ):
+        try:
+            LAPDSim1D(tf_bad, dict(_cathode_flags()))
+        except ValueError as tf_exc:
+            assert _TF_KEY in str(tf_exc), str(tf_exc)
+        else:
+            raise AssertionError(
+                f"expected ValueError for {_TF_KEY}={tf_bad[_TF_KEY]!r} under "
+                f"heating_anomalous_transport="
+                f"{tf_bad.get('heating_anomalous_transport')!r}"
+            )
+    # The default constructs under a stance that never walks -- the key is
+    # inert there, not refused -- and every accepted value constructs under
+    # each of the three walked selections.
+    LAPDSim1D(dict(k7_params, **{_TF_KEY: 0.5}), dict(_cathode_flags()))
+    for tf_sel in (
+        dict(heating_anomalous_transport="tail_walk"),
+        dict(heating_anomalous_transport="plateau_multigroup",
+             heating_anomalous_tail_energy_keying="phi_c"),
+        dict(heating_anomalous_disposal="landau_branched",
+             heating_anomalous_tail_phi_c_fraction=1.0),
+    ):
+        for tf_f in (0.5, 0.75, 1.0):
+            LAPDSim1D(
+                dict(k7_params, **tf_sel, **{_TF_KEY: tf_f}),
+                dict(_cathode_flags()),
+            )
+    return locals()
+
+
+# --------------------------------------------------------------------
 # beam-plateau-multigroup
 # --------------------------------------------------------------------
 @_case(
@@ -31533,7 +31763,7 @@ def _case_kep_acoustic_symbol(_kep_flat, _kep_rows, _kep_state):
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 187, "historical_stance": 69}
+_CASE_CENSUS = {"total": 191, "historical_stance": 73}
 
 
 def _assert_case_census():

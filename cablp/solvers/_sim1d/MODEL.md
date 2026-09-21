@@ -642,6 +642,7 @@ under `"beer_lambert"`.
 | `heating_anomalous_transport` | `"local"` | the anomalous bank heats the cell that drove it |
 | | `"tail_walk"` | the bank is withheld and launched $50/50$ along $\pm B$ as fast-tail electrons, walked on the Coulomb-slowing kinematics until thermalized at $\tfrac32T_e$ or lost to an end |
 | | `"plateau_multigroup"` | a solved plateau edge $E_1$ splits the bank into a wave/bulk share $(E_b-E_1)/2E_b$ deposited locally and a streaming share $(E_b+E_1)/2E_b$ divided into $N$ equal-power, $E^2$-uniform-edge groups walked at their own midpoint energies ($E_b=e\phi_c$) |
+| `heating_anomalous_tail_forward_fraction` | $f\in[0.5,1]$ | the share of every walked tail launch sent along $+z$ (the beam's direction), the rest along $-z$; $f=0.5$ is the symmetric launch above and $f=1$ launches no $-z$ walker at all, with the launched power $\Gamma E$ unchanged either way |
 | `beam_product_transport` | `"local"` | BOTH product populations — the mean secondary energy per ionization and the primary's terminal sub-threshold residual — are banked in the cell where the event happened |
 | | `"nonlocal"` | BOTH walk along $B$ from their birth cell on the same mini-CSDA Coulomb integral the primary uses; secondaries split $50/50$ into $\pm z$ half-weight walks, the terminal residual keeps the primary's direction |
 | | `"terminal_nonlocal"` | ONLY the terminal residual walks; every along-ray product stays banked in its birth cell |

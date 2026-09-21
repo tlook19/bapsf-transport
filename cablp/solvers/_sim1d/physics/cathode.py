@@ -2113,6 +2113,14 @@ def _csda_beam_deposition(
     if anomalous_transport != "local" or anomalous_disposal != "local":
         if anomalous_transport != "local":
             transport_kwargs["anomalous_transport"] = anomalous_transport
+        # The launch-direction split, passed only when it is not the symmetric
+        # default, so a symmetric arm enters deposit_beam with the argument
+        # list it had before this key existed.
+        tail_forward_fraction = float(
+            input_dict.get("heating_anomalous_tail_forward_fraction", 0.5)
+        )
+        if tail_forward_fraction != 0.5:
+            transport_kwargs["tail_forward_fraction"] = tail_forward_fraction
         # Read ONLY when the tail is walked (the keys are inert otherwise, by
         # design); the solver validated them at construction time.
         if not multigroup:
