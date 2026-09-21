@@ -74,7 +74,7 @@ and the trace is never read past ``c_trace_end_z_m``.
 Vessel profile
 --------------
 Measured bore: 40.0 cm source chamber, 50.0 cm main shell to the 19.65 m
-step, 76.2 cm far source chamber beyond it. Over the cathode box the bore is
+step, 75.25 cm far source chamber beyond it. Over the cathode box the bore is
 replaced by the annulus-area-equivalent radius that reproduces the measured
 clear area around the box (1350.1 cm^2 at the cathode cell, 1847.6 cm^2 at
 the first gap cell) against the 18.415 cm column. The plenum cell sits at
@@ -164,8 +164,9 @@ FLUX_REFERENCE_Z_M = 18.55
 AREA_CAP_FRACTION = 0.95
 
 #: Measured vessel bore, as (z_upper_cm, radius_cm) stages, applied by cell
-#: centre. The last stage is the far source chamber (r 762 mm).
-BORE_STAGES_CM = ((100.0, 40.0), (1965.0, 50.0), (np.inf, 76.2))
+#: centre. The last stage is the far source chamber, whose BORE is 752.5 mm;
+#: 762 mm is that shell's OUTER radius and is not a clear radius.
+BORE_STAGES_CM = ((100.0, 40.0), (1965.0, 50.0), (np.inf, 75.25))
 #: Cathode-box conductance encoding (sss): measured clear areas around the
 #: box, expressed as the vessel radius whose ANNULUS about the column
 #: reproduces them, at the cathode cell (front plate) and the first gap cell

@@ -132,7 +132,7 @@ the regularization rather than the measured field.
 
 DISCLOSED: the largest single-cell step the emitted profile carries is the cap
 RELEASE, not any feature of the field. Cells 259 -> 260 cross the vessel's
-50 -> 76.2 cm bore step, where 259 is still clamped at
+50 -> 75.25 cm bore step, where 259 is still clamped at
 ``sqrt(AREA_CAP_FRACTION) * 50 = 48.734`` cm and 260 comes out from under the
 cap at 62.302 cm -- a +63.4 % jump in plasma AREA across one cell face. Every
 validator accepts it, correctly: it stays far under the open-area cap and the
