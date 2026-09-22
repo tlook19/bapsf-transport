@@ -429,6 +429,7 @@ def solve_idriven(
     phi_c_cap_V: float = 1000.0,
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
+    anode_electron_saturation_A: float | None = None,
     circuit_V_avail_V: float | None = None,
     circuit_bound_object: str = "phi_c",
     tail_anode_current_A: float = 0.0,
@@ -455,6 +456,16 @@ def solve_idriven(
     deposition that produces it is solved after this, so the coupling is
     lagged one step rather than iterated. 0.0 (the default) leaves the solve
     bit-for-bit as it was.
+    ``anode_electron_saturation_A`` is the EXPLICIT electron saturation current
+    the mesh wires can draw -- the electron random flux ``n <v_e> / 4`` on the
+    wire area the two faces present, ``2 eta A``, at the anode sample's own
+    ``n`` and ``T_e``. The sheath relation caps the collected electron current
+    at it: ``I_e,a = I_e,sat exp(-max(phi_a, 0) / T_e,a)`` and
+    ``phi_a = T_e,a ln(I_e,sat / (I_i,a + I_anode))``. ``None`` (the default)
+    rebuilds it as ``I_i_a * exp(Lambda_a)``, the implicit form -- exactly the
+    same number when ``I_i_a`` is the analytic ``e^(-1/2) n c_s`` Bohm
+    collection on that area, and a different one when the caller hands over
+    the fluid's own face flux instead, which is the live configuration.
     ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy
     ``2 k_B T_s / e`` [V] when ``cathode_enthalpy_on_beam`` has placed it on
     the beam, 0.0 (the default) otherwise. It is applied only where the
@@ -716,6 +727,24 @@ def solve_idriven(
     # few volts higher (logarithmically). 0.0 (the default) leaves every float
     # below exactly as it was.
     J_tail_a = float(tail_anode_current_A) * R_p / T_e
+    # THE ELECTRON SATURATION the wires can draw, stated EXPLICITLY as the
+    # random flux on the mesh area where the caller sampled it. The relation
+    # below used to reach it implicitly, as ``I_i_a * exp(Lambda_a)``, which
+    # is the same number only where ``I_i_a`` is the analytic Bohm collection
+    # on that same area; ``None`` keeps that implicit form for callers with
+    # no sample of their own.
+    I_e_sat_a = (
+        I_i_a * math.exp(Lambda_anode)
+        if anode_electron_saturation_A is None
+        else float(anode_electron_saturation_A)
+    )
+    if not I_e_sat_a > 0.0:
+        raise ValueError(
+            "anode electron saturation current must be positive (got "
+            f"{anode_electron_saturation_A!r} A): it is the cap the anode "
+            "sheath relation divides by, and a non-positive cap has no "
+            "sheath solution"
+        )
 
     annular = bool(config.emission_Ts_K)
     if annular:
@@ -829,8 +858,8 @@ def solve_idriven(
         J_anode_p = (
             J_tot_p - eta * bypass_p * (J_star_p + J_see) - J_tail_a
         )
-        psi_a_p = Lambda_anode - math.log(
-            max(1.0 + J_anode_p / J_i_a, 1e-300)
+        psi_a_p = math.log(
+            I_e_sat_a / max(I_i_a * (1.0 + J_anode_p / J_i_a), 1e-300)
         )
         I_tot_p = J_tot_p * T_e / R_p
         return phi_c_p + I_tot_p * R_p - psi_a_p * T_e_anode
@@ -1048,7 +1077,10 @@ def solve_idriven(
         J_tot - eta * beam_bypass_fraction * (J_star + J_see) - J_tail_a
     )
     # Anode floating potential: the anode's own sheath, on its own presheath.
-    psi_a = Lambda_anode - math.log(max(1.0 + J_anode / J_i_a, 1e-300))
+    # phi_a = T_e,a ln(I_e,sat / I_e,a) with I_e,a = I_i,a + I_anode: the same
+    # relation, with the saturation cap named instead of reached through
+    # ``I_i_a e^Lambda_a``.
+    psi_a = math.log(I_e_sat_a / max(I_i_a * (1.0 + J_anode / J_i_a), 1e-300))
     phi_a = psi_a * T_e_anode
 
     I_tot = J_tot * T_e / R_p
@@ -1145,7 +1177,13 @@ def solve_idriven(
     # (2Te) and sheath-fall (phi) parts ride the SAME flux, so each electrode
     # power splits cleanly into ``_thermal + _phi`` (R3.2 / A16 routing).
     fe_c = _exp_clamped(Lambda - max(phi_c_plus, 0.0) / T_e)
-    fe_a = _exp_clamped(Lambda_anode - max(phi_a, 0.0) / T_e_anode)
+    # The anode's collected electron current as a fraction of ``I_i_a``, so
+    # the powers below keep their historical ``I_i_a * (...) * fe_a`` shape.
+    # The CAP is the explicit saturation, not ``I_i_a e^Lambda_a``.
+    fe_a = (
+        (I_e_sat_a / I_i_a)
+        * _exp_clamped(-max(phi_a, 0.0) / T_e_anode)
+    )
     # P_*_e / P_*_i keep their EXACT historical expressions (they feed the golden
     # via the fluid deposit and the cathode warming); the split derives the phi
     # part as the remainder so ``_thermal + _phi == P_*`` holds to machine zero.
@@ -1167,6 +1205,13 @@ def solve_idriven(
     )
     P_anode_e_thermal = I_i_a * (2.0 * T_e_anode) * fe_a
     P_anode_e_phi = P_anode_e - P_anode_e_thermal
+    # The QL tail's sheath-fall moment at the anode: the circuit pays
+    # ``I_tail_a * phi_a`` for the current the wires take out of the walked
+    # tail, exactly as the primary's bypass convention already pays for the
+    # flux that streams through the mesh. Zero at a non-positive ``phi_a``.
+    # ``I_tail_a`` is LAGGED -- the deposition is solved after the circuit
+    # within a step, so this reads the previous accepted step's cull.
+    P_tail_phi = max(phi_a, 0.0) * float(tail_anode_current_A)
     P_anode_i = _P_ion(phi_a, T_e_anode, I_i_a)
     P_anode_i_thermal = I_i_a * (T_e_anode / 2.0)
     P_anode_i_phi = P_anode_i - P_anode_i_thermal
@@ -1280,6 +1325,7 @@ def solve_idriven(
         P_cathode_i_phi=P_cathode_i_phi,
         P_anode_e_thermal=P_anode_e_thermal,
         P_anode_e_phi=P_anode_e_phi,
+        P_tail_phi=P_tail_phi,
         P_anode_i_thermal=P_anode_i_thermal,
         P_anode_i_phi=P_anode_i_phi,
         P_plasma_thermal_loss=P_plasma_thermal_loss,
@@ -1333,6 +1379,7 @@ def solve_beam_system_idriven(
     phi_c_cap_V: float = 1000.0,
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
+    anode_electron_saturation_A: float | None = None,
     circuit_V_avail_V: float | None = None,
     circuit_bound_object: str = "phi_c",
     beam_climb_V: float | None = None,
@@ -1397,6 +1444,7 @@ def solve_beam_system_idriven(
         phi_c_cap_V=phi_c_cap_V,
         alpha_sheath=alpha_sheath,
         alpha_sheath_anode=alpha_sheath_anode,
+        anode_electron_saturation_A=anode_electron_saturation_A,
         circuit_V_avail_V=circuit_V_avail_V,
         circuit_bound_object=circuit_bound_object,
         tail_anode_current_A=tail_anode_current_A,

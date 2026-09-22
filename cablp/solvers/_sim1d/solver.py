@@ -511,6 +511,10 @@ _CATHODE_RESULT_KEYS = (
     "P_cathode_i_phi",
     "P_anode_e_thermal",
     "P_anode_e_phi",
+    # The QL tail's own sheath-fall moment at the anode, I_tail_a * phi_a: the
+    # partner of P_anode_e_phi for the current the wires take out of the
+    # walked tail. Lagged by one step, like the tail current it is built from.
+    "P_tail_phi",
     "P_anode_i_thermal",
     "P_anode_i_phi",
     # Surface-resolved audit [W]: the total plasma-thermal loss to electrodes,

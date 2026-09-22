@@ -139,6 +139,7 @@ def solve_prescribed(
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
     tail_anode_current_A: float = 0.0,
+    anode_electron_saturation_A: float | None = None,
     emitted_enthalpy_V: float = 0.0,
     emitted_enthalpy_gap_netted: bool = False,
 ) -> SolverResult:
@@ -150,6 +151,17 @@ def solve_prescribed(
     mirrors ``solve_idriven``'s: ``cathode_current_A`` / ``anode_current_A`` /
     ``anode_T_e`` are the "the fluid already computed this" overrides,
     ``alpha_sheath`` / ``alpha_sheath_anode`` are the two electrodes' own
+    ``anode_electron_saturation_A`` is the EXPLICIT electron saturation current
+    the mesh wires can draw -- the electron random flux ``n <v_e> / 4`` on the
+    wire area the two faces present, ``2 eta A``, at the anode sample's own
+    ``n`` and ``T_e``. The sheath relation caps the collected electron current
+    at it: ``I_e,a = I_e,sat exp(-max(phi_a, 0) / T_e,a)`` and
+    ``phi_a = T_e,a ln(I_e,sat / (I_i,a + I_anode))``. ``None`` (the default)
+    rebuilds it as ``I_i_a * exp(Lambda_a)``, the implicit form -- exactly the
+    same number when ``I_i_a`` is the analytic ``e^(-1/2) n c_s`` Bohm
+    collection on that area, and a different one when the caller hands over
+    the fluid's own face flux instead, which is the live configuration.
+
     presheath factors, and ``tail_anode_current_A`` is the lagged QL-tail
     current the anode mesh collected without it crossing the anode sheath.
     ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy
@@ -254,6 +266,25 @@ def solve_prescribed(
     # potential IS the drop, the same float object.
     _enthalpy_V = _beam_launch_enthalpy_V(emitted_enthalpy_V, 0.0)
 
+    # THE ELECTRON SATURATION the wires can draw, stated EXPLICITLY as the
+    # random flux on the mesh area where the caller sampled it. The relation
+    # below used to reach it implicitly, as ``I_i_a * exp(Lambda_a)``, which
+    # is the same number only where ``I_i_a`` is the analytic Bohm collection
+    # on that same area; ``None`` keeps that implicit form for callers with
+    # no sample of their own.
+    I_e_sat_a = (
+        I_i_a * math.exp(Lambda_anode)
+        if anode_electron_saturation_A is None
+        else float(anode_electron_saturation_A)
+    )
+    if not I_e_sat_a > 0.0:
+        raise ValueError(
+            "anode electron saturation current must be positive (got "
+            f"{anode_electron_saturation_A!r} A): it is the cap the anode "
+            "sheath relation divides by, and a non-positive cap has no "
+            "sheath solution"
+        )
+
     def _anode_state(phi_c):
         l_b = _compute_l_b(
             _launch_potential_V(phi_c, _enthalpy_V),
@@ -263,8 +294,9 @@ def solve_prescribed(
         I_anode = I_tot - eta * bypass * I_eth_star - float(
             tail_anode_current_A
         )
-        psi_a = Lambda_anode - math.log(
-            max(1.0 + I_anode / I_i_a, 1e-300)
+        # phi_a = T_e,a ln(I_e,sat / I_e,a), I_e,a = I_i,a + I_anode.
+        psi_a = math.log(
+            I_e_sat_a / max(I_i_a + I_anode, 1e-300)
         )
         return psi_a * T_e_anode, l_b, bypass
 
@@ -339,7 +371,10 @@ def solve_prescribed(
     # electrode collects at most electron saturation, and the barrier the
     # plasma electrons climb is phi_c_plus).
     fe_c = _exp_clamped(Lambda - max(phi_c_plus, 0.0) / T_e)
-    fe_a = _exp_clamped(Lambda_anode - max(phi_a, 0.0) / T_e_anode)
+    fe_a = (
+        (I_e_sat_a / I_i_a)
+        * _exp_clamped(-max(phi_a, 0.0) / T_e_anode)
+    )
     P_cathode_e = I_i * (2.0 * T_e + phi_c) * fe_c
     P_cathode_e_thermal = I_i * (2.0 * T_e) * fe_c
     P_cathode_e_phi = P_cathode_e - P_cathode_e_thermal
@@ -350,6 +385,13 @@ def solve_prescribed(
     P_anode_e = I_i_a * (2.0 * T_e_anode + phi_a) * fe_a
     P_anode_e_thermal = I_i_a * (2.0 * T_e_anode) * fe_a
     P_anode_e_phi = P_anode_e - P_anode_e_thermal
+    # The QL tail's sheath-fall moment at the anode: the circuit pays
+    # ``I_tail_a * phi_a`` for the current the wires take out of the walked
+    # tail, exactly as the primary's bypass convention already pays for the
+    # flux that streams through the mesh. Zero at a non-positive ``phi_a``.
+    # ``I_tail_a`` is LAGGED -- the deposition is solved after the circuit
+    # within a step, so this reads the previous accepted step's cull.
+    P_tail_phi = max(phi_a, 0.0) * float(tail_anode_current_A)
     P_anode_i = _P_ion(phi_a, T_e_anode, I_i_a)
     P_anode_i_thermal = I_i_a * (T_e_anode / 2.0)
     P_anode_i_phi = P_anode_i - P_anode_i_thermal
@@ -426,6 +468,7 @@ def solve_prescribed(
         P_cathode_i_phi=P_cathode_i_phi,
         P_anode_e_thermal=P_anode_e_thermal,
         P_anode_e_phi=P_anode_e_phi,
+        P_tail_phi=P_tail_phi,
         P_anode_i_thermal=P_anode_i_thermal,
         P_anode_i_phi=P_anode_i_phi,
         P_plasma_thermal_loss=P_plasma_thermal_loss,
@@ -478,6 +521,7 @@ def solve_beam_system_prescribed(
     alpha_sheath_anode: float | None = None,
     beam_climb_V: float | None = None,
     tail_anode_current_A: float = 0.0,
+    anode_electron_saturation_A: float | None = None,
     emitted_enthalpy_V: float = 0.0,
     emitted_enthalpy_gap_netted: bool = False,
 ) -> BeamResult:
@@ -513,6 +557,7 @@ def solve_beam_system_prescribed(
         alpha_sheath=alpha_sheath,
         alpha_sheath_anode=alpha_sheath_anode,
         tail_anode_current_A=tail_anode_current_A,
+        anode_electron_saturation_A=anode_electron_saturation_A,
         emitted_enthalpy_V=emitted_enthalpy_V,
         emitted_enthalpy_gap_netted=emitted_enthalpy_gap_netted,
     )

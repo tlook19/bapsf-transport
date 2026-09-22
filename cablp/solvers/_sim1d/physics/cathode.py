@@ -23,7 +23,7 @@ from cablp.cathode.circuit import (
     beam_launch_potential_V,
     beam_launched_current_A,
 )
-from cablp.plasma.params import LN_LAMBDA_MIN, c_log
+from cablp.plasma.params import LN_LAMBDA_MIN, c_log, electron_mean_speed
 from cablp.cathode.circuit_idriven import (
     beam_launch_energy_eV,
     solve_beam_system_idriven,
@@ -223,7 +223,10 @@ class CathodeSolve1D:
 
 
 def anode_circuit_sample(state, derived, geometry, ion_mass_g, input_dict, end=0):
-    """Return ``(I_i_a [A], Te_anode [eV])`` for one anode, or ``(None, None)``.
+    """Return ``(I_i_a [A], Te_anode [eV], I_e_sat_a [A])`` for one anode.
+
+    ``(None, None, None)`` where the geometry resolves no anode face or the
+    mesh is fully open.
 
     The historical circuit takes ``I_i_a = 2*eta*I_i``, scaling the anode
     current straight off the *cathode* cell, which assumes both electrodes see the
@@ -238,27 +241,46 @@ def anode_circuit_sample(state, derived, geometry, ion_mass_g, input_dict, end=0
     The sheath temperature is collection-weighted across the two faces, matching
     how ``P_anode_e`` is apportioned. Resolving a *separate* sheath per face is
     a known open item.
+
+    The third member is the ELECTRON SATURATION current the wires can draw:
+    the electron random flux ``n * v_e_bar / 4`` on the wire area each face
+    presents, ``eta * A_c``, summed over the two faces on their own sides
+    exactly as the ion current is. It is the explicit form of what the sheath
+    relation used to reach through ``I_i_a * exp(Lambda_a)`` -- algebraically
+    the same number when ``I_i_a`` IS the analytic ``e^(-1/2) n c_s`` Bohm
+    collection on the same area, and a different one here, because the ion
+    current handed over is the fluid's own face flux rather than that
+    analytic form. Both are evaluated on the same samples, so the two faces'
+    densities and temperatures enter the electron cap the way they enter the
+    ion current.
     """
     anode_faces = np.asarray(getattr(geometry, "anode_face_indices", ()), dtype=int)
     eta = float(input_dict.get("eta", 0.0))
     if anode_faces.size == 0 or eta <= 0.0:
-        return None, None
+        return None, None, None
     face = int(anode_faces[0] if end == 0 else anode_faces[-1])
     total = 0.0
     weighted_Te = 0.0
+    saturation = 0.0
     for cell in (face - 1, face):
+        wire_area = eta * float(geometry.plasma_area_cm2[cell])
         collected = (
             np.exp(-0.5)
             * state.n[cell]
             * ion_sound_speed(derived.Te[cell], ion_mass_g)
-            * eta
-            * float(geometry.plasma_area_cm2[cell])
+            * wire_area
         )
         total += collected
         weighted_Te += collected * float(derived.Te[cell])
+        saturation += (
+            0.25
+            * state.n[cell]
+            * electron_mean_speed(derived.Te[cell])
+            * wire_area
+        )
     if total <= 0.0:
-        return None, None
-    return total * qe_SI, weighted_Te / total
+        return None, None, None
+    return total * qe_SI, weighted_Te / total, saturation * qe_SI
 
 
 def cathode_sample_indices(geometry):
@@ -1024,7 +1046,7 @@ def idriven_result_evaluator(
     contributes ``None`` either way.
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    anode_A, anode_Te = anode_circuit_sample(
+    anode_A, anode_Te, anode_e_sat = anode_circuit_sample(
         state, derived, geometry, ion_mass_g, input_dict, end=0
     )
     if T_s_override_K is not None:
@@ -1084,6 +1106,7 @@ def idriven_result_evaluator(
             I_tot_A=max(float(I_A), 0.0),
             anode_current_A=anode_A,
             anode_T_e=anode_Te,
+            anode_electron_saturation_A=anode_e_sat,
             schottky=schottky,
             bridge=bridge,
             phi_c_cap_V=cap,
@@ -1574,6 +1597,7 @@ def solve_cathode_boundary(
             cathode_index=beam_launch(geometry, end=0)[0],
             anode_current_A=anode_source[0],
             anode_T_e=anode_source[1],
+            anode_electron_saturation_A=anode_source[2],
             alpha_sheath=cathode_circuit_alpha_sheath(
                 state, derived, geometry, beam_launch(geometry, end=0)[0],
                 ion_mass_g, input_dict,
@@ -1628,6 +1652,7 @@ def solve_cathode_boundary(
             cathode_index=beam_launch(geometry, end=0)[0],
             anode_current_A=anode_source[0],
             anode_T_e=anode_source[1],
+            anode_electron_saturation_A=anode_source[2],
             alpha_sheath=cathode_circuit_alpha_sheath(
                 state, derived, geometry, beam_launch(geometry, end=0)[0],
                 ion_mass_g, input_dict,
