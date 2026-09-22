@@ -184,7 +184,6 @@ PERTURBED = {
     "beam_excitation_model": "manifold",
     "beam_excitation_energy_eV": 22.218,
     "beam_anode_interception": False,
-    "beam_tail_anode_interception": True,
     # cathode_surface_recycle
     "cathode_neutral_jet": False,
     "cathode_jet_R_N": 0.5,

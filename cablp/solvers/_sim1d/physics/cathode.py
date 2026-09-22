@@ -2033,7 +2033,15 @@ def _csda_beam_deposition(
     # tail, so culling one there would be work with no output. The solver
     # validated the trio at construction.
     _flags = {} if input_flags is None else input_flags
-    tail_interception = bool(_flags.get("beam_tail_anode_interception", False))
+    # The tail cull is not a choice: a mesh that is opaque to the streaming
+    # primary is opaque to the QL tail walkers too, so it is armed wherever
+    # the primary's interception is AND the closure actually walks a tail.
+    # With no walked tail there are no walkers to cull.
+    tail_interception = str(
+        input_dict.get("heating_anomalous_transport", "local")
+    ) in ("tail_walk", "plateau_multigroup") or str(
+        input_dict.get("heating_anomalous_disposal", "local")
+    ) == "landau_branched"
     tail_R_e = float(
         input_dict.get("beam_tail_anode_reflected_particles", 0.0)
     )
@@ -2310,10 +2318,9 @@ def _csda_beam_deposition(
                 anode_cross_index=cross_cell, anode_eta=eta
             )
             if tail_interception:
-                # A2a: the SAME cell and the SAME eta, met by the QL tail
-                # walkers instead of by the streaming primary. Presence-gated
-                # with the flag, so an unarmed run enters the module with the
-                # argument list it had before A2a.
+                # The SAME cell and the SAME eta, met by the QL tail walkers
+                # instead of by the streaming primary. One mesh, one opacity:
+                # the two views cannot disagree about whether it is there.
                 interception_kwargs.update(
                     tail_anode_cross_index=cross_cell,
                     tail_anode_eta=eta,

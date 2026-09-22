@@ -549,7 +549,6 @@ b_beam_excitation = 1.4
 beam_excitation_model = "2p_scalar"
 beam_excitation_energy_eV = 21.218
 beam_anode_interception = true
-beam_tail_anode_interception = false
 
 # The f dial is undeclared: plateau_multigroup runs the birth spectrum from the
 # derived plateau edge E_1 up to e*phi_c, and a stated fraction is refused.
