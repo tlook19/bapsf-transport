@@ -59,7 +59,7 @@ DEFAULT RUN (no arguments) -- everything decidable inside this repository:
 OPTIONAL MODES -- each reads data that does not live in this repository, so
 neither the default run nor the smoke suite depends on it:
 
-``--legacy-rows FILE --base-h5 FILE``
+``--legacy-rows FILE --base-h5 FILE --legacy-fixture-base-h5 FILE``
     G0 ROW BIT-IDENTITY, three legs, all compared at RAW UINT64 -- float64 bit
     patterns read as integers, so a one-ulp move is a difference, and the bar
     is zero differing values on every row. ``G0a`` rebuilds the committed
@@ -75,9 +75,23 @@ neither the default run nor the smoke suite depends on it:
     built at their own registered feet, and each is rebuilt through the
     registered ``--es N`` route -- no kernel, no foot -- so all three rungs'
     committed fills are covered rather than only the one the reference
-    configuration itself carries. All three legs need the equilibrated base
-    and the per-cell geometry profiles, which do not live in this repository,
-    so they ride this optional mode rather than the default run.
+    configuration itself carries. All three legs need an equilibrated base,
+    which does not live in this repository, so they ride this optional mode
+    rather than the default run.
+
+    THE LEGS STAND ON DIFFERENT MACHINES, and therefore take different
+    inputs. ``G0a`` and ``G0c`` rebuild rows the configurations carry NOW, so
+    they run on the geometry named by ``--legacy-geometry-npz`` and the base
+    ``--base-h5``, both of which are the reference configuration's current
+    ones. ``G0b`` rebuilds a FIXED set of numbers registered on the
+    far-chamber wall :data:`LEGACY_ROWS_BORE_CM`, so it reads its geometry
+    from the committed sidecar :data:`LEGACY_ROWS_GEOMETRY` -- never from the
+    command line -- and takes its own base through
+    ``--legacy-fixture-base-h5``, an equilibrated base of the reference
+    configuration on THAT wall. Handing G0b the current base, or the current
+    geometry, does not reproduce the fixture and is not meant to: the two
+    inputs are named separately so that neither leg can be run on the other's
+    machine by accident.
 ``--tpmc-record FILE``
     G6 TPMC RECORD GATE. Scores candidate members against a banked
     test-particle Monte Carlo record of the same puff on the same geometry, by
@@ -155,6 +169,29 @@ LEGACY_ROWS_FIXTURE = (
 #: model's 1 kA time is re-registered. G0a, which rebuilds the configuration's
 #: CURRENT rows, names no foot and so follows the registration.
 LEGACY_ROWS_FOOT_S = 5.83e-3
+#: G0b: the committed sidecar carrying the per-cell geometry the LEGACY rows
+#: are registered on -- the same four prescribed-area rows the reference
+#: configuration states, at the far-chamber wall :data:`LEGACY_ROWS_BORE_CM`.
+#: It is read INSTEAD of the geometry named on the command line, for the same
+#: reason the foot above is fixed: the rows are a fixed set of numbers, so
+#: every input that reproduces them is fixed too, and a geometry that moves
+#: under them would make the gate say the legacy route had changed when what
+#: moved was the machine the gate ran it on. The rows live here rather than
+#: being rebuilt when the gate runs because the two builders that emit them
+#: read an out-of-repo census table and the raw MSI shot files; the sidecar's
+#: ``provenance`` entry names them and the constant they are built at.
+LEGACY_ROWS_GEOMETRY = (
+    Path(__file__).resolve().parents[1]
+    / "data" / "nn0_legacy_ballistic_reference_geometry.npz"
+)
+#: G0b: the far source chamber's bore [cm] in the vessel profile the LEGACY
+#: rows are registered on. It is that shell's OUTER radius; the measured BORE
+#: is smaller and the reference configuration carries the measured value, so
+#: this wall is the fixture's and no longer the configuration's. The fixture is
+#: NOT re-cut onto the corrected wall: its rows ARE the fill every result
+#: produced before the finite-volume member is named by, and a re-cut row
+#: would name a fill no result was produced with.
+LEGACY_ROWS_BORE_CM = 76.2
 #: G0c: the committed reference configuration of each ES rung that carries its
 #: OWN initial-fill rows. ES1's fill is the reference configuration's own, and
 #: is what G0a covers through ``--legacy-rows``; ES2 and ES3 run at different
@@ -792,7 +829,8 @@ def _committed_rows(path):
     )
 
 
-def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
+def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz,
+                     legacy_base_h5):
     """Return ``(ok, lines)`` for the three committed-row bit-identity legs.
 
     ``G0a`` rebuilds the configuration's own committed rows through the
@@ -815,9 +853,22 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
     committed fills have no instrument at all: a change to the builder or to
     the foot registration that moved them would pass every other gate.
 
-    All three legs need the equilibrated base result and the per-cell geometry
-    profiles, neither of which lives in this repository, so they ride the
-    optional ``--legacy-rows`` mode rather than the default run.
+    EACH LEG IS RUN ON THE MACHINE ITS ROWS WERE BUILT ON. ``G0a`` and ``G0c``
+    take ``geometry_npz`` and ``base_h5``, the reference configuration's
+    current geometry and an equilibrated base on it. ``G0b`` takes neither:
+    its geometry is the committed sidecar :data:`LEGACY_ROWS_GEOMETRY`, at the
+    far-chamber wall :data:`LEGACY_ROWS_BORE_CM` the fixture is registered on,
+    and its base is ``legacy_base_h5``, an equilibrated base on THAT wall.
+    A row is a base plus a spread, and both halves move with the machine: run
+    on the current base the legacy leg misses the fixture in every cell, and
+    run on the current geometry at the correct base it misses it in the cells
+    the bore correction reaches. Neither miss is a statement about the legacy
+    route, which is what this leg exists to measure.
+
+    Every leg needs an equilibrated base result, and a base is a run artifact
+    rather than a file in this repository, so they ride the optional
+    ``--legacy-rows`` mode rather than the default run. The geometry is an
+    input only for ``G0a`` and ``G0c``, whose rows follow the configuration.
     """
     ok, lines = _compare_rows(
         "G0a registered route vs the committed rows:",
@@ -831,9 +882,11 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz):
         )
     ok_b, lines_b = _compare_rows(
         f"G0b --kernel ballistic at the fixture's own foot "
-        f"{LEGACY_ROWS_FOOT_S * 1e3:.2f} ms vs {LEGACY_ROWS_FIXTURE.name}:",
-        _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, "ballistic",
-                      dt_foot_s=LEGACY_ROWS_FOOT_S),
+        f"{LEGACY_ROWS_FOOT_S * 1e3:.2f} ms, on the fixture's own "
+        f"{LEGACY_ROWS_BORE_CM:g} cm far-chamber wall "
+        f"({LEGACY_ROWS_GEOMETRY.name}), vs {LEGACY_ROWS_FIXTURE.name}:",
+        _rebuild_rows(legacy_base_h5, es, nx, sgp, LEGACY_ROWS_GEOMETRY,
+                      "ballistic", dt_foot_s=LEGACY_ROWS_FOOT_S),
         legacy,
     )
     lines = lines + lines_b
@@ -1424,13 +1477,22 @@ def main(argv=None):
     )
     parser.add_argument(
         "--base-h5", type=Path, default=None,
-        help="G0: the equilibrated result whose t = 0 frames are the base "
-             "those rows were built on",
+        help="G0a/G0c: the equilibrated result whose t = 0 frames are the "
+             "base the CURRENT committed rows were built on",
     )
     parser.add_argument(
         "--legacy-geometry-npz", type=Path, default=None,
-        help="G0: the .npz carrying the per-cell geometry profiles those rows "
-             "were built on",
+        help="G0a/G0c: the .npz carrying the per-cell geometry profiles the "
+             "CURRENT committed rows were built on. G0b does not read it: "
+             f"its geometry is the committed {LEGACY_ROWS_GEOMETRY.name}",
+    )
+    parser.add_argument(
+        "--legacy-fixture-base-h5", type=Path, default=None,
+        help=f"G0b: the equilibrated result whose t = 0 frames are the base "
+             f"the LEGACY fixture was built on -- an equilibrated base of the "
+             f"reference configuration on the {LEGACY_ROWS_BORE_CM:g} cm "
+             f"far-chamber wall that fixture is registered on, which is NOT "
+             f"the wall the configuration carries now",
     )
     parser.add_argument("--legacy-es", type=int, default=1)
     parser.add_argument("--legacy-nx", type=int, default=268)
@@ -1471,9 +1533,22 @@ def main(argv=None):
                 "--legacy-rows needs --base-h5 and --legacy-geometry-npz: the "
                 "committed rows are a base plus a foot, and both are named"
             )
+        if args.legacy_fixture_base_h5 is None:
+            parser.error(
+                "--legacy-rows needs --legacy-fixture-base-h5 as well: G0b "
+                "rebuilds a FIXED set of numbers registered on the "
+                f"{LEGACY_ROWS_BORE_CM:g} cm far-chamber wall, and its base "
+                "is an equilibrated base of the reference configuration on "
+                "that wall rather than on the one the configuration carries "
+                "now. Build it by equilibrating the reference configuration "
+                "with its two per-cell geometry rows set to the ones in "
+                f"{LEGACY_ROWS_GEOMETRY.name}, and name it here; the current "
+                "base named by --base-h5 misses the fixture in every cell"
+            )
         ok, lines = gate_legacy_rows(
             args.legacy_rows, args.base_h5, args.legacy_es, args.legacy_nx,
             args.legacy_sgp, args.legacy_geometry_npz,
+            args.legacy_fixture_base_h5,
         )
         results.insert(0, ("G0 row bit-identity (G0a registered, G0b legacy, "
                            "G0c the other two rungs)", ok, lines))
