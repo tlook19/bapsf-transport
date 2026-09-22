@@ -1834,6 +1834,14 @@ def _sum_beam_deposition(a, b):
             float(a.tail_anode_returned_erg_s)
             + float(b.tail_anode_returned_erg_s)
         ),
+        tail_anode_sheath_reflected_flux_per_s=(
+            float(a.tail_anode_sheath_reflected_flux_per_s)
+            + float(b.tail_anode_sheath_reflected_flux_per_s)
+        ),
+        tail_anode_sheath_reflected_erg_s=(
+            float(a.tail_anode_sheath_reflected_erg_s)
+            + float(b.tail_anode_sheath_reflected_erg_s)
+        ),
     )
 
 
@@ -2324,6 +2332,15 @@ def _csda_beam_deposition(
                 interception_kwargs.update(
                     tail_anode_cross_index=cross_cell,
                     tail_anode_eta=eta,
+                    # The wires' own barrier: this solve's anode drop, the
+                    # SAME number the circuit books the tail's return power
+                    # on. The mesh floats phi_a below the plasma, so an
+                    # intercepted walker below it never reaches a wire and
+                    # the sheath turns it back. Read from THIS step's solve
+                    # (the circuit is solved before the deposition), so the
+                    # barrier is not lagged the way the tail CURRENT it
+                    # feeds back is. A non-positive drop reflects nothing.
+                    tail_anode_phi_eV=max(float(result.phi_a), 0.0),
                     tail_anode_reflected_particles=tail_R_e,
                     tail_anode_reflected_energy=tail_eta_E,
                 )
