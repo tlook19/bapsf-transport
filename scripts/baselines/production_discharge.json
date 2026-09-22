@@ -90,7 +90,7 @@
     "file_sha256": [
       "084fab878959bc411aba5cfa5e189efb371eb0e00ae406dbc31ac21ff6a73ff2"
     ],
-    "identity": "ff094ab99998d86f87043ff33c8858c1fc77808fc5438689d5342e4f8fc2f684",
+    "identity": "1241b42f8256fe0972c3cc6c7366c33aa414ddd55656c30f04dcc2caa95cd50f",
     "name": "g1atrim"
   },
   "description": "Golden baseline at the stance of record, re-cut to the gate mesh: default_config() plus the committed stance file scripts/stances/g1atrim.toml, minus that stance's mesh-sized package, plus the run-shape overrides in baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60).",
@@ -121,7 +121,6 @@
     "electron_heat_flux_limit": true,
     "end_expansion_geometry": false,
     "end_recycle_to_annulus": false,
-    "end_wall_face_riemann_flux": false,
     "end_wall_sheath_full_debit": true,
     "front_flux": false,
     "heat_conduction": true,
@@ -273,7 +272,6 @@
     "end_expansion_machine_radius_cm": null,
     "end_expansion_plasma_radius_cm": null,
     "end_mode": "end_wall",
-    "end_wall_face_riemann_solver": null,
     "end_wall_length_cm": 7.8,
     "energy_exchange_rate_fraction": 0.5,
     "equilibration_gas_puff_on_s": 0.027,
