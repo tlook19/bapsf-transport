@@ -808,9 +808,11 @@ $\phi_c\le0$), and $J_{\text{tail},a}$ the deposition module's collected
 tail-walker current, lagged one step. Its one consumer is the anode sheath, so
 both subtracted populations raise $\phi_a$ logarithmically:
 
-$$\psi_a=\Lambda_\text{anode}-\ln\!\left(\max\!\left(1+\frac{J_\text{anode}}{J_{i,a}},\epsilon\right)\right),\qquad \phi_a=\psi_aT_{e,\text{anode}}$$
+$$\psi_a=\ln\!\left(\frac{I_{e,\text{sat}}}{\max\!\left(I_{i,a}\left(1+\dfrac{J_\text{anode}}{J_{i,a}}\right),\epsilon\right)}\right),\qquad \phi_a=\psi_aT_{e,\text{anode}}$$
 
-This is a Boltzmann floating-sheath balance evaluated at the mesh, with $J_{i,a}$ the $\eta$-scaled Bohm ion flux collected there (the same current `anode_collection_rhs` removes from the fluid): $\Lambda_\text{anode}T_{e,\text{anode}}$ is the value of $\phi_a$ at $J_\text{anode}=0$, a negative $J_\text{anode}$ — the subtracted beam-bypass and tail-walker populations above — raises $\phi_a$ above it, and a positive $J_\text{anode}$ lowers it, through zero, into an attracting drop; the sign is an output of the balance either way, entering $V_b$ through $\phi_a$ and thereby the beam launch drop $\phi_c$ and, downstream of it, $P_\text{prim}$.
+with $I_{e,\text{sat}}=\tfrac{1}{4}n\langle v_e\rangle\cdot2\eta A\cdot e$ the electron saturation current the wires can draw — the electron random flux on the wire area the two anode faces present — evaluated at the anode sample's own $n$ and $T_{e}$, i.e. on the same samples as $I_{i,a}$.
+
+This is a Boltzmann floating-sheath balance evaluated at the mesh, with $J_{i,a}$ the $\eta$-scaled Bohm ion flux collected there (the same current `anode_collection_rhs` removes from the fluid): $I_{e,\text{sat}}/I_{i,a}=e^{\Lambda_\text{anode}}$ on that area, so $\Lambda_\text{anode}T_{e,\text{anode}}$ is the value of $\phi_a$ at $J_\text{anode}=0$, a negative $J_\text{anode}$ — the subtracted beam-bypass and tail-walker populations above — raises $\phi_a$ above it, and a positive $J_\text{anode}$ lowers it, through zero, into an attracting drop; the sign is an output of the balance either way, entering $V_b$ through $\phi_a$ and thereby the beam launch drop $\phi_c$ and, downstream of it, $P_\text{prim}$. The two couplings to the tail walkers run on opposite sides of the step: the sheath test that decides which intercepted walkers the wires turn back reads THIS solve's $\phi_a$, because the circuit is solved before the deposition, while $J_{\text{tail},a}$ above is the current the PREVIOUS accepted step's deposition measured.
 
 $$V_b=\phi_c+V_p-\phi_a,\qquad V_\text{dis}=V_b+V_\text{series}$$
 

@@ -462,10 +462,13 @@ def solve_idriven(
     ``n`` and ``T_e``. The sheath relation caps the collected electron current
     at it: ``I_e,a = I_e,sat exp(-max(phi_a, 0) / T_e,a)`` and
     ``phi_a = T_e,a ln(I_e,sat / (I_i,a + I_anode))``. ``None`` (the default)
-    rebuilds it as ``I_i_a * exp(Lambda_a)``, the implicit form -- exactly the
-    same number when ``I_i_a`` is the analytic ``e^(-1/2) n c_s`` Bohm
-    collection on that area, and a different one when the caller hands over
-    the fluid's own face flux instead, which is the live configuration.
+    rebuilds it as ``I_i_a * exp(Lambda_a)``, the implicit form -- the same
+    number to roundoff wherever ``I_i_a`` is the analytic ``e^(-1/2) n c_s``
+    Bohm collection on that same area, which is what the solver's anode sample
+    hands over, so the two forms agree at the live configuration. The explicit
+    member is carried because it states the cap as what it is, an electron
+    random flux on the wire area, and because a caller whose ``I_i_a`` is not
+    that analytic form has no other way to say so.
     ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy
     ``2 k_B T_s / e`` [V] when ``cathode_enthalpy_on_beam`` has placed it on
     the beam, 0.0 (the default) otherwise. It is applied only where the

@@ -7876,9 +7876,11 @@ def _case_anode_tail_circuit_coupling():
     # --- (e2) THE ALGEBRAIC IDENTITY. Where ``I_i_a`` IS the analytic
     # e^(-1/2) n c_s collection on the wire area, the explicit random flux
     # and the implicit ``I_i_a exp(Lambda_a)`` are the SAME number, so the
-    # rewritten sheath relation answers with the same phi_a. (At the live
-    # configuration ``I_i_a`` is the fluid's own face flux instead and the
-    # two forms differ -- that shift is MEASURED and disclosed, not gated.)
+    # rewritten sheath relation answers with the same phi_a. That is also the
+    # live configuration: the solver's anode sample hands over exactly that
+    # analytic collection, so the two forms agree to roundoff there too and
+    # the explicit member is carried as the physical statement of the cap,
+    # not as a change of value.
     assert abs(
         tc_I_e_sat / (tc_I_i_a * math.exp(tc_cfg.Lambda + 0.5)) - 1.0
     ) < 1e-13, (tc_I_e_sat, tc_I_i_a)
