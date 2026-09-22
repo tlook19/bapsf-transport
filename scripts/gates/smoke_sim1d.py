@@ -6487,6 +6487,38 @@ def _case_tail_forward_energy_closure(k7_params, tf_launched):
             assert abs(tf_delivered - tf_launched) / tf_launched < 1e-12, (
                 tf_f, tf_label, tf_launched, tf_delivered
             )
+    # --- AND ON THE PRODUCTION ROUTE. The three routes above are tail_walk
+    # arms; the reference configuration runs plateau_multigroup, which walks
+    # a SPECTRUM of groups rather than one tail line and launches each group
+    # at the same split. Its closure is stated against its OWN withheld bank
+    # (the groups' launched power), because the multigroup arm withholds a
+    # different bank from the single-line arm -- so this is the split moving
+    # no power on the route the stance actually takes, not a second reading
+    # of the single-line number.
+    for tf_f in (0.5, 0.75, 1.0):
+        tf_mg_dep = _tf_dep(
+            k7_params,
+            {
+                "heating_anomalous_transport": "plateau_multigroup",
+                "heating_anomalous_tail_phi_c_fraction": None,
+            },
+            forward=tf_f,
+        )
+        tf_mg_launched = float(tf_mg_dep.tail_power_erg_s)
+        assert tf_mg_launched > 0.0, tf_f
+        tf_mg_delivered = (
+            float(tf_mg_dep.heating_anomalous_erg_s.sum())
+            + float(tf_mg_dep.ionization_cost_tail_erg_s.sum())
+            + float(tf_mg_dep.radiated_tail_erg_s.sum())
+            + float(tf_mg_dep.end_loss_tail_low_erg_s)
+            + float(tf_mg_dep.end_loss_tail_high_erg_s)
+            - float(tf_mg_dep.plateau_wave_power_erg_s)
+        )
+        assert abs(
+            tf_mg_delivered - tf_mg_launched
+        ) / tf_mg_launched < 1e-12, (
+            tf_f, tf_mg_launched, tf_mg_delivered
+        )
     return locals()
 
 
@@ -15923,9 +15955,15 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     jet_RE = float(jet_params.get("cathode_jet_R_E", 0.2))
     jet_Ts = float(jet_params["cathode_Ts_base_K"])
     jet_veff = np.sqrt(np.pi * jet_kb * jet_Ts / (2.0 * jet_m))
+    # The incident per-ion energy is the CIRCUIT's own phi_c + Te/2 -- the
+    # half-Te the presheath gave the Bohm ion plus the fall it drops through
+    # -- restated here rather than read from the helper, so a change to the
+    # helper has to be made twice to pass.
     jet_vback = np.sqrt(
         2.0 * jet_RE
-        * (max(jet_res.phi_c, 0.0) + jet_derived.Ti[jet_cath])
+        * max(
+            max(jet_res.phi_c, 0.0) + 0.5 * jet_derived.Te[jet_cath], 0.0
+        )
         * ev_to_erg / jet_m
     )
     jet_vmix = jet_RN * jet_vback + (1.0 - jet_RN) * jet_veff
@@ -16144,7 +16182,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         )
         jet_en_cath = np.asarray(jet_en_sim.geometry.cell_role) == "cathode"
         jet_en_vback = cathode_jet_backscatter_speed(
-            jet_en_spec, jet_en_derived.Ti, jet_en_sim.ion_mass_g
+            jet_en_spec, jet_en_derived.Te, jet_en_sim.ion_mass_g
         )
         # Per-particle: what the backscattered share actually carries, and
         # what the surface debit gave up for it.
@@ -16153,7 +16191,10 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         )[jet_en_cath]
         jet_en_debited = (
             jet_RE
-            * (jet_en_spec["phi_c_V"] + jet_en_derived.Ti[jet_en_cath])
+            * (
+                jet_en_spec["phi_c_V"]
+                + 0.5 * jet_en_derived.Te[jet_en_cath]
+            )
             * ev_to_erg
         )
         assert np.all(jet_en_debited > 0.0)
@@ -16340,7 +16381,7 @@ def _case_cathode_jet_hot_carrier():
     hc_spec = hc_on._cathode_jet_spec(hc_solve)
     hc_der = derive_state(hc_state, hc_on.floors, hc_on.ion_mass_g)
     hc_RN = float(hc_spec["R_N"])
-    hc_vback = _hc_vback(hc_spec, hc_der.Ti, hc_on.ion_mass_g)
+    hc_vback = _hc_vback(hc_spec, hc_der.Te, hc_on.ion_mass_g)
     hc_ejet = hc_RN * 0.5 * hc_on.ion_mass_g * hc_vback**2 + (
         1.0 - hc_RN
     ) * (1.5 * hc_kb * max(float(hc_spec["T_s_K"]), 0.0))

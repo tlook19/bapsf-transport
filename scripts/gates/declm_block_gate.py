@@ -174,6 +174,7 @@ PERTURBED = {
     "heating_anomalous_tail_energy_keying": "fixed",
     "heating_anomalous_tail_phi_c_fraction": 0.25,
     "heating_anomalous_tail_cathode_boundary": "escape",
+    "heating_anomalous_tail_forward_fraction": 0.75,
     "beam_tail_anode_reflected_particles": 0.5,
     "beam_tail_anode_reflected_energy": 0.5,
     "beam_clump_fraction": 0.5,

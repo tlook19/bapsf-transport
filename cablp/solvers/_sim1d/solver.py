@@ -220,6 +220,7 @@ from .physics.sources import (
     add_state_rhs,
     anode_collection_rhs,
     cathode_jet_backscatter_speed,
+    cathode_jet_incident_energy_eV,
     characteristic_boundary_rhs,
     ELECTRON_DRIFT_DIAGNOSTIC_ROWS,
     ELECTRON_DRIFT_DIAGNOSTIC_SCALARS,
@@ -10603,7 +10604,7 @@ class LAPDSim1D:
             e_jet = 1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
         else:
             v_back = cathode_jet_backscatter_speed(
-                spec, derived.Ti, self._ion_mass_g
+                spec, derived.Te, self._ion_mass_g
             )
             e_jet = R_N * 0.5 * self._ion_mass_g * v_back**2 + (1.0 - R_N) * (
                 1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
@@ -15066,9 +15067,9 @@ class LAPDSim1D:
         Te = derive_state(
             state, floors=self._floors, ion_mass_g=self._ion_mass_g
         ).Te
-        per_ion_erg = np.maximum(
-            phi_c + 0.5 * np.asarray(Te, dtype=float), 0.0
-        ) * ev_to_erg
+        per_ion_erg = (
+            cathode_jet_incident_energy_eV(phi_c, Te) * ev_to_erg
+        )
         return np.asarray(cathode_row, dtype=float) * per_ion_erg
 
     def _dvm_anode_jet_incident_energy_row(
