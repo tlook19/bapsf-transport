@@ -163,20 +163,41 @@ selects the composition: `"lie"` applies $A(\Delta t)$ then $B(\Delta t)$ and is
 $O(\Delta t)$, the splitting error going as $\Delta t\,[A,B]$; `"strang"`
 applies $B(\Delta t/2)\to A(\Delta t)\to B(\Delta t/2)$, whose symmetry cancels
 that leading commutator and leaves $O(\Delta t^2)$.
-`beam_deposition_in_heat_substep` moves the beam's electron-energy term from
-$A$'s explicit sum into $B$, applied as a source held constant over each substep
-on the same tridiagonal operator; the beam's particle births, ionization cost
-and excitation radiation stay in $A$.
+Two terms cross the split into $B$, under either composition. The **anode
+electron-sheath debit** always does: at a frozen circuit solve the row is
+$I_{e,a}(2+\psi_a^+)T_e$, exactly linear in $T_e$, so $B$ carries it as a
+first-order REACTION RATE rather than as a power (below), which is what keeps
+the two anode-flanking cells off a within-step sawtooth and takes the row out
+of the `surface_loss` bundle. `beam_deposition_in_heat_substep` additionally
+moves the beam's electron-energy term from $A$'s explicit sum into $B$, applied
+as a source held constant over each substep on the same tridiagonal operator;
+the beam's particle births, ionization cost and excitation radiation stay in
+$A$. Both are still reported by `rhs_terms` at the same power — only which
+operator applies them moves — and each substep's terms are evaluated at the
+state it starts from and the time that state represents, which under Strang
+pairs $(y^n,t^n)$ with $(A y,\,t^n+\Delta t)$ and makes the two halves a
+trapezoidal quadrature. With `implicit_heat_conduction` off there is no $B$,
+the anode row stays in $A$, and a step explicitly asked for
+`operator_split=False` on a split stance is REFUSED rather than dropping the
+debit.
 
 ### Implicit heat substep
 
 Solved per species as a tridiagonal system via `scipy.linalg.solve_banded`.
 Three of the four schemes are theta methods,
 
-$$\left(C+\theta\,\Delta t\,K\right)T^{n+1}=C\,T^n-(1-\theta)\,\Delta t\,K\,T^n$$
+$$\left(C+\theta\,\Delta t\,L\right)T^{n+1}=C\,T^n-(1-\theta)\,\Delta t\,L\,T^n
++\Delta t\,S$$
 
-$C$ the heat capacity and $K$ the conduction operator built from the same face
-coefficients as the explicit half.
+$C$ the heat capacity, $K$ the conduction operator built from the same face
+coefficients as the explicit half, and $L=K+\nu C$ where $\nu\ge0$ is the
+per-cell electron-energy REACTION RATE the substep was handed (the anode
+electron-sheath debit; zero on the ion solve and absent whenever no caller
+supplies one). $S$ is the constant source. Both $\nu$ and $S$ are frozen over
+the substep — they depend on the density, the circuit solve and the electrode
+split weights, none of which the substep moves — so each scheme integrates the
+reaction term at its own order and the Picard loop below re-evaluates
+$\kappa$ alone.
 
 | `implicit_heat_scheme` | $\theta$ | $R(-\infty)$ | L-stable | banded solves | substep order |
 |---|---|---|---|---|---|
@@ -189,7 +210,13 @@ At $\theta=1$, $C+\Delta t\,K$ is an M-matrix satisfying
 $(C+\Delta t\,K)\mathbf 1=C\mathbf 1$ (as $K\mathbf 1=0$), giving the discrete
 maximum principle $T^{n+1}\ge\min(T^n)$:
 backward Euler is unconditionally monotone and cannot undershoot the temperature
-floors. For $\theta<1$ the amplification factor tends to $-(1-\theta)/\theta$ as
+floors. A non-negative $\nu$ only enlarges the diagonal, so $C+\Delta t\,L$
+stays an M-matrix and backward Euler stays monotone — the row sum is no longer
+$C\mathbf 1$, so the statement weakens to positivity, $T^{n+1}>0$, which is
+what a sink should give. The second-order schemes keep no such property
+against the reaction term: at $\nu\Delta t\gg1$ they ring exactly as they do on
+a stiff conduction mode, which is why the rate carries its own accuracy bound
+(`electrode_sink_rate`). For $\theta<1$ the amplification factor tends to $-(1-\theta)/\theta$ as
 $\Delta t\,\lambda\to-\infty$, so stiff modes ring — undamped at
 $\theta=\tfrac12$ — and can be clipped by a floor, which injects energy.
 `tr_bdf2` is second-order *and* L-stable: a trapezoidal stage out to
@@ -199,6 +226,19 @@ $\gamma/2=(1-\gamma)/(2-\gamma)$ and hence one banded operator — two
 `solve_banded` calls against a single matrix. It damps undershoot rather than
 preventing it. A third floor clip sits inside the substep itself, on its
 returned temperatures.
+
+**The substep's realised increments.** Each scheme's update is exactly the
+operator applied at ONE stage-weighted temperature: $\theta T^{n+1}+(1-\theta)
+T^n$ for a theta method, and
+$a\tfrac{\gamma}{2}(T^n+T_\gamma)+\tfrac{\gamma}{2}T^{n+1}$ for `tr_bdf2`
+with $a=1/[\gamma(2-\gamma)]$ (the three weights summing to one, as does the
+source pair $a\gamma+\gamma/2$). Evaluating $-\Delta t\,K$, $-\Delta t\,\nu C$
+and $\Delta t\,S$ at that temperature gives the substep's conduction, sink and
+source increments, which sum to $C(T^{n+1}_\text{pre-clip}-T^n)$ per cell to
+round-off wherever the floor is inactive. That is how the realised electrode
+debit is measured rather than assumed: the accepted step books both the
+circuit's charge and what the substep actually removed, and their ratio is the
+local $\langle T_{e,c}/T_{e,a}\rangle$.
 
 **Picard iterations on $\kappa$.** The conductivity is frozen at the incoming
 state, and that — not the scheme — caps the substep at first order.
@@ -279,9 +319,10 @@ over every cell.**
 | `plasma_cfl` | distance, $d$ the centre distance and $s=\tfrac12(\lvert u_L\rvert+\lvert u_R\rvert+c_L+c_R)$ per face, $\varepsilon$ = `cfl`; a face counts only where both cells are active and the face is open |
 | `front_density` | fractional on $n$ against the front-filling flux term, $\varepsilon$ = `density_dt_fraction` |
 | `reactions` | fractional on $n$ (floor $n_\text{floor}$) AND on $n_n$ (floor 0) against the bulk reaction term |
-| `surface_loss` | negative-margin — $\Delta t\le\varepsilon\min(\text{margin}/\lvert\dot X\rvert)$ over DRAINING cells only ($\varepsilon$ = `density_dt_fraction`), margins $n-n_\text{floor}$ and the exact conservative $E_s-\tfrac32nT_{s,\text{floor}}$ whose rates include the change in floor energy when $n$ changes, $d(E-\tfrac32nT_\text{floor})/dt=\dot E-\tfrac32T_\text{floor}\dot n$; a non-positive margin returns 0. Bundles the cathode/sheath, anode-collection and plasma-terminating boundary terms plus an engaged kinetic arm's coupling term, and is assembled only under `raw_stage_validation` or an engaged kinetic arm |
+| `surface_loss` | negative-margin — $\Delta t\le\varepsilon\min(\text{margin}/\lvert\dot X\rvert)$ over DRAINING cells only ($\varepsilon$ = `density_dt_fraction`), margins $n-n_\text{floor}$ and the exact conservative $E_s-\tfrac32nT_{s,\text{floor}}$ whose rates include the change in floor energy when $n$ changes, $d(E-\tfrac32nT_\text{floor})/dt=\dot E-\tfrac32T_\text{floor}\dot n$; a non-positive margin returns 0. Bundles the cathode/sheath, anode-collection and plasma-terminating boundary terms plus an engaged kinetic arm's coupling term, and is assembled only under `raw_stage_validation` or an engaged kinetic arm. It does NOT bundle the anode electron-sheath row wherever the operator split carries that row implicitly: the bound must describe what operator $A$ applies |
 | `energy_exchange` | fractional on $E_e$, $E_i$ against $Q_{ie}$ (floor 0) |
 | `energy_exchange_rate` | rate, $\Delta t\le c/\max\nu_\text{eq}$ at $c$ = `energy_exchange_rate_fraction`; withdrawn to infinity at that key's default `None` |
+| `electrode_sink_rate` | rate, $\Delta t\le c/\max\nu$ over the plasma-active cells at $c$ = `ELECTRODE_SINK_DT_FRACTION` = 1, $\nu$ the electrode electron-energy sink the implicit substep carries. An ACCURACY bound, not a stability one — the sink is L-stable at any step, but a second-order substep only expresses its order while $\nu\Delta t$ is order one, and the anode sheath can change regime between steps taken longer. Withdrawn to infinity wherever the row is applied explicitly instead |
 | `electron_cooling` | fractional on $E_e$ against the inelastic and radiative terms |
 | `ion_charge_exchange` | fractional on $E_i$ against the charge-exchange term |
 | `ion_neutral_drag` | rate, $\Delta t\max\nu_{in}\le$ `DRAG_DT_FRACTION`, $\nu$ scaled by $\lvert b_\text{ion\_neutral\_drag}\rvert$ |

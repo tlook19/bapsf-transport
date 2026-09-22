@@ -433,6 +433,13 @@ END_SHEATH_DEBIT_ROWS = END_SHEATH_END_WALL_ROWS + END_SHEATH_CATHODE_ROWS
 #: energy leak rather than an error.
 BEAM_POWER_DEPOSITION_TERM = "beam_power_deposition"
 
+#: Name of the RHS row carrying the anode's electron-sheath energy debit.
+#: Bound to a constant for the reason the beam row above is: it is named in
+#: the place it is withdrawn from operator A's sum and in the place the
+#: implicit heat substep rebuilds it as a rate, and a typo in either would be
+#: a silent energy leak.
+ANODE_E_SHEATH_TERM = "anode_e_sheath_loss"
+
 #: The cathode-circuit scalars written to the HDF5, per solved end.
 #:
 #: SIX NAMES ARE GONE from this tuple and are not exported any more:
@@ -529,6 +536,14 @@ _CATHODE_RESULT_KEYS = (
     "P_load_ledger",
     "P_load_residual",
     "I_cathode_kirchhoff_residual",
+    # The electron temperature [eV] the solve's ANODE block ran on -- the
+    # caller's anode sample, or the cathode's own T_e where none was given.
+    # Every anode member above is referenced to it, and the implicit
+    # electron-energy substep's sink rate is formed by dividing the anode
+    # electron power by the heat capacity AT THIS temperature, so a saved
+    # trajectory can reconstruct the rate rather than having to guess the
+    # scaling temperature.
+    "T_e_anode",
 )
 
 
@@ -676,6 +691,11 @@ class StepAttempt1D:
     # same reason the coverage and DVM accumulators are: a rejected attempt
     # must move neither the Picard cache nor the passive/active boundary.
     tracer: dict | None = None
+    # This attempt's anode electron-sheath book: the circuit's charge and the
+    # implicit substep's realised debit [J], plus the per-cell realised
+    # energy density [erg cm^-3] and the window it spans [s]. None whenever
+    # the row is not in the heat substep; committed only on accept.
+    electrode_sink_booking: dict | None = None
 
 
 def _atomic_rate_domain(result):
@@ -999,6 +1019,7 @@ def _timestep_limiters(diag, count=3):
         ("reactions", diag.dt_reactions),
         ("energy_exchange", diag.dt_energy_exchange),
         ("energy_exchange_rate", diag.dt_energy_exchange_rate),
+        ("electrode_sink_rate", diag.dt_electrode_sink_rate),
         ("electron_cooling", diag.dt_electron_cooling),
         ("ion_charge_exchange", diag.dt_ion_charge_exchange),
         ("heat_conduction", diag.dt_heat_conduction),
@@ -2291,6 +2312,44 @@ class LAPDSim1D:
                 "would leave A with nowhere to land"
             )
         self._beam_deposition_in_heat_substep = _beam_deposition_in_heat_substep
+        # The ANODE electron-sheath debit rides the implicit substep whenever
+        # there IS one. It is not a configuration choice: the row is exactly
+        # linear in Te at a frozen circuit solve and is the one member of the
+        # surface-loss bundle that binds the step, so with a B available it
+        # belongs in B. With the split off there is no B and the row stays in
+        # operator A, bit for bit as it always was.
+        self._electrode_sink_in_heat_substep = bool(
+            self._flags.get("implicit_heat_conduction")
+        )
+        # The rows operator A's sum LEAVES OUT because the implicit heat
+        # substep applies them instead. ``rhs_terms`` still reports every one
+        # of them at the same power; only which operator applies them moves.
+        _heat_substep_terms = []
+        if _beam_deposition_in_heat_substep:
+            _heat_substep_terms.append(BEAM_POWER_DEPOSITION_TERM)
+        if self._electrode_sink_in_heat_substep:
+            _heat_substep_terms.append(ANODE_E_SHEATH_TERM)
+        self._heat_substep_terms = frozenset(_heat_substep_terms)
+        # Cumulative anode electron-sheath energy books [J], advanced on
+        # ACCEPTED steps only. ``circuit_booked`` is what the circuit solve
+        # charged at its own anode sample temperature; ``realised`` is what
+        # the implicit substep actually removed from the plasma electron
+        # store at the LOCAL temperature. Their ratio is the per-step
+        # <Te_c/Te_a>, measured rather than assumed. Unconditional, so the
+        # pair is measured on every run -- with the split off the two rows
+        # are both 0.0 because operator A carries the debit.
+        self._anode_e_sheath_ledger_J = {"circuit_booked": 0.0, "realised": 0.0}
+        self._anode_e_sheath_last_booked_W = 0.0
+        self._anode_e_sheath_last_realised_W = 0.0
+        # Per-cell realised debit accumulated since the last save [erg cm^-3]
+        # and the window it spans [s]; the saved profile is their ratio, the
+        # save-interval MEAN power density.
+        self._anode_e_sheath_realised_accum = None
+        self._anode_e_sheath_realised_window_s = 0.0
+        # The attempt-scoped accumulator the heat substeps add into; armed in
+        # _attempt_step and dropped in its finally, so a rejected attempt
+        # books nothing.
+        self._anode_e_sheath_attempt = None
         # Census of the attracting-anode branch, advanced on ACCEPTED steps
         # only (see _accept_step_attempt) and exposed on an armed run's
         # cathode diagnostics. Initialised unconditionally so the attributes
@@ -5641,12 +5700,13 @@ class LAPDSim1D:
         (the default, and what every diagnostic caller does) is the historical
         behaviour exactly.
 
-        With ``beam_deposition_in_heat_substep`` armed this is operator A's
-        RHS with the ``beam_power_deposition`` row LEFT OUT of the sum: that
-        row is applied by the implicit heat substep instead
-        (:meth:`operator_split_step`). The row is still built and still
-        REPORTED by :meth:`rhs_terms` with the same deposited power -- only
-        which operator applies it moves.
+        Rows the implicit heat substep applies are LEFT OUT of this sum --
+        ``anode_e_sheath_loss`` whenever the operator split is in force, and
+        ``beam_power_deposition`` additionally under
+        ``beam_deposition_in_heat_substep``. Each is still built and still
+        REPORTED by :meth:`rhs_terms` at the same power; only which operator
+        applies it moves (:meth:`operator_split_step`). With the split off
+        the set is empty and every row enters the sum as it always did.
         """
         state_rhs = self._zero_rhs_state()
         terms = self.rhs_terms(
@@ -5655,9 +5715,9 @@ class LAPDSim1D:
             time=time,
             step_window=step_window,
         )
-        if self._beam_deposition_in_heat_substep:
+        if self._heat_substep_terms:
             for name, term in terms.items():
-                if name == BEAM_POWER_DEPOSITION_TERM:
+                if name in self._heat_substep_terms:
                     continue
                 state_rhs = add_state_rhs(state_rhs, term)
         else:
@@ -6582,6 +6642,19 @@ class LAPDSim1D:
                 "in the implicit heat substep, so a non-split step would "
                 "deposit no beam power at all"
             )
+        if self._electrode_sink_in_heat_substep and not operator_split:
+            # Same hazard, same refusal: with implicit_heat_conduction on,
+            # rhs() has already withdrawn the anode electron-sheath row from
+            # operator A's sum, and a step with no B has nowhere to apply it
+            # -- the debit would simply vanish.
+            raise ValueError(
+                "implicit_heat_conduction is on but this step was asked for "
+                "operator_split=False: the anode electron-sheath energy "
+                "debit has been removed from the explicit operator and lives "
+                "in the implicit heat substep, so a non-split step would "
+                "charge the plasma nothing for the electrons the anode "
+                "collects"
+            )
         if operator_split:
             if dt is None:
                 dt = self.suggest_timestep(include_heat_conduction=False).dt
@@ -6650,6 +6723,20 @@ class LAPDSim1D:
         # whenever the flag is off, which is the presence gate for the accept
         # path below.
         attempt_tracer = self._tracer_prepare(dt)
+
+        # Arm the anode electron-sheath book for THIS attempt only, on the
+        # same discipline the DVM and coverage accumulators use: the heat
+        # substeps add into it, the ``finally`` below drops it, and only
+        # ``_accept_step_attempt`` commits it.
+        if self._electrode_sink_in_heat_substep and operator_split:
+            self._anode_e_sheath_attempt = {
+                "circuit_booked": 0.0,
+                "realised": 0.0,
+                "realised_profile": np.zeros(
+                    self._geometry.cells, dtype=float
+                ),
+                "window_s": 0.0,
+            }
 
         starting_cache = self._step_cache_snapshot()
         attempt_floor_ledger = self._empty_floor_ledger()
@@ -6734,6 +6821,8 @@ class LAPDSim1D:
             self._coverage_reservoir_burn_accum = None
             self._coverage_w_accum = None
             self._coverage_burn_weight = 0.0
+            attempt_electrode_sink = self._anode_e_sheath_attempt
+            self._anode_e_sheath_attempt = None
         return StepAttempt1D(
             y=np.asarray(y_next, dtype=float),
             dt=dt,
@@ -6753,6 +6842,7 @@ class LAPDSim1D:
             coverage_reservoir_burn=attempt_coverage_reservoir_burn,
             coverage_w=attempt_coverage_w,
             tracer=attempt_tracer,
+            electrode_sink_booking=attempt_electrode_sink,
         )
 
     def _implicit_neutral_step(
@@ -7284,6 +7374,38 @@ class LAPDSim1D:
         return {**self._input_dict, "phi_wf": eff}
 
     def _accept_step_attempt(self, attempt):
+        # The anode electron-sheath pair, committed for an ACCEPTED step
+        # only. Both rows are cumulative [J]; their ratio is the measured
+        # per-step <Te_c/Te_a>, which is the reconciliation between what the
+        # circuit charged at its own sample and what the plasma paid at the
+        # local temperature.
+        electrode_sink = getattr(attempt, "electrode_sink_booking", None)
+        if electrode_sink is not None:
+            self._anode_e_sheath_ledger_J["circuit_booked"] += (
+                electrode_sink["circuit_booked"]
+            )
+            self._anode_e_sheath_ledger_J["realised"] += (
+                electrode_sink["realised"]
+            )
+            step_window = electrode_sink["window_s"]
+            self._anode_e_sheath_last_booked_W = (
+                electrode_sink["circuit_booked"] / step_window
+                if step_window > 0.0
+                else 0.0
+            )
+            self._anode_e_sheath_last_realised_W = (
+                electrode_sink["realised"] / step_window
+                if step_window > 0.0
+                else 0.0
+            )
+            if self._anode_e_sheath_realised_accum is None:
+                self._anode_e_sheath_realised_accum = np.zeros(
+                    self._geometry.cells, dtype=float
+                )
+            self._anode_e_sheath_realised_accum += (
+                electrode_sink["realised_profile"]
+            )
+            self._anode_e_sheath_realised_window_s += step_window
         # B5: what the cathode surface owes the kinetic gas for THIS step's
         # backscatter [erg]. Zero unless the DVM cathode jet booked
         # something below, which is what keeps the surface power balance
@@ -8222,6 +8344,7 @@ class LAPDSim1D:
         )
         snap["_floor_ledger"] = dict(self._floor_ledger)
         snap["_cathode_energy_ledger_J"] = dict(self._cathode_energy_ledger_J)
+        snap["_anode_e_sheath_ledger_J"] = dict(self._anode_e_sheath_ledger_J)
         ema = self._sample_ema
         snap["_sample_ema"] = (
             None if ema is None else {c: list(v) for c, v in ema.items()}
@@ -8241,6 +8364,7 @@ class LAPDSim1D:
         )
         self._floor_ledger = dict(snap["_floor_ledger"])
         self._cathode_energy_ledger_J = dict(snap["_cathode_energy_ledger_J"])
+        self._anode_e_sheath_ledger_J = dict(snap["_anode_e_sheath_ledger_J"])
         ema = snap["_sample_ema"]
         self._sample_ema = (
             None if ema is None else {c: list(v) for c, v in ema.items()}
@@ -8462,6 +8586,16 @@ class LAPDSim1D:
             {
                 f"cathode_energy_{key}_J": value
                 for key, value in self._cathode_energy_ledger_J.items()
+            }
+        )
+        # Unconditional (the book is measured on every run), so a payload
+        # written here always carries the pair. A payload written BEFORE the
+        # pair existed lacks the keys and is read back as 0.0 -- see the
+        # loader below.
+        ledgers.update(
+            {
+                f"anode_e_sheath_{key}_J": value
+                for key, value in self._anode_e_sheath_ledger_J.items()
             }
         )
         if self._anode_energy_ledger_J is not None:
@@ -8692,6 +8826,14 @@ class LAPDSim1D:
             self._cathode_energy_ledger_J[key] = float(
                 ledgers[f"cathode_energy_{key}_J"]
             )
+        for key in self._anode_e_sheath_ledger_J:
+            # Defaulted, not required: a payload written before this pair
+            # existed carries neither key, and a resumed run's cumulative
+            # anode book then starts from zero rather than refusing the
+            # payload. Every other member of ``ledgers`` is required.
+            self._anode_e_sheath_ledger_J[key] = float(
+                ledgers.get(f"anode_e_sheath_{key}_J", 0.0)
+            )
         if self._anode_energy_ledger_J is not None:
             for key in self._anode_energy_ledger_J:
                 self._anode_energy_ledger_J[key] = float(
@@ -8803,13 +8945,25 @@ class LAPDSim1D:
         conductivity (``heat_picard_iterations``); Strang alone only removes
         the splitting term.
 
-        ``beam_deposition_in_heat_substep`` MOVES ONE TERM ACROSS THE SPLIT:
-        the beam's electron-energy deposition leaves A's explicit sum (see
-        :meth:`rhs`) and enters B as a source held constant over each substep
-        (:meth:`beam_deposition_ee_source`). Nothing else changes -- the beam's
-        particle births, ionization cost and excitation radiation stay in A --
-        and the deposited power is booked once either way. Off, this method is
-        the historical composition, call for call.
+        TWO TERMS CROSS THE SPLIT into B, both applied under either
+        splitting and both still reported by :meth:`rhs_terms`:
+
+        ``anode_e_sheath_loss``
+            The anode's electron-sheath energy debit, always -- the row is
+            exactly linear in Te at a frozen circuit solve, so B carries it
+            as a first-order RATE (:meth:`electrode_ee_sink_rate`) rather
+            than as a constant power. That is what keeps the two anode cells
+            off the within-step sawtooth A's explicit removal used to leave,
+            and it takes the row out of A's timestep bundle.
+
+        ``beam_power_deposition``
+            Under ``beam_deposition_in_heat_substep`` only: B receives it as
+            a source held constant over each substep
+            (:meth:`beam_deposition_ee_source`). The beam's particle births,
+            ionization cost and excitation radiation stay in A.
+
+        Both are booked once either way. One read-only cathode solve per
+        substep serves both builders.
         """
         y0 = self._y if y is None else np.asarray(y, dtype=float)
         if dt is None:
@@ -8827,14 +8981,51 @@ class LAPDSim1D:
             raw_stage_func = self._validate_raw_stage
 
         def heat(y_in, sub_dt, source_time=None):
-            if self._beam_deposition_in_heat_substep:
+            if self._heat_substep_terms:
+                substep_state = self._unpack(y_in)
+                cathode_solve = None
+                cathode_phase = self._cathode_phase_options(time=source_time)
+                if self._flags.get("Plasma") and not (
+                    self._neutral_prebreakdown_active(time=source_time)
+                ) and cathode_phase["solve_enabled"]:
+                    # ONE read-only solve for both builders below: the memo
+                    # would serve the second from the first anyway, and
+                    # resolving it here makes that structural.
+                    cathode_solve = self.solve_cathode_boundary(
+                        state=substep_state,
+                        floating=cathode_phase["floating"],
+                        time=source_time,
+                        update_cache=False,
+                    )
+                ee_source = None
+                if self._beam_deposition_in_heat_substep:
+                    ee_source = self.beam_deposition_ee_source(
+                        state=substep_state,
+                        time=source_time,
+                        cathode_solve=cathode_solve,
+                    )
+                ee_sink_rate = None
+                sink_power_W = None
+                if self._electrode_sink_in_heat_substep:
+                    ee_sink_rate, sink_power_W = self.electrode_ee_sink_rate(
+                        state=substep_state,
+                        time=source_time,
+                        cathode_solve=cathode_solve,
+                    )
+                ledger = {} if ee_sink_rate is not None else None
                 state = self.implicit_heat_conduction_step(
                     dt=sub_dt,
-                    y=y_in,
-                    ee_source=self.beam_deposition_ee_source(
-                        y=y_in, time=source_time
-                    ),
+                    state=substep_state,
+                    ee_source=ee_source,
+                    ee_sink_rate=ee_sink_rate,
+                    ledger_out=ledger,
                 )
+                if ledger is not None:
+                    self._book_electrode_sink_substep(
+                        realised_erg_cm3=ledger["Ee_sink_erg_cm3"],
+                        booked_W=sink_power_W,
+                        sub_dt=sub_dt,
+                    )
             else:
                 state = self.implicit_heat_conduction_step(dt=sub_dt, y=y_in)
             raw = pack_state(state)
@@ -8858,17 +9049,17 @@ class LAPDSim1D:
                 raw_stage_func=raw_stage_func,
             )
 
-        # The source times below matter only under
-        # ``beam_deposition_in_heat_substep``; every other substep is
-        # autonomous, which is why the unarmed path computes neither of them.
-        # The rule is that a substep's source is evaluated at the state it
-        # starts from and at the time THAT STATE represents, which under Strang
-        # pairs (y0, t) with (post-A, t + dt) -- the same two instants operator
-        # A's own SSPRK2 stages use, so the two half-substeps together form the
-        # trapezoidal quadrature of the source over the step rather than a
-        # left-endpoint rule.
+        # The source times below matter only where the substep carries a
+        # term of its own -- the beam source or the electrode sink rate;
+        # every other substep is autonomous, which is why the unarmed path
+        # computes neither of them. The rule is that a substep's term is
+        # evaluated at the state it starts from and at the time THAT STATE
+        # represents, which under Strang pairs (y0, t) with (post-A, t + dt)
+        # -- the same two instants operator A's own SSPRK2 stages use, so the
+        # two half-substeps together form the trapezoidal quadrature over the
+        # step rather than a left-endpoint rule.
         source_time_start = source_time_end = None
-        if self._beam_deposition_in_heat_substep:
+        if self._heat_substep_terms:
             source_time_start = self._time
             source_time_end = self._time + dt
         if splitting == "strang":
@@ -8879,6 +9070,31 @@ class LAPDSim1D:
                 source_time_end,
             )
         return heat(explicit(y0, dt), dt, source_time_end)
+
+    def _book_electrode_sink_substep(self, realised_erg_cm3, booked_W, sub_dt):
+        """Add one heat substep's anode electron debit to the attempt's book.
+
+        ``realised_erg_cm3`` (<= 0) is what the substep actually took out of
+        the plasma electron store, at the scheme's own stage weights;
+        ``booked_W`` is the circuit's per-cell statement for the same
+        substep. Both are accumulated as energies [J] against the substep's
+        own ``sub_dt``, so the Strang halves add to one step's book, and the
+        pair is committed only by :meth:`_accept_step_attempt` -- a rejected
+        attempt books neither.
+        """
+        attempt = self._anode_e_sheath_attempt
+        if attempt is None:
+            return
+        realised = np.asarray(realised_erg_cm3, dtype=float)
+        # erg cm^-3 over the cell volumes -> erg -> J, and a DEBIT is
+        # reported positive here (the row is a loss).
+        realised_J = -float(
+            np.sum(realised * self._plasma_geometry().plasma_volume_cm3)
+        ) * 1.0e-7
+        attempt["realised"] += realised_J
+        attempt["circuit_booked"] += float(np.sum(booked_W)) * sub_dt
+        attempt["realised_profile"] += -realised
+        attempt["window_s"] += float(sub_dt)
 
     def _operator_splitting(self):
         return validate_operator_splitting(
@@ -9795,6 +10011,18 @@ class LAPDSim1D:
                 state=state,
                 time=time,
             )
+        # The implicit substep's electrode sink rate, for its accuracy
+        # bound. Presence-gated on the row actually being in B: with the
+        # split off the row is in operator A and the surface_loss bundle
+        # bounds it, so the candidate stays withdrawn and no non-split run's
+        # dt sequence moves. The solve this needs is the read-only memo's,
+        # which the bundle above has usually already filled.
+        electrode_sink_rate = None
+        if plasma_enabled and self._electrode_sink_in_heat_substep:
+            electrode_sink_rate = self.electrode_ee_sink_rate(
+                state=state,
+                time=time,
+            )[0]
         circuit_kwargs = self._circuit_timestep_kwargs(state=state, time=time)
         diag = suggest_timestep(
             state=state,
@@ -9838,6 +10066,7 @@ class LAPDSim1D:
             ),
             circuit_kwargs=circuit_kwargs,
             plasma_source_rhs=plasma_source_rhs,
+            electrode_sink_rate=electrode_sink_rate,
             source_floor_exempt_rtol=self._surface_loss_floor_exempt_rtol,
             source_floor_exempt_exit_rtol=(
                 self._surface_loss_floor_exempt_exit_rtol
@@ -9909,6 +10138,7 @@ class LAPDSim1D:
                 dt_reactions=np.inf,
                 dt_energy_exchange=np.inf,
                 dt_energy_exchange_rate=np.inf,
+                dt_electrode_sink_rate=np.inf,
                 dt_electron_cooling=np.inf,
                 dt_ion_charge_exchange=np.inf,
                 dt_heat_conduction=np.inf,
@@ -10018,7 +10248,13 @@ class LAPDSim1D:
             time=time,
         )
         rhs = add_state_rhs(rhs, _electrode_terms.rhs)
-        rhs = add_state_rhs(rhs, _electrode_terms.anode_rhs)
+        if not self._electrode_sink_in_heat_substep:
+            # APPLIED-ROW CONVENTION: with the operator split in force the
+            # anode electron row is not in operator A at all -- the implicit
+            # substep carries it, L-stably, and bounding a term this step
+            # does not apply would hold dt down for nothing. Its accuracy
+            # bound is the separate ``electrode_sink_rate`` candidate.
+            rhs = add_state_rhs(rhs, _electrode_terms.anode_rhs)
         if self._beam_ionization_birth_timestep_bound:
             # The WHOLE applied row, per the applied-row convention: a bound
             # computed from a fraction of a row describes a term the step does
@@ -11144,7 +11380,65 @@ class LAPDSim1D:
             coverage=self._coverage_view(state, time),
         )
 
-    def beam_deposition_ee_source(self, y=None, state=None, time=None):
+    def electrode_ee_sink_rate(
+        self, y=None, state=None, time=None, cathode_solve=None,
+    ):
+        """Return ``(nu, P_booked_W)`` for the anode electron sheath debit.
+
+        ``nu`` [s^-1] is the per-cell first-order electron-energy loss rate
+        the implicit heat substep integrates when the operator split is in
+        force, and ``P_booked_W`` the circuit's own per-cell power [W] the
+        rate was formed from -- the exact power :meth:`rhs_terms` still
+        reports in the ``anode_e_sheath_loss`` row. Applying ``nu`` to the
+        LOCAL temperature realises ``P_booked * Te_c / Te_a``, which is the
+        same statement at the temperature the collected electrons leave with.
+
+        It carries the same two gates the reported row does: the phase gate
+        (no plasma, or neutral prebreakdown, means no electrode solve) and
+        the active-plasma-topology mask ``rhs_terms`` applies to every row.
+        Both are exact zeros wherever the row is, so a phase with no cathode
+        solve hands the substep an all-zero rate and leaves it bit-identical.
+
+        The cathode solve runs with ``update_cache=False``, like the beam
+        source's: the solve of record stays operator A's.
+        """
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        zeros = np.zeros(self._geometry.cells, dtype=float)
+        if not self._flags.get("Plasma") or self._neutral_prebreakdown_active(
+            time=time,
+        ):
+            return zeros, zeros.copy()
+        if cathode_solve is None:
+            cathode_phase = self._cathode_phase_options(time=time)
+            if cathode_phase["solve_enabled"]:
+                cathode_solve = self.solve_cathode_boundary(
+                    state=state,
+                    floating=cathode_phase["floating"],
+                    time=time,
+                    update_cache=False,
+                )
+        electrode_terms = self.cathode_source_terms(
+            state=state,
+            cathode_solve=cathode_solve,
+            time=time,
+        )
+        metadata = electrode_terms.metadata
+        rate = np.asarray(
+            metadata.get("anode_sink_rate_s_inv", zeros), dtype=float
+        )
+        power_W = np.asarray(
+            metadata.get("anode_power_loss_W", zeros), dtype=float
+        )
+        if self._active_plasma_topology:
+            active = self._plasma_active_mask()
+            rate = np.where(active, rate, 0.0)
+            power_W = np.where(active, power_W, 0.0)
+        return rate, power_W
+
+    def beam_deposition_ee_source(
+        self, y=None, state=None, time=None, cathode_solve=None,
+    ):
         """Return the beam ``Ee`` deposition row [erg cm^-3 s^-1] at a state.
 
         The source the implicit heat substep integrates when
@@ -11161,7 +11455,10 @@ class LAPDSim1D:
         The cathode solve here runs with ``update_cache=False``: the solve of
         record -- the one the step's diagnostics and the sheath warm-start
         continuation come from -- stays operator A's, so arming the flag moves
-        no diagnostic.
+        no diagnostic. A caller that has already resolved that same solve --
+        the heat substep, which needs it for the electrode sink rate too --
+        passes it in as ``cathode_solve`` so the substep runs one solve
+        rather than two.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
@@ -11170,15 +11467,15 @@ class LAPDSim1D:
             time=time,
         ):
             return zeros
-        cathode_phase = self._cathode_phase_options(time=time)
-        cathode_solve = None
-        if cathode_phase["solve_enabled"]:
-            cathode_solve = self.solve_cathode_boundary(
-                state=state,
-                floating=cathode_phase["floating"],
-                time=time,
-                update_cache=False,
-            )
+        if cathode_solve is None:
+            cathode_phase = self._cathode_phase_options(time=time)
+            if cathode_phase["solve_enabled"]:
+                cathode_solve = self.solve_cathode_boundary(
+                    state=state,
+                    floating=cathode_phase["floating"],
+                    time=time,
+                    update_cache=False,
+                )
         beam_terms = self.beam_ionization_rhs_terms(
             state=state,
             cathode_solve=cathode_solve,
@@ -12881,6 +13178,18 @@ class LAPDSim1D:
             "ignition_diagnostics": ignition_diagnostics,
             "gas_puff_diagnostics": self._gas_puff_diagnostic_snapshot(time=time),
         }
+        if self._electrode_sink_in_heat_substep:
+            # The REALISED anode electron debit, as a save-interval MEAN
+            # power density [W cm^-3] -- the accumulated energy density the
+            # implicit substeps actually removed, over the time they span.
+            # The reported ``anode_e_sheath_loss`` row is the circuit's
+            # instantaneous statement at the saved state; this is what the
+            # plasma paid, and the two differ by the local <Te_c/Te_a>.
+            # Present exactly where the row is implicit, so a non-split
+            # run's saved arrays are the ones they always were.
+            snapshot["anode_e_sheath_realised_W_cm3"] = (
+                self._drain_anode_e_sheath_realised()
+            )
         # Only the DVM arm carries a transfer ledger, so only its runs carry
         # the per-save census record; a moment-model snapshot is unchanged.
         if self._dvm is not None:
@@ -12892,6 +13201,25 @@ class LAPDSim1D:
                 self._dvm_neutral_moment_sample(time=time)
             )
         return snapshot
+
+    def _drain_anode_e_sheath_realised(self):
+        """Return and reset the save-interval mean realised anode debit.
+
+        [W cm^-3], positive for a loss. The accumulator holds the energy
+        density the accepted steps' implicit substeps removed since the last
+        save and the time they span; dividing gives the interval mean, which
+        is the form the power ledger reads. A save with no accepted step
+        behind it (the t = 0 save, or a repeated save time) returns zeros.
+        """
+        window = self._anode_e_sheath_realised_window_s
+        accum = self._anode_e_sheath_realised_accum
+        if accum is None or not window > 0.0:
+            profile = np.zeros(self._geometry.cells, dtype=float)
+        else:
+            profile = accum * (1.0e-7 / window)
+        self._anode_e_sheath_realised_accum = None
+        self._anode_e_sheath_realised_window_s = 0.0
+        return profile
 
     def _gas_puff_diagnostic_snapshot(self, time):
         """Return the per-save EFFECTIVE gas-puff waveform record.
@@ -13087,6 +13415,13 @@ class LAPDSim1D:
         cathode_diagnostics = self._stack_trajectory_cathode_diagnostics(
             saved=saved,
         )
+        # The REPORTED ledger total: every row of ``rhs_terms``, including
+        # the ones the implicit heat substep applies rather than operator A
+        # (``anode_e_sheath_loss`` under the operator split,
+        # ``beam_power_deposition`` under its flag). It is the whole
+        # right-hand side the step integrates, not operator A's sum -- which
+        # is the reading the power ledger wants, since the rows are booked
+        # once either way.
         total_rhs = {
             field_name: sum(
                 (
@@ -13264,6 +13599,10 @@ class LAPDSim1D:
                 setattr(result, name, stack(name))
             for name in IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS:
                 setattr(result, name, stack(name))
+        if saved and "anode_e_sheath_realised_W_cm3" in saved[0]:
+            result.anode_e_sheath_realised_W_cm3 = stack(
+                "anode_e_sheath_realised_W_cm3"
+            )
         if saved and "nn_a" in saved[0]:
             result.nn_a = stack("nn_a")
         if saved and "M_n_a" in saved[0]:
@@ -13745,6 +14084,27 @@ class LAPDSim1D:
                 f"warming_E_{k}_J": float(v)
                 for k, v in self._cathode_energy_ledger_J.items()
             },
+            # The anode electron-sheath pair, UNCONDITIONAL so the
+            # reconciliation is measured on every run rather than only where
+            # someone thought to arm it. ``booked`` is what the circuit
+            # charged at its own anode sample temperature; ``realised`` is
+            # what the implicit substep took out of the plasma electron
+            # store at the local temperature. The *_W members are the last
+            # ACCEPTED step's rates, the *_J members the run cumulative;
+            # both are 0.0 wherever the row is applied by operator A
+            # instead, because there is no implicit debit to measure.
+            "anode_e_sheath_booked_W": float(
+                self._anode_e_sheath_last_booked_W
+            ),
+            "anode_e_sheath_realised_W": float(
+                self._anode_e_sheath_last_realised_W
+            ),
+            "anode_e_sheath_booked_J": float(
+                self._anode_e_sheath_ledger_J["circuit_booked"]
+            ),
+            "anode_e_sheath_realised_J": float(
+                self._anode_e_sheath_ledger_J["realised"]
+            ),
             # The ANODE's cumulative surface energy book [J], PRESENCE-GATED on
             # the B4 anode jet: absent the channel these keys do not exist and
             # the saved diagnostic set is the one it always was. The anode has

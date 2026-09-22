@@ -151,6 +151,12 @@ _OPTIONAL_ARRAY_FIELDS = (
     "u_n_a",
     "En",
     "Tn",
+    # Present only where the anode electron-sheath debit rides the implicit
+    # heat substep (the operator split in force): the save-interval mean of
+    # the debit the substep actually realised [W cm^-3], positive for a
+    # loss. Its companion is the ``anode_e_sheath_loss`` rhs_terms row,
+    # which is the circuit's instantaneous statement at the saved state.
+    "anode_e_sheath_realised_W_cm3",
 ) + HOT_CHANNEL_DIAGNOSTIC_FIELDS + IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS
 
 _ARRAY_FIELDS = (

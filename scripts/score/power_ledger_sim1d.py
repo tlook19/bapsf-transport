@@ -204,7 +204,10 @@ CHANNEL_PHASE = {
          "the ANODE electron sheath deposit (Ee only), landed at the "
          "anode-flanking cells under the Bohm split weights; this is the "
          "~10^5 W channel that used to hide inside cathode_surface_loss. "
-         "Absent from pre-split artifacts"),
+         "Absent from pre-split artifacts. Where the artifact carries "
+         "anode_e_sheath_realised_W_cm3 the number shown is the REALISED "
+         "debit the implicit heat substep took at the local temperature, "
+         "not the circuit's booking at its own anode sample"),
     "characteristic_boundary":
         ("BOTH",
          "energy leaving through the characteristic ghost-cell boundary at "
@@ -471,6 +474,17 @@ def integrate_rows(f, i0, i1, vols):
             mean = np.mean(f[key][i0:i1 + 1], axis=0)
             table[(channel, name)] = (
                 float(mean.dot(vols[name])) / ERG_PER_J / 1e3)
+    # The anode electron-sheath row is REPORTED at the circuit's own anode
+    # sample temperature, but where the implicit heat substep carries it the
+    # debit is realised at the LOCAL temperature -- and the run saves what
+    # it actually took. Prefer that: the ledger's job is what the plasma
+    # paid. An artifact without the array (every pre-implicit run, and every
+    # run with the operator split off) keeps the reported row.
+    realised_key = "anode_e_sheath_realised_W_cm3"
+    if realised_key in f and ("anode_e_sheath_loss", "Ee") in table:
+        realised = np.mean(f[realised_key][i0:i1 + 1], axis=0)
+        table[("anode_e_sheath_loss", "Ee")] = (
+            -float(realised.dot(vols["Ee"])) / 1e3)
     return table, channels
 
 
