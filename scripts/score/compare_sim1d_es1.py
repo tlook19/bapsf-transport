@@ -39,24 +39,55 @@ Three comparison stages, in tuning order (each scored independently):
       density. Neither changes a scored row above them, and both skip with a
       printed reason on an overlay vintage that lacks the keys.
 
-THE COMPARAND. Stage (ii) scores the model against the FLUX-TUBE average by
-default: the radial area average out to ``ftavg_radius_cm``, the cathode frame
-opening the 1D model's single radial cell also spans. Per field the measured
-side is ``te_ftavg_ev`` (the DENSITY-weighted area mean, which is what a cell
-carrying E_e = (3/2) n Te over that disc has), ``density_ftavg_cm3`` (the plain
-area mean), and for the Isat rows the ``n*sqrt(Te)`` formed from those two.
-The legacy CORE-BAND convention -- the unweighted line-cut mean over
--10 <= x <= 10 cm (``te_mean_ev``, ``density_mean_cm3``) that every historical
-continuity read was taken under -- is retained in full: every row is scored
-under BOTH and the table prints them side by side with the convention named on
-every row and every summary line. ``--comparand core`` swaps which of the two
-occupies the scored columns; neither is ever dropped.
+THE COMPARAND. Stage (ii) scores the model against THREE measured radial
+conventions, always all three, with the COLUMN convention PRIMARY by default:
 
-The flux-tube Te rows carry the overlay's coverage disclosure. A row is marked
-PRIOR-DERIVED where part of the integrated disc is the repo's scrape-off-layer
-prior rather than a measurement of that port, and REFUSED TO BIN where it
-carries a sample whose semi-quantitative weight is 1.0 with no coverage at all
--- such a row is printed and scored but is not eligible for a verdict.
+``column`` (primary)
+    the WHOLE COLUMN's plasma, expressed on the model's tube. Plasma measured
+    outside the cathode flux tube got there by cross-field transport a 1D
+    model does not represent, so the model's single radial cell is compared
+    against the column's whole inventory rather than against the part of it
+    that happens to lie inside the tube. The measured side is
+    ``density_column_cm3`` (the column inventory per unit length divided by
+    the TUBE's area, so it exceeds the flux-tube mean wherever the column is
+    wider than the tube) with ``density_column_sem_cm3``, and
+    ``te_column_ev`` (the density-weighted mean over the same extent, a
+    cell's E_e / ((3/2) n)) with ``te_column_sem_ev``.
+``ftavg``
+    the FLUX-TUBE average out to ``ftavg_radius_cm``, the cathode frame
+    opening the 1D model's single radial cell spans: ``te_ftavg_ev`` (the
+    density-weighted area mean) and ``density_ftavg_cm3`` (the plain area
+    mean).
+``core``
+    the legacy CORE-BAND unweighted line-cut mean over -10 <= x <= 10 cm
+    (``te_mean_ev``, ``density_mean_cm3``) that every historical continuity
+    read was taken under.
+
+The Isat rows are ``n*sqrt(Te)`` on both sides, synthesised from whichever
+convention's (n, Te) pair the leg names. Every row is scored under all three
+and the table prints them side by side with the convention named on every row
+and every summary line; ``--comparand {column,ftavg,core}`` chooses which one
+occupies the scored columns, and none is ever dropped.
+
+COVERAGE AND THE PRIOR. The flux-tube Te rows carry the overlay's coverage
+disclosure: PRIOR-DERIVED where part of the integrated disc is the repo's
+scrape-off-layer prior rather than a measurement of that port, and REFUSED TO
+BIN where a sample carries the full semi-quantitative weight with no coverage
+at all. The column convention integrates further out still, so
+``column_prior_beyond_coverage`` is True at every port of every set and the
+adjective carries no information -- the NUMBER does.
+``te_column_prior_weight``, the share of the row's own density-weighted
+quadrature carried by cells beyond that port's trust radius, is printed per
+row, and a row whose share exceeds one half is MAJORITY PRIOR: it is printed
+and scored, marked, and declared INELIGIBLE FOR A BIN VERDICT.
+
+THE MEASURED SIDE IS UNSUBTRACTED. The retired edge-median background
+subtraction is not in any comparand: the Isat baseline is already taken at the
+end of the shot, where there is no plasma, so a line scan has no background
+left to remove and the edge cells it removed were plasma. Products carrying
+the retired rows export them under ``*_subtracted*`` names with
+``subtracted_legacy_definition``; this module reads none of them for any
+score.
 
 Stage (ii) has one opt-in reading, absent unless asked for:
 
@@ -66,6 +97,12 @@ Stage (ii) has one opt-in reading, absent unless asked for:
     the plateau. Stages (i) and (iii) are unaffected -- stage (i) reports a
     peak and already carries its own plateau current row, and stage (iii)'s
     configured afterglow window does not overlap the plateau.
+
+A stage (ii) sample is scored only where the measurement, the model AND the
+sample's own sigma_tot are finite. A sample whose sigma_tot is not finite is
+DROPPED with a printed count on its row rather than averaged in, which would
+make the row's |dev|/sigma -- and every summary and JSON field built from it
+-- read NaN.
 
 Two further stage (ii) blocks are REPORT-ONLY and enter no score. The
 geomean-Isat z-trend row prints the port-to-port ratios of the area-normalized
@@ -685,9 +722,18 @@ def _score_samples(field, model_t, exp_t, sem_t, te_exp_t):
 
     Returns the row's model/measured window means, its ratio, RMS relative
     deviation, mean ``|dev|/sigma_tot``, the mean ``sigma_tot`` in the row's
-    own units, the mean measured Te over the scored samples, and how many
-    samples were scored. Returns ``None`` when no sample is finite and
-    non-zero on both sides, which is the caller's signal to emit no row.
+    own units, the mean measured Te over the scored samples, how many samples
+    were scored, and how many were dropped for a non-finite sigma_tot.
+    Returns ``None`` when no sample is finite and non-zero on both sides,
+    which is the caller's signal to emit no row.
+
+    A SAMPLE IS ACCEPTED ONLY WHERE ITS OWN ``sigma_tot`` IS FINITE. Every
+    scored figure below either divides by ``err_tot`` or averages it, so one
+    non-finite sigma_tot poisons the row's ``sigma`` and ``sigma_tot`` and
+    every summary mean and JSON field built from them -- a NaN that reads as
+    a missing verdict rather than as the one missing measurement error it
+    actually is. Such samples are dropped and COUNTED, so the row says how
+    much of it was thrown away instead of silently narrowing its own window.
     """
     te_safe = np.maximum(np.abs(te_exp_t), 1e-3)
     if field == "Isat":
@@ -704,7 +750,9 @@ def _score_samples(field, model_t, exp_t, sem_t, te_exp_t):
             (0.5 * sig_te / te_safe) ** 2 + N_CAL_FRAC**2
         )
     err_tot = np.sqrt(sem_t**2 + sys_t**2)
-    good = np.isfinite(exp_t) & np.isfinite(model_t) & (exp_t != 0.0)
+    paired = np.isfinite(exp_t) & np.isfinite(model_t) & (exp_t != 0.0)
+    good = paired & np.isfinite(err_tot)
+    n_dropped = int(np.count_nonzero(paired & ~np.isfinite(err_tot)))
     if not np.any(good):
         return None
     return {
@@ -727,6 +775,11 @@ def _score_samples(field, model_t, exp_t, sem_t, te_exp_t):
         "sigma_tot": float(np.mean(err_tot[good])),
         "te_mean": float(np.mean(te_exp_t[good])),
         "n_samples": int(np.count_nonzero(good)),
+        # Samples that paired on both sides but carried a non-finite
+        # sigma_tot and were therefore not scored. Zero on a product whose
+        # error model is complete over the window; printed on the row when it
+        # is not, so a narrowed window is visible rather than inferred.
+        "n_dropped_nonfinite_sigma": n_dropped,
     }
 
 
@@ -741,30 +794,65 @@ def _score_samples(field, model_t, exp_t, sem_t, te_exp_t):
 # read over.
 FTAVG_DENSITY_KEY = "density_ftavg_cm3"
 
-# --- THE COMPARAND: which measured convention the stage (ii) rows score
-# against.
+# --- THE COMPARAND: which measured radial convention the stage (ii) rows
+# score against. THREE are carried, always all three.
 #
-# The FLUX-TUBE convention is the quantity a 1D cell represents, and is the
-# DEFAULT: the model carries one radial cell spanning the cathode frame
-# opening, so the measured side has to be integrated over that same disc
-# before the two are commensurate. Per field:
+# The COLUMN convention is the DEFAULT, and it is a ruling about what the
+# model can be held to: plasma measured outside the cathode flux tube got
+# there by CROSS-FIELD TRANSPORT, which a 1D model does not represent at all,
+# so holding the model's single cell to the part of the column that happens to
+# lie inside the tube would score it against a quantity its own physics cannot
+# produce. The comparand is therefore the WHOLE COLUMN's inventory, expressed
+# on the tube the model carries. Per field:
 #
-#   Te   `te_ftavg_ev`, the DENSITY-WEIGHTED area mean
-#        int 2 pi r n Te dr / int 2 pi r n dr -- which is what a cell carrying
-#        E_e = (3/2) n Te over that disc has -- with `te_ftavg_sem_ev`.
-#   n    `density_ftavg_cm3`, the PLAIN area mean.
-#   Isat n*sqrt(Te) formed from the two fields above (see the note on
-#        ISAT_FTAVG_LEVEL_KEY below for why the row is NOT the overlay's own
-#        `isat_ftavg_upstream_a`).
+#   Te   `te_column_ev`, the DENSITY-WEIGHTED mean over the column extent
+#        int n Te 2 pi r dr / int n 2 pi r dr -- a cell's E_e / ((3/2) n) --
+#        with `te_column_sem_ev`.
+#   n    `density_column_cm3` = int_0^edge n 2 pi r dr / (pi ftavg_radius^2):
+#        the column's inventory per unit length, expressed as the density a
+#        tube of the model's radius would carry if all of it were inside. It
+#        is NOT an average over the disc it integrates -- numerator to the
+#        column edge, denominator the TUBE's area -- which is exactly why it
+#        exceeds `density_ftavg_cm3` wherever the column is wider than the
+#        tube. Its SEM is `density_column_sem_cm3`, the product's OWN
+#        composition (weighted radial scatter (+) the Probe-A calibration
+#        entered as the relative uncertainty it is), NOT the core-band
+#        fractional total transferred whole the way the flux-tube density row
+#        below has to do it -- the two give different numbers.
+#   Isat n*sqrt(Te) formed from the two fields above.
+#
+# The FLUX-TUBE convention is the area average out to `ftavg_radius_cm`, the
+# cathode frame opening the model's single radial cell spans: `te_ftavg_ev`
+# (density-weighted) and `density_ftavg_cm3` (plain). It is the tube's own
+# content and is what the column comparand is measured against.
 #
 # The CORE-BAND convention is the historical one (`te_mean_ev`,
-# `density_mean_cm3`) and is retained in full: every row is scored under BOTH
-# and the table prints them side by side, so the continuity reads that were
-# taken under the core band stay readable. `--comparand core` swaps which of
-# the two is the PRIMARY (scored-first) column; neither is ever dropped.
+# `density_mean_cm3`), an unweighted line-cut mean over -10 <= x <= 10 cm with
+# no radial weighting; the continuity reads of record were taken under it.
+#
+# All three are scored on every row and printed side by side. `--comparand`
+# chooses which is PRIMARY (the scored-first columns); none is ever dropped,
+# and the three are NOT interchangeable -- a quoted number must say which.
+COMPARAND_COLUMN = "column"
 COMPARAND_FLUX_TUBE = "flux-tube"
 COMPARAND_CORE_BAND = "core-band"
-COMPARANDS = (COMPARAND_FLUX_TUBE, COMPARAND_CORE_BAND)
+COMPARANDS = (COMPARAND_COLUMN, COMPARAND_FLUX_TUBE, COMPARAND_CORE_BAND)
+
+#: Short tag per comparand, for the table's column group headers. The long
+#: names spell the convention out in the legend and on every summary line;
+#: these only have to fit a column.
+COMPARAND_TAGS = {
+    COMPARAND_COLUMN: "col",
+    COMPARAND_FLUX_TUBE: "ft",
+    COMPARAND_CORE_BAND: "core",
+}
+
+#: CLI spelling -> the convention name the rows carry.
+COMPARAND_CHOICES = {
+    "column": COMPARAND_COLUMN,
+    "ftavg": COMPARAND_FLUX_TUBE,
+    "core": COMPARAND_CORE_BAND,
+}
 
 #: Per comparand, per scored field: the overlay keys the measured side is
 #: built from, as ``(time_key, mean_key, sem_key)``. The Isat row names the
@@ -782,6 +870,15 @@ _COMPARAND_KEYS = {
         "n": ("density_time_ms", FTAVG_DENSITY_KEY, "density_total_sem_cm3"),
         "Isat": ("density_time_ms", FTAVG_DENSITY_KEY, "density_total_sem_cm3"),
     },
+    COMPARAND_COLUMN: {
+        "Te": ("te_time_ms", "te_column_ev", "te_column_sem_ev"),
+        "n": (
+            "density_time_ms", "density_column_cm3", "density_column_sem_cm3",
+        ),
+        "Isat": (
+            "density_time_ms", "density_column_cm3", "density_column_sem_cm3",
+        ),
+    },
 }
 
 #: The flux-tube T_e SEM the scorer reads. Quoted from the exporter's own
@@ -797,6 +894,91 @@ _COMPARAND_KEYS = {
 #: the annulus between the core band and `ftavg_radius_cm` is MISSING and the
 #: exported total understates the flux-tube uncertainty by however large it is.
 FTAVG_TE_SEM_KEY = "te_ftavg_sem_ev"
+
+#: The column T_e SEM the scorer reads. Quoted from the exporter's own
+#: `column_sem_definition`: it is `te_column_radial_sem_ev` and the fit-window
+#: convention term `te_window_sem_ev` added in quadrature -- THE SAME
+#: COMPOSITION RULE as the core-band `te_sem_ev` and the flux-tube
+#: `te_ftavg_sem_ev` -- so it enters sigma_tot exactly where those enter it,
+#: as the SEM leg of sqrt(SEM^2 + sigma_sys^2) with sigma_sys unchanged at
+#: TE_SYS_FRAC*|Te| + TE_SYS_FLOOR_EV. DISCLOSED, from the same exporter
+#: field: the radial term is a RADIAL-SCATTER term, not a shot or cycle SEM
+#: (the filled T_e product carries no per-cell uncertainty), and the window
+#: term is defined over the CORE BAND ALONE and is transferred onto the column
+#: row unchanged. The sweep-systematics contribution of everything between the
+#: core band and the column edge is therefore MISSING and the exported total
+#: understates the column uncertainty -- by MORE than it understates the
+#: flux-tube one, because the column extends further out.
+COLUMN_TE_SEM_KEY = "te_column_sem_ev"
+
+#: The column density SEM. Unlike the flux-tube density row, this one is
+#: EXPORTED under its own convention (`density_column_radial_sem_cm3` in
+#: quadrature with the Probe-A calibration entered as a relative uncertainty),
+#: so nothing is transferred across conventions here and `_ftavg_density_sem`
+#: is not used for it.
+COLUMN_DENSITY_SEM_KEY = "density_column_sem_cm3"
+
+#: The unweighted column T_e mean, exported beside the weighted one and NOT
+#: SCORED: its own prior shares run 0.42-0.84, which is why the density
+#: weighting is the comparand. Carried on the Te rows for reference.
+COLUMN_TE_PLAIN_KEY = "te_column_plain_ev"
+
+#: Per-(port, sample) column disclosure fields.
+#:
+#: `te_column_prior_weight` is the share of the row's own density-weighted
+#: quadrature carried by cells beyond that port's trust radius, and
+#: `te_column_pure_prior_weight` the share beyond the blend radius, where the
+#: filled product reports the prior alone. `column_prior_beyond_coverage` is
+#: True wherever the coverage falls short of the integration edge -- which,
+#: per the exporter, is EVERY PORT OF EVERY EXPERIMENT SET, so the boolean
+#: carries no information about this product and the WEIGHT is the statement.
+#: `column_edge_cm` / `te_column_edge_cm` are where the integral stops (the
+#: scan limit in the centroid-folded frame, NOT a measured column boundary),
+#: and `column_coverage_cm` is the outermost measured scan |x|, NaN where the
+#: row is prior-derived at that sample.
+COLUMN_PRIOR_WEIGHT_KEY = "te_column_prior_weight"
+COLUMN_PURE_PRIOR_WEIGHT_KEY = "te_column_pure_prior_weight"
+COLUMN_PRIOR_KEY = "column_prior_beyond_coverage"
+COLUMN_COVERAGE_KEY = "column_coverage_cm"
+COLUMN_EDGE_KEY = "column_edge_cm"
+COLUMN_TE_EDGE_KEY = "te_column_edge_cm"
+
+#: The per-sample column/flux-tube inventory ratio and the column integral's
+#: own numerator (cm^-1, for an interferometer cross-check). The exporter is
+#: explicit that THE LEVEL IS THE RATIO OF THE PLATEAU MEANS, not the mean of
+#: the per-sample ratio field -- at a port whose denominator sits on the noise
+#: floor the two disagree in SIGN of the implied share outside the tube -- so
+#: the rows carry both, the ratio of the two legs' own window means as the
+#: level and the per-sample field's window mean explicitly labelled as not one.
+COLUMN_OVER_FTAVG_KEY = "column_over_ftavg_ratio"
+COLUMN_INVENTORY_KEY = "column_inventory_per_cm"
+
+#: REFUSAL TO BIN, second clause: MAJORITY PRIOR. The column integral runs
+#: past the trust radius at every port, so `column_prior_beyond_coverage` is
+#: True everywhere and the adjective decides nothing; the SHARE does. Where
+#: more than half of a row's density-weighted quadrature is carried by cells
+#: beyond that port's trust radius, the row is substantially a statement about
+#: the repo's scrape-off-layer prior rather than a measurement of that port's
+#: column T_e. Such a row is PRINTED and SCORED -- it is still the honest
+#: reading of what the product says -- and is declared INELIGIBLE FOR A BIN
+#: VERDICT. On the products of record that is every ES3 and ES4 port and every
+#: set's p50.
+COLUMN_PRIOR_MAJORITY_WEIGHT = 0.5
+
+#: The retired background-subtraction rows a schema-33+/35+ product carries
+#: for traceability. NO COMPARAND READS THEM: the edge-median subtraction was
+#: an error (the Isat baseline is already taken at the end of the shot, so a
+#: line scan has no background left to remove and the removed edge cells were
+#: plasma). Their presence is DISCLOSED in the table legend so a reader can
+#: see that the product carries them and that the scored rows do not use them.
+SUBTRACTED_LEGACY_DEFINITION_KEY = "subtracted_legacy_definition"
+SUBTRACTED_LEGACY_KEYS = (
+    "density_ftavg_subtracted_cm3",
+    "density_column_subtracted_cm3",
+    "isat_ftavg_upstream_subtracted_a",
+    "isat_ftavg_subtracted_a",
+    "isat_ftavg_geomean_subtracted_a_per_cm2",
+)
 
 #: The measured flux-tube Isat LEVEL, in amperes, printed beside the Isat rows
 #: and scored by nothing.
@@ -842,6 +1024,29 @@ FTAVG_SEMIQUANT_WEIGHT_KEY = "te_ftavg_semi_quantitative_weight"
 #: instance. The mark does not remove the row from the field's descriptive
 #: five-port summary, which is a statistic over the ports and not a bin.
 BIN_REFUSAL_SEMIQUANT_WEIGHT = 1.0
+
+#: The two clauses a row can be refused a bin verdict under, as short names.
+#: The table lists the refused ROWS with their own numbers and explains each
+#: CLASS once: a per-row paragraph repeated for fifteen rows (which ES3 and
+#: ES4 produce) buries the one thing a reader needs, which is which rows.
+BIN_REFUSAL_CLASS_SEMIQUANT = "semi-quantitative with no coverage"
+BIN_REFUSAL_CLASS_MAJORITY_PRIOR = "majority prior"
+BIN_REFUSAL_CLASS_TEXT = {
+    BIN_REFUSAL_CLASS_SEMIQUANT: (
+        f"a scored sample carries {FTAVG_SEMIQUANT_WEIGHT_KEY} == "
+        f"{BIN_REFUSAL_SEMIQUANT_WEIGHT:g} with {FTAVG_COVERAGE_KEY} NaN -- "
+        "every weight-bearing cell behind it is semi-quantitative and the "
+        "disc outside the trust radius is prior"
+    ),
+    BIN_REFUSAL_CLASS_MAJORITY_PRIOR: (
+        f"{COLUMN_PRIOR_WEIGHT_KEY} exceeds "
+        f"{COLUMN_PRIOR_MAJORITY_WEIGHT:g} -- more than half the row's "
+        "density-weighted quadrature is carried by cells beyond this port's "
+        "trust radius, so the row is substantially a statement about the "
+        "repo's scrape-off-layer prior and not a measurement of this port's "
+        "column T_e"
+    ),
+}
 
 
 def _comparand_arrays(overlay, comparand, field):
@@ -921,13 +1126,61 @@ def _prior_coverage_masks(overlay, n_ports, n_samples):
     return prior, refuse
 
 
+def _column_disclosure(overlay, n_ports, n_samples):
+    """Return the column convention's per-(port, sample) disclosure arrays.
+
+    ``(prior_weight, pure_prior_weight, prior, coverage_cm, edge_cm)``, each
+    shaped ``(n_ports, n_samples)`` on the column T_e clock. A vintage without
+    the fields yields all-NaN weights, an all-False prior flag and all-NaN
+    coverage/edge, so an older product renders with the disclosure ABSENT
+    rather than with a fabricated share of zero -- which would read as a
+    fully measured row.
+    """
+
+    def _field(key, dtype=float, fill=np.nan):
+        if key not in overlay:
+            return np.full((n_ports, n_samples), fill, dtype=dtype)
+        arr = np.asarray(overlay[key])
+        if arr.shape != (n_ports, n_samples):
+            raise ValueError(
+                f"overlay {key} has shape {arr.shape}, expected "
+                f"{(n_ports, n_samples)} (one entry per port per column Te "
+                "sample); a mismatched shape would attribute a port's "
+                "coverage to the wrong row"
+            )
+        return arr.astype(dtype)
+
+    return (
+        _field(COLUMN_PRIOR_WEIGHT_KEY),
+        _field(COLUMN_PURE_PRIOR_WEIGHT_KEY),
+        _field(COLUMN_PRIOR_KEY, dtype=bool, fill=False),
+        _field(COLUMN_COVERAGE_KEY),
+        _field(COLUMN_TE_EDGE_KEY),
+    )
+
+
+def _window_mean(values, mask):
+    """Return the mean of ``values[mask]`` ignoring NaN, or ``None``.
+
+    ``None`` where the window is empty or every admitted sample is NaN, so a
+    field that has nothing to say says nothing rather than emitting a bare NaN
+    into the table and the JSON payload.
+    """
+    if not np.any(mask):
+        return None
+    sel = np.asarray(values, dtype=float)[mask]
+    finite = np.isfinite(sel)
+    if not np.any(finite):
+        return None
+    return float(np.mean(sel[finite]))
+
+
 def compare(
     result,
     geometry,
     overlay,
     plateau_ms=None,
-    comparand=COMPARAND_FLUX_TUBE,
-    density_ftavg=False,
+    comparand=COMPARAND_COLUMN,
 ):
     """Return per-port deviation of model Te and density from measurement.
 
@@ -940,28 +1193,28 @@ def compare(
     under the row's ``"plateau"`` key. Left ``None`` no row carries the key
     and nothing else moves.
 
-    ``comparand`` names which measured convention is PRIMARY -- the one whose
-    numbers occupy the row's own ``model``/``exp``/``ratio``/``sigma`` fields.
-    The OTHER convention is scored over the same domain and carried under the
-    row's ``"alt"`` key, with its own ``"plateau"`` block when one was asked
-    for, so both conventions are always present and the row says which is
-    which (``comparand`` / ``alt_comparand``). The default is
-    ``COMPARAND_FLUX_TUBE``: the flux-tube average is what a 1D cell spanning
-    the frame opening represents.
+    ``comparand`` names which of the THREE measured radial conventions is
+    PRIMARY -- the one whose numbers occupy the row's own
+    ``model``/``exp``/``ratio``/``sigma`` fields. The other two are scored
+    over the same domain and carried under the row's ``"legs"`` mapping, each
+    with its own ``"plateau"`` block when one was asked for, so all three are
+    always present and every one of them is named. The default is
+    ``COMPARAND_COLUMN``: plasma outside the model's tube got there by
+    cross-field transport the model does not represent, so the comparand of
+    record is the whole column's inventory over the tube's area.
 
-    Each flux-tube T_e row additionally carries its coverage disclosure --
-    ``prior_derived`` (part of the integrated disc is the repo's SOL prior
-    rather than a measurement of that port) and ``bin_refused`` (see
-    ``BIN_REFUSAL_SEMIQUANT_WEIGHT``).
+    Every row carries the COLUMN disclosure -- ``column_prior_weight`` (the
+    share of the row's density-weighted quadrature carried beyond the port's
+    trust radius), ``prior_majority`` where that share exceeds
+    ``COLUMN_PRIOR_MAJORITY_WEIGHT``, and the column edge and coverage -- plus
+    the FLUX-TUBE coverage disclosure it carried before (``prior_derived``,
+    and the semi-quantitative-weight clause of ``bin_refused``). A row is
+    ``bin_refused`` under EITHER clause: it is printed and scored, and is
+    ineligible for a verdict.
 
-    ``density_ftavg`` is RETAINED AND INERT: the flux-tube density is now the
-    default comparand for the ``n`` rows, so the flag it used to need is no
-    longer a request for anything. Passing it prints a note and changes no
-    number.
-
-    Raises ``ValueError`` on an overlay vintage that carries no flux-tube
-    field rather than falling back to the core-band comparand under a
-    flux-tube label.
+    Raises ``ValueError`` on an overlay vintage that carries none of a named
+    convention's fields, rather than falling back to another convention's
+    field under this one's label.
     """
     if comparand not in COMPARANDS:
         raise ValueError(
@@ -973,11 +1226,7 @@ def compare(
     t_model_ms = (np.asarray(result.time, dtype=float) - origin) * 1.0e3
     z_model = np.asarray(result.z_cm, dtype=float)
 
-    alt_comparand = (
-        COMPARAND_CORE_BAND
-        if comparand == COMPARAND_FLUX_TUBE
-        else COMPARAND_FLUX_TUBE
-    )
+    alt_comparands = tuple(name for name in COMPARANDS if name != comparand)
 
     # The measured Te each convention propagates. It feeds BOTH the density
     # rows' sigma_sys (which needs Te) and the I_sat-space synthesis, and it
@@ -1011,6 +1260,19 @@ def compare(
         overlay, len(ports), te_ft_t.size
     )
 
+    # The COLUMN disclosure, on the column T_e clock. It describes the column
+    # product and rides every row whichever convention is primary, for the
+    # same reason the flux-tube coverage does: a reader comparing the legs
+    # side by side needs to know what the column leg is made of.
+    te_col_t, _ = te_by_comparand[COMPARAND_COLUMN]
+    (
+        col_wprior_2d,
+        col_wpure_2d,
+        col_prior_2d,
+        col_cov_2d,
+        col_edge_2d,
+    ) = _column_disclosure(overlay, len(ports), te_col_t.size)
+
     # The measured flux-tube Isat LEVEL in amperes: report-only, scored by
     # nothing. Absent on older vintages, where the column simply does not
     # print.
@@ -1028,6 +1290,26 @@ def compare(
             np.asarray(overlay[ISAT_FTAVG_LEVEL_KEY], dtype=float),
             np.asarray(overlay[ISAT_FTAVG_LEVEL_SEM_KEY], dtype=float),
         )
+
+    # Report-only column products, each presence-gated and absent from every
+    # score: the unweighted column T_e (on the column T_e clock), the column
+    # integral's own numerator and the per-sample column/flux-tube ratio (both
+    # on the density clock).
+    col_plain_te = (
+        np.asarray(overlay[COLUMN_TE_PLAIN_KEY], dtype=float)
+        if COLUMN_TE_PLAIN_KEY in overlay
+        else None
+    )
+    col_inventory = (
+        np.asarray(overlay[COLUMN_INVENTORY_KEY], dtype=float)
+        if COLUMN_INVENTORY_KEY in overlay
+        else None
+    )
+    col_over_ft = (
+        np.asarray(overlay[COLUMN_OVER_FTAVG_KEY], dtype=float)
+        if COLUMN_OVER_FTAVG_KEY in overlay
+        else None
+    )
 
     field_units = {"Te": "eV", "n": "cm^-3", "Isat": "a.u."}
     field_specs = []
@@ -1136,7 +1418,15 @@ def compare(
             scored, scored_pl = _leg(comparand)
             if scored is None:
                 continue
-            alt_scored, alt_scored_pl = _leg(alt_comparand)
+            alt_legs = {}
+            for name in alt_comparands:
+                alt_scored, alt_scored_pl = _leg(name)
+                if alt_scored is None:
+                    alt_legs[name] = None
+                elif plateau_ms is None:
+                    alt_legs[name] = alt_scored
+                else:
+                    alt_legs[name] = dict(alt_scored, plateau=alt_scored_pl)
             ratio = scored["ratio"]
             rel = scored["rms_rel"]
             sigma = scored["sigma"]
@@ -1185,15 +1475,62 @@ def compare(
             n_ft_samples = int(np.count_nonzero(ft_window))
             prior_n = int(np.count_nonzero(prior_2d[p, ft_window]))
             refuse_n = int(np.count_nonzero(refuse_2d[p, ft_window]))
+            # COLUMN disclosure, over the column T_e clock samples the model's
+            # coverage admits. The column integral runs past every port's
+            # trust radius, so its prior FLAG is True everywhere and says
+            # nothing; the WEIGHT is the statement, and a row whose weight is
+            # majority prior is substantially a statement about the repo's
+            # scrape-off-layer prior rather than a measurement of that port.
+            # The n and Isat rows carry it for the same reason they carry the
+            # flux-tube coverage: they propagate the column T_e (sigma_sys for
+            # n, the sqrt(Te) factor for Isat).
+            col_window = (te_col_t >= t_model_ms.min()) & (
+                te_col_t <= t_model_ms.max()
+            )
+            n_col_samples = int(np.count_nonzero(col_window))
+            col_prior_n = int(np.count_nonzero(col_prior_2d[p, col_window]))
+            col_wprior = _window_mean(col_wprior_2d[p], col_window)
+            col_wpure = _window_mean(col_wpure_2d[p], col_window)
+            prior_majority = bool(
+                col_wprior is not None
+                and col_wprior > COLUMN_PRIOR_MAJORITY_WEIGHT
+            )
+            reasons = []
+            classes = []
+            if refuse_n:
+                classes.append(BIN_REFUSAL_CLASS_SEMIQUANT)
+                reasons.append(
+                    f"{refuse_n}/{n_ft_samples} scored sample(s) carry "
+                    f"{FTAVG_SEMIQUANT_WEIGHT_KEY} == "
+                    f"{BIN_REFUSAL_SEMIQUANT_WEIGHT:g} with "
+                    f"{FTAVG_COVERAGE_KEY} NaN -- every weight-bearing cell "
+                    "behind them is semi-quantitative and the disc outside "
+                    "the trust radius is prior"
+                )
+            if prior_majority:
+                classes.append(BIN_REFUSAL_CLASS_MAJORITY_PRIOR)
+                reasons.append(
+                    f"{COLUMN_PRIOR_WEIGHT_KEY} = {col_wprior:.3f} over the "
+                    f"{n_col_samples} scored sample(s), above "
+                    f"{COLUMN_PRIOR_MAJORITY_WEIGHT:g}: MAJORITY PRIOR -- "
+                    "more than half the row's density-weighted quadrature is "
+                    "carried by cells beyond this port's trust radius, so the "
+                    "row is substantially a statement about the repo's "
+                    "scrape-off-layer prior and not a measurement of this "
+                    "port's column T_e"
+                )
             row = {
                 "field": field,
                 "unit": unit,
                 "port": str(port),
                 "z": float(z),
                 "comparand": comparand,
-                "alt_comparand": alt_comparand,
+                "alt_comparands": list(alt_comparands),
                 "measured_field": _COMPARAND_KEYS[comparand][field][1],
-                "alt_measured_field": _COMPARAND_KEYS[alt_comparand][field][1],
+                "alt_measured_fields": {
+                    name: _COMPARAND_KEYS[name][field][1]
+                    for name in alt_comparands
+                },
                 "model": scored["model"],
                 "exp": scored["exp"],
                 "ratio": ratio,
@@ -1208,27 +1545,76 @@ def compare(
                 "spread_gated": spread_frac is not None,
                 "prior_derived": bool(prior_n),
                 "prior_derived_frac": (
-                    prior_n / n_ft_samples if n_ft_samples else float("nan")
+                    prior_n / n_ft_samples if n_ft_samples else None
                 ),
-                "bin_refused": bool(refuse_n),
+                "column_prior_derived": bool(col_prior_n),
+                "column_prior_derived_frac": (
+                    col_prior_n / n_col_samples if n_col_samples else None
+                ),
+                "column_prior_weight": col_wprior,
+                "column_pure_prior_weight": col_wpure,
+                "prior_majority": prior_majority,
+                "column_edge_cm": _window_mean(col_edge_2d[p], col_window),
+                "column_coverage_cm": _window_mean(col_cov_2d[p], col_window),
+                "bin_refused": bool(refuse_n or prior_majority),
+                "bin_refused_classes": classes,
                 "bin_refused_frac": (
-                    refuse_n / n_ft_samples if n_ft_samples else float("nan")
+                    refuse_n / n_ft_samples if n_ft_samples else None
                 ),
                 "bin_refused_reason": (
                     (
-                        f"{refuse_n}/{n_ft_samples} scored sample(s) carry "
-                        f"{FTAVG_SEMIQUANT_WEIGHT_KEY} == "
-                        f"{BIN_REFUSAL_SEMIQUANT_WEIGHT:g} with "
-                        f"{FTAVG_COVERAGE_KEY} NaN -- every weight-bearing "
-                        "cell behind them is semi-quantitative and the disc "
-                        "outside the trust radius is prior, so this row is "
-                        "printed but is INELIGIBLE FOR A BIN VERDICT"
+                        "; ".join(reasons)
+                        + " -- this row is printed and scored but is "
+                        "INELIGIBLE FOR A BIN VERDICT"
                     )
-                    if refuse_n
+                    if reasons
                     else None
                 ),
-                "alt": alt_scored,
+                "legs": alt_legs,
             }
+            if field == "Te" and col_plain_te is not None:
+                # REPORT-ONLY: the unweighted column T_e mean. Not scored --
+                # its own prior shares are larger again, which is why the
+                # density-weighted row is the comparand.
+                row[COLUMN_TE_PLAIN_KEY] = _window_mean(
+                    col_plain_te[p], col_window
+                )
+            if field == "n":
+                # REPORT-ONLY column products on the density clock. The window
+                # is the primary leg's own scored domain so the numbers belong
+                # to the same samples the row scored.
+                n_t, _, _, n_win, n_pl_win = legs[COMPARAND_COLUMN]
+                use = n_pl_win if n_pl_win is not None else n_win
+                if col_inventory is not None:
+                    row[COLUMN_INVENTORY_KEY] = _window_mean(
+                        col_inventory[p], use
+                    )
+                if col_over_ft is not None:
+                    # NOT A LEVEL, and labelled so: the exporter is explicit
+                    # that the level is the ratio of the window MEANS, which
+                    # the two legs already carry, and that where the
+                    # denominator sits on the noise floor the two disagree.
+                    row["column_over_ftavg_per_sample_mean"] = _window_mean(
+                        col_over_ft[p], use
+                    )
+                ft_leg = (
+                    alt_legs.get(COMPARAND_FLUX_TUBE)
+                    if comparand != COMPARAND_FLUX_TUBE
+                    else scored
+                )
+                col_leg = (
+                    scored
+                    if comparand == COMPARAND_COLUMN
+                    else alt_legs.get(COMPARAND_COLUMN)
+                )
+                if (
+                    ft_leg is not None
+                    and col_leg is not None
+                    and ft_leg["exp"] != 0.0
+                ):
+                    row["column_over_ftavg_level"] = (
+                        col_leg["exp"] / ft_leg["exp"]
+                    )
             if field == "Isat" and isat_level is not None:
                 # Report-only: the overlay's own flux-tube Isat comparand, in
                 # AMPERES. Not scored -- see ISAT_FTAVG_LEVEL_KEY.
@@ -1240,17 +1626,18 @@ def compare(
                         & (lt >= float(plateau_ms[0]))
                         & (lt <= float(plateau_ms[1]))
                     )
-                if np.any(lwin):
-                    row["isat_ftavg_upstream_a"] = float(
-                        np.nanmean(lmean[p, lwin])
-                    )
-                    row["isat_ftavg_upstream_sem_a"] = float(
-                        np.nanmean(lsem[p, lwin])
+                level = _window_mean(lmean[p], lwin)
+                if level is not None:
+                    # Omitted rather than emitted as NaN where the window
+                    # admits no finite sample (ES4 p50 is the named instance):
+                    # the column simply does not print, which is what an
+                    # absent measured level means.
+                    row["isat_ftavg_upstream_a"] = level
+                    row["isat_ftavg_upstream_sem_a"] = _window_mean(
+                        lsem[p], lwin
                     )
             if plateau_ms is not None:
                 row["plateau"] = scored_pl
-                if alt_scored is not None:
-                    row["alt"] = dict(alt_scored, plateau=alt_scored_pl)
             rows.append(row)
     return rows
 
@@ -3358,14 +3745,84 @@ def _report_decay_interferometer(rows, skip_reason, window, clock_offset=None):
     print("    ('=' marks the chord that coincides with its probe port.)")
 
 
-def _report(label, rows, es=1, plateau_ms=None):
-    """Print the stage (ii) table, under BOTH measured conventions.
+def _row_leg(row, name):
+    """Return one row's scored block under comparand ``name``, or ``None``.
 
-    Every row carries a PRIMARY comparand (``row["comparand"]``, the
-    flux-tube average by default) and the other convention under
-    ``row["alt"]``. The table prints them side by side and names both in the
-    legend and on the summary lines, so a number can never be read without
-    its convention.
+    The PRIMARY convention's block is the row itself -- its ``model``/``exp``/
+    ``ratio``/``sigma`` fields ARE that leg -- and every other convention
+    rides ``row["legs"]``. Reading them through one accessor is what keeps a
+    summary from pulling one convention's number in under another's name.
+    """
+    if row.get("comparand") == name:
+        return row
+    return (row.get("legs") or {}).get(name)
+
+
+def _row_marks(row):
+    """Return the mark string for one printed row.
+
+    The marks are a SET, not a sequence: two independent reasons to doubt a
+    row still print one '~'. Which reason applies is readable from the
+    'prior w' column and from the REFUSED TO BIN block, and the legend names
+    both sources; a doubled tilde would only look like a typo.
+    """
+    marks = []
+
+    def _add(ch):
+        if ch not in marks:
+            marks.append(ch)
+
+    if row.get("spread_gated"):
+        if row.get("semiquant_spread"):
+            _add("~")
+        if row.get("semiquant_te"):
+            _add("*")
+        if row.get("spread_undetermined"):
+            _add("?")
+    elif row.get("semiquant"):
+        _add("~")
+    if row.get("prior_majority"):
+        _add("~")
+    if row.get("prior_derived"):
+        _add(">")
+    if row.get("bin_refused"):
+        _add("!")
+    return "".join(marks)
+
+
+def _dropped_notes(row):
+    """Return the row's 'N samples dropped: non-finite sigma' lines.
+
+    One per (convention, domain) that dropped anything. A row that dropped
+    nothing returns an empty list and prints exactly as it did before the
+    acceptance mask carried the finiteness requirement.
+    """
+    notes = []
+    for name in (row.get("comparand"), *(row.get("alt_comparands") or ())):
+        leg = _row_leg(row, name)
+        if leg is None:
+            continue
+        for block, domain in ((leg, "default domain"),
+                              (leg.get("plateau"), "plateau")):
+            if not block:
+                continue
+            n = int(block.get("n_dropped_nonfinite_sigma", 0) or 0)
+            if n:
+                notes.append(
+                    f"      {n} samples dropped: non-finite sigma "
+                    f"({name}, {domain})"
+                )
+    return notes
+
+
+def _report(label, rows, es=1, plateau_ms=None):
+    """Print the stage (ii) table, under ALL THREE measured conventions.
+
+    Every row carries a PRIMARY comparand (``row["comparand"]``, the column
+    convention by default) and the other two under ``row["legs"]``. The table
+    prints all three side by side and names every one of them in the legend
+    and on the summary lines, so a number can never be read without its
+    convention.
 
     ``plateau_ms`` appends the plateau-only scoring columns and their
     per-field summary, reading the ``"plateau"`` blocks ``compare`` attaches
@@ -3373,37 +3830,65 @@ def _report(label, rows, es=1, plateau_ms=None):
     """
     print(f"\n--- stage (ii): bulk Te / density at the ES{es} ports ---")
     comparand = next(
-        (r["comparand"] for r in rows if "comparand" in r), COMPARAND_FLUX_TUBE
+        (r["comparand"] for r in rows if "comparand" in r), COMPARAND_COLUMN
     )
-    alt_comparand = next(
-        (r["alt_comparand"] for r in rows if "alt_comparand" in r),
-        COMPARAND_CORE_BAND,
+    alt_comparands = next(
+        (tuple(r["alt_comparands"]) for r in rows if "alt_comparands" in r),
+        tuple(n for n in COMPARANDS if n != comparand),
     )
+    ordered = (comparand, *alt_comparands)
     print(
         f"  COMPARAND: the scored columns are the {comparand.upper()} "
-        f"convention; the 'alt' columns are {alt_comparand}."
+        "convention; the other two print beside them"
     )
     print(
-        f"   flux-tube = the area average out to ftavg_radius_cm, the frame "
-        f"opening the 1D model's single"
+        "   under their own tags ("
+        + ", ".join(f"{COMPARAND_TAGS[n]} = {n}" for n in alt_comparands)
+        + "). All three are always scored."
+    )
+    print(
+        "   column = the WHOLE COLUMN's plasma on the model's tube: n the "
+        "inventory int n 2 pi r dr out to the"
+    )
+    print(
+        "   scan edge divided by the TUBE's area (density_column_cm3, so it "
+        "exceeds the flux-tube mean wherever"
+    )
+    print(
+        "   the column is wider than the tube), Te the DENSITY-WEIGHTED mean "
+        "over the same extent (te_column_ev)."
+    )
+    print(
+        "   Plasma outside the tube got there by cross-field transport the 1D "
+        "model does not represent, which is"
+    )
+    print("   why the column's inventory is the comparand and not the tube's.")
+    print(
+        "   flux-tube = the area average out to ftavg_radius_cm, the frame "
+        "opening the 1D model's single"
     )
     print(
         "   radial cell also spans -- Te the DENSITY-WEIGHTED area mean "
-        "(te_ftavg_ev), which is what a cell"
+        "(te_ftavg_ev), n the plain area mean"
     )
-    print(
-        "   carrying E_e = (3/2) n Te over that disc has; n the plain area "
-        "mean (density_ftavg_cm3)."
-    )
+    print("   (density_ftavg_cm3).")
     print(
         "   core-band = the legacy unweighted line-cut mean over "
         "-10 <= x <= 10 cm (te_mean_ev, density_mean_cm3)."
     )
     print(
-        "   The two are NOT interchangeable; '--comparand core' swaps which "
-        "one is scored first, and neither"
+        "   The three are NOT interchangeable; '--comparand "
+        "{column,ftavg,core}' swaps which one is scored"
     )
-    print("   is ever dropped.")
+    print("   first, and none is ever dropped.")
+    print(
+        "   Every comparand is UNSUBTRACTED: the retired edge-median "
+        "background subtraction removed plasma, not"
+    )
+    print(
+        "   background (the Isat baseline is taken at the end of the shot), "
+        "and no scored row reads a *_subtracted* field."
+    )
     if any(r["field"] == "Isat" for r in rows):
         print(
             "   The Isat rows compare n*sqrt(Te) on BOTH sides under the "
@@ -3429,6 +3914,26 @@ def _report(label, rows, es=1, plateau_ms=None):
     else:
         print("  (sigma = |dev|/sigma_tot, SEM (+) sweep systematics; '~' marks")
         print("   semi-quantitative rows where measured Te < 1 eV)")
+    print(
+        f"   ('prior w' is {COLUMN_PRIOR_WEIGHT_KEY}: the share of the row's "
+        "own density-weighted quadrature"
+    )
+    print(
+        "    carried by cells beyond this port's trust radius, i.e. how much "
+        "of the column Te is the repo's"
+    )
+    print(
+        "    scrape-off-layer prior rather than a measurement of this port. "
+        f"A share above {COLUMN_PRIOR_MAJORITY_WEIGHT:g} is MAJORITY"
+    )
+    print(
+        "    PRIOR: the row also takes '~' and is INELIGIBLE FOR A BIN "
+        "VERDICT.  The column integral runs past"
+    )
+    print(
+        "    every port's trust radius, so the prior FLAG is true everywhere "
+        "and decides nothing -- the share does.)"
+    )
     if any(r.get("prior_derived") or r.get("bin_refused") for r in rows):
         print(
             "   ('>' marks a PRIOR-DERIVED row: part of the disc its "
@@ -3439,18 +3944,21 @@ def _report(label, rows, es=1, plateau_ms=None):
             "that port. '!' marks a row that is"
         )
         print(
-            "    INELIGIBLE FOR A BIN VERDICT -- it carries a sample whose "
-            "semi-quantitative weight is 1.0 with no"
+            "    INELIGIBLE FOR A BIN VERDICT -- it is majority prior, or it "
+            "carries a sample whose semi-quantitative"
         )
         print(
-            "    coverage at all. Both marks describe the flux-tube Te "
-            "product; the n and Isat rows inherit them"
+            "    weight is 1.0 with no coverage at all. Both marks describe "
+            "the measured Te product; the n and Isat"
         )
         print(
-            "    through the Te they propagate. A marked row is still scored "
-            "and still enters the descriptive"
+            "    rows inherit them through the Te they propagate. A marked "
+            "row is still scored and still enters the"
         )
-        print("    five-port summary, which is a statistic and not a bin.)")
+        print(
+            "    descriptive five-port summary, which is a statistic and not "
+            "a bin.)"
+        )
     if any("isat_ftavg_upstream_a" in r for r in rows):
         print(
             f"   (the 'Isat[A]' column is the overlay's {ISAT_FTAVG_LEVEL_KEY}"
@@ -3477,28 +3985,21 @@ def _report(label, rows, es=1, plateau_ms=None):
     )
     if plateau_ms is not None:
         header += f" {'ratio@pl':>9} {'|dev|/sig@pl':>13} {'n@pl':>5}"
-    header += f" | {'alt measured':>12} {'alt ratio':>9} {'alt |dev|/sig':>13}"
-    if plateau_ms is not None:
-        header += f" {'alt ratio@pl':>12}"
+    header += f" {'prior w':>8}"
+    for name in alt_comparands:
+        tag = COMPARAND_TAGS[name]
+        header += (
+            f" | {tag + ' measured':>13} {tag + ' ratio':>10} "
+            f"{tag + ' |dev|/sig':>14}"
+        )
+        if plateau_ms is not None:
+            header += f" {tag + ' ratio@pl':>13}"
     if show_isat_level:
         header += f" | {'Isat [A]':>10} {'+/- [A]':>9}"
     print(header)
     print("-" * len(header))
     for r in rows:
-        if r.get("spread_gated"):
-            marks = ""
-            if r.get("semiquant_spread"):
-                marks += "~"
-            if r.get("semiquant_te"):
-                marks += "*"
-            if r.get("spread_undetermined"):
-                marks += "?"
-        else:
-            marks = "~" if r.get("semiquant") else ""
-        if r.get("prior_derived"):
-            marks += ">"
-        if r.get("bin_refused"):
-            marks += "!"
+        marks = _row_marks(r)
         # Min-width 1 keeps the un-marked and single-marked rows rendering
         # exactly as they did before the spread criterion existed.
         line = (
@@ -3518,21 +4019,24 @@ def _report(label, rows, es=1, plateau_ms=None):
                     f" {pl['ratio']:9.2f} {pl['sigma']:13.1f} "
                     f"{pl['n_samples']:5d}"
                 )
-        alt = r.get("alt")
-        if alt is None:
-            line += f" | {'--':>12} {'--':>9} {'--':>13}"
-            if plateau_ms is not None:
-                line += f" {'--':>12}"
-        else:
+        wprior = r.get("column_prior_weight")
+        line += f" {'--':>8}" if wprior is None else f" {wprior:8.3f}"
+        for name in alt_comparands:
+            alt = _row_leg(r, name)
+            if alt is None:
+                line += f" | {'--':>13} {'--':>10} {'--':>14}"
+                if plateau_ms is not None:
+                    line += f" {'--':>13}"
+                continue
             line += (
-                f" | {alt['exp']:12.4g} {alt['ratio']:9.2f} "
-                f"{alt['sigma']:13.1f}"
+                f" | {alt['exp']:13.4g} {alt['ratio']:10.2f} "
+                f"{alt['sigma']:14.1f}"
             )
             if plateau_ms is not None:
                 alt_pl = alt.get("plateau")
                 line += (
-                    f" {'--':>12}" if alt_pl is None
-                    else f" {alt_pl['ratio']:12.2f}"
+                    f" {'--':>13}" if alt_pl is None
+                    else f" {alt_pl['ratio']:13.2f}"
                 )
         if show_isat_level:
             if "isat_ftavg_upstream_a" in r:
@@ -3543,6 +4047,8 @@ def _report(label, rows, es=1, plateau_ms=None):
             else:
                 line += f" | {'--':>10} {'--':>9}"
         print(line)
+        for note in _dropped_notes(r):
+            print(note)
     # Ordered over the fields actually present, so a requested extra row set
     # gets its summary and the default three render in their own order.
     summary_fields = []
@@ -3552,23 +4058,11 @@ def _report(label, rows, es=1, plateau_ms=None):
     for field in summary_fields:
         sub = [r for r in rows if r["field"] == field]
         if sub:
-            # Both conventions, named. `_alt` reads the other convention's
-            # block, which every row carries; a row without one is simply
-            # absent from that mean rather than pulling the other convention's
-            # number in under its name.
-            for name, get, get_pl in (
-                (
-                    comparand,
-                    lambda r: r,
-                    lambda r: r.get("plateau"),
-                ),
-                (
-                    alt_comparand,
-                    lambda r: r.get("alt"),
-                    lambda r: (r.get("alt") or {}).get("plateau"),
-                ),
-            ):
-                vals = [get(r) for r in sub]
+            # All three conventions, named. A row missing one convention's
+            # block is simply absent from that mean rather than pulling
+            # another convention's number in under its name.
+            for name in ordered:
+                vals = [_row_leg(r, name) for r in sub]
                 vals = [v for v in vals if v is not None]
                 if not vals:
                     continue
@@ -3583,7 +4077,7 @@ def _report(label, rows, es=1, plateau_ms=None):
                 )
                 if plateau_ms is None:
                     continue
-                pls = [get_pl(r) for r in sub]
+                pls = [v.get("plateau") for v in vals]
                 pls = [q for q in pls if q is not None]
                 if pls:
                     print(
@@ -3621,11 +4115,28 @@ def _report(label, rows, es=1, plateau_ms=None):
     if refused:
         print(
             "  REFUSED TO BIN (printed and scored, ineligible for a verdict): "
-            + ", ".join(
-                f"{r['field']} p{r['port']}" for r in refused
-            )
+            + ", ".join(f"{r['field']} p{r['port']}" for r in refused)
         )
-        print(f"   reason: {refused[0]['bin_refused_reason']}")
+        # The rows carry the numbers; the CLASSES carry the explanation, once
+        # each. The per-row sentence stays in --json for a consumer that wants
+        # it without re-deriving anything.
+        for r in refused:
+            tags = r.get("bin_refused_classes") or []
+            if not tags:
+                continue
+            w = r.get("column_prior_weight")
+            detail = "" if w is None else f", {COLUMN_PRIOR_WEIGHT_KEY}={w:.3f}"
+            frac = r.get("bin_refused_frac")
+            if frac:
+                detail += f", semi-quantitative share {frac:.2f}"
+            print(f"    {r['field']} p{r['port']}: {'; '.join(tags)}{detail}")
+        seen = []
+        for r in refused:
+            for tag in r.get("bin_refused_classes") or []:
+                if tag not in seen:
+                    seen.append(tag)
+        for tag in seen:
+            print(f"   '{tag}': {BIN_REFUSAL_CLASS_TEXT[tag]}.")
 
 
 def _report_plateau_geomean_ztrend(rows, skip_reason, window):
@@ -3855,7 +4366,7 @@ def json_payload(
     mach_rows=(),
     mach_skip=None,
     mach_window=None,
-    comparand=COMPARAND_FLUX_TUBE,
+    comparand=COMPARAND_COLUMN,
 ):
     """Return the machine-readable form of one scoring pass.
 
@@ -3878,7 +4389,12 @@ def json_payload(
 
     NaN is written as the bare ``NaN`` token (Python's ``json`` default), which
     Python reads back as ``float('nan')``; a strict JSON reader will reject it,
-    which is the honest outcome for a row whose fit returned no value.
+    which is the honest outcome for a row whose fit returned no value. The
+    STAGE (ii) rows carry none: a sample whose sigma_tot is not finite is
+    dropped and counted rather than averaged in, and a report-only column with
+    nothing finite in its window is omitted rather than emitted as NaN. The
+    stage (iii) per-face and chord blocks still can, and by design -- a decay
+    fit that returned no value has no number to report.
 
     The plateau geomean z-trend and the two-face Mach block land under their
     own top-level keys for the same reason the per-face rows do: they are an
@@ -3892,9 +4408,9 @@ def json_payload(
         "label": label,
         "es": int(es),
         "wpe_arm": wpe_arm_line(params),
-        # Which convention the rows' own scored fields carry. The other one
-        # rides each row's "alt" block, so a consumer gets BOTH without
-        # having to know which run produced the file.
+        # Which convention the rows' own scored fields carry. The other two
+        # ride each row's "legs" mapping, so a consumer gets ALL THREE
+        # without having to know which run produced the file.
         "comparand": comparand,
         "comparands": list(COMPARANDS),
         "peak_current": peak,
@@ -4082,29 +4598,22 @@ def main(argv=None):
     )
     parser.add_argument(
         "--comparand",
-        default="ftavg",
-        choices=("ftavg", "core"),
+        default="column",
+        choices=tuple(COMPARAND_CHOICES),
         help=(
-            "which measured convention the stage (ii) rows are SCORED "
-            "against. 'ftavg' (default) is the flux-tube average out to the "
-            "frame-opening radius the 1D model's single radial cell also "
-            "spans -- Te the density-weighted area mean te_ftavg_ev, n the "
-            "plain area mean density_ftavg_cm3. 'core' is the legacy "
-            "core-band line-cut mean (te_mean_ev, density_mean_cm3), which "
-            "the historical continuity reads were taken under. BOTH are "
-            "always computed and printed side by side; this flag only "
-            "chooses which one occupies the scored columns"
-        ),
-    )
-    parser.add_argument(
-        "--density-ftavg",
-        action="store_true",
-        help=(
-            "RETAINED AND INERT. The flux-tube density is now the DEFAULT "
-            "comparand for the 'n' rows, so the flag that used to request it "
-            "is no longer a request for anything; passing it prints a note "
-            "and changes no number. Use --comparand core for the legacy "
-            "core-band reading"
+            "which measured radial convention the stage (ii) rows are SCORED "
+            "against. 'column' (default) is the whole column's inventory "
+            "expressed on the model's tube (density_column_cm3, te_column_ev) "
+            "-- plasma outside the tube got there by cross-field transport a "
+            "1D model does not represent, so the comparand of record is the "
+            "column's plasma and not the part of it inside the tube. 'ftavg' "
+            "is the flux-tube average out to the frame-opening radius the "
+            "model's single radial cell spans (density_ftavg_cm3, "
+            "te_ftavg_ev). 'core' is the legacy core-band line-cut mean "
+            "(density_mean_cm3, te_mean_ev), which the historical continuity "
+            "reads were taken under. ALL THREE are always computed and "
+            "printed side by side; this flag only chooses which one occupies "
+            "the scored columns"
         ),
     )
     parser.add_argument(
@@ -4295,21 +4804,13 @@ def main(argv=None):
     _report_peak_current(peak)
     plateau_ms = PLATEAU_MS if args.window == "plateau" else None
     # The CLI spells the conventions short; the row labels spell them out.
-    comparand = (
-        COMPARAND_FLUX_TUBE if args.comparand == "ftavg" else COMPARAND_CORE_BAND
-    )
-    if args.density_ftavg:
-        print(
-            "NOTE: --density-ftavg is inert -- the flux-tube density is the "
-            "default 'n' comparand. Nothing changed."
-        )
+    comparand = COMPARAND_CHOICES[args.comparand]
     rows = compare(
         result,
         geometry,
         overlay,
         plateau_ms=plateau_ms,
         comparand=comparand,
-        density_ftavg=args.density_ftavg,
     )
     _report(label, rows, es=args.es, plateau_ms=plateau_ms)
     # The z-trend row belongs to the plateau reading and is computed only when
