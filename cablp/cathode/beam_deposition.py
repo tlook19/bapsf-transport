@@ -1250,6 +1250,22 @@ LANE_MARCH_MIN_LEGS = 128
 LANE_MARCH_COUNTS = {"substeps": 0, "legs": 0}
 
 
+
+def _leg_cull_kwargs(kwargs, cell, launch):
+    """The cull kwargs a tail leg is marched with -- STRICTLY AFTER BIRTH.
+
+    ``cell`` is the leg's own crossing cell (the far side of the plane in its
+    direction) and ``launch`` the cell it is launched from. A leg born AT its
+    crossing cell is already on the far side and walking away, so it never
+    crosses: the argument is WITHHELD for that leg rather than handed over
+    and tested. Withholding it here rather than testing inside the march
+    keeps the streaming primary's interception -- which has always fired on
+    its own launch cell when asked to, and is pinned that way by the
+    deposit-beam corpus -- byte for byte what it was.
+    """
+    return {} if int(launch) == int(cell) else kwargs
+
+
 def _tail_anode_take(culled_flux, W_cross, R_e, eta_E):
     """Split one crossing tally into what the anode keeps and what returns.
 
@@ -1731,7 +1747,12 @@ def _tail_recursive_chains(
                 leg = deposit_beam(
                     E_walk, float(dir_flux[birth]), nn_w, ne_w, Te_w,
                     int(birth) - tail_lo, leg_dir, dz_w, **march_kwargs,
-                    **(leg_cull_kwargs if armed else {}),
+                    **(
+                        _leg_cull_kwargs(
+                            leg_cull_kwargs, leg_cull_cell,
+                            int(birth) - tail_lo,
+                        ) if armed else {}
+                    ),
                 )
                 chain = []
                 riders = []
@@ -1815,11 +1836,15 @@ def _tail_recursive_chains(
                         ({}, cull_local) if cull is None
                         else cull_kwargs_for(leg_dir)
                     )
+                    _leg_launch = 0 if reflect_face < 0 else n_w - 1
                     leg = deposit_beam(
-                        leg_E, leg_flux, nn_w, ne_w, Te_w,
-                        0 if reflect_face < 0 else n_w - 1,
+                        leg_E, leg_flux, nn_w, ne_w, Te_w, _leg_launch,
                         leg_dir, dz_w, **march_kwargs,
-                        **(leg_cull_kwargs if armed else {}),
+                        **(
+                            _leg_cull_kwargs(
+                                leg_cull_kwargs, leg_cull_cell, _leg_launch,
+                            ) if armed else {}
+                        ),
                     )
                 built.append(chain)
                 for kind, r_cell, r_dir, r_flux, r_E in riders:
@@ -1925,8 +1950,11 @@ def _tail_sheath_chain(
         float(E_eV), float(flux), nn_w, ne_w, Te_w, int(cell), leg_dir, dz_w,
         **march_kwargs,
         **(
-            dict(anode_cross_index=int(leg_cell), anode_eta=float(cull_eta))
-            if armed else {}
+            _leg_cull_kwargs(
+                dict(anode_cross_index=int(leg_cell),
+                     anode_eta=float(cull_eta)),
+                leg_cell, int(cell),
+            ) if armed else {}
         ),
     )
     chain = []
@@ -1988,14 +2016,16 @@ def _tail_sheath_chain(
         leg_flux, leg_E = _next
         leg_dir = -leg_dir
         leg_cell = cull_local if leg_dir > 0 else cull_local - 1
+        _leg_launch = 0 if reflect_face < 0 else n_w - 1
         leg = deposit_beam(
-            leg_E, leg_flux, nn_w, ne_w, Te_w,
-            0 if reflect_face < 0 else n_w - 1,
+            leg_E, leg_flux, nn_w, ne_w, Te_w, _leg_launch,
             leg_dir, dz_w, **march_kwargs,
             **(
-                dict(anode_cross_index=int(leg_cell),
-                     anode_eta=float(cull_eta))
-                if armed else {}
+                _leg_cull_kwargs(
+                    dict(anode_cross_index=int(leg_cell),
+                         anode_eta=float(cull_eta)),
+                    leg_cell, _leg_launch,
+                ) if armed else {}
             ),
         )
     chains.append(chain)
@@ -2451,11 +2481,13 @@ def deposit_beam(
 
         Gamma0*E0 = heating + radiated + cost + anode_intercepted + transmitted
 
-    The test is STRICTLY AFTER BIRTH: a ray launched IN ``anode_cross_index``
-    was born on the far side of the plane and never crosses it, so it is not
-    intercepted. The cathode-borne primary launches at a cathode face, so the
-    rule never touches it; it matters for the marched TAIL legs, which are
-    launched anywhere in the column.
+    A ray launched IN ``anode_cross_index`` meets it on its own launch cell,
+    which is the convention this argument has carried since it was added --
+    the cathode-borne primary launches at a cathode face, so the case does
+    not arise for it, and the corpus pins the arithmetic either way. The TAIL
+    legs, which are launched anywhere in the column, do NOT use it that way:
+    their callers withhold the argument on a leg born at the cell, so a
+    walker is culled only on a crossing STRICTLY AFTER its birth.
 
     Off (``anode_cross_index is None`` or ``anode_eta == 0``) the running flux
     is the constant ``Gamma0_per_s`` throughout, so every bank is byte-for-byte
@@ -3169,18 +3201,7 @@ def deposit_beam(
     # by this, so the off path is bit-for-bit the historical constant-flux result.
     gamma = float(Gamma0_per_s)
     anode_intercepted = 0.0  # erg/s booked to the anode, not the plasma
-    # STRICTLY AFTER BIRTH. ``order`` is a strictly monotone range from
-    # ``launch``, so the interception cell is visited exactly once; if that
-    # one visit IS the launch, the ray was BORN on the far side of the plane
-    # and never crosses it -- entering a cell you were born in is not a
-    # crossing. The cathode-borne primary launches at a cathode face, so this
-    # never disarms it; it is the marched TAIL legs, born anywhere in the
-    # column, that the rule is for.
-    intercept_active = (
-        anode_cross_index is not None
-        and anode_eta > 0.0
-        and int(launch) != int(anode_cross_index)
-    )
+    intercept_active = anode_cross_index is not None and anode_eta > 0.0
 
     if E <= E_stop_eV:
         # Sub-threshold source: nothing inelastic can happen; the module's
@@ -4829,14 +4850,7 @@ def deposit_beam_two_stream(
         return chan, _empty_deposition(cells), flux_entry
 
     order = range(launch, cells) if direction > 0 else range(launch, -1, -1)
-    # STRICTLY AFTER BIRTH -- see the twin in ``deposit_beam``: a ray whose
-    # single visit to the interception cell is its own launch was born on the
-    # far side of the plane and never crosses it.
-    intercept_active = (
-        anode_cross_index is not None
-        and anode_eta > 0.0
-        and int(launch) != int(anode_cross_index)
-    )
+    intercept_active = anode_cross_index is not None and anode_eta > 0.0
     absorbed = False
     for cell in order:
         # Anode-mesh interception (A15). The mesh is a GEOMETRIC obstruction
@@ -5235,7 +5249,12 @@ def deposit_beam_two_stream(
                             leg_dir,
                             dz_w,
                             **march_kwargs,
-                            **(_leg_cull if armed else {}),
+                            **(
+                                _leg_cull_kwargs(
+                                    _leg_cull, _leg_cull_cell,
+                                    int(birth) - tail_lo,
+                                ) if armed else {}
+                            ),
                         )
                         while True:
                             _bank_tail_march(leg)
@@ -5296,17 +5315,26 @@ def deposit_beam_two_stream(
                                 _leg_cull, _leg_cull_cell = _cull_kwargs_for(
                                     leg_dir
                                 )
+                                _leg_launch = (
+                                    0 if reflect_face < 0
+                                    else tail_hi - tail_lo
+                                )
                                 leg = deposit_beam(
                                     leg_E,
                                     leg_flux,
                                     nn_w,
                                     ne_w,
                                     Te_w,
-                                    0 if reflect_face < 0 else tail_hi - tail_lo,
+                                    _leg_launch,
                                     leg_dir,
                                     dz_w,
                                     **march_kwargs,
-                                    **(_leg_cull if armed else {}),
+                                    **(
+                                        _leg_cull_kwargs(
+                                            _leg_cull, _leg_cull_cell,
+                                            _leg_launch,
+                                        ) if armed else {}
+                                    ),
                                 )
                                 continue
                             exit_erg = leg_flux * leg_E * _ERG_PER_EV
@@ -5337,7 +5365,11 @@ def deposit_beam_two_stream(
                     leg = deposit_beam(
                         _r_E, _r_flux, nn_w, ne_w, Te_w, _r_cell, leg_dir,
                         dz_w, **march_kwargs,
-                        **(_leg_cull if armed else {}),
+                        **(
+                            _leg_cull_kwargs(
+                                _leg_cull, _leg_cull_cell, _r_cell,
+                            ) if armed else {}
+                        ),
                     )
                     while True:
                         _bank_tail_march(leg)
@@ -5392,11 +5424,19 @@ def deposit_beam_two_stream(
                                 _cull_kwargs_for(leg_dir) if armed
                                 else ({}, int(tail_anode_local))
                             )
+                            _leg_launch = (
+                                0 if reflect_face < 0 else tail_hi - tail_lo
+                            )
                             leg = deposit_beam(
                                 leg_E, leg_flux, nn_w, ne_w, Te_w,
-                                0 if reflect_face < 0 else tail_hi - tail_lo,
+                                _leg_launch,
                                 leg_dir, dz_w, **march_kwargs,
-                                **(_leg_cull if armed else {}),
+                                **(
+                                    _leg_cull_kwargs(
+                                        _leg_cull, _leg_cull_cell,
+                                        _leg_launch,
+                                    ) if armed else {}
+                                ),
                             )
                             continue
                         exit_erg = leg_flux * leg_E * _ERG_PER_EV
