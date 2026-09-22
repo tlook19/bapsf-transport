@@ -1,6 +1,27 @@
 import numpy as np
 
-from cablp.constants import ev_to_erg
+from cablp.constants import ev_to_erg, m_e_cgs
+
+
+def electron_mean_speed(Te):
+    """Electron mean thermal speed ``<v> = sqrt(8 T_e / (pi m_e))`` [cm/s].
+
+    THE ONE SPEC for the electron random-flux speed: a Maxwellian's
+    one-sided flux onto a surface is ``n <v> / 4``, so any electrode's
+    electron saturation current is built from this and not from a sound
+    speed or an rms speed, which differ by O(1) factors.
+
+    Parameters
+    ----------
+    Te : float or array
+        Electron temperature [eV].
+
+    Returns
+    -------
+    float or array
+        Electron mean speed [cm/s].
+    """
+    return np.sqrt(8.0 * Te * ev_to_erg / (np.pi * m_e_cgs))
 
 
 def bohm_sound_speed(Te, ion_mass_g):

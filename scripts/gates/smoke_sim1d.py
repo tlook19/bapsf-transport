@@ -5650,13 +5650,29 @@ def _case_beam_anomalous_transport_wpe(
     # roundoff and not merely a budget statement, because the ray integration
     # itself is bit-identical in both modes -- L_anom depends on the beam and
     # the column, never on where its energy is banked.
+    # The anode mesh is the THIRD destination: a walker the wires intercept
+    # leaves the plasma at the plane, so the identity reads
+    # delivered + culled == launched. The culled bank is a TERM, never a
+    # tolerance -- it is measured here and cross-checked against the anode
+    # row below.
     wpe_removed = float(csda_dep.heating_anomalous_erg_s.sum())
+    wpe_culled = float(wpe_on_dep.tail_anode_culled_erg_s)
+    wpe_returned = float(wpe_on_dep.tail_anode_returned_erg_s)
     wpe_delivered = (
         float(wpe_on_dep.heating_anomalous_erg_s.sum()) + wpe_tail_ledger
     )
-    assert abs(wpe_delivered - wpe_removed) / wpe_removed < 1e-12, (
-        wpe_removed, wpe_delivered
-    )
+    assert wpe_culled > 0.0, wpe_culled
+    assert abs(
+        wpe_delivered + wpe_culled - wpe_removed
+    ) / wpe_removed < 1e-12, (wpe_removed, wpe_delivered, wpe_culled)
+    # ... and the anode row carries exactly the NET of it: the local arm walks
+    # no tail, so the whole difference between the two arms' anode rows is the
+    # tail's own landing.
+    assert abs(
+        (float(wpe_on_dep.anode_intercepted_erg_s)
+         - float(csda_dep.anode_intercepted_erg_s))
+        - (wpe_culled - wpe_returned)
+    ) <= 1e-9 * abs(wpe_culled)
     # The other three heating channels are untouched: only the anomalous bank
     # moved, so the whole difference in plasma heating IS the tail ledger.
     for _wpe_arr in (
@@ -5669,7 +5685,7 @@ def _case_beam_anomalous_transport_wpe(
     assert abs(
         (csda_dep.plasma_heating_erg_s.sum()
          - wpe_on_dep.plasma_heating_erg_s.sum())
-        - wpe_tail_ledger
+        - (wpe_tail_ledger + wpe_culled)
     ) / wpe_tail_ledger < 1e-9
     # Energy-only, exactly like WP-D: the particle rows the fluid and circuit
     # read are untouched, and the WP-D ledger stays identically zero -- the two
@@ -5696,6 +5712,11 @@ def _case_beam_anomalous_transport_wpe(
         nn=csda_state.nn, ne=csda_state.n, Te=csda_derived.Te,
         anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
         anode_eta=csda_eta,
+        # The solver arms the TAIL cull too (it is the model's, not a flag's),
+        # so the comparison ray has to carry the same kwargs or it would be
+        # measuring the cull rather than the hoist.
+        tail_anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
+        tail_anode_eta=csda_eta,
         anomalous_transport="tail_walk",
         tail_energy_eV=float(
             csda_params.get("heating_anomalous_tail_energy_eV", 75.0)
@@ -5934,16 +5955,21 @@ def _case_beam_tail_ionization_k6(
     # the "local" arm banked locally -- exact, because the ray integration is
     # bit-identical in both modes -- and the secondary-birth heat is inside
     # heating_anomalous with the rest of the walkers' heat.
+    # ... and the sixth destination, the anode mesh: a walker the wires
+    # intercept leaves the plasma at the plane, so the culled bank is a TERM
+    # of the closure and never a tolerance on it.
     k6_launched = float(csda_dep.heating_anomalous_erg_s.sum())
+    k6_culled = float(k6_on_dep.tail_anode_culled_erg_s)
     k6_delivered = (
         float(k6_on_dep.heating_anomalous_erg_s.sum())
         + float(k6_on_dep.ionization_cost_tail_erg_s.sum())
         + float(k6_on_dep.radiated_tail_erg_s.sum())
         + k6_ledger
     )
-    assert abs(k6_delivered - k6_launched) / k6_launched < 1e-12, (
-        k6_launched, k6_delivered
-    )
+    assert k6_culled > 0.0, k6_culled
+    assert abs(
+        k6_delivered + k6_culled - k6_launched
+    ) / k6_launched < 1e-12, (k6_launched, k6_delivered, k6_culled)
     # ... and the whole ray still closes, with the tail's cost and radiation
     # now inside the terms that already carried the primary's.
     k6_on_total = (
@@ -6201,6 +6227,11 @@ def _case_beam_sheath_aware_tail_k7(
         nn=csda_state.nn, ne=csda_state.n, Te=csda_derived.Te,
         anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
         anode_eta=csda_eta,
+        # The solver arms the tail cull unconditionally, so the direct ray
+        # has to be built with it or the comparison would be measuring the
+        # cull rather than the legacy arm's own arithmetic.
+        tail_anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
+        tail_anode_eta=csda_eta,
         anomalous_transport="tail_walk", tail_energy_eV=75.0,
         **_pskip_ray_kwargs,
     )
@@ -6230,12 +6261,16 @@ def _case_beam_sheath_aware_tail_k7(
         float(k7_on_dep.end_loss_tail_low_erg_s)
         + float(k7_on_dep.end_loss_tail_high_erg_s)
     )
+    # The anode mesh takes its share before anything reaches a ledger, so the
+    # culled bank is a TERM of the closure, not a tolerance on it.
+    k7_on_culled = float(k7_on_dep.tail_anode_culled_erg_s)
     k7_on_delivered = (
         float(k7_on_dep.heating_anomalous_erg_s.sum()) + k7_on_ledger
     )
-    assert abs(k7_on_delivered - k7_launched) / k7_launched < 1e-12, (
-        k7_launched, k7_on_delivered
-    )
+    assert k7_on_culled > 0.0, k7_on_culled
+    assert abs(
+        k7_on_delivered + k7_on_culled - k7_launched
+    ) / k7_launched < 1e-12, (k7_launched, k7_on_delivered, k7_on_culled)
     assert (
         float(k7_on_dep.heating_anomalous_erg_s.sum())
         > float(k7_legacy_dep.heating_anomalous_erg_s.sum())
@@ -6317,15 +6352,17 @@ def _case_beam_sheath_aware_tail_k7(
     )
     assert k7_ion_dep.end_loss_tail_low_erg_s == 0.0
     assert float(k7_ion_dep.ionization_events_tail.sum()) > 0.0
+    k7_ion_culled = float(k7_ion_dep.tail_anode_culled_erg_s)
     k7_ion_delivered = (
         float(k7_ion_dep.heating_anomalous_erg_s.sum())
         + float(k7_ion_dep.ionization_cost_tail_erg_s.sum())
         + float(k7_ion_dep.radiated_tail_erg_s.sum())
         + k7_ion_ledger
     )
-    assert abs(k7_ion_delivered - k7_launched) / k7_launched < 1e-12, (
-        k7_launched, k7_ion_delivered
-    )
+    assert k7_ion_culled > 0.0, k7_ion_culled
+    assert abs(
+        k7_ion_delivered + k7_ion_culled - k7_launched
+    ) / k7_launched < 1e-12, (k7_launched, k7_ion_delivered, k7_ion_culled)
     assert np.allclose(
         k7_ion_dep.ionization_events - k7_on_dep.ionization_events,
         k7_ion_dep.ionization_events_tail, rtol=1e-12, atol=0.0,
@@ -6478,14 +6515,18 @@ def _case_tail_forward_energy_closure(k7_params, tf_launched):
                 float(tf_dep.end_loss_tail_low_erg_s)
                 + float(tf_dep.end_loss_tail_high_erg_s)
             )
+            tf_culled = float(tf_dep.tail_anode_culled_erg_s)
             tf_delivered = (
                 float(tf_dep.heating_anomalous_erg_s.sum())
                 + float(tf_dep.ionization_cost_tail_erg_s.sum())
                 + float(tf_dep.radiated_tail_erg_s.sum())
                 + tf_ledger
             )
-            assert abs(tf_delivered - tf_launched) / tf_launched < 1e-12, (
-                tf_f, tf_label, tf_launched, tf_delivered
+            assert tf_culled > 0.0, (tf_f, tf_label)
+            assert abs(
+                tf_delivered + tf_culled - tf_launched
+            ) / tf_launched < 1e-12, (
+                tf_f, tf_label, tf_launched, tf_delivered, tf_culled
             )
     # --- AND ON THE PRODUCTION ROUTE. The three routes above are tail_walk
     # arms; the reference configuration runs plateau_multigroup, which walks
@@ -6506,6 +6547,7 @@ def _case_tail_forward_energy_closure(k7_params, tf_launched):
         )
         tf_mg_launched = float(tf_mg_dep.tail_power_erg_s)
         assert tf_mg_launched > 0.0, tf_f
+        tf_mg_culled = float(tf_mg_dep.tail_anode_culled_erg_s)
         tf_mg_delivered = (
             float(tf_mg_dep.heating_anomalous_erg_s.sum())
             + float(tf_mg_dep.ionization_cost_tail_erg_s.sum())
@@ -6514,10 +6556,11 @@ def _case_tail_forward_energy_closure(k7_params, tf_launched):
             + float(tf_mg_dep.end_loss_tail_high_erg_s)
             - float(tf_mg_dep.plateau_wave_power_erg_s)
         )
+        assert tf_mg_culled > 0.0, tf_f
         assert abs(
-            tf_mg_delivered - tf_mg_launched
+            tf_mg_delivered + tf_mg_culled - tf_mg_launched
         ) / tf_mg_launched < 1e-12, (
-            tf_f, tf_mg_launched, tf_mg_delivered
+            tf_f, tf_mg_launched, tf_mg_delivered, tf_mg_culled
         )
     return locals()
 
@@ -6744,6 +6787,7 @@ def _case_beam_plateau_multigroup(
     mg_sim._circuit_I_loop = 3000.0
     mg_solve = mg_sim.solve_cathode_boundary()
     mg_dep = mg_solve.beam_deposition[0]
+    mg_culled = float(mg_dep.tail_anode_culled_erg_s)
     mg_delivered = (
         float(mg_dep.heating_anomalous_erg_s.sum())
         + float(mg_dep.ionization_cost_tail_erg_s.sum())
@@ -6751,8 +6795,9 @@ def _case_beam_plateau_multigroup(
         + float(mg_dep.end_loss_tail_low_erg_s)
         + float(mg_dep.end_loss_tail_high_erg_s)
     )
-    assert abs(mg_delivered - _mg_bank) / _mg_bank < 1e-12, (
-        _mg_bank, mg_delivered
+    assert mg_culled > 0.0, mg_culled
+    assert abs(mg_delivered + mg_culled - _mg_bank) / _mg_bank < 1e-12, (
+        _mg_bank, mg_delivered, mg_culled
     )
     # The two heirs partition the bank: the wave share is banked locally, the
     # streaming share is what was launched as walkers, and nothing else exists.
@@ -6936,6 +6981,7 @@ def _case_beam_tail_band_split_k7b(
     # The channel still closes its own energy branching above the bar -- the
     # truncation understates the CASCADE, it does not leak energy.
     k7b_hi_launched = float(k7_local_dep.heating_anomalous_erg_s.sum())
+    k7b_hi_culled = float(k7b_hi.tail_anode_culled_erg_s)
     k7b_hi_delivered = (
         float(k7b_hi.heating_anomalous_erg_s.sum())
         + float(k7b_hi.ionization_cost_tail_erg_s.sum())
@@ -6943,7 +6989,12 @@ def _case_beam_tail_band_split_k7b(
         + float(k7b_hi.end_loss_tail_low_erg_s)
         + float(k7b_hi.end_loss_tail_high_erg_s)
     )
-    assert abs(k7b_hi_delivered - k7b_hi_launched) / k7b_hi_launched < 1e-12
+    assert k7b_hi_culled > 0.0, k7b_hi_culled
+    assert abs(
+        k7b_hi_delivered + k7b_hi_culled - k7b_hi_launched
+    ) / k7b_hi_launched < 1e-12, (
+        k7b_hi_launched, k7b_hi_delivered, k7b_hi_culled
+    )
     k7b_hi_diag = k7b_hi_sim._cathode_diagnostic_snapshot()
     assert k7b_hi_diag["beam_tail_above_bar_power_W"] == (
         k7b_hi.tail_above_bar_power_erg_s * 1.0e-7
@@ -7376,15 +7427,17 @@ def _case_beam_ql_power_disposal_pd1(
         float(_pd1_on_dep.end_loss_tail_low_erg_s)
         + float(_pd1_on_dep.end_loss_tail_high_erg_s)
     )
+    _pd1_culled = float(_pd1_on_dep.tail_anode_culled_erg_s)
     _pd1_delivered = (
         float(_pd1_on_dep.heating_anomalous_erg_s.sum())
         + float(_pd1_on_dep.ionization_cost_tail_erg_s.sum())
         + float(_pd1_on_dep.radiated_tail_erg_s.sum())
         + _pd1_ledger
     )
-    assert abs(_pd1_delivered - _pd1_P_QL) / _pd1_P_QL < 1.0e-12, (
-        _pd1_P_QL, _pd1_delivered
-    )
+    assert _pd1_culled > 0.0, _pd1_culled
+    assert abs(
+        _pd1_delivered + _pd1_culled - _pd1_P_QL
+    ) / _pd1_P_QL < 1.0e-12, (_pd1_P_QL, _pd1_delivered, _pd1_culled)
     # ANTI-VACUITY: the branch really SPLIT something. Both shares are a
     # substantial fraction of P_QL at these conditions, so neither corner is
     # being tested by accident -- which is the whole content of "branched" as
@@ -7451,6 +7504,450 @@ def _case_beam_ql_power_disposal_pd1(
     )
 
 
+# --------------------------------------------------------------------
+# anode-tail-cull-crossing-rule
+# --------------------------------------------------------------------
+@_case("anode-tail-cull-crossing-rule", historical_stance=True)
+def _case_anode_tail_cull_crossing_rule(
+    _pskip_Gamma0, _pskip_geom, _pskip_ray_kwargs, csda_derived, csda_eta,
+    csda_params, csda_res, csda_state, wpe_on_dep,
+):
+    """D1 (i)+(ii): WHERE the anode mesh takes its share of the tail.
+
+    (i) at the frozen solver state, one deposition evaluation with the cull
+    and one without: the cull removes exactly ``eta`` of what crosses and
+    leaves ``1 - eta`` walking; (ii) on synthetic marches, a leg is culled
+    when -- and only when -- its own direction carries it across the plane,
+    strictly after its birth.
+    """
+    # --- (i) THE SHARE, at the frozen state the solver just solved. ONE ray,
+    # evaluated twice: the ONLY difference between the two calls is whether
+    # the tail cull kwargs are present, so nothing but the cull can move a
+    # float between them. (Turning the whole mesh off instead would also move
+    # the PRIMARY's interception and with it the QL power the tail is built
+    # from, which is a different A/B.)
+    ac_face = int(_pskip_geom.anode_face_indices[0])
+    ac_eta = float(csda_eta)
+    assert 0.0 < ac_eta < 1.0, ac_eta
+    ac_ray_kwargs = dict(
+        dz_cm=_pskip_geom.length_cm, nn=csda_state.nn, ne=csda_state.n,
+        Te=csda_derived.Te, anode_cross_index=ac_face, anode_eta=ac_eta,
+        anomalous_transport="tail_walk",
+        tail_energy_eV=float(
+            csda_params.get("heating_anomalous_tail_energy_eV", 75.0)
+        ),
+        **_pskip_ray_kwargs,
+    )
+    ac_off = _deposit_beam_ray(
+        csda_res.phi_c, _pskip_Gamma0, **ac_ray_kwargs
+    )
+    ac_on = _deposit_beam_ray(
+        csda_res.phi_c, _pskip_Gamma0,
+        tail_anode_cross_index=ac_face, tail_anode_eta=ac_eta,
+        **ac_ray_kwargs,
+    )
+    # The armed ray IS the one the solver ran, so this is a statement about
+    # the live configuration and not about a ray only this case has seen.
+    assert np.array_equal(
+        ac_on.heating_anomalous_erg_s, wpe_on_dep.heating_anomalous_erg_s
+    )
+    assert float(ac_off.tail_anode_culled_erg_s) == 0.0
+    ac_culled = float(ac_on.tail_anode_culled_erg_s)
+    assert ac_culled > 0.0, "the cull never fired: the case is vacuous"
+    # THE CULL IS THE ONLY MOVER, and what it moves it MOVES: the disarmed
+    # ray's delivery is the armed ray's delivery plus the culled bank, to
+    # roundoff, on one ray at one frozen state. This is the identity the
+    # closure cases assert arm-to-arm, stated here where the two arms differ
+    # in nothing but the cull kwargs.
+    def _ac_delivered(ray):
+        return (
+            float(ray.heating_anomalous_erg_s.sum())
+            + float(ray.ionization_cost_tail_erg_s.sum())
+            + float(ray.radiated_tail_erg_s.sum())
+            + float(ray.end_loss_tail_low_erg_s)
+            + float(ray.end_loss_tail_high_erg_s)
+        )
+
+    assert abs(
+        (_ac_delivered(ac_on) + ac_culled) / _ac_delivered(ac_off) - 1.0
+    ) < 1e-12, (_ac_delivered(ac_off), _ac_delivered(ac_on), ac_culled)
+    # ... and it takes it from the COLUMN SIDE. The walkers this scenario
+    # launches are born on both sides of the plane, so the column-side
+    # deposit is not simply (1 - eta) of the disarmed ray's -- the
+    # walkers born past the plane never cross it -- but every walker that
+    # DOES cross loses eta there, which is what the per-crossing equality
+    # in (ii) below states exactly.
+    ac_col_on = float(ac_on.heating_anomalous_erg_s[ac_face:].sum())
+    ac_col_off = float(ac_off.heating_anomalous_erg_s[ac_face:].sum())
+    assert ac_col_off > 0.0, "no tail power reaches the column side"
+    assert ac_col_on < ac_col_off, (ac_col_on, ac_col_off)
+    assert (1.0 - ac_eta) <= ac_col_on / ac_col_off < 1.0, (
+        ac_col_on, ac_col_off, ac_eta
+    )
+    # FIRST CROSSING ONLY: no walker is culled twice, so the culled bank
+    # cannot reach eta of the whole launched tail -- a walker culled at a
+    # second crossing would take it past that bound.
+    ac_launched = (
+        float(ac_off.tail_power_erg_s)
+        + float(ac_off.plateau_wave_power_erg_s)
+    )
+    assert 0.0 < ac_culled / ac_launched < ac_eta, (
+        ac_culled, ac_launched, ac_eta
+    )
+
+    # --- (ii) THE CROSSING RULE, on synthetic marched TAIL legs. The plane
+    # sits between cells X-1 and X; a leg crosses it by ENTERING the cell on
+    # the far side in its own direction, and entering the cell it was born in
+    # is not a crossing. Eight rows, both directions, both flanking cells and
+    # one cell either side of them.
+    #
+    # Marched exactly as ``_tail_recursive_chains`` marches one: the leg's
+    # own crossing cell, handed over through ``_leg_cull_kwargs``, which is
+    # where the strictly-after-birth rule lives. It is stated there rather
+    # than inside the march because the STREAMING PRIMARY has always been
+    # intercepted on its own launch cell when asked to be, and the
+    # deposit-beam corpus pins that arithmetic; the tail legs simply do not
+    # ask.
+    from cablp.cathode.beam_deposition import (
+        _leg_cull_kwargs as _ac_leg_kwargs,
+    )
+    ac_cells, ac_X = 12, 6
+    ac_nn = np.full(ac_cells, 1.0e13)
+    ac_ne = np.full(ac_cells, 1.0e12)
+    ac_Te = np.full(ac_cells, 3.0)
+    ac_dz = np.full(ac_cells, 10.0)
+    ac_kw = dict(
+        I_ion_eV=24.587, E_stop_eV=25.0, coulomb_model="fast_electron",
+        anomalous_model="none",
+    )
+    # The helper itself: withheld on the launch cell, handed over otherwise.
+    assert _ac_leg_kwargs({"a": 1}, 6, 6) == {}
+    assert _ac_leg_kwargs({"a": 1}, 6, 5) == {"a": 1}
+    for ac_dir, ac_cell in ((+1, ac_X), (-1, ac_X - 1)):
+        for ac_born in (ac_X - 2, ac_X - 1, ac_X, ac_X + 1):
+            ac_ray = _deposit_beam_ray(
+                75.0, 1.0e18, ac_nn, ac_ne, ac_Te, ac_born, ac_dir, ac_dz,
+                **_ac_leg_kwargs(
+                    dict(anode_cross_index=ac_cell, anode_eta=ac_eta),
+                    ac_cell, ac_born,
+                ),
+                **ac_kw,
+            )
+            ac_frac = float(ac_ray.anode_intercepted_erg_s) / (
+                1.0e18 * 75.0 * ev_to_erg
+            )
+            ac_expect = (
+                (ac_dir > 0 and ac_born < ac_X)
+                or (ac_dir < 0 and ac_born >= ac_X)
+            )
+            assert (ac_frac > 0.0) == ac_expect, (
+                ac_dir, ac_born, ac_frac, ac_expect
+            )
+            if ac_expect:
+                # ... and it takes exactly eta of the flux that reached the
+                # plane, at the energy it arrived with.
+                assert abs(
+                    ac_frac
+                    - ac_eta * float(ac_ray.E_entry_eV[ac_cell]) / 75.0
+                ) < 1e-12, (ac_dir, ac_born, ac_frac)
+    print(
+        "anode tail cull crossing rule: ok (eta "
+        f"{ac_eta:.4f}, column-side survival {ac_col_on / ac_col_off:.6f}, "
+        f"culled share of launch {ac_culled / ac_launched:.4f})"
+    )
+    return locals()
+
+
+# --------------------------------------------------------------------
+# anode-tail-sheath-reflection
+# --------------------------------------------------------------------
+@_case("anode-tail-sheath-reflection", historical_stance=True)
+def _case_anode_tail_sheath_reflection(csda_params):
+    """The wires' sheath: absorbed at or above the drop, reflected below it.
+
+    Synthetic walks either side of ``e*phi_a`` from BOTH directions, then the
+    two shares summing to the whole intercepted bank on a plateau-like state
+    at a stated drop.
+    """
+    ar_eta = float(csda_params["eta"])
+    ar_cells, ar_X = 24, 8
+    ar_nn = np.full(ar_cells, 3.0e13)
+    ar_ne = np.full(ar_cells, 1.0e12)
+    ar_Te = np.full(ar_cells, 3.0)
+    ar_dz = np.full(ar_cells, 10.0)
+    ar_common = dict(
+        I_ion_eV=24.587, E_stop_eV=25.0, coulomb_model="fast_electron",
+        anomalous_model="quasilinear", ql_relaxation_coeff=0.5,
+        beam_area_cm2=np.full(ar_cells, 100.0),
+        anomalous_transport="tail_walk", tail_energy_eV=60.0,
+        product_transport="nonlocal",
+    )
+
+    def _ar_ray(phi_eV, direction, ionize):
+        kw = dict(ar_common)
+        kw["tail_ionization"] = "on" if ionize else "off"
+        if ionize:
+            kw["tail_walk_window"] = (0, ar_cells - 1)
+        return _deposit_beam_ray(
+            300.0, 1.0e18, ar_nn, ar_ne, ar_Te,
+            0 if direction > 0 else ar_cells - 1, direction, ar_dz,
+            tail_anode_cross_index=ar_X, tail_anode_eta=ar_eta,
+            tail_anode_phi_eV=phi_eV, **kw,
+        )
+
+    def _ar_closure(ray):
+        """Launched == delivered + culled, the tail bank's own identity."""
+        launched = (
+            float(ray.tail_power_erg_s)
+            + float(ray.plateau_wave_power_erg_s)
+        )
+        delivered = (
+            float(ray.heating_anomalous_erg_s.sum())
+            + float(ray.ionization_cost_tail_erg_s.sum())
+            + float(ray.radiated_tail_erg_s.sum())
+            + float(ray.end_loss_tail_low_erg_s)
+            + float(ray.end_loss_tail_high_erg_s)
+        )
+        return abs(
+            delivered + float(ray.tail_anode_culled_erg_s) - launched
+        ) / launched
+
+    # --- BOTH SIDES OF THE BARRIER, both directions, both tail routes. The
+    # SUM of what the wires keep and what their sheath turns back is the
+    # whole intercepted bank and does not move with the drop; only the split
+    # does. A drop far above every arrival reflects all of it, a drop below
+    # every arrival keeps all of it, and 0.0 is the historical statement.
+    for ar_ionize in (False, True):
+        for ar_dir in (+1, -1):
+            ar_base = _ar_ray(0.0, ar_dir, ar_ionize)
+            ar_bank = float(ar_base.tail_anode_culled_erg_s)
+            assert ar_bank > 0.0, (ar_ionize, ar_dir)
+            assert float(
+                ar_base.tail_anode_sheath_reflected_erg_s
+            ) == 0.0, "a non-positive drop must reflect nothing"
+            for ar_phi, ar_all_reflected in (
+                (5.0, False), (1.0e4, True),
+            ):
+                ar_ray = _ar_ray(ar_phi, ar_dir, ar_ionize)
+                ar_kept = float(ar_ray.tail_anode_culled_erg_s)
+                ar_back = float(ar_ray.tail_anode_sheath_reflected_erg_s)
+                assert abs(
+                    (ar_kept + ar_back) / ar_bank - 1.0
+                ) < 1e-12, (ar_ionize, ar_dir, ar_phi, ar_kept, ar_back)
+                if ar_all_reflected:
+                    # Far above every arrival: nothing reaches a wire.
+                    assert ar_kept == 0.0, (ar_ionize, ar_dir, ar_kept)
+                    assert ar_back > 0.0
+                else:
+                    # Far below every arrival: every one lands.
+                    assert ar_back == 0.0, (ar_ionize, ar_dir, ar_back)
+                    assert ar_kept == ar_bank
+                # ENERGY IS CONSERVED EITHER WAY: a reflected walker stays in
+                # the plasma, so the tail bank's closure holds at roundoff at
+                # every drop.
+                assert _ar_closure(ar_ray) < 1e-12, (
+                    ar_ionize, ar_dir, ar_phi, _ar_closure(ar_ray)
+                )
+            # ... and a drop INSIDE the arrival spectrum splits it, which is
+            # what makes the two corners above a bracket rather than a pair
+            # of trivial cases.
+            ar_mid = _ar_ray(58.0, ar_dir, ar_ionize)
+            assert float(ar_mid.tail_anode_culled_erg_s) > 0.0
+            assert float(ar_mid.tail_anode_sheath_reflected_erg_s) > 0.0
+            assert abs(
+                (float(ar_mid.tail_anode_culled_erg_s)
+                 + float(ar_mid.tail_anode_sheath_reflected_erg_s))
+                / ar_bank - 1.0
+            ) < 1e-12
+            assert _ar_closure(ar_mid) < 1e-12
+
+    # --- THE REFLECTED LEG WALKS BACK, onto the side it came from. Read at
+    # ``tail_forward_fraction = 1.0``, where every walker is launched +z, so
+    # the only walkers that meet the plane are the ones born below it and
+    # "the side it came from" is one side of the grid rather than two.
+    # The (1 - eta) share passes either way, so the column side past the
+    # plane is BIT-IDENTICAL between a keeping mesh and a mirroring one --
+    # the whole difference is the eta share, and a mirror puts it back on
+    # the gap side.
+    def _ar_fwd_ray(phi_eV):
+        kw = dict(ar_common)
+        kw["tail_ionization"] = "off"
+        kw["tail_forward_fraction"] = 1.0
+        return _deposit_beam_ray(
+            300.0, 1.0e18, ar_nn, ar_ne, ar_Te, 0, +1, ar_dz,
+            tail_anode_cross_index=ar_X, tail_anode_eta=ar_eta,
+            tail_anode_phi_eV=phi_eV, **kw,
+        )
+
+    ar_keep = _ar_fwd_ray(5.0)
+    ar_mirror = _ar_fwd_ray(1.0e4)
+    assert float(ar_keep.tail_anode_sheath_reflected_erg_s) == 0.0
+    assert float(ar_mirror.tail_anode_culled_erg_s) == 0.0
+    assert np.array_equal(
+        ar_mirror.heating_anomalous_erg_s[ar_X:],
+        ar_keep.heating_anomalous_erg_s[ar_X:],
+    )
+    assert float(
+        ar_mirror.heating_anomalous_erg_s[:ar_X].sum()
+    ) > float(ar_keep.heating_anomalous_erg_s[:ar_X].sum())
+    # ... and the energy the mirror kept in the plasma is exactly the bank
+    # the keeping mesh took out of it: what lands on the gap side plus what
+    # leaves through the gap-side end.
+    ar_back = (
+        float(ar_mirror.heating_anomalous_erg_s[:ar_X].sum())
+        - float(ar_keep.heating_anomalous_erg_s[:ar_X].sum())
+        + float(ar_mirror.end_loss_tail_low_erg_s)
+        - float(ar_keep.end_loss_tail_low_erg_s)
+    )
+    assert abs(
+        ar_back / float(ar_keep.tail_anode_culled_erg_s) - 1.0
+    ) < 1e-12, (ar_back, float(ar_keep.tail_anode_culled_erg_s))
+
+    # --- REFUSALS. The drop is read only where there is a cull to apply it
+    # to, and it has to be a number.
+    for ar_bad in (
+        dict(tail_anode_phi_eV=21.0),
+        dict(tail_anode_cross_index=ar_X, tail_anode_eta=ar_eta,
+             tail_anode_phi_eV=float("nan")),
+    ):
+        try:
+            _deposit_beam_ray(
+                300.0, 1.0e18, ar_nn, ar_ne, ar_Te, 0, +1, ar_dz,
+                tail_ionization="off", **ar_common, **ar_bad,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"expected ValueError for tail_anode_phi_eV ({ar_bad})"
+            )
+    print(
+        "anode wire-sheath reflection: ok (intercepted bank invariant in "
+        "phi_a on both routes and both directions)"
+    )
+    return locals()
+
+
+# --------------------------------------------------------------------
+# anode-tail-circuit-coupling
+# --------------------------------------------------------------------
+@_case("anode-tail-circuit-coupling", historical_stance=True)
+def _case_anode_tail_circuit_coupling():
+    """The tail current in the loop, and the anode's electron cap.
+
+    The cull's current reaches the circuit through ``tail_anode_current_A``,
+    ONE STEP LAGGED: the deposition that measures it is solved after the
+    circuit within a step, so a solve reads the previous accepted step's
+    cull. At a frozen state the sheath answers monotonically, and the two
+    sheath-fall powers add up to the whole current the anode collects times
+    the drop.
+    """
+    from cablp.cathode.circuit_idriven import solve_idriven as _tc_idriven
+    from cablp.cathode.circuit_prescribed import (
+        solve_prescribed as _tc_prescribed,
+    )
+    from cablp.cathode import circuit as _tc_circ
+    from cablp.plasma.params import (
+        bohm_sound_speed as _tc_cs, electron_mean_speed as _tc_ve,
+    )
+    from cablp.constants import m_He_cgs as _tc_mi, qe_SI as _tc_e
+
+    tc_params, tc_flags = _cathode_unit_config()
+    from cablp.solvers._sim1d.physics.cathode import (
+        cathode_device_config as _tc_device,
+    )
+    tc_cfg = _tc_device(tc_params, tc_flags, 4.0, _tc_mi)
+    tc_Te, tc_ne = 4.0, 2.0e12
+    tc_plasma = _tc_circ.PlasmaState(
+        T_e=tc_Te, n_e=tc_ne, n_n=1.0e13, sigma_b=1.0e-16
+    )
+    # The anode sample the solver hands over, built by hand from the ONE
+    # analytic form, so the identity below is a statement about the two
+    # expressions and not about a sampled state.
+    tc_A = 2.0 * tc_cfg.eta * tc_cfg.A_c
+    tc_I_i_a = tc_A * _tc_e * tc_ne * _tc_cs(tc_Te, _tc_mi) * math.exp(-0.5)
+    tc_I_e_sat = 0.25 * tc_ne * _tc_ve(tc_Te) * tc_A * _tc_e
+
+    tc_variants = (
+        ("idriven", _tc_idriven, dict(I_tot_A=3000.0)),
+        ("voltage", _tc_circ.solve, dict()),
+    )
+
+    # --- (e2) THE ALGEBRAIC IDENTITY. Where ``I_i_a`` IS the analytic
+    # e^(-1/2) n c_s collection on the wire area, the explicit random flux
+    # and the implicit ``I_i_a exp(Lambda_a)`` are the SAME number, so the
+    # rewritten sheath relation answers with the same phi_a. (At the live
+    # configuration ``I_i_a`` is the fluid's own face flux instead and the
+    # two forms differ -- that shift is MEASURED and disclosed, not gated.)
+    assert abs(
+        tc_I_e_sat / (tc_I_i_a * math.exp(tc_cfg.Lambda + 0.5)) - 1.0
+    ) < 1e-13, (tc_I_e_sat, tc_I_i_a)
+    for tc_name, tc_solve, tc_extra in tc_variants:
+        tc_old = tc_solve(
+            tc_cfg, tc_plasma, anode_current_A=tc_I_i_a, anode_T_e=tc_Te,
+            **tc_extra,
+        )
+        tc_new = tc_solve(
+            tc_cfg, tc_plasma, anode_current_A=tc_I_i_a, anode_T_e=tc_Te,
+            anode_electron_saturation_A=tc_I_e_sat, **tc_extra,
+        )
+        assert abs(
+            tc_new.phi_a - tc_old.phi_a
+        ) <= 1e-12 * abs(tc_old.phi_a), (tc_name, tc_old.phi_a, tc_new.phi_a)
+        assert abs(
+            tc_new.P_anode_e - tc_old.P_anode_e
+        ) <= 1e-12 * abs(tc_old.P_anode_e), tc_name
+
+    # --- (d4) THE COUPLING IS LIVE, AND MONOTONE. At a frozen state, more
+    # current arriving straight off the tail is less current the sheath has
+    # to pass, so the anode sits higher. Read across a ladder rather than a
+    # pair, so a non-monotone relation cannot slip through on two points.
+    for tc_name, tc_solve, tc_extra in tc_variants:
+        tc_phi = []
+        for tc_I_tail in (0.0, 100.0, 300.0, 600.0):
+            tc_res = tc_solve(
+                tc_cfg, tc_plasma, anode_current_A=tc_I_i_a,
+                anode_T_e=tc_Te, anode_electron_saturation_A=tc_I_e_sat,
+                tail_anode_current_A=tc_I_tail, **tc_extra,
+            )
+            tc_phi.append(float(tc_res.phi_a))
+            # THE NEW ROW: the circuit pays phi_a for the tail current the
+            # wires took, and the two sheath-fall powers together are the
+            # drop times the WHOLE electron current the anode collects.
+            tc_I_e_a = float(tc_res.P_anode_e_thermal) / (
+                2.0 * float(tc_res.T_e_anode)
+            )
+            assert abs(
+                (float(tc_res.P_anode_e_phi) + float(tc_res.P_tail_phi))
+                - float(tc_res.phi_a) * (tc_I_e_a + tc_I_tail)
+            ) <= 1e-9 * abs(
+                float(tc_res.P_anode_e_phi) + float(tc_res.P_tail_phi)
+            ), (tc_name, tc_I_tail, tc_res.P_anode_e_phi, tc_res.P_tail_phi)
+            assert float(tc_res.P_tail_phi) == (
+                max(float(tc_res.phi_a), 0.0) * tc_I_tail
+            ), (tc_name, tc_I_tail)
+        assert all(
+            tc_phi[k] < tc_phi[k + 1] for k in range(len(tc_phi) - 1)
+        ), (tc_name, tc_phi)
+        assert tc_phi[0] > 0.0, (tc_name, tc_phi)
+
+    # The prescribed variant carries the same two members; it takes the
+    # measured drive rather than solving for the current, so it is read on
+    # its own call.
+    tc_pre = _tc_prescribed(
+        tc_cfg, tc_plasma, I_tot_A=3000.0, V_dis_V=90.0,
+        anode_current_A=tc_I_i_a, anode_T_e=tc_Te,
+        anode_electron_saturation_A=tc_I_e_sat, tail_anode_current_A=400.0,
+    )
+    assert float(tc_pre.P_tail_phi) == (
+        max(float(tc_pre.phi_a), 0.0) * 400.0
+    )
+    print(
+        "anode tail circuit coupling: ok (phi_a rises with I_tail,a; "
+        "P_anode_e_phi + P_tail_phi closes; the coupling is ONE STEP "
+        "LAGGED by construction)"
+    )
+    return locals()
 # --------------------------------------------------------------------
 # beam-deposition-smoothing-conservation
 # --------------------------------------------------------------------
@@ -19028,12 +19525,16 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
         + float(_cov_walk_dep.end_loss_tail_high_erg_s)
     )
     assert _cov_walk_landed > 0.0, "the tail walk deposited nothing"
-    # The walk conserves the withheld power: what it lands plus what escapes
-    # the two ends IS the tail power it launched.
+    # The walk conserves the withheld power: what it lands, plus what the
+    # anode mesh culls out of it at the plane, plus what escapes the two ends
+    # IS the tail power it launched. The culled bank is a TERM, not a
+    # tolerance.
+    _cov_walk_culled = float(_cov_walk_dep.tail_anode_culled_erg_s)
+    assert _cov_walk_culled > 0.0, _cov_walk_culled
     assert abs(
-        (_cov_walk_landed + _cov_walk_escaped)
+        (_cov_walk_landed + _cov_walk_escaped + _cov_walk_culled)
         / float(_cov_walk_dep.tail_power_erg_s) - 1.0
-    ) < 1e-12, (_cov_walk_landed, _cov_walk_escaped)
+    ) < 1e-12, (_cov_walk_landed, _cov_walk_escaped, _cov_walk_culled)
     assert np.all(np.isfinite(_cov_walk_dep.plasma_heating_erg_s))
     assert np.all(np.isfinite(
         _cov_walk_solve.beam_reservoir_deposition[0].plasma_heating_erg_s
@@ -24115,6 +24616,22 @@ def _case_cathode_closed_audit_export():
         )
         assert np.all(ce_Te_a[ce_has_solution] > 0.0), ce_Te_a
         assert "end_T_e_anode" not in ce_dg
+        # (a3) THE TAIL'S OWN SHEATH-FALL MOMENT. ``P_tail_phi`` is the
+        # partner of ``P_anode_e_phi`` for the current the wires take out
+        # of the QL tail rather than out of the thermal return. All three
+        # circuit variants compute it, so unlike the 22 above it is NOT
+        # current-driven-only; it is exported all the same, and it is
+        # identically 0.0 on a run that hands in no tail current -- this
+        # one -- because the deposition that measures it is solved after
+        # the circuit and so is lagged a step behind.
+        assert "P_tail_phi" in _CATHODE_RESULT_KEYS
+        assert "P_tail_phi" not in ce_closed
+        assert "P_tail_phi" not in _CURRENT_DRIVEN_ONLY_CATHODE_KEYS
+        ce_tail_phi = np.asarray(ce_dg["source_P_tail_phi"], dtype=float)
+        assert ce_tail_phi.shape == ce_loaded.time.shape
+        assert np.all(np.isfinite(ce_tail_phi))
+        assert np.all(ce_tail_phi == 0.0), ce_tail_phi
+        assert "end_P_tail_phi" not in ce_dg
         for ce_pair_key in (
             "anode_e_sheath_booked_W", "anode_e_sheath_realised_W",
             "anode_e_sheath_booked_J", "anode_e_sheath_realised_J",
@@ -32612,7 +33129,7 @@ def _case_implicit_ee_sink_no_solve_bit_identity():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 200, "historical_stance": 75}
+_CASE_CENSUS = {"total": 203, "historical_stance": 78}
 
 
 def _assert_case_census():

@@ -511,6 +511,10 @@ _CATHODE_RESULT_KEYS = (
     "P_cathode_i_phi",
     "P_anode_e_thermal",
     "P_anode_e_phi",
+    # The QL tail's own sheath-fall moment at the anode, I_tail_a * phi_a: the
+    # partner of P_anode_e_phi for the current the wires take out of the
+    # walked tail. Lagged by one step, like the tail current it is built from.
+    "P_tail_phi",
     "P_anode_i_thermal",
     "P_anode_i_phi",
     # Surface-resolved audit [W]: the total plasma-thermal loss to electrodes,
@@ -3546,8 +3550,11 @@ class LAPDSim1D:
         # reason: a misconfiguration must fail at construction, not on the
         # first cathode solve. The module keeps its copies -- it is called
         # directly by instruments that never build a solver.
-        _tail_cull = bool(
-            self._flags.get("beam_tail_anode_interception")
+        # The cull itself is unconditional wherever the mesh is resolved and
+        # the closure walks a tail; only the reversed-walker RIDER is a
+        # configuration choice, and it is what the guards below police.
+        _tail_cull = _tail_walking and bool(
+            self._flags.get("beam_anode_interception")
         )
         _R_e = float(
             self._input_dict.get("beam_tail_anode_reflected_particles")
@@ -3572,10 +3579,14 @@ class LAPDSim1D:
         if (_R_e > 0.0 or _eta_E > 0.0) and not _tail_cull:
             raise ValueError(
                 "beam_tail_anode_reflected_particles/"
-                "beam_tail_anode_reflected_energy ride on the anode tail cull "
-                "and are read only under beam_tail_anode_interception=True; "
-                "with the cull off nothing is intercepted and the pair would "
-                "be a silent no-op"
+                "beam_tail_anode_reflected_energy ride on the anode tail "
+                "cull, which fires only where the mesh is resolved "
+                "(beam_anode_interception) AND the closure walks a tail "
+                "(heating_anomalous_transport='tail_walk' or "
+                "'plateau_multigroup', or "
+                "heating_anomalous_disposal='landau_branched'); with neither "
+                "there is nothing intercepted and the pair would be a silent "
+                "no-op"
             )
         if _R_e > 0.0 and _tion != "on":
             raise ValueError(
@@ -3587,27 +3598,6 @@ class LAPDSim1D:
                 "reverse. The cull itself composes with either walk; only the "
                 "return does not, and it is refused rather than approximated"
             )
-        if _tail_cull:
-            if not _tail_walking:
-                raise ValueError(
-                    "beam_tail_anode_interception culls the QL TAIL walkers, "
-                    "so it needs a walked tail: "
-                    "heating_anomalous_transport='tail_walk' or "
-                    "'plateau_multigroup', or "
-                    "heating_anomalous_disposal='landau_branched'. With none "
-                    "of them there are no walkers to cull and the flag would "
-                    "do nothing"
-                )
-            if not bool(self._flags.get("beam_anode_interception")):
-                raise ValueError(
-                    "beam_tail_anode_interception requires "
-                    "beam_anode_interception: the tail cull fires at the same "
-                    "anode face, on the same mesh solid fraction eta, and "
-                    "books to the same anode_intercepted row as the primary's "
-                    "interception. Arming one without the other would leave "
-                    "two views of one mesh disagreeing about whether it is "
-                    "there"
-                )
         _fc = float(self._input_dict.get("beam_clump_fraction"))
         if not 0.0 <= _fc < 1.0:
             raise ValueError(

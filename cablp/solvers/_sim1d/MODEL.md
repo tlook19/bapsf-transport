@@ -653,6 +653,28 @@ and their treatment at the cathode face is a selector of its own
 (`heating_anomalous_tail_cathode_boundary`) — reflecting them back into the
 column rather than absorbing them.
 
+**The walkers meet the anode mesh too.** A mesh opaque to the streaming primary
+is opaque to its tail, so the cull is not a choice: wherever the geometry
+resolves anode faces and the closure walks a tail, a walker loses the solid
+fraction $\eta$ of its flux at its FIRST crossing of the anode plane. A
+crossing is entry into the cell on the far side of the plane in the walker's
+own direction, strictly after its birth — a walker born on one side has not
+crossed — and a walker that thermalizes short of the plane, or walks away from
+it, loses nothing. The removed share books to the same anode surface the
+primary's interception does.
+
+**What the wires do with it depends on their own sheath.** The mesh floats at
+$\phi_a$ below the plasma, so an intercepted walker has to climb $e\phi_a$ to
+land on a wire. Of the $\eta$ share aimed at a wire, the arrivals with
+$E\ge e\phi_a$ are ABSORBED — that is the anode current the circuit sees — and
+those with $E<e\phi_a$ are REFLECTED by the sheath: direction reversed, energy
+unchanged, nothing booked to the anode, no energy partner. The $(1-\eta)$ share
+passes through the openings either way. A reflected walker re-enters the cell it
+came from, keeps walking, thermalizes by the ordinary Coulomb loss, and is
+treated again at any LATER crossing — reflection carries no first-crossing
+memory, while interception remains first-crossing-only. With $\phi_a\le0$ (an
+attracting anode) nothing is reflected.
+
 ### Cathode, anode and the circuit
 
 The emitting surface, the anode mesh and the bank are one system; the electrode

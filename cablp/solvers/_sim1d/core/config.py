@@ -2600,10 +2600,11 @@ def cathode_defaults():
     beam_tail_anode_reflected_particles:
         Reversed-walker rider, PARTICLE half (default 0.0 = the rider OFF,
         bit-exact). The share ``R_e`` of the QL tail walkers the anode mesh
-        intercepts that come back off it, PER INCIDENT walker. Read ONLY under
-        the ``beam_tail_anode_interception`` flag, which is refused without it
-        and which refuses this pair without itself. Dimensionless, in
-        ``[0, 1]``. At 0.0 nothing returns and the whole culled share lands on
+        intercepts that come back off it, PER INCIDENT walker. Read ONLY
+        where the anode tail cull fires -- a resolved mesh
+        (``beam_anode_interception``) and a walked tail -- and refused with a
+        non-zero value anywhere else. Dimensionless, in ``[0, 1]``. At 0.0
+        nothing returns and the whole culled share lands on
         the anode, which is the cull with no rider on top. The rider needs a
         per-walker launch to reverse, so it additionally requires the marched
         tail (``heating_anomalous_tail_ionization="on"``) and is refused, not
@@ -2925,8 +2926,8 @@ def cathode_defaults():
         "heating_anomalous_tail_energy_keying": "phi_c",
         "heating_anomalous_tail_phi_c_fraction": None,
         "heating_anomalous_tail_cathode_boundary": "reflect",
-        # A2a reversed-walker rider on the anode tail cull: DEFAULT OFF
-        # (bit-exact). Both are read only under beam_tail_anode_interception.
+        # Reversed-walker rider on the anode tail cull: DEFAULT OFF
+        # (bit-exact). Both are read only where the cull fires.
         # The declared box the campaign brackets these across is NOT here --
         # the arms state their own values.
         "beam_tail_anode_reflected_particles": 0.0,
@@ -4027,21 +4028,6 @@ input_flags_template_1d = {
     # launches the CSDA module) and where the resolved geometry has no anode
     # faces. Set False for the with/without-interception A/B.
     "beam_anode_interception": True,
-    # A2a: the same anode mesh, met by the QL TAIL walkers. DEFAULT OFF
-    # (bit-exact off: with it clear the tail walk never enters the cull
-    # branch). The primary interception above removes cathode-borne flux
-    # streaming OUT through the wires; the tail walkers are born in the column
-    # and meet the same wires from whichever side they approach, and until
-    # this flag they passed through the mesh as if it were not there. On, a
-    # walker loses the mesh solid fraction eta of its flux at its FIRST
-    # crossing of the anode plane, the removed share books to the SAME
-    # anode_intercepted convention the primary uses, and the walkers the anode
-    # actually collects feed the circuit's J_anode one step later (the
-    # deposition is solved after the circuit within a step, so the coupling
-    # is lagged rather than iterated). Requires beam_anode_interception: the
-    # cull uses that channel's anode face and eta, and arming one without the
-    # other would leave the two views of the same mesh disagreeing.
-    "beam_tail_anode_interception": False,
     # Ion-neutral friction. Implemented as a SCALE TO ZERO rather than a branch:
     # off forces b_ion_neutral_drag = 0.0 in every collision bundle, which
     # short-circuits the drag term, its frictional heating, its neutral-energy
@@ -4983,6 +4969,14 @@ RETIRED_FLAG_KEYS = {
         "end wall's sheath-climb row, the second the emitting cathode "
         "face's three rows, and a configuration that armed the merged key "
         "arms BOTH"
+    ),
+    "beam_tail_anode_interception": (
+        "nothing: the QL tail walkers are culled at the anode mesh wherever "
+        "the mesh is resolved and the closure walks a tail, on the same "
+        "solid fraction eta and into the same anode_intercepted row as the "
+        "primary's beam_anode_interception -- a mesh opaque to the streaming "
+        "beam is opaque to its tail, so there was no second decision for a "
+        "flag to carry"
     ),
     "end_wall_face_riemann_flux": (
         "nothing: the end wall face removes the PHYSICAL flux at the "

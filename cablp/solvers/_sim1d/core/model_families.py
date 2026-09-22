@@ -310,9 +310,9 @@ NEUTRAL_RADIAL_CLOSURE_MEMBERS = (
 #: walked tail. MEASURED 2026-08-30 at 22 keys and now 23 with the launch
 #: split, not the census's "~10": the
 #: census counted the tail spine and left out the excitation trio, the clump
-#: pair, the anode-reflect riders and the two interception FLAGS, all of which
+#: pair, the anode-reflect riders and the interception FLAG, all of which
 #: the same guard block couples. The enforced chain is likewise 7 deep, not 4
-#: (beam_anode_interception -> beam_tail_anode_interception -> the riders ->
+#: (beam_anode_interception -> the anode tail cull -> the riders ->
 #: tail_ionization -> the walked-tail selector -> beam_anomalous_model ->
 #: beam_deposition_model); the census's "depth 4" is the middle spine read
 #: upward. This is the family whose one-key-at-a-time refusal cascade motivated
@@ -342,7 +342,6 @@ BEAM_TAIL_CLOSURE_MEMBERS = (
     (PARAMS, "beam_excitation_model"),
     (PARAMS, "beam_excitation_energy_eV"),
     (FLAGS, "beam_anode_interception"),
-    (FLAGS, "beam_tail_anode_interception"),
 )
 
 #: Family B, cathode half -- the cathode surface's directed-recycle channel.

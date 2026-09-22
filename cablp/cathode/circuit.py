@@ -338,6 +338,16 @@ class SolverResult:
     P_cathode_i_phi: float = 0.0
     P_anode_e_thermal: float = 0.0
     P_anode_e_phi: float = 0.0
+    # The QL tail's sheath-fall moment at the anode, ``I_tail_a * phi_a``
+    # [W], the partner of ``P_anode_e_phi`` for the current the wires take out
+    # of the walked tail rather than out of the thermal return. It is power
+    # the CIRCUIT pays and the mesh receives, never routed through the plasma
+    # thermal store, exactly like the primary's bypass convention. Identically
+    # 0.0 at a non-positive ``phi_a`` (an attracting anode charges no fall)
+    # and whenever no tail current is handed in. ``I_tail_a`` is the LAGGED
+    # net culled current: the deposition is solved after the circuit within a
+    # step, so this solve reads the previous accepted step's cull.
+    P_tail_phi: float = 0.0
     P_anode_i_thermal: float = 0.0
     P_anode_i_phi: float = 0.0
     # Closed surface-resolved audit [W], replacing P_net/P_net2:
@@ -1030,6 +1040,7 @@ def solve(
     anode_current_A: float | None = None,
     anode_T_e: float | None = None,
     tail_anode_current_A: float = 0.0,
+    anode_electron_saturation_A: float | None = None,
     emitted_enthalpy_V: float = 0.0,
     emitted_enthalpy_gap_netted: bool = False,
 ) -> SolverResult:
@@ -1182,6 +1193,23 @@ def solve(
     Lambda = config.Lambda + 0.5
     eta = config.eta
     mu = config.mu
+    # THE ELECTRON SATURATION the mesh wires can draw, stated EXPLICITLY as
+    # the electron random flux on the wire area the anode sample was taken
+    # over. ``None`` rebuilds the implicit ``I_i_a * exp(Lambda)`` the sheath
+    # relation used to reach through -- the same number exactly where
+    # ``I_i_a`` is the analytic Bohm collection on that same area.
+    I_e_sat_a = (
+        I_i_a * math.exp(Lambda)
+        if anode_electron_saturation_A is None
+        else float(anode_electron_saturation_A)
+    )
+    if not I_e_sat_a > 0.0:
+        raise ValueError(
+            "anode electron saturation current must be positive (got "
+            f"{anode_electron_saturation_A!r} A): it is the cap the anode "
+            "sheath relation divides by, and a non-positive cap has no "
+            "sheath solution"
+        )
 
     # Annular emission profile (empty = historical uniform disc).
     annular = bool(config.emission_Ts_K)
@@ -1395,7 +1423,12 @@ def solve(
         J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
         # Scaled anode sheath potential; clamp mirrors the residual's guard
         # (extreme-emission roots can land at a marginally negative argument).
-        psi_a = Lambda - math.log(max(1.0 + J_anode / J_i_a, 1e-300))
+        # phi_a = T_e,a ln(I_e,sat / I_e,a), I_e,a = I_i,a + I_anode: the
+        # same relation with the saturation cap named rather than reached
+        # through ``I_i_a e^Lambda``.
+        psi_a = math.log(
+            I_e_sat_a / max(I_i_a * (1.0 + J_anode / J_i_a), 1e-300)
+        )
 
         # Physical potentials [V]
         phi_c_plus = psi_c_plus * T_e
@@ -1440,7 +1473,13 @@ def solve(
     P_cathode_e = _P_elec(phi_c, T_e, I_i, Lambda)
     P_cathode_i = _P_ion(phi_c, T_e, I_i)
     P_cathode_i_pl = _P_ion(phi_c, T_e, I_i_a, pl=True)
-    P_anode_e = _P_elec(phi_a, T_e_anode, I_i_a, Lambda)
+    # The anode electron power rides the EXPLICIT saturation cap: handed the
+    # Lambda that reproduces it, ``ln(I_e,sat / I_i,a)``, so the one expression
+    # keeps its shape and the cap is the sampled random flux rather than the
+    # analytic ``I_i_a e^Lambda``. Identical where the two forms agree.
+    P_anode_e = _P_elec(
+        phi_a, T_e_anode, I_i_a, math.log(I_e_sat_a / I_i_a)
+    )
     P_anode_i = _P_ion(phi_a, T_e_anode, I_i_a)
     P_anode_i_pl = _P_ion(phi_a, T_e_anode, I_i_a, pl=True)
     _P_beam_bypass = eta * beam_bypass_fraction * I_eth_star * V_b
@@ -1448,11 +1487,13 @@ def solve(
     P_net2 = P_prim + P_ohmic - P_cathode_e - P_cathode_i_pl - P_anode_e - P_anode_i_pl
     P_loss = P_cathode_e + P_cathode_i_pl + P_anode_e + P_anode_i_pl
 
+    P_tail_phi = max(phi_a, 0.0) * float(tail_anode_current_A)
     return SolverResult(
         phi_c_plus=phi_c_plus,
         phi_c_minus=phi_c_minus,
         phi_c=phi_c,
         phi_a=phi_a,
+        P_tail_phi=P_tail_phi,
         V_p=V_p,
         V_b=V_b,
         R_p=R_p,
@@ -1513,6 +1554,7 @@ def solve_beam_system(
     beam_excitation_energy_eV: float = 21.218,
     beam_excitation_model: str = "2p_scalar",
     tail_anode_current_A: float = 0.0,
+    anode_electron_saturation_A: float | None = None,
 ) -> BeamResult:
     """Solve cathode sheath(s) and compute beam quantities for all cells.
 
@@ -1578,6 +1620,7 @@ def solve_beam_system(
         anode_current_A=anode_current_A,
         anode_T_e=anode_T_e,
         tail_anode_current_A=tail_anode_current_A,
+        anode_electron_saturation_A=anode_electron_saturation_A,
     )
     x0_next = result.phi_c_plus
     phi_c_0 = beam_launch_potential_V(result)
@@ -1618,6 +1661,7 @@ def solve_beam_system(
             anode_current_A=anode_current_twin_A,
             anode_T_e=anode_T_e_twin,
             tail_anode_current_A=tail_anode_current_A,
+            anode_electron_saturation_A=anode_electron_saturation_A,
         )
         x0_twin_next = result_twin.phi_c_plus
         phi_c_1 = beam_launch_potential_V(result_twin)
