@@ -876,6 +876,24 @@ is the payer, and the thermal debit stands alone. A non-finite $\phi_a$ belongs
 to neither regime and raises. The collected IONS leave with the enthalpy
 $\tfrac52T_i$, not $\tfrac32T_i$ — the $S_\text{an}$ terms above.
 
+**The anode electron debit is a RATE, not a fixed power.** At a frozen sheath
+solve the row is $I_{e,a}(2+\psi_a^+)T_e$ with
+$\psi_a^+=\max(\phi_a,0)/T_{e,a}$, i.e. exactly linear in the electron
+temperature: an electron leaving flanking cell $c$ carries
+$(2+\psi_a^+)T_{e,c}$, not the sample's $(2+\psi_a^+)T_{e,a}$. The model
+therefore charges the row as a first-order loss rate on each flanking cell,
+
+$$\nu_c=\frac{w_c\,P_{a,e}}{\tfrac32n_cT_{e,a}V_c},\qquad\text{realised
+power}=w_cP_{a,e}\frac{T_{e,c}}{T_{e,a}},$$
+
+with $w_c$ the same $n\sqrt{T_e}$ split weights the deposited row uses and
+$T_{e,a}$ the temperature the solve's anode block ran on. Where the local
+temperature equals the sample the realised debit IS the circuit's booking;
+elsewhere the two differ by $\langle T_{e,c}/T_{e,a}\rangle$, and both the
+charge and the realised debit are saved so the difference is a measured number
+rather than a convention. [`NUMERICS.md`](NUMERICS.md) carries how the rate is
+integrated.
+
 **End-face sheath debit at the cathode.** `cathode_face_full_debit` extends
 that convention to the emitting face and adds what an emitter does that a
 end wall does not. Armed, three further electron-energy rows are booked at the
@@ -1292,7 +1310,7 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `recombination_3b_loss` | `physics/reactions.py:reaction_rhs_terms` |
 | `recombination_energy_return` | `physics/reactions.py:recombination_energy_return_rhs` |
 | `cathode_surface_loss` | `physics/cathode.py:cathode_source_terms` |
-| `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode part) |
+| `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode part); REPORTED here and applied by the implicit heat substep as `solver.py:electrode_ee_sink_rate` wherever the operator split is in force |
 | `end_wall_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (`end_wall_sheath_full_debit` only) |
 | `cathode_e_emitted_enthalpy` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
 | `cathode_e_emitted_fall` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |

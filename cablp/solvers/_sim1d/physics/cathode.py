@@ -3006,6 +3006,10 @@ def cathode_source_terms(
     # bit-exactly the single row they replace.
     cathode_power_loss_W = zeros.copy()
     anode_power_loss_W = zeros.copy()
+    # The anode block's own electron temperature, per cell the anode power
+    # lands in; 0.0 everywhere else. It is the reference temperature of the
+    # exactly-linear sink rate built below.
+    anode_Te_ref_eV = zeros.copy()
     cathode_cells = cathode_adjacent_cells(geometry)
     anode_pairs = anode_flanking_cells(geometry)
     # anode_sheath_full_debit: complete the anode side of that routing by
@@ -3023,6 +3027,7 @@ def cathode_source_terms(
             state=state,
             derived=derived,
             anode_full_debit=anode_full_debit,
+            anode_Te_ref_eV=anode_Te_ref_eV,
         )
         if (
             boundary.twin_cathode
@@ -3037,6 +3042,7 @@ def cathode_source_terms(
                 state=state,
                 derived=derived,
                 anode_full_debit=anode_full_debit,
+                anode_Te_ref_eV=anode_Te_ref_eV,
             )
     else:
         # Unresolved geometry: the lumped model puts both electrodes in the
@@ -3048,6 +3054,7 @@ def cathode_source_terms(
         result_source = cathode_solve.beam_result.result
         cathode_power_loss_W[0] = result_source.P_cathode_e
         anode_power_loss_W[0] = result_source.P_anode_e
+        anode_Te_ref_eV[0] = float(result_source.T_e_anode)
         if (
             boundary.twin_cathode
             and cathode_solve.beam_result.result_twin is not None
@@ -3055,9 +3062,15 @@ def cathode_source_terms(
             result_twin = cathode_solve.beam_result.result_twin
             cathode_power_loss_W[-1] = result_twin.P_cathode_e
             anode_power_loss_W[-1] = result_twin.P_anode_e
+            anode_Te_ref_eV[-1] = float(result_twin.T_e_anode)
     volume_cm3 = geometry.plasma_volume_cm3
     cathode_power_loss_density = cathode_power_loss_W * 1.0e7 / volume_cm3
     anode_power_loss_density = anode_power_loss_W * 1.0e7 / volume_cm3
+    anode_sink_rate_s_inv = _anode_sink_rate_s_inv(
+        anode_power_loss_density=anode_power_loss_density,
+        anode_Te_ref_eV=anode_Te_ref_eV,
+        n=np.maximum(state.n, floors["n"]),
+    )
     # Metadata keeps the COMBINED array under its historical name and meaning
     # (both electrodes, per cell) and states each electrode's share beside it.
     # This is a diagnostic, not the booking: the booking is the two rows.
@@ -3093,8 +3106,46 @@ def cathode_source_terms(
             "end_electron_power_loss_W": float(electron_power_loss_W[-1]),
             "cathode_power_loss_W": cathode_power_loss_W,
             "anode_power_loss_W": anode_power_loss_W,
+            "anode_Te_ref_eV": anode_Te_ref_eV,
+            "anode_sink_rate_s_inv": anode_sink_rate_s_inv,
         },
     )
+
+
+def _anode_sink_rate_s_inv(anode_power_loss_density, anode_Te_ref_eV, n):
+    """Return the anode electron debit as a first-order loss rate [s^-1].
+
+    The booked row is ``P_c`` [erg cm^-3 s^-1] at the circuit's own anode
+    sample temperature ``Te_a``, and the debit per collected electron is
+    ``(2 + psi_a) Te``, so the row is EXACTLY LINEAR in the temperature at a
+    frozen solve. Dividing by the cell's heat capacity at the sample
+    temperature,
+
+        nu_c = P_c / (3/2 n_c Te_a e),
+
+    turns it into the rate an implicit substep can carry: applying ``nu_c``
+    to the LOCAL temperature reproduces the circuit's booking exactly where
+    ``Te_c == Te_a`` and otherwise states the same physics at the
+    temperature the electrons actually leave with, ``P_c Te_c / Te_a``.
+
+    Zero power gives exactly zero rate. Power with no usable reference
+    temperature has no rate form and raises rather than being dropped.
+    """
+    power = np.asarray(anode_power_loss_density, dtype=float)
+    Te_ref = np.asarray(anode_Te_ref_eV, dtype=float)
+    capacity_at_ref = 1.5 * np.asarray(n, dtype=float) * Te_ref * ev_to_erg
+    usable = capacity_at_ref > 0.0
+    unbookable = (power != 0.0) & ~usable
+    if np.any(unbookable):
+        bad = int(np.flatnonzero(unbookable)[0])
+        raise RuntimeError(
+            "anode electron sheath power has no rate form at cell "
+            f"{bad}: power={power[bad]!r} erg cm^-3 s^-1 against reference "
+            f"T_e_anode={Te_ref[bad]!r} eV and n={np.asarray(n)[bad]!r} "
+            "cm^-3; the implicit substep cannot carry a debit whose "
+            "reference heat capacity is not positive"
+        )
+    return np.where(usable, power / np.where(usable, capacity_at_ref, 1.0), 0.0)
 
 
 def beam_launch(geometry, end=0):
@@ -3879,7 +3930,7 @@ def _cathode_particle_loss_rate(result, eta):
 
 def _deposit_electrode_power(
     cathode_power_loss_W, anode_power_loss_W, result, cathode_cell, anode_pair,
-    state, derived, anode_full_debit=False,
+    state, derived, anode_full_debit=False, anode_Te_ref_eV=None,
 ):
     """Land P_cathode_e and P_anode_e in their OWN per-electrode accumulators.
 
@@ -3943,8 +3994,61 @@ def _deposit_electrode_power(
     ``P_anode_e_thermal + P_anode_e_phi``. The unresolved-cathode fallback
     below this function already deposits the full ``P_anode_e`` and so is
     already on the corrected anode convention.
+
+    ``anode_Te_ref_eV``, when given, records per cell the electron
+    temperature the ANODE block of the solve that deposited there ran on
+    (``SolverResult.T_e_anode``). It is the reference temperature of the
+    linear sink rate the caller builds from this row, and is written at
+    exactly the cells the anode power landed in.
     """
     p_cathode_e = result.P_cathode_e_thermal
+    p_anode_e = anode_plasma_thermal_power_W(result, anode_full_debit)
+    cathode_power_loss_W[cathode_cell] += p_cathode_e
+    if anode_pair is None:
+        anode_power_loss_W[cathode_cell] += p_anode_e
+        if anode_Te_ref_eV is not None:
+            anode_Te_ref_eV[cathode_cell] = float(result.T_e_anode)
+        return
+    gap_side, column_side = anode_pair
+    weights = anode_power_split_weights(state, derived, anode_pair)
+    anode_power_loss_W[gap_side] += weights[0] * p_anode_e
+    anode_power_loss_W[column_side] += weights[1] * p_anode_e
+    if anode_Te_ref_eV is not None:
+        anode_Te_ref_eV[gap_side] = float(result.T_e_anode)
+        anode_Te_ref_eV[column_side] = float(result.T_e_anode)
+
+
+def anode_power_split_weights(state, derived, anode_pair):
+    """Return the two flanking cells' shares of one anode's sheath power.
+
+    Bohm collection ~ n * c_s, and c_s ~ sqrt(Te/mu) with the same mu on both
+    sides, so mu cancels in the normalized split. The ONE definition: the
+    deposited row and the implicit sink rate built from it read this, so the
+    power the circuit books and the rate the substep applies cannot end up
+    split differently.
+    """
+    gap_side, column_side = anode_pair
+    weights = np.array(
+        [
+            state.n[gap_side] * np.sqrt(derived.Te[gap_side]),
+            state.n[column_side] * np.sqrt(derived.Te[column_side]),
+        ],
+        dtype=float,
+    )
+    total = weights.sum()
+    if not np.isfinite(total) or total <= 0.0:
+        return np.full(2, 0.5)
+    return weights / total
+
+
+def anode_plasma_thermal_power_W(result, anode_full_debit):
+    """Return the anode electron power [W] charged to the PLASMA store.
+
+    ``P_anode_e_thermal`` always, plus the sheath-fall share
+    ``P_anode_e_phi`` under ``anode_sheath_full_debit`` in the REPELLING
+    regime. See :func:`_deposit_electrode_power` for the two regimes and why
+    the attracting one books the thermal part alone.
+    """
     p_anode_e = result.P_anode_e_thermal
     if anode_full_debit:
         phi_a = float(result.phi_a)
@@ -3963,27 +4067,7 @@ def _deposit_electrode_power(
         # ATTRACTING anode (phi_a <= 0): the bank pays the fall, so the
         # plasma-side debit stays thermal-only and p_anode_e is left exactly
         # as the unarmed path built it. Counted by the caller, never printed.
-    cathode_power_loss_W[cathode_cell] += p_cathode_e
-    if anode_pair is None:
-        anode_power_loss_W[cathode_cell] += p_anode_e
-        return
-    gap_side, column_side = anode_pair
-    # Bohm collection ~ n * c_s, and c_s ~ sqrt(Te/mu) with the same mu on both
-    # sides, so mu cancels in the normalized split.
-    weights = np.array(
-        [
-            state.n[gap_side] * np.sqrt(derived.Te[gap_side]),
-            state.n[column_side] * np.sqrt(derived.Te[column_side]),
-        ],
-        dtype=float,
-    )
-    total = weights.sum()
-    if not np.isfinite(total) or total <= 0.0:
-        weights = np.full(2, 0.5)
-    else:
-        weights = weights / total
-    anode_power_loss_W[gap_side] += weights[0] * p_anode_e
-    anode_power_loss_W[column_side] += weights[1] * p_anode_e
+    return p_anode_e
 
 
 #: The names of the three cathode-face electron-energy rows

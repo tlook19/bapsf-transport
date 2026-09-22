@@ -373,6 +373,7 @@ def cathode_jet_carrier_rhs(
     )
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     Ti = np.asarray(derived.Ti, dtype=float)
+    Te = np.asarray(derived.Te, dtype=float)
     u_i = np.asarray(derived.u, dtype=float)
     length = np.asarray(geometry.length_cm, dtype=float)
 
@@ -418,7 +419,7 @@ def cathode_jet_carrier_rhs(
         direction = 1.0 if live == face else -1.0
         v_fast = float(
             cathode_jet_backscatter_speed(
-                cathode_jet, float(Ti[live]), ion_mass_g
+                cathode_jet, float(Te[live]), ion_mass_g
             )
         )
         if not np.isfinite(v_fast) or v_fast <= 0.0:

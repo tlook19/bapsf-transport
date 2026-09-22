@@ -307,7 +307,8 @@ NEUTRAL_RADIAL_CLOSURE_MEMBERS = (
 )
 
 #: Family K -- beam deposition, the anomalous (quasilinear) channel, and the
-#: walked tail. MEASURED 2026-08-30 at 22 keys, not the census's "~10": the
+#: walked tail. MEASURED 2026-08-30 at 22 keys and now 23 with the launch
+#: split, not the census's "~10": the
 #: census counted the tail spine and left out the excitation trio, the clump
 #: pair, the anode-reflect riders and the two interception FLAGS, all of which
 #: the same guard block couples. The enforced chain is likewise 7 deep, not 4
@@ -331,6 +332,7 @@ BEAM_TAIL_CLOSURE_MEMBERS = (
     (PARAMS, "heating_anomalous_tail_energy_keying"),
     (PARAMS, "heating_anomalous_tail_phi_c_fraction"),
     (PARAMS, "heating_anomalous_tail_cathode_boundary"),
+    (PARAMS, "heating_anomalous_tail_forward_fraction"),
     (PARAMS, "beam_tail_anode_reflected_particles"),
     (PARAMS, "beam_tail_anode_reflected_energy"),
     (PARAMS, "beam_clump_fraction"),

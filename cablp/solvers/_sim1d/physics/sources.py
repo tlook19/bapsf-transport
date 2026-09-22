@@ -679,7 +679,29 @@ def _annulus_deposit_row(dN_routed, annulus_volume_cm3):
 CATHODE_JET_ENERGY_CONVENTIONS = ("legacy", "total_reflected")
 
 
-def cathode_jet_backscatter_speed(cathode_jet, Ti_eV, ion_mass_g):
+def cathode_jet_incident_energy_eV(phi_c_V, Te_eV):
+    """Return the per-ion INCIDENT energy [eV] at the cathode face.
+
+    THE ONE DEFINITION, read by the fluid jet's launch speed below and by
+    the kinetic channel's incident-energy row, so the two arms cannot
+    describe ions arriving with different energies.
+
+    ``phi_c + Te/2``, clamped at zero: a Bohm ion enters the sheath with the
+    half-``Te`` directed energy the presheath gave it and then falls through
+    the cathode drop. That sum is exactly the circuit's own per-ion energy
+    (``cablp.cathode.circuit._P_ion``), so the power the jet launches and
+    the power ``P_cathode_i`` credits the surface with are one energy on one
+    count.
+
+    ``phi_c_V`` is the CLAMPED sheath drop the jet spec carries; ``Te_eV``
+    the local electron temperature, scalar or per-cell.
+    """
+    return np.maximum(
+        float(phi_c_V) + 0.5 * np.asarray(Te_eV, dtype=float), 0.0
+    )
+
+
+def cathode_jet_backscatter_speed(cathode_jet, Te_eV, ion_mass_g):
     """Return the cathode jet's backscatter launch speed [cm s^-1].
 
     THE ONE SPEC. Every consumer of the backscattered atoms' kinetic energy
@@ -690,16 +712,18 @@ def cathode_jet_backscatter_speed(cathode_jet, Ti_eV, ion_mass_g):
     moving at two different speeds.
 
     ``cathode_jet`` is the jet spec dict (``R_N``, ``R_E``, ``phi_c_V``,
-    ``T_s_K``, and optionally ``energy_convention``); ``Ti_eV`` is the local
-    ion temperature [eV], scalar or per-cell; ``ion_mass_g`` the ion mass [g].
-    The incident per-particle energy is ``phi_c + Ti`` [eV], clamped at zero.
+    ``T_s_K``, and optionally ``energy_convention``); ``Te_eV`` is the local
+    electron temperature [eV], scalar or per-cell; ``ion_mass_g`` the ion mass
+    [g]. The incident per-particle energy is
+    :func:`cathode_jet_incident_energy_eV`, the circuit's own ``phi_c + Te/2``
+    -- the SAME number the kinetic channel's incident-energy row reads.
 
     ``energy_convention`` fixes what ``R_E`` means, and therefore how much
     energy one backscattered atom leaves with:
 
     ``"legacy"`` (the default when the key is absent)
         ``R_E`` is read PER BACKSCATTERED PARTICLE:
-        ``v_back = sqrt(2 R_E (phi_c + Ti)/m)``. Only the ``R_N`` reflected
+        ``v_back = sqrt(2 R_E (phi_c + Te/2)/m)``. Only the ``R_N`` reflected
         fraction carries it, so the gas receives ``R_N R_E`` of the incident
         ion power.
     ``"total_reflected"``
@@ -708,7 +732,7 @@ def cathode_jet_backscatter_speed(cathode_jet, Ti_eV, ion_mass_g):
         convention :func:`~cablp.solvers._sim1d.solver.LAPDSim1D` debits the
         cathode surface by. The ``R_N`` reflected particles carry all of it,
         so each leaves with ``R_E/R_N`` of the incident energy:
-        ``v_back = sqrt(2 (R_E/R_N) (phi_c + Ti)/m)`` and the gas receives
+        ``v_back = sqrt(2 (R_E/R_N)(phi_c + Te/2)/m)`` and the gas receives
         ``R_E`` of the incident ion power.
 
     Raises ``ValueError`` for any other ``energy_convention`` string.
@@ -727,7 +751,7 @@ def cathode_jet_backscatter_speed(cathode_jet, Ti_eV, ion_mass_g):
     return np.sqrt(
         2.0
         * energy_fraction
-        * np.maximum(float(cathode_jet["phi_c_V"]) + Ti_eV, 0.0)
+        * cathode_jet_incident_energy_eV(cathode_jet["phi_c_V"], Te_eV)
         * ev_to_erg
         / ion_mass_g
     )
@@ -1101,7 +1125,7 @@ def characteristic_boundary_rhs(
             routed_abs[live] += cell_loss
         if jet_active and roles[live] == "cathode":
             v_back = cathode_jet_backscatter_speed(
-                cathode_jet, Ti_l, ion_mass_g
+                cathode_jet, Te_l, ion_mass_g
             )
             R_N = float(cathode_jet["R_N"])
             if carrier_active:

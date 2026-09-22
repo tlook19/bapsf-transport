@@ -302,6 +302,13 @@ class SolverResult:
     beam_bypass_fraction: float = 0.0
     # Beam mean free path [cm]; 0.0 if beam parameters not provided
     l_b: float = 0.0
+    # The electron temperature [eV] the ANODE block of this solve ran on: the
+    # caller's ``anode_T_e`` sample where one was given, and the cathode's own
+    # ``T_e`` otherwise. Every anode quantity below -- ``phi_a`` and the four
+    # ``P_anode_*`` members -- is referenced to it, so a consumer that wants
+    # the anode rows at some other temperature has the scaling temperature
+    # here rather than having to guess which sample the solve used.
+    T_e_anode: float = 0.0
     # R3.2 (A16) one-control-surface split. Each electrode
     # power splits into a PLASMA-THERMAL part (Te/2 per ion, 2Te per electron --
     # sourced from the plasma thermal store) and a SHEATH-FALL phi part (sourced
@@ -1475,6 +1482,7 @@ def solve(
         long_mfp=long_mfp,
         beam_bypass_fraction=beam_bypass_fraction,
         l_b=l_b,
+        T_e_anode=T_e_anode,
     )
 
 

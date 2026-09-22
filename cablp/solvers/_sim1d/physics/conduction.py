@@ -14,8 +14,11 @@ from ..core.state import ConservativeState1D, derive_state
 HEAT_DT_FRACTION = 0.25
 
 # Named discretizations for the implicit heat substep, which advances
-#   C dT/dt = -K T
-# with the conductivity inside K frozen at the incoming state.
+#   C dT/dt = -(K + nu C) T + S
+# with the conductivity inside K frozen at the incoming state (or Picard-
+# iterated), and the electron-energy reaction rate nu and source S held
+# constant over the substep. nu and S are absent unless the caller hands
+# them in; K alone is the historical operator.
 #
 # Theta methods solve
 #   (C + theta*dt*K) T_new = C*T_old - (1 - theta)*dt*K*T_old
@@ -279,6 +282,8 @@ def implicit_heat_conduction_step(
     heat_flux_limiter_f=0.3,
     heat_flux_limiter_exponent=1.0,
     ee_source=None,
+    ee_sink_rate=None,
+    ledger_out=None,
 ):
     """Return a state after one implicit heat step.
 
@@ -298,6 +303,32 @@ def implicit_heat_conduction_step(
     (``K = 0``): the theta methods trivially, and TR-BDF2 because its two
     stage weights sum to one (``gamma/(gamma(2-gamma)) + gamma/2 = 1`` at
     ``gamma = 2 - sqrt(2)``).
+
+    ``ee_sink_rate`` [s^-1], when given, is a per-cell first-order LOSS rate
+    ``nu >= 0`` on the electron temperature, solved together with the
+    conduction operator: the substep advances
+    ``C dTe/dt = -K Te - nu C Te + ee_source``. The ion solve is never given
+    one. It carries the electrode electron-sheath debit when the operator
+    split is in force; the term is then removed from the explicit operator, so
+    the sink enters here INSTEAD OF there and is not an extra booking. ``nu``
+    is held CONSTANT over the substep -- it depends on the density, the
+    circuit solve and the split weights, none of which this substep moves --
+    so the Picard loop below re-evaluates the conductivity only, and each
+    scheme integrates the reaction term at its own order. The enlarged
+    operator ``K + nu C`` keeps the matrix an M-matrix, so ``backward_euler``
+    stays monotone (``T >= 0`` structurally); the second-order schemes ring
+    at large ``nu*dt`` exactly as they do on a stiff conduction mode, which is
+    what the accuracy bound on ``nu*dt`` exists to keep out of the run.
+    ``None`` (the default) is the historical path, expression for expression.
+
+    ``ledger_out``, when a dict is given, receives the realised per-cell
+    ELECTRON energy increments of the substep [erg cm^-3]:
+    ``Ee_conduction_erg_cm3``, ``Ee_sink_erg_cm3`` (<= 0) and
+    ``Ee_source_erg_cm3``. They are written at the scheme's own stage weights
+    and BEFORE the temperature floor is applied, so
+    ``C*(Te_preclip - Te_old) == conduction + sink + source`` holds per cell to
+    round-off whenever the floor is inactive. The last Picard iteration's
+    values are the ones left in the dict.
 
     ``heat_picard_iterations`` controls how the Braginskii conductivity, which
     depends on temperature as roughly T^(5/2), is evaluated:
@@ -321,7 +352,16 @@ def implicit_heat_conduction_step(
         raise ValueError(f"dt must be positive (got {dt})")
     scheme = validate_implicit_heat_scheme(implicit_heat_scheme)
     iterations = max(int(heat_picard_iterations), 0)
-    if not heat_conduction:
+    sink_rate = None
+    if ee_sink_rate is not None:
+        sink_rate = np.asarray(ee_sink_rate, dtype=float)
+        if not np.all(np.isfinite(sink_rate)) or np.any(sink_rate < 0.0):
+            raise ValueError(
+                "ee_sink_rate must be finite and non-negative per cell "
+                "(a loss rate); got min="
+                f"{np.min(sink_rate)!r}, max={np.max(sink_rate)!r}"
+            )
+    if not heat_conduction and sink_rate is None:
         # No conduction operator to solve against, but the substep still OWNS
         # the source it was handed: dropping it would delete energy the
         # explicit operator has already stopped booking. K = 0 makes the exact
@@ -332,6 +372,15 @@ def implicit_heat_conduction_step(
             if ee_source is None
             else state.Ee + dt * np.asarray(ee_source, dtype=float)
         )
+        if ledger_out is not None:
+            zeros_ledger = np.zeros_like(np.asarray(state.Ee, dtype=float))
+            ledger_out["Ee_conduction_erg_cm3"] = zeros_ledger
+            ledger_out["Ee_sink_erg_cm3"] = zeros_ledger.copy()
+            ledger_out["Ee_source_erg_cm3"] = (
+                zeros_ledger.copy()
+                if ee_source is None
+                else dt * np.asarray(ee_source, dtype=float)
+            )
         return ConservativeState1D(
             n=state.n.copy(),
             nn=state.nn.copy(),
@@ -368,17 +417,24 @@ def implicit_heat_conduction_step(
         # on healthy runs and merely keeps bad steps finite and rejectable.
         Te_eval = np.minimum(Te_eval, 1.0e4)
         Ti_eval = np.minimum(Ti_eval, 1.0e4)
-        conductivity_e, conductivity_i = _parallel_conductivities(
-            Te=Te_eval,
-            Ti=Ti_eval,
-            n=n,
-            mu=mu,
-        )
-        if electron_heat_flux_limit:
-            conductivity_e = flux_limited_electron_conductivity(
-                conductivity_e, Te_eval, n, geometry, heat_flux_limiter_f,
-                exponent=heat_flux_limiter_exponent,
+        if heat_conduction:
+            conductivity_e, conductivity_i = _parallel_conductivities(
+                Te=Te_eval,
+                Ti=Ti_eval,
+                n=n,
+                mu=mu,
             )
+            if electron_heat_flux_limit:
+                conductivity_e = flux_limited_electron_conductivity(
+                    conductivity_e, Te_eval, n, geometry, heat_flux_limiter_f,
+                    exponent=heat_flux_limiter_exponent,
+                )
+        else:
+            # Reached only with a sink to apply (the no-sink case returned
+            # above). K = 0 leaves the banded operator diagonal, so the same
+            # scheme integrates the pure decay ``C dTe/dt = -nu C Te + S``.
+            conductivity_e = np.zeros_like(n)
+            conductivity_i = np.zeros_like(n)
         Ee = _implicit_species_energy(
             energy=state.Ee,
             capacity=capacity,
@@ -388,6 +444,8 @@ def implicit_heat_conduction_step(
             dt=dt,
             scheme=scheme,
             source=ee_source,
+            sink_rate=sink_rate,
+            ledger_out=ledger_out,
         )
         Ei = _implicit_species_energy(
             energy=state.Ei,
@@ -496,6 +554,8 @@ def _implicit_species_energy(
     dt,
     scheme="backward_euler",
     source=None,
+    sink_rate=None,
+    ledger_out=None,
 ):
     energy = np.asarray(energy, dtype=float)
     kwargs = dict(
@@ -506,6 +566,8 @@ def _implicit_species_energy(
         geometry=geometry,
         dt=dt,
         source=source,
+        sink_rate=sink_rate,
+        ledger_out=ledger_out,
     )
     if scheme == TR_BDF2:
         temperature = _tr_bdf2_temperature(**kwargs)
@@ -531,28 +593,52 @@ def _theta_temperature(
     dt,
     theta,
     source=None,
+    sink_rate=None,
+    ledger_out=None,
 ):
     # The implicit operator carries theta*dt; the remaining (1 - theta)*dt of
     # the conduction is applied explicitly on the right-hand side below.
-    banded = _banded_heat_operator(capacity, conductivity, geometry, theta * dt)
+    banded = _banded_heat_operator(
+        capacity, conductivity, geometry, theta * dt, sink_rate=sink_rate
+    )
     rhs = energy
+    old_temperature = None
     if theta != 1.0:
         # _conductive_divergence is exactly -K*T_old over the same face
         # coefficients as the implicit operator, so the explicit and implicit
         # halves stay consistent by construction. theta=1 keeps rhs as the raw
         # conservative energy, reproducing the original backward-Euler solve
         # bit-for-bit.
+        old_temperature = np.maximum(energy / capacity, temperature_floor)
         rhs = energy + (1.0 - theta) * dt * _conductive_divergence(
-            np.maximum(energy / capacity, temperature_floor),
+            old_temperature,
             conductivity,
             geometry,
         )
+        if sink_rate is not None:
+            # The reaction term's explicit share, at the same T_old and the
+            # same (1 - theta) weight the conduction share carries.
+            rhs = rhs - (1.0 - theta) * dt * sink_rate * capacity * old_temperature
     if source is not None:
         # A constant source over the substep is theta-independent: it
         # contributes theta*dt*S implicitly and (1 - theta)*dt*S explicitly,
         # which is dt*S either way.
         rhs = rhs + dt * np.asarray(source, dtype=float)
-    return solve_banded((1, 1), banded, rhs)
+    temperature = solve_banded((1, 1), banded, rhs)
+    if ledger_out is not None:
+        if old_temperature is None:
+            old_temperature = np.maximum(energy / capacity, temperature_floor)
+        _write_substep_ledger(
+            ledger_out,
+            blended=theta * temperature + (1.0 - theta) * old_temperature,
+            capacity=capacity,
+            conductivity=conductivity,
+            geometry=geometry,
+            dt=dt,
+            source=source,
+            sink_rate=sink_rate,
+        )
+    return temperature
 
 
 def _tr_bdf2_temperature(
@@ -563,6 +649,8 @@ def _tr_bdf2_temperature(
     geometry,
     dt,
     source=None,
+    sink_rate=None,
+    ledger_out=None,
 ):
     old_temperature = np.maximum(energy / capacity, temperature_floor)
     # Both stages share this operator -- that is what gamma = 2 - sqrt(2) buys.
@@ -571,12 +659,20 @@ def _tr_bdf2_temperature(
         conductivity,
         geometry,
         _TR_BDF2_IMPLICIT * dt,
+        sink_rate=sink_rate,
     )
     # Stage 1: trapezoidal rule out to t + gamma*dt, i.e. Crank-Nicolson over a
     # step of gamma*dt, whose implicit weight is (gamma/2)*dt = _TR_BDF2_IMPLICIT*dt.
     stage_1_rhs = energy + _TR_BDF2_IMPLICIT * dt * _conductive_divergence(
         old_temperature, conductivity, geometry
     )
+    if sink_rate is not None:
+        # The trapezoidal stage's explicit half of the reaction term, under
+        # the same weight the conduction half above carries.
+        stage_1_rhs = (
+            stage_1_rhs
+            - _TR_BDF2_IMPLICIT * dt * sink_rate * capacity * old_temperature
+        )
     if source is not None:
         # The trapezoidal stage spans gamma*dt, and a constant source over it
         # contributes gamma*dt*S regardless of the trapezoid weighting.
@@ -601,16 +697,65 @@ def _tr_bdf2_temperature(
         stage_2_rhs = stage_2_rhs + _TR_BDF2_IMPLICIT * dt * np.asarray(
             source, dtype=float
         )
-    return solve_banded((1, 1), banded, stage_2_rhs)
+    temperature = solve_banded((1, 1), banded, stage_2_rhs)
+    if ledger_out is not None:
+        # Substituting the stage-1 identity into the stage-2 one gives
+        #   C*(T_new - T_old) = -dt*L*[a*g/2*(T_old + T_gamma) + g/2*T_new]
+        #                       + (a*g + g/2)*dt*S
+        # with L = K + nu*C, a = _TR_BDF2_A and g/2 = _TR_BDF2_IMPLICIT. The
+        # three weights sum to one, and so does the source pair.
+        _write_substep_ledger(
+            ledger_out,
+            blended=(
+                _TR_BDF2_A
+                * _TR_BDF2_IMPLICIT
+                * (old_temperature + gamma_temperature)
+                + _TR_BDF2_IMPLICIT * temperature
+            ),
+            capacity=capacity,
+            conductivity=conductivity,
+            geometry=geometry,
+            dt=dt,
+            source=source,
+            sink_rate=sink_rate,
+        )
+    return temperature
 
 
-def _banded_heat_operator(capacity, conductivity, geometry, dt):
-    """Return ``C + dt*K`` in scipy banded form."""
+def _write_substep_ledger(
+    ledger_out, blended, capacity, conductivity, geometry, dt, source, sink_rate
+):
+    """Record the substep's realised per-cell energy increments [erg cm^-3].
+
+    ``blended`` is the scheme's own stage-weighted temperature -- the single
+    point at which applying the (linear) operator reproduces the scheme's
+    update exactly -- so the three rows written here sum to
+    ``C*(T_new_preclip - T_old)`` to round-off whenever the temperature floor
+    is inactive.
+    """
+    ledger_out["Ee_conduction_erg_cm3"] = dt * _conductive_divergence(
+        blended, conductivity, geometry
+    )
+    ledger_out["Ee_sink_erg_cm3"] = (
+        np.zeros_like(blended)
+        if sink_rate is None
+        else -dt * sink_rate * capacity * blended
+    )
+    ledger_out["Ee_source_erg_cm3"] = (
+        np.zeros_like(blended)
+        if source is None
+        else dt * np.asarray(source, dtype=float)
+    )
+
+
+def _banded_heat_operator(capacity, conductivity, geometry, dt, sink_rate=None):
+    """Return ``C + dt*(K + nu*C)`` in scipy banded form."""
     lower, diagonal, upper = _implicit_heat_diagonals(
         capacity=capacity,
         conductivity=conductivity,
         geometry=geometry,
         dt=dt,
+        sink_rate=sink_rate,
     )
     banded = np.zeros((3, geometry.cells), dtype=float)
     banded[0, 1:] = upper
@@ -631,7 +776,7 @@ def _conductive_divergence(temperature, conductivity, geometry):
     )
 
 
-def _implicit_heat_diagonals(capacity, conductivity, geometry, dt):
+def _implicit_heat_diagonals(capacity, conductivity, geometry, dt, sink_rate=None):
     face_coeff = np.zeros(geometry.cells + 1, dtype=float)
     k_face = 0.5 * (conductivity[:-1] + conductivity[1:])
     # Must carry the same throttle as the explicit conductive_face_flux, or the
@@ -645,6 +790,11 @@ def _implicit_heat_diagonals(capacity, conductivity, geometry, dt):
     left = dt * face_coeff[:-1] / geometry.plasma_volume_cm3
     right = dt * face_coeff[1:] / geometry.plasma_volume_cm3
     diagonal = capacity + left + right
+    if sink_rate is not None:
+        # A non-negative reaction rate only enlarges the diagonal, so the
+        # operator stays an irreducibly diagonally dominant M-matrix and the
+        # banded solve keeps its monotone inverse.
+        diagonal = diagonal + dt * sink_rate * capacity
     lower = -left[1:]
     upper = -right[:-1]
     return lower, diagonal, upper

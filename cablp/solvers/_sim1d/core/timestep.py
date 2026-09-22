@@ -33,6 +33,14 @@ from .state import derive_state
 #: forward-Euler factor (1 - dt nu_in) stays at 1/2 or above.
 DRAG_DT_FRACTION = 0.5
 
+#: Fraction [dimensionless] of the electrode electron-energy sink's own
+#: relaxation time 1/nu the accepted step may take. The sink is solved
+#: IMPLICITLY and is therefore unconditionally stable at any step, so this is
+#: an ACCURACY bound, not a stability one: at nu*dt <= 1 the second-order
+#: substep stays in its resolved regime instead of merely being stable while
+#: the anode sheath flips regime step to step.
+ELECTRODE_SINK_DT_FRACTION = 1.0
+
 
 @dataclass(frozen=True)
 class TimestepDiagnostics:
@@ -81,6 +89,12 @@ class TimestepDiagnostics:
     # energy_exchange_rate_fraction at None -- the candidate is presence-gated
     # on that key, so an unarmed run's dt sequence cannot move.
     dt_energy_exchange_rate: float = np.inf
+    # The electrode electron-energy sink's ACCURACY bound. Defaulted (and
+    # inf) so results written before it existed still load, and inf on every
+    # run whose operator split is off -- the candidate is presence-gated on
+    # the sink rate actually being handed to the implicit substep, so a
+    # non-split run's dt sequence cannot move.
+    dt_electrode_sink_rate: float = np.inf
     accepted_dt: float = np.nan
     # The dt_min clamp as a fact about the ACCEPTED step, which is a different
     # statement from ``clamped_to_dt_min`` above. That flag is computed from
@@ -126,6 +140,7 @@ def suggest_timestep(
     neutral_energy_kwargs=None,
     circuit_kwargs=None,
     plasma_source_rhs=None,
+    electrode_sink_rate=None,
     source_floor_exempt_rtol=None,
     source_floor_exempt_exit_rtol=None,
     source_floor_exempt_latch=None,
@@ -177,6 +192,13 @@ def suggest_timestep(
     census separates it from the fractional-change ``energy_exchange`` bound
     it is the min with. ``None`` -- the default -- withdraws it to ``inf``.
     See ``energy_exchange_rate_timestep``.
+
+    ``electrode_sink_rate`` is the per-cell electron-energy loss rate the
+    IMPLICIT heat substep carries (``solver.electrode_ee_sink_rate``), and
+    arms the ``electrode_sink_rate`` candidate. It is the one candidate that
+    bounds an implicitly-applied term, so it is an accuracy bound rather
+    than a stability one; see ``electrode_sink_rate_timestep``. ``None`` --
+    every run whose operator split is off -- withdraws it to ``inf``.
 
     ``dt_global_scale`` is a measurement instrument, not a bound: it
     multiplies the returned step AFTER every candidate and after the
@@ -275,6 +297,10 @@ def suggest_timestep(
             energy_exchange_rate_fraction=energy_exchange_rate_fraction,
             plasma_active=plasma_active,
         ),
+        "electrode_sink_rate": electrode_sink_rate_timestep(
+            electrode_sink_rate=electrode_sink_rate,
+            plasma_active=plasma_active,
+        ),
         "electron_cooling": electron_cooling_timestep(
             state=state,
             floors=floors,
@@ -357,6 +383,7 @@ def suggest_timestep(
         dt_raw=float(raw_dt),
         dt_neutral_energy=float(dt_candidates["neutral_energy"]),
         dt_energy_exchange_rate=float(dt_candidates["energy_exchange_rate"]),
+        dt_electrode_sink_rate=float(dt_candidates["electrode_sink_rate"]),
         dt_global_scale=float(dt_global_scale),
     )
 
@@ -910,6 +937,37 @@ def energy_exchange_rate_timestep(
     if not rate_max > 0.0:
         return np.inf
     return float(energy_exchange_rate_fraction) / rate_max
+
+
+def electrode_sink_rate_timestep(electrode_sink_rate=None, plasma_active=None):
+    """Return an ACCURACY bound on the implicit electrode electron sink.
+
+    The sink is solved inside the implicit heat substep, so it needs no
+    stability bound at all: the enlarged operator is L-stable and the step
+    could be many relaxation times long without the solve noticing. What it
+    would lose there is ACCURACY -- the second-order substep only expresses
+    its order while ``nu*dt`` is order one, and the anode sheath's regime
+    (repelling vs attracting) can flip between steps taken that long.
+
+    ``ELECTRODE_SINK_DT_FRACTION`` is the ``c`` in ``dt <= c / nu_max``, the
+    maximum taken over the plasma-active cells. ``None`` -- every run whose
+    operator split is off, so the row is applied explicitly by operator A
+    and bounded by the ``surface_loss`` bundle instead -- withdraws the
+    candidate to ``inf``.
+
+    Returns seconds.
+    """
+    if electrode_sink_rate is None:
+        return np.inf
+    rate = _active_values(
+        np.asarray(electrode_sink_rate, dtype=float), plasma_active
+    )
+    if rate.size == 0:
+        return np.inf
+    rate_max = float(np.max(rate))
+    if not rate_max > 0.0:
+        return np.inf
+    return float(ELECTRODE_SINK_DT_FRACTION) / rate_max
 
 
 def electron_cooling_timestep(

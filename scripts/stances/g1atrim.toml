@@ -536,6 +536,10 @@ heating_anomalous_tail_energy_eV = 75.0
 heating_anomalous_tail_ionization = "on"
 heating_anomalous_tail_energy_keying = "phi_c"
 heating_anomalous_tail_cathode_boundary = "reflect"
+# The launch split of the walked groups: half each way along B, which
+# is what an isotropic quasilinear plateau launches. Stated because the
+# block form is the family's complete inventory, not because it moves.
+heating_anomalous_tail_forward_fraction = 0.5
 beam_tail_anode_reflected_particles = 0.0
 beam_tail_anode_reflected_energy = 0.0
 beam_clump_fraction = 0.0

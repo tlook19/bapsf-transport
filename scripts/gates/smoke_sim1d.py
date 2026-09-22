@@ -142,6 +142,7 @@ from cablp.solvers._sim1d import (
 from cablp.solvers._sim1d.physics.conduction import (
     conductive_face_flux,
     heat_conduction_rhs,
+    heat_conduction_timestep_bound,
     implicit_heat_conduction_step,
 )
 from cablp.solvers._sim1d.physics.cathode import (
@@ -210,6 +211,8 @@ from cablp.solvers._sim1d.physics.neutrals import (
     two_zone_knudsen_coefficients,
 )
 from cablp.solvers._sim1d.core.timestep import (
+    ELECTRODE_SINK_DT_FRACTION,
+    electrode_sink_rate_timestep,
     neutral_wind_timestep,
     plasma_source_timestep,
     suggest_timestep,
@@ -6484,6 +6487,38 @@ def _case_tail_forward_energy_closure(k7_params, tf_launched):
             assert abs(tf_delivered - tf_launched) / tf_launched < 1e-12, (
                 tf_f, tf_label, tf_launched, tf_delivered
             )
+    # --- AND ON THE PRODUCTION ROUTE. The three routes above are tail_walk
+    # arms; the reference configuration runs plateau_multigroup, which walks
+    # a SPECTRUM of groups rather than one tail line and launches each group
+    # at the same split. Its closure is stated against its OWN withheld bank
+    # (the groups' launched power), because the multigroup arm withholds a
+    # different bank from the single-line arm -- so this is the split moving
+    # no power on the route the stance actually takes, not a second reading
+    # of the single-line number.
+    for tf_f in (0.5, 0.75, 1.0):
+        tf_mg_dep = _tf_dep(
+            k7_params,
+            {
+                "heating_anomalous_transport": "plateau_multigroup",
+                "heating_anomalous_tail_phi_c_fraction": None,
+            },
+            forward=tf_f,
+        )
+        tf_mg_launched = float(tf_mg_dep.tail_power_erg_s)
+        assert tf_mg_launched > 0.0, tf_f
+        tf_mg_delivered = (
+            float(tf_mg_dep.heating_anomalous_erg_s.sum())
+            + float(tf_mg_dep.ionization_cost_tail_erg_s.sum())
+            + float(tf_mg_dep.radiated_tail_erg_s.sum())
+            + float(tf_mg_dep.end_loss_tail_low_erg_s)
+            + float(tf_mg_dep.end_loss_tail_high_erg_s)
+            - float(tf_mg_dep.plateau_wave_power_erg_s)
+        )
+        assert abs(
+            tf_mg_delivered - tf_mg_launched
+        ) / tf_mg_launched < 1e-12, (
+            tf_f, tf_mg_launched, tf_mg_delivered
+        )
     return locals()
 
 
@@ -15920,9 +15955,15 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     jet_RE = float(jet_params.get("cathode_jet_R_E", 0.2))
     jet_Ts = float(jet_params["cathode_Ts_base_K"])
     jet_veff = np.sqrt(np.pi * jet_kb * jet_Ts / (2.0 * jet_m))
+    # The incident per-ion energy is the CIRCUIT's own phi_c + Te/2 -- the
+    # half-Te the presheath gave the Bohm ion plus the fall it drops through
+    # -- restated here rather than read from the helper, so a change to the
+    # helper has to be made twice to pass.
     jet_vback = np.sqrt(
         2.0 * jet_RE
-        * (max(jet_res.phi_c, 0.0) + jet_derived.Ti[jet_cath])
+        * max(
+            max(jet_res.phi_c, 0.0) + 0.5 * jet_derived.Te[jet_cath], 0.0
+        )
         * ev_to_erg / jet_m
     )
     jet_vmix = jet_RN * jet_vback + (1.0 - jet_RN) * jet_veff
@@ -16141,7 +16182,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         )
         jet_en_cath = np.asarray(jet_en_sim.geometry.cell_role) == "cathode"
         jet_en_vback = cathode_jet_backscatter_speed(
-            jet_en_spec, jet_en_derived.Ti, jet_en_sim.ion_mass_g
+            jet_en_spec, jet_en_derived.Te, jet_en_sim.ion_mass_g
         )
         # Per-particle: what the backscattered share actually carries, and
         # what the surface debit gave up for it.
@@ -16150,7 +16191,10 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         )[jet_en_cath]
         jet_en_debited = (
             jet_RE
-            * (jet_en_spec["phi_c_V"] + jet_en_derived.Ti[jet_en_cath])
+            * (
+                jet_en_spec["phi_c_V"]
+                + 0.5 * jet_en_derived.Te[jet_en_cath]
+            )
             * ev_to_erg
         )
         assert np.all(jet_en_debited > 0.0)
@@ -16337,7 +16381,7 @@ def _case_cathode_jet_hot_carrier():
     hc_spec = hc_on._cathode_jet_spec(hc_solve)
     hc_der = derive_state(hc_state, hc_on.floors, hc_on.ion_mass_g)
     hc_RN = float(hc_spec["R_N"])
-    hc_vback = _hc_vback(hc_spec, hc_der.Ti, hc_on.ion_mass_g)
+    hc_vback = _hc_vback(hc_spec, hc_der.Te, hc_on.ion_mass_g)
     hc_ejet = hc_RN * 0.5 * hc_on.ion_mass_g * hc_vback**2 + (
         1.0 - hc_RN
     ) * (1.5 * hc_kb * max(float(hc_spec["T_s_K"]), 0.0))
@@ -16812,6 +16856,14 @@ def _case_electrode_sample_smoothing(m3_params):
             "neutral_prebreakdown": False,
             "neutral_equilibration": False,
             "launch_plasma_after_equilibration": False,
+            # This block and the R1b/R1c blocks built on it step with
+            # ``operator_split=False`` on purpose -- they are about the
+            # explicit operator's own rows and rejection machinery. The
+            # split stance moves the anode electron-sheath debit into the
+            # implicit substep, and a non-split step then has nowhere to
+            # apply it, which the solver refuses; so the stance here is the
+            # one these steps actually take.
+            "implicit_heat_conduction": False,
         }
     )
     # R1b below walks the five/six/seven/eight-row layouts by ADDING closure
@@ -24044,6 +24096,40 @@ def _case_cathode_closed_audit_export():
             ce_vals = np.asarray(ce_dg[f"source_{ce_key}"], dtype=float)
             assert ce_vals.shape == ce_loaded.time.shape, ce_key
             assert np.all(np.isfinite(ce_vals)), ce_key
+
+        # (a2) THE ANODE'S OWN TEMPERATURE AND ITS ENERGY PAIR. The solve's
+        # anode block runs on ``T_e_anode`` and every anode member is
+        # referenced to it, so it is exported beside them. The four
+        # ``anode_e_sheath_*`` scalars are the implicit substep's
+        # reconciliation -- what the circuit charged against what the
+        # plasma paid -- and are UNCONDITIONAL, so they are present here
+        # even on a run whose window books nothing.
+        assert "T_e_anode" in _CATHODE_RESULT_KEYS
+        assert "T_e_anode" not in ce_closed
+        assert "T_e_anode" not in _CURRENT_DRIVEN_ONLY_CATHODE_KEYS
+        ce_Te_a = np.asarray(ce_dg["source_T_e_anode"], dtype=float)
+        assert ce_Te_a.shape == ce_loaded.time.shape
+        assert np.all(np.isfinite(ce_Te_a))
+        ce_has_solution = (
+            np.asarray(ce_dg["has_solution"], dtype=float) == 1.0
+        )
+        assert np.all(ce_Te_a[ce_has_solution] > 0.0), ce_Te_a
+        assert "end_T_e_anode" not in ce_dg
+        for ce_pair_key in (
+            "anode_e_sheath_booked_W", "anode_e_sheath_realised_W",
+            "anode_e_sheath_booked_J", "anode_e_sheath_realised_J",
+        ):
+            assert ce_pair_key in ce_dg, ce_pair_key
+            ce_pair_vals = np.asarray(ce_dg[ce_pair_key], dtype=float)
+            assert ce_pair_vals.shape == ce_loaded.time.shape, ce_pair_key
+            assert np.all(np.isfinite(ce_pair_vals)), ce_pair_key
+            assert np.all(ce_pair_vals >= 0.0), ce_pair_key
+        # The cumulative rows never decrease.
+        for ce_pair_key in (
+            "anode_e_sheath_booked_J", "anode_e_sheath_realised_J",
+        ):
+            ce_pair_vals = np.asarray(ce_dg[ce_pair_key], dtype=float)
+            assert np.all(np.diff(ce_pair_vals) >= 0.0), ce_pair_key
 
         # (b) THE RESIDUALS ARE THE CLOSURE NUMBERS. Row-relative against the
         # row each one is a residual OF, and both rows are asserted physical
@@ -31788,6 +31874,735 @@ def _case_cathode_jet_incident_power_one_book():
     ) <= 1.0e-14, (_cp_ledger, _cp_accum, _cp_R_E)
 
 
+def _anode_sink_config():
+    """A small split-stance configuration with a live cathode and anode.
+
+    ``default_config()`` ships ``implicit_heat_conduction`` on, so the anode
+    electron-sheath row is in the implicit substep here -- which is what
+    these cases are about. The scheduled phases put the run straight into
+    the discharge so the anode actually collects.
+    """
+    params, flags = default_config()
+    params.update({
+        "nx": 16,
+        "nx_gap": 2,
+        "ne0": 5.0e11,
+        "nn0": 2.0e13,
+        "Te0": 3.0,
+        "Ti0": 1.0,
+        "phase_transition_mode": "scheduled",
+        "tau_prebreakdown": 0.0,
+        "tau_breakdown": 0.0,
+        "tau_discharge": 1.0e-3,
+    })
+    flags.update({
+        "cathode_coupling": True,
+        "neutral_prebreakdown": False,
+        "neutral_equilibration": False,
+        "launch_plasma_after_equilibration": False,
+    })
+    return params, flags
+
+
+def _anode_sink_sim(steps=60):
+    """A stepped sim on ``_anode_sink_config`` plus its anode cell pair."""
+    params, flags = _anode_sink_config()
+    sim = LAPDSim1D(params, flags)
+    for _ in range(steps):
+        sim.advance_one_step()
+    pair = anode_flanking_cells(sim.geometry)[0]
+    return sim, [int(pair[0]), int(pair[1])]
+
+
+def _ee_sink_fixture():
+    """(sim, state, geometry, floors, capacity, nu) for the substep sink cases.
+
+    The floors are pushed to -inf on both temperatures so the substep's one
+    clip site is inert: the realised-increment ledger is defined against the
+    PRE-clip temperature, so the closure identity is only exact where nothing
+    is clipped.
+    """
+    sim, snapshot = _base_sim()
+    geometry = snapshot.geometry
+    floors = dict(sim.floors)
+    floors["Te"] = -np.inf
+    floors["Ti"] = -np.inf
+    # A conducting, non-uniform plateau-like column, so the conduction
+    # operator is genuinely live beside the reaction term (the base
+    # snapshot's quiescent 0.21 eV / 1e9 cm^-3 state has no gradient at all
+    # and would leave K exactly zero).
+    axis = np.linspace(0.0, 1.0, geometry.cells)
+    n_profile = 1.0e12 * (1.0 + 0.4 * np.sin(2.0 * np.pi * axis))
+    Te_profile = 5.0 + 2.5 * np.cos(3.0 * np.pi * axis)
+    Ti_profile = 1.5 + 0.4 * np.sin(5.0 * np.pi * axis)
+    state = conservative_from_primitives(
+        n=n_profile,
+        nn=np.full(geometry.cells, 1.0e13),
+        u=np.zeros(geometry.cells),
+        Te=Te_profile,
+        Ti=Ti_profile,
+        ion_mass_g=sim.ion_mass_g,
+    )
+    n_floored = np.maximum(state.n, floors["n"])
+    capacity = 1.5 * n_floored * ev_to_erg
+    # A two-cell profile in the anode's own shape: a strong rate on the two
+    # flanking cells, exact zero everywhere else.
+    nu = np.zeros(geometry.cells, dtype=float)
+    pairs = anode_flanking_cells(geometry)
+    assert pairs, "the base stance must resolve an anode"
+    gap_side, column_side = pairs[0]
+    nu[gap_side] = 3.6e5
+    nu[column_side] = 3.8e5
+    return sim, state, geometry, floors, capacity, nu
+
+
+def _ee_sink_step(sim, state, geometry, floors, dt, scheme, picard, **kwargs):
+    """One bare ``implicit_heat_conduction_step`` on the fixture's arguments."""
+    return implicit_heat_conduction_step(
+        state=state,
+        floors=floors,
+        ion_mass_g=sim.ion_mass_g,
+        mu=sim.mu,
+        geometry=geometry,
+        dt=dt,
+        implicit_heat_scheme=scheme,
+        heat_picard_iterations=picard,
+        heat_picard_tol=1.0e-12,
+        **kwargs,
+    )
+
+
+# ----------------------------------------------------------------------
+# implicit-ee-sink-substep-identity
+# ----------------------------------------------------------------------
+@_case("implicit-ee-sink-substep-identity", historical_stance=True)
+def _case_implicit_ee_sink_substep_identity():
+    sim, state, geometry, floors, capacity, nu = _ee_sink_fixture()
+    dt = 6.0e-7
+    Te_old = np.asarray(state.Ee, dtype=float) / capacity
+    # Sized against the store the substep is moving, so neither the source
+    # nor the sink drives the temperature through zero.
+    source = (
+        np.linspace(-0.05, 0.10, geometry.cells) * np.asarray(state.Ee) / dt
+    )
+
+    for scheme in ("backward_euler", "shifted", "crank_nicolson", "tr_bdf2"):
+        for picard in (0, 2):
+            # (a) the per-cell closure: the three realised rows sum to the
+            # substep's own pre-clip electron-energy increment.
+            ledger = {}
+            stepped = _ee_sink_step(
+                sim, state, geometry, floors, dt, scheme, picard,
+                ee_source=source,
+                ee_sink_rate=nu,
+                ledger_out=ledger,
+            )
+            increment = np.asarray(stepped.Ee, dtype=float) - capacity * Te_old
+            rows = (
+                ledger["Ee_conduction_erg_cm3"]
+                + ledger["Ee_sink_erg_cm3"]
+                + ledger["Ee_source_erg_cm3"]
+            )
+            scale = np.maximum(
+                np.abs(ledger["Ee_conduction_erg_cm3"]),
+                np.maximum(
+                    np.abs(ledger["Ee_sink_erg_cm3"]),
+                    np.abs(ledger["Ee_source_erg_cm3"]),
+                ),
+            )
+            scale = np.maximum(scale, np.max(np.abs(increment)))
+            assert np.max(np.abs(increment - rows) / scale) < 1.0e-12, (
+                scheme, picard, np.max(np.abs(increment - rows) / scale)
+            )
+            # The sink is a LOSS: never positive, and exactly zero off the
+            # two cells the rate profile names.
+            assert np.all(ledger["Ee_sink_erg_cm3"] <= 0.0), (scheme, picard)
+            assert np.all(ledger["Ee_sink_erg_cm3"][nu == 0.0] == 0.0), (
+                scheme, picard
+            )
+            assert np.any(ledger["Ee_sink_erg_cm3"] < 0.0), (scheme, picard)
+
+            # (b) no sink handed in reproduces the historical substep byte for
+            # byte, and an all-zero rate array is the same float arithmetic.
+            historical = _ee_sink_step(
+                sim, state, geometry, floors, dt, scheme, picard,
+                ee_source=source,
+            )
+            none_rate = _ee_sink_step(
+                sim, state, geometry, floors, dt, scheme, picard,
+                ee_source=source, ee_sink_rate=None,
+            )
+            zero_rate = _ee_sink_step(
+                sim, state, geometry, floors, dt, scheme, picard,
+                ee_source=source, ee_sink_rate=np.zeros(geometry.cells),
+            )
+            for field in ("Ee", "Ei"):
+                base_bytes = np.asarray(
+                    getattr(historical, field), dtype=float
+                ).tobytes()
+                assert np.asarray(
+                    getattr(none_rate, field), dtype=float
+                ).tobytes() == base_bytes, (scheme, picard, field)
+                assert np.asarray(
+                    getattr(zero_rate, field), dtype=float
+                ).tobytes() == base_bytes, (scheme, picard, field)
+            # ... and the sink actually moved the answer, so (b) is not
+            # passing because the whole term is inert.
+            assert not np.array_equal(
+                np.asarray(stepped.Ee, dtype=float),
+                np.asarray(historical.Ee, dtype=float),
+            ), (scheme, picard)
+
+    # A negative or non-finite rate is a misconfiguration, not a source.
+    for bad in (-1.0, np.nan, np.inf):
+        bad_rate = nu.copy()
+        bad_rate[0] = bad
+        try:
+            _ee_sink_step(
+                sim, state, geometry, floors, dt, "tr_bdf2", 2,
+                ee_sink_rate=bad_rate,
+            )
+        except ValueError as exc:
+            assert "ee_sink_rate" in str(exc), exc
+        else:
+            raise AssertionError(f"ee_sink_rate={bad!r} was accepted")
+
+
+# ----------------------------------------------------------------------
+# implicit-ee-sink-pure-decay-exact
+# ----------------------------------------------------------------------
+@_case("implicit-ee-sink-pure-decay-exact", historical_stance=True)
+def _case_implicit_ee_sink_pure_decay_exact():
+    sim, state, geometry, floors, capacity, _nu = _ee_sink_fixture()
+    Te_old = np.asarray(state.Ee, dtype=float) / capacity
+    gamma = 2.0 - math.sqrt(2.0)
+    implicit_weight = gamma / 2.0
+    tr_a = 1.0 / (gamma * (2.0 - gamma))
+    tr_b = -((1.0 - gamma) ** 2) / (gamma * (2.0 - gamma))
+
+    def amplification(scheme, z):
+        """The scheme's stability function at ``z = -nu*dt``."""
+        if scheme == "tr_bdf2":
+            m = -implicit_weight * z
+            t_gamma = (1.0 - m) / (1.0 + m)
+            return (tr_a * t_gamma + tr_b) / (1.0 + m)
+        theta = {
+            "backward_euler": 1.0, "shifted": 0.6, "crank_nicolson": 0.5,
+        }[scheme]
+        return (1.0 + (1.0 - theta) * z) / (1.0 - theta * z)
+
+    for nu_dt in (0.05, 0.4, 1.0):
+        dt = 5.0e-7
+        rate = np.full(geometry.cells, nu_dt / dt, dtype=float)
+        for scheme in ("backward_euler", "shifted", "crank_nicolson", "tr_bdf2"):
+            ledger = {}
+            stepped = _ee_sink_step(
+                sim, state, geometry, floors, dt, scheme, 0,
+                heat_conduction=False,
+                ee_sink_rate=rate,
+                ledger_out=ledger,
+            )
+            Te_new = np.asarray(stepped.Ee, dtype=float) / capacity
+            expected = Te_old * amplification(scheme, -nu_dt)
+            assert np.max(np.abs(Te_new / expected - 1.0)) < 1.0e-13, (
+                scheme, nu_dt, np.max(np.abs(Te_new / expected - 1.0))
+            )
+            # With no conduction and no source, the realised debit IS the
+            # whole increment.
+            realised = -ledger["Ee_sink_erg_cm3"]
+            assert np.allclose(
+                realised, capacity * (Te_old - Te_new), rtol=1.0e-13, atol=0.0
+            ), (scheme, nu_dt)
+            assert np.all(ledger["Ee_conduction_erg_cm3"] == 0.0), (scheme, nu_dt)
+            assert np.all(ledger["Ee_source_erg_cm3"] == 0.0), (scheme, nu_dt)
+            # The ION solve is never handed a sink.
+            assert np.allclose(
+                np.asarray(stepped.Ei, dtype=float),
+                np.asarray(state.Ei, dtype=float),
+                rtol=1.0e-14, atol=0.0,
+            ), (scheme, nu_dt)
+
+    # Monotonicity at a rate the accuracy bound would never let through:
+    # backward Euler is the one unconditionally monotone member, because the
+    # enlarged operator stays an M-matrix. The second-order schemes ring
+    # negative there exactly as they do on a stiff conduction mode -- asserted
+    # so the distinction cannot be misread as a defect later.
+    dt = 5.0e-7
+    stiff = np.full(geometry.cells, 50.0 / dt, dtype=float)
+    monotone = _ee_sink_step(
+        sim, state, geometry, floors, dt, "backward_euler", 0,
+        heat_conduction=False, ee_sink_rate=stiff,
+    )
+    assert np.all(np.asarray(monotone.Ee, dtype=float) > 0.0)
+    assert np.all(
+        np.asarray(monotone.Ee, dtype=float) < np.asarray(state.Ee, dtype=float)
+    )
+    for ringing in ("shifted", "crank_nicolson", "tr_bdf2"):
+        rung = _ee_sink_step(
+            sim, state, geometry, floors, dt, ringing, 0,
+            heat_conduction=False, ee_sink_rate=stiff,
+        )
+        assert np.all(np.asarray(rung.Ee, dtype=float) < 0.0), ringing
+
+
+# ----------------------------------------------------------------------
+# implicit-ee-sink-substep-order
+# ----------------------------------------------------------------------
+@_case("implicit-ee-sink-substep-order", historical_stance=True)
+def _case_implicit_ee_sink_substep_order():
+    sim, state, geometry, floors, capacity, nu_shape = _ee_sink_fixture()
+    # The refinement triplet is taken in the RESOLVED regime of BOTH terms --
+    # an order read where either one is stiff is meaningless (every L-stable
+    # substep reads ~1 there). The coarsest step is the state's own explicit
+    # conduction bound, and the rate is scaled so nu*dt is 0.3 on that step,
+    # which puts the error's argmax on a sink cell.
+    bound = heat_conduction_timestep_bound(
+        state=state,
+        floors=floors,
+        ion_mass_g=sim.ion_mass_g,
+        mu=sim.mu,
+        geometry=geometry,
+    )
+    window = 4.0 * bound
+    nu = np.zeros(geometry.cells, dtype=float)
+    sink_cells = np.flatnonzero(nu_shape > 0.0)
+    nu[sink_cells] = 0.30 / (window / 4.0)
+
+    def integrate(scheme, picard, steps):
+        current = state
+        sub_dt = window / steps
+        for _ in range(steps):
+            current = _ee_sink_step(
+                sim, current, geometry, floors, sub_dt, scheme, picard,
+                ee_sink_rate=nu,
+            )
+        return np.asarray(current.Ee, dtype=float) / capacity
+
+    orders = {}
+    argmax_cells = {}
+    for scheme, picard in (
+        ("backward_euler", 2), ("crank_nicolson", 2), ("tr_bdf2", 2),
+    ):
+        coarse = integrate(scheme, picard, 4)
+        medium = integrate(scheme, picard, 8)
+        fine = integrate(scheme, picard, 16)
+        num = np.max(np.abs(coarse - medium))
+        den = np.max(np.abs(medium - fine))
+        orders[scheme] = math.log2(num / den)
+        argmax_cells[scheme] = int(np.argmax(np.abs(coarse - medium)))
+    print(
+        "  implicit ee-sink substep order (dt*lambda_max = %.3f, nu*dt = 0.30): "
+        % (0.25 * window / 4.0 / bound)
+        + ", ".join(f"{k} {v:.2f}" for k, v in orders.items())
+    )
+    # The reading has to be ABOUT the sink: the refinement error must peak on
+    # a cell the rate profile names.
+    for scheme, cell in argmax_cells.items():
+        assert cell in set(sink_cells.tolist()), (scheme, cell, sink_cells)
+    assert orders["crank_nicolson"] >= 1.9, orders
+    assert orders["tr_bdf2"] >= 1.9, orders
+    assert 0.8 <= orders["backward_euler"] <= 1.2, orders
+
+
+# ----------------------------------------------------------------------
+# anode-e-sheath-realised-equals-booked
+# ----------------------------------------------------------------------
+@_case("anode-e-sheath-realised-equals-booked")
+def _case_anode_e_sheath_realised_equals_booked():
+    sim, pair = _anode_sink_sim()
+    # The rate is built from the SAME split weights and the SAME power the
+    # reported row carries, so the row and the rate cannot disagree about
+    # where the debit lands.
+    nu, booked_W = sim.electrode_ee_sink_rate()
+    row = np.asarray(sim.rhs_terms()["anode_e_sheath_loss"].Ee, dtype=float)
+    volumes = np.asarray(sim.geometry.plasma_volume_cm3, dtype=float)
+    assert np.all(nu >= 0.0)
+    assert np.all(nu[[c for c in range(sim.geometry.cells) if c not in pair]]
+                  == 0.0)
+    assert np.all(nu[pair] > 0.0), nu[pair]
+    # booked_W is the row, cell for cell: W vs erg cm^-3 s^-1.
+    assert np.allclose(
+        -row * volumes * 1.0e-7, booked_W, rtol=1.0e-13, atol=0.0
+    )
+    # nu is that power over the heat capacity at the circuit's own anode
+    # sample temperature.
+    Te_ref = np.asarray(
+        sim.cathode_source_terms().metadata["anode_Te_ref_eV"], dtype=float
+    )
+    n_floor = np.maximum(np.asarray(sim.state.n, dtype=float), sim.floors["n"])
+    expected = np.zeros_like(nu)
+    expected[pair] = (
+        -row[pair] / (1.5 * n_floor[pair] * Te_ref[pair] * ev_to_erg)
+    )
+    assert np.allclose(nu, expected, rtol=1.0e-13, atol=0.0)
+
+    # One accepted step: the attempt's book is the sum of the substeps'
+    # ledgers, and the realised debit differs from the circuit's booking by
+    # exactly the local <Te_c/Te_a>.
+    attempt = sim._attempt_step()
+    booking = attempt.electrode_sink_booking
+    assert booking is not None
+    assert booking["window_s"] > 0.0
+    assert booking["circuit_booked"] > 0.0
+    assert booking["realised"] > 0.0
+    ratio = booking["realised"] / booking["circuit_booked"]
+    Te_local = np.asarray(sim.derived.Te, dtype=float)
+    bracket = sorted(Te_local[pair] / Te_ref[pair])
+    print(
+        "  anode e-sheath realised/booked = %.4f; local Te/Te_a bracket "
+        "[%.4f, %.4f]" % (ratio, bracket[0], bracket[1])
+    )
+    assert bracket[0] * 0.9 <= ratio <= bracket[1] * 1.1, (ratio, bracket)
+    # The per-cell profile is the same energy, per cell.
+    profile_J = (
+        float(np.sum(booking["realised_profile"] * volumes)) * 1.0e-7
+    )
+    assert abs(profile_J / booking["realised"] - 1.0) < 1.0e-12, (
+        profile_J, booking["realised"]
+    )
+    # ... and the saved scalars are the committed attempt, not a recompute.
+    before = dict(sim._anode_e_sheath_ledger_J)
+    step_dt = sim.suggest_timestep(include_heat_conduction=False).dt
+    sim.advance_one_step(dt=step_dt)
+    diag = sim._cathode_diagnostic_snapshot()
+    step_booked = (
+        sim._anode_e_sheath_ledger_J["circuit_booked"] - before["circuit_booked"]
+    )
+    step_realised = (
+        sim._anode_e_sheath_ledger_J["realised"] - before["realised"]
+    )
+    assert step_booked > 0.0 and step_realised > 0.0
+    assert diag["anode_e_sheath_booked_J"] == (
+        sim._anode_e_sheath_ledger_J["circuit_booked"]
+    )
+    assert diag["anode_e_sheath_realised_J"] == (
+        sim._anode_e_sheath_ledger_J["realised"]
+    )
+    assert np.isclose(
+        diag["anode_e_sheath_booked_W"] * step_dt, step_booked,
+        rtol=1.0e-12, atol=0.0,
+    ), (diag["anode_e_sheath_booked_W"], step_dt, step_booked)
+    assert np.isclose(
+        diag["anode_e_sheath_realised_W"] * step_dt, step_realised,
+        rtol=1.0e-12, atol=0.0,
+    )
+
+
+# ----------------------------------------------------------------------
+# anode-cells-no-within-step-sawtooth
+# ----------------------------------------------------------------------
+@_case("anode-cells-no-within-step-sawtooth")
+def _case_anode_cells_no_within_step_sawtooth():
+    # The DEFECT this member exists to remove: operator A used to take the
+    # whole anode electron debit out of the two flanking cells explicitly
+    # and the following heat substep put it back, so every Te-dependent A
+    # row in those cells ran at a dipped temperature. The A/B below is the
+    # two compositions at ONE dt and ONE state -- the live one, with the row
+    # carried as an implicit rate, against the historical one with the row
+    # back in A -- so the difference IS the removed sawtooth.
+    sim, pair = _anode_sink_sim()
+    dt = sim.suggest_timestep(include_heat_conduction=False).dt
+    y0 = sim._y.copy()
+    nu, _booked_W = sim.electrode_ee_sink_rate()
+    capacity = 1.5 * np.maximum(
+        np.asarray(sim.state.n, dtype=float), sim.floors["n"]
+    ) * ev_to_erg
+
+    def compose(row_in_a):
+        # ONE solver, so both compositions run on the same circuit state,
+        # the same warm start and the same caches; the step caches are
+        # snapshotted around each pass so neither leaves a trace in the
+        # other, and nothing is ever accepted.
+        cache = sim._step_cache_snapshot()
+        live_terms = sim._heat_substep_terms
+        live_gate = sim._electrode_sink_in_heat_substep
+        if row_in_a:
+            sim._heat_substep_terms = frozenset()
+            sim._electrode_sink_in_heat_substep = False
+        try:
+            half = sim.implicit_heat_conduction_step(
+                dt=0.5 * dt,
+                y=y0,
+                ee_sink_rate=None if row_in_a else nu,
+            )
+            y_half = sim.floor_state_vector(pack_state(half))
+            y_after = ssprk2_step(
+                y0=y_half,
+                dt=dt,
+                rhs_func=sim._explicit_stage_rhs(
+                    dt, include_heat_conduction=False
+                ),
+                floor_func=sim.floor_state_vector,
+                time=sim._time,
+            )
+        finally:
+            sim._heat_substep_terms = live_terms
+            sim._electrode_sink_in_heat_substep = live_gate
+            sim._restore_step_cache(cache)
+        Te_half = np.asarray(sim._unpack(y_half).Ee, dtype=float) / capacity
+        Te_after = np.asarray(sim._unpack(y_after).Ee, dtype=float) / capacity
+        return (Te_after - Te_half) / Te_half
+
+    live = compose(row_in_a=False)
+    legacy = compose(row_in_a=True)
+    # What the EXPLICIT operator removes from these cells in one step: the
+    # row's own power over the local electron store. It is the implicit
+    # rate's nu*dt scaled by Te_a/Te_local, because the rate is referenced
+    # to the circuit's anode sample and the row is a fixed power.
+    row = np.asarray(sim.rhs_terms()["anode_e_sheath_loss"].Ee, dtype=float)
+    Ee0 = np.asarray(sim.state.Ee, dtype=float)
+    removed = dt * np.abs(row[pair]) / Ee0[pair]
+    print(
+        "  anode within-step A-stage Te change at cells %s: implicit %s, "
+        "explicit-row %s (explicit removal %s, nu*dt %s)"
+        % (pair, np.round(live[pair], 6), np.round(legacy[pair], 6),
+           np.round(removed, 6), np.round(nu[pair] * dt, 6))
+    )
+    # The explicit composition dips FURTHER at both anode cells, and the
+    # extra dip is the explicit removal nu*dt.
+    assert np.all(legacy[pair] < live[pair]), (legacy[pair], live[pair])
+    extra = live[pair] - legacy[pair]
+    assert np.allclose(extra, removed, rtol=0.15, atol=0.0), (extra, removed)
+    # The two compositions differ AT THE ANODE CELLS. Operator A's second
+    # SSPRK2 stage sees the first stage's state, so a flux-coupled neighbour
+    # picks up a fraction of it -- what must not happen is the difference
+    # living anywhere but the two cells the row lands in.
+    difference = np.abs(live - legacy)
+    other = [c for c in range(sim.geometry.cells) if c not in pair]
+    print(
+        "  anode-cell difference %s vs worst elsewhere %.3e (cell %d)"
+        % (np.round(difference[pair], 8), np.max(difference[other]),
+           other[int(np.argmax(difference[other]))])
+    )
+    assert np.max(difference[other]) < 0.2 * np.min(difference[pair]), (
+        np.max(difference[other]), difference[pair]
+    )
+    # And the live composition leaves the anode cells within 3 % across A.
+    assert np.all(np.abs(live[pair]) < 0.03), live[pair]
+
+
+# ----------------------------------------------------------------------
+# anode-ion-collection-counted-vs-circuit
+# ----------------------------------------------------------------------
+@_case("anode-ion-collection-counted-vs-circuit")
+def _case_anode_ion_collection_counted_vs_circuit():
+    # The fluid-applied anode ion current against the circuit's own I_i_a.
+    # The two are the SAME book, so the only thing separating them is how
+    # the anode cells' state is sampled -- and an anode cell running at a
+    # within-step dipped Te samples low, because the Bohm flux goes as
+    # sqrt(Te). This is therefore the acceptance instrument for the
+    # implicit member, read as an A/B of the two compositions at one
+    # fixture and one state.
+    #
+    # The ABSOLUTE level is NOT this gate's business: at this fixture's
+    # operating point (9 us into a scheduled discharge) the circuit's
+    # supply-averaged EMA has not caught up with the raw state, and the
+    # ratio sits near 0.71 on BOTH compositions. The level belongs to a
+    # plateau read, not to a smoke case.
+    def counted_over_circuit(legacy):
+        sim, _pair = _anode_sink_sim()
+        if legacy:
+            # The historical composition: the row applied explicitly by A.
+            sim._heat_substep_terms = frozenset()
+            sim._electrode_sink_in_heat_substep = False
+        volumes = np.asarray(sim.geometry.plasma_volume_cm3, dtype=float)
+        counted = {"n": np.zeros(sim.geometry.cells, dtype=float), "w": 0.0}
+        original_terms = sim.rhs_terms
+
+        def counting_rhs_terms(*args, **kwargs):
+            terms = original_terms(*args, **kwargs)
+            if counted["w"] > 0.0:
+                counted["n"] = counted["n"] + counted["w"] * np.asarray(
+                    terms["anode_collection"].n, dtype=float
+                )
+            return terms
+
+        sim.rhs_terms = counting_rhs_terms
+        solved = []
+        elapsed = 0.0
+        for _ in range(6):
+            dt = sim.suggest_timestep(include_heat_conduction=False).dt
+            # SSPRK2 weights each stage's RHS by dt/2.
+            counted["w"] = 0.5 * dt
+            sim.advance_one_step(dt=dt)
+            counted["w"] = 0.0
+            solved.append(float(sim._cathode_solve.beam_result.result.I_i_a))
+            elapsed += dt
+        sim.rhs_terms = original_terms
+        # The anode collection row is a particle SINK, so its integral is
+        # negative; e times the rate is the current.
+        counted_A = -float(np.sum(counted["n"] * volumes)) * qe_SI / elapsed
+        circuit_A = float(np.mean(solved))
+        return counted_A / circuit_A, counted_A, circuit_A
+
+    implicit_ratio, implicit_A, implicit_circuit = counted_over_circuit(False)
+    legacy_ratio, legacy_A, legacy_circuit = counted_over_circuit(True)
+    print(
+        "  anode counted/circuit ion current: implicit %.4f (%.3f / %.3f A), "
+        "explicit-row %.4f (%.3f / %.3f A)"
+        % (implicit_ratio, implicit_A, implicit_circuit,
+           legacy_ratio, legacy_A, legacy_circuit)
+    )
+    # Taking the debit out of operator A moves the counted current TOWARD
+    # the solve's -- the anode cells no longer sample a within-step dipped
+    # Te, and the Bohm flux goes as sqrt(Te). The MARGIN is set by nu*dt,
+    # which is ~1e-4 at this fixture's step, so the assertion is on the
+    # direction and on the margin being above round-off; it is not a claim
+    # about the level.
+    assert implicit_ratio > legacy_ratio, (implicit_ratio, legacy_ratio)
+    assert abs(1.0 - implicit_ratio) < abs(1.0 - legacy_ratio), (
+        implicit_ratio, legacy_ratio
+    )
+    assert implicit_ratio - legacy_ratio > 1.0e-5, (
+        implicit_ratio, legacy_ratio
+    )
+
+
+# ----------------------------------------------------------------------
+# dt-not-bound-by-anode-row
+# ----------------------------------------------------------------------
+@_case("dt-not-bound-by-anode-row")
+def _case_dt_not_bound_by_anode_row():
+    sim, pair = _anode_sink_sim()
+    state = sim.state
+    bundle = sim._plasma_source_timestep_rhs(state=state, time=sim._time)
+    row = np.asarray(sim.rhs_terms()["anode_e_sheath_loss"].Ee, dtype=float)
+    assert np.all(np.abs(row[pair]) > 0.0), row[pair]
+    # The bundle the surface_loss bound reads no longer contains the row.
+    bundle_Ee = np.asarray(bundle.Ee, dtype=float)
+    with_row = bundle_Ee + row
+    assert np.all(
+        np.abs(bundle_Ee[pair]) < np.abs(with_row[pair])
+    ), (bundle_Ee[pair], with_row[pair])
+    # ... and the row's absence is exact: adding it back reproduces the
+    # pre-withdrawal bundle at those cells.
+    cache = sim._step_cache_snapshot()
+    sim._electrode_sink_in_heat_substep = False
+    try:
+        legacy_bundle = np.asarray(
+            sim._plasma_source_timestep_rhs(
+                state=state, time=sim._time
+            ).Ee,
+            dtype=float,
+        )
+    finally:
+        sim._electrode_sink_in_heat_substep = True
+        sim._restore_step_cache(cache)
+    assert np.allclose(legacy_bundle, with_row, rtol=1.0e-12, atol=0.0), (
+        legacy_bundle[pair], with_row[pair]
+    )
+
+    # The replacement candidate exists, is finite, and is inert here.
+    diag = sim.suggest_timestep(include_heat_conduction=False)
+    nu, _ = sim.electrode_ee_sink_rate()
+    assert np.isfinite(diag.dt_electrode_sink_rate)
+    assert np.isclose(
+        diag.dt_electrode_sink_rate,
+        ELECTRODE_SINK_DT_FRACTION / float(np.max(nu)),
+        rtol=1.0e-12, atol=0.0,
+    )
+    assert diag.dt_electrode_sink_rate > diag.dt, (
+        diag.dt_electrode_sink_rate, diag.dt
+    )
+    assert diag.active_constraint != "electrode_sink_rate"
+    # ... and it BINDS on a state whose rate is scaled up past every other
+    # candidate, so the candidate is not merely inert-by-construction.
+    scaled = ELECTRODE_SINK_DT_FRACTION / (0.01 * diag.dt)
+    bound = electrode_sink_rate_timestep(
+        electrode_sink_rate=np.full(sim.geometry.cells, scaled),
+    )
+    assert bound < diag.dt, (bound, diag.dt)
+    # With the operator split off the candidate is withdrawn entirely.
+    assert electrode_sink_rate_timestep(electrode_sink_rate=None) == np.inf
+
+
+# ----------------------------------------------------------------------
+# anode-e-sheath-row-reported-not-applied
+# ----------------------------------------------------------------------
+@_case("anode-e-sheath-row-reported-not-applied")
+def _case_anode_e_sheath_row_reported_not_applied():
+    sim, pair = _anode_sink_sim()
+    assert sim._heat_substep_terms == frozenset({"anode_e_sheath_loss"})
+    terms = sim.rhs_terms()
+    assert "anode_e_sheath_loss" in terms
+    row = np.asarray(terms["anode_e_sheath_loss"].Ee, dtype=float)
+    assert np.all(np.abs(row[pair]) > 0.0)
+    # rhs() is the sum of every OTHER row, bit for bit.
+    expected = None
+    for name, term in terms.items():
+        if name == "anode_e_sheath_loss":
+            continue
+        expected = term if expected is None else add_state_rhs(expected, term)
+    assert sim.rhs().tobytes() == pack_state(expected).tobytes()
+
+    # With the split OFF the row is back in A, bit-exactly.
+    off_params, off_flags = _anode_sink_config()
+    off_flags["implicit_heat_conduction"] = False
+    off = LAPDSim1D(off_params, off_flags)
+    off._set_state_vector(sim._y.copy())
+    off._time = sim._time
+    assert off._heat_substep_terms == frozenset()
+    off_terms = off.rhs_terms()
+    off_expected = None
+    for term in off_terms.values():
+        off_expected = (
+            term if off_expected is None else add_state_rhs(off_expected, term)
+        )
+    assert off.rhs().tobytes() == pack_state(off_expected).tobytes()
+    assert np.all(
+        np.abs(np.asarray(off_terms["anode_e_sheath_loss"].Ee)[pair]) > 0.0
+    )
+    # ... and a split-on run asked for a non-split step REFUSES rather than
+    # dropping the debit on the floor.
+    try:
+        sim.advance_one_step(dt=1.0e-12, operator_split=False)
+    except ValueError as error:
+        assert "implicit_heat_conduction is on" in str(error), error
+        assert "anode electron-sheath" in str(error), error
+    else:
+        raise AssertionError(
+            "a non-split step on a split stance silently dropped the anode "
+            "electron-sheath debit"
+        )
+
+
+# ----------------------------------------------------------------------
+# implicit-ee-sink-no-solve-bit-identity
+# ----------------------------------------------------------------------
+@_case("implicit-ee-sink-no-solve-bit-identity")
+def _case_implicit_ee_sink_no_solve_bit_identity():
+    # A phase with no cathode solve hands the substep an all-zero rate, and
+    # an all-zero rate is exact-zero arithmetic on every float the substep
+    # touches -- so those steps are byte-identical to a build with no sink.
+    params, flags = _anode_sink_config()
+    params["tau_discharge"] = 0.0
+    params["tau_afterglow"] = 0.0
+    quiet = LAPDSim1D(params, flags)
+    nu, booked_W = quiet.electrode_ee_sink_rate()
+    assert np.all(nu == 0.0), nu[nu != 0.0]
+    assert np.all(booked_W == 0.0)
+    state = quiet.state
+    with_zero = quiet.implicit_heat_conduction_step(
+        dt=1.0e-10, state=state, ee_sink_rate=nu, ledger_out={},
+    )
+    without = quiet.implicit_heat_conduction_step(dt=1.0e-10, state=state)
+    for field in ("Ee", "Ei"):
+        assert np.asarray(
+            getattr(with_zero, field), dtype=float
+        ).tobytes() == np.asarray(
+            getattr(without, field), dtype=float
+        ).tobytes(), field
+    # A post-drive phase reaches the same place through the phase gate.
+    cold = LAPDSim1D(*_anode_sink_config())
+    cold_flags_off = dict(cold._flags)
+    assert cold_flags_off["Plasma"]
+    late_rate, late_power = cold.electrode_ee_sink_rate(
+        time=cold._time, state=cold.state,
+    )
+    assert late_rate.shape == (cold.geometry.cells,)
+    assert np.all(np.isfinite(late_rate)) and np.all(late_rate >= 0.0)
+
+
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
@@ -31797,7 +32612,7 @@ def _case_cathode_jet_incident_power_one_book():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 191, "historical_stance": 72}
+_CASE_CENSUS = {"total": 200, "historical_stance": 75}
 
 
 def _assert_case_census():
