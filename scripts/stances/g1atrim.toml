@@ -106,10 +106,18 @@
 # mirrored build painted onto the far column belongs on the cathode side,
 # inside the flat hold. See that script's docstring.
 #
-# machine_radius_profile_cm is UNCHANGED: still the measured CAD bore
-# staircase built by scripts/stance/g1_build_profiles.py, which also remains
-# the independent cross-check for the plasma profile (its census flux traces
-# are what the MSI build is compared against).
+# machine_radius_profile_cm is the measured CAD bore staircase, built by
+# scripts/stance/g1_build_profiles.py, which also remains the independent
+# cross-check for the plasma profile (its census flux traces are what the MSI
+# build is compared against). Each stage is a CLEAR radius: the far source
+# chamber beyond the 19.65 m step is its 75.25 cm bore, not the 76.2 cm outer
+# radius of that shell.
+#
+# The two rows are COUPLED at the far end. The plasma radius is capped at
+# sqrt(0.95) * R_m -- the declared annulus regularization -- and that cap
+# binds over the terminal cells, so the far-chamber bore sets the plasma
+# radius, the plasma and end-wall face areas and the annulus there directly.
+# A change to either builder's bore stages moves both rows.
 neutral_baffle_positions_cm = [342.65]
 neutral_baffle_clear_radii_cm = [39.75]
 plasma_radius_profile_cm = [
@@ -179,10 +187,10 @@ plasma_radius_profile_cm = [
   37.124948312307254, 39.91242393277031, 42.82459558829402, 45.852960435127926,
   48.733971724044814, 48.733971724044814, 48.733971724044814, 48.733971724044814,
   62.30224123848677, 65.77958331005898, 69.30963127926263, 72.88733824745582,
-  74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,
-  74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,
-  74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,
-  74.2705729074443, 74.2705729074443, 74.2705729074443, 74.2705729074443,
+  73.34462744468745, 73.34462744468745, 73.34462744468745, 73.34462744468745,
+  73.34462744468745, 73.34462744468745, 73.34462744468745, 73.34462744468745,
+  73.34462744468745, 73.34462744468745, 73.34462744468745, 73.34462744468745,
+  73.34462744468745, 73.34462744468745, 73.34462744468745, 73.34462744468745,
 ]
 machine_radius_profile_cm = [
   40.0, 27.728368187412972, 30.45031314638934, 40.0,
@@ -250,11 +258,11 @@ machine_radius_profile_cm = [
   50.0, 50.0, 50.0, 50.0,
   50.0, 50.0, 50.0, 50.0,
   50.0, 50.0, 50.0, 50.0,
-  76.2, 76.2, 76.2, 76.2,
-  76.2, 76.2, 76.2, 76.2,
-  76.2, 76.2, 76.2, 76.2,
-  76.2, 76.2, 76.2, 76.2,
-  76.2, 76.2, 76.2, 76.2,
+  75.25, 75.25, 75.25, 75.25,
+  75.25, 75.25, 75.25, 75.25,
+  75.25, 75.25, 75.25, 75.25,
+  75.25, 75.25, 75.25, 75.25,
+  75.25, 75.25, 75.25, 75.25,
 ]
 
 # MESH. nx counts the FAR column only under source_fixed_grid; the source

@@ -132,7 +132,7 @@ the regularization rather than the measured field.
 
 DISCLOSED: the largest single-cell step the emitted profile carries is the cap
 RELEASE, not any feature of the field. Cells 259 -> 260 cross the vessel's
-50 -> 76.2 cm bore step, where 259 is still clamped at
+50 -> 75.25 cm bore step, where 259 is still clamped at
 ``sqrt(AREA_CAP_FRACTION) * 50 = 48.734`` cm and 260 comes out from under the
 cap at 62.302 cm -- a +63.4 % jump in plasma AREA across one cell face. Every
 validator accepts it, correctly: it stays far under the open-area cap and the
@@ -158,13 +158,16 @@ Inputs
 ------
 ``MSI_DATA_DIR``/*.hdf5
     The ES1 raw shot files. READ-ONLY; never modified.
-``scripts/lapd_end_field_1400G_rp18p415_census2026.npz``
-``scripts/l2a7b_foot45_cr6p94.h5``
-    Read through ``g1_build_profiles`` for the mesh, the vessel profile and
-    the two census plasma profiles the comparison is made against.
+``--census-npz PATH``
+    The measured-census field re-solve, an out-of-repo table, handed to
+    ``g1_build_profiles`` for the two census plasma profiles the comparison
+    is made against.
+``scripts/stances/g1atrim.toml``
+    The LAPD reference configuration, read through ``g1_build_profiles`` for
+    the mesh and the vessel profile.
 
-Outputs (all in ``scripts/``)
------------------------------
+Outputs (all in ``--outdir``, which must lie outside the repository)
+-------------------------------------------------------------------
 ``mfp_field_profile.txt``
     The full report: the per-file MSI table, the cross-file spread, the
     32/34 adjudication, the departure z, the per-cell profile table, the
@@ -176,6 +179,7 @@ Outputs (all in ``scripts/``)
     ratio.
 """
 
+import argparse
 import glob
 import os
 import sys
@@ -629,7 +633,44 @@ def write_figure(
 # ------------------------------------------------------------------- main
 
 
-def main():
+def _parse_args(argv=None):
+    """Return the parsed CLI: the out-of-repo census table and output dir."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--census-npz",
+        required=True,
+        help=(
+            "path to the measured-census field re-solve (not in the repo); "
+            "read through the census build for the comparison profiles"
+        ),
+    )
+    parser.add_argument(
+        "--outdir",
+        required=True,
+        help=(
+            "directory the build writes its report and figure to; it must lie "
+            "outside the repository, which holds code only"
+        ),
+    )
+    args = parser.parse_args(argv)
+    args.census_npz = os.path.abspath(args.census_npz)
+    if not os.path.isfile(args.census_npz):
+        parser.error(f"--census-npz is not a file: {args.census_npz}")
+    args.outdir = os.path.abspath(args.outdir)
+    repo_root = os.path.dirname(HERE)
+    if os.path.commonpath([args.outdir, repo_root]) == repo_root:
+        parser.error(
+            f"--outdir {args.outdir} is inside the repository {repo_root}; "
+            "run artifacts belong outside it"
+        )
+    os.makedirs(args.outdir, exist_ok=True)
+    return args
+
+
+def main(argv=None):
+    args = _parse_args(argv)
+    census_build.CENSUS_NPZ = args.census_npz
+    outdir = args.outdir
     lines = []
 
     def say(text=""):
@@ -639,7 +680,11 @@ def main():
     say("=== MSI measured-field plasma radius profile build ===")
     say(f"data     : {MSI_DATA_DIR}")
     say(f"census   : {census_build.CENSUS_NPZ}")
-    say(f"reference: {census_build.REFERENCE_H5}")
+    say(
+        f"reference: configuration {census_build.REFERENCE_STANCE} "
+        f"(mesh-sized package dropped)"
+    )
+    say(f"outdir   : {outdir}")
     say(
         f"rules    : plateau = median over z in {PLATEAU_WINDOW_CM} cm; flat "
         f"tolerance |B_hat - 1| <= {FLAT_TOLERANCE}; sustained departure "
@@ -1304,7 +1349,7 @@ def main():
     say("]")
     say()
 
-    figure_path = os.path.join(HERE, "mfp_profile_compare.png")
+    figure_path = os.path.join(outdir, "mfp_profile_compare.png")
     write_figure(
         figure_path,
         z_grid_cm,
@@ -1318,7 +1363,7 @@ def main():
     )
     say(f"wrote {figure_path}")
 
-    report_path = os.path.join(HERE, "mfp_field_profile.txt")
+    report_path = os.path.join(outdir, "mfp_field_profile.txt")
     with open(report_path, "w") as handle:
         handle.write("\n".join(lines) + "\n")
     print(f"wrote {report_path}")
