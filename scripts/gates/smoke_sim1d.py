@@ -5650,13 +5650,29 @@ def _case_beam_anomalous_transport_wpe(
     # roundoff and not merely a budget statement, because the ray integration
     # itself is bit-identical in both modes -- L_anom depends on the beam and
     # the column, never on where its energy is banked.
+    # The anode mesh is the THIRD destination: a walker the wires intercept
+    # leaves the plasma at the plane, so the identity reads
+    # delivered + culled == launched. The culled bank is a TERM, never a
+    # tolerance -- it is measured here and cross-checked against the anode
+    # row below.
     wpe_removed = float(csda_dep.heating_anomalous_erg_s.sum())
+    wpe_culled = float(wpe_on_dep.tail_anode_culled_erg_s)
+    wpe_returned = float(wpe_on_dep.tail_anode_returned_erg_s)
     wpe_delivered = (
         float(wpe_on_dep.heating_anomalous_erg_s.sum()) + wpe_tail_ledger
     )
-    assert abs(wpe_delivered - wpe_removed) / wpe_removed < 1e-12, (
-        wpe_removed, wpe_delivered
-    )
+    assert wpe_culled > 0.0, wpe_culled
+    assert abs(
+        wpe_delivered + wpe_culled - wpe_removed
+    ) / wpe_removed < 1e-12, (wpe_removed, wpe_delivered, wpe_culled)
+    # ... and the anode row carries exactly the NET of it: the local arm walks
+    # no tail, so the whole difference between the two arms' anode rows is the
+    # tail's own landing.
+    assert abs(
+        (float(wpe_on_dep.anode_intercepted_erg_s)
+         - float(csda_dep.anode_intercepted_erg_s))
+        - (wpe_culled - wpe_returned)
+    ) <= 1e-9 * abs(wpe_culled)
     # The other three heating channels are untouched: only the anomalous bank
     # moved, so the whole difference in plasma heating IS the tail ledger.
     for _wpe_arr in (
@@ -5669,7 +5685,7 @@ def _case_beam_anomalous_transport_wpe(
     assert abs(
         (csda_dep.plasma_heating_erg_s.sum()
          - wpe_on_dep.plasma_heating_erg_s.sum())
-        - wpe_tail_ledger
+        - (wpe_tail_ledger + wpe_culled)
     ) / wpe_tail_ledger < 1e-9
     # Energy-only, exactly like WP-D: the particle rows the fluid and circuit
     # read are untouched, and the WP-D ledger stays identically zero -- the two
@@ -5696,6 +5712,11 @@ def _case_beam_anomalous_transport_wpe(
         nn=csda_state.nn, ne=csda_state.n, Te=csda_derived.Te,
         anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
         anode_eta=csda_eta,
+        # The solver arms the TAIL cull too (it is the model's, not a flag's),
+        # so the comparison ray has to carry the same kwargs or it would be
+        # measuring the cull rather than the hoist.
+        tail_anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
+        tail_anode_eta=csda_eta,
         anomalous_transport="tail_walk",
         tail_energy_eV=float(
             csda_params.get("heating_anomalous_tail_energy_eV", 75.0)
@@ -5934,16 +5955,21 @@ def _case_beam_tail_ionization_k6(
     # the "local" arm banked locally -- exact, because the ray integration is
     # bit-identical in both modes -- and the secondary-birth heat is inside
     # heating_anomalous with the rest of the walkers' heat.
+    # ... and the sixth destination, the anode mesh: a walker the wires
+    # intercept leaves the plasma at the plane, so the culled bank is a TERM
+    # of the closure and never a tolerance on it.
     k6_launched = float(csda_dep.heating_anomalous_erg_s.sum())
+    k6_culled = float(k6_on_dep.tail_anode_culled_erg_s)
     k6_delivered = (
         float(k6_on_dep.heating_anomalous_erg_s.sum())
         + float(k6_on_dep.ionization_cost_tail_erg_s.sum())
         + float(k6_on_dep.radiated_tail_erg_s.sum())
         + k6_ledger
     )
-    assert abs(k6_delivered - k6_launched) / k6_launched < 1e-12, (
-        k6_launched, k6_delivered
-    )
+    assert k6_culled > 0.0, k6_culled
+    assert abs(
+        k6_delivered + k6_culled - k6_launched
+    ) / k6_launched < 1e-12, (k6_launched, k6_delivered, k6_culled)
     # ... and the whole ray still closes, with the tail's cost and radiation
     # now inside the terms that already carried the primary's.
     k6_on_total = (
@@ -6201,6 +6227,11 @@ def _case_beam_sheath_aware_tail_k7(
         nn=csda_state.nn, ne=csda_state.n, Te=csda_derived.Te,
         anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
         anode_eta=csda_eta,
+        # The solver arms the tail cull unconditionally, so the direct ray
+        # has to be built with it or the comparison would be measuring the
+        # cull rather than the legacy arm's own arithmetic.
+        tail_anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
+        tail_anode_eta=csda_eta,
         anomalous_transport="tail_walk", tail_energy_eV=75.0,
         **_pskip_ray_kwargs,
     )
@@ -6230,12 +6261,16 @@ def _case_beam_sheath_aware_tail_k7(
         float(k7_on_dep.end_loss_tail_low_erg_s)
         + float(k7_on_dep.end_loss_tail_high_erg_s)
     )
+    # The anode mesh takes its share before anything reaches a ledger, so the
+    # culled bank is a TERM of the closure, not a tolerance on it.
+    k7_on_culled = float(k7_on_dep.tail_anode_culled_erg_s)
     k7_on_delivered = (
         float(k7_on_dep.heating_anomalous_erg_s.sum()) + k7_on_ledger
     )
-    assert abs(k7_on_delivered - k7_launched) / k7_launched < 1e-12, (
-        k7_launched, k7_on_delivered
-    )
+    assert k7_on_culled > 0.0, k7_on_culled
+    assert abs(
+        k7_on_delivered + k7_on_culled - k7_launched
+    ) / k7_launched < 1e-12, (k7_launched, k7_on_delivered, k7_on_culled)
     assert (
         float(k7_on_dep.heating_anomalous_erg_s.sum())
         > float(k7_legacy_dep.heating_anomalous_erg_s.sum())
@@ -6317,15 +6352,17 @@ def _case_beam_sheath_aware_tail_k7(
     )
     assert k7_ion_dep.end_loss_tail_low_erg_s == 0.0
     assert float(k7_ion_dep.ionization_events_tail.sum()) > 0.0
+    k7_ion_culled = float(k7_ion_dep.tail_anode_culled_erg_s)
     k7_ion_delivered = (
         float(k7_ion_dep.heating_anomalous_erg_s.sum())
         + float(k7_ion_dep.ionization_cost_tail_erg_s.sum())
         + float(k7_ion_dep.radiated_tail_erg_s.sum())
         + k7_ion_ledger
     )
-    assert abs(k7_ion_delivered - k7_launched) / k7_launched < 1e-12, (
-        k7_launched, k7_ion_delivered
-    )
+    assert k7_ion_culled > 0.0, k7_ion_culled
+    assert abs(
+        k7_ion_delivered + k7_ion_culled - k7_launched
+    ) / k7_launched < 1e-12, (k7_launched, k7_ion_delivered, k7_ion_culled)
     assert np.allclose(
         k7_ion_dep.ionization_events - k7_on_dep.ionization_events,
         k7_ion_dep.ionization_events_tail, rtol=1e-12, atol=0.0,
@@ -6478,14 +6515,18 @@ def _case_tail_forward_energy_closure(k7_params, tf_launched):
                 float(tf_dep.end_loss_tail_low_erg_s)
                 + float(tf_dep.end_loss_tail_high_erg_s)
             )
+            tf_culled = float(tf_dep.tail_anode_culled_erg_s)
             tf_delivered = (
                 float(tf_dep.heating_anomalous_erg_s.sum())
                 + float(tf_dep.ionization_cost_tail_erg_s.sum())
                 + float(tf_dep.radiated_tail_erg_s.sum())
                 + tf_ledger
             )
-            assert abs(tf_delivered - tf_launched) / tf_launched < 1e-12, (
-                tf_f, tf_label, tf_launched, tf_delivered
+            assert tf_culled > 0.0, (tf_f, tf_label)
+            assert abs(
+                tf_delivered + tf_culled - tf_launched
+            ) / tf_launched < 1e-12, (
+                tf_f, tf_label, tf_launched, tf_delivered, tf_culled
             )
     # --- AND ON THE PRODUCTION ROUTE. The three routes above are tail_walk
     # arms; the reference configuration runs plateau_multigroup, which walks
@@ -6506,6 +6547,7 @@ def _case_tail_forward_energy_closure(k7_params, tf_launched):
         )
         tf_mg_launched = float(tf_mg_dep.tail_power_erg_s)
         assert tf_mg_launched > 0.0, tf_f
+        tf_mg_culled = float(tf_mg_dep.tail_anode_culled_erg_s)
         tf_mg_delivered = (
             float(tf_mg_dep.heating_anomalous_erg_s.sum())
             + float(tf_mg_dep.ionization_cost_tail_erg_s.sum())
@@ -6514,10 +6556,11 @@ def _case_tail_forward_energy_closure(k7_params, tf_launched):
             + float(tf_mg_dep.end_loss_tail_high_erg_s)
             - float(tf_mg_dep.plateau_wave_power_erg_s)
         )
+        assert tf_mg_culled > 0.0, tf_f
         assert abs(
-            tf_mg_delivered - tf_mg_launched
+            tf_mg_delivered + tf_mg_culled - tf_mg_launched
         ) / tf_mg_launched < 1e-12, (
-            tf_f, tf_mg_launched, tf_mg_delivered
+            tf_f, tf_mg_launched, tf_mg_delivered, tf_mg_culled
         )
     return locals()
 
@@ -6744,6 +6787,7 @@ def _case_beam_plateau_multigroup(
     mg_sim._circuit_I_loop = 3000.0
     mg_solve = mg_sim.solve_cathode_boundary()
     mg_dep = mg_solve.beam_deposition[0]
+    mg_culled = float(mg_dep.tail_anode_culled_erg_s)
     mg_delivered = (
         float(mg_dep.heating_anomalous_erg_s.sum())
         + float(mg_dep.ionization_cost_tail_erg_s.sum())
@@ -6751,8 +6795,9 @@ def _case_beam_plateau_multigroup(
         + float(mg_dep.end_loss_tail_low_erg_s)
         + float(mg_dep.end_loss_tail_high_erg_s)
     )
-    assert abs(mg_delivered - _mg_bank) / _mg_bank < 1e-12, (
-        _mg_bank, mg_delivered
+    assert mg_culled > 0.0, mg_culled
+    assert abs(mg_delivered + mg_culled - _mg_bank) / _mg_bank < 1e-12, (
+        _mg_bank, mg_delivered, mg_culled
     )
     # The two heirs partition the bank: the wave share is banked locally, the
     # streaming share is what was launched as walkers, and nothing else exists.
@@ -6936,6 +6981,7 @@ def _case_beam_tail_band_split_k7b(
     # The channel still closes its own energy branching above the bar -- the
     # truncation understates the CASCADE, it does not leak energy.
     k7b_hi_launched = float(k7_local_dep.heating_anomalous_erg_s.sum())
+    k7b_hi_culled = float(k7b_hi.tail_anode_culled_erg_s)
     k7b_hi_delivered = (
         float(k7b_hi.heating_anomalous_erg_s.sum())
         + float(k7b_hi.ionization_cost_tail_erg_s.sum())
@@ -6943,7 +6989,12 @@ def _case_beam_tail_band_split_k7b(
         + float(k7b_hi.end_loss_tail_low_erg_s)
         + float(k7b_hi.end_loss_tail_high_erg_s)
     )
-    assert abs(k7b_hi_delivered - k7b_hi_launched) / k7b_hi_launched < 1e-12
+    assert k7b_hi_culled > 0.0, k7b_hi_culled
+    assert abs(
+        k7b_hi_delivered + k7b_hi_culled - k7b_hi_launched
+    ) / k7b_hi_launched < 1e-12, (
+        k7b_hi_launched, k7b_hi_delivered, k7b_hi_culled
+    )
     k7b_hi_diag = k7b_hi_sim._cathode_diagnostic_snapshot()
     assert k7b_hi_diag["beam_tail_above_bar_power_W"] == (
         k7b_hi.tail_above_bar_power_erg_s * 1.0e-7
@@ -7376,15 +7427,17 @@ def _case_beam_ql_power_disposal_pd1(
         float(_pd1_on_dep.end_loss_tail_low_erg_s)
         + float(_pd1_on_dep.end_loss_tail_high_erg_s)
     )
+    _pd1_culled = float(_pd1_on_dep.tail_anode_culled_erg_s)
     _pd1_delivered = (
         float(_pd1_on_dep.heating_anomalous_erg_s.sum())
         + float(_pd1_on_dep.ionization_cost_tail_erg_s.sum())
         + float(_pd1_on_dep.radiated_tail_erg_s.sum())
         + _pd1_ledger
     )
-    assert abs(_pd1_delivered - _pd1_P_QL) / _pd1_P_QL < 1.0e-12, (
-        _pd1_P_QL, _pd1_delivered
-    )
+    assert _pd1_culled > 0.0, _pd1_culled
+    assert abs(
+        _pd1_delivered + _pd1_culled - _pd1_P_QL
+    ) / _pd1_P_QL < 1.0e-12, (_pd1_P_QL, _pd1_delivered, _pd1_culled)
     # ANTI-VACUITY: the branch really SPLIT something. Both shares are a
     # substantial fraction of P_QL at these conditions, so neither corner is
     # being tested by accident -- which is the whole content of "branched" as
@@ -19028,12 +19081,16 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
         + float(_cov_walk_dep.end_loss_tail_high_erg_s)
     )
     assert _cov_walk_landed > 0.0, "the tail walk deposited nothing"
-    # The walk conserves the withheld power: what it lands plus what escapes
-    # the two ends IS the tail power it launched.
+    # The walk conserves the withheld power: what it lands, plus what the
+    # anode mesh culls out of it at the plane, plus what escapes the two ends
+    # IS the tail power it launched. The culled bank is a TERM, not a
+    # tolerance.
+    _cov_walk_culled = float(_cov_walk_dep.tail_anode_culled_erg_s)
+    assert _cov_walk_culled > 0.0, _cov_walk_culled
     assert abs(
-        (_cov_walk_landed + _cov_walk_escaped)
+        (_cov_walk_landed + _cov_walk_escaped + _cov_walk_culled)
         / float(_cov_walk_dep.tail_power_erg_s) - 1.0
-    ) < 1e-12, (_cov_walk_landed, _cov_walk_escaped)
+    ) < 1e-12, (_cov_walk_landed, _cov_walk_escaped, _cov_walk_culled)
     assert np.all(np.isfinite(_cov_walk_dep.plasma_heating_erg_s))
     assert np.all(np.isfinite(
         _cov_walk_solve.beam_reservoir_deposition[0].plasma_heating_erg_s
