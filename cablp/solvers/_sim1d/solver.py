@@ -8320,6 +8320,13 @@ class LAPDSim1D:
         # off.
         "_prescribed_active",
         "_circuit_V_dis_prescribed",
+        # The save-interval window the realised anode-debit profile is
+        # normalised by, advanced on the accepted-step write beside
+        # _anode_e_sheath_ledger_J, so a Picard re-run must start from the
+        # value the step started from -- otherwise a discarded iteration's
+        # window would be added into the saved mean. Its per-cell partner
+        # _anode_e_sheath_realised_accum is copied below, being an array.
+        "_anode_e_sheath_realised_window_s",
     )
 
     def _picard_snapshot(self):
@@ -8336,6 +8343,13 @@ class LAPDSim1D:
         snap["_floor_ledger"] = dict(self._floor_ledger)
         snap["_cathode_energy_ledger_J"] = dict(self._cathode_energy_ledger_J)
         snap["_anode_e_sheath_ledger_J"] = dict(self._anode_e_sheath_ledger_J)
+        # The per-cell realised debit is accumulated IN PLACE on the accepted
+        # step, so the snapshot takes its own copy exactly as the ledger dict
+        # does; None is the pre-first-save state and survives the round trip.
+        accum = self._anode_e_sheath_realised_accum
+        snap["_anode_e_sheath_realised_accum"] = (
+            None if accum is None else np.asarray(accum, dtype=float).copy()
+        )
         ema = self._sample_ema
         snap["_sample_ema"] = (
             None if ema is None else {c: list(v) for c, v in ema.items()}
@@ -8356,6 +8370,10 @@ class LAPDSim1D:
         self._floor_ledger = dict(snap["_floor_ledger"])
         self._cathode_energy_ledger_J = dict(snap["_cathode_energy_ledger_J"])
         self._anode_e_sheath_ledger_J = dict(snap["_anode_e_sheath_ledger_J"])
+        accum = snap["_anode_e_sheath_realised_accum"]
+        self._anode_e_sheath_realised_accum = (
+            None if accum is None else np.asarray(accum, dtype=float).copy()
+        )
         ema = snap["_sample_ema"]
         self._sample_ema = (
             None if ema is None else {c: list(v) for c, v in ema.items()}

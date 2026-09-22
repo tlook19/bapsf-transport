@@ -246,13 +246,16 @@ def anode_circuit_sample(state, derived, geometry, ion_mass_g, input_dict, end=0
     the electron random flux ``n * v_e_bar / 4`` on the wire area each face
     presents, ``eta * A_c``, summed over the two faces on their own sides
     exactly as the ion current is. It is the explicit form of what the sheath
-    relation used to reach through ``I_i_a * exp(Lambda_a)`` -- algebraically
-    the same number when ``I_i_a`` IS the analytic ``e^(-1/2) n c_s`` Bohm
-    collection on the same area, and a different one here, because the ion
-    current handed over is the fluid's own face flux rather than that
-    analytic form. Both are evaluated on the same samples, so the two faces'
-    densities and temperatures enter the electron cap the way they enter the
-    ion current.
+    relation reaches implicitly through ``I_i_a * exp(Lambda_a)``, and here the
+    two are the SAME number to roundoff: the ``I_i_a`` handed over IS the
+    analytic ``e^(-1/2) n c_s`` Bohm collection on that same wire area, and the
+    ratio of the two expressions is ``exp(Lambda_a)`` with no ``n`` and no
+    ``T_e`` left in it, so the agreement survives the per-face sum even where
+    the two faces sample different states. The explicit form is kept because it
+    is the physical statement of the cap -- an electron random flux on the wire
+    area the mesh presents -- rather than an ion current rescaled by a mass
+    ratio. Both are evaluated on the same samples, so the two faces' densities
+    and temperatures enter the electron cap the way they enter the ion current.
     """
     anode_faces = np.asarray(getattr(geometry, "anode_face_indices", ()), dtype=int)
     eta = float(input_dict.get("eta", 0.0))

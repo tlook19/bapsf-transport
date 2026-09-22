@@ -7876,9 +7876,11 @@ def _case_anode_tail_circuit_coupling():
     # --- (e2) THE ALGEBRAIC IDENTITY. Where ``I_i_a`` IS the analytic
     # e^(-1/2) n c_s collection on the wire area, the explicit random flux
     # and the implicit ``I_i_a exp(Lambda_a)`` are the SAME number, so the
-    # rewritten sheath relation answers with the same phi_a. (At the live
-    # configuration ``I_i_a`` is the fluid's own face flux instead and the
-    # two forms differ -- that shift is MEASURED and disclosed, not gated.)
+    # rewritten sheath relation answers with the same phi_a. That is also the
+    # live configuration: the solver's anode sample hands over exactly that
+    # analytic collection, so the two forms agree to roundoff there too and
+    # the explicit member is carried as the physical statement of the cap,
+    # not as a change of value.
     assert abs(
         tc_I_e_sat / (tc_I_i_a * math.exp(tc_cfg.Lambda + 0.5)) - 1.0
     ) < 1e-13, (tc_I_e_sat, tc_I_i_a)
@@ -32806,6 +32808,84 @@ def _case_anode_e_sheath_realised_equals_booked():
 
 
 # ----------------------------------------------------------------------
+# anode-sink-picard-accumulator
+# ----------------------------------------------------------------------
+@_case("anode-sink-picard-accumulator")
+def _case_anode_sink_picard_accumulator():
+    """The realised-debit accumulator is accepted-STEP state, not attempt state.
+
+    ``_anode_e_sheath_realised_accum`` and ``_anode_e_sheath_realised_window_s``
+    are advanced in ``_accept_step_attempt``, which a Picard iteration calls
+    once per ITERATION. Unless the snapshot carries them the way
+    ``_anode_e_sheath_ledger_J`` is carried, every discarded iteration's debit
+    is added into the profile the next save reports as
+    ``anode_e_sheath_realised_W_cm3``. The composition of record is the
+    ACCEPTED iteration's alone.
+    """
+    ap_params, ap_flags = _anode_sink_config()
+    # A tolerance no loop current meets, so every driven step spends its
+    # whole iteration budget and the discarded iterations are real.
+    ap_params.update({
+        "circuit_picard_tol_rel": 1.0e-14,
+        "circuit_picard_max_iter": 3,
+    })
+    ap_flags["coupled_circuit_picard"] = True
+    ap_sim = LAPDSim1D(ap_params, ap_flags)
+
+    # Record every ``_accept_step_attempt`` booking. Within one
+    # ``advance_one_step`` the LAST one is the accepted composition; the
+    # earlier ones are the iterations the Picard loop threw away.
+    ap_calls = []
+    ap_accept = ap_sim._accept_step_attempt
+
+    def _ap_record(attempt):
+        result = ap_accept(attempt)
+        ap_calls.append(getattr(attempt, "electrode_sink_booking", None))
+        return result
+
+    ap_sim._accept_step_attempt = _ap_record
+
+    ap_expect = np.zeros(ap_sim.geometry.cells, dtype=float)
+    ap_window = 0.0
+    ap_discarded = 0
+    for _ in range(60):
+        ap_calls.clear()
+        ap_sim.advance_one_step()
+        assert ap_calls, "advance_one_step accepted no attempt"
+        ap_discarded += len(ap_calls) - 1
+        ap_booking = ap_calls[-1]
+        if ap_booking is not None:
+            # Summed in the solver's own order, so the comparison below is
+            # an EXACT one rather than a tolerance.
+            ap_expect += np.asarray(
+                ap_booking["realised_profile"], dtype=float
+            )
+            ap_window += float(ap_booking["window_s"])
+
+    # Without a discarded iteration and a live debit this member gates
+    # nothing, so both are asserted rather than assumed.
+    assert ap_discarded > 0, ap_discarded
+    assert ap_window > 0.0, ap_window
+    assert float(np.sum(np.abs(ap_expect))) > 0.0, ap_expect
+
+    # The window spans the ACCEPTED steps, not the iterations.
+    assert ap_sim._anode_e_sheath_realised_window_s == ap_window, (
+        ap_sim._anode_e_sheath_realised_window_s, ap_window
+    )
+    # ... and the drained profile is the accepted composition, cell for cell.
+    ap_saved = ap_sim._drain_anode_e_sheath_realised()
+    ap_ref = ap_expect * (1.0e-7 / ap_window)
+    assert np.array_equal(ap_saved, ap_ref), float(
+        np.max(np.abs(ap_saved - ap_ref))
+    )
+    print(
+        "  anode-sink picard accumulator: %d discarded iteration(s) over 60 "
+        "accepted steps; window %.6e s; saved profile exact"
+        % (ap_discarded, ap_window)
+    )
+
+
+# ----------------------------------------------------------------------
 # anode-cells-no-within-step-sawtooth
 # ----------------------------------------------------------------------
 @_case("anode-cells-no-within-step-sawtooth")
@@ -33129,7 +33209,7 @@ def _case_implicit_ee_sink_no_solve_bit_identity():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 203, "historical_stance": 78}
+_CASE_CENSUS = {"total": 204, "historical_stance": 78}
 
 
 def _assert_case_census():

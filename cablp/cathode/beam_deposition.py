@@ -1347,8 +1347,14 @@ def _anode_sheath_returns(
     retraces the traversal backwards, so the reflected leg is the traversal
     UNFOLDED once more: the same arrays, read the other way. It meets the
     plane again wherever the retraced path steps across it and is re-treated
-    there, up to :data:`TAIL_ANODE_SHEATH_MAX_REFLECTIONS` turns, after which
-    the residue is booked as absorbed so the ledger closes at the truncation.
+    there, up to :data:`TAIL_ANODE_SHEATH_MAX_REFLECTIONS` turns. Past that
+    depth the leg is walked with the plane UNCALLED -- the mesh is transparent
+    to that walker, which simply marches on and deposits or leaves the
+    traversal like any other. NOTHING is booked as absorbed at the truncation:
+    the residue is ``eta**MAX`` of one crossing (1.6e-2 at eta = 0.358 and four
+    turns), of a population already below the anode drop, and it passes through
+    the open mesh. Energy still closes, because the truncation moves energy
+    between the plasma and the anode rather than losing any.
 
     Returns ``(absorbed_flux, absorbed_W, dep_eV, exit_back_eV,
     exit_forward_eV, reflected_flux, reflected_eV)``: the crossings the anode

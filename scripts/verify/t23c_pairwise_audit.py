@@ -36,15 +36,29 @@ terms, the carrier's named ledger, and the geometry volumes. Add fields to it
 rather than re-deriving them per pair, so two clients cannot disagree about
 what state they audited.
 
+WHICH CONFIGURATION IT RUNS ON, AND WHY NOT THE REFERENCE ONE. The carrier is
+a member of the cathode surface-recycle family, and the LAPD reference
+configuration selects ``neutral_model = "kinetic_dvm"``, which REFUSES that
+member at construction: the DVM state carries the neutral first moment itself,
+so the jet the carrier takes its backscatter share from does not exist under
+that selection. Arming the carrier on the reference configuration therefore
+raises rather than running, and this instrument cannot audit the reference
+arm's neutral closure. It runs instead on the committed DERIVED configuration
+``scripts/stances/examples/g1atrim_fluid_comparator.toml`` -- the reference
+operating point with the two-moment fluid closure, which does carry the jet,
+its surface debit and an ``En`` field -- so what the audit certifies is the
+carrier's own bookkeeping on the fluid closure, not the reference arm.
+
 USAGE
 
     python scripts/verify/t23c_pairwise_audit.py --t-end 5e-3 --nx 60
 
-builds the golden's own operating point (``default_config()`` + the committed
-stance minus its mesh-sized package + ``nx``), arms the carrier, runs to
-``--t-end``, and audits the end state. ``--tol`` sets the relative bar
-(default 1e-10). Exit status is 0 only when every applicable pair and closure
-passes.
+layers that configuration's delta (minus its mesh-sized package) under the
+golden's own run-shape overrides, arms the carrier, runs to ``--t-end``, and
+audits the end state. ``--config`` names a different committed configuration
+or a path; it must select a closure that admits the carrier. ``--tol`` sets
+the relative bar (default 1e-10). Exit status is 0 only when every applicable
+pair and closure passes.
 """
 
 import argparse
@@ -66,7 +80,15 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 if str(_SCRIPTS.parent) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS.parent))
 
-from baseline_sim1d import build_baseline_config  # noqa: E402
+from baseline_sim1d import (  # noqa: E402
+    BASELINE_FLAG_OVERRIDES,
+    BASELINE_PARAM_OVERRIDES,
+    build_baseline_config,
+)
+from stance_config import (  # noqa: E402
+    load_named_configuration,
+    without_mesh_sized_package,
+)
 from cablp.solvers._sim1d import LAPDSim1D  # noqa: E402
 from cablp.solvers._sim1d.core.state import (  # noqa: E402
     NEUTRAL_ENERGY_FLOOR_T_K,
@@ -74,11 +96,18 @@ from cablp.solvers._sim1d.core.state import (  # noqa: E402
 )
 from cablp.solvers._sim1d.physics.sources import (  # noqa: E402
     cathode_jet_backscatter_speed,
+    cathode_jet_incident_energy_eV,
 )
 from cablp.constants import ev_to_erg, kb_cgs  # noqa: E402
 
 #: erg/s per watt.
 ERG_S_PER_W = 1.0e7
+
+#: The committed derived configuration this instrument runs on by default --
+#: the reference configuration with the two-moment fluid neutral closure in
+#: place of the kinetic one. See the module docstring for why the reference
+#: configuration itself cannot carry this audit.
+FLUID_COMPARATOR = "scripts/stances/examples/g1atrim_fluid_comparator.toml"
 
 
 # ---------------------------------------------------------------- registries
@@ -212,7 +241,7 @@ def _v1_jet_excess_off(ctx):
     spec = ctx.cathode_jet_spec
     R_N = float(spec["R_N"])
     v_back = cathode_jet_backscatter_speed(
-        spec, ctx.derived.Ti, ctx.sim.ion_mass_g
+        spec, ctx.derived.Te, ctx.sim.ion_mass_g
     )
     e_jet = R_N * 0.5 * ctx.sim.ion_mass_g * v_back**2 + (1.0 - R_N) * (
         1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
@@ -249,12 +278,21 @@ def _pair_surface_debit(ctx):
     convention = spec.get("energy_convention", "legacy")
     share = R_E if convention == "total_reflected" else R_N * R_E
     cell = int(np.flatnonzero(ctx.cathode_mask)[0])
-    Ti = float(ctx.derived.Ti[cell])
+    # THE ONE INCIDENT ENERGY: phi_c + Te/2, read from
+    # ``cathode_jet_incident_energy_eV`` rather than restated here, and the
+    # SAME temperature the launch speed below is evaluated at. Restating it
+    # as phi_c + Ti opened the pair by the difference between the two
+    # temperatures, which is not a physical shortfall.
+    Te = float(ctx.derived.Te[cell])
     v_back = float(
-        cathode_jet_backscatter_speed(spec, Ti, ctx.sim.ion_mass_g)
+        cathode_jet_backscatter_speed(spec, Te, ctx.sim.ion_mass_g)
     )
     income = R_N * 0.5 * ctx.sim.ion_mass_g * v_back**2
-    debit = share * (float(spec["phi_c_V"]) + Ti) * ev_to_erg
+    debit = (
+        share
+        * float(cathode_jet_incident_energy_eV(spec["phi_c_V"], Te))
+        * ev_to_erg
+    )
     return debit, income
 
 
@@ -677,10 +715,33 @@ def main():
                         help="progress interval [s]; 0 disables")
     parser.add_argument("--out", default=None,
                         help="also write the report to this file")
+    parser.add_argument("--config", default=FLUID_COMPARATOR,
+                        help=("configuration to audit on -- a committed name "
+                              "or a path. It must select a neutral closure "
+                              "that admits the carrier; the LAPD reference "
+                              "configuration does NOT (see the module "
+                              "docstring)"))
     args = parser.parse_args()
 
+    # The named configuration's cumulative delta, minus its mesh-sized
+    # package, layered under the golden's own run-shape overrides -- which
+    # re-supply the scalar fill the dropped per-cell profile was carrying.
+    delta = load_named_configuration(args.config)
+    delta_params, delta_flags = without_mesh_sized_package(
+        dict(delta.params), dict(delta.flags)
+    )
     params, flags = build_baseline_config(
-        param_overrides={"nx": args.nx, "cathode_jet_hot_carrier": True}
+        param_overrides={
+            **delta_params,
+            **BASELINE_PARAM_OVERRIDES,
+            "nx": args.nx,
+            "cathode_jet_hot_carrier": True,
+        },
+        flag_overrides={**delta_flags, **BASELINE_FLAG_OVERRIDES},
+    )
+    print(
+        f"configuration {delta.lineage.name!r} "
+        f"(base chain {delta.lineage.base_chain})"
     )
     sim = LAPDSim1D(
         params,
