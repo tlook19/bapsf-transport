@@ -1106,7 +1106,7 @@ def model_mode_defaults():
         the live surface temperature, which is the shipped reading. On, the
         ``neutral_kinetic_dvm_cathode_jet_R_N`` share is instead born as a
         directed volume birth in the cell the recycle was counted into,
-        carrying ``(R_E/R_N)(phi_c + Ti)`` of kinetic energy per atom -- the
+        carrying ``(R_E/R_N)(phi_c + Te/2)`` of kinetic energy per atom -- the
         ``"total_reflected"`` reading of the reflection coefficients -- and
         the remainder keeps the thermal inflow. The energy the share carries
         is DEBITED from the cathode surface's own power balance in the same
@@ -1131,7 +1131,7 @@ def model_mode_defaults():
         TOTAL reflected energy fraction of that same channel: reflected
         energy over incident energy, summed over all particles. The
         ``R_N`` backscattered atoms carry all of it, so each leaves with
-        ``R_E/R_N`` of the incident ``phi_c + Ti``, and the cathode surface
+        ``R_E/R_N`` of the incident ``phi_c + Te/2``, and the cathode surface
         is debited exactly ``R_E`` of the ion bombardment energy the same
         particles delivered. Read only when
         ``neutral_kinetic_dvm_cathode_jet`` is on.
@@ -1348,34 +1348,6 @@ def model_mode_defaults():
         Number of perpendicular-speed (``v_perp``) bins in that same grid.
         This axis is positive-only -- it carries the 2D perpendicular speed
         measure -- and is likewise stretched. Inert under ``"moment"``.
-    end_wall_face_riemann_solver:
-        Which Riemann solver supplies the END WALL ghost face's flux under the
-        ``end_wall_face_riemann_flux`` flag. ``None`` -- the default -- is "not
-        named": the face keeps the KEP/Rusanov kernel every other face uses,
-        and naming a solver while the flag is off raises at construction rather
-        than leaving a silently inert control. Armed, it must name one of two
-        solvers, and both deliver all four face fluxes from ONE face state so
-        that the particle sink, the electron sheath rows and the neutral
-        rebirth ride the same particle flux:
-
-        ``"exact_isothermal"``
-            The exact Riemann solution of the isothermal Euler pair ``(n, M)``
-            with ``p = n m_i c^2``, ``c`` the face's isothermal sound speed --
-            the same speed the ghost's Bohm velocity is set at, so the ghost
-            sits exactly at its own sonic point. The pair carries no ion
-            partial pressure, so this face's momentum flux is smaller than the
-            model's own ``n (Te + Ti)`` face pressure by
-            ``n_f ((Te + Ti) - m_i c^2)`` -- exactly ``n_f Ti`` plus a small
-            mass-convention residual (``m_i c^2`` uses the true ion mass
-            ``ion_mass_g`` against a sound speed built on ``mu`` proton
-            masses; ~0.600% of Te at mu=4).
-        ``"hll"``
-            The HLL flux on the full ``(n, M, Ee, Ei)`` vector with the face's
-            own signal speeds ``S_L = min(u_L - c_L, u_R - c_R)`` and
-            ``S_R = max(u_L + c_L, u_R + c_R)``, ``c`` per
-            ``hyperbolic_wave_speed``. It keeps the model's full face pressure
-            and reduces to the Rusanov flux term by term at
-            ``S_R = -S_L = a_max``.
     cathode_circuit_sample:
         Which sampled electrode state the CURRENT-DRIVEN circuit's
         ``V_dis(I)`` relation is built on. It has exactly two readers, and
@@ -1524,10 +1496,6 @@ def model_mode_defaults():
         # refused outright by every other neutral model, so the key can
         # never be a silently inert control:
         "neutral_kinetic_dvm_transfer_hold": None,
-        # None = "not named"; REQUIRED to name one of the two solvers when
-        # end_wall_face_riemann_flux is armed and refused outright while it is
-        # off, so the key can never be a silently inert control:
-        "end_wall_face_riemann_solver": None,
         # Which sampled state the current-driven circuit advance evaluates
         # V_dis(I) on. "raw" is the shipped behaviour, bit for bit:
         "cathode_circuit_sample": "raw",
@@ -4046,23 +4014,6 @@ input_flags_template_1d = {
     # plasma energy K+Ee+Ei telescopes LOCALLY, against a face flux that
     # carries the enthalpy.
     "hyperbolic_energy_consistent": True,
-    # Riemann flux at the END WALL ghost face, DEFAULT OFF. The plasma-
-    # terminating faces evaluate the interior's KEP/Rusanov kernel between the
-    # live cell and the Bohm ghost, and the ghost's density step drives that
-    # kernel's -a_max (n_R - n_L)/2 dissipation: the delivered flux carries a
-    # dissipative share the resolved solution does not have, and the wall cell
-    # equilibrates at the density that share implies. Armed, the end wall face
-    # -- and ONLY it: the cathode face and every interior face keep the R2
-    # kernel -- takes its flux from the Riemann solver
-    # end_wall_face_riemann_solver names instead. All four fluxes come from one
-    # face state, so the particle sink, the 2 Te electron row, the sheath-climb
-    # row under end_wall_sheath_full_debit and the neutral recycle rebirth all
-    # ride one f_n, as they already do. Must be a real bool. Arming refuses at
-    # construction unless the solver is named AND the configuration supplies a
-    # plasma-absorbing face of the end wall role -- the only face this key
-    # touches, so without one it would be an armed control that changes
-    # nothing. Bit-exact when off: the branch is never entered.
-    "end_wall_face_riemann_flux": False,
     # Anode-mesh beam interception (R4): the CSDA beam
     # ray launches the full emitted flux Gamma0 = I_eth_star/e through the
     # whole column, so without this the fluid deposits the entire emitted beam
@@ -5007,6 +4958,12 @@ RETIRED_PARAM_KEYS = {
         "temperature -- the static warming model holds the surface at it "
         "and 'power_balance' evolves from it"
     ),
+    "end_wall_face_riemann_solver": (
+        "nothing: the end wall face removes the PHYSICAL flux at the "
+        "sheath-edge state it samples (n_se = alpha_se n, u = c_s), which "
+        "is a single state and so poses no Riemann problem for a solver to "
+        "resolve"
+    ),
 }
 
 
@@ -5026,6 +4983,12 @@ RETIRED_FLAG_KEYS = {
         "end wall's sheath-climb row, the second the emitting cathode "
         "face's three rows, and a configuration that armed the merged key "
         "arms BOTH"
+    ),
+    "end_wall_face_riemann_flux": (
+        "nothing: the end wall face removes the PHYSICAL flux at the "
+        "sheath-edge state it samples, unconditionally -- a sheath sends no "
+        "wave back into the plasma, so there is no face kernel left to "
+        "select between"
     ),
 }
 

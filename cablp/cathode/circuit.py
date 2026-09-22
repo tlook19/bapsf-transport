@@ -39,7 +39,10 @@ from cablp.atomic.cross_sections import (
     He_beam_excitation_channel,
 )
 from cablp.cathode.kernels import COMPILED_KERNELS as _COMPILED_KERNELS
-from cablp.plasma.params import LN_LAMBDA_MIN as _LN_LAMBDA_MIN
+from cablp.plasma.params import (
+    LN_LAMBDA_MIN as _LN_LAMBDA_MIN,
+    bohm_sound_speed as _bohm_sound_speed,
+)
 from cablp.atomic.coefficients import b_11s_21p
 from cablp.constants import E_21p as _E_21p_eV, Ry_eV as _Ry_eV, atm_cross_cgs as _atm_cross_cgs
 
@@ -55,21 +58,21 @@ _pemr: float = _mp_cgs / _me_cgs  # Proton-to-electron mass ratio ≈ 1836.15
 _erg_per_eV: float = _e_SI * 1.0e7  # eV → erg conversion
 
 
-def sheath_lift_lambda(mu: float) -> float:
-    """Return the sheath lift ``Lambda`` [dimensionless] for ion mass ``mu``.
+def sheath_lift_lambda(ion_mass_g: float) -> float:
+    """Return the sheath lift ``Lambda`` [dimensionless] for the ion mass.
 
-    ``Lambda = ln(sqrt(mu m_p / (2 pi m_e)))`` is the floating-potential
+    ``Lambda = ln(sqrt(m_i / (2 pi m_e)))`` is the floating-potential
     parameter in units of ``T_e``: the barrier a Maxwellian electron
     population must climb for its one-sided random flux to be throttled to
-    the ion flux at a surface drawing no net current. ``mu`` is the ion mass
-    in proton masses and must be positive; helium gives 3.53.
+    the ion flux at a surface drawing no net current. ``ion_mass_g`` is the
+    ion mass [g] and must be positive; helium gives 3.529.
 
     THE ONE SPEC. :class:`DeviceConfig` stores this as its ``Lambda`` and
     every sheath current in this module rides that value, so a consumer
     outside the circuit that needs the same barrier calls this instead of
     restating the expression.
     """
-    return -math.log(math.sqrt(2.0 * math.pi / (mu * _pemr)))
+    return math.log(math.sqrt(ion_mass_g / (2.0 * math.pi * _me_cgs)))
 
 
 #: Accepted values of ``DeviceConfig.lnL_model``, which fixes how the parallel
@@ -92,7 +95,8 @@ class DeviceConfig:
     Parameters
     ----------
     A_c     : Cathode area [cm²]
-    mu      : Ion mass / proton mass [dimensionless]
+    mu      : Ion mass / proton mass [dimensionless]; sets the electron-to-ion mass ratio of the space-charge emission ceiling only
+    ion_mass_g : Ion mass [g]; sets the sound speed the ion collection currents ride and the sheath lift ``Lambda``
     V_bank  : Power supply (cathode bank) voltage [V]
     T_s     : Cathode surface temperature [K]
     phi_wf  : Work function [eV]; default 3.0 (LaB6)
@@ -107,6 +111,7 @@ class DeviceConfig:
 
     A_c: float
     mu: float
+    ion_mass_g: float
     V_bank: float
     T_s: float
     phi_wf: float = 3.0
@@ -167,7 +172,7 @@ class DeviceConfig:
         # Lambda = sheath floating-potential parameter, from the module's
         # one spec (`sheath_lift_lambda`) so an outside consumer of the same
         # barrier reads the same expression rather than a copy of it.
-        lam = sheath_lift_lambda(self.mu)
+        lam = sheath_lift_lambda(self.ion_mass_g)
         object.__setattr__(self, "Lambda", lam)
 
         # I_eth = thermionic emission current [A] (static; depends only on T_s)
@@ -1109,9 +1114,9 @@ def solve(
     # Parallel plasma resistance [Ω]
     R_p = config.L_cath / (math.pi * config.R_cath**2 * sigma_par)
 
-    # Ion sound speed [cm/s]:  C_s = sqrt(T_e [erg] / (mu * m_p [g]))
-    # T_e [eV] * _e_SI [J/eV] * 1e7 [erg/J] = T_e [erg]
-    C_s = math.sqrt(T_e * _e_SI * 1.0e7 / (config.mu * _mp_cgs))
+    # Ion sound speed [cm/s]: the fluid boundary's own spec, so the current
+    # this circuit books and the flux the fluid removes ride ONE sound speed.
+    C_s = float(_bohm_sound_speed(T_e, config.ion_mass_g))
 
     # Ion saturation current [A]:  A_c [cm²] * e [C] * n_e [cm⁻³] * C_s [cm/s]
     I_i = config.A_c * _e_SI * n_e * C_s * math.exp(-0.5)

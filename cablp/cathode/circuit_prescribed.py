@@ -113,6 +113,7 @@ from cablp.cathode.circuit import (
     _launch_potential_V,
     _mp_cgs,
 )
+from cablp.plasma.params import bohm_sound_speed as _bohm_sound_speed
 from cablp.cathode.circuit_idriven import assemble_beam_arrays
 
 __all__ = [
@@ -198,7 +199,7 @@ def solve_prescribed(
             f"{CATHODE_LNL_MODELS} (got {config.lnL_model!r})"
         )
     R_p = config.L_cath / (math.pi * config.R_cath**2 * sigma_par)
-    C_s = math.sqrt(T_e * _e_SI * 1.0e7 / (config.mu * _mp_cgs))
+    C_s = float(_bohm_sound_speed(T_e, config.ion_mass_g))
 
     def _sheath_factors(alpha):
         if alpha is None:

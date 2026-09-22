@@ -103,6 +103,7 @@ from cablp.solvers._sim1d import (
 )
 from cablp.solvers._sim1d.physics.flux import plasma_wave_speed
 from cablp.solvers._sim1d.results.io import save_result_hdf5
+from cablp.constants import m_He_cgs
 
 _SCRIPTS = Path(__file__).resolve().parents[1]
 # scripts/ sibling imports: the seven purpose subdirectories on sys.path.
@@ -1315,11 +1316,11 @@ MACH_FACE_KEYS = (
 #: measured M at BOTH ends rather than picking one.
 MACH_K_BRACKET = (1.34, 1.74)
 
-#: Ion mass number the model Mach uses. The solver is hard helium-only --
+#: Ion mass [g] the model Mach uses. The solver is hard helium-only --
 #: ``gas_type != "He"`` raises at construction -- so this is the only value a
 #: scored artifact can carry, and the block refuses any other gas_type rather
 #: than assuming it.
-MACH_MU = 4.0
+MACH_ION_MASS_G = m_He_cgs
 MACH_GAS_TYPE = "He"
 
 #: Config key naming the run's own signal-speed convention. The model Mach is
@@ -1383,7 +1384,8 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
     if gas != MACH_GAS_TYPE:
         return [], (
             f"this run's gas_type is {gas!r}, and the ion mass number behind "
-            f"the model Mach is pinned to {MACH_GAS_TYPE} (mu = {MACH_MU:g}); "
+            f"the model Mach is pinned to {MACH_GAS_TYPE} "
+            f"(m_i = {MACH_ION_MASS_G:g} g); "
             "assuming a mass for another gas would put a silent factor in the "
             "sound speed"
         )
@@ -1421,7 +1423,7 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
     cs_model = plasma_wave_speed(
         np.asarray(result.Te, dtype=float),
         np.asarray(result.Ti, dtype=float),
-        MACH_MU,
+        MACH_ION_MASS_G,
         wave_speed=wave_speed,
     )
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -1433,7 +1435,7 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
     cs_model_probe = plasma_wave_speed(
         np.asarray(result.Te, dtype=float),
         np.asarray(result.Ti, dtype=float),
-        MACH_MU,
+        MACH_ION_MASS_G,
         wave_speed="isothermal",
     )
     with np.errstate(divide="ignore", invalid="ignore"):

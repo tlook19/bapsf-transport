@@ -15,8 +15,7 @@ from .flux import (
     ion_sound_speed,
     plasma_wave_speed,
     _flux_divergence,
-    end_wall_riemann_face_scalar,
-    kep_rusanov_face_scalar,
+    physical_face_scalar,
 )
 from ..core.state import (
     ConservativeState1D,
@@ -449,7 +448,6 @@ def hyperbolic_energy_correction_rhs(
     state,
     floors,
     ion_mass_g,
-    mu,
     geometry,
     wave_speed="isothermal",
 ):
@@ -492,7 +490,7 @@ def hyperbolic_energy_correction_rhs(
     n = np.asarray(state.n, dtype=float)
     M = np.asarray(state.M, dtype=float)
 
-    cs = plasma_wave_speed(derived.Te, derived.Ti, mu, wave_speed)
+    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g, wave_speed)
     amax = np.maximum(np.abs(u[:-1]) + cs[:-1], np.abs(u[1:]) + cs[1:])
     open_faces = np.asarray(geometry.plasma_open, dtype=bool)
     transmission = np.asarray(geometry.plasma_transmission, dtype=float)
@@ -555,7 +553,6 @@ def presheath_length_cm(
     nn,
     Te,
     Ti,
-    mu,
     ion_mass_g,
     gas_type=None,
     Tn_eV=None,
@@ -583,7 +580,7 @@ def presheath_length_cm(
     )
     if nu_in <= 0.0 or not np.isfinite(nu_in):
         return np.inf
-    return float(ion_sound_speed(Te, mu) / nu_in)
+    return float(ion_sound_speed(Te, ion_mass_g) / nu_in)
 
 
 def presheath_alpha(alpha_isat, cell_length_cm, presheath_cm):
@@ -621,7 +618,6 @@ def electrode_sheath_alpha(
     Te,
     Ti,
     cell_length_cm,
-    mu,
     ion_mass_g,
     alpha_isat=np.exp(-0.5),
     b_presheath_length=1.0,
@@ -629,12 +625,15 @@ def electrode_sheath_alpha(
 ):
     """Return the mesh-independent sheath-edge factor ``n_se/n`` at one cell.
 
-    The single source of truth for the collisional-presheath sampling
-    (R3.2 / A16): one mesh-independent sheath-edge density ``n_se``, SHARED by
-    the fluid sink, the circuit current, and the power terms.
-    Both the fluid characteristic boundary (``characteristic_boundary_rhs``) and
-    the circuit's cathode current (``cathode.circuit_idriven.solve_idriven``
-    via the cathode adapter) call this so they cannot disagree about ``n_se``.
+    The single source of truth for the collisional-presheath sampling:
+    one mesh-independent sheath-edge density ``n_se``, SHARED by the fluid
+    sink, the circuit current, and the power terms. Both the fluid
+    characteristic boundary (``characteristic_boundary_rhs``) and the circuit's
+    cathode current (``cathode.circuit_idriven.solve_idriven`` via the cathode
+    adapter) call this, and both build the same flux ``alpha_eff n c_s`` on the
+    same face area, so the ions the fluid removes at the cathode and the ions
+    the circuit counts are ONE number -- up to the electrode sample smoothing,
+    which is a sampling of the same formula and not a second one.
     The anode mesh is NOT sampled here: its presheath is geometric and always
     fits inside a cell, so its factor is the flat ``exp(-1/2)`` used unchanged by
     both ``anode_collection_rhs`` and ``anode_circuit_sample``.
@@ -643,7 +642,6 @@ def electrode_sheath_alpha(
         nn=nn,
         Te=Te,
         Ti=Ti,
-        mu=mu,
         ion_mass_g=ion_mass_g,
         gas_type=gas_type,
     )
@@ -800,7 +798,6 @@ def absorbing_face_states(
     geometry,
     live,
     outward,
-    mu,
     ion_mass_g,
     alpha_isat=np.exp(-0.5),
     b_presheath_length=1.0,
@@ -816,18 +813,21 @@ def absorbing_face_states(
     side), so the ghost's velocity always points INTO the wall.
 
     The two returned dicts carry the conservative and derived scalars
-    (``n, M, Ee, Ei, u, p, Te, Ti``) a single-face flux kernel reads. The ghost
-    is the Bohm outflow condition at the sheath edge: density
+    (``n, M, Ee, Ei, u, p, Te, Ti``) a single-face flux reads. The GHOST is
+    the Bohm outflow condition at the sheath edge -- density
     ``n_se = alpha_eff n``, velocity the ion sound speed
     :func:`~.flux.ion_sound_speed` directed outward, and the live cell's own
-    ``Te`` and ``Ti``. ``alpha_eff`` is the sheath-edge sampling factor
-    :func:`electrode_sheath_alpha` returns for this cell -- returned rather
-    than recomputed by the caller, so the flux this face delivers and any
-    sheath barrier charged on it describe one sheath edge.
+    ``Te`` and ``Ti`` -- and it is the state the face flux is evaluated at.
+    ``interior`` is returned for the callers that report the live cell beside
+    it; the flux itself reads the ghost alone. ``alpha_eff`` is the
+    sheath-edge sampling factor :func:`electrode_sheath_alpha` returns for
+    this cell -- returned rather than recomputed by the caller, so the flux
+    this face delivers and any sheath barrier charged on it describe one
+    sheath edge.
     """
     Te_l = float(derived.Te[live])
     Ti_l = float(derived.Ti[live])
-    cs = float(ion_sound_speed(Te_l, mu))
+    cs = float(ion_sound_speed(Te_l, ion_mass_g))
 
     # Shared mesh-independent sheath-edge sampling (presheath_alpha): the
     # SAME factor the circuit reads in R3.2 (via electrode_sheath_alpha).
@@ -836,7 +836,6 @@ def absorbing_face_states(
         Te=Te_l,
         Ti=Ti_l,
         cell_length_cm=float(geometry.length_cm[live]),
-        mu=mu,
         ion_mass_g=ion_mass_g,
         alpha_isat=alpha_isat,
         b_presheath_length=b_presheath_length,
@@ -873,19 +872,15 @@ def characteristic_boundary_rhs(
     state,
     floors,
     ion_mass_g,
-    mu,
     geometry,
     alpha_isat=np.exp(-0.5),
     b_surface_loss=1.0,
     b_presheath_length=1.0,
     gas_type=None,
     cathode_jet=None,
-    wave_speed="isothermal",
-    energy_consistent=False,
     end_recycle_annulus_volume_cm3=None,
     cathode_carrier_out=None,
     end_wall_sheath_climb_out=None,
-    end_wall_face_riemann_solver=None,
 ):
     """Return the characteristic ghost-cell Bohm outflow at absorbing faces.
 
@@ -898,9 +893,15 @@ def characteristic_boundary_rhs(
 
         n_se = n * presheath_alpha,  u = c_s directed into the wall,  Te, Ti
 
-    and the committed R2 KEP/Rusanov flux (``flux.kep_rusanov_face_scalar``) is
-    evaluated between the interior live cell and the ghost. The ghost flux
-    DRIVES the interior toward the Bohm state and is a net energy sink.
+    and the flux removed is the PHYSICAL flux at that sheath-edge state
+    alone (``flux.physical_face_scalar`` on the ghost): the pure-upwind limit,
+    with no live-cell central half and no dissipation term. A sheath sends no
+    wave back into the plasma, and the density step from the live cell to
+    ``n_se`` is a sub-grid presheath model rather than a discontinuity, so
+    there is no Riemann problem at the surface to average across. The face
+    flux DRIVES the interior toward the Bohm state and is a net energy sink,
+    and its particle flux ``alpha_se n c_s`` per unit area is the SAME
+    expression the cathode circuit books as its ion current.
 
     The flux is applied **one-sidedly to the live cell**: the shared face-flux
     array telescopes, so an interior absorbing face would otherwise hand the
@@ -929,7 +930,7 @@ def characteristic_boundary_rhs(
     row keeps its unconditional ``2 Te`` meaning. ``Lambda_eff = Lambda +
     ln(1/alpha)`` is the barrier those electrons climb at a surface drawing
     no net current: ``Lambda`` (:func:`~cablp.cathode.circuit.sheath_lift_lambda`
-    at this call's ``mu``, the same lift the circuit's sheath currents ride)
+    at this call's ion mass, the same lift the circuit's sheath currents ride)
     plus the presheath drop implied by the very ``alpha`` this face samples
     its Bohm flux at, so the two cannot describe different sheath edges. The
     fall is taken from the plasma electron store and handed to the ions,
@@ -938,22 +939,6 @@ def characteristic_boundary_rhs(
     driven electrodes above. CATHODE faces are untouched: the accelerated
     species there is the ion. ``None`` -- the default -- computes nothing and
     is the historical call, bit for bit.
-
-    ``end_wall_face_riemann_solver``: when given (one of
-    ``flux.END_WALL_FACE_RIEMANN_SOLVERS``, supplied only under the
-    ``end_wall_face_riemann_flux`` closure), the faces whose live cell has the
-    ``end_wall`` role take their flux from
-    :func:`~.flux.end_wall_riemann_face_scalar` instead of the KEP/Rusanov
-    kernel. It is ONE substitution and it reaches ONE face: the cathode faces
-    and every interior face are untouched, and because the four rows this
-    function books all ride the single ``f_n`` the substitution returns, the
-    particle sink, the ``2 Te`` electron row, the sheath-climb row and the
-    neutral rebirth continue to describe the same face flux. The Rusanov
-    dissipation ``-a_max (n_R - n_L)/2`` that the ghost's density step drives
-    is what it removes; in the resolved limit, where the ghost equals the
-    interior, that dissipation vanishes and both solvers and the Rusanov
-    kernel are the same physical upwind flux. ``None`` -- the default -- never
-    enters the branch and is the historical call, bit for bit.
 
     ``end_recycle_annulus_volume_cm3``: when given (the per-cell annulus
     volume [cm^3], supplied only under the ``end_recycle_to_annulus``
@@ -1045,7 +1030,7 @@ def characteristic_boundary_rhs(
     # The sheath lift is a property of the ion mass alone, so it is read once
     # here rather than per face -- and read from the circuit, which is where
     # the same barrier sets the sheath currents.
-    lambda_lift = sheath_lift_lambda(mu) if climb_active else None
+    lambda_lift = sheath_lift_lambda(ion_mass_g) if climb_active else None
     if jet_active:
         v_eff = np.sqrt(
             np.pi * kb_cgs * max(float(cathode_jet["T_s_K"]), 0.0)
@@ -1068,7 +1053,6 @@ def characteristic_boundary_rhs(
             geometry=geometry,
             live=live,
             outward=outward,
-            mu=mu,
             ion_mass_g=ion_mass_g,
             alpha_isat=alpha_isat,
             b_presheath_length=b_presheath_length,
@@ -1076,38 +1060,18 @@ def characteristic_boundary_rhs(
         )
         Te_l = interior["Te"]
         Ti_l = interior["Ti"]
-        # Assemble the +z-oriented face: the interior sits on whichever side the
-        # live cell occupies, the ghost (the surface) on the other.
-        if live_is_right:
-            left_state, right_state, signL = ghost, interior, 1.0
-        else:
-            left_state, right_state, signL = interior, ghost, -1.0
+        # The face is +z-oriented, so the one-sided divergence takes the
+        # live cell's side: +1 where the plasma is the face's RIGHT state,
+        # -1 where it is the left one.
+        signL = 1.0 if live_is_right else -1.0
 
-        if (
-            end_wall_face_riemann_solver is not None
-            and roles[live] == "end_wall"
-        ):
-            # end_wall_face_riemann_flux. ONE face -- the END WALL's -- and
-            # one face state, from which all four fluxes come; the cathode
-            # face below and every interior face keep the R2 kernel.
-            f_n, f_M, f_Ee, f_Ei = end_wall_riemann_face_scalar(
-                left_state,
-                right_state,
-                solver=end_wall_face_riemann_solver,
-                mu=mu,
-                ion_mass_g=ion_mass_g,
-                wave_speed=wave_speed,
-                energy_consistent=energy_consistent,
-            )
-        else:
-            f_n, f_M, f_Ee, f_Ei = kep_rusanov_face_scalar(
-                left_state,
-                right_state,
-                mu=mu,
-                ion_mass_g=ion_mass_g,
-                wave_speed=wave_speed,
-                energy_consistent=energy_consistent,
-            )
+        # A MATERIAL surface removes the physical flux at the sheath-edge
+        # state, evaluated at the ghost ALONE: the pure-upwind limit, with no
+        # live-cell central half and no dissipation term. Every one of the
+        # four rows this function books rides the single ``f_n`` that returns,
+        # so the particle sink, the electron rows, the neutral rebirth and --
+        # at the cathode -- the circuit's ion current describe one face flux.
+        f_n, f_M, f_Ee, f_Ei = physical_face_scalar(ghost)
         # One-sided divergence on the live cell (the plenum keeps its closed
         # face and never receives this flux).
         scale = signL * area[face] / Vp[live]
@@ -1211,7 +1175,6 @@ def anode_collection_rhs(
     state,
     floors,
     ion_mass_g,
-    mu,
     geometry,
     eta,
     alpha_isat=np.exp(-0.5),
@@ -1298,7 +1261,7 @@ def anode_collection_rhs(
             loss = _cell_surface_particle_loss(
                 n=state.n[cell],
                 Te=derived.Te[cell],
-                mu=mu,
+                ion_mass_g=ion_mass_g,
                 area_cm2=float(eta) * geometry.plasma_area_cm2[cell],
                 alpha_isat=alpha_isat,
             )
@@ -1361,8 +1324,8 @@ def anode_collection_rhs(
     )
 
 
-def _cell_surface_particle_loss(n, Te, mu, area_cm2, alpha_isat):
-    return float(alpha_isat) * n * ion_sound_speed(Te, mu) * area_cm2
+def _cell_surface_particle_loss(n, Te, ion_mass_g, area_cm2, alpha_isat):
+    return float(alpha_isat) * n * ion_sound_speed(Te, ion_mass_g) * area_cm2
 
 
 def ion_neutral_collision_frequency(

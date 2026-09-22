@@ -222,7 +222,7 @@ class CathodeSolve1D:
     tail_anode_current_A: float = 0.0
 
 
-def anode_circuit_sample(state, derived, geometry, mu, input_dict, end=0):
+def anode_circuit_sample(state, derived, geometry, ion_mass_g, input_dict, end=0):
     """Return ``(I_i_a [A], Te_anode [eV])`` for one anode, or ``(None, None)``.
 
     The historical circuit takes ``I_i_a = 2*eta*I_i``, scaling the anode
@@ -250,7 +250,7 @@ def anode_circuit_sample(state, derived, geometry, mu, input_dict, end=0):
         collected = (
             np.exp(-0.5)
             * state.n[cell]
-            * ion_sound_speed(derived.Te[cell], mu)
+            * ion_sound_speed(derived.Te[cell], ion_mass_g)
             * eta
             * float(geometry.plasma_area_cm2[cell])
         )
@@ -282,7 +282,7 @@ def cathode_sample_indices(geometry):
 
 
 def cathode_circuit_alpha_sheath(
-    state, derived, geometry, cathode_index, mu, ion_mass_g, input_dict
+    state, derived, geometry, cathode_index, ion_mass_g, input_dict
 ):
     """Return the cathode sheath-edge factor ``n_se/n`` for the circuit.
 
@@ -300,7 +300,6 @@ def cathode_circuit_alpha_sheath(
         Te=float(derived.Te[cathode_index]),
         Ti=float(derived.Ti[cathode_index]),
         cell_length_cm=float(geometry.length_cm[cathode_index]),
-        mu=mu,
         ion_mass_g=ion_mass_g,
         alpha_isat=float(input_dict.get("alpha_isat", math.exp(-0.5))),
         b_presheath_length=float(input_dict.get("b_presheath_length", 1.0)),
@@ -376,7 +375,7 @@ def cathode_emission_annuli(input_dict, n_annuli=10):
     return tuple(Ts_k), tuple(area_k), tuple(frac_k)
 
 
-def cathode_device_config(input_dict, input_flags, mu, f_em=None):
+def cathode_device_config(input_dict, input_flags, mu, ion_mass_g, f_em=None):
     """Build the existing cathode solver's static device configuration.
 
     ``f_em`` is the cathode's lit-area fraction under the emitting-area
@@ -423,6 +422,7 @@ def cathode_device_config(input_dict, input_flags, mu, f_em=None):
     return DeviceConfig(
         A_c=math.pi * R_cath**2,
         mu=mu,
+        ion_mass_g=ion_mass_g,
         V_bank=float(input_dict["V_bank"]),
         T_s=float(input_dict["cathode_Ts_base_K"]),
         phi_wf=float(input_dict["phi_wf"]),
@@ -1025,14 +1025,14 @@ def idriven_result_evaluator(
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     anode_A, anode_Te = anode_circuit_sample(
-        state, derived, geometry, mu, input_dict, end=0
+        state, derived, geometry, ion_mass_g, input_dict, end=0
     )
     if T_s_override_K is not None:
         input_dict = {**input_dict, "cathode_Ts_base_K": float(T_s_override_K)}
     if phi_wf_override_eV is not None:
         input_dict = {**input_dict, "phi_wf": float(phi_wf_override_eV)}
     device_config = cathode_device_config(
-        input_dict, input_flags, mu, f_em=f_em_override
+        input_dict, input_flags, mu, ion_mass_g, f_em=f_em_override
     )
     device_config, _, _ = apply_cathode_Rp_model(
         device_config, derived, geometry, input_dict, input_flags,
@@ -1057,7 +1057,7 @@ def idriven_result_evaluator(
     bridge = bool(input_flags.get("cathode_emission_bridge", False))
     cap = float(input_dict.get("cathode_phi_c_cap_V", 1000.0))
     alpha_sheath = cathode_circuit_alpha_sheath(
-        state, derived, geometry, idx, mu, ion_mass_g, input_dict
+        state, derived, geometry, idx, ion_mass_g, input_dict
     )
 
     emitted_enthalpy_V = cathode_beam_launch_enthalpy_V(
@@ -1493,7 +1493,7 @@ def solve_cathode_boundary(
 
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     anode_source = anode_circuit_sample(
-        state, derived, geometry, mu, input_dict, end=0
+        state, derived, geometry, ion_mass_g, input_dict, end=0
     )
     if T_s_override_K is not None:
         # cathode_warming_model: substitute the evolving surface temperature
@@ -1522,7 +1522,7 @@ def solve_cathode_boundary(
     # discipline as the two above -- one value, applied at the one seam every
     # emission consumer is built from.
     device_config = cathode_device_config(
-        input_dict, input_flags, mu, f_em=f_em_override
+        input_dict, input_flags, mu, ion_mass_g, f_em=f_em_override
     )
     device_config, Rp_model, R_p_gap_ohm = apply_cathode_Rp_model(
         device_config, derived, geometry, input_dict, input_flags,
@@ -1576,7 +1576,7 @@ def solve_cathode_boundary(
             anode_T_e=anode_source[1],
             alpha_sheath=cathode_circuit_alpha_sheath(
                 state, derived, geometry, beam_launch(geometry, end=0)[0],
-                mu, ion_mass_g, input_dict,
+                ion_mass_g, input_dict,
             ),
             b_beam_excitation=float(
                 input_dict.get("b_beam_excitation", 0.0)
@@ -1630,7 +1630,7 @@ def solve_cathode_boundary(
             anode_T_e=anode_source[1],
             alpha_sheath=cathode_circuit_alpha_sheath(
                 state, derived, geometry, beam_launch(geometry, end=0)[0],
-                mu, ion_mass_g, input_dict,
+                ion_mass_g, input_dict,
             ),
             b_beam_excitation=float(
                 input_dict.get("b_beam_excitation", 0.0)

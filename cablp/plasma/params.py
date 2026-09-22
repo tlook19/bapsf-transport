@@ -1,5 +1,31 @@
 import numpy as np
 
+from cablp.constants import ev_to_erg
+
+
+def bohm_sound_speed(Te, ion_mass_g):
+    """
+    Bohm (ion sound) speed C_s = sqrt(T_e / m_i) [cm/s].
+
+    THE ONE SPEC for the sound speed. Every consumer -- the sheath-edge
+    (Bohm) outflow at a material face, the presheath depth, the Rusanov
+    signal speed, the electrode collection currents of the cathode circuit --
+    calls this, so none of them can describe a different ion.
+
+    Parameters
+    ----------
+    Te : float or array
+        Electron temperature [eV].
+    ion_mass_g : float
+        Ion mass [g]; the true ion mass, not a mass number.
+
+    Returns
+    -------
+    float or array
+        Ion sound speed [cm/s].
+    """
+    return np.sqrt(Te * ev_to_erg / ion_mass_g)
+
 
 def time_elec_coll(T, ne, lnlambda):
     """

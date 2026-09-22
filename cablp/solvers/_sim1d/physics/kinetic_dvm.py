@@ -841,10 +841,11 @@ class TransientDVM:
 
     * the ``R_N`` share is BACKSCATTERED, born as a volume birth in the cell
       the recycle was counted into, on a moment-compensated narrow shifted
-      Maxwellian carrying ``(R_E/R_N) (phi_c + Ti)`` of kinetic energy per
-      atom -- the ``"total_reflected"`` convention of
-      :func:`~cablp.solvers._sim1d.physics.sources.cathode_jet_backscatter_speed`,
-      so the DVM channel and the fluid one describe the same atoms;
+      Maxwellian carrying ``(R_E/R_N) (phi_c + Te/2)`` of kinetic energy per
+      atom -- the ``"total_reflected"`` reading of the reflection
+      coefficients, on the circuit's own per-ion incident energy, so the
+      energy the gas receives and the energy the surface is debited are one
+      number;
     * the ``1 - R_N`` remainder keeps the thermal cosine half-flux inflow at
       the live surface temperature, unchanged.
 
@@ -2118,7 +2119,7 @@ class TransientDVM:
         """Return the backscatter launch spectrum at ``e_launch`` erg per atom.
 
         ``e_launch`` is the kinetic energy ONE backscattered atom leaves
-        with, ``(R_E/R_N) (phi_c + Ti)`` under the ``"total_reflected"``
+        with, ``(R_E/R_N) (phi_c + Te/2)`` under the ``"total_reflected"``
         convention. The returned bin masses sum to 1 and their DISCRETE mean
         energy is ``e_launch`` -- not ``e_launch`` plus the smear's own
         ``(3/2) k T_launch``, which is why the drift is solved from the
@@ -2152,7 +2153,7 @@ class TransientDVM:
             raise ValueError(
                 "the DVM cathode jet needs a positive finite launch energy "
                 f"per atom at cell {cell} (got {e_launch!r} erg): the "
-                "backscattered share carries (R_E/R_N)(phi_c + Ti), and a "
+                "backscattered share carries (R_E/R_N)(phi_c + Te/2), and a "
                 "cell that recycles particles at zero incident energy has no "
                 "energetic share to launch"
             )
@@ -2914,7 +2915,7 @@ class TransientDVM:
 
         ``cathode_jet_incident_erg`` is the counted INCIDENT ion energy per
         column cell [erg] that the ``cathode_face`` particles arrived with
-        over this tick -- ``sum over the tick of N (phi_c + Ti)`` at each
+        over this tick -- ``sum over the tick of N (phi_c + Te/2)`` at each
         contributing state, not a tick-time re-reading of it. Required
         exactly when the engine was built with a ``cathode_jet`` spec and
         refused otherwise; it is the number the partner's surface debit is
@@ -3593,7 +3594,7 @@ class TransientDVM:
         Armed, ``jet`` is ``R_N`` of the counted particles and
         ``jet_energy`` is ``R_E`` of the counted INCIDENT energy -- the
         total reflected energy fraction, so the per-atom launch energy is
-        ``jet_energy / jet = (R_E/R_N)(phi_c + Ti)`` exactly. The thermal
+        ``jet_energy / jet = (R_E/R_N)(phi_c + Te/2)`` exactly. The thermal
         share is the REMAINDER rather than ``(1 - R_N)`` of the count, so
         the two shares sum to the counted stream to the bit and the particle
         ledger's external total is untouched by the split.
@@ -3604,7 +3605,7 @@ class TransientDVM:
         arming criterion suppresses the incident-energy booking on censored
         steps while the recycle COUNT keeps accruing on every step, so
         ``R_N`` of the full count paired with energy from the armed steps
-        alone is not ``(R_E/R_N)(phi_c + Ti)`` -- it is that number diluted
+        alone is not ``(R_E/R_N)(phi_c + Te/2)`` -- it is that number diluted
         by however much of the tick was censored, and where the whole tick
         was censored it is 0/0. Passing the armed-step counts here keeps
         numerator and denominator over the same steps, which is what the

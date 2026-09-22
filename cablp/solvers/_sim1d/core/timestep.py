@@ -197,7 +197,6 @@ def suggest_timestep(
             state=state,
             floors=floors,
             ion_mass_g=ion_mass_g,
-            mu=mu,
             geometry=geometry,
             cfl=cfl,
             plasma_active=plasma_active,
@@ -207,7 +206,6 @@ def suggest_timestep(
             state=state,
             floors=floors,
             ion_mass_g=ion_mass_g,
-            mu=mu,
             geometry=geometry,
             density_dt_fraction=density_dt_fraction,
             include_front=include_front,
@@ -394,14 +392,14 @@ def circuit_timestep(circuit_kwargs=None, circuit_dt_fraction=0.25):
 
 
 def plasma_cfl_timestep(
-    state, floors, ion_mass_g, mu, geometry, cfl=0.4, plasma_active=None,
+    state, floors, ion_mass_g, geometry, cfl=0.4, plasma_active=None,
     wave_speed="isothermal",
 ):
     """Return the plasma wave CFL timestep [s]."""
     if cfl <= 0.0:
         raise ValueError(f"cfl must be positive (got {cfl})")
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    cs = plasma_wave_speed(derived.Te, derived.Ti, mu, wave_speed)
+    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g, wave_speed)
     face_speed = 0.5 * (
         np.abs(derived.u[:-1])
         + np.abs(derived.u[1:])
@@ -537,7 +535,6 @@ def front_density_timestep(
     state,
     floors,
     ion_mass_g,
-    mu,
     geometry,
     density_dt_fraction=0.25,
     include_front=True,
@@ -556,7 +553,6 @@ def front_density_timestep(
         state=state,
         floors=floors,
         ion_mass_g=ion_mass_g,
-        mu=mu,
         geometry=geometry,
         include_front=True,
         alpha_front=alpha_front,
@@ -566,7 +562,6 @@ def front_density_timestep(
         state=state,
         floors=floors,
         ion_mass_g=ion_mass_g,
-        mu=mu,
         geometry=geometry,
         include_front=False,
         alpha_front=alpha_front,

@@ -116,7 +116,6 @@ def _faces(sim, geometry):
         state=sim.state,
         floors=sim.floors,
         ion_mass_g=sim.ion_mass_g,
-        mu=sim._mu,
         geometry=geometry,
         active_plasma_topology=sim._active_plasma_topology,
         wave_speed=sim._hyperbolic_wave_speed,

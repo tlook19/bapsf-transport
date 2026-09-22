@@ -18,7 +18,7 @@ erg cm<sup>-3</sup>, cm<sup>-3</sup> s<sup>-1</sup>, A, V.
 | $M=m_inu$ | parallel plasma momentum density |
 | $E_e=\tfrac32nT_e$, $E_i=\tfrac32nT_i$ | electron and ion energy densities |
 | $p_e=nT_e$, $p_i=nT_i$, $p=p_e+p_i$ | pressures, formed on the floored $n$ |
-| $c_s=9.79\times10^5\sqrt{T_e/\mu}$ cm s<sup>-1</sup> | Bohm speed — the sound speed every boundary, collection and presheath term uses, on $\mu$ PROTON masses (a disclosed convention, below) |
+| $c_s=\sqrt{T_e/m_i}$ cm s<sup>-1</sup> | Bohm speed — the sound speed every boundary, collection and presheath term uses |
 | $a=\sqrt{\tfrac53(T_e+T_i)/m_i}$ | the Rusanov signal speed, a scheme quantity ([`NUMERICS.md`](NUMERICS.md)) |
 | $\mathbf r$, $\mathbf v$ | position and velocity vector of a neutral |
 | $z=\mathbf r\!\cdot\!\hat z$ | axial coordinate; $\hat z$ along the axis and $\mathbf B$ |
@@ -82,14 +82,11 @@ superscript — $n_n^\text{col}$, $n_n^\text{ann}$, $u_n^\text{col}$,
 $T_n^\text{col}$ — and because the plasma occupies the column, every
 plasma-side rate below couples to the COLUMN gas.
 
-**The sound speed is a disclosed convention.** Every $c_s$ in this document is
-the code's `ion_sound_speed`, $9.79\times10^5\sqrt{T_e/\mu}$ cm s<sup>-1</sup>
-on $\mu$ PROTON masses ($\mu=4$ for helium), not
-$\sqrt{T_e/m_i}$ on the true ion mass $m_i=m_\text{He}$ that every other term
-uses. The two differ by a fixed 0.600 % in $m_ic_s^2$ against $T_e$ — $c_s$
-about 0.30 % LOW — at every site that reads it: the anode-mesh collection,
-the absorbing-face ghost velocity and the presheath depth. The residual is
-stated in the docstring of `ion_sound_speed` in `physics/flux.py`.
+**One sound speed, one ion mass.** Every $c_s$ in this document is the code's
+`ion_sound_speed`, $\sqrt{T_e/m_i}$ on the true ion mass $m_i=m_\text{He}$ that
+every other term of the model carries — the anode-mesh collection, the
+material-face sheath-edge state, the presheath depth and the cathode circuit's
+ion current all read one number.
 
 **The two velocity coordinates are not the same kind of quantity:**
 $v_\parallel$ is a SIGNED component along $\hat z$, so the discrete grid spans
@@ -988,15 +985,23 @@ shortfall on top of $P_{c,e,\phi}$. A hand-off time
 that runs before it.
 
 **Plasma-terminating boundary.** At each absorbing face a ghost state is set to
-the Bohm outflow — $n_\text{se}=\alpha_\text{se}n$, $u=c_s$ into
-the wall, the live cell's $T_e$ and $T_i$ — and the face flux between the
-interior cell and that ghost is applied one-sidedly to the live cell. Those
+the sheath edge — $n_\text{se}=\alpha_\text{se}n$, $u=c_s$ into
+the wall, the live cell's $T_e$ and $T_i$ — and the material surface removes
+the PHYSICAL flux at that state,
+
+$$\Gamma_n=n_\text{se}u,\qquad \Gamma_M=m_in_\text{se}u^2+n_\text{se}(T_e+T_i),
+\qquad \Gamma_{E_s}=E_s^\text{se}u,$$
+
+applied one-sidedly to the live cell. There is no two-state kernel and no
+dissipation term at a material face: the step from the live cell to
+$n_\text{se}$ is the sub-grid presheath model, not a discontinuity, and a
+sheath sends no wave back into the plasma. Those
 terms are the $S_n^\text{out}$, $F^\text{out}$, $Q_e^\text{out}$ and
 $Q_i^\text{out}$ of the conservation laws. $S_n^\text{out}$, $F^\text{out}$ and
-$Q_i^\text{out}$ are the ghost-face fluxes themselves, but **$Q_e^\text{out}$
-is not**: the face kernel does compute a ghost-face electron-energy flux and
-the operator DISCARDS it, booking instead $2T_e$ per collected electron on the
-face's own particle flux, $2T_e\Gamma_n$, at the end wall and zero at the
+$Q_i^\text{out}$ are the face fluxes themselves, but **$Q_e^\text{out}$
+is not**: the face's electron-energy flux is DISCARDED and the operator books
+instead $2T_e$ per collected electron on the face's own particle flux,
+$2T_e\Gamma_n$, at the end wall and zero at the
 cathode, where the electron thermal channel belongs to the circuit. When
 `end_wall_sheath_full_debit` is armed, $Q_e^\text{out}$ at the end wall
 additionally carries the sheath climb $-\Lambda_\text{eff}T_e\Gamma_\text{coll}$
@@ -1028,20 +1033,16 @@ surface; at the cathode that term is owned by the circuit.
 cell's annulus, $\partial_tn_n^\text{ann}|_\text{recycle}=\dot N_\text{loss}/V_\text{ann}$,
 as thermal diffuse gas carrying no directed momentum.
 
-ONE FACE FLUX, FOUR ROWS. Whatever supplies the end wall face's particle flux
-$\Gamma_n$, the same number carries every booking made on it: the plasma
-particle sink, the $2T_e$ floating-sheath electron loss, the sheath-climb row
-below when it is armed, and the neutral rebirth that returns the absorbed
-plasma as gas. `end_wall_face_riemann_flux` — default off — replaces that flux
-at the end wall face alone, taking all four fluxes from the exact isothermal
-Riemann solution of the face or from an HLL solve of it (whichever
-`end_wall_face_riemann_solver` names) in place of the interior's Rusanov
-kernel, whose dissipation the ghost's density step drives. The cathode face and
-every interior face are untouched, and because the four rows already ride one
-$\Gamma_n$ they move together and stay mutually consistent. What changes is how
-much plasma the wall takes, and so the density the wall cell settles at; what
-does not change is the accounting on top of it. The numerical statement is
-[`NUMERICS.md`](NUMERICS.md).
+ONE FACE FLUX, FOUR ROWS. The end wall face removes the PHYSICAL flux at the
+sheath-edge state it samples — $n_\text{se}=\alpha_\text{se}n$, $u=c_s$ into
+the surface — and that single particle flux
+$\Gamma_n=\alpha_\text{se}\,n\,c_s$ carries every booking made on it: the
+plasma particle sink, the $2T_e$ floating-sheath electron loss, the
+sheath-climb row below when it is armed, and the neutral rebirth that returns
+the absorbed plasma as gas. It is the flux a surface takes, not an average
+across a wave fan: the density step from the live cell to $n_\text{se}$ is the
+sub-grid presheath model, and a sheath sends no wave back into the plasma. The
+numerical statement is [`NUMERICS.md`](NUMERICS.md).
 
 **End-face sheath debit at the end wall.** `end_wall_sheath_full_debit`
 completes that booking the way `anode_sheath_full_debit` completes the anode's.
@@ -1057,7 +1058,7 @@ $-\Lambda_\text{eff}T_e\Gamma_\text{coll}$ is booked at each end wall cell,
 making the face debit the sheath-edge $\gamma_e=2+\Lambda_\text{eff}$ per
 collected electron rather than the thermal $2T_e$ alone. The barrier is
 $\Lambda_\text{eff}=\Lambda+\ln(1/\alpha_\text{se})$: the sheath lift
-$\Lambda=\ln\sqrt{\mu m_p/2\pi m_e}$ for the configured gas, plus the presheath
+$\Lambda=\ln\sqrt{m_i/2\pi m_e}$ for the configured gas, plus the presheath
 drop implied by the same $\alpha_\text{se}$ that face samples its Bohm flux at,
 so the flux and the barrier describe one sheath edge. That holds only in the
 RESOLVED limit: at production resolution the delivered ghost-face flux
@@ -1093,30 +1094,42 @@ of the end wall role.
 Cathode faces are untouched — the accelerated species there is the ion. The
 row is absent entirely when the flag is off.
 
-**Two books for the cathode ion current, and they do not agree.** The circuit's
-ion current $I_i$ (saved as `source_I_i`) is the analytic Bohm collection on
-the cathode's own emitting area, $I_i=A_cen_ec_s\alpha_\text{se}$, read from
-the cathode-adjacent cell. The fluid's delivered ion current at the cathode
-face is a different number: the ghost-flux particle flux the boundary operator
-actually removes there, through the face area and the face kernel rather than
-from that analytic expression. The fluid's is the LARGER, by a factor of order
-1.6 at the reference operating points. The two are never reconciled, and the
+**ONE book for the cathode ion current.** The circuit's ion current $I_i$
+(saved as `source_I_i`) is the Bohm collection on the cathode's own emitting
+area, $I_i=A_cen_ec_s\alpha_\text{se}$, and the fluid's delivered ion current
+at the cathode face is $e$ times the particle flux the boundary operator
+removes there, $eA_f\alpha_\text{se}nc_s$ — the same expression, on the same
+sheath-edge factor, the same sound speed and the same area, since the emitting
+disc IS the face the plasma terminates on ($A_f=A_c=\pi R_\text{cath}^2$,
+asserted at construction). What separates the two numbers is the SAMPLING and
+nothing else: the boundary operator reads the live cell's RAW state, the
+circuit the exponential moving average `cathode_sample_smoothing` maintains.
+The residual between them is therefore that filter's lag and nothing but it —
+largest while the sampled cell is moving fast, since the EMA's time constant
+is the ion transit across it and a breakdown transient crosses that cell far
+faster, and falling toward zero as the sample settles. It is a property of how
+hard the plasma is being driven rather than of the boundary, so the
+`cathode-face-one-ion-current` smoke case PRINTS the spread instead of bounding
+it, and gates the thing the model asserts: that the circuit's $I_i$ is the one
+expression above evaluated on the smoothed sample, to round-off, at every
+sampled step. The
 current-driven path's thermionic remainder — the emission the cathode Kirchhoff
 $I_\text{eth}^\star+I_\text{see}+I_i-I_{e,\text{ret}}=I_\text{tot}$ leaves to be
-supplied — is built on the CIRCUIT's number. The anode carries no such split:
-`anode_circuit_sample` hands the circuit the very Bohm collection
-`anode_collection_rhs` removes from the fluid, one expression shared, and the
-two books agree to about 1 %. This is the same class of item as the
-ghost-face sampling mismatch above: disclosed, not reconciled.
+supplied — is built on that one number, and so is the ion power
+$I_i(T_e/2+\phi_c)$ the surface balance is credited with and the incident
+power the cathode recycle jet carries away from it. The anode is booked the
+same way: `anode_circuit_sample` hands the circuit the very Bohm collection
+`anode_collection_rhs` removes from the fluid.
 
 **The sheath ROWS are not the whole of what each store pays at an absorbing
 face.** The rows above are the boundary operator's bookings per collected
 particle: $(2+\Lambda_\text{eff})T_e$ on the electron store at the end wall,
 and the cathode face's own rows. Beside them, the fluid pressure work exports
-$p_su_iA_f$ per species through the absorbing face — the face velocity there is
-the live cell's, so each store does that much work on the kinetic energy, which
-the advective momentum flux then carries nowhere because it is zeroed at that
-face. The electron store therefore pays its sheath row PLUS $p_eu_iA_f$, and
+$p_su_iA_f$ per species through the absorbing face — that export is a
+`velocity_divergence` term built on the LIVE CELL's face velocity $u_i$, not on
+the sheath-edge $c_s$ the boundary flux above is evaluated at, so each store
+does that much work on the kinetic energy, which the advective momentum flux
+then carries nowhere because it is zeroed at that face. The electron store therefore pays its sheath row PLUS $p_eu_iA_f$, and
 the ion store its row plus $p_iu_iA_f$; the ion export is the fluid form of the
 enthalpy ions genuinely carry across, while the electron one is a fluid work
 term with no electron loss row beside it at the cathode face, where the

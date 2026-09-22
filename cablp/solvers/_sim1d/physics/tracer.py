@@ -618,7 +618,7 @@ def beam_plasma_thinness(*, n_cm3, Te_eV, geometry, E_beam_eV, launch_cells,
     return out
 
 
-def transport_ratio(*, gamma, Te_eV, mu, L_n_cm):
+def transport_ratio(*, gamma, Te_eV, ion_mass_g, L_n_cm):
     """Return ``c_s / (L_n * gamma)``: the term the tracer DROPS, over the one it keeps.
 
     Not a passivity criterion -- it never gates activation -- but reported in
@@ -629,7 +629,7 @@ def transport_ratio(*, gamma, Te_eV, mu, L_n_cm):
     be small against.
     """
     gamma = np.asarray(gamma, dtype=float)
-    cs = ion_sound_speed(np.asarray(Te_eV, dtype=float), mu)
+    cs = ion_sound_speed(np.asarray(Te_eV, dtype=float), ion_mass_g)
     growing = gamma > 0.0
     safe = np.where(growing, gamma, 1.0)
     return np.where(growing, cs / (float(L_n_cm) * safe), np.inf)

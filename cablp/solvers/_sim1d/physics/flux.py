@@ -3,7 +3,7 @@ import math
 
 import numpy as np
 
-from cablp.plasma.params import v_ion_speed
+from cablp.plasma.params import bohm_sound_speed
 from ..core.state import ConservativeState1D, derive_state
 from cablp.constants import ev_to_erg
 
@@ -18,20 +18,22 @@ class PlasmaFaceFluxes1D:
     Ei: np.ndarray
 
 
-def ion_sound_speed(Te, mu):
-    """Return the ion sound speed [cm/s] using the existing _sim3 convention.
+def ion_sound_speed(Te, ion_mass_g):
+    """Return the Bohm (ion sound) speed ``sqrt(Te/m_i)`` [cm/s].
 
-    Built on ``mu`` proton masses (``9.79e5 * sqrt(Te/mu)``, i.e. an implied
-    ion mass ``mu * m_p``), not the true ion mass ``ion_mass_g`` (m_He) that
-    other terms use directly -- a fixed ~0.600% residual in ``m_i c^2``
-    against ``Te`` at mu=4. That 0.600% nets two effects: the mu*m_p-vs-
-    ion_mass_g mass mismatch alone is ~0.658%, partly offset by the rounded
-    ``9.79e5`` coefficient's own implied proton mass, itself ~0.058% low.
+    ``Te`` is the electron temperature [eV] and ``ion_mass_g`` the ion mass
+    [g] -- the same ``ion_mass_g`` every other term of the model carries, so
+    the sound speed, the pressures and the momentum density describe one ion.
+    The gamma=1 electron-pressure form: this is the speed the sheath-edge
+    (Bohm) outflow is set at and the speed the presheath depth is built from.
+
+    The expression is :func:`~cablp.plasma.params.bohm_sound_speed`, THE ONE
+    SPEC, so the fluid boundary and the cathode circuit read one number.
     """
-    return v_ion_speed(Te, mu)
+    return bohm_sound_speed(Te, ion_mass_g)
 
 
-def plasma_wave_speed(Te, Ti, mu, wave_speed="isothermal"):
+def plasma_wave_speed(Te, Ti, ion_mass_g, wave_speed="isothermal"):
     """Return the plasma signal speed [cm/s] for the Rusanov a_max and CFL.
 
     ``"isothermal"`` is the historical gamma=1 electron-pressure Bohm speed
@@ -47,9 +49,9 @@ def plasma_wave_speed(Te, Ti, mu, wave_speed="isothermal"):
     what the ``kep-acoustic-symbol`` smoke case measures.
     """
     if wave_speed == "isothermal":
-        return ion_sound_speed(Te, mu)
+        return ion_sound_speed(Te, ion_mass_g)
     if wave_speed == "adiabatic":
-        return v_ion_speed(Te + Ti, mu, gamma=5.0 / 3.0)
+        return np.sqrt((5.0 / 3.0) * (Te + Ti) * ev_to_erg / ion_mass_g)
     raise ValueError(
         f"wave_speed must be 'isothermal' or 'adiabatic' (got {wave_speed!r})"
     )
@@ -66,13 +68,13 @@ def physical_fluxes(state, derived):
 
 
 def rusanov_fluxes(
-    state, floors, ion_mass_g, mu, geometry, active_plasma_topology=False,
+    state, floors, ion_mass_g, geometry, active_plasma_topology=False,
     wave_speed="isothermal", energy_consistent=False,
 ):
     """Build closed-boundary Rusanov fluxes for plasma conservative variables."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     raw = _rusanov_raw_faces(
-        state, derived, mu, geometry, wave_speed=wave_speed,
+        state, derived, ion_mass_g, geometry, wave_speed=wave_speed,
         energy_consistent=energy_consistent,
     )
     return _apply_face_conditions(
@@ -84,7 +86,7 @@ def rusanov_fluxes(
 
 
 def _rusanov_raw_faces(
-    state, derived, mu, geometry, wave_speed="isothermal",
+    state, derived, ion_mass_g, geometry, wave_speed="isothermal",
     energy_consistent=False,
 ):
     """Return interior Rusanov faces *before* transmission or wall conditions.
@@ -100,7 +102,7 @@ def _rusanov_raw_faces(
     face_Ee = np.zeros(cells + 1, dtype=float)
     face_Ei = np.zeros(cells + 1, dtype=float)
 
-    cs = plasma_wave_speed(derived.Te, derived.Ti, mu, wave_speed)
+    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g, wave_speed)
     amax = np.maximum(
         np.abs(derived.u[:-1]) + cs[:-1],
         np.abs(derived.u[1:]) + cs[1:],
@@ -222,20 +224,19 @@ def _apply_plasma_walls(
         face_Ei[face] = 0.0
 
 
-def front_filling_fluxes(state, floors, ion_mass_g, mu, geometry, alpha_front=1.0):
+def front_filling_fluxes(state, floors, ion_mass_g, geometry, alpha_front=1.0):
     """Return sonic-relaxation front-filling face fluxes."""
     raw = _front_raw_faces(
         state=state,
         floors=floors,
         ion_mass_g=ion_mass_g,
-        mu=mu,
         geometry=geometry,
         alpha_front=alpha_front,
     )
     return _apply_front_conditions(raw, geometry)
 
 
-def _front_raw_faces(state, floors, ion_mass_g, mu, geometry, alpha_front=1.0):
+def _front_raw_faces(state, floors, ion_mass_g, geometry, alpha_front=1.0):
     """Return front-filling faces before transmission or wall closure."""
     if alpha_front < 0:
         raise ValueError(f"alpha_front must be non-negative (got {alpha_front})")
@@ -247,7 +248,7 @@ def _front_raw_faces(state, floors, ion_mass_g, mu, geometry, alpha_front=1.0):
     face_Ee = np.zeros(cells + 1, dtype=float)
     face_Ei = np.zeros(cells + 1, dtype=float)
 
-    cs = ion_sound_speed(derived.Te, mu)
+    cs = ion_sound_speed(derived.Te, ion_mass_g)
     raw_gamma = state.n[:-1] * cs[:-1] - state.n[1:] * cs[1:]
     cap = alpha_front * np.maximum(state.n[:-1] * cs[:-1], state.n[1:] * cs[1:])
     gamma = np.clip(raw_gamma, -cap, cap)
@@ -286,14 +287,13 @@ def _apply_front_conditions(faces, geometry):
 
 
 def _front_fluxes(
-    state, floors, ion_mass_g, mu, geometry, alpha_front, pressure=None
+    state, floors, ion_mass_g, geometry, alpha_front, pressure=None
 ):
     """Return ``(raw, transmitted)`` front-filling faces."""
     raw = _front_raw_faces(
         state=state,
         floors=floors,
         ion_mass_g=ion_mass_g,
-        mu=mu,
         geometry=geometry,
         alpha_front=alpha_front,
     )
@@ -304,7 +304,6 @@ def plasma_flux_rhs(
     state,
     floors,
     ion_mass_g,
-    mu,
     geometry,
     include_front=True,
     alpha_front=1.0,
@@ -317,7 +316,6 @@ def plasma_flux_rhs(
         state=state,
         floors=floors,
         ion_mass_g=ion_mass_g,
-        mu=mu,
         geometry=geometry,
         include_front=include_front,
         alpha_front=alpha_front,
@@ -335,7 +333,6 @@ def plasma_flux_rhs_terms(
     state,
     floors,
     ion_mass_g,
-    mu,
     geometry,
     include_front=True,
     alpha_front=1.0,
@@ -349,7 +346,6 @@ def plasma_flux_rhs_terms(
         state=state,
         floors=floors,
         ion_mass_g=ion_mass_g,
-        mu=mu,
         geometry=geometry,
         active_plasma_topology=active_plasma_topology,
         wave_speed=wave_speed,
@@ -361,7 +357,6 @@ def plasma_flux_rhs_terms(
             state=state,
             floors=floors,
             ion_mass_g=ion_mass_g,
-            mu=mu,
             geometry=geometry,
             alpha_front=alpha_front,
         )
@@ -413,7 +408,6 @@ def _add_state_rhs(left, right):
 def kep_rusanov_face_scalar(
     left,
     right,
-    mu,
     ion_mass_g,
     wave_speed="isothermal",
     energy_consistent=False,
@@ -434,8 +428,8 @@ def kep_rusanov_face_scalar(
     uL, pL = left["u"], left["p"]
     uR, pR = right["u"], right["p"]
 
-    csL = plasma_wave_speed(left["Te"], left["Ti"], mu, wave_speed)
-    csR = plasma_wave_speed(right["Te"], right["Ti"], mu, wave_speed)
+    csL = plasma_wave_speed(left["Te"], left["Ti"], ion_mass_g, wave_speed)
+    csR = plasma_wave_speed(right["Te"], right["Ti"], ion_mass_g, wave_speed)
     amax = max(abs(uL) + csL, abs(uR) + csR)
 
     f_n = 0.5 * (nL * uL + nR * uR) - 0.5 * amax * (nR - nL)
@@ -449,264 +443,27 @@ def kep_rusanov_face_scalar(
     return f_n, f_M, f_Ee, f_Ei
 
 
-#: The Riemann face solvers ``end_wall_face_riemann_solver`` accepts.
-END_WALL_FACE_RIEMANN_SOLVERS = ("exact_isothermal", "hll")
+def physical_face_scalar(face):
+    """Return the physical flux (Γ_n, Γ_M, Γ_Ee, Γ_Ei) of ONE state.
 
+    ``face`` is a dict with the conservative and derived scalars
+    (``n, M, Ee, Ei, u, p``) of the state the flux is evaluated at, and the
+    flux returned is the +z-oriented one,
 
-def end_wall_riemann_face_scalar(
-    left,
-    right,
-    solver,
-    mu,
-    ion_mass_g,
-    wave_speed="isothermal",
-    energy_consistent=False,
-):
-    """Return one face's Riemann flux (Γ_n, Γ_M, Γ_Ee, Γ_Ei) for the end wall.
+        f_n = n u,  f_M = M u + p,  f_Ee = Ee u,  f_Ei = Ei u.
 
-    ``left`` and ``right`` carry the same scalars ``kep_rusanov_face_scalar``
-    reads (``n, M, Ee, Ei, u, p, Te, Ti``), the L (low-z) and R (high-z) states
-    of a +z-oriented face. ``solver`` selects between the two implemented face
-    solvers and must be one of :data:`END_WALL_FACE_RIEMANN_SOLVERS`; any other
-    value raises ``ValueError`` naming the accepted set.
-
-    Every solver here returns ALL FOUR fluxes from ONE face state, so the
-    particle flux the caller books and the energy fluxes that ride it describe
-    the same face.
-
-    ``wave_speed`` and ``energy_consistent`` are read by ``"hll"`` only.
-    ``"exact_isothermal"`` solves its own Riemann problem, whose sound speed is
-    the isothermal one by definition, and evaluates the flux at a SINGLE face
-    state, where the two-point kinetic-energy-preserving momentum average
-    degenerates to the physical product ``M u``.
+    This is the two-point kernel's own physical flux with both of its states
+    set to this one, so the KEP momentum average degenerates to the product
+    ``M u`` and every dissipation term vanishes. It is what a MATERIAL
+    surface removes: the boundary operator evaluates it at the sheath-edge
+    (Bohm) state alone, since a sheath sends no wave back into the plasma and
+    the density step across the sub-grid presheath is a model, not a
+    discontinuity for a Riemann solver to resolve.
     """
-    if solver == "exact_isothermal":
-        return exact_isothermal_face_scalar(
-            left, right, mu=mu, ion_mass_g=ion_mass_g
-        )
-    if solver == "hll":
-        return hll_face_scalar(
-            left,
-            right,
-            mu=mu,
-            ion_mass_g=ion_mass_g,
-            wave_speed=wave_speed,
-            energy_consistent=energy_consistent,
-        )
-    raise ValueError(
-        "end_wall_face_riemann_solver must be one of "
-        f"{END_WALL_FACE_RIEMANN_SOLVERS} (got {solver!r})"
+    u = face["u"]
+    return (
+        face["n"] * u,
+        face["M"] * u + face["p"],
+        face["Ee"] * u,
+        face["Ei"] * u,
     )
-
-
-def hll_face_scalar(
-    left,
-    right,
-    mu,
-    ion_mass_g,
-    wave_speed="isothermal",
-    energy_consistent=False,
-):
-    """Return the HLL face flux on the full ``(n, M, Ee, Ei)`` vector.
-
-    The two signal speeds are the face's OWN, not a single symmetric bound:
-
-        S_L = min(u_L - c_L, u_R - c_R),  S_R = max(u_L + c_L, u_R + c_R)
-
-    with ``c`` from :func:`plasma_wave_speed` at the configured ``wave_speed``.
-    With ``S_L >= 0`` or ``S_R <= 0`` the face is supersonic and the flux is the
-    upwind physical flux of that side; otherwise it is the HLL average
-
-        (S_R F_L - S_L F_R + S_L S_R (U_R - U_L)) / (S_R - S_L)
-
-    written as ``w_L F_L + w_R F_R + d (U_R - U_L)`` with ``w_L + w_R = 1``.
-    Setting ``S_R = -S_L = a_max`` recovers ``kep_rusanov_face_scalar`` term by
-    term, which is what makes the two comparable at the same face.
-
-    ``energy_consistent`` selects the convective momentum flux the same way the
-    Rusanov path does: the kinetic-energy-preserving product of the two weighted
-    means, ``(w_L M_L + w_R M_R)(w_L u_L + w_R u_R)``, in place of the weighted
-    mean of the two physical convective fluxes. At ``w = 1/2`` that is the
-    ``{u}{M}`` form exactly, and in either supersonic branch (``w`` a unit
-    vector) both forms are the single state's physical ``M u``.
-    """
-    nL, ML, EeL, EiL = left["n"], left["M"], left["Ee"], left["Ei"]
-    nR, MR, EeR, EiR = right["n"], right["M"], right["Ee"], right["Ei"]
-    uL, pL = left["u"], left["p"]
-    uR, pR = right["u"], right["p"]
-
-    csL = plasma_wave_speed(left["Te"], left["Ti"], mu, wave_speed)
-    csR = plasma_wave_speed(right["Te"], right["Ti"], mu, wave_speed)
-    sL = min(uL - csL, uR - csR)
-    sR = max(uL + csL, uR + csR)
-
-    if sL >= 0.0:
-        wL, wR, diss = 1.0, 0.0, 0.0
-    elif sR <= 0.0:
-        wL, wR, diss = 0.0, 1.0, 0.0
-    else:
-        denom = sR - sL
-        wL = sR / denom
-        wR = -sL / denom
-        diss = sL * sR / denom
-
-    f_n = wL * (nL * uL) + wR * (nR * uR) + diss * (nR - nL)
-    if energy_consistent:
-        conv = (wL * ML + wR * MR) * (wL * uL + wR * uR)
-    else:
-        conv = wL * (ML * uL) + wR * (MR * uR)
-    f_M = conv + (wL * pL + wR * pR) + diss * (MR - ML)
-    f_Ee = wL * (EeL * uL) + wR * (EeR * uR) + diss * (EeR - EeL)
-    f_Ei = wL * (EiL * uL) + wR * (EiR * uR) + diss * (EiR - EiL)
-    return f_n, f_M, f_Ee, f_Ei
-
-
-def exact_isothermal_face_scalar(left, right, mu, ion_mass_g):
-    """Return the exact isothermal-Riemann face flux for one face.
-
-    The Riemann problem solved is the isothermal Euler pair in ``(n, M)``
-
-        d_t n + d_z (n u) = 0,   d_t M + d_z (M u + p) = 0,   p = n m_i c^2
-
-    with ``c`` the face's isothermal sound speed :func:`ion_sound_speed`, i.e.
-    the same ``sqrt(Te/m_i)`` the ghost state's Bohm velocity is set at. That
-    pair carries no ion partial pressure, so where ``Ti`` is not negligible this
-    momentum flux is smaller than the model's own ``n (Te + Ti)`` face pressure
-    by ``n_f ((Te + Ti) - m_i c^2)`` -- exactly ``n_f Ti`` plus a small
-    mass-convention residual (``m_i c^2`` uses the true ion mass ``ion_mass_g``
-    against a sound speed built on ``mu`` proton masses; ~0.600% of Te at
-    mu=4) -- the price of a closure whose Riemann problem has a closed-form
-    solution. Both sides must name the same ``Te`` (one Riemann problem has one
-    sound speed); a differing pair raises rather than picking a side.
-
-    The system has two genuinely nonlinear fields and no contact, so the star
-    region is a SINGLE state ``(n*, u*)``. The wave curves are
-
-        rarefaction   u = u_K -/+ c ln(n*/n_K)
-        shock         u = u_K -/+ c (n* - n_K)/sqrt(n* n_K)
-
-    (upper sign the 1-wave off the left state, lower the 2-wave off the right),
-    and their intersection is found by a bracketed Newton iteration in
-    ``ln n*``. The self-similar solution is then sampled at ``x/t = 0`` -- which
-    may land in either initial state, in the star state, or inside a rarefaction
-    fan -- and the flux is the physical flux of THAT face state:
-    ``f_n = n_f u_f`` and ``f_M = m_i n_f u_f^2 + m_i n_f c^2``.
-
-    ``Ee`` and ``Ei`` ride the pair as passively advected scalars: their
-    specific values ``E/n`` are constant along the linearly degenerate ``u``
-    field, so each is upwinded on the face velocity and transported by the very
-    particle flux above, ``f_E = (E/n)_upwind * f_n``. All four fluxes therefore
-    come from one face state and one ``f_n``.
-
-    Raises ``ValueError`` on a non-positive density on either side (the wave
-    curves are logarithmic there) or if the star-state iteration fails to
-    converge.
-    """
-    cL = ion_sound_speed(left["Te"], mu)
-    cR = ion_sound_speed(right["Te"], mu)
-    if cL != cR:
-        raise ValueError(
-            "the exact isothermal Riemann face requires one sound speed on the "
-            f"face: got c_L={cL!r} from Te_L={left['Te']!r} and c_R={cR!r} from "
-            f"Te_R={right['Te']!r}"
-        )
-    c = cL
-    nL, uL = left["n"], left["u"]
-    nR, uR = right["n"], right["u"]
-    if not (nL > 0.0 and nR > 0.0):
-        raise ValueError(
-            "the exact isothermal Riemann face requires a positive density on "
-            f"both sides (got n_L={nL!r}, n_R={nR!r})"
-        )
-
-    n_star, u_star = _isothermal_star_state(nL, uL, nR, uR, c)
-    n_f, u_f = _isothermal_face_state(nL, uL, nR, uR, n_star, u_star, c)
-
-    f_n = n_f * u_f
-    f_M = ion_mass_g * n_f * u_f * u_f + ion_mass_g * n_f * c * c
-    upwind = left if u_f >= 0.0 else right
-    f_Ee = (upwind["Ee"] / upwind["n"]) * f_n
-    f_Ei = (upwind["Ei"] / upwind["n"]) * f_n
-    return f_n, f_M, f_Ee, f_Ei
-
-
-def _isothermal_wave(n_star, n_k, c):
-    """Return ``(g, dg/dn*)`` of one isothermal wave curve.
-
-    ``g`` is the velocity change across the wave in units of ``c``, signed so
-    that the 1-wave gives ``u* = u_L - c g_L`` and the 2-wave ``u* = u_R +
-    c g_R``: the logarithmic Riemann invariant for an expansion
-    (``n* <= n_k``) and the Rankine-Hugoniot locus for a compression.
-    """
-    if n_star <= n_k:
-        return math.log(n_star / n_k), 1.0 / n_star
-    root = math.sqrt(n_star * n_k)
-    return (n_star - n_k) / root, 0.5 * (1.0 + n_k / n_star) / root
-
-
-def _isothermal_star_state(nL, uL, nR, uR, c):
-    """Return the star state ``(n*, u*)`` of the isothermal Riemann problem.
-
-    ``F(n*) = c (g_L + g_R) - (u_L - u_R)`` is strictly increasing in ``n*`` and
-    crosses zero exactly once on ``n* > 0``, so the iteration is a Newton step
-    in ``ln n*`` kept inside a bracket that the sign of ``F`` tightens at every
-    pass. The first guess is the two-rarefaction solution, which is the ANSWER
-    whenever both waves expand -- the case an outflow boundary is in.
-    """
-    n_star = math.sqrt(nL * nR) * math.exp((uL - uR) / (2.0 * c))
-    lo, hi = 0.0, math.inf
-    for _ in range(100):
-        gL, dgL = _isothermal_wave(n_star, nL, c)
-        gR, dgR = _isothermal_wave(n_star, nR, c)
-        F = c * (gL + gR) - (uL - uR)
-        if F > 0.0:
-            hi = n_star
-        else:
-            lo = n_star
-        dF = c * (dgL + dgR)
-        candidate = n_star * math.exp(-F / (dF * n_star))
-        if not math.isfinite(candidate) or candidate <= lo or candidate >= hi:
-            if lo > 0.0 and math.isfinite(hi):
-                candidate = math.sqrt(lo * hi)
-            else:
-                candidate = n_star * (0.5 if F > 0.0 else 2.0)
-        converged = abs(candidate - n_star) <= 1.0e-15 * n_star
-        n_star = candidate
-        if converged:
-            break
-    else:
-        raise ValueError(
-            "the isothermal Riemann star state did not converge for "
-            f"n_L={nL!r}, u_L={uL!r}, n_R={nR!r}, u_R={uR!r}, c={c!r}"
-        )
-    gL, _ = _isothermal_wave(n_star, nL, c)
-    gR, _ = _isothermal_wave(n_star, nR, c)
-    u_star = 0.5 * ((uL - c * gL) + (uR + c * gR))
-    return n_star, u_star
-
-
-def _isothermal_face_state(nL, uL, nR, uR, n_star, u_star, c):
-    """Return ``(n, u)`` of the self-similar solution sampled at ``x/t = 0``.
-
-    ``u*`` is the velocity of the star region, so its sign says which of the two
-    waves the face sits behind; that wave is then a shock (one speed) or a
-    rarefaction (a head and a tail speed, with the fan state in between given by
-    the field's Riemann invariant at ``u = +/- c``).
-    """
-    if u_star >= 0.0:
-        if n_star > nL:
-            speed = uL - c * math.sqrt(n_star / nL)
-            return (nL, uL) if speed >= 0.0 else (n_star, u_star)
-        if uL - c >= 0.0:
-            return nL, uL
-        if u_star - c <= 0.0:
-            return n_star, u_star
-        return nL * math.exp(uL / c - 1.0), c
-    if n_star > nR:
-        speed = uR + c * math.sqrt(n_star / nR)
-        return (nR, uR) if speed <= 0.0 else (n_star, u_star)
-    if uR + c <= 0.0:
-        return nR, uR
-    if u_star + c >= 0.0:
-        return n_star, u_star
-    return nR * math.exp(-uR / c - 1.0), -c
