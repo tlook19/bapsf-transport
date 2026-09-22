@@ -37,6 +37,29 @@
 # they sit on and the builder arguments that reproduce them, and which
 # scripts/verify/verify_fill_spreading.py's G0b leg checks at raw uint64.
 #
+# WHICH MACHINE THEY ARE REGISTERED ON. These rows are registered on a vessel
+# profile whose far source chamber has a 76.2 cm bore stage. That figure is
+# the shell's OUTER radius; the measured BORE is 75.25 cm, and the reference
+# configuration carries the measured value, so the base this file inherits
+# from puts the far-chamber wall closer in than the wall these rows were
+# derived on. The per-cell geometry they were derived on is committed beside
+# them as scripts/data/nn0_legacy_ballistic_reference_geometry.npz. They are
+# NOT re-derived onto the corrected wall: they are the fill every result
+# produced before the reference moved is named by, and a re-derived row would
+# name a fill no result was produced with.
+#
+# SO THE TWO ARE MIXED AT CONSTRUCTION, DELIBERATELY. Resolving this file
+# gives a configuration whose fill rows come from one wall and whose cell
+# volumes come from the other. The rows are densities, so what the mismatch
+# costs is inventory: the twenty far-chamber cells are narrower here than
+# where the rows were derived, and hold correspondingly fewer atoms at the
+# same density. Nothing upstream of the bore step is touched, and neither the
+# foot, the kernel nor the base moves. Anyone running this arm is running the
+# LEGACY spreading route on the CURRENT machine, and should read it that way:
+# it reproduces where the legacy member put the gas, not the inventory an
+# earlier result started from. The arm that reproduces an earlier result
+# whole is that result's own lineage attributes, not this file.
+#
 # HOW TO RUN IT. The campaign drivers resolve `--stance <name>` against
 # `scripts/stances/`, so copy this file there first; `run_sim1d.py` takes the
 # path directly and needs no copy:
