@@ -32,7 +32,7 @@ THREE METRICS, on both sides:
 (a) and (b) differ on the MEASURED side only -- the radial convention -- so
 they share a model D; the 1D model carries one radial cell spanning exactly the
 flux-tube radius, which is why the flux-tube row needs no model-side change
-(the same reasoning the scored ``n_ft`` row of compare_sim1d_es1 states). (c)
+(the same reasoning ``compare_sim1d_es1``'s flux-tube comparand states). (c)
 carries two measured conventions and one model D: the upstream face keeps the
 Mach-probe flow factor, the geomean cancels it to first order in M, so the two
 bracket the flow-artifact treatment rather than agreeing.
