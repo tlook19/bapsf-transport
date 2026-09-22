@@ -15,19 +15,27 @@ panels with the adopted sigma_tot error bars:
   (4) per-port Te(t) and ne(t) time series, model line vs measured mean with a
       sigma_tot band, one colour per ES port.
 
-THE COMPARAND. The measured points are the FLUX-TUBE average by default --
-the radial area average out to the frame opening the 1D model's single radial
-cell also spans (``te_ftavg_ev``, the DENSITY-weighted area mean, and
-``density_ftavg_cm3``, the plain one) -- drawn as FILLED markers with their
-own sems, and on the flux-tube Te clock ``te_ftavg_time_ms``. The legacy
-CORE-BAND line-cut mean (``te_mean_ev``, ``density_mean_cm3``) is drawn beside
-it as HOLLOW markers and, in the time-series panels, as a thin dashed trace,
-so the two conventions are read together and neither is quoted unlabelled.
-A point whose flux-tube Te average integrates part of the disc from the repo's
-scrape-off-layer prior rather than a measurement of that port is drawn with a
-DISTINCT marker (a triangle). On an overlay vintage carrying no flux-tube
-fields the figure falls back to the core-band series alone, drawn filled, and
-says so in the legend.
+THE COMPARAND. The measured points are the COLUMN convention -- the whole
+column's inventory expressed on the model's tube (``density_column_cm3``, and
+``te_column_ev``, the density-weighted mean over the same extent) -- drawn as
+FILLED circles with their own sems, and carrying the band and the dashed trace
+in the time-series panels. Plasma outside the tube got there by cross-field
+transport a 1D model does not represent, which is why the column's plasma is
+the comparand and not the part of it inside the tube. The other two
+conventions are drawn beside it as HOLLOW markers, each with its own style --
+the FLUX-TUBE area mean (``te_ftavg_ev``, ``density_ftavg_cm3``) as hollow
+circles, the legacy CORE-BAND line cut (``te_mean_ev``, ``density_mean_cm3``)
+as hollow squares -- and as thin dotted traces in the time-series panels, so
+the three are read together and none is quoted unlabelled.
+
+A column point whose ``te_column_prior_weight`` exceeds one half is MAJORITY
+PRIOR: more than half the density-weighted quadrature behind it is the repo's
+scrape-off-layer prior rather than a measurement of that port. Those points
+are drawn with the '~' marker, the same mark the scorer's table gives them,
+and are ineligible for a bin verdict there. On an overlay vintage carrying no
+column fields the figure falls back to the flux-tube series as the filled
+primary, and to the core band alone if it carries neither, and says which in
+the legend.
 
 Model V_dis is the dt-integrated circuit voltage (the inductor's view, the
 honest smooth trace). Times are on the main-discharge clock (t=0 at discharge
@@ -64,6 +72,8 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 from compare_sim1d_es1 import (
     _main_discharge_origin,
     _sigma_sys,
+    COLUMN_PRIOR_MAJORITY_WEIGHT,
+    COLUMN_PRIOR_WEIGHT_KEY,
     TE_SYS_FRAC,
     TE_SYS_FLOOR_EV,
     N_CAL_FRAC,
@@ -73,12 +83,18 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1]
 T_SLICES_MS = (15.0, 19.0)
 SLICE_COLORS = {15.0: "tab:blue", 19.0: "tab:red"}
 
-#: Marker for a measured point whose flux-tube Te average integrates part of
-#: the disc from the scrape-off-layer prior rather than a measurement of that
-#: port (``ftavg_prior_beyond_coverage``). Distinct from the ordinary filled
-#: circle so a reader cannot take a prior-derived point for a measured one.
-PRIOR_MARKER = "^"
+#: Marker for a PRIMARY (filled) measured point whose column Te average is
+#: MAJORITY PRIOR -- more than half of its density-weighted quadrature is the
+#: repo's scrape-off-layer prior rather than a measurement of that port. The
+#: mathtext tilde is the same mark the scorer's table gives such a row, so the
+#: figure and the table say the same thing with the same character.
+PRIOR_MAJORITY_MARKER = r"$\sim$"
 MEASURED_MARKER = "o"
+
+#: Hollow marker styles for the two non-primary conventions, so the three are
+#: distinguishable without reading the legend twice.
+FTAVG_MARKER = "o"
+CORE_MARKER = "s"
 
 
 def _overlay_path(es):
@@ -140,50 +156,92 @@ def _n_sigma_tot(n_meas, te_meas, n_sem):
     return np.sqrt(np.asarray(n_sem) ** 2 + sys ** 2)
 
 
-def _flux_tube_series(ov):
-    """Return the flux-tube measured series, or ``None`` on an older overlay.
+#: The three measured radial conventions, in the order they are preferred as
+#: the FILLED primary series. Each entry is
+#: ``(name, label, te_time_key, te_key, te_sem_key, density_key)``; the
+#: density SEM is convention-specific and is built by ``_density_sem`` below.
+CONVENTIONS = (
+    ("column", "column",
+     "te_time_ms", "te_column_ev", "te_column_sem_ev", "density_column_cm3"),
+    ("flux-tube", "flux-tube",
+     "te_ftavg_time_ms", "te_ftavg_ev", "te_ftavg_sem_ev",
+     "density_ftavg_cm3"),
+    ("core-band", "core-band",
+     "te_time_ms", "te_mean_ev", "te_sem_ev", "density_mean_cm3"),
+)
 
-    Presence-gated on the whole set at once: a vintage carrying some of the
-    flux-tube fields but not others would be drawn half under one convention
-    and half under the other, which is exactly the mislabelling the
-    two-convention rendering exists to prevent.
+#: Hollow marker per non-primary convention.
+CONVENTION_MARKERS = {
+    "column": MEASURED_MARKER,
+    "flux-tube": FTAVG_MARKER,
+    "core-band": CORE_MARKER,
+}
+
+
+def _density_sem(ov, name, de_m):
+    """Return the density SEM for one convention, exactly as the scorer does.
+
+    The column product exports its OWN SEM (``density_column_sem_cm3``); the
+    core band exports ``density_total_sem_cm3``; the flux tube exports
+    neither, so the core-band FRACTIONAL error is carried across the
+    convention, which is what the scorer does for it and what makes the two
+    figures agree.
     """
-    keys = (
-        "te_ftavg_time_ms",
-        "te_ftavg_ev",
-        "te_ftavg_sem_ev",
-        "density_ftavg_cm3",
-    )
+    if name == "column" and "density_column_sem_cm3" in ov:
+        return np.asarray(ov["density_column_sem_cm3"], float)
+    core_sem = np.asarray(ov["density_total_sem_cm3"], float)
+    if name == "core-band":
+        return core_sem
+    legacy = np.asarray(ov["density_mean_cm3"], float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return core_sem * np.where(legacy != 0.0, de_m / legacy, np.nan)
+
+
+def _convention_series(ov, name):
+    """Return one convention's measured series, or ``None`` on an overlay
+    vintage that does not carry it.
+
+    Presence-gated on the whole set at once: a vintage carrying some of a
+    convention's fields but not others would be drawn half under one
+    convention and half under another, which is exactly the mislabelling the
+    three-convention rendering exists to prevent.
+    """
+    spec = next(c for c in CONVENTIONS if c[0] == name)
+    _, label, te_t_key, te_key, te_sem_key, de_key = spec
+    keys = (te_t_key, te_key, te_sem_key, de_key, "density_total_sem_cm3",
+            "density_mean_cm3", "density_time_ms")
     if any(k not in ov for k in keys):
         return None
-    te_t = np.asarray(ov["te_ftavg_time_ms"], float)
-    te_m = np.asarray(ov["te_ftavg_ev"], float)
-    te_s = np.asarray(ov["te_ftavg_sem_ev"], float)
-    de_m = np.asarray(ov["density_ftavg_cm3"], float)
-    # The overlay exports no flux-tube density SEM; the core-band FRACTIONAL
-    # error is carried across the convention, exactly as the scorer does it.
-    legacy = np.asarray(ov["density_mean_cm3"], float)
-    core_sem = np.asarray(ov["density_total_sem_cm3"], float)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        de_s = core_sem * np.where(legacy != 0.0, de_m / legacy, np.nan)
-    # Per-port prior flag: True where ANY sample of that port integrates part
-    # of the disc from the prior. Per-point marking on a z-profile panel is
-    # per PORT, so the port-level reduction is the one the marker needs.
-    if "ftavg_prior_beyond_coverage" in ov:
-        prior = np.any(
-            np.asarray(ov["ftavg_prior_beyond_coverage"]).astype(bool), axis=1
-        )
-    else:
-        prior = np.zeros(te_m.shape[0], dtype=bool)
+    de_m = np.asarray(ov[de_key], float)
     return {
-        "te_t": te_t,
-        "te_m": te_m,
-        "te_s": te_s,
+        "name": name,
+        "label": label,
+        "te_t": np.asarray(ov[te_t_key], float),
+        "te_m": np.asarray(ov[te_key], float),
+        "te_s": np.asarray(ov[te_sem_key], float),
         "de_t": np.asarray(ov["density_time_ms"], float),
         "de_m": de_m,
-        "de_s": de_s,
-        "prior": prior,
+        "de_s": _density_sem(ov, name, de_m),
     }
+
+
+def _prior_majority(ov, n_ports):
+    """Return the per-port MAJORITY-PRIOR flag for the column T_e rows.
+
+    True where the port's mean ``te_column_prior_weight`` exceeds
+    ``COLUMN_PRIOR_MAJORITY_WEIGHT``: more than half the row's
+    density-weighted quadrature is carried by cells beyond that port's trust
+    radius, so the point is substantially a statement about the repo's
+    scrape-off-layer prior. The mean is taken over the PRODUCT's whole time
+    base -- a figure has no scored window -- so it can differ from the
+    scorer's row-level share when the model under-covers the measurement.
+    All-False on a vintage carrying no such field.
+    """
+    if COLUMN_PRIOR_WEIGHT_KEY not in ov:
+        return np.zeros(n_ports, dtype=bool)
+    w = np.asarray(ov[COLUMN_PRIOR_WEIGHT_KEY], float)
+    with np.errstate(invalid="ignore"):
+        return np.nanmean(w, axis=1) > COLUMN_PRIOR_MAJORITY_WEIGHT
 
 
 def main():
@@ -255,13 +313,20 @@ def main():
     ax.set_xlabel("t [ms]"); ax.set_ylabel("V_dis [V]")
     ax.set_title("discharge voltage"); ax.legend(fontsize=8); ax.grid(alpha=0.3)
 
-    te_t = np.asarray(ov["te_time_ms"], float)
-    te_m = np.asarray(ov["te_mean_ev"], float)
-    te_s = np.asarray(ov["te_sem_ev"], float)
-    de_t = np.asarray(ov["density_time_ms"], float)
-    de_m = np.asarray(ov["density_mean_cm3"], float)
-    de_s = np.asarray(ov["density_total_sem_cm3"], float)
-    ft = _flux_tube_series(ov)
+    # The three measured conventions, in preference order. The first one this
+    # overlay carries is the FILLED primary; the rest are drawn hollow. An
+    # older vintage that carries only the core band therefore renders it
+    # filled rather than as though its primary convention had gone missing.
+    series = [s for s in (_convention_series(ov, name)
+                          for name, *_ in CONVENTIONS) if s is not None]
+    if not series:
+        raise ValueError(
+            "overlay carries none of the three measured radial conventions "
+            f"({', '.join(name for name, *_ in CONVENTIONS)}); there is "
+            "nothing to plot the model against"
+        )
+    primary, alts = series[0], series[1:]
+    prior_major = _prior_majority(ov, primary["te_m"].shape[0])
 
     # (2a) Te(z) at slices, (2b) ne(z) at slices, (3a) Isat(z)
     ax_te, ax_ne, ax_is = axes[1, 0], axes[1, 1], axes[2, 0]
@@ -270,57 +335,64 @@ def main():
         it = int(np.argmin(np.abs(t_ms - tsl)))
         ax_te.plot(z, _blank_dead(Te[it], live), "-", color=c, lw=1.3, label=f"model {tsl:.0f} ms")
         ax_ne.plot(z, _blank_dead(n[it], live), "-", color=c, lw=1.3, label=f"model {tsl:.0f} ms")
-        # measured port points at this slice, CORE-BAND convention
-        te_p = _interp_port_slice(te_t, te_m, tsl)
-        te_ps = _interp_port_slice(te_t, te_s, tsl)
-        ne_p = _interp_port_slice(de_t, de_m, tsl)
-        ne_ps = _interp_port_slice(de_t, de_s, tsl)
-        te_tot = np.sqrt(te_ps ** 2 + (_sigma_sys("Te", te_p)) ** 2)
-        ne_tot = _n_sigma_tot(ne_p, te_p, ne_ps)
         isat_model = _blank_dead(n[it] * np.sqrt(np.maximum(Te[it], 0)), live)
         ax_is.plot(z, isat_model, "-", color=c, lw=1.3, label=f"model {tsl:.0f} ms")
-        if ft is None:
-            # No flux-tube product on this vintage: the core-band series is
-            # the only one there is, and it is drawn FILLED so the figure is
-            # not read as though its primary convention were missing.
-            ax_te.errorbar(zc, te_p, yerr=te_tot, fmt="o", color=c, ms=5, capsize=3)
-            ax_ne.errorbar(zc, ne_p, yerr=ne_tot, fmt="o", color=c, ms=5, capsize=3)
-            ax_is.plot(zc, ne_p * np.sqrt(np.maximum(te_p, 0)), "o", color=c, ms=5)
-            continue
-        # CORE-BAND beside it, HOLLOW.
-        ax_te.errorbar(zc, te_p, yerr=te_tot, fmt="o", mfc="none", color=c,
-                       ms=6, capsize=2, lw=0.8, alpha=0.75)
-        ax_ne.errorbar(zc, ne_p, yerr=ne_tot, fmt="o", mfc="none", color=c,
-                       ms=6, capsize=2, lw=0.8, alpha=0.75)
-        ax_is.plot(zc, ne_p * np.sqrt(np.maximum(te_p, 0)), "o", mfc="none",
-                   color=c, ms=6, alpha=0.75)
-        # FLUX-TUBE, filled, with its own sems; prior-derived ports get the
-        # distinct marker.
-        fte_p = _interp_port_slice(ft["te_t"], ft["te_m"], tsl)
-        fte_ps = _interp_port_slice(ft["te_t"], ft["te_s"], tsl)
-        fne_p = _interp_port_slice(ft["de_t"], ft["de_m"], tsl)
-        fne_ps = _interp_port_slice(ft["de_t"], ft["de_s"], tsl)
-        fte_tot = np.sqrt(fte_ps ** 2 + (_sigma_sys("Te", fte_p)) ** 2)
-        fne_tot = _n_sigma_tot(fne_p, fte_p, fne_ps)
-        fisat = fne_p * np.sqrt(np.maximum(fte_p, 0))
-        for mask, marker in (
-            (~ft["prior"], MEASURED_MARKER),
-            (ft["prior"], PRIOR_MARKER),
+
+        def _slice(s, _tsl=tsl):
+            """This convention's (Te, sigma_tot_Te, n, sigma_tot_n) at a slice."""
+            te_p = _interp_port_slice(s["te_t"], s["te_m"], _tsl)
+            te_ps = _interp_port_slice(s["te_t"], s["te_s"], _tsl)
+            ne_p = _interp_port_slice(s["de_t"], s["de_m"], _tsl)
+            ne_ps = _interp_port_slice(s["de_t"], s["de_s"], _tsl)
+            return (
+                te_p,
+                np.sqrt(te_ps ** 2 + (_sigma_sys("Te", te_p)) ** 2),
+                ne_p,
+                _n_sigma_tot(ne_p, te_p, ne_ps),
+            )
+
+        # The non-primary conventions first, HOLLOW, each with its own marker.
+        for s in alts:
+            marker = CONVENTION_MARKERS[s["name"]]
+            te_p, te_tot, ne_p, ne_tot = _slice(s)
+            ax_te.errorbar(zc, te_p, yerr=te_tot, marker=marker, ls="none",
+                           mfc="none", color=c, ms=6, capsize=2, lw=0.8,
+                           alpha=0.75)
+            ax_ne.errorbar(zc, ne_p, yerr=ne_tot, marker=marker, ls="none",
+                           mfc="none", color=c, ms=6, capsize=2, lw=0.8,
+                           alpha=0.75)
+            ax_is.plot(zc, ne_p * np.sqrt(np.maximum(te_p, 0)), marker=marker,
+                       ls="none", mfc="none", color=c, ms=6, alpha=0.75)
+        # The PRIMARY, filled, with its own sems; majority-prior ports carry
+        # the '~' marker the scorer's table gives them.
+        te_p, te_tot, ne_p, ne_tot = _slice(primary)
+        pisat = ne_p * np.sqrt(np.maximum(te_p, 0))
+        for mask, marker, ms in (
+            (~prior_major, MEASURED_MARKER, 5),
+            (prior_major, PRIOR_MAJORITY_MARKER, 10),
         ):
             if not np.any(mask):
                 continue
-            ax_te.errorbar(zc[mask], fte_p[mask], yerr=fte_tot[mask],
-                           fmt=marker, color=c, ms=5, capsize=3)
-            ax_ne.errorbar(zc[mask], fne_p[mask], yerr=fne_tot[mask],
-                           fmt=marker, color=c, ms=5, capsize=3)
-            ax_is.plot(zc[mask], fisat[mask], marker, color=c, ms=5)
-    if ft is None:
-        legend_note = "measured: core-band line-cut mean (no flux-tube product)"
-    else:
-        legend_note = (
-            "measured: filled = flux-tube area mean, hollow = core-band "
-            f"line cut, '{PRIOR_MARKER}' = prior-derived"
+            # marker=/ls= rather than fmt=: the majority-prior mark is a
+            # mathtext marker, which a format string cannot express.
+            ax_te.errorbar(zc[mask], te_p[mask], yerr=te_tot[mask],
+                           marker=marker, ls="none", color=c, ms=ms,
+                           capsize=3)
+            ax_ne.errorbar(zc[mask], ne_p[mask], yerr=ne_tot[mask],
+                           marker=marker, ls="none", color=c, ms=ms,
+                           capsize=3)
+            ax_is.plot(zc[mask], pisat[mask], marker=marker, ls="none",
+                       color=c, ms=ms)
+    # Kept SHORT and wrapped: the legend title sits inside the panel, and a
+    # one-line sentence here runs off the axes at every figure width.
+    legend_note = (
+        f"meas: filled={primary['label']}\n"
+        + ", ".join(
+            f"hollow {CONVENTION_MARKERS[s['name']]}={s['label']}"
+            for s in alts
         )
+        + (", '~'=majority prior" if np.any(prior_major) else "")
+    )
     for ax, ttl, yl in ((ax_te, "Te(z)", "Te [eV]"), (ax_ne, "ne(z)", "n [cm^-3]"),
                         (ax_is, "Isat(z) = n*sqrt(Te)", "n*sqrt(Te)")):
         for zp in zc:
@@ -350,40 +422,34 @@ def main():
         c = port_colors[p]
         iz = int(np.argmin(np.abs(z - zp)))
         lbl = f"p{port} z{zp:.0f}"
-        if ft is None:
-            # Core-band only: the band and the dashed trace are its own.
-            te_sys = TE_SYS_FRAC * np.abs(te_m[p]) + TE_SYS_FLOOR_EV
-            te_band = np.sqrt(te_s[p] ** 2 + te_sys ** 2)
-            ax_tet.fill_between(te_t, te_m[p] - te_band, te_m[p] + te_band,
-                                color=c, alpha=0.15)
-            ax_tet.plot(te_t, te_m[p], "--", color=c, lw=1.0)
-            te_on_de = np.interp(de_t, te_t, te_m[p])
-            ne_band = _n_sigma_tot(de_m[p], te_on_de, de_s[p])
-            ax_net.fill_between(de_t, de_m[p] - ne_band, de_m[p] + ne_band,
-                                color=c, alpha=0.15)
-            ax_net.plot(de_t, de_m[p], "--", color=c, lw=1.0)
-        else:
-            # The FLUX-TUBE series carries the band and the dashed trace, on
-            # its own clock te_ftavg_time_ms; the core-band trace is drawn
-            # thin and dotted beside it for comparison and carries no band.
-            fte_sys = TE_SYS_FRAC * np.abs(ft["te_m"][p]) + TE_SYS_FLOOR_EV
-            fte_band = np.sqrt(ft["te_s"][p] ** 2 + fte_sys ** 2)
-            ax_tet.fill_between(ft["te_t"], ft["te_m"][p] - fte_band,
-                                ft["te_m"][p] + fte_band, color=c, alpha=0.15)
-            ax_tet.plot(ft["te_t"], ft["te_m"][p], "--", color=c, lw=1.0)
-            ax_tet.plot(te_t, te_m[p], ":", color=c, lw=0.7, alpha=0.7)
-            fte_on_de = np.interp(ft["de_t"], ft["te_t"], ft["te_m"][p])
-            fne_band = _n_sigma_tot(ft["de_m"][p], fte_on_de, ft["de_s"][p])
-            ax_net.fill_between(ft["de_t"], ft["de_m"][p] - fne_band,
-                                ft["de_m"][p] + fne_band, color=c, alpha=0.15)
-            ax_net.plot(ft["de_t"], ft["de_m"][p], "--", color=c, lw=1.0)
-            ax_net.plot(de_t, de_m[p], ":", color=c, lw=0.7, alpha=0.7)
+        # The PRIMARY series carries the band and the dashed trace, on its own
+        # Te clock; the other conventions are drawn thin and dotted beside it
+        # for comparison and carry no band.
+        pte_sys = TE_SYS_FRAC * np.abs(primary["te_m"][p]) + TE_SYS_FLOOR_EV
+        pte_band = np.sqrt(primary["te_s"][p] ** 2 + pte_sys ** 2)
+        ax_tet.fill_between(primary["te_t"], primary["te_m"][p] - pte_band,
+                            primary["te_m"][p] + pte_band, color=c, alpha=0.15)
+        ax_tet.plot(primary["te_t"], primary["te_m"][p], "--", color=c, lw=1.0)
+        pte_on_de = np.interp(primary["de_t"], primary["te_t"],
+                              primary["te_m"][p])
+        pne_band = _n_sigma_tot(primary["de_m"][p], pte_on_de,
+                                primary["de_s"][p])
+        ax_net.fill_between(primary["de_t"], primary["de_m"][p] - pne_band,
+                            primary["de_m"][p] + pne_band, color=c, alpha=0.15)
+        ax_net.plot(primary["de_t"], primary["de_m"][p], "--", color=c, lw=1.0)
+        for s, style in zip(alts, (":", "-.")):
+            ax_tet.plot(s["te_t"], s["te_m"][p], style, color=c, lw=0.7,
+                        alpha=0.7)
+            ax_net.plot(s["de_t"], s["de_m"][p], style, color=c, lw=0.7,
+                        alpha=0.7)
         ax_tet.plot(t_ms, Te[:, iz], "-", color=c, lw=1.4, label=lbl)
         ax_net.plot(t_ms, n[:, iz], "-", color=c, lw=1.4, label=lbl)
     series_note = (
-        "solid=model  dashed=meas core-band"
-        if ft is None
-        else "solid=model  dashed=meas flux-tube (+band)  dotted=meas core-band"
+        f"solid=model, dashed=meas {primary['label']} (+band)\n"
+        + ", ".join(
+            f"{style}=meas {s['label']}"
+            for s, style in zip(alts, ("dotted", "dash-dot"))
+        )
     )
     for ax, ttl, yl in ((ax_tet, "Te(t) per port", "Te [eV]"),
                         (ax_net, "ne(t) per port", "n [cm^-3]")):

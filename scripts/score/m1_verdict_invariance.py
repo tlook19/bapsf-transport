@@ -85,6 +85,13 @@ trajectories: a saved run's bulk is its ``rhs_terms`` and diagnostics, which no
 scoring stage reads. Rows are never re-implemented here -- every number in the
 table comes from ``compare_sim1d_es1.compare``.
 
+THE COMPARAND. The scored rows are the COLUMN convention -- the whole column's
+inventory expressed on the model's tube -- named explicitly at the call site
+rather than inherited from the scorer's default, so a later change of that
+default cannot silently re-base this gate's verdict. The flux-tube and
+core-band conventions are scored alongside and ride each row's ``"legs"``
+mapping.
+
 Usage::
 
     python scripts/score/m1_verdict_invariance.py --fluid F.h5 \\
@@ -111,7 +118,11 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
     if _dir not in _sys.path:
         _sys.path.insert(0, _dir)
 
-from compare_sim1d_es1 import OVERLAY, compare  # noqa: E402
+from compare_sim1d_es1 import (  # noqa: E402
+    COMPARAND_COLUMN,
+    OVERLAY,
+    compare,
+)
 
 # Imported rather than re-spelled: these two decide how a stored dataset
 # becomes an array, and a second copy of that decision here could drift from
@@ -173,8 +184,19 @@ def load_scoring_fields(path):
 
 
 def score_run(path, overlay):
-    """Return ``compare``'s stage (ii) rows for one saved run."""
-    return compare(load_scoring_fields(path), None, overlay)
+    """Return ``compare``'s stage (ii) rows for one saved run.
+
+    Scored against the COLUMN comparand, named explicitly rather than taken
+    from ``compare``'s default: this gate's verdict rests on the mid-port
+    density and Isat rows, and which measured radial convention those rows
+    are built from decides what the verdict is a statement about. The other
+    two conventions are still scored and ride each row's ``"legs"`` mapping,
+    so ``--all-rows`` can read them; only the row's own scored fields -- the
+    ones ``gate_table`` compares across cadences -- are the column ones.
+    """
+    return compare(
+        load_scoring_fields(path), None, overlay, comparand=COMPARAND_COLUMN
+    )
 
 
 def _row_key(row):
