@@ -142,6 +142,7 @@ from cablp.solvers._sim1d import (
 from cablp.solvers._sim1d.physics.conduction import (
     conductive_face_flux,
     heat_conduction_rhs,
+    heat_conduction_timestep_bound,
     implicit_heat_conduction_step,
 )
 from cablp.solvers._sim1d.physics.cathode import (
@@ -31788,6 +31789,296 @@ def _case_cathode_jet_incident_power_one_book():
     ) <= 1.0e-14, (_cp_ledger, _cp_accum, _cp_R_E)
 
 
+def _ee_sink_fixture():
+    """(sim, state, geometry, floors, capacity, nu) for the substep sink cases.
+
+    The floors are pushed to -inf on both temperatures so the substep's one
+    clip site is inert: the realised-increment ledger is defined against the
+    PRE-clip temperature, so the closure identity is only exact where nothing
+    is clipped.
+    """
+    sim, snapshot = _base_sim()
+    geometry = snapshot.geometry
+    floors = dict(sim.floors)
+    floors["Te"] = -np.inf
+    floors["Ti"] = -np.inf
+    # A conducting, non-uniform plateau-like column, so the conduction
+    # operator is genuinely live beside the reaction term (the base
+    # snapshot's quiescent 0.21 eV / 1e9 cm^-3 state has no gradient at all
+    # and would leave K exactly zero).
+    axis = np.linspace(0.0, 1.0, geometry.cells)
+    n_profile = 1.0e12 * (1.0 + 0.4 * np.sin(2.0 * np.pi * axis))
+    Te_profile = 5.0 + 2.5 * np.cos(3.0 * np.pi * axis)
+    Ti_profile = 1.5 + 0.4 * np.sin(5.0 * np.pi * axis)
+    state = conservative_from_primitives(
+        n=n_profile,
+        nn=np.full(geometry.cells, 1.0e13),
+        u=np.zeros(geometry.cells),
+        Te=Te_profile,
+        Ti=Ti_profile,
+        ion_mass_g=sim.ion_mass_g,
+    )
+    n_floored = np.maximum(state.n, floors["n"])
+    capacity = 1.5 * n_floored * ev_to_erg
+    # A two-cell profile in the anode's own shape: a strong rate on the two
+    # flanking cells, exact zero everywhere else.
+    nu = np.zeros(geometry.cells, dtype=float)
+    pairs = anode_flanking_cells(geometry)
+    assert pairs, "the base stance must resolve an anode"
+    gap_side, column_side = pairs[0]
+    nu[gap_side] = 3.6e5
+    nu[column_side] = 3.8e5
+    return sim, state, geometry, floors, capacity, nu
+
+
+def _ee_sink_step(sim, state, geometry, floors, dt, scheme, picard, **kwargs):
+    """One bare ``implicit_heat_conduction_step`` on the fixture's arguments."""
+    return implicit_heat_conduction_step(
+        state=state,
+        floors=floors,
+        ion_mass_g=sim.ion_mass_g,
+        mu=sim.mu,
+        geometry=geometry,
+        dt=dt,
+        implicit_heat_scheme=scheme,
+        heat_picard_iterations=picard,
+        heat_picard_tol=1.0e-12,
+        **kwargs,
+    )
+
+
+# ----------------------------------------------------------------------
+# implicit-ee-sink-substep-identity
+# ----------------------------------------------------------------------
+@_case("implicit-ee-sink-substep-identity", historical_stance=True)
+def _case_implicit_ee_sink_substep_identity():
+    sim, state, geometry, floors, capacity, nu = _ee_sink_fixture()
+    dt = 6.0e-7
+    Te_old = np.asarray(state.Ee, dtype=float) / capacity
+    # Sized against the store the substep is moving, so neither the source
+    # nor the sink drives the temperature through zero.
+    source = (
+        np.linspace(-0.05, 0.10, geometry.cells) * np.asarray(state.Ee) / dt
+    )
+
+    for scheme in ("backward_euler", "shifted", "crank_nicolson", "tr_bdf2"):
+        for picard in (0, 2):
+            # (a) the per-cell closure: the three realised rows sum to the
+            # substep's own pre-clip electron-energy increment.
+            ledger = {}
+            stepped = _ee_sink_step(
+                sim, state, geometry, floors, dt, scheme, picard,
+                ee_source=source,
+                ee_sink_rate=nu,
+                ledger_out=ledger,
+            )
+            increment = np.asarray(stepped.Ee, dtype=float) - capacity * Te_old
+            rows = (
+                ledger["Ee_conduction_erg_cm3"]
+                + ledger["Ee_sink_erg_cm3"]
+                + ledger["Ee_source_erg_cm3"]
+            )
+            scale = np.maximum(
+                np.abs(ledger["Ee_conduction_erg_cm3"]),
+                np.maximum(
+                    np.abs(ledger["Ee_sink_erg_cm3"]),
+                    np.abs(ledger["Ee_source_erg_cm3"]),
+                ),
+            )
+            scale = np.maximum(scale, np.max(np.abs(increment)))
+            assert np.max(np.abs(increment - rows) / scale) < 1.0e-12, (
+                scheme, picard, np.max(np.abs(increment - rows) / scale)
+            )
+            # The sink is a LOSS: never positive, and exactly zero off the
+            # two cells the rate profile names.
+            assert np.all(ledger["Ee_sink_erg_cm3"] <= 0.0), (scheme, picard)
+            assert np.all(ledger["Ee_sink_erg_cm3"][nu == 0.0] == 0.0), (
+                scheme, picard
+            )
+            assert np.any(ledger["Ee_sink_erg_cm3"] < 0.0), (scheme, picard)
+
+            # (b) no sink handed in reproduces the historical substep byte for
+            # byte, and an all-zero rate array is the same float arithmetic.
+            historical = _ee_sink_step(
+                sim, state, geometry, floors, dt, scheme, picard,
+                ee_source=source,
+            )
+            none_rate = _ee_sink_step(
+                sim, state, geometry, floors, dt, scheme, picard,
+                ee_source=source, ee_sink_rate=None,
+            )
+            zero_rate = _ee_sink_step(
+                sim, state, geometry, floors, dt, scheme, picard,
+                ee_source=source, ee_sink_rate=np.zeros(geometry.cells),
+            )
+            for field in ("Ee", "Ei"):
+                base_bytes = np.asarray(
+                    getattr(historical, field), dtype=float
+                ).tobytes()
+                assert np.asarray(
+                    getattr(none_rate, field), dtype=float
+                ).tobytes() == base_bytes, (scheme, picard, field)
+                assert np.asarray(
+                    getattr(zero_rate, field), dtype=float
+                ).tobytes() == base_bytes, (scheme, picard, field)
+            # ... and the sink actually moved the answer, so (b) is not
+            # passing because the whole term is inert.
+            assert not np.array_equal(
+                np.asarray(stepped.Ee, dtype=float),
+                np.asarray(historical.Ee, dtype=float),
+            ), (scheme, picard)
+
+    # A negative or non-finite rate is a misconfiguration, not a source.
+    for bad in (-1.0, np.nan, np.inf):
+        bad_rate = nu.copy()
+        bad_rate[0] = bad
+        try:
+            _ee_sink_step(
+                sim, state, geometry, floors, dt, "tr_bdf2", 2,
+                ee_sink_rate=bad_rate,
+            )
+        except ValueError as exc:
+            assert "ee_sink_rate" in str(exc), exc
+        else:
+            raise AssertionError(f"ee_sink_rate={bad!r} was accepted")
+
+
+# ----------------------------------------------------------------------
+# implicit-ee-sink-pure-decay-exact
+# ----------------------------------------------------------------------
+@_case("implicit-ee-sink-pure-decay-exact", historical_stance=True)
+def _case_implicit_ee_sink_pure_decay_exact():
+    sim, state, geometry, floors, capacity, _nu = _ee_sink_fixture()
+    Te_old = np.asarray(state.Ee, dtype=float) / capacity
+    gamma = 2.0 - math.sqrt(2.0)
+    implicit_weight = gamma / 2.0
+    tr_a = 1.0 / (gamma * (2.0 - gamma))
+    tr_b = -((1.0 - gamma) ** 2) / (gamma * (2.0 - gamma))
+
+    def amplification(scheme, z):
+        """The scheme's stability function at ``z = -nu*dt``."""
+        if scheme == "tr_bdf2":
+            m = -implicit_weight * z
+            t_gamma = (1.0 - m) / (1.0 + m)
+            return (tr_a * t_gamma + tr_b) / (1.0 + m)
+        theta = {
+            "backward_euler": 1.0, "shifted": 0.6, "crank_nicolson": 0.5,
+        }[scheme]
+        return (1.0 + (1.0 - theta) * z) / (1.0 - theta * z)
+
+    for nu_dt in (0.05, 0.4, 1.0):
+        dt = 5.0e-7
+        rate = np.full(geometry.cells, nu_dt / dt, dtype=float)
+        for scheme in ("backward_euler", "shifted", "crank_nicolson", "tr_bdf2"):
+            ledger = {}
+            stepped = _ee_sink_step(
+                sim, state, geometry, floors, dt, scheme, 0,
+                heat_conduction=False,
+                ee_sink_rate=rate,
+                ledger_out=ledger,
+            )
+            Te_new = np.asarray(stepped.Ee, dtype=float) / capacity
+            expected = Te_old * amplification(scheme, -nu_dt)
+            assert np.max(np.abs(Te_new / expected - 1.0)) < 1.0e-13, (
+                scheme, nu_dt, np.max(np.abs(Te_new / expected - 1.0))
+            )
+            # With no conduction and no source, the realised debit IS the
+            # whole increment.
+            realised = -ledger["Ee_sink_erg_cm3"]
+            assert np.allclose(
+                realised, capacity * (Te_old - Te_new), rtol=1.0e-13, atol=0.0
+            ), (scheme, nu_dt)
+            assert np.all(ledger["Ee_conduction_erg_cm3"] == 0.0), (scheme, nu_dt)
+            assert np.all(ledger["Ee_source_erg_cm3"] == 0.0), (scheme, nu_dt)
+            # The ION solve is never handed a sink.
+            assert np.allclose(
+                np.asarray(stepped.Ei, dtype=float),
+                np.asarray(state.Ei, dtype=float),
+                rtol=1.0e-14, atol=0.0,
+            ), (scheme, nu_dt)
+
+    # Monotonicity at a rate the accuracy bound would never let through:
+    # backward Euler is the one unconditionally monotone member, because the
+    # enlarged operator stays an M-matrix. The second-order schemes ring
+    # negative there exactly as they do on a stiff conduction mode -- asserted
+    # so the distinction cannot be misread as a defect later.
+    dt = 5.0e-7
+    stiff = np.full(geometry.cells, 50.0 / dt, dtype=float)
+    monotone = _ee_sink_step(
+        sim, state, geometry, floors, dt, "backward_euler", 0,
+        heat_conduction=False, ee_sink_rate=stiff,
+    )
+    assert np.all(np.asarray(monotone.Ee, dtype=float) > 0.0)
+    assert np.all(
+        np.asarray(monotone.Ee, dtype=float) < np.asarray(state.Ee, dtype=float)
+    )
+    for ringing in ("shifted", "crank_nicolson", "tr_bdf2"):
+        rung = _ee_sink_step(
+            sim, state, geometry, floors, dt, ringing, 0,
+            heat_conduction=False, ee_sink_rate=stiff,
+        )
+        assert np.all(np.asarray(rung.Ee, dtype=float) < 0.0), ringing
+
+
+# ----------------------------------------------------------------------
+# implicit-ee-sink-substep-order
+# ----------------------------------------------------------------------
+@_case("implicit-ee-sink-substep-order", historical_stance=True)
+def _case_implicit_ee_sink_substep_order():
+    sim, state, geometry, floors, capacity, nu_shape = _ee_sink_fixture()
+    # The refinement triplet is taken in the RESOLVED regime of BOTH terms --
+    # an order read where either one is stiff is meaningless (every L-stable
+    # substep reads ~1 there). The coarsest step is the state's own explicit
+    # conduction bound, and the rate is scaled so nu*dt is 0.3 on that step,
+    # which puts the error's argmax on a sink cell.
+    bound = heat_conduction_timestep_bound(
+        state=state,
+        floors=floors,
+        ion_mass_g=sim.ion_mass_g,
+        mu=sim.mu,
+        geometry=geometry,
+    )
+    window = 4.0 * bound
+    nu = np.zeros(geometry.cells, dtype=float)
+    sink_cells = np.flatnonzero(nu_shape > 0.0)
+    nu[sink_cells] = 0.30 / (window / 4.0)
+
+    def integrate(scheme, picard, steps):
+        current = state
+        sub_dt = window / steps
+        for _ in range(steps):
+            current = _ee_sink_step(
+                sim, current, geometry, floors, sub_dt, scheme, picard,
+                ee_sink_rate=nu,
+            )
+        return np.asarray(current.Ee, dtype=float) / capacity
+
+    orders = {}
+    argmax_cells = {}
+    for scheme, picard in (
+        ("backward_euler", 2), ("crank_nicolson", 2), ("tr_bdf2", 2),
+    ):
+        coarse = integrate(scheme, picard, 4)
+        medium = integrate(scheme, picard, 8)
+        fine = integrate(scheme, picard, 16)
+        num = np.max(np.abs(coarse - medium))
+        den = np.max(np.abs(medium - fine))
+        orders[scheme] = math.log2(num / den)
+        argmax_cells[scheme] = int(np.argmax(np.abs(coarse - medium)))
+    print(
+        "  implicit ee-sink substep order (dt*lambda_max = %.3f, nu*dt = 0.30): "
+        % (0.25 * window / 4.0 / bound)
+        + ", ".join(f"{k} {v:.2f}" for k, v in orders.items())
+    )
+    # The reading has to be ABOUT the sink: the refinement error must peak on
+    # a cell the rate profile names.
+    for scheme, cell in argmax_cells.items():
+        assert cell in set(sink_cells.tolist()), (scheme, cell, sink_cells)
+    assert orders["crank_nicolson"] >= 1.9, orders
+    assert orders["tr_bdf2"] >= 1.9, orders
+    assert 0.8 <= orders["backward_euler"] <= 1.2, orders
+
+
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
@@ -31797,7 +32088,7 @@ def _case_cathode_jet_incident_power_one_book():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 191, "historical_stance": 72}
+_CASE_CENSUS = {"total": 194, "historical_stance": 75}
 
 
 def _assert_case_census():

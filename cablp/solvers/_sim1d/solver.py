@@ -11450,18 +11450,26 @@ class LAPDSim1D:
             stacklevel=2,
         )
 
-    def implicit_heat_conduction_step(self, dt, y=None, state=None, ee_source=None):
+    def implicit_heat_conduction_step(
+        self, dt, y=None, state=None, ee_source=None, ee_sink_rate=None,
+        ledger_out=None,
+    ):
         """Return state after one frozen-conductivity implicit heat substep.
 
         ``ee_source`` (default ``None``, the historical path) is an electron-
         energy source density held constant over the substep and solved with
-        the conduction operator; see the module function of the same name.
+        the conduction operator; ``ee_sink_rate`` is the matching per-cell
+        first-order electron-energy loss rate, and ``ledger_out`` collects the
+        substep's realised per-cell increments. See the module function of the
+        same name.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
         return implicit_heat_conduction_step(
             state=state,
             ee_source=ee_source,
+            ee_sink_rate=ee_sink_rate,
+            ledger_out=ledger_out,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             mu=self._mu,
