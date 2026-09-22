@@ -645,10 +645,16 @@ use_cached_neutral_seed = false
 # model has already reached, so the model never sees it and the fill carries
 # it instead. The injected inventory that foot carries is 4.42e19 atoms --
 # the member decides where that inventory lands, not how much of it there is.
-# It supersedes the fill spread by the legacy BALLISTIC top-hat on the same
-# base at that member's own 5.83 ms foot; those rows are committed as
-# scripts/data/nn0_legacy_ballistic_reference.npz and are reproducible by the
-# same builder run with --kernel ballistic at that foot.
+# It supersedes the fill spread by the legacy BALLISTIC top-hat at that
+# member's own 5.83 ms foot; those rows are committed as
+# scripts/data/nn0_legacy_ballistic_reference.npz. They do NOT sit on this
+# configuration's machine: they are registered on a far source chamber wall
+# of 76.2 cm -- that shell's outer radius, which this configuration carried
+# before it took the measured bore -- and on a base equilibrated there, so
+# reproducing them takes the per-cell geometry committed beside them as
+# scripts/data/nn0_legacy_ballistic_reference_geometry.npz and a base of this
+# configuration on that wall, with the same builder run at --kernel ballistic
+# and that foot.
 # The profile flag stays stance-side because the per-cell nn0_profile it
 # requires is sized to this mesh.
 neutral_initial_profile = true
