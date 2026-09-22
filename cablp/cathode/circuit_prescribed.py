@@ -452,6 +452,7 @@ def solve_prescribed(
         long_mfp=long_mfp,
         beam_bypass_fraction=beam_bypass_fraction,
         l_b=l_b,
+        T_e_anode=T_e_anode,
     )
 
 
