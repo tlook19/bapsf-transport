@@ -63,7 +63,7 @@ surface and is treated this way; the two-state kernel
 (`flux.kep_rusanov_face_scalar`) is the INTERIOR's.
 
 **Energy-consistent hyperbolic core** (`hyperbolic_energy_consistent`). The
-convective momentum flux becomes the kinetic-energy-preserving $\{u\}\{M\}$
+convective momentum flux becomes the kinetic-energy-preserving $\lbrace u\rbrace\lbrace M\rbrace$
 form, and the Rusanov $(n,M)$ numerical kinetic-energy dissipation is deposited
 into $E_i$ as `hyperbolic_dissipation_heating` — a flux divergence contracted
 with the local velocity, so non-negative only in the volume-weighted total. The
@@ -389,7 +389,7 @@ one step capped by anything else — a physics bound, an output cadence, or a
 retry — resets the streak. The active constraint names the bound that actually
 minimized; when it asked for less than $\Delta t_\text{min}$,
 `clamped_to_dt_min` is set and `dt_raw` keeps the unclamped request,
-$\texttt{dt\_raw}=0$ being the drained floor-pinned signature.
+`dt_raw` $=0$ being the drained floor-pinned signature.
 `dt_min_lock_max_steps` bounds CONSECUTIVE clamped ADAPTIVE steps and raises
 past it; its counter is driven by
 
@@ -728,7 +728,7 @@ delivering exactly $D/\Delta t_\text{tick}$ in the resolved limit and damping it
 when the tick is coarse; a flat $D/\Delta t_\text{tick}$ would re-inject the
 zero-order increment the hold removed. The per-tick map is then
 
-$$\begin{pmatrix}g\\D\end{pmatrix}_{k+1}=\begin{pmatrix}e^{-X}&a\\-(X-1+e^{-X})&1-a\end{pmatrix}\begin{pmatrix}g\\D\end{pmatrix}_k,\qquad a=\frac{1-e^{-X}}{X},\quad X=\nu\Delta t_\text{tick}$$
+$$\begin{pmatrix}g\cr D\end{pmatrix}_{k+1}=\begin{pmatrix}e^{-X}&a\cr -(X-1+e^{-X})&1-a\end{pmatrix}\begin{pmatrix}g\cr D\end{pmatrix}_k,\qquad a=\frac{1-e^{-X}}{X},\quad X=\nu\Delta t_\text{tick}$$
 
 with determinant $1-a$ and trace $e^{-X}+1-a$, so both eigenvalues lie strictly
 inside the unit circle for every $X>0$ independently of how the tick is
