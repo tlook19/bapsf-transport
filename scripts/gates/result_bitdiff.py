@@ -555,11 +555,18 @@ def run_leg(tree, entry, out_path, log_path, compiled):
 
 
 def cmd_matrix(args):
-    outdir = Path(args.outdir).expanduser()
+    # Refuse BEFORE anything is created: every tree knowable without side
+    # effects -- this tree (which a revision is exported from) and any
+    # directory given as --base/--head.
+    known_trees = [THIS_TREE] + [
+        Path(spec).expanduser() for spec in (args.base, args.head)
+        if Path(spec).expanduser().is_dir()
+    ]
+    outdir = _refuse_outdir_in_tree(Path(args.outdir).expanduser(),
+                                    known_trees)
     outdir.mkdir(parents=True, exist_ok=True)
     base_tree, base_label = resolve_tree(args.base, outdir, args.compiled)
     head_tree, head_label = resolve_tree(args.head, outdir, args.compiled)
-    outdir = _refuse_outdir_in_tree(outdir, (base_tree, head_tree, THIS_TREE))
     entries = [MATRIX_BY_NAME[name] for name in args.entries] if args.entries \
         else list(MATRIX)
     print(f"result_bitdiff matrix: base={base_label}", flush=True)
@@ -728,10 +735,10 @@ def _evidence(label, path_a, path_b, expected_paths):
 
 
 def cmd_self_test(args):
-    outdir = Path(args.outdir).expanduser()
+    tree = Path(args.tree).expanduser().resolve() if args.tree else THIS_TREE
+    outdir = _refuse_outdir_in_tree(Path(args.outdir).expanduser(),
+                                    (tree, THIS_TREE))
     outdir.mkdir(parents=True, exist_ok=True)
-    tree = Path(args.tree).resolve() if args.tree else THIS_TREE
-    outdir = _refuse_outdir_in_tree(outdir, (tree, THIS_TREE))
     entry = MATRIX_BY_NAME[args.entry]
     started = time.perf_counter()
     ok = True
