@@ -44,6 +44,22 @@ values; `preflight_diffcfg.py` is the no-solve config
 diff every campaign arm runs before spending compute. A file belongs here when
 a merge is blocked by its verdict.
 
+`result_bitdiff.py` is the full-result bit-diff gate: the golden compares
+`time`, `y` and `phase`, and this gate compares every group, dataset and
+attribute of a saved `sim1d-hdf5-v1` result at raw bytes (so `-0.0` against
+`+0.0` is a difference), with an explicit allow-list for the fields stamped
+from the clock or the execution. Run it on a change that could move saved
+output while leaving the state trajectory bit-identical: diagnostics, ledgers,
+RHS term rows, result I/O. `matrix` runs a fixed set of short runs of
+committed configurations under two code trees (a revision or a directory),
+each leg in its own process on its own tree, and compares each pair;
+`--self-test` proves the allow-list complete and the comparator able to fail.
+
+    python scripts/gates/result_bitdiff.py compare A.h5 B.h5
+    python scripts/gates/result_bitdiff.py matrix --base <rev-or-tree> \
+        --head <rev-or-tree> --outdir <dir outside the repo> [--compiled]
+    python scripts/gates/result_bitdiff.py --self-test --outdir <dir outside the repo>
+
 **`run/`** — the drivers that build a `LAPDSim1D` and run it.
 `run_m6_point.py` is the config-complete campaign driver, `run_sim1d.py` the
 plain one, `run_mechanism_ladder.py` the ladder; the rest build the inputs a
