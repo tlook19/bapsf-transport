@@ -33201,6 +33201,76 @@ def _case_implicit_ee_sink_no_solve_bit_identity():
 
 
 # ----------------------------------------------------------------------
+# result-bitdiff-compare-synthetic
+# ----------------------------------------------------------------------
+@_case("result-bitdiff-compare-synthetic")
+def _case_result_bitdiff_compare_synthetic():
+    # The full-result bit-diff comparator on tiny synthetic files, no solve:
+    # identical files pass, and a signed zero, an attribute and an extra
+    # dataset are each reported as exactly one finding naming its path.
+    import result_bitdiff
+
+    def write(path, zero=0.0, attr=3, extra=False):
+        str_dtype = h5py.string_dtype(encoding="utf-8")
+        with h5py.File(path, "w") as h5:
+            h5.attrs["format"] = "synthetic"
+            h5.attrs["steps"] = 7
+            h5.create_dataset("y", data=np.array([[1.0, zero], [2.5, -3.0]]))
+            group = h5.create_group("rhs_terms/ionization")
+            group.attrs["count"] = attr
+            group.create_dataset("n", data=np.arange(4, dtype=np.int64))
+            h5.create_dataset(
+                "phase", data=np.asarray(["a", "b"], dtype=object),
+                dtype=str_dtype,
+            )
+            if extra:
+                h5.create_dataset("rhs_terms/extra", data=np.zeros(2))
+
+    compare = result_bitdiff.compare_files
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        paths = {
+            "base": tmp / "base.h5",
+            "twin": tmp / "twin.h5",
+            "negzero": tmp / "negzero.h5",
+            "attr": tmp / "attr.h5",
+            "extra": tmp / "extra.h5",
+        }
+        write(paths["base"])
+        write(paths["twin"])
+        write(paths["negzero"], zero=-0.0)
+        write(paths["attr"], attr=4)
+        write(paths["extra"], extra=True)
+
+        report = compare(paths["base"], paths["twin"])
+        assert report.identical, report.findings
+        assert report.objects == 6 and report.attributes == 3, report
+        # The value comparison np.array_equal would make passes the signed
+        # zero; the raw-byte comparison must not.
+        with h5py.File(paths["negzero"], "r") as h5:
+            assert np.array_equal(h5["y"][()], np.array([[1.0, 0.0], [2.5, -3.0]]))
+        expected = {
+            "negzero": "/y BYTES differ at 1 of 4 elements; first at flat index 1",
+            "attr": "/rhs_terms/ionization@count BYTES differ",
+            "extra": "/rhs_terms/extra: dataset present in B only",
+        }
+        for name, prefix in expected.items():
+            report = compare(paths["base"], paths[name])
+            assert len(report.findings) == 1, (name, report.findings)
+            assert report.findings[0].startswith(prefix), (
+                name, report.findings)
+        # The command-line mode exits on the same verdicts.
+        for name, want in (("twin", 0), ("negzero", 1)):
+            proc = subprocess.run(
+                [sys.executable, str(Path(result_bitdiff.__file__)),
+                 "compare", str(paths["base"]), str(paths[name])],
+                capture_output=True, text=True,
+            )
+            assert proc.returncode == want, (name, proc.stdout, proc.stderr)
+
+
+# ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
 # These counts used to sit in the module docstring as prose, where nothing
@@ -33209,7 +33279,7 @@ def _case_implicit_ee_sink_no_solve_bit_identity():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 204, "historical_stance": 78}
+_CASE_CENSUS = {"total": 205, "historical_stance": 78}
 
 
 def _assert_case_census():
