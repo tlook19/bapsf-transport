@@ -31,7 +31,7 @@ $-\Delta(\text{area}\cdot\Gamma)/\text{volume}$ per cell, each
 $u\,\partial_z$ derivative fused with its compression partner inside one face
 flux rather than discretized separately. As in [`MODEL.md`](MODEL.md),
 $\partial_z$ is the only spatial derivative and
-$\nabla_\parallel\!\cdot \Gamma\equiv A^{-1}\partial_z(A\Gamma)$.
+$\nabla_\parallel\cdot \Gamma\equiv A^{-1}\partial_z(A\Gamma)$.
 
 **`front_flux` selects a second face-flux operator** beside the Rusanov one: a
 sonic-relaxation front flux that fills unfilled cells, capped by `alpha_front`
@@ -68,13 +68,13 @@ form, and the Rusanov $(n,M)$ numerical kinetic-energy dissipation is deposited
 into $E_i$ as `hyperbolic_dissipation_heating` — a flux divergence contracted
 with the local velocity, so non-negative only in the volume-weighted total. The
 selector does NOT touch the `pressure_work` term: that row is
-$-p_{s,i}\left.\nabla_\parallel\!\cdot u\right|_i$ on either side of the flag.
+$-p_{s,i}\left.\nabla_\parallel\cdot u\right|_i$ on either side of the flag.
 
 The conservation statement is LOCAL. With the face velocity
-$\bar u_f=\tfrac12(u_L+u_R)$ of $\nabla_\parallel\!\cdot u$ and the face
+$\bar u_f=\tfrac12(u_L+u_R)$ of $\nabla_\parallel\cdot u$ and the face
 pressure $\bar p_f$ the momentum flux carries,
 
-$$-p_iV_i\left.\nabla_\parallel\!\cdot u\right|_i+u_i\cdot\left(\text{net pressure force}\right)_i=-\left[A_f\Pi_f\right]_{i-1/2}^{\,i+1/2},\qquad\Pi_f=\tfrac12\left(p_Lu_R+u_Lp_R\right),$$
+$$-p_iV_i\left.\nabla_\parallel\cdot u\right|_i+u_i\cdot\left(\text{net pressure force}\right)_i=-\left[A_f\Pi_f\right]_{i-1/2}^{\,i+1/2},\qquad\Pi_f=\tfrac12\left(p_Lu_R+u_Lp_R\right),$$
 
 identically, for general states and a VARYING area — the $p_iu_iA$ pieces of
 the two members cancel cell by cell, so no $p\,\partial_zA$ term survives in
@@ -131,7 +131,7 @@ one otherwise).
 A two-stage strong-stability-preserving Runge–Kutta step (SSPRK2 / Heun),
 `core/integrator.py`:
 
-$$y^{(1)}=\Pi\!\left[y^n+\Delta t\,L(t^n,y^n)\right],\qquad y^{n+1}=\Pi\!\left[\tfrac12y^n+\tfrac12\left(y^{(1)}+\Delta t\,L(t^n+\Delta t,y^{(1)})\right)\right]$$
+$$y^{(1)}=\Pi\left[y^n+\Delta t\,L(t^n,y^n)\right],\qquad y^{n+1}=\Pi\left[\tfrac12y^n+\tfrac12\left(y^{(1)}+\Delta t\,L(t^n+\Delta t,y^{(1)})\right)\right]$$
 
 $\Pi$ the floor projection below, applied at each stage. The stages are
 evaluated at $t^n$ and $t^n+\Delta t$, preserving second-order accuracy for
@@ -593,7 +593,7 @@ out to a common half-extent, $v_\parallel$ spanning
 $(-v_\text{max},+v_\text{max})$ and the perpendicular SPEED axis
 $(0,v_\text{max})$:
 
-$$v_k=v_\text{fine}\sinh\!\left(a\,u_k\right),\qquad a=\operatorname{arcsinh}\!\left(v_\text{max}/v_\text{fine}\right)$$
+$$v_k=v_\text{fine}\sinh\left(a\,u_k\right),\qquad a=\operatorname{arcsinh}\left(v_\text{max}/v_\text{fine}\right)$$
 
 $u_k$ the half-offset normalized index, so resolution is $\sim v_\text{fine}$
 near zero (the wall gas) and coarsens toward $v_\text{max}$ (the
