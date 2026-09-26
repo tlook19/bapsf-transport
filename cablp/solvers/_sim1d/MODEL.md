@@ -291,7 +291,7 @@ $$\left.\nabla_\parallel\cdot u\right|_i=\frac{A_{i+1/2}u_{i+1/2}-A_{i-1/2}u_{i-
 
 and the `hyperbolic_energy_consistent` selector does not move it. What the
 selector changes is the convective momentum flux (the kinetic-energy-preserving
-$\{u\}\{M\}$ form) and the booking of $Q_\text{diss}$; it adds nothing to the
+$\lbrace u\rbrace\lbrace M\rbrace$ form) and the booking of $Q_\text{diss}$; it adds nothing to the
 energy rows' pressure term.
 
 **Energy consistency is a PAIRING identity, and it is local.** With the face
