@@ -102,7 +102,7 @@ $\Gamma$ on a tube of area $A(z)$ is written
 $\nabla_\parallel\cdot \Gamma\equiv A^{-1}\partial_z(A\Gamma)$, which is the
 $\Delta(A\Gamma)/V$ the code forms and reduces to $\partial_z\Gamma$ at constant
 area. The material derivative along the flow is
-$D/Dt\equiv\partial_t+u\,\partial_z$. No perpendicular derivative appears
+$D/Dt\equiv\partial_t+u\partial_z$. No perpendicular derivative appears
 anywhere in the model.
 
 $+z$ runs from the cathode end toward the end wall; a flux is positive
@@ -190,9 +190,9 @@ ionization birth contributes NOTHING — the new electron is born cold, so its
 birth energy is identically zero and $T_e$ falls by dilution alone. Their
 decomposition is
 
-$$F^n=m_iu_n^\text{col}\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)-m_iu\,S_\text{rec}+F_\parallel^{cx},$$
+$$F^n=m_iu_n^\text{col}\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)-m_iuS_\text{rec}+F_\parallel^{cx},$$
 
-$$Q_i^n=\left[\tfrac32T_n^\text{col}+\tfrac12m_i\left(u_i-u_n^\text{col}\right)^2\right]\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)-\tfrac32T_i\,S_\text{rec}+Q_i^{cx},$$
+$$Q_i^n=\left[\tfrac32T_n^\text{col}+\tfrac12m_i\left(u_i-u_n^\text{col}\right)^2\right]\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)-\tfrac32T_iS_\text{rec}+Q_i^{cx},$$
 
 $F_\parallel^{cx}$ and $Q_i^{cx}$ the charge-exchange/elastic friction and
 heating of the relaxation described later. Ionization is velocity-blind, which
@@ -216,17 +216,17 @@ the birth moments carries the ion drift and temperature rather than the gas's.
 The model is a two-fluid Braginskii plasma reduced to the parallel direction.
 In primitive variables $(n,u,T_e,T_i)$ along the material derivative:
 
-$$\frac{Dn}{Dt}=-n\,\nabla_\parallel\cdot u+S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}-S_\text{rec}-S_\text{an}+S_n^\text{out}$$
+$$\frac{Dn}{Dt}=-n\nabla_\parallel\cdot u+S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}-S_\text{rec}-S_\text{an}+S_n^\text{out}$$
 
-$$m_in\frac{Du}{Dt}=-\partial_zp_i+enE_\parallel+m_i\left(u_n^\text{col}-u\right)\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)+F_\parallel^{cx}+F^\text{out}-m_iu\,S_n^\text{out}$$
+$$m_in\frac{Du}{Dt}=-\partial_zp_i+enE_\parallel+m_i\left(u_n^\text{col}-u\right)\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)+F_\parallel^{cx}+F^\text{out}-m_iuS_n^\text{out}$$
 
-$$\tfrac32n\frac{DT_e}{Dt}=-p_e\,\nabla_\parallel\cdot u-\nabla_\parallel\cdot q_{\parallel e}-Q_{ie}-Q_\text{inel}+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_e\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)+T_eS_\text{an}+Q_e^\text{elec}+Q_e^\text{out}-\tfrac32T_eS_n^\text{out}$$
+$$\tfrac32n\frac{DT_e}{Dt}=-p_e\nabla_\parallel\cdot u-\nabla_\parallel\cdot q_{\parallel e}-Q_{ie}-Q_\text{inel}+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_e\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)+T_eS_\text{an}+Q_e^\text{elec}+Q_e^\text{out}-\tfrac32T_eS_n^\text{out}$$
 
-$$\tfrac32n\frac{DT_i}{Dt}=-p_i\,\nabla_\parallel\cdot u-\nabla_\parallel\cdot q_{\parallel i}+Q_{ie}+Q_i^{cx}+\left[\tfrac32\left(T_n^\text{col}-T_i\right)+\tfrac12m_i\left(u_i-u_n^\text{col}\right)^2\right]\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)-T_iS_\text{an}+Q_\text{diss}+Q_i^\text{out}-\tfrac32T_iS_n^\text{out}$$
+$$\tfrac32n\frac{DT_i}{Dt}=-p_i\nabla_\parallel\cdot u-\nabla_\parallel\cdot q_{\parallel i}+Q_{ie}+Q_i^{cx}+\left[\tfrac32\left(T_n^\text{col}-T_i\right)+\tfrac12m_i\left(u_i-u_n^\text{col}\right)^2\right]\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)-T_iS_\text{an}+Q_\text{diss}+Q_i^\text{out}-\tfrac32T_iS_n^\text{out}$$
 
 with the parallel heat fluxes and the electron-momentum (ambipolar) closure
 
-$$q_{\parallel s}=-\kappa_{\parallel s}\,\partial_zT_s,\qquad 0=-\partial_zp_e-enE_\parallel\ \Longrightarrow\ enE_\parallel=-\partial_zp_e.$$
+$$q_{\parallel s}=-\kappa_{\parallel s}\partial_zT_s,\qquad 0=-\partial_zp_e-enE_\parallel\ \Longrightarrow\ enE_\parallel=-\partial_zp_e.$$
 
 **The electric field is not an independent field.** The electrons are taken
 massless and carry no separately retained parallel friction, so their momentum
@@ -257,13 +257,13 @@ $n$, $M=m_inu$, $E_e=\tfrac32nT_e$ and $E_i=\tfrac32nT_i$; the primitive
 equations above are that same system rewritten, and every term corresponds one
 for one — with the single exception of $F^\text{geom}$, which belongs to the
 conservative form alone. It is the area part of the conservative pressure-flux
-divergence, $A^{-1}\partial_z(Ap)-p\,\partial_zA/A=\partial_zp$, so a primitive
+divergence, $A^{-1}\partial_z(Ap)-p\partial_zA/A=\partial_zp$, so a primitive
 momentum law already written on $-\partial_zp$ carries it and adding it there
 would count the geometry twice. Each equation is
 $\partial_tU+\nabla_\parallel\cdot\boldsymbol\Gamma(U)=S$. The convective
 derivative is never discretized alone: each is fused with its compression
 partner inside one face flux through
-$\nabla_\parallel\cdot(Uu)=u\,\partial_zU+U\,\nabla_\parallel\cdot u$,
+$\nabla_\parallel\cdot(Uu)=u\partial_zU+U\nabla_\parallel\cdot u$,
 giving $\Gamma_n=nu$, $\Gamma_M=Mu+p$, $\Gamma_{E_e}=E_eu$,
 $\Gamma_{E_i}=E_iu$ — the momentum flux carrying the total pressure
 $p=p_e+p_i$ the ambipolar closure produced. The advected energy flux is the
@@ -272,11 +272,11 @@ $p_su$ returns as the explicit pressure work below.
 
 $$\partial_tn+\nabla_\parallel\cdot(nu)=S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}-S_\text{rec}-S_\text{an}+S_n^\text{out}$$
 
-$$\partial_tM+\nabla_\parallel\cdot(Mu+p)=F^{n}-m_iu\,S_\text{an}+F^\text{geom}+F^\text{out}$$
+$$\partial_tM+\nabla_\parallel\cdot(Mu+p)=F^{n}-m_iuS_\text{an}+F^\text{geom}+F^\text{out}$$
 
-$$\partial_tE_e+\nabla_\parallel\cdot(E_eu)=-p_e\,\nabla_\parallel\cdot u+\nabla_\parallel\cdot\left(\kappa_{\parallel e}\partial_zT_e\right)-Q_{ie}-Q_\text{inel}+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_eS_\text{rec}-\tfrac12T_eS_\text{an}+Q_e^\text{elec}+Q_e^\text{out}$$
+$$\partial_tE_e+\nabla_\parallel\cdot(E_eu)=-p_e\nabla_\parallel\cdot u+\nabla_\parallel\cdot\left(\kappa_{\parallel e}\partial_zT_e\right)-Q_{ie}-Q_\text{inel}+Q_\text{beam}+Q_\text{ohm}-\tfrac32T_eS_\text{rec}-\tfrac12T_eS_\text{an}+Q_e^\text{elec}+Q_e^\text{out}$$
 
-$$\partial_tE_i+\nabla_\parallel\cdot(E_iu)=-p_i\,\nabla_\parallel\cdot u+\nabla_\parallel\cdot\left(\kappa_{\parallel i}\partial_zT_i\right)+Q_{ie}+Q_i^{n}+Q_\text{diss}-\tfrac52T_iS_\text{an}+Q_i^\text{out}$$
+$$\partial_tE_i+\nabla_\parallel\cdot(E_iu)=-p_i\nabla_\parallel\cdot u+\nabla_\parallel\cdot\left(\kappa_{\parallel i}\partial_zT_i\right)+Q_{ie}+Q_i^{n}+Q_\text{diss}-\tfrac52T_iS_\text{an}+Q_i^\text{out}$$
 
 The ionization birth and the recombination sink are absent from the $M$ and
 $E_i$ equations for the reason given above — they are inside $F^n$ and
@@ -304,10 +304,10 @@ for general states and a varying area, the net pressure force being the
 momentum flux divergence together with $F^\text{geom}$. So the discrete
 total-energy face flux
 
-$$G_f=A_f\left[\Gamma_{E_e,f}+\Gamma_{E_i,f}+\tfrac12\{M\}_f\,u_Lu_R+\Pi_f\right]\ \cong\ Au\left(K+E_e+E_i+p\right)$$
+$$G_f=A_f\left[\Gamma_{E_e,f}+\Gamma_{E_i,f}+\tfrac12\lbrace M\rbrace_fu_Lu_R+\Pi_f\right]\ \cong\ Au\left(K+E_e+E_i+p\right)$$
 
 carries the ENTHALPY, and $\sum V(K+E_e+E_i)$ telescopes cell by cell, not
-merely over a closed domain. **There is no $p\,\partial_zA$ member in any
+merely over a closed domain. **There is no $p\partial_zA$ member in any
 energy equation** — a static flux-tube wall does no work, and the area part of
 the pressure-flux divergence cancels against $F^\text{geom}$ in the kinetic
 energy. At a plasma-ABSORBING face the stores pay $p_su_iA_f$ and the kinetic
@@ -327,10 +327,10 @@ compression heating in a straight tube; there is no separate mirror-cooling
 source.
 
 With a varying area the momentum law is quasi-1D,
-$\partial_t(A\rho u)+\partial_z[A(\rho u^2+p)]=p\,\partial_zA+AF$, and the
+$\partial_t(A\rho u)+\partial_z[A(\rho u^2+p)]=p\partial_zA+AF$, and the
 geometric source is
 
-$$F^\text{geom}=\frac{p\,A_{i+1/2}-p\,A_{i-1/2}}{V_{\text{col},i}},\qquad p=p_e+p_i,$$
+$$F^\text{geom}=\frac{pA_{i+1/2}-pA_{i-1/2}}{V_{\text{col},i}},\qquad p=p_e+p_i,$$
 
 the TOTAL pressure, the same $p$ the momentum flux carries.
 
@@ -351,12 +351,12 @@ integrated over $\varphi_v$; the polar Jacobian $c_\perp$ folds into $f$, so
 the surviving perpendicular coordinate is the SPEED $c_\perp\in[0,\infty)$ and
 no signed perpendicular component is carried anywhere:
 
-$$f_n^\text{col}(z,v_\parallel,c_\perp,t)=\frac{1}{A_\text{col}(z)}\int_{A_\text{col}(z)}d^2r_\perp\int_0^{2\pi}d\varphi_v\;c_\perp\,\mathcal F_n\left(\mathbf r,\left(v_\parallel,c_\perp\cos\varphi_v,c_\perp\sin\varphi_v\right),t\right)$$
+$$f_n^\text{col}(z,v_\parallel,c_\perp,t)=\frac{1}{A_\text{col}(z)}\int_{A_\text{col}(z)}d^2r_\perp\int_0^{2\pi}d\varphi_vc_\perp\mathcal F_n\left(\mathbf r,\left(v_\parallel,c_\perp\cos\varphi_v,c_\perp\sin\varphi_v\right),t\right)$$
 
 normalised so moments are taken against the plain measure
 $dv_\parallel dc_\perp$:
 
-$$\int f_n^\text{col}\,dv_\parallel dc_\perp=n_n^\text{col}(z,t),\qquad E_n^\text{col}=\int\tfrac12m\left(v_\parallel^2+c_\perp^2\right)f_n^\text{col}\,dv_\parallel dc_\perp$$
+$$\int f_n^\text{col}dv_\parallel dc_\perp=n_n^\text{col}(z,t),\qquad E_n^\text{col}=\int\tfrac12m\left(v_\parallel^2+c_\perp^2\right)f_n^\text{col}dv_\parallel dc_\perp$$
 
 $f_n^\text{ann}$ is the same construction with $A_\text{ann}(z)$. On the discrete
 grid the arrays hold each bin's integral of $f$ — its particle content — so a
@@ -400,7 +400,7 @@ two-zone split is this model's radial description.
 
 ### Ionization and recombination
 
-$$S_\text{ion}^\text{bulk}=n\,n_n^\text{col}\,\mathcal S_\text{CD}(n,T_e),\qquad S_\text{rec}=\alpha_\text{CD}(n,T_e)\,n^2$$
+$$S_\text{ion}^\text{bulk}=nn_n^\text{col}\mathcal S_\text{CD}(n,T_e),\qquad S_\text{rec}=\alpha_\text{CD}(n,T_e)n^2$$
 
 $\mathcal S_\text{CD}$ and $\alpha_\text{CD}$ are ADAS effective
 coefficients from the bundled helium `adf11` collisional–radiative files — the
@@ -446,7 +446,7 @@ $Q_\text{inel}$ is the electron inelastic cooling, three named channels — a
 POSITIVE loss, which is why it enters the electron equations above as
 $-Q_\text{inel}$:
 
-$$Q_\text{inel}=\underbrace{I_\text{ion}S_\text{ion}^\text{bulk}}_\text{ionization cost}+\underbrace{\texttt{plt1}\,(n,T_e)\,n\,n_n^\text{col}}_{\text{He}^0\text{ line radiation}}+\underbrace{\texttt{plt2}\,(n,T_e)\,n^2}_{\text{He}^+\text{ line radiation}}$$
+$$Q_\text{inel}=\underbrace{I_\text{ion}S_\text{ion}^\text{bulk}}_\text{ionization cost}+\underbrace{\texttt{plt1}(n,T_e)nn_n^\text{col}}_{\text{He}^0\text{ line radiation}}+\underbrace{\texttt{plt2}(n,T_e)n^2}_{\text{He}^+\text{ line radiation}}$$
 
 Its ionization cost rides the BULK rate alone; the beam's own cost is booked
 separately, with the beam terms below. $I_\text{ion}$ is the ionization
@@ -461,7 +461,7 @@ is booked explicitly as
 $Q_\text{mix}=\tfrac12m_i(u_i-u_n^\text{col})^2\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)$
 — **both** ionization channels carry it, the beam birth exactly as the thermal
 one — so with
-the reconstructed bulk kinetic change $dK=u_i\,dM-\tfrac12m_iu_i^2dn$ the ion
+the reconstructed bulk kinetic change $dK=u_idM-\tfrac12m_iu_i^2dn$ the ion
 total energy closes on the consumed neutral's,
 
 $$dE_i+dK=\left[\tfrac32T_{i,\text{birth}}+\tfrac12m_i\left(u_n^\text{col}\right)^2\right]\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right).$$
@@ -488,7 +488,7 @@ $$g_\text{eff}^2=(v_\parallel-u_i)^2+c_\perp^2+\frac{8kT_i}{\pi m},$$
 on the Phelps He<sup>+</sup>/He backscatter and isotropic cross sections; their
 per-bin loss frequencies are
 
-$$\nu_{cx}=n\,Q_b\,g_\text{eff},\qquad \nu_{el}=\tfrac12\,n\,Q_i\,g_\text{eff},$$
+$$\nu_{cx}=nQ_bg_\text{eff},\qquad \nu_{el}=\tfrac12nQ_ig_\text{eff},$$
 
 the $\tfrac12$ being the BGK momentum weighting of an isotropic scatter.
 `atomic/cross_sections.py` carries the citation and the archived table.
@@ -510,7 +510,7 @@ construction.
 Over a tick, and per cell, the charge-exchange and elastic channels remove a
 population whose moments are
 
-$$N_\text{loss}\ [\text{atoms}],\qquad P_\text{loss}=\sum_{\text{lost}}m v_\parallel\ [\mathrm{g\,cm\,s^{-1}}],\qquad E_\text{loss}=\sum_{\text{lost}}\tfrac12m\lvert\mathbf v\rvert^2\ [\mathrm{erg}],$$
+$$N_\text{loss}\ [\text{atoms}],\qquad P_\text{loss}=\sum_{\text{lost}}m v_\parallel\ [\mathrm{gcms^{-1}}],\qquad E_\text{loss}=\sum_{\text{lost}}\tfrac12m\lvert\mathbf v\rvert^2\ [\mathrm{erg}],$$
 
 a count and two sums over the atoms that left, and $T_{n,\text{loss}}$ is that
 population's own temperature — the second moment about ITS mean velocity
@@ -519,7 +519,7 @@ cell toward targets set by those moments, taken about the **ion** drift:
 
 $$\frac{dE_i}{dt}=-\nu\left(E_i-E_i^\text{eq}\right),\qquad \frac{dM}{dt}=-\nu\left(M-M^\text{eq}\right)$$
 
-$$u_{n,\text{eff}}=\frac{P_\text{loss}}{m\,N_\text{loss}},\qquad \tfrac32kT_\text{eff}=\frac{E_\text{loss}-u_iP_\text{loss}+\tfrac12mu_i^2N_\text{loss}}{N_\text{loss}}=\tfrac32kT_{n,\text{loss}}+\tfrac12m\left|u_{n,\text{eff}}-u_i\right|^2$$
+$$u_{n,\text{eff}}=\frac{P_\text{loss}}{mN_\text{loss}},\qquad \tfrac32kT_\text{eff}=\frac{E_\text{loss}-u_iP_\text{loss}+\tfrac12mu_i^2N_\text{loss}}{N_\text{loss}}=\tfrac32kT_{n,\text{loss}}+\tfrac12m\left|u_{n,\text{eff}}-u_i\right|^2$$
 
 with $M^\text{eq}=mn_iu_{n,\text{eff}}$ and
 $E_i^\text{eq}=\tfrac32n_ikT_\text{eff}$. $T_\text{eff}$ is therefore **not**
@@ -538,18 +538,18 @@ $F^n$ and $Q_i^n$ are the momentum and ion-energy totals of this booking.
 $$Q_{ie}=\frac{3n\left(T_e-T_i\right)}{\tau_e}\frac{m_e}{m_i}$$
 
 the Braginskii collisional exchange at the electron collision time $\tau_e$
-built in `plasma/params.py`, so $Q_{ie}\propto n^2\ln\Lambda\,T_e^{-3/2}$.
+built in `plasma/params.py`, so $Q_{ie}\propto n^2\ln\LambdaT_e^{-3/2}$.
 
-Parallel Braginskii conduction is $q_{\parallel s}=-\kappa_{\parallel s}\,\partial_zT_s$
-with $\kappa_{\parallel e}=3.16\,n\tau_ev_{te}^2\propto T_e^{5/2}$ and
-$\kappa_{\parallel i}=3.9\,n\tau_iv_{ti}^2$; perpendicular conduction is not
+Parallel Braginskii conduction is $q_{\parallel s}=-\kappa_{\parallel s}\partial_zT_s$
+with $\kappa_{\parallel e}=3.16n\tau_ev_{te}^2\propto T_e^{5/2}$ and
+$\kappa_{\parallel i}=3.9n\tau_iv_{ti}^2$; perpendicular conduction is not
 carried. The face conductivity is the arithmetic mean of its two cells, and
 each face carries a transmission factor: zero at a plasma wall, $1-\eta$ across
 the anode mesh — **parallel conduction is throttled by the mesh's open
 fraction** — and one on an ordinary interior face. The electron conductivity is
 scaled per cell by the harmonic limiter
 
-$$\lambda=\frac{q_\text{sat}}{q_\text{sat}+q_{SH}},\qquad q_\text{sat}=f\,n\,T_e\,v_{th,e},\qquad q_{SH}=\kappa_e\left|\partial_zT_e\right|$$
+$$\lambda=\frac{q_\text{sat}}{q_\text{sat}+q_{SH}},\qquad q_\text{sat}=fnT_ev_{th,e},\qquad q_{SH}=\kappa_e\left|\partial_zT_e\right|$$
 
 $f$ = `heat_flux_limiter_f` the free-streaming fraction,
 `heat_flux_limiter_exponent` its blending exponent (a value other than 1 gives
@@ -563,7 +563,7 @@ selects the unlimited local law.
 The mesh intercepts the Bohm flux reaching it. At each cell flanking the anode
 face,
 
-$$S_\text{an}=\eta\,\alpha_\text{ps}\,n\,c_s\,\frac{A}{V_\text{col}},$$
+$$S_\text{an}=\eta\alpha_\text{ps}nc_s\frac{A}{V_\text{col}},$$
 
 removing $S_\text{an}$ particles and $m_iuS_\text{an}$ of momentum. Under
 `anode_sheath_full_debit` the energy debits are the SHEATH-EDGE moments,
@@ -598,7 +598,7 @@ sum is the $Q_\text{beam}$ of the equations above, the NET electron gain.
 $Q_\text{inel}$ does not cover either: its ionization cost is the BULK $I_\text{ion}S_\text{ion}^\text{bulk}$
 alone, so the beam's own cost has to be, and is, booked separately. Each cell
 also banks the beam ionization birth as the RATE the surviving flux drives,
-$S_\text{ion}^\text{beam}\,dV=\Gamma\,n_n^\text{col}\sigma_\text{ion}(E)\,dz$ integrated over the
+$S_\text{ion}^\text{beam}dV=\Gamman_n^\text{col}\sigma_\text{ion}(E)dz$ integrated over the
 cell's path; those births cost the primary its potential term but do not remove
 it from the beam.
 
@@ -632,10 +632,10 @@ under `"beer_lambert"`.
 | selector | value | equation selected |
 |---|---|---|
 | `beam_coulomb_model` | `"fast_electron"` | $L_\text{coul}=2\pi e^4n_e\ln\Lambda/E$, the CSDA electron–electron stopping power |
-| | `"legacy_tau_ei"` | $L_\text{coul}=E/(v(E)\,\tau_{ei}(T_e,n_e))$ on the thermal collision time |
+| | `"legacy_tau_ei"` | $L_\text{coul}=E/(v(E)\tau_{ei}(T_e,n_e))$ on the thermal collision time |
 | `beam_anomalous_model` | `"none"` | $L_\text{anom}\equiv0$ |
 | | `"quasilinear"` | $L_\text{anom}=E/l_{QL}$, $l_{QL}=(n_e/n_b)(v_b/\omega_{pe})\ln(n_e/n_b)$, $n_b=\Gamma/(Av_b)$; the length is taken infinite for $n_b\ge n_e/10$, outside the weak-beam domain |
-| | `"ql_relaxation"` | $L_\text{anom}=f_\text{ext}E/L_\text{rel}$, $L_\text{rel}=c(n_e/n_b)v_b/\omega_{pe}$, trapped fraction $f_\text{ext}=C_\text{trap}\min(n_b/2n_e,1)^{1/3}$, gated per cell on $0.687\,\omega_{pe}\min(n_b/n_e,1)^{1/3}>\nu_{en}/2$ with $\omega_{pe}>\nu_{en}$ |
+| | `"ql_relaxation"` | $L_\text{anom}=f_\text{ext}E/L_\text{rel}$, $L_\text{rel}=c(n_e/n_b)v_b/\omega_{pe}$, trapped fraction $f_\text{ext}=C_\text{trap}\min(n_b/2n_e,1)^{1/3}$, gated per cell on $0.687\omega_{pe}\min(n_b/n_e,1)^{1/3}>\nu_{en}/2$ with $\omega_{pe}>\nu_{en}$ |
 | `heating_anomalous_transport` | `"local"` | the anomalous bank heats the cell that drove it |
 | | `"tail_walk"` | the bank is withheld and launched $50/50$ along $\pm B$ as fast-tail electrons, walked on the Coulomb-slowing kinematics until thermalized at $\tfrac32T_e$ or lost to an end |
 | | `"plateau_multigroup"` | a solved plateau edge $E_1$ splits the bank into a wave/bulk share $(E_b-E_1)/2E_b$ deposited locally and a streaming share $(E_b+E_1)/2E_b$ divided into $N$ equal-power, $E^2$-uniform-edge groups walked at their own midpoint energies ($E_b=e\phi_c$) |
@@ -645,7 +645,7 @@ under `"beer_lambert"`.
 | | `"terminal_nonlocal"` | ONLY the terminal residual walks; every along-ray product stays banked in its birth cell |
 
 $E_1$ is solved per extraction from the launch cell's own Maxwellian against the
-emitted flux, $f_\text{M}(v_1)=m\,j_b/((E_b-E_1)\,\text{erg})$, and clamped at
+emitted flux, $f_\text{M}(v_1)=mj_b/((E_b-E_1)\text{erg})$, and clamped at
 $E_\text{stop}$ when the edge the equation asks for falls inside the bulk.
 **The walkers are not passive.** Under the walking selectors they IONIZE the gas
 they cross (`heating_anomalous_tail_ionization`), adding their own birth term,
@@ -698,7 +698,7 @@ $I_\text{eth}=A_cC_RT_s^2\exp(-e\phi_\text{wf}/k_BT_s)$, with $A_c$ the
 emitting area, $C_R$ the Richardson constant, $\phi_\text{wf}$ the work
 function and $T_s$ the surface temperature. Space charge limits release at
 
-$$J_\text{eth,crit}(\psi_+)=J_i\sqrt{\mu\,m_p/m_e}\;\frac{e^{-\psi_+}+\sqrt{1+2\psi_+}-2}{\sqrt{2\psi_+}},$$
+$$J_\text{eth,crit}(\psi_+)=J_i\sqrt{\mum_p/m_e}\frac{e^{-\psi_+}+\sqrt{1+2\psi_+}-2}{\sqrt{2\psi_+}},$$
 
 $\mu$ the ion mass in proton masses, and $I_\text{eth}^\star=J^\star T_e/R_p$.
 
@@ -739,7 +739,7 @@ incident ion energy that the gas receives and the surface therefore loses.
 Under `cathode_surface_model = "ads_des"` the work function is not a constant
 either: an adsorbate coverage $\theta\in[0,1]$ obeys
 
-$$\frac{d\theta}{dt}=-\sigma_\text{cl}(E)\,\Gamma_i\,\theta,\qquad \phi_\text{wf,eff}=\phi_\text{clean}+\left(\phi_\text{wf}-\phi_\text{clean}\right)\theta,$$
+$$\frac{d\theta}{dt}=-\sigma_\text{cl}(E)\Gamma_i\theta,\qquad \phi_\text{wf,eff}=\phi_\text{clean}+\left(\phi_\text{wf}-\phi_\text{clean}\right)\theta,$$
 
 $\Gamma_i=I_i/(eA_c)$ the ion flux density and $\sigma_\text{cl}$ the
 ion-stimulated desorption cross section, carrying the near-threshold Bohdansky
@@ -800,7 +800,7 @@ $I_\text{see}=0$ and every expression here is the one above it.
 The anode current the sheath must pass is the loop current less every directly
 collected population,
 
-$$J_\text{anode}=J_\text{tot}-\eta\,\beta_\text{bypass}\,\left(J^\star+J_\text{see}\right)-J_{\text{tail},a},$$
+$$J_\text{anode}=J_\text{tot}-\eta\beta_\text{bypass}\left(J^\star+J_\text{see}\right)-J_{\text{tail},a},$$
 
 $\beta_\text{bypass}=e^{-L_\text{cath}/l_b}$ the beam's gap survival at the
 coupling length $l_b$ ($1/l_b=1/(v_b\tau_{ei})+\sigma_bn_n^\text{col}$, zero for
@@ -824,7 +824,7 @@ the discharge-voltage probe does not see.
 
 **The loop.** `cathode_solver_model = "current_driven"` integrates
 
-$$L\frac{dI}{dt}=V_\text{src}-I\,xR_\text{comp}-V_\text{dis}(I),\qquad C_\text{bank}\frac{dV_\text{cap}}{dt}=-I$$
+$$L\frac{dI}{dt}=V_\text{src}-IxR_\text{comp}-V_\text{dis}(I),\qquad C_\text{bank}\frac{dV_\text{cap}}{dt}=-I$$
 
 $L$ the loop inductance, $R_\text{comp}$ the compliance resistor,
 $R_\text{mesh}$ the anode-mesh series resistance, $V_\text{src}$ the bank
@@ -907,7 +907,7 @@ temperature: an electron leaving flanking cell $c$ carries
 $(2+\psi_a^+)T_{e,c}$, not the sample's $(2+\psi_a^+)T_{e,a}$. The model
 therefore charges the row as a first-order loss rate on each flanking cell,
 
-$$\nu_c=\frac{w_c\,P_{a,e}}{\tfrac32n_cT_{e,a}V_c},\qquad\text{realised
+$$\nu_c=\frac{w_cP_{a,e}}{\tfrac32n_cT_{e,a}V_c},\qquad\text{realised
 power}=w_cP_{a,e}\frac{T_{e,c}}{T_{e,a}},$$
 
 with $w_c$ the same $n\sqrt{T_e}$ split weights the deposited row uses and
@@ -986,7 +986,7 @@ $\phi_c+2k_BT_s/e$, and every route that launches a beam reads it there:
   exactly the climbed-away term — a prediction channel, not a closed budget.
   It closes at the reference configuration, where the climb is absent.
 - **Beer-Lambert deposition** heats the column through $P_\text{prim}$, which
-  already carries the gap-survival factor $1-\eta\,b_\text{bypass}$, so only that
+  already carries the gap-survival factor $1-\etab_\text{bypass}$, so only that
   share of the beam — and of its enthalpy — ever enters the column and the
   reported on-beam power is netted by the same factor. The deposition route
   therefore selects the normalisation of that diagnostic, and nothing else; no
@@ -1051,7 +1051,7 @@ of the paragraph below, saved as its own `end_wall_e_sheath_climb` row on that
 same particle flux. The sheath-edge
 factor is
 
-$$\alpha_\text{se}=\alpha_\text{ps}^{\,d/L_\text{ps}},\qquad \alpha_\text{ps}=e^{-1/2},\qquad L_\text{ps}\sim c_s/\nu_{in}$$
+$$\alpha_\text{se}=\alpha_\text{ps}^{d/L_\text{ps}},\qquad \alpha_\text{ps}=e^{-1/2},\qquad L_\text{ps}\sim c_s/\nu_{in}$$
 
 — $\alpha_\text{ps}$ the whole-presheath Boltzmann drop, raised to the sampling
 cell length $d$ (capped at $L_\text{ps}$) over the collisional presheath depth.
@@ -1078,7 +1078,7 @@ as thermal diffuse gas carrying no directed momentum.
 ONE FACE FLUX, FOUR ROWS. The end wall face removes the PHYSICAL flux at the
 sheath-edge state it samples — $n_\text{se}=\alpha_\text{se}n$, $u=c_s$ into
 the surface — and that single particle flux
-$\Gamma_n=\alpha_\text{se}\,n\,c_s$ carries every booking made on it: the
+$\Gamma_n=\alpha_\text{se}nc_s$ carries every booking made on it: the
 plasma particle sink, the $2T_e$ floating-sheath electron loss, the
 sheath-climb row below when it is armed, and the neutral rebirth that returns
 the absorbed plasma as gas. It is the flux a surface takes, not an average
@@ -1109,10 +1109,10 @@ $\alpha\approx1.07$ against the cell density with the Rusanov dissipation
 supplying the excess, while the climb barrier uses $\alpha_\text{se}=e^{-1/2}$
 (the cell read as the presheath entrance) -- so the two describe one edge
 only as the cell resolves the presheath. The mismatch is a one-sided item of
-$\tfrac12/\Lambda_\text{eff}\approx12\%$ on the climb row ($\Lambda_\text{eff}$'s
+$\tfrac12/\Lambda_\text{eff}\approx12$ % on the climb row ($\Lambda_\text{eff}$'s
 whole presheath share), the over-booking against $\alpha=1$; against the
 $\alpha\approx1.07$ this paragraph names, the barrier gap is
-$4.0319-3.4643=0.568$, i.e. $\approx14\%$, inside the disclosed width, and it
+$4.0319-3.4643=0.568$, i.e. $\approx14$ %, inside the disclosed width, and it
 shrinks with resolution.
 $\Lambda_\text{eff}$ is
 a state-dependent barrier rather than a constant and lies in
@@ -1240,11 +1240,11 @@ anode-collected current and carry no such latch.
 At an annular baffle the blocked share of the annulus flux crossing the face is
 intercepted at the annulus transparency
 
-$$t_f=\min\left(\frac{A_\text{open}}{A^{\,f}_\text{ann}},1\right),\qquad A^{\,f}_\text{ann}=\min\left(A_{\text{ann},f-1},A_{\text{ann},f}\right)$$
+$$t_f=\min\left(\frac{A_\text{open}}{A^{f}_\text{ann}},1\right),\qquad A^{f}_\text{ann}=\min\left(A_{\text{ann},f-1},A_{\text{ann},f}\right)$$
 
 the throat being the smaller of the two flanking CELLS' annulus areas, so the
 transmitted throughput per bin,
-$t_f\,f_n^\text{ann}|v_\parallel|A^{\,f}_\text{ann}$, is exactly
+$t_ff_n^\text{ann}|v_\parallel|A^{f}_\text{ann}$, is exactly
 $f_n^\text{ann}|v_\parallel|A_\text{open}$ — the bin content of the annulus
 distribution times the open area is what passes, which is the whole content of
 a free-molecular orifice. Intercepted atoms are re-emitted at $T_\text{wall}$
@@ -1253,7 +1253,7 @@ column flux is untouched.
 
 ### Fueling and pumping
 
-$$s_\text{gp}=\dot N_\text{gp}(t)\,g(z)\,\chi(v_\parallel,c_\perp)$$
+$$s_\text{gp}=\dot N_\text{gp}(t)g(z)\chi(v_\parallel,c_\perp)$$
 
 $\dot N_\text{gp}$ the measured inflow waveform — a square with erf rise and
 close — $g$ the axial placement profile, normalized so every distributed form
@@ -1271,7 +1271,7 @@ perigee where it stays outside.
 
 **Pumping is a surface, not a volume.** Each end plane absorbs the fraction
 
-$$s_\text{abs}=\min\left(\frac{\dot V_\text{pump}}{A_\text{end}\,\bar v/4},\,1\right)$$
+$$s_\text{abs}=\min\left(\frac{\dot V_\text{pump}}{A_\text{end}\bar v/4},1\right)$$
 
 of the free-molecular flux striking it — the pumping speed
 $\dot V_\text{pump}$, a volume per unit time, over the one-way
@@ -1299,7 +1299,7 @@ used to rebuild them, at construction and at the end of every stage.
 
 $$n\ge n_\text{floor},\qquad n_n^\text{col},n_n^\text{ann}\ge n_{n,\text{floor}},\qquad E_n^\text{col}\ge\tfrac32n_n^\text{col}kT_\text{wall}$$
 
-$$T_e=\max\left(\frac{2E_e}{3n},\,T_{e,\text{floor}}\right),\qquad T_i=\max\left(\frac{2E_i}{3n},\,T_{i,\text{floor}}\right)$$
+$$T_e=\max\left(\frac{2E_e}{3n},T_{e,\text{floor}}\right),\qquad T_i=\max\left(\frac{2E_i}{3n},T_{i,\text{floor}}\right)$$
 
 Momenta are not clipped: $u$ is recovered with the floored density and $M$
 rebuilt from it, leaving $M$ unchanged. Densities are floored before the
