@@ -27601,10 +27601,11 @@ def _case_effective_cathode_flags_refuses_driven_override_in_floating_phase():
     regardless of phase -- the circuit advance passes exactly this, and
     returns before reaching the call on ``step_phase["floating"]``, so the
     override is inert for it by construction. A caller that CAN reach a
-    floating phase and still passes this override is handed a configuration that does not exist (a floating
-    phase reported as ``cathode_coupling=False``), which is the same class
-    of silent mis-booking the hand-off and final-step-boundary fixes closed
-    (2026-09-10) -- so the method now refuses it loudly instead.
+    floating phase and still passes this override is handed a configuration
+    that does not exist (a floating phase reported as
+    ``cathode_coupling=False``), which is the same class of silent mis-booking
+    the hand-off and final-step-boundary fixes closed (2026-09-10) -- so the
+    method now refuses it loudly instead.
 
     The sim is constructed but never run, so ``_circuit_I_prev`` stays at
     its construction-time 0.0 and the inductive-tail exception (which needs

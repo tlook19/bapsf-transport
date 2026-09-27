@@ -3231,10 +3231,11 @@ def _deposit_electrode_power(
     from the plasma thermal store.
 
     THE ANODE FULL DEBIT: add the anode's sheath-fall share
-    ``phi_a * I_e_coll`` back onto the plasma electron store, so the ANODE debit is the sheath-edge ``(2 Te + phi_a)`` per
-    collected electron while the cathode side keeps its thermal-only
-    routing -- at the cathode the accelerated species is the ion, so the
-    electron fall there is not plasma-electron energy IN THIS FUNCTION's own
+    ``phi_a * I_e_coll`` back onto the plasma electron store, so the ANODE
+    debit is the sheath-edge ``(2 Te + phi_a)`` per collected electron while
+    the cathode side keeps its thermal-only routing -- at the cathode the
+    accelerated species is the ion, so the electron fall there is not
+    plasma-electron energy IN THIS FUNCTION's own
     booking. The sibling rows ``end_wall_e_sheath_climb`` and
     ``cathode_e_collected_climb`` -- presence-gated by ``end_wall_sheath_full_debit``
     and ``cathode_face_full_debit`` respectively, and independent of this
@@ -3382,7 +3383,8 @@ def cathode_emission_sheath_power_W(result, T_s_K):
         The barrier the COLLECTED plasma electrons climbed, taken from their
         own thermal store -- the plasma-pays convention the anode sheath
         debit books, applied to the identical physics at the cathode.
-        ``Gamma_ec = I_e_ret / e`` is the returning plasma-electron flux. Always <= 0 for a repelling face.
+        ``Gamma_ec = I_e_ret / e`` is the returning plasma-electron flux.
+        Always <= 0 for a repelling face.
 
     ``result`` is a cathode circuit ``SolverResult`` and ``T_s_K`` the
     emitter surface temperature [K] the solve was run at (the evolving

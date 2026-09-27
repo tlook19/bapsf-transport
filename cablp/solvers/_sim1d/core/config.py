@@ -3862,16 +3862,17 @@ input_flags_template_1d = {
     # superseded and DEPRECATED.
     "ion_neutral_moment_closure": True,
     # The cathode/anode/bank circuit solve. OFF, no cathode solve is produced
-    # for the whole run: the boundary carries no device current or voltage, the cathode
-    # and anode jets return nothing, and the tracer's beam rows get no source.
-    # run_neutral_equilibration pins it off on its inner sim.
-    # Three construction-time refusals of things that need a solve that would
-    # not exist: regime_tracer (its affine source IS the beam-impact ionization
+    # for the whole run: the boundary carries no device current or voltage, the
+    # cathode and anode jets return nothing, and the tracer's beam rows get no
+    # source. run_neutral_equilibration pins it off on its inner sim. Three
+    # construction-time refusals of things that need a solve that would not
+    # exist: regime_tracer (its affine source IS the beam-impact ionization
     # birth), and the two DVM jets, whose launch energies are the sheath
-    # potentials phi_c and phi_a -- armed without a solve they would silently launch at the
-    # thermal Ti alone. With the flag ON, a zero anode ion current is a runtime
-    # error rather than a clamp: the circuit cannot close, and the message names
-    # clearing this flag as the way to model a machine with no anode collection.
+    # potentials phi_c and phi_a -- armed without a solve they would silently
+    # launch at the thermal Ti alone. With the flag ON, a zero anode ion
+    # current is a runtime error rather than a clamp: the circuit cannot close,
+    # and the message names clearing this flag as the way to model a machine
+    # with no anode collection.
     # A structural restart key.
     "cathode_coupling": True,
     # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON while

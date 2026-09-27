@@ -1725,8 +1725,9 @@ class LAPDSim1D:
 
         These are budgets rather than physics: the heat-flux limiter, the
         floor-exempt drain, the max-step and dt_min locks, the wall-clock and
-        accepted-step ignition caps, and the dt_growth recovery. Each is checked HERE so a misconfigured guard
-        cannot be discovered hours into the run it exists to catch.
+        accepted-step ignition caps, and the dt_growth recovery. Each is
+        checked HERE so a misconfigured guard cannot be discovered hours into
+        the run it exists to catch.
         """
         # R5.2 / audit A9: flux-limited electron heat conduction (default on).
         self._electron_heat_flux_limit = bool(
