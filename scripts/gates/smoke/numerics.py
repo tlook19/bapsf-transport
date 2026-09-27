@@ -2085,15 +2085,25 @@ def _case_dt_not_bound_by_anode_row():
         ELECTRODE_SINK_DT_FRACTION / float(np.max(nu + nu_climb)),
         rtol=1.0e-12, atol=0.0,
     )
-    # The ANODE's share of it is inert here: its own bound is the anode-only
-    # formula and does not bind the step.
-    anode_bound = electrode_sink_rate_timestep(electrode_sink_rate=nu)
+    # The ANODE's share of it, through the solver: with the climb's gate
+    # turned off the candidate is the anode rate alone, and it is exactly the
+    # anode-only formula, finite, and inert here.
+    cache = sim._step_cache_snapshot()
+    sim._cathode_climb_in_heat_substep = False
+    try:
+        anode_diag = sim.suggest_timestep(include_heat_conduction=False)
+    finally:
+        sim._cathode_climb_in_heat_substep = True
+        sim._restore_step_cache(cache)
     assert np.isclose(
-        anode_bound,
+        anode_diag.dt_electrode_sink_rate,
         ELECTRODE_SINK_DT_FRACTION / float(np.max(nu)),
         rtol=1.0e-12, atol=0.0,
     )
-    assert anode_bound > diag.dt, (anode_bound, diag.dt)
+    assert anode_diag.dt_electrode_sink_rate > anode_diag.dt, (
+        anode_diag.dt_electrode_sink_rate, anode_diag.dt
+    )
+    assert anode_diag.active_constraint != "electrode_sink_rate"
     # ... and it BINDS on a state whose rate is scaled up past every other
     # candidate, so the candidate is not merely inert-by-construction.
     scaled = ELECTRODE_SINK_DT_FRACTION / (0.01 * diag.dt)
