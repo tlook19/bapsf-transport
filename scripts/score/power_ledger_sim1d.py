@@ -365,14 +365,16 @@ CHANNEL_PHASE = {
          "energy advected by the plasma flow across cell faces"),
     "plasma_front_flux":
         ("BOTH",
-         "energy carried across the propagating plasma front"),
+         "a constant zero row carried by older artifacts only; the "
+         "front-filling flux it booked is removed"),
     "pressure_work":
         ("BOTH",
          "pdV work done by the plasma flow, -p_s div u per species"),
     "recombination_3b_loss":
         ("AFTERGLOW-ACTIVE",
-         "three-body recombination, ungated but steep in 1/Te, so it is "
-         "negligible against the drive terms and grows as the plasma cools"),
+         "a zero row carried by older artifacts only: the ADAS "
+         "recombination coefficient already contains three-body "
+         "recombination, which recombination_rad_loss books"),
     "recombination_energy_return":
         ("AFTERGLOW-ACTIVE",
          "the (3/2) k Ti the recombining ion hands to the neutral it "

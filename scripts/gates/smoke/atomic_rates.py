@@ -131,16 +131,12 @@ def _case_helium_only_reaction_rates(dt_default):
         # unconditional, so its term is always present.
         "neutral_zone_exchange",
         "plasma_advective_flux",
-        # Constant zero row kept so the saved term set does not move.
-        "plasma_front_flux",
         "boundary_absorption",
         "characteristic_boundary",
         # The end wall sheath debit: armed by the geometry's end wall face,
         # which this single-cathode layout carries.
         "end_wall_e_sheath_climb",
         "pressure_work",
-        # Constant zero row kept so the saved term set does not move.
-        "electron_drift_transport",
         "hyperbolic_dissipation_heating",
         "ei_exchange",
         "ionization_energy_cost",
@@ -166,7 +162,6 @@ def _case_helium_only_reaction_rates(dt_default):
         "beam_ionization_cost",
         "beam_excitation_radiation",
         "recombination_rad_loss",
-        "recombination_3b_loss",
         "recombination_energy_return",
         "heat_conduction",
     }

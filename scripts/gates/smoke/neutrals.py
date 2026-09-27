@@ -272,7 +272,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     assert set(reaction_terms) == {
         "ionization_birth",
         "recombination_rad_loss",
-        "recombination_3b_loss",
     }
     reaction_term_sum = np.zeros_like(pack_state(reaction_rhs))
     for term in reaction_terms.values():
@@ -295,7 +294,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         ion_mass_g=sim.ion_mass_g,
     )
     recomb_terms = sim.reaction_rhs_terms(state=recomb_state)
-    for _recomb_name in ("recombination_rad_loss", "recombination_3b_loss"):
+    for _recomb_name in ("recombination_rad_loss",):
         _recomb_term = recomb_terms[_recomb_name]
         assert np.all(_recomb_term.n <= 0.0)
         assert np.all(_recomb_term.nn >= 0.0)
@@ -956,7 +955,6 @@ def _case_neutral_momentum_sources(
     for mn_name in (
         "ionization_birth",
         "recombination_rad_loss",
-        "recombination_3b_loss",
     ):
         mn_term = mn_reactions[mn_name]
         assert mn_term.M_n is not None

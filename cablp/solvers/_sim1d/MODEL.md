@@ -418,8 +418,7 @@ solver.
 
 **There is no separate three-body sink.** `acd` already contains three-body
 recombination at the tabulated density, so the whole recombination loss is the
-quadratic term above and the cubic channel is identically zero; the
-`recombination_3b_loss` term a result carries reads zero throughout. The
+quadratic term above and there is no cubic channel. The
 coefficients carry no scale factor. Each result records an
 `atomic_rate_domain` ledger of where the run sampled below the tabulated $T_e$
 edge. Below that edge the lookup clamps the log-$T_e$ (and log-$n_e$)
@@ -1220,7 +1219,6 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `electron_ion_cooling` | `physics/energy.py:electron_cooling_rhs_terms` |
 | `electron_neutral_cooling` | `physics/energy.py:electron_cooling_rhs_terms` |
 | `recombination_rad_loss` | `physics/reactions.py:reaction_rhs_terms` |
-| `recombination_3b_loss` | `physics/reactions.py:reaction_rhs_terms` |
 | `recombination_energy_return` | `physics/reactions.py:recombination_energy_return_rhs` |
 | `cathode_surface_loss` | `physics/cathode.py:cathode_source_terms` |
 | `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode part); REPORTED here and applied by the implicit heat substep as `solver.py:electrode_ee_sink_rate` wherever the operator split is in force |
@@ -1237,11 +1235,8 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `parallel_momentum_sink` | `physics/sources.py:parallel_momentum_sink_rhs` |
 | `parallel_momentum_sink_heating` | `physics/sources.py:parallel_momentum_sink_heating_rhs` |
 
-`boundary_absorption`, `surface_loss`, `gas_puff_local_ionization`,
-`plasma_front_flux` and `electron_drift_transport` are permanently zero terms
-kept for saved-ledger schema stability, as is `recombination_3b_loss` under
-the ADAS coefficients. The saved timestep diagnostic `dt_front_density` is
-likewise a constant infinity.
+`boundary_absorption`, `surface_loss` and `gas_puff_local_ionization` are
+permanently zero terms kept for saved-ledger schema stability.
 
 The model presented here is the equation set the reference configuration
 integrates. A result may carry further terms that are not part of it: those of

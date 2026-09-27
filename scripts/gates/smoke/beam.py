@@ -2758,15 +2758,13 @@ def _case_csda_walk_window_reflection_k7(
             "expected ValueError for reflection without a tail walk"
         )
 
-    S_ion_a, S_rad_a, S_3b_a = reaction_rates(
+    S_ion_a, S_rad_a = reaction_rates(
         state=knob_state,
         floors=knob_floors,
         ion_mass_g=knob_mass,
     )
     for values in (S_ion_a, S_rad_a):
         assert np.all(np.isfinite(values)) and np.all(values >= 0.0)
-    # ACD carries the whole sink; the three-body slot is empty.
-    assert np.all(S_3b_a == 0.0)
 
     cool_adas = electron_cooling_rhs(**cooling_kwargs)
     assert np.all(np.isfinite(cool_adas.Ee))
@@ -2777,7 +2775,7 @@ def _case_csda_walk_window_reflection_k7(
     cost_kwargs = dict(cooling_kwargs)
     cost_kwargs["ionization_energy_cost"] = True
     cost_terms = electron_cooling_rhs_terms(**cost_kwargs)
-    S_ion_ref, _, _ = reaction_rates(
+    S_ion_ref, _ = reaction_rates(
         state=shape_state,
         floors=knob_floors,
         ion_mass_g=knob_mass,

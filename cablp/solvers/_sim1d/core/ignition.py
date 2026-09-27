@@ -105,7 +105,6 @@ IGNITION_POWER_GROUPS = {
         "electron_neutral_cooling",
         "beam_excitation_radiation",
         "recombination_rad_loss",
-        "recombination_3b_loss",
         "recombination_energy_return",
     ),
     "P_ionization_W": (
