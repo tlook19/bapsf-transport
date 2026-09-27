@@ -62,7 +62,9 @@ each leg in its own process on its own tree, and compares each pair;
 
 **`run/`** — the drivers that build a `LAPDSim1D` and run it.
 `run_m6_point.py` is the config-complete campaign driver, `run_sim1d.py` the
-plain one, `run_mechanism_ladder.py` the ladder; the rest build the inputs a
+plain one, `run_mechanism_ladder.py` the ladder, `run_closure_ladder.py` the
+closure ladder (the kinetic reference, its parameter bands and the fluid
+closures, generated, t0-registered, run and tabulated per rung); the rest build the inputs a
 run needs (`build_neutral_seed_cache.py`, `eqmap_make.py`) or measure the run
 itself (`profile_sim1d.py`, `sweep_sim1d_stability.py`). A file belongs here
 when its job is to *produce a trajectory*.
