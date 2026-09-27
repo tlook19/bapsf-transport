@@ -2073,19 +2073,27 @@ def _case_dt_not_bound_by_anode_row():
         legacy_bundle[pair], with_row[pair]
     )
 
-    # The replacement candidate exists, is finite, and is inert here.
+    # The replacement candidate exists and is finite. It is the shared
+    # electrode-sink bound over BOTH implicit sink rates -- the anode's and
+    # the cathode face's collected-electron climb, which joins it.
     diag = sim.suggest_timestep(include_heat_conduction=False)
     nu, _ = sim.electrode_ee_sink_rate()
+    nu_climb, _ = sim.cathode_climb_ee_sink_rate()
     assert np.isfinite(diag.dt_electrode_sink_rate)
     assert np.isclose(
         diag.dt_electrode_sink_rate,
+        ELECTRODE_SINK_DT_FRACTION / float(np.max(nu + nu_climb)),
+        rtol=1.0e-12, atol=0.0,
+    )
+    # The ANODE's share of it is inert here: its own bound is the anode-only
+    # formula and does not bind the step.
+    anode_bound = electrode_sink_rate_timestep(electrode_sink_rate=nu)
+    assert np.isclose(
+        anode_bound,
         ELECTRODE_SINK_DT_FRACTION / float(np.max(nu)),
         rtol=1.0e-12, atol=0.0,
     )
-    assert diag.dt_electrode_sink_rate > diag.dt, (
-        diag.dt_electrode_sink_rate, diag.dt
-    )
-    assert diag.active_constraint != "electrode_sink_rate"
+    assert anode_bound > diag.dt, (anode_bound, diag.dt)
     # ... and it BINDS on a state whose rate is scaled up past every other
     # candidate, so the candidate is not merely inert-by-construction.
     scaled = ELECTRODE_SINK_DT_FRACTION / (0.01 * diag.dt)
