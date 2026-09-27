@@ -440,7 +440,6 @@ def _case_tracer_construction_refusals(_r2_on_config):
         LAPDSim1D(params, flags)
 
     _r2_refuses("cathode_coupling on", cathode_coupling=False)
-    _r2_refuses("active_plasma_topology on", active_plasma_topology=False)
     _r2_refuses("Plasma on", Plasma=False)
     _r2_refuses("R2 is fluid-arms", neutral_model="kinetic_dvm")
     _r2_refuses("restart_from", restart_from="/nonexistent/payload.h5")

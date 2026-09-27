@@ -744,10 +744,9 @@ def _case_variable_area_well_balancedness(
     # a plasma-OPEN boundary: it carries a Bohm outflow (ghost u_g = c_s) whose
     # flux is supplied by characteristic_boundary_rhs (a term not summed here),
     # so a uniform stationary state is deliberately NOT its equilibrium -- the
-    # plasma flows out. (hyperbolic_energy_consistent and hyperbolic_wave_speed
-    # have no effect on this state: at u=0 with no gradients the KEP convective
-    # term and the Rusanov dissipation both vanish at every interior face, so
-    # only the end wall ghost can be nonzero.) The legacy reflecting-wall
+    # plasma flows out. (At u=0 with no gradients the KEP convective term and
+    # the Rusanov dissipation both vanish at every interior face, so only the
+    # end wall ghost can be nonzero.) The legacy reflecting-wall
     # alternative, under which the end wall cancelled like the interior, was
     # retired; see commit 1fc05c9.
     resolved_params, resolved_flags = _resolved_config()
@@ -1908,7 +1907,6 @@ def _case_prescribed_area_well_balancedness(
         _pa_var_sim.floors,
         _pa_var_sim.ion_mass_g,
         _pa_var_geom,
-        active_plasma_topology=_pa_var_sim._active_plasma_topology,
     )
     _pa_face_A = np.asarray(_pa_var_geom.plasma_face_area_cm2, dtype=float)
     _pa_want_divu = (

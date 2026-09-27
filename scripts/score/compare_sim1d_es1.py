@@ -150,7 +150,7 @@ from cablp.solvers._sim1d import (
     default_config,
     load_result_hdf5,
 )
-from cablp.solvers._sim1d.physics.flux import plasma_wave_speed
+from cablp.solvers._sim1d.physics.flux import ion_sound_speed, plasma_wave_speed
 from cablp.solvers._sim1d.results.io import save_result_hdf5
 from cablp.constants import m_He_cgs
 
@@ -332,8 +332,8 @@ PARAM_OVERRIDES = {
     "beam_deposition_smoothing_cm": _STANCE["beam_deposition_smoothing_cm"],
     # NB the free-streaming cap on the parallel electron heat flux is NOT set
     # here any more: heat_flux_limiter_f folded into the config defaults at
-    # R2b, joining the flag that reads it (folded at R2a) and the exponent that
-    # shapes it (a config default throughout).
+    # R2b, beside the exponent that shapes it (a config default throughout),
+    # and the limiter that reads them is unconditional.
     # NB the fixed-cell-size source region (7a) is NOT set here any more: the
     # flag and both source_region_* values folded into the config defaults at
     # R2a, and the three are presence-gated against each other, so naming any
@@ -344,9 +344,8 @@ FLAG_OVERRIDES = {
     # NB end_expansion_geometry is NOT set here any more: the G1 measured
     # geometry replaced the built-in flare with per-cell prescribed radii, and
     # the solver refuses the two together. It comes with the stance.
-    # NB electron_heat_flux_limit is NOT set here any more either: the flag
-    # folded into the config defaults at R2a and its coefficient at R2b, so
-    # neither namespace names the limiter.
+    # NB the electron heat-flux limiter is unconditional and its coefficient
+    # is a config default, so neither namespace names the limiter here.
 }
 
 
@@ -1972,10 +1971,33 @@ MACH_K_BRACKET = (1.34, 1.74)
 MACH_ION_MASS_G = m_He_cgs
 MACH_GAS_TYPE = "He"
 
-#: Config key naming the run's own signal-speed convention. The model Mach is
-#: u / c_s with c_s taken from THAT convention, so the number is the model's
-#: own Mach and not a second convention introduced by this report.
+#: Config key that named a run's own signal-speed convention while it was a
+#: selector. The model Mach is u / c_s with c_s taken from the run's
+#: convention, so the number is the model's own Mach and not a second
+#: convention introduced by this report. The solver now runs the adiabatic
+#: speed unconditionally and no longer writes the key, so an artifact without
+#: it is read as ``MACH_WAVE_SPEED_ADOPTED``; an older artifact carrying it is
+#: read at the value it states.
 MACH_WAVE_SPEED_KEY = "hyperbolic_wave_speed"
+MACH_WAVE_SPEED_ADOPTED = "adiabatic"
+
+
+def _mach_signal_speed(Te, Ti, wave_speed):
+    """Return the signal speed [cm/s] of one named convention.
+
+    ``"adiabatic"`` is the solver's :func:`plasma_wave_speed`,
+    ``sqrt((5/3)(Te+Ti)/m_i)``; ``"isothermal"`` is the gamma=1 Bohm speed
+    :func:`ion_sound_speed`, ``sqrt(Te/m_i)``, which is also the PROBE
+    convention. Any other value raises ``ValueError``.
+    """
+    if wave_speed == "adiabatic":
+        return plasma_wave_speed(Te, Ti, MACH_ION_MASS_G)
+    if wave_speed == "isothermal":
+        return ion_sound_speed(Te, MACH_ION_MASS_G)
+    raise ValueError(
+        f"unknown signal-speed convention {wave_speed!r}; accepted: "
+        "'adiabatic', 'isothermal'"
+    )
 
 #: Needle for the overlay clause that forbids ratioing the two faces'
 #: flux-tube fields, quoted in the block's legend.
@@ -1989,14 +2011,15 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
     carrying the MODEL Mach number beside a MEASURED two-face estimate.
 
     MODEL side: the plateau-window mean of ``u / c_s`` at the model cell
-    nearest the port, with ``c_s`` evaluated by the solver's own
-    ``plasma_wave_speed`` under the run's configured ``hyperbolic_wave_speed``
-    convention, so the reported number is the model's own Mach and not a
-    second convention invented here. Each row also carries
+    nearest the port, with ``c_s`` evaluated in the run's own signal-speed
+    convention (``_mach_signal_speed``: the solver's ``plasma_wave_speed``
+    for a current artifact, or the ``hyperbolic_wave_speed`` an older
+    artifact states), so the reported number is the model's own Mach and not
+    a second convention invented here. Each row also carries
     ``mach_model_probe``, the SAME ``u`` and ``Te`` evaluated instead in the
-    PROBE convention ``u / sqrt(Te / m_i)`` (``plasma_wave_speed``'s
-    ``"isothermal"`` branch) -- printed beside the run-convention model Mach
-    so a reader can tell which sound-speed convention a given number uses.
+    PROBE convention ``u / sqrt(Te / m_i)`` (``ion_sound_speed``) -- printed
+    beside the run-convention model Mach so a reader can tell which
+    sound-speed convention a given number uses.
 
     MEASURED side: ``M = ln(R) / K``, where ``R = J_up / J_dn`` is the ratio of
     the two probe faces' AREA-NORMALIZED core-band plateau current densities
@@ -2038,13 +2061,7 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
             "assuming a mass for another gas would put a silent factor in the "
             "sound speed"
         )
-    if MACH_WAVE_SPEED_KEY not in params:
-        return [], (
-            f"this run's parameters carry no {MACH_WAVE_SPEED_KEY}, so the "
-            "signal-speed convention behind its own Mach number is not "
-            "recoverable from the artifact"
-        )
-    wave_speed = params[MACH_WAVE_SPEED_KEY]
+    wave_speed = params.get(MACH_WAVE_SPEED_KEY, MACH_WAVE_SPEED_ADOPTED)
 
     t_exp = np.asarray(overlay["isat_ftavg_geomean_time_ms"], dtype=float)
     up = np.asarray(overlay["isat_ftavg_upstream_core_a"], dtype=float)
@@ -2069,23 +2086,20 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
     t_model_ms = (np.asarray(result.time, dtype=float) - origin) * 1.0e3
     z_model = np.asarray(result.z_cm, dtype=float)
     u_model = np.asarray(result.u, dtype=float)
-    cs_model = plasma_wave_speed(
+    cs_model = _mach_signal_speed(
         np.asarray(result.Te, dtype=float),
         np.asarray(result.Ti, dtype=float),
-        MACH_ION_MASS_G,
-        wave_speed=wave_speed,
+        wave_speed,
     )
     with np.errstate(divide="ignore", invalid="ignore"):
         mach_model = np.where(cs_model > 0.0, u_model / cs_model, np.nan)
-    # PROBE convention, u/sqrt(Te/m_i) -- plasma_wave_speed's "isothermal"
-    # branch is a bit-exact passthrough of that formula, from the SAME u
-    # and Te the run convention above uses. Not the model's own read of
-    # itself; a second, fixed convention printed beside it for comparison.
-    cs_model_probe = plasma_wave_speed(
+    # PROBE convention, u/sqrt(Te/m_i), from the SAME u and Te the run
+    # convention above uses. Not the model's own read of itself; a second,
+    # fixed convention printed beside it for comparison.
+    cs_model_probe = _mach_signal_speed(
         np.asarray(result.Te, dtype=float),
         np.asarray(result.Ti, dtype=float),
-        MACH_ION_MASS_G,
-        wave_speed="isothermal",
+        "isothermal",
     )
     with np.errstate(divide="ignore", invalid="ignore"):
         mach_model_probe = np.where(
@@ -4233,8 +4247,8 @@ def _report_plateau_mach(rows, skip_reason, window, face_ruling=None, show_level
     run_wave_speed = rows[0]["wave_speed"]
     print("   (Sound-speed convention: MODEL M above is the run's own Mach,")
     print(
-        f"   u/c_s, with c_s this run's configured {run_wave_speed!r} "
-        "convention (plasma_wave_speed) -- 'adiabatic' is"
+        f"   u/c_s, with c_s this run's {run_wave_speed!r} "
+        "convention -- 'adiabatic' is"
     )
     print("   sqrt((5/3)(Te+Ti)/m_i), 'isothermal' is sqrt(Te/m_i).  The")
     print("   PROBE convention is always u/sqrt(Te/m_i) (the isothermal Bohm")

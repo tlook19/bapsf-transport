@@ -1887,21 +1887,49 @@ def _case_cathode_power_balance_warming(
     growth_flags["heat_conduction"] = False
     growth_sim = LAPDSim1D(growth_params, growth_flags)
     growth_result = growth_sim.run(t_end=1.5e-6)
-    assert growth_result.steps == 3
-    assert np.allclose(growth_result.time, [0.0, 0.5e-6, 1.125e-6, 1.5e-6])
+    # The surface_loss drain bound is always evaluated, so it binds the
+    # first step and, once the ramp has re-approached it, the last two
+    # before t_end; the phase boundary cuts the step that crosses it, and
+    # the four steps after it are the dt_growth ramp (each 1.25x the last).
+    assert growth_result.steps == 9
+    assert np.allclose(
+        growth_result.time,
+        [
+            0.0, 4.39038e-7, 5.0e-7, 5.76202e-7, 6.71455e-7, 7.90522e-7,
+            9.39354e-7, 1.18684e-6, 1.38460e-6, 1.5e-6,
+        ],
+        rtol=1.0e-5, atol=0.0,
+    )
     assert [diag.step_cap for diag in growth_result.diagnostics] == [
+        "surface_loss",
         "phase_boundary",
         "dt_growth",
+        "dt_growth",
+        "dt_growth",
+        "dt_growth",
+        "surface_loss",
+        "surface_loss",
         "t_end",
     ]
+    growth_dts = [diag.accepted_dt for diag in growth_result.diagnostics]
     assert np.allclose(
-        [diag.accepted_dt for diag in growth_result.diagnostics],
-        [0.5e-6, 0.625e-6, 0.375e-6],
+        growth_dts,
+        [
+            4.39038e-7, 6.09619e-8, 7.62024e-8, 9.52530e-8, 1.19066e-7,
+            1.48833e-7, 2.47486e-7, 1.97764e-7, 1.15396e-7,
+        ],
+        rtol=1.0e-5, atol=0.0,
     )
+    for growth_step in range(2, 6):
+        assert np.isclose(
+            growth_dts[growth_step], 1.25 * growth_dts[growth_step - 1],
+            rtol=1.0e-12, atol=0.0,
+        ), growth_step
     growth_summary = summarize_result(growth_result)
     assert growth_summary.step_cap_counts == {
-        "dt_growth": 1,
+        "dt_growth": 4,
         "phase_boundary": 1,
+        "surface_loss": 3,
         "t_end": 1,
     }
     return locals()
@@ -2001,7 +2029,6 @@ def _case_electrode_sample_smoothing(m3_params):
     )
     r1a_flags.update(
         {
-            "active_plasma_topology": True,
             "cathode_coupling": False,
             # This block and the R1b/R1c blocks built on it step with
             # ``operator_split=False`` on purpose -- they are about the
@@ -2045,14 +2072,12 @@ def _case_electrode_sample_smoothing(m3_params):
         r1a_sim.floors,
         r1a_sim.ion_mass_g,
         r1a_geom,
-        active_plasma_topology=True,
     )
     div_dead_fast = velocity_divergence(
         r1a_dead_fast,
         r1a_sim.floors,
         r1a_sim.ion_mass_g,
         r1a_geom,
-        active_plasma_topology=True,
     )
     assert np.array_equal(div_reference[r1a_active], div_dead_fast[r1a_active])
 

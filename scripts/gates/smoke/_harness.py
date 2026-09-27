@@ -150,10 +150,10 @@ def _pin_pre_r2a_neutral_stance(params, flags):
     return params, flags
 
 
-# The long-standing operator algebra isolates the historical all-cells path;
-# dedicated R1/R2/R3/R4 cases exercise the repaired live defaults. This helper
-# holds the pins that used to sit inline at the top of main(): the R2/R3
-# boundary+flux repairs off, the scheduled phase machine, and the pre-R2a
+# The long-standing operator algebra isolates a simple fluid stance;
+# dedicated R1/R2/R3/R4 cases exercise the live defaults. This helper
+# holds the pins that used to sit inline at the top of main(): the cathode
+# and implicit heat substep off, the scheduled phase machine, and the pre-R2a
 # cold-neutral layout the hand-packed (n, nn, M, Ee, Ei, nn_a) state vectors
 # below assume. The puff is the shipped square valve pulse on the orifice row.
 def _pin_operator_algebra_stance(params, flags):
@@ -161,11 +161,7 @@ def _pin_operator_algebra_stance(params, flags):
     params["phase_transition_mode"] = "scheduled"
     flags["cathode_coupling"] = False
     flags["implicit_heat_conduction"] = False
-    flags["active_plasma_topology"] = False
-    flags["raw_stage_validation"] = False
-    flags["hyperbolic_energy_consistent"] = False
     flags["front_flux"] = True
-    params["hyperbolic_wave_speed"] = "isothermal"
     return _pin_pre_r2a_neutral_stance(params, flags)
 
 
@@ -188,11 +184,7 @@ _HISTORICAL_PIN_KEYS = (
     "phase_transition_mode",
     "cathode_coupling",
     "implicit_heat_conduction",
-    "active_plasma_topology",
-    "raw_stage_validation",
-    "hyperbolic_energy_consistent",
     "front_flux",
-    "hyperbolic_wave_speed",
 )
 
 
@@ -322,7 +314,6 @@ def _cathode_unit_config():
         "heat_picard_iterations": 0,
     })
     f.update({
-        "hyperbolic_energy_consistent": False,
         "front_flux": True,
     })
     # These unit tests are about the cathode and the fluid; keep the simple
@@ -520,7 +511,7 @@ def _anode_sink_sim(steps=60):
 # a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 164, "historical_stance": 64}
+_CASE_CENSUS = {"total": 165, "historical_stance": 64}
 
 
 def _assert_case_census():
