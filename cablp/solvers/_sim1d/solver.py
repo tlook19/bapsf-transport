@@ -5682,30 +5682,22 @@ class LAPDSim1D:
         """Return a candidate step without committing state, time, or caches."""
         if operator_split is None:
             operator_split = self._flags.get("implicit_heat_conduction")
-        if self._beam_deposition_in_heat_substep and not operator_split:
+        if (
+            self._beam_deposition_in_heat_substep
+            or self._electrode_sink_in_heat_substep
+        ) and not operator_split:
             # The only way here is a caller passing operator_split=False
             # explicitly (run/advance_one_step) with implicit_heat_conduction
-            # on. Silently stepping would drop the beam deposition entirely:
-            # rhs() has already removed it from the explicit sum and there is
-            # no substep to receive it.
+            # on. rhs() has already withdrawn the beam electron-energy row and
+            # the anode electron-sheath row from operator A's sum, and a step
+            # with no B has nowhere to apply them -- both would simply vanish.
             raise ValueError(
                 "implicit_heat_conduction is on but this step was asked for "
-                "operator_split=False: the beam electron-energy source has "
-                "been removed from the explicit operator and lives in the "
-                "implicit heat substep, so a non-split step would deposit no "
-                "beam power at all"
-            )
-        if self._electrode_sink_in_heat_substep and not operator_split:
-            # Same hazard, same refusal: with implicit_heat_conduction on,
-            # rhs() has already withdrawn the anode electron-sheath row from
-            # operator A's sum, and a step with no B has nowhere to apply it
-            # -- the debit would simply vanish.
-            raise ValueError(
-                "implicit_heat_conduction is on but this step was asked for "
-                "operator_split=False: the anode electron-sheath energy "
-                "debit has been removed from the explicit operator and lives "
-                "in the implicit heat substep, so a non-split step would "
-                "charge the plasma nothing for the electrons the anode "
+                "operator_split=False: the beam electron-energy source and "
+                "the anode electron-sheath energy debit have been removed "
+                "from the explicit operator and live in the implicit heat "
+                "substep, so a non-split step would deposit no beam power "
+                "and charge the plasma nothing for the electrons the anode "
                 "collects"
             )
         if operator_split:

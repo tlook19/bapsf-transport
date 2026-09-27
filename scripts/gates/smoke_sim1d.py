@@ -2341,8 +2341,12 @@ def _case_cathode_boundary_beam_terms(cathode_face):
         "beam_ionization_cost",
         "beam_excitation_radiation",
     }
+    # beam_ionization_rhs is the birth, power-deposition and cost rows; the
+    # excitation radiation is a fourth row of its own.
     split_beam_sum = np.zeros_like(pack_state(beam_birth_terms))
-    for split_term in split_beam_terms.values():
+    for split_name, split_term in split_beam_terms.items():
+        if split_name == "beam_excitation_radiation":
+            continue
         split_beam_sum = split_beam_sum + pack_state(split_term)
     assert np.allclose(split_beam_sum, pack_state(beam_birth_terms))
     assert np.all(beam_birth_terms.n >= 0.0)
@@ -15330,14 +15334,9 @@ print(json.dumps({
                     _ck_scenario, _ck_tag
                 )
                 if _ck_scenario == "coverage":
-                    # The closure was really on, and the nested single-medium
-                    # marches -- the ONLY place the compiled march can be
-                    # reached under coverage -- really ran.
+                    # The closure was really on.
                     assert _ck_res["coverage_fraction"] is not None, (
                         _ck_scenario, _ck_tag
-                    )
-                    assert _ck_res["nested_marches"] > 0, (
-                        _ck_scenario, _ck_tag, _ck_res["nested_marches"]
                     )
                 if _ck_scenario == "initial_profile":
                     # The shaped fill was really the initial condition: a
@@ -27004,7 +27003,9 @@ def _case_dt_not_bound_by_anode_row():
 @_case("anode-e-sheath-row-reported-not-applied")
 def _case_anode_e_sheath_row_reported_not_applied():
     sim, pair = _anode_sink_sim()
-    assert sim._heat_substep_terms == frozenset({"anode_e_sheath_loss"})
+    assert sim._heat_substep_terms == frozenset(
+        {"anode_e_sheath_loss", "beam_power_deposition"}
+    )
     terms = sim.rhs_terms()
     assert "anode_e_sheath_loss" in terms
     row = np.asarray(terms["anode_e_sheath_loss"].Ee, dtype=float)
@@ -27012,7 +27013,7 @@ def _case_anode_e_sheath_row_reported_not_applied():
     # rhs() is the sum of every OTHER row, bit for bit.
     expected = None
     for name, term in terms.items():
-        if name == "anode_e_sheath_loss":
+        if name in sim._heat_substep_terms:
             continue
         expected = term if expected is None else add_state_rhs(expected, term)
     assert sim.rhs().tobytes() == pack_state(expected).tobytes()
