@@ -3335,13 +3335,30 @@ def _case_anode_e_sheath_row_reported_not_applied():
     assert "anode_e_sheath_loss" in terms
     row = np.asarray(terms["anode_e_sheath_loss"].Ee, dtype=float)
     assert np.all(np.abs(row[pair]) > 0.0)
+    # The rows the implicit substep applies are withdrawn from rhs(): the
+    # anode's (above) and, on this single-cathode layout with the circuit
+    # solve running, the cathode face's collected-electron climb, which is
+    # reported too.
+    assert sim._cathode_climb_in_heat_substep
+    assert "cathode_e_collected_climb" in terms
+    withdrawn = sim._heat_substep_terms | {"cathode_e_collected_climb"}
     # rhs() is the sum of every OTHER row, bit for bit.
     expected = None
     for name, term in terms.items():
-        if name in sim._heat_substep_terms:
+        if name in withdrawn:
             continue
         expected = term if expected is None else add_state_rhs(expected, term)
     assert sim.rhs().tobytes() == pack_state(expected).tobytes()
+    # ... and the anode row, on its own, is withdrawn and reported but not
+    # applied: adding it back to rhs() is the sum with it included.
+    with_anode = None
+    for name, term in terms.items():
+        if name in withdrawn - {"anode_e_sheath_loss"}:
+            continue
+        with_anode = (
+            term if with_anode is None else add_state_rhs(with_anode, term)
+        )
+    assert sim.rhs().tobytes() != pack_state(with_anode).tobytes()
 
     # With the split OFF the row is back in A, bit-exactly.
     off_params, off_flags = _anode_sink_config()
