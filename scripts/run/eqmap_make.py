@@ -12,14 +12,14 @@ row ``k`` is the neutral fill a discharge would start from had it broken down
 ``t_s[k]`` after the valve opened.  ``scripts/stance/eqmap_slice.py`` cuts a row out of
 it and writes the shaped-initial-fill npz that ``run_m6_point.py
 --nn0-profile-npz`` consumes, so the map's slices reach a run through the
-EXISTING ``neutral_initial_profile`` capability and no other path.
+EXISTING ``initial_neutral_state = "profile"`` capability and no other path.
 
 SCRIPT-ONLY.  Nothing here is solver code and no solver code was changed for
 it: the equilibration is driven through the public
 ``LAPDSim1D.run_neutral_equilibration``, and the 101st cycle is an ordinary
 ``Plasma=False`` inner sim whose neutral initial condition is planted through
-the public ``neutral_initial_profile`` keys -- the same capability the map's
-own slices are delivered by.
+the public ``initial_neutral_state = "profile"`` keys -- the same capability
+the map's own slices are delivered by.
 
 THE FOOT FILL TIME IS AN AXIS, NOT A CONSTANT.  ``--foot-s`` sets how far the
 map extends; it is recorded in the header and every slice states the pre-fill
@@ -178,7 +178,8 @@ def foot_cycle(params, flags, nn, nn_a, foot_s, cadence_s, map_dt):
     The inner sim is built exactly as ``run_neutral_equilibration`` builds its
     own (plasma off, cathode off, no nested equilibration, no seed cache), with
     two deltas that ARE the instrument: its neutral initial condition is the
-    equilibrated profile planted through ``neutral_initial_profile`` rather than
+    equilibrated profile planted through ``initial_neutral_state = "profile"``
+    rather than
     a uniform scalar, and its per-cycle puff window is the foot fill time
     instead of the stance's ``equilibration_gas_puff_on_s``.
     """
@@ -187,8 +188,6 @@ def foot_cycle(params, flags, nn, nn_a, foot_s, cadence_s, map_dt):
     # LAPDSim1D.run_neutral_equilibration.
     f["Plasma"] = False
     f["cathode_coupling"] = False
-    f["neutral_equilibration"] = False
-    f["launch_plasma_after_equilibration"] = False
     f["use_cached_neutral_seed"] = False
     # The two DVM directed-recycle jets, cleared for the same reason as
     # cathode_coupling above: with no plasma and no cathode solve there is no
@@ -199,8 +198,9 @@ def foot_cycle(params, flags, nn, nn_a, foot_s, cadence_s, map_dt):
     p["neutral_kinetic_dvm_anode_jet"] = False
     # ...and the two deltas that make this the 101st cycle rather than another
     # standard one. The scalar nn0 is superseded for BOTH zones (the solver
-    # refuses an armed flag alongside an explicit scalar), so it is cleared.
-    f["neutral_initial_profile"] = True
+    # refuses the profile route alongside an explicit scalar), so it is
+    # cleared.
+    p["initial_neutral_state"] = "profile"
     p["nn0"] = None
     p["nn0_profile"] = np.asarray(nn, dtype=float).tolist()
     if nn_a is not None:
@@ -217,7 +217,7 @@ def foot_cycle(params, flags, nn, nn_a, foot_s, cadence_s, map_dt):
     if not np.array_equal(sim.state.nn, np.asarray(nn, dtype=float)):
         raise ValueError(
             "the 101st cycle's initial nn is not the equilibrated seed; the "
-            "neutral_initial_profile path did not plant the profile verbatim"
+            "profile route did not plant the profile verbatim"
         )
     if nn_a is not None and not np.array_equal(
         sim.state.nn_a, np.asarray(nn_a, dtype=float)

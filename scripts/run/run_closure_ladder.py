@@ -418,7 +418,7 @@ def cmd_base(args):
     BASE_DIR.mkdir(parents=True, exist_ok=True)
     base = load_base()["models"][FILL_FAMILY]
     members = dict(base)
-    members.update({"neutral_equilibration": True, "neutral_initial_profile": False})
+    members.update({"initial_neutral_state": "equilibrate"})
     for k in FILL_KEYS:
         members.pop(k, None)
     lines = ["# The 27 ms-duty equilibrated base for the ladder's foot profiles: the", "# equilibrate route replaces the profile route; nothing else moves.",

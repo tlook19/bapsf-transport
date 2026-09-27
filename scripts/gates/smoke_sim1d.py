@@ -2679,7 +2679,7 @@ def _case_cathode_clamp_census():
             "cathode_Ts_base_K": 1998.15,
             "cathode_cleaning_E_th_eV": None,
         })
-        _f = dict(_f, neutral_equilibration=False)
+        _p["initial_neutral_state"] = "fill"
         for _k, _v in overrides.items():
             if _k in _f:
                 _f[_k] = _v
@@ -5172,7 +5172,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     puffdiag_params["nn0"] = 1.0e5
     puffdiag_params["b_surface_loss"] = 0.0
     puffdiag_flags = dict(flags)
-    puffdiag_flags["neutral_equilibration"] = False
+    puffdiag_params["initial_neutral_state"] = "fill"
     puffdiag_sim = LAPDSim1D(puffdiag_params, puffdiag_flags)
     puffdiag_geom = puffdiag_sim.get_initial_snapshot().geometry
     puffdiag_result = puffdiag_sim.run(t_end=8.0e-10, dt=1.0e-10)
@@ -6115,9 +6115,8 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.all(np.isnan(_source_I_tot))
 
     entry_flags = dict(flags)
-    entry_flags["neutral_equilibration"] = False
-    entry_flags["launch_plasma_after_equilibration"] = False
-    entry_sim = LAPDSim1D(run_params, entry_flags)
+    entry_params = dict(run_params, initial_neutral_state="fill")
+    entry_sim = LAPDSim1D(entry_params, entry_flags)
     entry_sim.start_simulation(t_end=3.0e-10, dt=1.0e-10)
     entry_result = entry_sim.get_results()
     assert entry_result.steps == run_result.steps
@@ -8935,9 +8934,8 @@ def _case_non_ignition_guards(
     equilibration_params = dict(neutral_phase_run_params)
     equilibration_params["neutral_equilibration_cycles"] = 2
     equilibration_params["neutral_equilibration_dt"] = 1.0e-10
+    equilibration_params["initial_neutral_state"] = "equilibrate_only"
     equilibration_flags = dict(flags)
-    equilibration_flags["neutral_equilibration"] = True
-    equilibration_flags["launch_plasma_after_equilibration"] = False
     equilibration_sim = LAPDSim1D(equilibration_params, equilibration_flags)
     equilibration_sim.start_simulation(dt=1.0e-10)
     equilibration_result = equilibration_sim.get_results()
@@ -8951,8 +8949,8 @@ def _case_non_ignition_guards(
     assert not hasattr(equilibration_result, "neutral_equilibration")
 
     launch_flags = dict(equilibration_flags)
-    launch_flags["launch_plasma_after_equilibration"] = True
-    launch_sim = LAPDSim1D(equilibration_params, launch_flags)
+    launch_params = dict(equilibration_params, initial_neutral_state="equilibrate")
+    launch_sim = LAPDSim1D(launch_params, launch_flags)
     launch_sim.start_simulation(t_end=2.0e-10, dt=1.0e-10)
     launch_result = launch_sim.get_results()
     assert np.isclose(launch_result.final_time, 2.0e-10)
@@ -9071,6 +9069,9 @@ def _case_equilibration_puff_width(
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     puffw_base_params = dict(neutral_phase_params)
+    # The equilibration-only route the equilibration case above measured
+    # through: run the accumulation, return its result, launch nothing.
+    puffw_base_params["initial_neutral_state"] = "equilibrate_only"
     puffw_base_params["neutral_equilibration_cycles"] = 2
     puffw_base_params["neutral_equilibration_dt"] = 1.0e-10
 
@@ -9638,8 +9639,8 @@ def _case_neutral_momentum_sources(
     # implicit heat with the 6-field state, floors, step acceptance).
     mn_plasma_flags = dict(mn_flags)
     mn_plasma_flags["neutral_prebreakdown"] = False
-    mn_plasma_flags["neutral_equilibration"] = False
     mn_plasma_params = dict(params)
+    mn_plasma_params["initial_neutral_state"] = "fill"
     mn_plasma_params["u0"] = 5.0e4
     mn_plasma_sim = LAPDSim1D(mn_plasma_params, mn_plasma_flags)
     mn_plasma_terms = mn_plasma_sim.rhs_terms()
@@ -9866,7 +9867,7 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
     kd_params["neutral_kinetic_dvm_nvp"] = 6
     kd_flags = dict(p2z_flags)
     kd_flags["neutral_prebreakdown"] = False
-    kd_flags["neutral_equilibration"] = False
+    kd_params["initial_neutral_state"] = "fill"
 
     # Every refusal, and the offender it must name.
     for kd_bad_params, kd_bad_flags, kd_offender in (
@@ -10921,7 +10922,7 @@ def _case_gas_puff_double_erf_waveform():
     # sites share the value via _effective_gas_puff_sccm.
     derf_params, derf_flags = default_config()
     derf_flags["neutral_prebreakdown"] = False
-    derf_flags["neutral_equilibration"] = False
+    derf_params["initial_neutral_state"] = "fill"
     derf_params.update(
         {
             # scheduled phases so the afterglow assert sees the valve close
@@ -12564,7 +12565,7 @@ def _case_cathode_jet_hot_carrier():
     hc_kb = 1.380649e-16
     hc_params, hc_flags = default_config()
     hc_params["nx"] = 10
-    hc_flags["neutral_equilibration"] = False
+    hc_params["initial_neutral_state"] = "fill"
 
     # (1) Construction refusals, one per prerequisite, each naming the flag.
     for hc_bad_params, hc_bad_flags, hc_missing in (
@@ -13141,6 +13142,7 @@ def _case_electrode_sample_smoothing(m3_params):
             "tau_prebreakdown": 0.0,
             "tau_breakdown": 0.0,
             "tau_discharge": 1.0e-6,
+            "initial_neutral_state": "fill",
         }
     )
     r1a_flags.update(
@@ -13148,8 +13150,6 @@ def _case_electrode_sample_smoothing(m3_params):
             "active_plasma_topology": True,
             "cathode_coupling": False,
             "neutral_prebreakdown": False,
-            "neutral_equilibration": False,
-            "launch_plasma_after_equilibration": False,
             # This block and the R1b/R1c blocks built on it step with
             # ``operator_split=False`` on purpose -- they are about the
             # explicit operator's own rows and rejection machinery. The
@@ -13805,7 +13805,9 @@ def _case_neutral_equilibration_run_warning():
     import warnings as _eq_warnings
 
     _eq_params, _eq_flags = default_config()
-    assert _eq_flags["neutral_equilibration"], "expected the flag on by default"
+    assert _eq_params["initial_neutral_state"] == "equilibrate", (
+        "expected the equilibrate route by default"
+    )
     _eq_params["nx"] = 12
     _eq_sim = LAPDSim1D(_eq_params, _eq_flags)
     with _eq_warnings.catch_warnings(record=True) as _eq_caught:
@@ -13823,7 +13825,9 @@ def _case_neutral_equilibration_run_warning():
     assert "nn0" in _eq_text
     assert _eq_direct is not None, "the warning must not abort the run"
     # ... and the equilibration-aware entry point stays silent.
-    _eq_sim2 = LAPDSim1D(_eq_params, {**_eq_flags, "neutral_equilibration": False})
+    _eq_sim2 = LAPDSim1D(
+        {**_eq_params, "initial_neutral_state": "fill"}, _eq_flags
+    )
     with _eq_warnings.catch_warnings(record=True) as _eq_quiet:
         _eq_warnings.simplefilter("always")
         _eq_sim2.run(t_end=0.0)
@@ -14205,14 +14209,14 @@ elif scenario == "initial_profile":
         "cathode_Ts_base_K": 1998.15,
         "cathode_cleaning_E_th_eV": None,
     })
-    flags["neutral_equilibration"] = False
+    params["initial_neutral_state"] = "fill"
     _cells = int(LAPDSim1D(dict(params), dict(flags)).geometry.cells)
     params["nn0_profile"] = (
         float(params["nn0"])
         * (1.5 + np.sin(np.arange(_cells, dtype=float)))
     ).tolist()
     params["nn0"] = None
-    flags["neutral_initial_profile"] = True
+    params["initial_neutral_state"] = "profile"
     t_end = 1.0e-6
 else:
     raise SystemExit(f"unknown scenario {scenario!r}")
@@ -14727,7 +14731,7 @@ def _case_tracer_fluid_n_row_identity(_r2):
     _r2_id_p, _r2_id_f = default_config()
     _r2_id_p["nx"] = 12
     _r2_id_p["ne0"] = 5.0e10  # above ne_floor, so the probe ratio is exactly 1
-    _r2_id_f["neutral_equilibration"] = False
+    _r2_id_p["initial_neutral_state"] = "fill"
     _r2_id_f["cathode_coupling"] = False
     _r2_id_sim = LAPDSim1D(_r2_id_p, _r2_id_f)
     _r2_id_state = _r2_id_sim.state
@@ -14801,7 +14805,7 @@ def _case_tracer_presence_gating():
     def _r2_off_bytes(scale):
         params, flags = default_config()
         params["nx"] = 12
-        flags["neutral_equilibration"] = False
+        params["initial_neutral_state"] = "fill"
         flags["cathode_coupling"] = False
         for key in (
             "tracer_passivity_current_ratio",
@@ -14837,7 +14841,7 @@ def _case_tracer_presence_gating():
         params, flags = default_config()
         params["nx"] = 12
         params["cathode_solver_model"] = "current_driven"
-        flags["neutral_equilibration"] = False
+        params["initial_neutral_state"] = "fill"
         flags["cathode_coupling"] = True
         flags["regime_tracer"] = True
         # The refusal table below arms one offending key at a time and asserts
@@ -14948,7 +14952,7 @@ def _case_tracer_passive_anomalous_leak_phase_gated_solve():
         flags = dict(flags)
         params["nx"] = 16
         params["cathode_solver_model"] = "current_driven"
-        flags["neutral_equilibration"] = False
+        params["initial_neutral_state"] = "fill"
         flags["cathode_coupling"] = True
         flags["regime_tracer"] = True
         params["phase_transition_mode"] = "scheduled"
@@ -15094,7 +15098,7 @@ def _case_tracer_census_and_criterion(_r2, _r2_on_config):
     # ANTI-VACUITY: a run WITHOUT the flag carries no census at all.
     _r2_nocen_p, _r2_nocen_f = default_config()
     _r2_nocen_p["nx"] = 12
-    _r2_nocen_f["neutral_equilibration"] = False
+    _r2_nocen_p["initial_neutral_state"] = "fill"
     _r2_nocen_sim = LAPDSim1D(_r2_nocen_p, _r2_nocen_f)
     assert not hasattr(
         _r2_nocen_sim.run(t_end=2.0e-10, dt=1.0e-10), "tracer_criterion_census"
@@ -15855,7 +15859,7 @@ def _case_ql_relaxation_km_table():
 # --------------------------------------------------------------------
 @_case("shaped-initial-neutral-fill-sp3")
 def _case_shaped_initial_neutral_fill_sp3():
-    # ---- sp3: shaped initial neutral fill (neutral_initial_profile) --------
+    # ---- sp3: shaped initial neutral fill (initial_neutral_state="profile") -
     # The capability replaces the uniform scalar nn0 with a per-cell array of
     # ABSOLUTE densities. Four questions decide it: does the off path still
     # build exactly the old initial condition, is a UNIFORM profile at the
@@ -15884,9 +15888,10 @@ def _case_shaped_initial_neutral_fill_sp3():
             "cathode_cleaning_E_th_eV": None,
         })
         # The shaped IC and the equilibrated seed are alternative statements of
-        # the same initial condition and the solver refuses the pair, so the
-        # comparison stance clears the flag on BOTH arms.
-        flags["neutral_equilibration"] = False
+        # the same initial condition, so the comparison stance takes the
+        # scalar-fill route on the scalar arm and the profile route on the
+        # shaped one -- never the equilibrated seed.
+        params["initial_neutral_state"] = "fill"
         # The scalar arm below asserts the single-zone layout outright
         # (state.nn_a is None) and compares the two arms at the raw bit level,
         # so the stance names the layout rather than inheriting it. The annulus
@@ -15934,7 +15939,7 @@ def _case_shaped_initial_neutral_fill_sp3():
     _sp3_uniform_p, _sp3_uniform_f = _sp3_stance(
         nn0=None, nn0_profile=[_sp3_nn0] * _sp3_cells
     )
-    _sp3_uniform_f["neutral_initial_profile"] = True
+    _sp3_uniform_p["initial_neutral_state"] = "profile"
     _sp3_uniform_result = LAPDSim1D(
         _sp3_uniform_p, _sp3_uniform_f
     ).run(t_end=1.0e-6, dt=1.0e-7)
@@ -15958,7 +15963,7 @@ def _case_shaped_initial_neutral_fill_sp3():
     _sp3_shaped_p, _sp3_shaped_f = _sp3_stance(
         nn0=None, nn0_profile=_sp3_shape
     )
-    _sp3_shaped_f["neutral_initial_profile"] = True
+    _sp3_shaped_p["initial_neutral_state"] = "profile"
     _sp3_shaped_sim = LAPDSim1D(dict(_sp3_shaped_p), dict(_sp3_shaped_f))
     assert np.array_equal(_sp3_shaped_sim.state.nn, np.array(_sp3_shape))
     assert _sp3_shaped_sim.state.nn_a is None
@@ -15980,14 +15985,14 @@ def _case_shaped_initial_neutral_fill_sp3():
     # (d) EVERY MISCONFIGURATION RAISES, at construction.
     def _sp3_refuses(label, params_over=None, flags_over=None):
         params, flags = _sp3_stance(nn0=None, nn0_profile=_sp3_shape)
-        flags["neutral_initial_profile"] = True
+        params["initial_neutral_state"] = "profile"
         params.update(params_over or {})
         flags.update(flags_over or {})
         try:
             LAPDSim1D(params, flags)
         except ValueError:
             return
-        raise AssertionError(f"neutral_initial_profile must refuse: {label}")
+        raise AssertionError(f"the profile route must refuse: {label}")
 
     _sp3_refuses(
         "a wrong-length profile",
@@ -16010,23 +16015,27 @@ def _case_shaped_initial_neutral_fill_sp3():
         params_over={"nn0_annulus_profile": _sp3_ann_shape},
     )
     _sp3_refuses(
-        "the flag armed alongside an explicit scalar nn0",
+        "the route armed alongside an explicit scalar nn0",
         params_over={"nn0": _sp3_nn0},
     )
+    # The profile and the equilibrated seed are values of one selector, so
+    # the pair the solver used to refuse is unrepresentable; an unknown
+    # selector value is the refusal that remains.
     _sp3_refuses(
-        "neutral_equilibration, which would overwrite the shaped fill",
-        flags_over={"neutral_equilibration": True},
+        "an initial_neutral_state value the selector does not accept",
+        params_over={"initial_neutral_state": "profiled"},
     )
     _sp3_refuses(
         "restart_from, which replaces the whole initial condition",
         params_over={"restart_from": "nonexistent.h5"},
     )
     _sp3_refuses(
-        "the flag armed with no profile at all",
+        "the route armed with no profile at all",
         params_over={"nn0_profile": None},
     )
-    # ...and the presence gate the other way: either key set with the flag off
-    # is inert, so it raises rather than running the uniform fill silently.
+    # ...and the presence gate the other way: either key set off the profile
+    # route is inert, so it raises rather than running the uniform fill
+    # silently.
     for _sp3_key, _sp3_value in (
         ("nn0_profile", _sp3_shape),
         ("nn0_annulus_profile", _sp3_ann_shape),
@@ -16038,11 +16047,12 @@ def _case_shaped_initial_neutral_fill_sp3():
             pass
         else:
             raise AssertionError(
-                f"{_sp3_key} must be refused with neutral_initial_profile off"
+                f"{_sp3_key} must be refused off the profile route"
             )
     # The complementary presence gate, and the witness for the RETIRED
-    # gas-puff nn0 table. ``nn0 = None`` is the flag's own requirement, but
-    # with the flag OFF it used to fall through to a frozen lookup keyed on
+    # gas-puff nn0 table. ``nn0 = None`` is the profile route's own
+    # requirement, but off that route it used to fall through to a frozen
+    # lookup keyed on
     # S_gp -- ungenerable, on a superseded sccm convention, reached by nothing
     # that ships. The table is gone, so the only remaining reading of a None
     # here is "no initial neutral density was configured", and resolve_nn0
@@ -16053,10 +16063,10 @@ def _case_shaped_initial_neutral_fill_sp3():
         LAPDSim1D(_sp3_no_nn0_p, _sp3_no_nn0_f)
     except ValueError as _sp3_no_nn0_error:
         assert "nn0 accepts" in str(_sp3_no_nn0_error), _sp3_no_nn0_error
-        assert "neutral_initial_profile" in str(_sp3_no_nn0_error)
+        assert "initial_neutral_state='profile'" in str(_sp3_no_nn0_error)
     else:
         raise AssertionError(
-            "nn0 = None with neutral_initial_profile off must be refused"
+            "nn0 = None off the profile route must be refused"
         )
 
     # (e) THE CONSTRUCTION SCRIPT. It is an instrument in scripts/, not repo
@@ -16519,7 +16529,7 @@ def _case_prescribed_area_geometry():
         # The cached equilibrated seed is keyed on the geometry (a prescribed
         # profile re-keys it by design), so the comparison arms clear it and
         # the identity below is about the profile alone.
-        flags["neutral_equilibration"] = False
+        params["initial_neutral_state"] = "fill"
         params.update(over)
         return params, flags
 
@@ -17107,11 +17117,11 @@ def _case_config_key_namespace_and_seed_cache():
         assert _key in _r2_reg_p and _key not in _r2_reg_f, _key
         assert _r2_reg_p[_key] is None, "a shaped IC ships no shape"
     assert (
-        "neutral_initial_profile" in _r2_reg_f
-        and "neutral_initial_profile" not in _r2_reg_p
+        "initial_neutral_state" in _r2_reg_p
+        and "initial_neutral_state" not in _r2_reg_f
     )
-    assert _r2_reg_f["neutral_initial_profile"] is False, (
-        "neutral_initial_profile must ship OFF"
+    assert _r2_reg_p["initial_neutral_state"] == "equilibrate", (
+        "the shaped-fill route must ship OFF"
     )
     for _key in (
         "plasma_radius_profile_cm",
@@ -17799,7 +17809,7 @@ def _case_golden_digest_gate_deterministic():
     _gdg_params, _gdg_flags = default_config()
     _gdg_params["nx"] = 12
     _gdg_params["max_steps_action"] = "stop"
-    _gdg_flags["neutral_equilibration"] = False
+    _gdg_params["initial_neutral_state"] = "fill"
     _gdg_run_kwargs = {"t_end": None, "dt": None, "operator_split": None}
     _gdg_a = _gdg.compute_digest(
         _gdg_params,
@@ -18561,7 +18571,7 @@ def _case_configuration_hdf5_lineage_round_trip():
     # run() does not equilibrate and says so loudly; nothing here reads nn.
     def _cl_config():
         _p, _f = default_config()
-        _f["neutral_equilibration"] = False
+        _p["initial_neutral_state"] = "fill"
         return _p, _f
 
     _cl_named = LAPDSim1D(*_cl_config(), configuration=_cl_lineage)
@@ -19670,7 +19680,7 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
         (pl_ja_flags if pl_ja_space == "flags" else pl_ja_params)[
             pl_ja_key
         ] = pl_ja_value
-    pl_ja_flags["neutral_equilibration"] = False
+    pl_ja_params["initial_neutral_state"] = "fill"
     pl_ja_flags["neutral_prebreakdown"] = False
     pl_ja_params.update({
         "neutral_model": "kinetic_dvm",
@@ -20078,7 +20088,7 @@ def _case_parallel_momentum_sink_refusals():
     def _ms_config(**over):
         _p, _f = default_config()
         _p.update({"nx": 12, "max_steps_action": "stop"})
-        _f["neutral_equilibration"] = False
+        _p["initial_neutral_state"] = "fill"
         _p.update(over)
         return _p, _f
 
@@ -20248,7 +20258,7 @@ def _case_parallel_momentum_sink_mechanism():
     def _mm_config(**over):
         _p, _f = default_config()
         _p.update({"nx": 12, "max_steps_action": "stop", "dt_save": 0.0})
-        _f["neutral_equilibration"] = False
+        _p["initial_neutral_state"] = "fill"
         _p.update(over)
         return _p, _f
 
@@ -20436,7 +20446,7 @@ def _case_prescribed_drive_refusals():
         _p, _f = default_config()
         _p.update({"nx": 12})
         _f["cathode_coupling"] = True
-        _f["neutral_equilibration"] = False
+        _p["initial_neutral_state"] = "fill"
         _p.update(over)
         if _pr_flag_over:
             _f.update(_pr_flag_over)
@@ -20670,7 +20680,7 @@ def _case_prescribed_drive_handoff():
         })
         _f["cathode_coupling"] = True
         _f["neutral_prebreakdown"] = False
-        _f["neutral_equilibration"] = False
+        _p["initial_neutral_state"] = "fill"
         if trace_path is not None:
             _p.update({
                 "cathode_solver_model": _ho_MEASURED,
@@ -21182,11 +21192,11 @@ def _case_afterglow_tail_handoff_criterion():
         _th_f,
         cathode_coupling=True,
         neutral_prebreakdown=False,
-        # This case steps the solver directly, so the equilibration seed is
-        # not being asked for; clearing the flag keeps run() from warning
-        # that it did not run one.
-        neutral_equilibration=False,
     )
+    # This case steps the solver directly, so the equilibration seed is not
+    # being asked for; the scalar-fill route keeps run() from warning that it
+    # did not run one.
+    _th_p = dict(_th_p, initial_neutral_state="fill")
 
     def _th_build(V_dis_step, I_prev):
         sim = LAPDSim1D(dict(_th_p), dict(_th_f))
@@ -21673,7 +21683,7 @@ def _case_end_wall_lambda_eff_barrier_bracket():
     # This case reads a barrier off two RHS rows, not a neutral profile, and
     # ``run()`` performs no equilibration -- so the equilibration flag is
     # cleared rather than left on to warn that it did nothing.
-    _le_flags["neutral_equilibration"] = False
+    _le_params["initial_neutral_state"] = "fill"
     _le_sim = LAPDSim1D(dict(_le_params), _le_flags)
     _le_result = _le_sim.run(t_end=4.0e-10, dt=1.0e-10)
 
@@ -21919,7 +21929,7 @@ def _case_cell_role_whitelist_on_load():
     # role round-trip needs. The equilibration flag is cleared because run()
     # does not equilibrate and says so loudly; nothing here reads nn.
     _cw_params, _cw_flags = default_config()
-    _cw_flags["neutral_equilibration"] = False
+    _cw_params["initial_neutral_state"] = "fill"
     _cw_result = LAPDSim1D(_cw_params, _cw_flags).run(t_end=0.0)
 
     with tempfile.TemporaryDirectory() as _cw_tmp:
@@ -22593,7 +22603,7 @@ def _case_effective_cathode_flags_refuses_driven_override_in_floating_phase():
     _ecf_params, _ecf_flags = default_config()
     _ecf_params = dict(_ecf_params)
     _ecf_flags = dict(_ecf_flags)
-    _ecf_flags["neutral_equilibration"] = False
+    _ecf_params["initial_neutral_state"] = "fill"
     _ecf_params["nx"] = 16
     _ecf_params["phase_transition_mode"] = "scheduled"
     _ecf_params["tau_prebreakdown"] = 1.0e-7
@@ -23269,7 +23279,7 @@ def _case_end_wall_face_sheath_edge_flux():
     _ew_flags["end_wall_sheath_full_debit"] = True
     # run() is called directly below, so the equilibration pre-solve is
     # cleared rather than left on to warn that it did nothing.
-    _ew_flags["neutral_equilibration"] = False
+    _ew_params["initial_neutral_state"] = "fill"
     _ew_lambda = sheath_lift_lambda(m_He_cgs)
 
     _ew_sim = LAPDSim1D(dict(_ew_params), dict(_ew_flags))
@@ -23418,7 +23428,7 @@ def _case_cathode_face_one_ion_current():
     _cf_params = dict(_cf_params, max_steps_action="stop")
     _cf_flags = dict(_cf_flags)
     _cf_flags["cathode_coupling"] = True
-    _cf_flags["neutral_equilibration"] = False
+    _cf_params["initial_neutral_state"] = "fill"
 
     def _cf_face_current(sim):
         """Return ``(I_fluid_A, cell, n, Te, alpha_eff)`` at the cathode face."""
@@ -23558,7 +23568,7 @@ def _case_cathode_jet_incident_power_one_book():
     _cp_params = dict(_cp_params, max_steps_action="stop")
     _cp_flags = dict(_cp_flags)
     _cp_flags["cathode_coupling"] = True
-    _cp_flags["neutral_equilibration"] = False
+    _cp_params["initial_neutral_state"] = "fill"
     _cp_sim = LAPDSim1D(dict(_cp_params), _cp_flags)
     _cp_cell = int(
         absorbing_live_cells_by_role(_cp_sim.geometry)["cathode"][0]
@@ -23623,7 +23633,7 @@ def _case_cathode_jet_incident_power_one_book():
         KINETIC_DVM_INCOMPATIBLE_DEFAULTS
     ):
         (_cp_jf if _cp_space == "flags" else _cp_jp)[_cp_key] = _cp_value
-    _cp_jf["neutral_equilibration"] = False
+    _cp_jp["initial_neutral_state"] = "fill"
     _cp_jf["neutral_prebreakdown"] = False
     _cp_jf["cathode_coupling"] = True
     _cp_jp.update({
@@ -23668,12 +23678,11 @@ def _anode_sink_config():
         "tau_prebreakdown": 0.0,
         "tau_breakdown": 0.0,
         "tau_discharge": 1.0e-3,
+        "initial_neutral_state": "fill",
     })
     flags.update({
         "cathode_coupling": True,
         "neutral_prebreakdown": False,
-        "neutral_equilibration": False,
-        "launch_plasma_after_equilibration": False,
     })
     return params, flags
 
@@ -24583,6 +24592,10 @@ def _case_neutral_retired_keys_refuse():
         "ion_neutral_drag_cx_only": False,
         "ion_neutral_thermalization": False,
         "coverage_closure": False,
+        # Folded into initial_neutral_state.
+        "neutral_equilibration": True,
+        "launch_plasma_after_equilibration": True,
+        "neutral_initial_profile": False,
     }
     _nr_base_p, _nr_base_f = default_config()
     for _nr_key, _nr_value in _nr_params.items():

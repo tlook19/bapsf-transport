@@ -77,7 +77,7 @@ def _capture_stance_rows(steps):
     arguments the run built its velocity grid with.
     """
     params, flags = build_baseline_config()
-    flags["neutral_equilibration"] = False
+    params["initial_neutral_state"] = "fill"
 
     grid_args = {}
     orig_grid_init = VGrid.__init__

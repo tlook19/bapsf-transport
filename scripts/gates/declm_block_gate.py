@@ -184,14 +184,12 @@ PERTURBED = {
     "anode_jet_energy_convention": "total_reflected",
     "neutral_mesh_accommodation": True,
     # initial_neutral_state
-    "neutral_equilibration": False,
-    "launch_plasma_after_equilibration": False,
+    "initial_neutral_state": "profile",
     "neutral_equilibration_cycles": 200,
     "neutral_equilibration_dt": 0.02,
     "equilibration_gas_puff_on_s": 0.025,
     "use_cached_neutral_seed": True,
     "neutral_seed_cache_dir": "/tmp/declm_block_gate_seed_cache",
-    "neutral_initial_profile": True,
     "nn0": 4.0e13,
     "nn0_profile": [1.0, 2.0, 3.0, 4.0],
     "nn0_annulus_profile": [1.0, 2.0, 3.0, 4.0],
@@ -204,11 +202,10 @@ PERTURBED = {
 
 #: Members deliberately LEFT at their config default in the perturbed fixture,
 #: with the reason. ``restart_from`` is a mutually exclusive ROUTE of
-#: ``initial_neutral_state``: the fixture already arms the ``profile`` route, so
-#: giving the restart payload a value would arm a second route and the block
-#: would be refused before the equivalence comparison ever ran. The perturbation
-#: is applied to the two route keys that CAN move together -- equilibrate is
-#: disarmed and profile is armed, both away from their defaults.
+#: ``initial_neutral_state``: the fixture already arms the selector route at
+#: ``"profile"``, away from its ``"equilibrate"`` default, so giving the restart
+#: payload a value would arm a second route and the block would be refused
+#: before the equivalence comparison ever ran.
 PERTURB_KEEP_DEFAULT = {"restart_from"}
 
 
@@ -405,11 +402,11 @@ def gate_refusals():
     )
 
     misfiled = dict(family_values(cathode))
-    misfiled["neutral_equilibration"] = False
+    misfiled["use_cached_neutral_seed"] = False
     refuses(
         "a block naming another family's member",
         lambda: resolve_config(models={cathode.name: misfiled}),
-        must_name=["neutral_equilibration", "models.initial_neutral_state"],
+        must_name=["use_cached_neutral_seed", "models.initial_neutral_state"],
     )
 
     # The same refusal's OTHER two owner branches: a real config key that no
@@ -468,12 +465,12 @@ def gate_refusals():
     )
 
     two_routes = dict(family_values(fill))
-    two_routes["neutral_equilibration"] = True
-    two_routes["neutral_initial_profile"] = True
+    two_routes["initial_neutral_state"] = "profile"
+    two_routes["restart_from"] = "/tmp/declm_block_gate_payload.h5"
     refuses(
         "two mutually exclusive fill routes armed at once",
         lambda: resolve_config(models={fill.name: two_routes}),
-        must_name=["mutually exclusive", "equilibrate", "profile"],
+        must_name=["mutually exclusive", "initial_neutral_state", "restart"],
     )
 
     both_valued = dict(family_values(cathode))

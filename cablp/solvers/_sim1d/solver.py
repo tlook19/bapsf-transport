@@ -73,6 +73,7 @@ from .core.validation import (
     refuse_te_floor_above_adas_table_edge,
     resolve_electron_drift_transport_config,
     resolve_energy_exchange_rate_fraction,
+    resolve_initial_neutral_state,
     resolve_jet_arming_criterion,
     resolve_neutral_jet_config,
     resolve_parallel_momentum_sink,
@@ -1180,6 +1181,15 @@ class LAPDSim1D:
         once -- the two-zone conductances, the kinetic bookkeeping record,
         the DVM accumulators -- in the order the refusals depend on.
         """
+        # How the initial neutral state is established: one selector, whose
+        # value arms the pre-run equilibration (and whether the plasma run
+        # follows it) or the shaped per-cell fill, never both.
+        (
+            self._initial_neutral_state,
+            self._neutral_equilibration,
+            self._launch_after_equilibration,
+            self._neutral_initial_profile,
+        ) = resolve_initial_neutral_state(self._input_dict)
         validate_neutral_seed_cache_config(self._input_dict, self._flags)
         validate_equilibration_gas_puff_on(self._input_dict)
         _x = float(self._input_dict.get("R_comp_partition"))
@@ -6448,12 +6458,13 @@ class LAPDSim1D:
             REFUSED_NEUTRAL_MODELS,
         )
 
-        if self._flags.get("neutral_equilibration"):
+        if self._neutral_equilibration:
             raise ValueError(
-                "restart_from cannot be combined with neutral_equilibration: "
-                "start_simulation() would run the puff/off accumulation and "
-                "OVERWRITE the restored state. A restart payload IS the "
-                "neutral seed. Clear the flag on the resuming run."
+                "restart_from cannot be combined with initial_neutral_state="
+                f"{self._initial_neutral_state!r}: start_simulation() would run "
+                "the puff/off accumulation and OVERWRITE the restored state. A "
+                "restart payload IS the neutral seed. Set "
+                "initial_neutral_state='fill' on the resuming run."
             )
         if self._neutral_model in REFUSED_NEUTRAL_MODELS:
             raise ValueError(
@@ -6833,19 +6844,16 @@ class LAPDSim1D:
         # run: that is the presence gate for each resume branch below.
         resume = self._restart_run_loop
         self._restart_run_loop = None
-        if (
-            self._flags.get("neutral_equilibration")
-            and not self._run_via_start_simulation
-        ):
+        if self._neutral_equilibration and not self._run_via_start_simulation:
             warnings.warn(
-                "neutral_equilibration is ON but run() was called directly, so "
-                "NO equilibration happens: only start_simulation() runs the "
-                "puff/off accumulation and seeds nn from it. This run starts "
-                "from the direct nn0 fill "
+                f"initial_neutral_state={self._initial_neutral_state!r} but "
+                "run() was called directly, so NO equilibration happens: only "
+                "start_simulation() runs the puff/off accumulation and seeds "
+                "nn from it. This run starts from the direct nn0 fill "
                 f"({resolve_nn0(self._input_dict):.3g} cm^-3) "
                 "instead of an equilibrated profile. Call start_simulation() "
-                "for the equilibrated result, or clear the flag to silence "
-                "this.",
+                "for the equilibrated result, or set "
+                "initial_neutral_state='fill' to silence this.",
                 stacklevel=2,
             )
         explicit_t_end = t_end is not None
@@ -7318,11 +7326,10 @@ class LAPDSim1D:
         params, flags = self.get_config()
         flags["Plasma"] = False
         flags["cathode_coupling"] = False
-        flags["neutral_equilibration"] = False
-        flags["launch_plasma_after_equilibration"] = False
+        params["initial_neutral_state"] = "fill"
         # The inner sim IS the equilibration -- it must never consult the seed
-        # database itself. Leaving this ON contradicts the two flags just
-        # cleared, so validate_neutral_seed_cache_config would reject the inner
+        # database itself. Leaving this ON contradicts the selection just
+        # made, so validate_neutral_seed_cache_config would reject the inner
         # config and a database MISS would raise instead of equilibrating and
         # populating the database (the caller stores the result). The cache-
         # control flags are inert to the seed signature, so clearing this here
@@ -7570,7 +7577,7 @@ class LAPDSim1D:
         This mirrors the _sim3 entry-point style while preserving ``run(...)`` as
         the direct result-returning API.
         """
-        if self._flags.get("neutral_equilibration"):
+        if self._neutral_equilibration:
             use_db = self._flags.get("use_cached_neutral_seed")
             seed = self._lookup_cached_neutral_seed() if use_db else None
             if seed is not None:
@@ -7588,7 +7595,7 @@ class LAPDSim1D:
                 )
                 if use_db:
                     self._store_cached_neutral_seed(neutral_result)
-                if not self._flags.get("launch_plasma_after_equilibration"):
+                if not self._launch_after_equilibration:
                     self._last_result = neutral_result
                     return
                 self._apply_neutral_equilibration_result(neutral_result)
@@ -13275,11 +13282,12 @@ class LAPDSim1D:
 
         Sets ``_nn0_profile`` (the column, or the single neutral field without
         the two-zone closure) and ``_nn0_annulus_profile``. Both are ``None``
-        with the ``neutral_initial_profile`` flag off, which is the presence
-        gate :meth:`_initial_state` reads: the off path resolves the scalar
-        fill exactly as it always has and never touches an array from here.
+        unless ``initial_neutral_state = "profile"``, which is the presence
+        gate :meth:`_initial_state` reads: every other route resolves the
+        scalar fill exactly as it always has and never touches an array from
+        here.
         """
-        enabled = bool(self._flags.get("neutral_initial_profile"))
+        enabled = self._neutral_initial_profile
         column = self._input_dict.get("nn0_profile")
         annulus = self._input_dict.get("nn0_annulus_profile")
         if not enabled:
@@ -13294,10 +13302,10 @@ class LAPDSim1D:
             if configured:
                 raise ValueError(
                     f"the shaped-initial-fill parameters {configured} were "
-                    "configured without the neutral_initial_profile flag, "
-                    "where they are inert (the run would start from the "
-                    "uniform scalar nn0 and the profile would never be read); "
-                    "set the flag or drop the parameters"
+                    "configured with initial_neutral_state="
+                    f"{self._initial_neutral_state!r}, where they are inert "
+                    "(the profile would never be read); set "
+                    "initial_neutral_state='profile' or drop the parameters"
                 )
             self._nn0_profile = None
             self._nn0_annulus_profile = None
@@ -13312,36 +13320,28 @@ class LAPDSim1D:
             )
         if column is None:
             raise ValueError(
-                "the neutral_initial_profile flag requires nn0_profile (a "
+                "initial_neutral_state='profile' requires nn0_profile (a "
                 f"per-cell sequence of length nx={int(self._geometry.cells)} "
                 "of absolute neutral densities [cm^-3]). There is no default: "
-                "the flag's whole content is the profile the caller computed"
+                "the route's whole content is the profile the caller computed"
             )
         if self._input_dict.get("nn0") is not None:
             raise ValueError(
-                "neutral_initial_profile supersedes the scalar nn0 for BOTH "
+                "initial_neutral_state='profile' supersedes the scalar nn0 "
+                "for BOTH "
                 f"zones, but nn0={self._input_dict['nn0']!r} was supplied as "
                 "well. There is no precedence rule to apply and a silent one "
                 "would hide which fill the run actually started from: set "
                 "nn0=None on a shaped run, and put the uniform level into "
                 "nn0_profile if that is what is wanted"
             )
-        if self._flags.get("neutral_equilibration"):
-            raise ValueError(
-                "neutral_initial_profile cannot be combined with "
-                "neutral_equilibration: start_simulation() seeds nn (and nn_a) "
-                "from the equilibration result AFTER construction, so the "
-                "shaped fill would be built and then OVERWRITTEN without a "
-                "trace. The two are alternative ways to state the same "
-                "initial condition -- clear the flag on a shaped run"
-            )
         if self._input_dict.get("restart_from") is not None:
             raise ValueError(
-                "neutral_initial_profile cannot be combined with restart_from "
-                "for the same reason neutral_equilibration cannot: the restart "
-                "payload replaces the whole initial condition after "
-                "construction, so the shaped fill would be silently discarded. "
-                "A restart payload IS the initial neutral profile"
+                "initial_neutral_state='profile' cannot be combined with "
+                "restart_from: the restart payload replaces the whole initial "
+                "condition after construction, so the shaped fill would be "
+                "silently discarded. A restart payload IS the initial neutral "
+                "profile"
             )
         self._nn0_profile = neutral_initial_profile_values(
             self._geometry, column, "nn0_profile"

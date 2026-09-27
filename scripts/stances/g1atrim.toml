@@ -555,14 +555,13 @@ none_valued = ["anode_jet_energy_convention"]
 
 [models.initial_neutral_state]
 
-# The equilibrate route is OFF and the profile route is armed: the equilibrated
-# seed would overwrite the shaped foot, and the solver refuses the pair. The
-# equilibration cycle count, its dt and the cached-seed modifier are config
-# defaults, inert while the route is off, and are stated because a block is an
-# inventory. equilibration_gas_puff_on_s is NOT inert -- the 27 ms puff window
+# The selector takes the profile route: the shaped foot below IS the initial
+# fill, and an equilibrated seed would overwrite it, so the one selector arms
+# either and never both. The equilibration cycle count, its dt and the
+# cached-seed modifier are config defaults, inert on this route, and are stated
+# because a block is an inventory. equilibration_gas_puff_on_s is NOT inert -- the 27 ms puff window
 # is a stance value the golden's own re-cut re-arms the route to use.
-neutral_equilibration = false
-launch_plasma_after_equilibration = true
+initial_neutral_state = "profile"
 neutral_equilibration_cycles = 100
 neutral_equilibration_dt = 0.01
 equilibration_gas_puff_on_s = 0.027
@@ -601,9 +600,6 @@ use_cached_neutral_seed = false
 # scripts/data/nn0_legacy_ballistic_reference_geometry.npz and a base of this
 # configuration on that wall, with the same builder run at --kernel ballistic
 # and that foot.
-# The profile flag stays stance-side because the per-cell nn0_profile it
-# requires is sized to this mesh.
-neutral_initial_profile = true
 nn0_profile = [
   6341136458302.529, 39372308507217.72, 39637229270091.125, 40318131886828.53,
   40595122800739.99, 40968239862055.4, 43789406432470.89, 44128590627064.984,

@@ -103,11 +103,11 @@ CLEAN_PARAMS = {
     "dt_min": 1e-16, "dt_max": 1.0,
     "max_density_step_fraction": 0.0, "max_neutral_step_fraction": 0.0,
     "max_energy_step_fraction": 0.0,
+    "initial_neutral_state": "fill",
 }
 CLEAN_FLAGS = {
     "Plasma": True, "implicit_heat_conduction": True,
-    "neutral_prebreakdown": False, "neutral_equilibration": False,
-    "launch_plasma_after_equilibration": False,
+    "neutral_prebreakdown": False,
     "cathode_coupling": False, "debug_checks": False,
 }
 

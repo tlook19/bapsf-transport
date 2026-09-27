@@ -44,16 +44,15 @@ ne0 = 2e8
 # exceed the conducting phase it is now expected to contain.
 tau_prebreakdown = 12e-3
 
-[flags]
 # The equilibrated-seed convention is OFF for this configuration. With it on,
 # start_simulation() pre-runs the neutral puff/off accumulation and injects the
 # EQUILIBRATED nn profile as the initial condition -- i.e. the machine is
 # already filled at t = 0 and breaks down almost immediately, which is exactly
-# what compresses the window to ~0.49 ms. Off, the run starts from the direct
-# pre-shot nn0 fill and the puff fills the machine inside the simulated window,
-# which is what the conducting phase physically is.
+# what compresses the window to ~0.49 ms. On the scalar fill the run starts
+# from the direct pre-shot nn0 and the puff fills the machine inside the
+# simulated window, which is what the conducting phase physically is.
 #
 # use_cached_neutral_seed stays at its default False: the seed DATABASE is only
-# consulted when neutral_equilibration is on (and the solver refuses the
-# combination outright), so there is no cache interaction left to disarm.
-neutral_equilibration = false
+# consulted under initial_neutral_state = "equilibrate", so there is no cache
+# interaction left to disarm.
+initial_neutral_state = "fill"

@@ -5739,9 +5739,10 @@ def _ja8_sim(**overrides):
     """A restart-eligible FLUID cathode-jet build at an arming criterion.
 
     Two departures from :func:`_ja_fluid_sim`, both forced by the restart:
-    ``neutral_equilibration`` is cleared (a resume REFUSES it at construction,
-    because ``start_simulation`` would overwrite the restored state, and the
-    unbroken leg clears it too so all three legs carry one config), and the
+    ``initial_neutral_state`` is ``"fill"`` (a resume REFUSES the equilibrating
+    values at construction, because ``start_simulation`` would overwrite the
+    restored state, and the unbroken leg selects it too so all three legs carry
+    one config), and the
     criterion is named here so every leg arms on the same pair.
 
     The arm is ``JA_IMMEDIATE_ARM_A``: the latch has to be ARMED at the handoff
@@ -5751,7 +5752,7 @@ def _ja8_sim(**overrides):
     d, fl = default_config()
     d = dict(d)
     fl = dict(fl)
-    fl["neutral_equilibration"] = False
+    d["initial_neutral_state"] = "fill"
     d["neutral_jet_arm_current_A"] = JA_IMMEDIATE_ARM_A
     d["neutral_jet_disarm_current_A"] = 0.0
     d.update(overrides)

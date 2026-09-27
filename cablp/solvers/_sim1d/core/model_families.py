@@ -248,14 +248,12 @@ ANODE_SURFACE_RECYCLE_MEMBERS = (
 
 #: Family F -- how the initial neutral state is established.
 INITIAL_NEUTRAL_STATE_MEMBERS = (
-    (FLAGS, "neutral_equilibration"),
-    (FLAGS, "launch_plasma_after_equilibration"),
+    (PARAMS, "initial_neutral_state"),
     (PARAMS, "neutral_equilibration_cycles"),
     (PARAMS, "neutral_equilibration_dt"),
     (PARAMS, "equilibration_gas_puff_on_s"),
     (FLAGS, "use_cached_neutral_seed"),
     (PARAMS, "neutral_seed_cache_dir"),
-    (FLAGS, "neutral_initial_profile"),
     (PARAMS, "nn0"),
     (PARAMS, "nn0_profile"),
     (PARAMS, "nn0_annulus_profile"),
@@ -266,26 +264,21 @@ INITIAL_NEUTRAL_STATE_MEMBERS = (
 #: as ``(route, (space, key), off_value, why)``: a route is ARMED when its key
 #: holds anything other than ``off_value``, and at most one may be armed.
 #:
-#: THREE routes, not the census's four. MEASURED 2026-08-30: ``cached_seed`` is
-#: NOT a fourth exclusive route -- it REQUIRES ``neutral_equilibration`` (the
-#: co-requisite is validation.py's ``use_cached_neutral_seed is ON but the
-#: configuration is incoherent`` refusal) and its dispatch is a hit/miss branch
-#: INSIDE the equilibration path, so it is a modifier of ``equilibrate``, not
-#: an alternative to it. That also settles the count: three routes have three
-#: pairs, and the code carries exactly three direct pairwise refusals, not the
-#: census's six. Collapsing the four-route reading into one selector would have
-#: made cached_seed and equilibrate mutually exclusive -- a behaviour change,
-#: and one this migration is forbidden to make.
+#: TWO routes. The equilibrated seed and the shaped per-cell fill are values
+#: of the one ``initial_neutral_state`` selector, so they cannot both be armed
+#: at all; the selector is armed at any value but ``"fill"``, the scalar fill a
+#: restart payload replaces. ``cached_seed`` is NOT a route: it REQUIRES
+#: ``initial_neutral_state = "equilibrate"`` (validation.py's
+#: ``use_cached_neutral_seed is ON but the configuration is incoherent``
+#: refusal) and its dispatch is a hit/miss branch INSIDE the equilibration
+#: path, so it is a modifier of that value, not an alternative to it.
 INITIAL_NEUTRAL_STATE_ROUTES = (
     (
-        "equilibrate", (FLAGS, "neutral_equilibration"), False,
-        "start_simulation() runs the puff/off accumulation and seeds nn from "
-        "it, overwriting whatever the initial condition put there.",
-    ),
-    (
-        "profile", (FLAGS, "neutral_initial_profile"), False,
-        "the shaped per-cell nn0_profile IS the initial fill, and it "
-        "supersedes the scalar nn0 for both zones.",
+        "initial_neutral_state", (PARAMS, "initial_neutral_state"), "fill",
+        "'equilibrate' and 'equilibrate_only' run the puff/off accumulation "
+        "and seed nn from it, and 'profile' makes the shaped per-cell "
+        "nn0_profile the initial fill; each establishes the initial "
+        "condition a restart payload would otherwise replace.",
     ),
     (
         "restart", (PARAMS, "restart_from"), None,

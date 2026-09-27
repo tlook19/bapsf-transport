@@ -1,6 +1,7 @@
 """Cached neutral-equilibration seed (R5 ES1 tuning pass, 2026-07-26).
 
-The optional neutral pre-equilibration (``neutral_equilibration`` flag) runs a
+The optional neutral pre-equilibration (``initial_neutral_state =
+"equilibrate"``) runs a
 100-cycle puff/off neutral-only accumulation before the plasma launch, and injects
 ONLY the equilibrated neutral density profile into the plasma run's initial state
 (``_apply_neutral_equilibration_result`` seeds ``nn``/``nn_a``; n, M, Ee, Ei, M_n
@@ -116,15 +117,17 @@ INERT_PARAM_KEYS = frozenset({
     # inert; every other neutral knob stays in the hash.
     #
     # Its shaped counterparts nn0_profile / nn0_annulus_profile are
-    # deliberately NOT listed here, and neither is the neutral_initial_profile
-    # flag in INERT_FLAG_KEYS. They are inert for a stronger reason than nn0
-    # is -- the flag REFUSES neutral_equilibration at construction, so an
-    # armed profile can never reach this cache at all -- but the fail-closed
-    # rule above says a key leaves the hash only when it must, and these three
-    # sit at their None/False defaults on every config that can be cached.
-    # They contribute a constant to the signature, which rotates the hash once
-    # (a cold recompute, bit-exact results) and is stable thereafter.
+    # deliberately NOT listed here. They are inert for a stronger reason than
+    # nn0 is -- they are read only under initial_neutral_state='profile', which
+    # never equilibrates, so an armed profile can never reach this cache at all
+    # -- but the fail-closed rule above says a key leaves the hash only when it
+    # must, and these two sit at their None defaults on every config that can
+    # be cached. They contribute a constant to the signature, which rotates the
+    # hash once (a cold recompute, bit-exact results) and is stable thereafter.
     "nn0",
+    # The initial-neutral-state selector triggers the equilibration; it is not
+    # seed content, and every config that can be cached holds 'equilibrate'.
+    "initial_neutral_state",
     # The prescribed per-cell geometry keys (plasma_radius_profile_cm,
     # machine_radius_profile_cm, plasma_area_max_vessel_fraction,
     # neutral_annulus_volume_fraction_min) are deliberately NOT listed here,
@@ -178,8 +181,7 @@ INERT_FLAG_KEYS = frozenset({
     # every stored seed's signature the moment such a key joins the template,
     # an invalidation with no neutral content behind it.
     "end_wall_sheath_full_debit", "cathode_face_full_debit",
-    # cache-control + equilibration-trigger flags (not seed content)
-    "neutral_equilibration", "launch_plasma_after_equilibration",
+    # the cache-control flag (not seed content)
     "use_cached_neutral_seed",
 })
 

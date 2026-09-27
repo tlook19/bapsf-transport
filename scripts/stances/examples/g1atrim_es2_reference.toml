@@ -84,15 +84,14 @@ cathode_prescribed_start_s = 0.00009
 # rest agree with the base because the two configurations differ in the fill
 # alone.
 #
-# The equilibrate route is OFF and the profile route is armed: the equilibrated
-# seed would overwrite the shaped foot, and the solver refuses the pair. The
-# equilibration cycle count, its dt and the cached-seed modifier are config
-# defaults, inert while the route is off, and are stated because a block is an
-# inventory. equilibration_gas_puff_on_s is NOT inert -- the 27 ms puff window
+# The selector takes the profile route: the shaped foot below IS the initial
+# fill, and an equilibrated seed would overwrite it, so the one selector arms
+# either and never both. The equilibration cycle count, its dt and the
+# cached-seed modifier are config defaults, inert on this route, and are stated
+# because a block is an inventory. equilibration_gas_puff_on_s is NOT inert -- the 27 ms puff window
 # is the base the fill below was built on.
 [models.initial_neutral_state]
-neutral_equilibration = false
-launch_plasma_after_equilibration = true
+initial_neutral_state = "profile"
 neutral_equilibration_cycles = 100
 neutral_equilibration_dt = 0.01
 equilibration_gas_puff_on_s = 0.027
@@ -112,8 +111,6 @@ use_cached_neutral_seed = false
 # has already reached, so the model never sees it and the fill carries it
 # instead. The injected inventory that foot carries is 5.01e19 atoms -- the
 # member decides where that inventory lands, not how much of it there is.
-# The profile flag stays with the rows because the per-cell arrays it requires
-# are sized to this mesh.
 #
 # HOW THE ROWS ARE REPRODUCED. The REGISTERED route: the builder named with
 # this rung and nothing else about the spreading, so it supplies its own
@@ -139,7 +136,6 @@ use_cached_neutral_seed = false
 # and the per-cell geometry profiles the reference's own rows were built on --
 # and scripts/verify/verify_fill_spreading.py's G0c leg rebuilds the rows below
 # through this route, at raw uint64, when it is given them.
-neutral_initial_profile = true
 nn0_profile = [
   6341136458302.529, 42657560560498.67, 42900189900825.54, 43522967236707.33,
   43779061077031.43, 44121586931201.98, 46680299990192.15, 46975392464848.37,

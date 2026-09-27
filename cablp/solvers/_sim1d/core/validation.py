@@ -275,26 +275,49 @@ def resolve_energy_exchange_rate_fraction(input_dict):
     return fraction
 
 
+#: The accepted values of ``initial_neutral_state``, and what each one arms:
+#: ``(equilibrate, launch, profile)``. ``equilibrate`` runs the pre-run
+#: puff/off accumulation in ``start_simulation()``; ``launch`` proceeds into
+#: the plasma run after it; ``profile`` starts from the per-cell
+#: ``nn0_profile``. An equilibrated seed and a shaped profile would each
+#: overwrite the other, so no value arms both.
+INITIAL_NEUTRAL_STATES = {
+    "equilibrate": (True, True, False),
+    "equilibrate_only": (True, False, False),
+    "fill": (False, False, False),
+    "profile": (False, False, True),
+}
+
+
+def resolve_initial_neutral_state(input_dict):
+    """Return ``(value, equilibrate, launch, profile)`` for the configuration.
+
+    Raises ``ValueError`` naming the accepted values for any other value.
+    """
+    value = input_dict.get("initial_neutral_state")
+    if value not in INITIAL_NEUTRAL_STATES:
+        raise ValueError(
+            "initial_neutral_state must be one of "
+            f"{sorted(INITIAL_NEUTRAL_STATES)} (got {value!r})"
+        )
+    return (value, *INITIAL_NEUTRAL_STATES[value])
+
+
 def validate_neutral_seed_cache_config(input_dict, flags):
     """Reject an incoherent cached-neutral-seed configuration (loud, at build).
 
     ``use_cached_neutral_seed`` replaces the live neutral equilibration with a
     cached seed, so it requires the equilibration pipeline to be selected
-    (``neutral_equilibration`` + ``launch_plasma_after_equilibration``) and a
-    cache path. A missing path or a contradictory flag would otherwise be a
-    silent no-op.
+    (``initial_neutral_state = "equilibrate"``) and a cache path. A missing
+    path or a contradictory selection would otherwise be a silent no-op.
     """
     if not flags.get("use_cached_neutral_seed", False):
         return
     problems = []
-    if not flags.get("neutral_equilibration", False):
+    if input_dict.get("initial_neutral_state") != "equilibrate":
         problems.append(
-            "neutral_equilibration must be ON (the cache seeds that pipeline)"
-        )
-    if not flags.get("launch_plasma_after_equilibration", False):
-        problems.append(
-            "launch_plasma_after_equilibration must be ON (nothing to seed "
-            "otherwise)"
+            "initial_neutral_state must be 'equilibrate' (the cache seeds "
+            "that pipeline, and nothing is launched to seed otherwise)"
         )
     if not input_dict.get("neutral_seed_cache_dir"):
         problems.append(

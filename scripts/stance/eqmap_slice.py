@@ -3,15 +3,14 @@
 ``scripts/run/eqmap_make.py`` records nn(z,t) and nn_a(z,t) through a foot-fill
 101st cycle -- a map of starting distributions parameterised by pre-fill time.
 This script takes that map and a pre-fill time and writes the
-shaped-initial-fill npz that the EXISTING ``neutral_initial_profile``
-capability consumes::
+shaped-initial-fill npz that the EXISTING ``initial_neutral_state =
+"profile"`` capability consumes::
 
     python scripts/stance/eqmap_slice.py --map scripts/eqmap_demo_es1_nx240.npz \
         --prefill-s 4.5e-3 --out scripts/eqmap_nn0_es1_t4p5ms.npz
 
     python scripts/run/run_m6_point.py --es 1 --nx 240 --two-zone \
         --nn0-profile-npz scripts/eqmap_nn0_es1_t4p5ms.npz \
-        --extra-flag neutral_equilibration=false \
         --sgp 9010 --save-h5 scripts/somerun.h5
 
 No second initial-condition mechanism is built here.  The output is an ordinary
@@ -243,11 +242,7 @@ def selfcheck(out_path, header):
     if nn0_annulus_profile is not None:
         params["nn0_annulus_profile"] = nn0_annulus_profile
     params["nn0"] = None
-    flags["neutral_initial_profile"] = True
-    # The stance ships neutral_equilibration ON and the solver REFUSES it with
-    # a shaped IC -- the same delta a shaped campaign arm states on its command
-    # line (--extra-flag neutral_equilibration=false).
-    flags["neutral_equilibration"] = False
+    params["initial_neutral_state"] = "profile"
 
     sim = LAPDSim1D(params, flags)
     ok_nn = bool(np.array_equal(sim.state.nn, np.asarray(nn0_profile)))
@@ -371,8 +366,7 @@ def main(argv=None):
         "annulus_min_cm3": None if nn_a_slice is None else float(nn_a_slice.min()),
         "annulus_max_cm3": None if nn_a_slice is None else float(nn_a_slice.max()),
         "run_with": (
-            "run_m6_point.py --nn0-profile-npz <this file> "
-            "--extra-flag neutral_equilibration=false"
+            "run_m6_point.py --nn0-profile-npz <this file>"
             + (" --two-zone" if nn_a_slice is not None else "")
         ),
     }

@@ -166,21 +166,12 @@ def main(argv=None):
                    help="path to a shaped initial neutral profile written by "
                         "scripts/stance/sp3_build_nn0.py. The DRIVER does the file "
                         "I/O -- the solver never opens a file -- and passes "
-                        "the arrays in as input_dict values. It arms the "
-                        "neutral_initial_profile flag, sets nn0=None (the "
-                        "scalar is superseded, and the solver refuses an "
-                        "armed flag alongside an explicit scalar), and passes "
-                        "nn0_annulus_profile too when the npz carries one. "
-                        "NOT set here: the reference stance already ships "
-                        "neutral_equilibration OFF, but the solver REFUSES "
-                        "neutral_initial_profile alongside an armed "
-                        "neutral_equilibration at construction (the "
-                        "equilibration seed would overwrite the shaped "
-                        "profile), so a run against a config that ships it "
-                        "ON must pass --extra-flag "
-                        "neutral_equilibration=false itself -- a stance "
-                        "delta the arm states rather than inherits. Applied "
-                        "AFTER --stance and BEFORE "
+                        "the arrays in as input_dict values. It selects "
+                        "initial_neutral_state='profile', sets nn0=None (the "
+                        "scalar is superseded, and the solver refuses the "
+                        "profile route alongside an explicit scalar), and "
+                        "passes nn0_annulus_profile too when the npz carries "
+                        "one. Applied AFTER --stance and BEFORE "
                         "--extra/--extra-flag, so it overrides a stance's own "
                         "shaped fill and either of those can still override "
                         "any of it")
@@ -311,9 +302,11 @@ def main(argv=None):
                 str(data["provenance"]) if "provenance" in data else "(absent)"
             )
         extra["nn0"] = None
-        flags_extra["neutral_initial_profile"] = True
-        cli_supplied.update(("nn0", "nn0_profile", "nn0_annulus_profile"))
-        cli_supplied_flags.add("neutral_initial_profile")
+        extra["initial_neutral_state"] = "profile"
+        cli_supplied.update(
+            ("nn0", "nn0_profile", "nn0_annulus_profile",
+             "initial_neutral_state")
+        )
         print(f"shaped nn0 from {args.nn0_profile_npz}: {provenance}")
     npz_params, npz_provenance = parse_npz_overrides(args.extra_npz)
     for key, value in npz_params.items():

@@ -28,26 +28,53 @@ def initial_condition_defaults():
         conventions and ``"H"`` for hydrogen neutral/proton conventions.
     ne0:
         Uniform initial plasma/electron density [cm^-3].
+    initial_neutral_state:
+        How the initial neutral state is established. One of:
+
+        ``"equilibrate"`` (default): ``start_simulation()`` runs the pre-run
+        puff/off neutral accumulation -- an inner neutral-only sim with
+        ``Plasma`` and ``cathode_coupling`` off, for
+        ``neutral_equilibration_cycles`` at ``neutral_equilibration_dt`` --
+        seeds ``nn`` (and ``nn_a``) from its settled state, and proceeds into
+        the plasma run.
+
+        ``"equilibrate_only"``: the same accumulation, after which
+        ``start_simulation()`` stops and returns the equilibration result
+        itself. This is how the neutral-only seed is produced.
+
+        ``"fill"``: no accumulation; the run starts from the uniform scalar
+        ``nn0`` fill.
+
+        ``"profile"``: the run starts from the per-cell ``nn0_profile`` (and
+        optionally ``nn0_annulus_profile``), which supersedes the scalar
+        ``nn0``.
+
+        Calling ``run()`` directly under the two equilibrating values performs
+        NO equilibration and WARNS rather than raising, since the run is well
+        defined -- it starts from the direct ``nn0`` fill. The equilibrating
+        values and ``"profile"`` each refuse ``restart_from`` at construction:
+        a restart payload replaces the whole initial condition after
+        construction, so either would be silently overwritten. Any other value
+        raises at construction naming the four accepted.
     nn0:
-        Uniform initial neutral density [cm^-3]. REQUIRED, except under the
-        ``neutral_initial_profile`` flag, which supersedes it and requires
+        Uniform initial neutral density [cm^-3]. REQUIRED, except under
+        ``initial_neutral_state = "profile"``, which supersedes it and requires
         ``None``; a ``None`` reaching ``resolve_nn0`` any other way raises,
         the frozen gas-puff table that used to fill one in being retired.
 
-        This is the DIRECT-RUN fill only. The equilibrated path
-        (``neutral_equilibration`` via ``start_simulation``) does NOT read this
-        value: ``run_neutral_equilibration`` pins its inner sim's start at 1e8
-        and overwrites nn with the equilibrated
-        profile, so the two paths are decoupled and this default can move
-        without disturbing any equilibrated run. Since ``neutral_equilibration``
-        ships ON, the uniform value is a PLACEHOLDER that no shipped
+        This is the DIRECT-RUN fill only. The equilibrated path does NOT read
+        this value: ``run_neutral_equilibration`` pins its inner sim's start
+        at 1e8 and overwrites nn with the equilibrated profile, so the two
+        paths are decoupled and this default can move without disturbing any
+        equilibrated run. Since ``initial_neutral_state`` ships at
+        ``"equilibrate"``, the uniform value is a PLACEHOLDER that no shipped
         configuration reads -- equilibration is the convention for the fill a
         run starts from.
     nn0_profile:
         PER-CELL initial neutral density [cm^-3]: a sequence of length ``nx``
         (the grid's cell count), every entry finite and ``> 0``. Read ONLY
-        under the ``neutral_initial_profile`` flag, and REQUIRED by it; with
-        the flag off it must be ``None`` or construction raises.
+        under ``initial_neutral_state = "profile"``, and REQUIRED by it; under
+        any other value it must be ``None`` or construction raises.
 
         Supplied as VALUES, not as a shape: these are the absolute densities
         the run starts from, cell by cell, and nothing rescales or normalizes
@@ -56,18 +83,18 @@ def initial_condition_defaults():
         is built outside and passed here.
 
         It supersedes the scalar ``nn0`` for BOTH zones, so ``nn0`` must be
-        ``None`` when the flag is armed -- an armed flag with a non-``None``
-        scalar raises rather than establishing a silent precedence.
-        ``resolve_nn0`` is not consulted on the armed path.
+        ``None`` under ``"profile"`` -- a non-``None`` scalar there raises
+        rather than establishing a silent precedence. ``resolve_nn0`` is not
+        consulted on that path.
     nn0_annulus_profile:
         PER-CELL initial ANNULUS neutral density [cm^-3] under the
         ``neutral_two_zone`` closure: same length, finiteness and positivity
-        rules as ``nn0_profile``. Read ONLY under the
-        ``neutral_initial_profile`` flag, and valid only with
+        rules as ``nn0_profile``. Read ONLY under
+        ``initial_neutral_state = "profile"``, and valid only with
         ``neutral_two_zone`` on -- setting it without that closure raises,
         because there is no second neutral field for it to land in.
 
-        OPTIONAL when armed: omitted, the annulus starts at ``nn0_profile``,
+        OPTIONAL under ``"profile"``: omitted, the annulus starts at ``nn0_profile``,
         which is the shaped form of the shipped convention that both zones
         start at the same fill density. Supplying it addresses the two zones
         separately, which is what a construction that routes its inventory
@@ -90,12 +117,13 @@ def initial_condition_defaults():
         # --- ACTIVE (production) ---
         "gas_type": "He",
         "ne0": 1e9,
+        "initial_neutral_state": "equilibrate",
         # Pre-shot neutral background for DIRECT runs. The equilibrated path
         # never reads this (see the docstring above).
         "nn0": 2.0e13,
-        # Shaped initial neutral fill (neutral_initial_profile flag). Both are
-        # None on every shipped configuration: a per-cell IC has no default
-        # shape to inherit, and the flag's whole content is what the caller
+        # Shaped initial neutral fill (initial_neutral_state = "profile"). Both
+        # are None on every shipped configuration: a per-cell IC has no default
+        # shape to inherit, and the route's whole content is what the caller
         # computed outside.
         "nn0_profile": None,
         "nn0_annulus_profile": None,
@@ -2681,7 +2709,8 @@ def restart_defaults():
         The load raises ``ValueError`` at construction if the file is missing,
         carries another format, or was produced under a different grid, packed
         state layout, or structural closure key; and if the run also requests
-        ``neutral_equilibration`` (which would overwrite the restored state) or
+        an equilibrating ``initial_neutral_state`` (which would overwrite the
+        restored state) or
         a ``neutral_model`` whose distribution function the payload does not
         carry. The full inventory, and the justification for each deliberately
         dropped member, is ``_sim1d/results/restart.py`` together with the
@@ -3134,20 +3163,6 @@ input_flags_template_1d = {
     # the off path's wall bounds ARE the two end planes, so every clip reduces
     # to the historical one).
     "neutral_hot_internal_wall": True,
-    # Shaped initial neutral fill. The run's neutral IC comes from a PER-CELL
-    # profile of absolute densities (nn0_profile, and optionally
-    # nn0_annulus_profile under neutral_two_zone) instead of the uniform
-    # scalar nn0. Values, not a shape: nothing is rescaled or normalized, so
-    # the array IS the initial condition. Requires nn0_profile, requires
-    # nn0 = None (the scalar is superseded, and an armed flag with an
-    # explicit scalar raises rather than establishing a
-    # silent precedence), and REFUSES neutral_equilibration and restart_from
-    # -- both of those overwrite nn after construction, so a shaped IC under
-    # either would be silently discarded. Each is a construction-time
-    # ValueError, as is either profile key set with this flag off. Default
-    # OFF and bit-exact off (presence-gated: the off path builds no profile
-    # and the initial condition is the historical uniform fill).
-    "neutral_initial_profile": False,
     # Replace the drag + frictional-heating + elastic thermalization +
     # CX-cooling quartet with ONE moment-closed reduced ion-neutral collision
     # operator (Phelps He+/He isotropic+backscatter rates, T_eff=(Ti+Tn)/2).
@@ -3181,30 +3196,11 @@ input_flags_template_1d = {
     # the silent fallback the house rules forbid. Keeping it True leaves the
     # duration as the single sufficient control.
     "neutral_prebreakdown": True,
-    # The pre-run puff/off neutral accumulation that seeds nn. ONLY
-    # start_simulation() honours it: an inner sim runs with Plasma,
-    # cathode_coupling, this flag and launch_plasma_after_equilibration all off,
-    # for neutral_equilibration_cycles at neutral_equilibration_dt, and its
-    # settled neutral state becomes the outer run's initial fill. Calling run()
-    # directly with this ON performs NO equilibration and WARNS rather than
-    # raising, since the run is well defined -- it just starts from the direct
-    # nn0 fill. One of the three mutually exclusive initial-neutral-state routes.
-    # Refused with restart_from (a restart payload IS the neutral seed, and the
-    # accumulation would overwrite the restored state) and with
-    # neutral_initial_profile (which the accumulation would likewise discard);
-    # both at construction.
-    "neutral_equilibration": True,
-    # Whether start_simulation() proceeds into the plasma run after that
-    # accumulation. OFF, it stops and returns the equilibration result itself,
-    # which is how the neutral-only seed is produced. Pinned off on the
-    # equilibration inner sim. use_cached_neutral_seed requires it ON -- with
-    # nothing launched there is nothing for the cached seed to seed.
-    "launch_plasma_after_equilibration": True,
     # Reuse a cached neutral-equilibration seed (the equilibrated nn/nn_a
     # profile) instead of re-running the ~1-min 100-cycle equilibration every
     # run. Default OFF and bit-exact off.
-    # When ON, requires neutral_equilibration + launch_plasma_after_equilibration
-    # ON and a neutral_seed_cache_dir (the signature-keyed seed DATABASE):
+    # When ON, requires initial_neutral_state = "equilibrate" and a
+    # neutral_seed_cache_dir (the signature-keyed seed DATABASE):
     # a miss (new neutral-flow config) equilibrates once and stores it. See
     # core/neutral_seed_cache.py and scripts/run/build_neutral_seed_cache.py.
     "use_cached_neutral_seed": False,
@@ -3813,6 +3809,19 @@ RETIRED_FLAG_KEYS = {
     "coverage_closure": (
         "nothing: the clumpy-plasma coverage closure is removed"
     ),
+    # The initial-neutral-state flags, folded into one selector.
+    "neutral_equilibration": (
+        "initial_neutral_state: 'equilibrate' (or 'equilibrate_only' where "
+        "launch_plasma_after_equilibration was off) for the ON value, and "
+        "'fill' (or 'profile' where neutral_initial_profile was on) for OFF"
+    ),
+    "launch_plasma_after_equilibration": (
+        "initial_neutral_state: 'equilibrate' launches the plasma run after "
+        "the accumulation, 'equilibrate_only' stops there"
+    ),
+    "neutral_initial_profile": (
+        "initial_neutral_state='profile'"
+    ),
 }
 
 
@@ -4049,7 +4058,7 @@ def resolve_nn0(input_dict):
 
     Raises ``ValueError`` on a ``None``, which under the solver's call order
     is a construction-time refusal. ``None`` is still the REQUIRED value under
-    the ``neutral_initial_profile`` flag -- that path supersedes the scalar
+    ``initial_neutral_state = "profile"`` -- that path supersedes the scalar
     with a per-cell array and does not call this function at all.
     """
     nn0 = input_dict.get("nn0")
@@ -4058,7 +4067,7 @@ def resolve_nn0(input_dict):
             "nn0 is None and there is no table to resolve it from (the "
             "frozen gas-puff nn0 table was retired). nn0 accepts a uniform "
             "initial neutral density in cm^-3; None is accepted ONLY under "
-            "the neutral_initial_profile flag, which supersedes the scalar "
+            "initial_neutral_state='profile', which supersedes the scalar "
             "with the per-cell nn0_profile array."
         )
     return nn0

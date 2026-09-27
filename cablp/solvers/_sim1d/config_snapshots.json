@@ -1,20 +1,20 @@
 {
   "cases": {
     "compare_sim1d_es1": {
-      "sha256": "6bb7ac7cf96042a6b46362a720ecc4ad4c1522df40214ec15e5d607f21892056"
+      "sha256": "6e9c9e9850698cd474a16eb93b071a3fc4ccd11a4ccb799e4ba04c668e1d192f"
     },
     "production_golden": {
-      "sha256": "0061b338af24f8a46ef022e173b4294fb7be3b89c165dbddd6197992942a181d"
+      "sha256": "3be36d59fbfb6bb9c19c4453a210d525efe93d6633ab58b772cdc3b40abcddc4"
     },
     "run_m6_point_es1_stance_g1atrim": {
-      "sha256": "923431be040f612b6714b3f1eec27c4fc0290b6bc804f36ea88ede31ac3de405"
+      "sha256": "5650859b01cd9a51f52f9a251e7e2f3233b3815ea94b4be8aebbf33f57970e2f"
     },
     "run_mechanism_ladder_es1_stance_g1atrim": {
-      "sha256": "923431be040f612b6714b3f1eec27c4fc0290b6bc804f36ea88ede31ac3de405"
+      "sha256": "5650859b01cd9a51f52f9a251e7e2f3233b3815ea94b4be8aebbf33f57970e2f"
     }
   },
-  "flag_count": 37,
-  "manifest_sha256": "e01dbd952416d564c107411241210df6b99f0fe435f7ff2f4ea09ad35ba16f52",
-  "parameter_count": 220,
+  "flag_count": 34,
+  "manifest_sha256": "1f00a4ffab85a03810e38a02a46ecf52a202583d447a46c693028dc193d3d912",
+  "parameter_count": 221,
   "schema": "lapdsim1d-resolved-config-snapshots-v1"
 }

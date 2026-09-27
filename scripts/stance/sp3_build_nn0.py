@@ -1,7 +1,7 @@
 """Build the sp3 shaped initial neutral profile nn0(z) for the foot-shape arm.
 
 INSTRUMENT, not repo physics: this script is the VALUE PRODUCER behind the
-solver's ``neutral_initial_profile`` capability, which ships no number of its
+solver's ``initial_neutral_state = "profile"`` capability, which ships no number of its
 own. It writes an ``.npz`` that ``run_m6_point.py --nn0-profile-npz`` hands to
 the solver as ``nn0_profile`` / ``nn0_annulus_profile``.
 

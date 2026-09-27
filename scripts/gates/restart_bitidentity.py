@@ -74,7 +74,7 @@ def scenario_config(name):
     # Inert for a direct run() (only start_simulation reads it), and cleared so
     # the unsplit and split runs carry byte-identical configs apart from
     # restart_from itself.
-    flags["neutral_equilibration"] = False
+    params["initial_neutral_state"] = "fill"
     if name == "meanfield":
         # CHEAP, and deliberately in the dt-growth-dominated regime: over this
         # window the growth ramp is the active bound on most steps, which is

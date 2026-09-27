@@ -84,7 +84,7 @@ def build_config(nx, tracer_on, extra=None):
             "cathode_emissivity": 0.7,
         }
     )
-    flags["neutral_equilibration"] = False
+    params["initial_neutral_state"] = "fill"
     flags["regime_tracer"] = bool(tracer_on)
     if extra:
         for key, value in extra.items():
