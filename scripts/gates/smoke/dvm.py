@@ -165,10 +165,8 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
 
     def kd_expected(values):
         # The coupling term is plasma-coupled, so it takes the same
-        # dead-cell mask as every other plasma term when that stance is on.
-        if kd_sim._active_plasma_topology:
-            return np.where(kd_active, values, 0.0)
-        return values
+        # dead-cell mask as every other plasma term.
+        return np.where(kd_active, values, 0.0)
 
     assert np.array_equal(
         np.asarray(kd_coupling.M, dtype=float), kd_expected(kd_dvm.M_transfer)

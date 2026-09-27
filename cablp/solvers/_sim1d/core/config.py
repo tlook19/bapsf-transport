@@ -625,12 +625,6 @@ def output_defaults():
 def model_mode_defaults():
     """Return string-valued model selector defaults.
 
-    hyperbolic_wave_speed:
-        Signal speed used by both the Rusanov dissipation ``a_max`` and the
-        plasma CFL. ``"isothermal"`` is the historical gamma=1 Bohm
-        speed ``sqrt(Te/m_i)``; ``"adiabatic"`` (default) is the exact linear
-        acoustic speed of the implemented gamma=5/3 two-species ideal-gas
-        energy system, ``sqrt((5/3)(Te+Ti)/m_i)``.
     Ti_birth_ionization:
         Ion birth temperature model for ionization -- the temperature the ion
         BORN by bulk ionization, by a beam ionization, and by the gas-puff
@@ -1113,11 +1107,6 @@ def model_mode_defaults():
     """
     return {
         # --- ACTIVE ---
-        # "adiabatic" is the exact linear acoustic speed of the implemented
-        # energy system: its pressure work is -p_s div u, so the system is the
-        # gamma=5/3 one and sqrt((5/3)(Te+Ti)/m_i) is the speed the Rusanov
-        # a_max and the CFL must use for the flux to bound its own signals.
-        "hyperbolic_wave_speed": "adiabatic",
         "Ti_birth_ionization": "neutral",
         "neutral_model": "moment",
         # 2nd-order operator-split pair; both are needed together with
@@ -1203,9 +1192,8 @@ def fudge_factor_defaults():
         parallel flux ``q_SH`` is capped. The limiter scales the conductivity
         per cell, so the operator stays a conservative flux divergence, and
         is frozen at the incoming ``Te`` like ``kappa`` itself. A smaller
-        ``f`` lowers the ceiling and suppresses more. Read only when the
-        ``electron_heat_flux_limit`` flag is on, where it must be ``> 0``;
-        raises at construction otherwise.
+        ``f`` lowers the ceiling and suppresses more. The limiter is always
+        on and ``f`` must be ``> 0``; raises at construction otherwise.
     heat_flux_limiter_exponent:
         Knudsen exponent ``p`` in that limiter's suppression factor
         ``lambda = 1/(1 + (q_SH/q_sat)^p)``, applied as
@@ -1217,8 +1205,7 @@ def fudge_factor_defaults():
         limiter. ``p > 1`` suppresses
         the steep-gradient (high-ratio, non-local) flux much harder while
         leaving the shallow-gradient limit near-Spitzer -- a separation a
-        single free-streaming fraction cannot express. Read only when the
-        ``electron_heat_flux_limit`` flag is on, where it must be ``> 0``;
+        single free-streaming fraction cannot express. Must be ``> 0``;
         raises at construction otherwise.
     b_surface_loss:
         Plasma surface neutralization/loss scale factor.
@@ -1261,16 +1248,15 @@ def fudge_factor_defaults():
         # cascade). Net = I_ion - E_rad. The PAIR is the consistent unit.
         # adf11 grid bottoms at 0.2 eV; lookups clamp there.
         "recombination_energy_return": False,
-        # --- Electron heat-flux limiter (read only when the
-        # electron_heat_flux_limit flag is on, which is a shipped default) ---
+        # --- Electron heat-flux limiter (always on) ---
         # Free-streaming fraction f in q_sat = f*n*Te*v_the -- the ceiling
         # (Cowie & McKee, ApJ 211 (1977) 135, eq. 7) that the harmonic cap
         # saturates toward. Convention: v_the = sqrt(Te/m_e), as in Malone
         # 1975 / Fundamenski 2005; a coefficient quoted in the Cowie & McKee
         # convention needs *sqrt(2/pi) = 0.7979 to be read as an f here.
         "heat_flux_limiter_f": 0.45,
-        # Non-local Knudsen exponent p for that limiter (read only when
-        # electron_heat_flux_limit is on). lambda = 1/(1+Kn^p)
+        # Non-local Knudsen exponent p for that limiter.
+        # lambda = 1/(1+Kn^p)
         # with Kn = q_SH/q_sat. p=1.0 (default) is the harmonic form of
         # Malone 1975 / Fundamenski 2005 eq. 10a. p>1 suppresses the
         # steep-gradient (high-Kn, non-local)
@@ -2304,8 +2290,8 @@ def timestep_defaults():
         only widens the ceiling the ramp itself imposes.
     surface_loss_floor_exempt_exit_rtol:
         Outer (re-admission) threshold [dimensionless] of a two-threshold band
-        on the ``surface_loss`` floor-aware drain exemption. Read only while
-        the ``surface_loss_floor_exempt`` flag is on. The default is 0.1. Zero
+        on the ``surface_loss`` floor-aware drain exemption. The default is
+        0.1. Zero
         disables the band entirely: the exemption stays single-threshold and
         knife-edge, and a run is bit-exact with one predating this key.
 
@@ -2330,14 +2316,13 @@ def timestep_defaults():
         width.
 
         Must be strictly greater than ``solver.SURFACE_LOSS_FLOOR_EXEMPT_RTOL``
-        and strictly less than 1.0 when nonzero, and requires
-        ``surface_loss_floor_exempt``. A value at or below the inner threshold
+        and strictly less than 1.0 when nonzero. A value at or below the inner
+        threshold
         (which would be no band at all), a value at or above 1.0 (which would
         demand a margin larger than the floor energy itself before a cell can
         come back, so the exemption is no longer a hysteresis band around the
-        floor and in the limit is permanent), a negative or non-finite or
-        non-numeric value, and any nonzero value with the flag off each raise
-        ValueError at construction.
+        floor and in the limit is permanent), and a negative or non-finite or
+        non-numeric value each raise ValueError at construction.
 
         The exemption latch it introduces is per-cell, per-energy-channel RUN
         STATE: it lives on the solver instance, advances on every
@@ -2560,19 +2545,6 @@ input_flags_template_1d = {
     # the walk window would be reflecting cathodes, trapping the walkers, and the
     # walk has no termination convention for that). A structural restart key.
     "TwinCathode": False,
-    # Typed plasma topology.
-    "active_plasma_topology": True,
-    # Rejection of raw invalid stages BEFORE any floor projection. When on, a
-    # stage whose packed vector or any of n/nn/M/Ee/Ei/M_n/nn_a/M_n_a/En is
-    # non-finite, or whose n/nn/nn_a has gone negative, is REJECTED and the step
-    # retried at a smaller dt -- rather than clipped up to the floors and
-    # accepted, which is how an invalid stage would otherwise be laundered into
-    # a valid-looking trajectory. The raw-stage error is caught inside the step
-    # attempt and surfaces as a rejection reason, never as a propagated
-    # exception. At construction, and only with Plasma on, it additionally
-    # requires Te0 > Te_floor and Ti0 > Ti_floor, raising otherwise. A
-    # non-default value warns at construction (deprecation register).
-    "raw_stage_validation": True,
     # Axial (Spitzer-Harm) electron and ion heat conduction: the RHS term, its
     # parabolic timestep bound, and the conductivity of the implicit substep.
     # OFF returns a zero conduction RHS and withdraws the bound (it returns
@@ -2591,26 +2563,6 @@ input_flags_template_1d = {
     # and into B, so a caller asking a single step for operator_split=False
     # while it is on is refused: those rows would have nowhere to land.
     "implicit_heat_conduction": True,
-    # Flux-limited electron heat conduction. The classical Spitzer-Harm flux
-    # can exceed the free-streaming scale n*Te*v_the at resolved gap faces,
-    # i.e. exceed the physical ceiling. When ON, the electron conductivity is
-    # scaled per cell by lambda = q_sat/(q_sat+q_SH) -- the harmonic form of
-    # Malone 1975 / Fundamenski 2005 eq. 10a, riding on the Cowie & McKee 1977
-    # free-streaming ceiling q_sat = heat_flux_limiter_f * n * Te * v_the -- so
-    # the flux caps at
-    # free-streaming where gradients are steep and recovers Spitzer where they
-    # are shallow. Electron only; ion conduction unchanged. Bit-exact when
-    # off; a declared closure-family A/B instrument. The cap COEFFICIENT
-    # heat_flux_limiter_f is a separate input_dict key with its own default.
-    "electron_heat_flux_limit": True,
-    # Conservative hyperbolic core: kinetic-energy-preserving convective
-    # momentum flux, plus deposit of the Rusanov (n,M) numerical kinetic-energy
-    # dissipation into the ion internal energy. The pressure work is the
-    # literal -p_s div u either way, and it is what pairs the energy rows with
-    # the momentum equation's net pressure force cell by cell -- so the total
-    # plasma energy K+Ee+Ei telescopes LOCALLY, against a face flux that
-    # carries the enthalpy.
-    "hyperbolic_energy_consistent": True,
     # Evolve axial neutral momentum M_n as a sixth conservative field:
     # the drag deposits its momentum into the
     # neutral wind instead of a closure, ionization/recombination exchange
@@ -2701,27 +2653,6 @@ input_flags_template_1d = {
     # a miss (new neutral-flow config) equilibrates once and stores it. See
     # core/neutral_seed_cache.py and scripts/run/build_neutral_seed_cache.py.
     "use_cached_neutral_seed": False,
-    # Floor-aware drain exemption on the "surface_loss" timestep bound
-    # (the afterglow dt-collapse fix): cells pinned at the Te/Ti floor
-    # (electron/ion energy margin within solver.SURFACE_LOSS_FLOOR_EXEMPT_RTOL
-    # of the per-cell floor energy 3/2 n Te_floor, i.e. Te within 0.1% of the
-    # floor) are excluded from the drain-margin bound ONLY -- the
-    # accept-time floor clip resets their margin to float residue every step,
-    # so a persistent drain otherwise pins dt at dt_min indefinitely. One-sided
-    # (all other bounds still govern the cell). ON by default because a run
-    # that reaches a floor-pinned afterglow otherwise cannot finish in finite
-    # time. Recovering the historical bound takes BOTH keys -- clear this flag
-    # and pass surface_loss_floor_exempt_exit_rtol=0.0 -- because the band
-    # below is armed by default and arming it with this flag off raises.
-    #
-    # Re-admission is governed by the params key
-    # surface_loss_floor_exempt_exit_rtol, which is read only while this flag
-    # is on and raises at construction if set with it off. At its default the
-    # exemption is a two-threshold band: entry stays at
-    # SURFACE_LOSS_FLOOR_EXEMPT_RTOL and re-admission needs the wider margin.
-    # Set that key to 0.0 for the knife edge, where any real margin re-admits
-    # the cell immediately.
-    "surface_loss_floor_exempt": True,
     # END-FACE SHEATH ELECTRON-ENERGY BOOKING, one closure per axial end. The
     # two ends are separate faces carrying separate fluxes in separate
     # regimes -- the end wall row is live in every phase, the cathode fall
@@ -3244,6 +3175,12 @@ RETIRED_PARAM_KEYS = {
         "nothing: the end-expansion flare is removed; a flaring flux tube "
         "is expressed by plasma_radius_profile_cm"
     ),
+    # The adopted numerics selector: its one surviving value is
+    # unconditional.
+    "hyperbolic_wave_speed": (
+        "nothing: the Rusanov a_max and the plasma CFL use the adiabatic "
+        "signal speed sqrt((5/3)(Te+Ti)/m_i), unconditionally"
+    ),
 }
 
 
@@ -3434,6 +3371,29 @@ RETIRED_FLAG_KEYS = {
         "nothing: the single-cathode mesh always carries the fixed source "
         "region (source_region_length_cm, source_region_dz_cm); the "
         "TwinCathode mesh is its own uniform column"
+    ),
+    # The adopted numerics flags: the behaviour is unconditional.
+    "active_plasma_topology": (
+        "nothing: the typed plasma topology (closed faces carry their live "
+        "cell's pressure, plasma-dead cells are masked out of every "
+        "plasma-coupled term) is unconditional"
+    ),
+    "hyperbolic_energy_consistent": (
+        "nothing: the kinetic-energy-preserving momentum flux and the "
+        "hyperbolic_dissipation_heating deposit are unconditional"
+    ),
+    "raw_stage_validation": (
+        "nothing: raw invalid stages are rejected before any floor "
+        "projection, unconditionally"
+    ),
+    "surface_loss_floor_exempt": (
+        "nothing: the floor-aware drain exemption on the surface_loss "
+        "timestep bound is unconditional; surface_loss_floor_exempt_exit_rtol "
+        "still sets its re-admission band"
+    ),
+    "electron_heat_flux_limit": (
+        "nothing: the electron heat-flux limiter is unconditional; "
+        "heat_flux_limiter_f and heat_flux_limiter_exponent still set it"
     ),
 }
 

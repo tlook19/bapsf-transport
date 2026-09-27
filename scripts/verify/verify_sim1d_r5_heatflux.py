@@ -1,6 +1,6 @@
 """R5.2 electron heat-flux limiter gate suite (audit A9).
 
-The electron_heat_flux_limit flag (default ON) scales the electron conductivity per
+The electron heat-flux limiter (unconditional) scales the electron conductivity per
 cell by the harmonic flux limiter
     lambda = q_sat / (q_sat + q_SH),  q_sat = f n Te v_the,  q_SH = kappa_e |dTe/dz|
 so the parallel flux caps at the free-streaming ceiling where gradients are steep
@@ -14,8 +14,8 @@ eq. (7). Analytic identities (closed domain, to roundoff):
       everywhere, and -> q_sat in the strong-gradient limit.
   E1  energy conservation: the limited explicit operator conserves total electron
       energy on a closed domain (sum dEe * Vp == 0, still -div(q)).
-  P1  presence: limiter off == no-limiter; limiter on perturbs a steep-gradient
-      state. (The flag ships ON; this gate builds both arms explicitly.)
+  P1  effect: at f = 0.1 the limiter perturbs a steep-gradient state against
+      the large-f arm, which S1 shows is the unlimited Spitzer operator.
 
 Usage:  python scripts/verify/verify_sim1d_r5_heatflux.py
 """
@@ -43,13 +43,12 @@ CLEAN_PARAMS = {
 CLEAN_FLAGS = {"Plasma": True, "cathode_coupling": False, "debug_checks": False}
 
 
-def _sim(limit=False, f=0.3):
+def _sim(f=0.3):
     params, flags = default_config()
     params.update(CLEAN_PARAMS)
     params["nx"] = 60
     params["heat_flux_limiter_f"] = f
     flags.update(CLEAN_FLAGS)
-    flags["electron_heat_flux_limit"] = limit
     return LAPDSim1D(params, flags)
 
 
@@ -76,7 +75,7 @@ def _kappa_e(sim, st):
 
 
 def gate_s1():
-    sim = _sim(limit=True)
+    sim = _sim()
     st = _steep_state(sim)
     ke, Te, n = _kappa_e(sim, st)
     lim = flux_limited_electron_conductivity(ke, Te, n, sim._geometry, f=1.0e8)
@@ -88,7 +87,7 @@ def gate_s1():
 
 
 def gate_s2():
-    sim = _sim(limit=True, f=0.1)
+    sim = _sim(f=0.1)
     st = _steep_state(sim)
     ke, Te, n = _kappa_e(sim, st)
     Te_erg = Te * ev_to_erg
@@ -105,7 +104,7 @@ def gate_s2():
 
 
 def gate_e1():
-    sim = _sim(limit=True, f=0.1)
+    sim = _sim(f=0.1)
     st = _steep_state(sim)
     term = heat_conduction_rhs(
         state=st, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
@@ -123,22 +122,21 @@ def gate_e1():
 
 
 def gate_p1():
-    off = _sim(limit=False)
-    on = _sim(limit=True, f=0.1)
-    st = _steep_state(off)
-    kw_off = off._heat_conduction_kwargs()
+    spitzer = _sim(f=1.0e8)
+    on = _sim(f=0.1)
+    st = _steep_state(spitzer)
+    kw_spitzer = spitzer._heat_conduction_kwargs()
     kw_on = on._heat_conduction_kwargs()
-    r_off = heat_conduction_rhs(
-        state=st, floors=off._floors, ion_mass_g=off._ion_mass_g,
-        mu=off._mu, geometry=off._geometry, **kw_off)
+    r_spitzer = heat_conduction_rhs(
+        state=st, floors=spitzer._floors, ion_mass_g=spitzer._ion_mass_g,
+        mu=spitzer._mu, geometry=spitzer._geometry, **kw_spitzer)
     r_on = heat_conduction_rhs(
         state=st, floors=on._floors, ion_mass_g=on._ion_mass_g,
         mu=on._mu, geometry=on._geometry, **kw_on)
-    flag_off_arm = not off._electron_heat_flux_limit
-    perturbs = np.max(np.abs(r_on.Ee - r_off.Ee)) > 0.0
-    ok = flag_off_arm and perturbs
-    return "P1 presence: flag-off arm is inert; limiter perturbs conduction", ok, (
-        f"flag_off_arm={flag_off_arm}  max|dEe|={np.max(np.abs(r_on.Ee - r_off.Ee)):.2e}"
+    delta = np.max(np.abs(r_on.Ee - r_spitzer.Ee))
+    ok = delta > 0.0
+    return "P1 effect: the f=0.1 limiter perturbs the large-f (Spitzer) arm", ok, (
+        f"max|dEe|={delta:.2e}"
     )
 
 

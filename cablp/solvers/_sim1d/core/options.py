@@ -82,13 +82,11 @@ def heat_conduction_kwargs(
     input_dict,
     flags,
     *,
-    electron_heat_flux_limit,
     heat_flux_limiter_f,
     heat_flux_limiter_exponent,
 ):
     return {
         "heat_conduction": bool(flags.get("heat_conduction", True)),
-        "electron_heat_flux_limit": electron_heat_flux_limit,
         "heat_flux_limiter_f": heat_flux_limiter_f,
         "heat_flux_limiter_exponent": heat_flux_limiter_exponent,
     }
@@ -156,7 +154,6 @@ def build_solver_options(
     *,
     geometry,
     I_ion,
-    electron_heat_flux_limit,
     heat_flux_limiter_f,
     heat_flux_limiter_exponent,
     neutral_energy,
@@ -185,7 +182,6 @@ def build_solver_options(
         heat_conduction=heat_conduction_kwargs(
             input_dict,
             flags,
-            electron_heat_flux_limit=electron_heat_flux_limit,
             heat_flux_limiter_f=heat_flux_limiter_f,
             heat_flux_limiter_exponent=heat_flux_limiter_exponent,
         ),

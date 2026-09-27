@@ -394,8 +394,6 @@ def _case_timestep_surface_loss_floor_exempt_hysteresis(
     #       expression in place (the knife edge exercised above through
     #       floor_exempt_exit_rtol=None).
     assert default_config()[0]["surface_loss_floor_exempt_exit_rtol"] == hyst_outer
-    assert default_config()[1]["surface_loss_floor_exempt"] is True
-    assert growth_flags["surface_loss_floor_exempt"] is True
     hyst_params = dict(growth_params)
     hyst_params["tau_prebreakdown"] = 2.0e-9
     hyst_params["tau_discharge"] = 40.0e-6
@@ -462,37 +460,6 @@ def _case_timestep_surface_loss_floor_exempt_hysteresis(
             assert "surface_loss_floor_exempt_exit_rtol" in str(error), str(error)
         else:
             raise AssertionError(f"{bad_hyst} must raise")
-    # Arming the band while the exemption it re-admits into is off is refused
-    # too -- it could never do anything.
-    hyst_flag_off = dict(growth_flags)
-    hyst_flag_off["surface_loss_floor_exempt"] = False
-    try:
-        LAPDSim1D(
-            {**hyst_params, "surface_loss_floor_exempt_exit_rtol": hyst_outer},
-            hyst_flag_off,
-        )
-    except ValueError as error:
-        assert "surface_loss_floor_exempt" in str(error), str(error)
-    else:
-        raise AssertionError("band armed with the exemption off must raise")
-    # CONSEQUENCE OF THE FLIP, asserted rather than left to be discovered:
-    # the band is now armed by the DEFAULT, so clearing the exemption flag on
-    # its own is exactly the configuration refused above. Recovering the
-    # historical bound is a two-key operation, and the error says so.
-    try:
-        LAPDSim1D(hyst_params, hyst_flag_off)
-    except ValueError as error:
-        assert "surface_loss_floor_exempt_exit_rtol" in str(error), str(error)
-        assert "0.0" in str(error), str(error)
-    else:
-        raise AssertionError(
-            "the shipped band with the exemption flag off must raise"
-        )
-    # The two-key form is what constructs.
-    LAPDSim1D(
-        {**hyst_params, "surface_loss_floor_exempt_exit_rtol": 0.0},
-        hyst_flag_off,
-    )
     return locals()
 
 
@@ -1187,7 +1154,7 @@ def _case_dt_min_lock_union_summary(
 def _case_kep_pressure_work_closure():
     """G1. The energy-consistent core closes PER CELL, in moving flow, in a flare.
 
-    The claim the ``hyperbolic_energy_consistent`` selector makes is LOCAL, not
+    The claim the energy-consistent hyperbolic core makes is LOCAL, not
     merely global: for every cell with two open faces the hyperbolic operator's
     total-energy rate equals the net total-energy flux through that cell's two
     faces, where the discrete total-energy face flux is
@@ -1231,9 +1198,6 @@ def _case_kep_pressure_work_closure():
             params, flags = _kep_drop_mesh(params, flags)
             params, flags = dict(params), dict(flags)
             params["nn0"] = _KEP_FLAT_NN0
-        # Named explicitly: this case is ABOUT the armed selector, and the
-        # stance carrying it is not what is being tested.
-        flags["hyperbolic_energy_consistent"] = True
         return LAPDSim1D(params, flags)
 
     def _kep_state(sim, n, u, Te, Ti):
@@ -1273,12 +1237,7 @@ def _case_kep_pressure_work_closure():
             state, floors=sim.floors, ion_mass_g=sim.ion_mass_g
         )
         u = derived.u
-        fluxes = _kep_rusanov(
-            state, sim.floors, sim.ion_mass_g, geom,
-            active_plasma_topology=sim._active_plasma_topology,
-            wave_speed=sim._hyperbolic_wave_speed,
-            energy_consistent=True,
-        )
+        fluxes = _kep_rusanov(state, sim.floors, sim.ion_mass_g, geom)
         internal = area * (fluxes.Ee + fluxes.Ei)
         kinetic = np.zeros(cells + 1, dtype=float)
         kinetic[1:-1] = (
@@ -1616,7 +1575,6 @@ def _case_kep_terminating_cells(
     _g4_geom = dataclasses.replace(geom, plasma_absorbing=_g4_absorb)
     _g4_divu = velocity_divergence(
         _g4_state, _kep_flare.floors, mass, _g4_geom,
-        active_plasma_topology=True,
     )
     # A reflecting face passes no inventory: the cell's divergence is its one
     # open face alone.
@@ -1668,7 +1626,6 @@ def _case_kep_acoustic_symbol(_kep_flat, _kep_rows, _kep_state):
     mass = _kep_flat.ion_mass_g
     n0, Te0, Ti0 = 1.0e13, 5.0, 2.0
     c_ad = math.sqrt((5.0 / 3.0) * (Te0 + Ti0) * ev_to_erg / mass)
-    assert _kep_flat._hyperbolic_wave_speed == "adiabatic"
 
     def _g5_rhs(fields):
         """The four hyperbolic rows, as the solver folds them."""
@@ -1747,10 +1704,8 @@ def _case_sound_speed_true_ion_mass():
         _ss_want = math.sqrt(_ss_Te * ev_to_erg / m_He_cgs)
         _ss_got = float(_ss_cs_fn(_ss_Te, m_He_cgs))
         assert abs(_ss_got / _ss_want - 1.0) <= 1.0e-15, (_ss_Te, _ss_got)
-        # The isothermal branch is a passthrough; the adiabatic branch is the
-        # same mass with gamma = 5/3 on (Te + Ti).
-        assert _ss_wave(_ss_Te, 0.3 * _ss_Te, m_He_cgs) == _ss_got
-        _ss_ad = float(_ss_wave(_ss_Te, 0.3 * _ss_Te, m_He_cgs, "adiabatic"))
+        # The signal speed is the same mass with gamma = 5/3 on (Te + Ti).
+        _ss_ad = float(_ss_wave(_ss_Te, 0.3 * _ss_Te, m_He_cgs))
         _ss_ad_want = math.sqrt(
             (5.0 / 3.0) * 1.3 * _ss_Te * ev_to_erg / m_He_cgs
         )
@@ -2034,6 +1989,14 @@ def _case_implicit_ee_sink_substep_order():
     nu = np.zeros(geometry.cells, dtype=float)
     sink_cells = np.flatnonzero(nu_shape > 0.0)
     nu[sink_cells] = 0.30 / (window / 4.0)
+    # The electron heat-flux limiter is always on, and at the reference
+    # f = 0.45 the LIMITED conduction operator reads its own orders on this
+    # fixture (backward Euler 0.89, Crank-Nicolson 1.90, TR-BDF2 0.88) --
+    # a property of the limiter, not of the sink this case is about. So the
+    # conduction runs in the limiter's Spitzer limit: at this free-streaming
+    # fraction the suppression factor on this state is 1 to within 5.5e-9
+    # (against 0.55 at f = 0.45).
+    spitzer_limit_f = 1.0e8
 
     def integrate(scheme, picard, steps):
         current = state
@@ -2041,7 +2004,7 @@ def _case_implicit_ee_sink_substep_order():
         for _ in range(steps):
             current = _ee_sink_step(
                 sim, current, geometry, floors, sub_dt, scheme, picard,
-                ee_sink_rate=nu,
+                ee_sink_rate=nu, heat_flux_limiter_f=spitzer_limit_f,
             )
         return np.asarray(current.Ee, dtype=float) / capacity
 
@@ -2164,3 +2127,85 @@ def _case_implicit_ee_sink_no_solve_bit_identity():
     )
     assert late_rate.shape == (cold.geometry.cells,)
     assert np.all(np.isfinite(late_rate)) and np.all(late_rate >= 0.0)
+
+
+# ----------------------------------------------------------------------
+# numerics-retired-keys-refuse
+# ----------------------------------------------------------------------
+@_case("numerics-retired-keys-refuse")
+def _case_numerics_retired_keys_refuse():
+    # The numerics flags and the wave-speed selector whose one surviving
+    # behaviour is now unconditional. Each is gone from both templates, is on
+    # the retired register of ITS OWN namespace, and a configuration naming
+    # it -- at any value, the old default included -- is refused at
+    # construction with the key named as RETIRED and the refusal stating the
+    # unconditional behaviour ("nothing: ..."). A retired name filed in the
+    # OTHER namespace reads as the plain unknown key it is there.
+    from cablp.solvers._sim1d.core.config import (
+        RETIRED_FLAG_KEYS,
+        RETIRED_PARAM_KEYS,
+        input_dict_template_1d,
+        input_flags_template_1d,
+    )
+
+    _nr_params = {
+        "hyperbolic_wave_speed": ("adiabatic", "isothermal"),
+    }
+    _nr_flags = {
+        "active_plasma_topology": (True, False),
+        "hyperbolic_energy_consistent": (True, False),
+        "raw_stage_validation": (True, False),
+        "surface_loss_floor_exempt": (True, False),
+        "electron_heat_flux_limit": (True, False),
+    }
+    _nr_base_p, _nr_base_f = default_config()
+    for _nr_key, _nr_values in _nr_params.items():
+        assert _nr_key not in input_dict_template_1d, _nr_key
+        assert _nr_key not in input_flags_template_1d, _nr_key
+        assert _nr_key in RETIRED_PARAM_KEYS, _nr_key
+        for _nr_value in _nr_values:
+            try:
+                LAPDSim1D(dict(_nr_base_p, **{_nr_key: _nr_value}), _nr_base_f)
+            except ValueError as _nr_exc:
+                assert f"{_nr_key} is RETIRED; use nothing: " in str(
+                    _nr_exc
+                ), str(_nr_exc)
+            else:
+                raise AssertionError(
+                    f"retired params key {_nr_key}={_nr_value!r} ACCEPTED"
+                )
+    for _nr_key, _nr_values in _nr_flags.items():
+        assert _nr_key not in input_dict_template_1d, _nr_key
+        assert _nr_key not in input_flags_template_1d, _nr_key
+        assert _nr_key in RETIRED_FLAG_KEYS, _nr_key
+        for _nr_value in _nr_values:
+            try:
+                LAPDSim1D(_nr_base_p, dict(_nr_base_f, **{_nr_key: _nr_value}))
+            except ValueError as _nr_exc:
+                assert f"{_nr_key} is RETIRED; use nothing: " in str(
+                    _nr_exc
+                ), str(_nr_exc)
+            else:
+                raise AssertionError(
+                    f"retired flags key {_nr_key}={_nr_value!r} ACCEPTED"
+                )
+    # A retired FLAG name in params is a misfiled key, not a retired one.
+    try:
+        LAPDSim1D(dict(_nr_base_p, raw_stage_validation=True), _nr_base_f)
+    except ValueError as _nr_exc:
+        assert "unknown LAPDSim1D configuration keys" in str(_nr_exc)
+        assert "RETIRED" not in str(_nr_exc), str(_nr_exc)
+    else:
+        raise AssertionError("a misfiled retired flag name was ACCEPTED")
+    # The limiter's coefficient and the exemption's band are what stay
+    # configurable, and each still refuses a value that cannot be one.
+    for _nr_bad in (
+        {"heat_flux_limiter_f": 0.0},
+        {"heat_flux_limiter_exponent": -1.0},
+    ):
+        try:
+            LAPDSim1D(dict(_nr_base_p, **_nr_bad), _nr_base_f)
+        except ValueError as _nr_exc:
+            assert next(iter(_nr_bad)) in str(_nr_exc), str(_nr_exc)
+        else:
+            raise AssertionError(f"{_nr_bad} ACCEPTED")

@@ -145,8 +145,6 @@ def suggest_timestep(
     dt_max=1e-6,
     dt_global_scale=1.0,
     plasma_active=None,
-    active_plasma_topology=False,
-    wave_speed="isothermal",
 ):
     """Return a bounded explicit timestep and diagnostics.
 
@@ -204,7 +202,6 @@ def suggest_timestep(
             geometry=geometry,
             cfl=cfl,
             plasma_active=plasma_active,
-            wave_speed=wave_speed,
         ),
         # Retain the historical diagnostic key while assigning it to the live
         # resolved electrode/source bundle. The old volumetric endpoint loss
@@ -370,13 +367,12 @@ def apply_dt_global_scale(dt, dt_global_scale):
 
 def plasma_cfl_timestep(
     state, floors, ion_mass_g, geometry, cfl=0.4, plasma_active=None,
-    wave_speed="isothermal",
 ):
     """Return the plasma wave CFL timestep [s]."""
     if cfl <= 0.0:
         raise ValueError(f"cfl must be positive (got {cfl})")
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g, wave_speed)
+    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g)
     face_speed = 0.5 * (
         np.abs(derived.u[:-1])
         + np.abs(derived.u[1:])

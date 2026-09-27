@@ -24,8 +24,7 @@ Two classes of row exist:
   sets, which are scheduled for removal.
 * **value-scoped** (``values=(...)``) -- only the listed values are deprecated
   and the rest of the key stays fully supported. Used where a selector keeps
-  live arms, e.g. ``hyperbolic_wave_speed``: ``"isothermal"`` deprecates
-  while ``"adiabatic"`` does not.
+  live arms beside the deprecated ones.
 
 Closure families with a live A/B are APPARATUS, not legacy, and are absent for
 that reason: the beam-deposition family and the excitation models stay
@@ -98,18 +97,6 @@ DEPRECATED_CONTROLS = {
     # Each of these was a live branch only because the retired fixture pinned
     # it away from the production value. With the fixture re-anchored at the
     # stance, nothing committed selects them any more.
-    "active_plasma_topology": DeprecatedControl(
-        FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
-    ),
-    "raw_stage_validation": DeprecatedControl(
-        FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
-    ),
-    "hyperbolic_energy_consistent": DeprecatedControl(
-        FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
-    ),
-    "hyperbolic_wave_speed": DeprecatedControl(
-        PARAMS, _FREED_BRANCH, _FREED_BRANCH_FIX, values=("isothermal",),
-    ),
     "b_ion_neutral_drag": DeprecatedControl(
         PARAMS,
         "it scales the moment-closed Phelps ion-neutral collision rates, "

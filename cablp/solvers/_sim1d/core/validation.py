@@ -83,8 +83,6 @@ def validate_r1_configuration_presence(
     flags,
     *,
     geometry,
-    hyperbolic_wave_speed,
-    raw_stage_validation,
 ):
     """Reject R1-audited controls that would otherwise be silent no-ops."""
     # "neutral" is the partner of the En ionization sink, which debits the
@@ -105,12 +103,7 @@ def validate_r1_configuration_presence(
             "Ti_birth_ionization must be 'neutral', or a finite "
             f"non-negative numeric eV value (got {ti_birth!r})"
         )
-    if hyperbolic_wave_speed not in {"isothermal", "adiabatic"}:
-        raise ValueError(
-            "hyperbolic_wave_speed must be 'isothermal' or 'adiabatic' "
-            f"(got {hyperbolic_wave_speed!r})"
-        )
-    if raw_stage_validation and flags.get("Plasma", True):
+    if flags.get("Plasma", True):
         for initial_name, floor_name in (
             ("Te0", "Te_floor"),
             ("Ti0", "Ti_floor"),
@@ -120,8 +113,8 @@ def validate_r1_configuration_presence(
             if not initial > floor:
                 raise ValueError(
                     f"{initial_name} must be strictly greater than "
-                    f"{floor_name} when raw_stage_validation=True "
-                    f"(got {initial} <= {floor})"
+                    f"{floor_name}: raw-stage validation rejects a state "
+                    f"at its floor (got {initial} <= {floor})"
                 )
 
 

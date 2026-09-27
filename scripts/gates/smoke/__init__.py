@@ -193,6 +193,7 @@ _CASE_ORDER = (
     "dt-not-bound-by-anode-row",
     "anode-e-sheath-row-reported-not-applied",
     "implicit-ee-sink-no-solve-bit-identity",
+    "numerics-retired-keys-refuse",
     "result-bitdiff-compare-synthetic",
     "beam-tail-retired-keys-refuse",
     "neutral-retired-keys-refuse",

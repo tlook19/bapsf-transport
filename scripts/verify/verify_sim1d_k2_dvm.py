@@ -1899,9 +1899,7 @@ def gate_d2():
         ion_mass_g=sim._ion_mass_g,
         ion_charge_exchange_kwargs=sim._ion_charge_exchange_kwargs(),
         density_dt_fraction=0.25,
-        plasma_active=(
-            sim._geometry.plasma_active if sim._active_plasma_topology else None
-        ),
+        plasma_active=sim._geometry.plasma_active,
     )
     terms = sim.rhs_terms()
     lines = [

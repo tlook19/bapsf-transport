@@ -1222,7 +1222,6 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
     r1c_flags = dict(
         r1a_flags,
         neutral_momentum=True,
-        raw_stage_validation=True,
     )
     r1c_dt = 1.0e-10
     for bad_field in ("n", "nn", "nn_a", "Ee", "Ei"):
@@ -1389,39 +1388,17 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
                 f"expected birth-selector rejection: {birth_name}={bad_value}"
             )
 
-    topo_off = LAPDSim1D(
-        r1a_params, dict(r1a_flags, active_plasma_topology=False)
-    )
+    # The masked reaction rows: the bare reaction operator books an
+    # ionization birth on the plasma-dead cells, and the typed topology
+    # removes it from the summed RHS there.
     topo_on = LAPDSim1D(r1a_params, r1a_flags)
     topo_dead = ~topo_on.geometry.plasma_active
     assert np.any(
-        topo_off.reaction_rhs_terms()["ionization_birth"].n[topo_dead] != 0.0
+        topo_on.reaction_rhs_terms()["ionization_birth"].n[topo_dead] != 0.0
     )
     assert np.all(
         topo_on.rhs_terms()["ionization_birth"].n[topo_dead] == 0.0
     )
-
-    raw_off = LAPDSim1D(
-        r1c_params, dict(r1c_flags, raw_stage_validation=False)
-    )
-    raw_off_fields = state_field_names(raw_off.state)
-    raw_off_row = raw_off_fields.index("nn_a")
-    raw_off_cells = raw_off.geometry.cells
-
-    def raw_off_rhs(y, time=None):
-        rhs = np.zeros_like(y)
-        start = raw_off_row * raw_off_cells
-        rhs[start : start + raw_off_cells] = (
-            -2.0 * np.asarray(y)[start : start + raw_off_cells] / r1c_dt
-        )
-        return rhs
-
-    raw_off.rhs = raw_off_rhs
-    raw_off_attempt = raw_off._attempt_step(
-        dt=r1c_dt, operator_split=False
-    )
-    assert raw_off_attempt.raw_rejection_reason == ""
-    assert raw_off_attempt.floor_ledger["nn_a_particles_added"] > 0.0
 
 
 # --------------------------------------------------------------------
@@ -1567,8 +1544,6 @@ def _case_resolved_config_manifest_r1e():
     # accepted-only floor ledger exactly null through plasma launch.
     repaired_params, repaired_flags = default_config()
     adas_te_min, adas_te_max = he_rate_temperature_range_eV()
-    assert repaired_flags["active_plasma_topology"] is True
-    assert repaired_flags["raw_stage_validation"] is True
     assert repaired_params["Te0"] == 0.21
     assert repaired_params["Ti0"] == 0.026
     assert repaired_params["Te0"] > adas_te_min

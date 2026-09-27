@@ -1719,7 +1719,6 @@ def _case_prescribed_area_well_balancedness(
         _pa_var_sim.floors,
         _pa_var_sim.ion_mass_g,
         _pa_var_geom,
-        active_plasma_topology=_pa_var_sim._active_plasma_topology,
     )
     _pa_face_A = np.asarray(_pa_var_geom.plasma_face_area_cm2, dtype=float)
     _pa_want_divu = (

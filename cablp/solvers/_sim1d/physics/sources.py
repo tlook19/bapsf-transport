@@ -22,9 +22,7 @@ from ..core.state import (
 )
 
 
-def velocity_divergence(
-    state, floors, ion_mass_g, geometry, active_plasma_topology=False
-):
+def velocity_divergence(state, floors, ion_mass_g, geometry):
     """Return finite-volume axial velocity divergence [s^-1].
 
     The face velocity rule, which is what makes the ``-p_s div u`` row the
@@ -39,20 +37,16 @@ def velocity_divergence(
       fluid does not move through it, so no pressure work crosses it and the
       wall reaction in the momentum flux is cancelled by the quasi-1D
       geometric source at the same face.
-
-    The last rule is reachable only with ``active_plasma_topology``, and only
-    at a closed face that is not a plasma-terminating surface.
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     face_u = np.zeros(geometry.cells + 1, dtype=float)
     face_u[1:-1] = 0.5 * (derived.u[:-1] + derived.u[1:])
-    if active_plasma_topology:
-        absorbing = np.asarray(geometry.plasma_absorbing, dtype=bool)
-        for face in np.flatnonzero(~np.asarray(geometry.plasma_open, dtype=bool)):
-            live = int(geometry.plasma_face_live_cell[face])
-            face_u[face] = (
-                derived.u[live] if (live >= 0 and absorbing[face]) else 0.0
-            )
+    absorbing = np.asarray(geometry.plasma_absorbing, dtype=bool)
+    for face in np.flatnonzero(~np.asarray(geometry.plasma_open, dtype=bool)):
+        live = int(geometry.plasma_face_live_cell[face])
+        face_u[face] = (
+            derived.u[live] if (live >= 0 and absorbing[face]) else 0.0
+        )
     inventory_rate = geometry.plasma_face_area_cm2 * face_u
     return (inventory_rate[1:] - inventory_rate[:-1]) / geometry.plasma_volume_cm3
 
@@ -64,7 +58,6 @@ def pressure_work_rhs(
     geometry,
     electron_scale=1.0,
     ion_scale=1.0,
-    active_plasma_topology=False,
 ):
     """Return conservative electron/ion pressure-work energy sources."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
@@ -73,7 +66,6 @@ def pressure_work_rhs(
         floors=floors,
         ion_mass_g=ion_mass_g,
         geometry=geometry,
-        active_plasma_topology=active_plasma_topology,
     )
     zeros = np.zeros(geometry.cells, dtype=float)
     return ConservativeState1D(
@@ -90,7 +82,6 @@ def hyperbolic_energy_correction_rhs(
     floors,
     ion_mass_g,
     geometry,
-    wave_speed="isothermal",
 ):
     """Return the Rusanov numerical-dissipation deposit, into ``Ei`` alone.
 
@@ -122,8 +113,7 @@ def hyperbolic_energy_correction_rhs(
         ``-p_i V_i (div u)_i + u_i * (net pressure force)_i
              = -[A_f Pi_f]_{i-1/2}^{i+1/2},  Pi_f = 0.5 (p_L u_R + u_L p_R)``,
 
-    for general states and variable area. Off-path callers never build this
-    operator, so it is structurally inert when the selector is off.
+    for general states and variable area.
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     u = derived.u
@@ -131,7 +121,7 @@ def hyperbolic_energy_correction_rhs(
     n = np.asarray(state.n, dtype=float)
     M = np.asarray(state.M, dtype=float)
 
-    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g, wave_speed)
+    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g)
     amax = np.maximum(np.abs(u[:-1]) + cs[:-1], np.abs(u[1:]) + cs[1:])
     open_faces = np.asarray(geometry.plasma_open, dtype=bool)
     transmission = np.asarray(geometry.plasma_transmission, dtype=float)
