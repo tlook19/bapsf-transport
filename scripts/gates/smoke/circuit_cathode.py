@@ -85,7 +85,7 @@ _CAPFIX_WINDOW_I_A = (5.47, 5.5, _CAPFIX_ESCAPE_I_A, 5.57, 5.58, 6.0, 8.0)
     historical_stance=True,
 )
 def _case_twin_cathode_plateau_multigroup(
-    srcgrid_off_flags, srcgrid_off_params
+    twin_base_flags, twin_base_params
 ):
     # PRESENCE GATE for the plateau-edge pair, BOTH DIRECTIONS, on the twin
     # layout. The twin fixture in variable-area-well-balancedness resolves
@@ -103,7 +103,7 @@ def _case_twin_cathode_plateau_multigroup(
     # boundary, which the
     # twin's own refusal decides and which is asserted below rather than
     # assumed.
-    twin_flags = dict(srcgrid_off_flags)
+    twin_flags = dict(twin_base_flags)
     twin_flags["TwinCathode"] = True
     twin_flags["cathode_coupling"] = False
     _mg_rows = ("beam_plateau_edge_eV", "beam_plateau_edge_clamped")
@@ -113,7 +113,7 @@ def _case_twin_cathode_plateau_multigroup(
     # ever moved, the fixture below would be selecting a boundary for a reason
     # that no longer exists.
     mg_reflect_params = dict(
-        srcgrid_off_params,
+        twin_base_params,
         heating_anomalous_transport="plateau_multigroup",
         heating_anomalous_tail_cathode_boundary="reflect",
     )
@@ -127,7 +127,7 @@ def _case_twin_cathode_plateau_multigroup(
         )
 
     mg_params = dict(
-        srcgrid_off_params,
+        twin_base_params,
         heating_anomalous_transport="plateau_multigroup",
         heating_anomalous_tail_cathode_boundary="escape",
     )
@@ -141,7 +141,7 @@ def _case_twin_cathode_plateau_multigroup(
     # The OFF arm of the same fixture: identical geometry and identical flags,
     # the selector alone cleared, and the pair is gone from both prefixes.
     local_params = dict(
-        srcgrid_off_params,
+        twin_base_params,
         heating_anomalous_transport="local",
         heating_anomalous_tail_cathode_boundary="escape",
     )

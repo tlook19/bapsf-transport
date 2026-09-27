@@ -305,9 +305,6 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
             "Rcs": 40.0,
             "Lcs": 25.0,
             "Rsup": 0.0,
-            "end_expansion_cells": 10,
-            "end_expansion_machine_radius_cm": 100.0,
-            "end_expansion_plasma_radius_cm": 15.0,
             "cathode_anode_gap_cm": 50.0,
             "source_region_length_cm": 100.0,
             "source_region_dz_cm": 10.0,
@@ -315,8 +312,6 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
         }
     )
     pl_flags = dict(kd_flags)
-    pl_flags["end_expansion_geometry"] = True
-    pl_flags["source_fixed_grid"] = True
 
     # The moment control, differing from the DVM build below in neutral_model
     # and nothing else, so a layout difference between the two files can be

@@ -171,6 +171,7 @@ _CASE_ORDER = (
     "afterglow-tail-handoff-criterion",
     "tail-handoff-surface-continuity",
     "end-face-full-debit-split",
+    "end-wall-debit-armed-by-geometry-role",
     "cathode-emitted-fall-beam-row-non-overlap",
     "end-wall-lambda-eff-barrier-bracket",
     "end-wall-rename-retired-names",

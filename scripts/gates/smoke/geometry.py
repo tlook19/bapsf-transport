@@ -234,9 +234,9 @@ def _case_shipped_defaults_and_base_geometry():
     assert resolved_geom.cell_role[anode_face - 1] == "gap"
     # The puff role sits on the cell CONTAINING gas_puff_z_cm, wherever the
     # mesh puts it: on the nominal machine that is the first column cell past
-    # the anode face, and under source_fixed_grid with the G1 puff position
-    # (86.3 cm, both config defaults since the R2a fold-in) it is a fixed
-    # source cell further downstream. Checked as containment, so this states
+    # the anode face, and on the fixed source grid with the G1 puff position
+    # (86.3 cm, a config default) it is a fixed source cell further
+    # downstream. Checked as containment, so this states
     # the rule rather than one machine's answer to it.
     _puff_first, _puff_last = puff_cell_indices(resolved_geom)
     assert _puff_first == _puff_last
@@ -248,20 +248,11 @@ def _case_shipped_defaults_and_base_geometry():
     assert _puff_first >= anode_face
     assert np.all(np.isnan(resolved_geom.neutral_face_conductance_cm3_s))
 
-    # G1: default-off expanded end geometry. The provisional hardware arm
-    # resolves a 150 cm, Rm=100 cm end wall region in ten cells. Plasma area
-    # is either unchanged (vessel-only) or smoothly flared; the source/end
-    # params are presence-gated so incomplete or flag-off configs fail loudly.
-    assert not resolved_flags["end_expansion_geometry"]
-    assert resolved_params["end_expansion_cells"] is None
-    assert resolved_params["end_expansion_machine_radius_cm"] is None
-    assert resolved_params["end_expansion_plasma_radius_cm"] is None
-    assert not resolved_flags["neutral_baffles"]
     assert resolved_params["neutral_baffle_positions_cm"] is None
     assert resolved_params["neutral_baffle_clear_radii_cm"] is None
 
-    # CAD-pending thin annular baffles are default-off, presence-gated
-    # neutral apertures. A 40 cm clear radius leaves the 18 cm plasma column
+    # Thin annular baffles are neutral apertures placed by the presence of
+    # their two arrays. A 40 cm clear radius leaves the 18 cm plasma column
     # exactly unchanged and adds a series orifice only to neutral transport.
     baffle_params = dict(resolved_params)
     baffle_params.update(
@@ -270,7 +261,7 @@ def _case_shipped_defaults_and_base_geometry():
             "neutral_baffle_clear_radii_cm": [40.0],
         }
     )
-    baffle_flags = {**resolved_flags, "neutral_baffles": True}
+    baffle_flags = dict(resolved_flags)
     baffle_geom = LAPDSim1D(
         baffle_params, baffle_flags
     ).get_initial_snapshot().geometry
@@ -362,14 +353,14 @@ def _case_shipped_defaults_and_base_geometry():
 
     for bad_params, bad_flags, expected in (
         (
-            baffle_params,
-            resolved_flags,
-            "require the default-off",
+            {**resolved_params, "neutral_baffle_positions_cm": [150.0]},
+            baffle_flags,
+            "require positions and clear radii together",
         ),
         (
-            resolved_params,
+            {**resolved_params, "neutral_baffle_clear_radii_cm": [40.0]},
             baffle_flags,
-            "requires positions and clear radii",
+            "require positions and clear radii together",
         ),
         (
             {
@@ -405,19 +396,16 @@ def _case_shipped_defaults_and_base_geometry():
 @_case(
     "source-fixed-grid",
     historical_stance=True,
-    provides=(
-        "expansion_geom", "expansion_sim", "srcgrid_off_flags",
-        "srcgrid_off_params",
-    ),
+    provides=("twin_base_flags", "twin_base_params"),
 )
 def _case_source_fixed_grid():
-    # Fixed-cell-size source region (``source_fixed_grid``). Without it, nx
-    # uniform column cells span anode face to end wall start, so a refinement
-    # study moves every near-source cell edge -- including the puff cell, whose
-    # centre anchors the default cosine puff profile. With it on the column from
-    # the anode face to source_region_length_cm is meshed at exactly
-    # source_region_dz_cm regardless of nx, and the puff role follows
-    # gas_puff_z_cm.
+    # The single-cathode mesh's fixed-cell-size source region. A uniform
+    # column would make a refinement study move every near-source cell edge --
+    # including the puff cell. Instead the column from the anode face to
+    # source_region_length_cm is meshed at exactly source_region_dz_cm
+    # regardless of nx, and the puff role follows gas_puff_z_cm. The
+    # TwinCathode layout keeps its own uniform column and reads neither
+    # source region parameter.
     #
     # The gap, the region end and the puff position are PINNED below rather
     # than inherited. They were inherited until the 2026-08-24 CAD-span gap
@@ -428,14 +416,12 @@ def _case_source_fixed_grid():
     # gap-agnostic, so it now states the round geometry its hard-coded edge
     # positions below describe.
     #
-    # (d) The OFF path takes no new branch: with the flag cleared and both keys
-    # None the spec helper returns None. Since the R2a fold-in the flag and both
-    # values are config defaults, so the off arm is constructed here rather than
-    # read off default_config().
+    # (d) The TwinCathode layout takes its own branch: with both keys None the
+    # spec helper returns None for it. Both values are config defaults, so the
+    # twin base is constructed here rather than read off default_config().
     resolved_params, resolved_flags = _resolved_config()
-    resolved_geom = _resolved_geometry()
-    srcgrid_off_flags = {**resolved_flags, "source_fixed_grid": False}
-    srcgrid_off_params = dict(
+    twin_base_flags = dict(resolved_flags)
+    twin_base_params = dict(
         resolved_params,
         cathode_anode_gap_cm=50.0,
         source_region_length_cm=None,
@@ -443,22 +429,16 @@ def _case_source_fixed_grid():
     )
     assert (
         _source_fixed_grid_spec(
-            srcgrid_off_params,
-            srcgrid_off_flags,
-            gap_length=srcgrid_off_params["cathode_anode_gap_cm"],
-            total_length=srcgrid_off_params["Lm"],
-            end_wall_length=srcgrid_off_params["end_wall_length_cm"],
-            twin=False,
+            twin_base_params,
+            gap_length=twin_base_params["cathode_anode_gap_cm"],
+            total_length=twin_base_params["Lm"],
+            end_wall_length=twin_base_params["end_wall_length_cm"],
+            twin=True,
         )
         is None
     )
-    srcgrid_off_geom = (
-        LAPDSim1D(srcgrid_off_params, srcgrid_off_flags)
-        .get_initial_snapshot()
-        .geometry
-    )
 
-    srcgrid_flags = {**resolved_flags, "source_fixed_grid": True}
+    srcgrid_flags = dict(resolved_flags)
 
     def _srcgrid_params(nx):
         params = dict(resolved_params)
@@ -495,7 +475,7 @@ def _case_source_fixed_grid():
         srcgrid_geom.length_cm[srcgrid_anode_face:srcgrid_region_end_face] == 10.0
     )
     # nx meshes only the far column, from the region end to the end wall.
-    assert srcgrid_geom.cells == srcgrid_off_geom.cells + srcgrid_n_fixed
+    assert srcgrid_geom.cells == srcgrid_region_end_face + 60 + 1
     srcgrid_puff, srcgrid_puff_twin = puff_cell_indices(srcgrid_geom)
     assert srcgrid_puff == srcgrid_puff_twin
     # The puff role went to the fixed-region cell CONTAINING 60 cm, not the
@@ -571,14 +551,9 @@ def _case_source_fixed_grid():
             "requires all source region parameters",
         ),
         (
-            _srcgrid_params(60),
-            srcgrid_off_flags,
-            "source region parameters require the source_fixed_grid flag",
-        ),
-        (
-            {**srcgrid_off_params, "source_region_dz_cm": 10.0},
-            srcgrid_off_flags,
-            "source region parameters require the source_fixed_grid flag",
+            {**twin_base_params, "source_region_dz_cm": 10.0},
+            {**twin_base_flags, "TwinCathode": True},
+            "defined only for the single-cathode layout",
         ),
         (
             {**_srcgrid_params(60), "source_region_length_cm": 50.0},
@@ -625,104 +600,8 @@ def _case_source_fixed_grid():
             assert expected in str(exc), (expected, str(exc))
         else:
             raise AssertionError(
-                "invalid source_fixed_grid configuration constructed"
+                "invalid source region configuration constructed"
             )
-
-    expansion_params = dict(resolved_params)
-    expansion_params.update(
-        {
-            "Lm": 2125.85,
-            "end_wall_length_cm": 150.0,
-            "end_expansion_cells": 10,
-            "end_expansion_machine_radius_cm": 100.0,
-            "end_expansion_plasma_radius_cm": 50.0,
-        }
-    )
-    expansion_flags = dict(resolved_flags)
-    expansion_flags.update(
-        {
-            "end_expansion_geometry": True,
-            "cathode_coupling": False,
-            "implicit_heat_conduction": False,
-        }
-    )
-    expansion_params["phase_transition_mode"] = "scheduled"
-    expansion_params["tau_prebreakdown"] = 0.0
-    expansion_params["tau_breakdown"] = 0.0
-    expansion_sim = LAPDSim1D(expansion_params, expansion_flags)
-    expansion_geom = expansion_sim.get_initial_snapshot().geometry
-    end_cells = np.flatnonzero(
-        np.isin(expansion_geom.cell_role, np.asarray(["end", "end_wall"]))
-    )
-    assert end_cells.size == 10
-    assert np.array_equal(end_cells, np.arange(expansion_geom.cells - 10, expansion_geom.cells))
-    assert list(expansion_geom.cell_role[-10:-1]) == ["end"] * 9
-    assert expansion_geom.cell_role[-1] == "end_wall"
-    assert expansion_geom.cells == resolved_geom.cells + 9
-    assert np.allclose(expansion_geom.length_cm[end_cells], 15.0)
-    start_face = int(end_cells[0])
-    assert np.isclose(expansion_geom.z_edges_cm[start_face], 1975.85)
-    assert np.isclose(expansion_geom.z_edges_cm[-1], 2125.85)
-    assert np.allclose(expansion_geom.Rm_cm[end_cells], 100.0)
-    assert np.allclose(
-        expansion_geom.neutral_area_cm2[end_cells], np.pi * 100.0**2
-    )
-    # The abrupt vessel entrance retains the upstream Rm=50 cm throat.
-    assert np.isclose(
-        expansion_geom.neutral_face_area_cm2[start_face], np.pi * 50.0**2
-    )
-    # The flux-tube area starts at the column Rp, ends at the declared Rp=50 cm,
-    # and widens monotonically across the end region.
-    end_face_area = expansion_geom.plasma_face_area_cm2[start_face:]
-    assert np.isclose(end_face_area[0], np.pi * expansion_params["Rp"] ** 2)
-    assert np.isclose(end_face_area[-1], np.pi * 50.0**2)
-    assert np.all(np.diff(end_face_area) > 0.0)
-    assert np.all(expansion_geom.Rp_cm[end_cells] < expansion_geom.Rm_cm[end_cells])
-
-    vessel_params = dict(expansion_params)
-    vessel_params["end_expansion_plasma_radius_cm"] = vessel_params["Rp"]
-    vessel_geom = LAPDSim1D(
-        vessel_params, expansion_flags
-    ).get_initial_snapshot().geometry
-    assert np.allclose(vessel_geom.plasma_area_cm2, np.pi * vessel_params["Rp"] ** 2)
-    assert np.allclose(
-        vessel_geom.plasma_face_area_cm2, np.pi * vessel_params["Rp"] ** 2
-    )
-
-    for bad_params, bad_flags, expected in (
-        (
-            {**resolved_params, "end_expansion_cells": 10},
-            resolved_flags,
-            "require the default-off",
-        ),
-        (
-            resolved_params,
-            {**resolved_flags, "end_expansion_geometry": True},
-            "requires all",
-        ),
-        (
-            {
-                **expansion_params,
-                "end_expansion_plasma_radius_cm": 101.0,
-            },
-            expansion_flags,
-            "Rp <= Rp_end <= Rm_end",
-        ),
-        (
-            expansion_params,
-            {
-                **expansion_flags,
-                "TwinCathode": True,
-            },
-            "single-cathode",
-        ),
-    ):
-        try:
-            LAPDSim1D(bad_params, bad_flags)
-        except ValueError as exc:
-            assert expected in str(exc)
-        else:
-            raise AssertionError("invalid expanded-end configuration constructed")
     return locals()
 
 
@@ -734,74 +613,25 @@ def _case_source_fixed_grid():
     historical_stance=True,
 )
 def _case_variable_area_well_balancedness(
-    anode_face, cathode_face, expansion_geom, expansion_sim,
-    srcgrid_off_flags, srcgrid_off_params
+    anode_face, cathode_face, twin_base_flags, twin_base_params
 ):
-    # Well-balancedness of the variable-area flux tube: for a uniform stationary
-    # plasma the quasi-1D p*dA/dz geometric source cancels the area-weighted
-    # pressure flux bit-for-bit -- but this property applies only across the
-    # INTERIOR expansion cells (role "end"). The terminating "end_wall" cell is
-    # a plasma-OPEN boundary: it carries a Bohm outflow (ghost u_g = c_s) whose
-    # flux is supplied by characteristic_boundary_rhs (a term not summed here),
-    # so a uniform stationary state is deliberately NOT its equilibrium -- the
-    # plasma flows out. (hyperbolic_energy_consistent and hyperbolic_wave_speed
-    # have no effect on this state: at u=0 with no gradients the KEP convective
-    # term and the Rusanov dissipation both vanish at every interior face, so
-    # only the end wall ghost can be nonzero.) The legacy reflecting-wall
-    # alternative, under which the end wall cancelled like the interior, was
-    # retired; see commit 1fc05c9.
+    # The variable-area well-balancedness itself is asserted on the
+    # prescribed per-cell geometry (prescribed-area-well-balancedness); this
+    # case keeps the resolved-machine layout checks.
     resolved_params, resolved_flags = _resolved_config()
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     resolved_geom = _resolved_geometry()
-    uniform_expansion = conservative_from_primitives(
-        n=np.full(expansion_geom.cells, 1.0e12),
-        nn=np.full(expansion_geom.cells, 1.0e12),
-        u=np.zeros(expansion_geom.cells),
-        Te=np.full(expansion_geom.cells, 2.0),
-        Ti=np.full(expansion_geom.cells, 1.0),
-        ion_mass_g=expansion_sim.ion_mass_g,
-    )
-    expansion_advective = expansion_sim.plasma_flux_rhs_terms(
-        state=uniform_expansion, include_front=False
-    )["plasma_advective_flux"]
-    expansion_geometric = expansion_sim.flux_tube_geometry_rhs(
-        state=uniform_expansion
-    )
-    interior_expansion_cells = np.flatnonzero(expansion_geom.cell_role == "end")
-    end_wall_cells = np.flatnonzero(expansion_geom.cell_role == "end_wall")
-    assert interior_expansion_cells.size == 9
-    assert end_wall_cells.size == 1
-    expansion_momentum_residual = expansion_advective.M + expansion_geometric.M
-    # Interior variable-area cells: exact cancellation (the load-bearing
-    # well-balancedness of the KEP pressure flux against the flux-tube source).
-    assert np.array_equal(
-        expansion_momentum_residual[interior_expansion_cells],
-        np.zeros(interior_expansion_cells.size),
-    )
-    # Terminating end wall cell: an open Bohm outflow, directed toward +z, so
-    # a net POSITIVE momentum residual -- the load-bearing contrast against the
-    # interior cells' exact cancellation asserted just above.
-    assert np.all(expansion_momentum_residual[end_wall_cells] > 0.0)
-    assert np.allclose(expansion_geometric.n, 0.0)
-    assert np.allclose(expansion_geometric.Ee, 0.0)
-    assert np.allclose(expansion_geometric.Ei, 0.0)
-    expansion_attempt = expansion_sim._attempt_step(
-        dt=1.0e-9, operator_split=False
-    )
-    assert np.all(np.isfinite(expansion_attempt.y))
-    assert expansion_attempt.y.shape == expansion_sim.get_initial_snapshot().y.shape
 
     # Twin cathode mirrors the source end: its cathode
-    # surface sits at z = Lm, with that plenum beyond it. It builds on the
-    # source_fixed_grid OFF arm because mirroring the fixed source region onto
-    # a second cathode end is not implemented and the geometry refuses the
-    # pair (checked in the refusal table above); since the R2a fold-in that
-    # flag is a config default, so the twin layout has to clear it explicitly.
-    twin_resolved_flags = dict(srcgrid_off_flags)
+    # surface sits at z = Lm, with that plenum beyond it. It builds on its own
+    # uniform column, with both source region parameters cleared, because the
+    # fixed source region is not mirrored onto a second cathode end (the
+    # geometry refuses the pair; checked in the source-fixed-grid table).
+    twin_resolved_flags = dict(twin_base_flags)
     twin_resolved_flags["TwinCathode"] = True
     twin_resolved_flags["cathode_coupling"] = False
-    twin_resolved_sim = LAPDSim1D(srcgrid_off_params, twin_resolved_flags)
+    twin_resolved_sim = LAPDSim1D(twin_base_params, twin_resolved_flags)
     twin_resolved_geom = twin_resolved_sim.get_initial_snapshot().geometry
     # PRESENCE GATE, armed side. The ``end_*`` cathode-result block exists
     # exactly where a twin solve can fill it; the single-cathode cases assert
@@ -1146,8 +976,9 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
     # channels must be READ from that cell and DEPOSITED into it; positional
     # constants read the plasma-dead cells behind it and source nothing.
     # This is the PRE-G1 production geometry, reconstructed key by key (the
-    # fitted 15 cm radii, the plenum-choke obstruction and the built-in end
-    # flare, none of which the measured machine uses). The R2a fold-in moved
+    # fitted 15 cm radii and the plenum-choke obstruction, neither of which
+    # the measured machine uses; its built-in end flare was removed with the
+    # end-expansion keys). The R2a fold-in moved
     # the four machine scalars into the config defaults, so they are named here
     # with the rest of the arm rather than inherited -- the tiny G1 end wall
     # block would otherwise put a 7.8 cm cell under this block's fixed
@@ -1164,17 +995,12 @@ def _case_obstruction_geometry_production_style(kd_flags, kd_params):
             "Rcs": 40.0,
             "Lcs": 25.0,
             "Rsup": 0.0,
-            "end_expansion_cells": 10,
-            "end_expansion_machine_radius_cm": 100.0,
-            "end_expansion_plasma_radius_cm": 15.0,
             "cathode_anode_gap_cm": 50.0,
             "source_region_length_cm": 100.0,
             "source_region_dz_cm": 10.0,
         }
     )
     kd_obs_flags = dict(kd_flags)
-    kd_obs_flags["end_expansion_geometry"] = True
-    kd_obs_flags["source_fixed_grid"] = True
     kd_obs_sim = LAPDSim1D(kd_obs_params, kd_obs_flags)
     kd_obs_roles = [str(r) for r in np.asarray(kd_obs_sim.geometry.cell_role)]
     assert kd_obs_roles[:3] == ["plenum", "obstruction", "cathode"]
@@ -1568,7 +1394,8 @@ def _case_anode_disc_radius(build_geometry):
     ),
 )
 def _case_prescribed_area_geometry():
-    # ---- pa: prescribed per-cell flux-tube / vessel geometry (default off) --
+    # ---- pa: prescribed per-cell flux-tube / vessel geometry (absent by
+    # default, armed by the plasma profile's presence) --
     # The capability replaces the uniform scalars Rp and Rm with per-cell
     # radius vectors computed OUTSIDE the solver, so the plasma areas, the cell
     # volumes, the face areas, the neutral conductances and the two-zone
@@ -1613,7 +1440,7 @@ def _case_prescribed_area_geometry():
             for y in result.y
         ]
 
-    # (a) PRESENCE GATE. With the flag off nothing is read, the column is the
+    # (a) PRESENCE GATE. With no profile nothing is read, the column is the
     # uniform pi*Rp^2 inside the uniform Rm, and the quasi-1D geometric
     # momentum source is not even in the term ledger -- which is what keeps the
     # golden bit-exact. Naming the new keys at their off values must also
@@ -1630,7 +1457,6 @@ def _case_prescribed_area_geometry():
         machine_radius_profile_cm=None,
         plasma_area_max_vessel_fraction=None,
     )
-    _pa_null_f["prescribed_area_geometry"] = False
     _pa_null_result = LAPDSim1D(
         _pa_null_p, _pa_null_f
     ).run(t_end=1.0e-6, dt=1.0e-7)
@@ -1653,7 +1479,7 @@ def _case_prescribed_area_trivial_profile_identity(
     # uniform Rp and Rm in every cell reproduce the no-profile run at the RAW
     # BIT level: each area is rebuilt with the same pi*R**2 expression the
     # uniform path uses, so the two reach the state through identical
-    # arithmetic, and the geometric source the flag switches on is identically
+    # arithmetic, and the geometric source the profile switches on is identically
     # +0.0, which cannot perturb the term sum. This is why the parameters are
     # RADII and not areas -- pi*r^2 does not round-trip through sqrt(A/pi) for
     # every r (18.415 does, 3.7 does not), so an area vector could only claim
@@ -1664,7 +1490,6 @@ def _case_prescribed_area_trivial_profile_identity(
         machine_radius_profile_cm=_pa_Rm.tolist(),
         plasma_area_max_vessel_fraction=1.0,
     )
-    _pa_flat_f["prescribed_area_geometry"] = True
     _pa_flat_sim = LAPDSim1D(dict(_pa_flat_p), dict(_pa_flat_f))
     assert _pa_flat_sim._variable_area_geometry
     _pa_flat_terms = _pa_flat_sim.rhs_terms()
@@ -1708,7 +1533,6 @@ def _case_prescribed_area_trivial_profile_identity(
             _pa_duct_geom.Rm_cm, dtype=float
         ).tolist(),
     )
-    _pa_duct_flat_f["prescribed_area_geometry"] = True
     _pa_duct_flat_geom = LAPDSim1D(
         _pa_duct_flat_p, _pa_duct_flat_f
     ).geometry
@@ -1723,9 +1547,8 @@ def _case_prescribed_area_trivial_profile_identity(
         ), _pa_field
 
     # (b2) A STEPPED BORE. The point of the vessel vector: the machine radius
-    # can change PART WAY along a block of cells, which neither the scalar Rm
-    # nor end_expansion_machine_radius_cm (one value over the whole terminal
-    # block) can express. The step lands exactly where it was asked to, the
+    # can change PART WAY along a block of cells, which the scalar Rm cannot
+    # express. The step lands exactly where it was asked to, the
     # open area and hydraulic radius follow it, and the neutral FACE at the
     # step stays a restricting aperture -- the narrow side, as at any other
     # change of bore.
@@ -1735,7 +1558,6 @@ def _case_prescribed_area_trivial_profile_identity(
         plasma_radius_profile_cm=_pa_Rp.tolist(),
         machine_radius_profile_cm=_pa_step_Rm.tolist(),
     )
-    _pa_step_f["prescribed_area_geometry"] = True
     _pa_step_geom = LAPDSim1D(_pa_step_p, _pa_step_f).geometry
     assert np.array_equal(
         np.asarray(_pa_step_geom.Rm_cm, dtype=float), _pa_step_Rm
@@ -1773,7 +1595,6 @@ def _case_prescribed_area_trivial_profile_identity(
         plasma_radius_profile_cm=_pa_tight_rp.tolist(),
         machine_radius_profile_cm=_pa_tight_Rm.tolist(),
     )
-    _pa_tight_f["prescribed_area_geometry"] = True
     try:
         LAPDSim1D(dict(_pa_tight_p), dict(_pa_tight_f))
     except ValueError as _pa_exc:
@@ -1810,7 +1631,6 @@ def _case_prescribed_area_trivial_profile_identity(
     _pa_full_p, _pa_full_f = _pa_stance(
         plasma_radius_profile_cm=_pa_full_rp.tolist(),
     )
-    _pa_full_f["prescribed_area_geometry"] = True
     _pa_full_sim = LAPDSim1D(_pa_full_p, _pa_full_f)
     assert np.all(neutral_zone_volumes(_pa_full_sim.geometry)[1][-3:] == 0.0)
 
@@ -1830,8 +1650,7 @@ def _case_prescribed_area_well_balancedness(
     # pairs with, so the cancellation is bit-exact rather than merely
     # algebraic. The carve-out is the two plasma-TERMINATING live cells, where
     # the characteristic ghost-cell outflow (a term not summed here) carries
-    # the face momentum instead of a reflecting wall pressure -- the same
-    # carve-out the end_expansion block above makes.
+    # the face momentum instead of a reflecting wall pressure.
     _pa_col = np.flatnonzero(
         np.isin(
             _pa_geom0.cell_role, np.asarray(["puff", "column"], dtype=object)
@@ -1845,7 +1664,6 @@ def _case_prescribed_area_well_balancedness(
     _pa_var_p, _pa_var_f = _pa_stance(
         plasma_radius_profile_cm=_pa_flare.tolist()
     )
-    _pa_var_f["prescribed_area_geometry"] = True
     _pa_var_sim = LAPDSim1D(dict(_pa_var_p), dict(_pa_var_f))
     _pa_var_geom = _pa_var_sim.geometry
     assert np.array_equal(_pa_var_geom.Rp_cm, _pa_flare)
@@ -1949,7 +1767,6 @@ def _case_prescribed_area_well_balancedness(
     _pa_tz_p, _pa_tz_f = _pa_stance(
         plasma_radius_profile_cm=_pa_flare.tolist(),
     )
-    _pa_tz_f["prescribed_area_geometry"] = True
     _pa_tz_sim = LAPDSim1D(_pa_tz_p, _pa_tz_f)
     _pa_Vc, _pa_Va = neutral_zone_volumes(_pa_tz_sim.geometry)
     assert np.array_equal(
@@ -1993,7 +1810,6 @@ def _case_prescribed_area_well_balancedness(
         params, flags = _pa_stance(
             plasma_radius_profile_cm=_pa_flare.tolist()
         )
-        flags["prescribed_area_geometry"] = True
         params.update(params_over or {})
         flags.update(flags_over or {})
         try:
@@ -2002,7 +1818,7 @@ def _case_prescribed_area_well_balancedness(
             if expected is not None:
                 assert expected in str(exc), (label, str(exc))
             return
-        raise AssertionError(f"prescribed_area_geometry must refuse: {label}")
+        raise AssertionError(f"the prescribed geometry must refuse: {label}")
 
     _pa_refuses(
         "a profile shorter than the mesh",
@@ -2053,7 +1869,6 @@ def _case_prescribed_area_well_balancedness(
         Lcs=25.0,
         plasma_radius_profile_cm=np.full(_pa_cells + 1, 45.0).tolist(),
     )
-    _pa_duct_refuse_f["prescribed_area_geometry"] = True
     try:
         LAPDSim1D(_pa_duct_refuse_p, _pa_duct_refuse_f)
     except ValueError as _pa_exc:
@@ -2062,24 +1877,6 @@ def _case_prescribed_area_well_balancedness(
         raise AssertionError(
             "a plasma wider than a duct's open area must be refused"
         )
-    _pa_refuses(
-        "the flag armed with no profile at all",
-        params_over={"plasma_radius_profile_cm": None},
-        expected="requires plasma_radius_profile_cm",
-    )
-    _pa_refuses(
-        "the built-in half-cosine flare configured alongside it -- two "
-        "prescriptions of the same area with no composition rule",
-        params_over={
-            "Lm": 2125.85,
-            "end_wall_length_cm": 150.0,
-            "end_expansion_cells": 10,
-            "end_expansion_machine_radius_cm": 100.0,
-            "end_expansion_plasma_radius_cm": 50.0,
-        },
-        flags_over={"end_expansion_geometry": True},
-        expected="cannot be combined with end_expansion_geometry",
-    )
     # The vessel profile's own bad values, and the pair's consistency.
     _pa_refuses(
         "a vessel profile shorter than the mesh",
@@ -2123,11 +1920,10 @@ def _case_prescribed_area_well_balancedness(
             },
             expected="neutral_annulus_volume_fraction_min must be finite",
         )
-    # ...and the presence gate the other way: ANY of the three parameters set
-    # with the flag off is inert, so it raises rather than silently running the
-    # uniform column inside the scalar bore.
+    # ...and the presence gate the other way: either optional parameter set
+    # without the plasma profile is inert, so it raises rather than silently
+    # running the uniform column inside the scalar bore.
     for _pa_off_key, _pa_off_value in (
-        ("plasma_radius_profile_cm", _pa_flare.tolist()),
         ("machine_radius_profile_cm", _pa_Rm.tolist()),
         ("plasma_area_max_vessel_fraction", 0.95),
     ):
@@ -2135,13 +1931,13 @@ def _case_prescribed_area_well_balancedness(
         try:
             LAPDSim1D(_pa_off_p, _pa_off_f)
         except ValueError as _pa_exc:
-            assert "require the default-off prescribed_area_geometry flag" in (
+            assert "require plasma_radius_profile_cm" in str(_pa_exc), (
                 str(_pa_exc)
-            ), str(_pa_exc)
+            )
             assert _pa_off_key in str(_pa_exc), str(_pa_exc)
         else:
             raise AssertionError(
-                f"{_pa_off_key} must be refused with the flag off"
+                f"{_pa_off_key} must be refused without the plasma profile"
             )
 
 
@@ -2149,7 +1945,7 @@ def _case_prescribed_area_well_balancedness(
 # The axial field-map loader (physics/mirror_field.py). There is NO mirror
 # flag and NO mirror config key here, deliberately: the fluid mirror force is
 # already in the model as the quasi-1D p dA/dz source
-# (sources.flux_tube_geometry_rhs, armed by prescribed_area_geometry), and at
+# (sources.flux_tube_geometry_rhs, armed by plasma_radius_profile_cm), and at
 # A proportional to 1/B that source IS the isotropic average of
 # -mu grad_par B, so a second term would double-count it exactly. The loader
 # is a library function whose one in-tree consumer is
