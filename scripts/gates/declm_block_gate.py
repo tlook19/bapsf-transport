@@ -38,12 +38,10 @@ two TOML routes -- ``load_config`` and a committed stance file -- are exercised
 against the SAME block and compared to the same flat form, so a divergence
 between the file routes and the Python API cannot hide.
 
-Last, the FIVE run-time-first guards hoisted with this migration are asserted to
-refuse AT CONSTRUCTION -- the original four, ``dt_growth_factor``, the two
-scheme selectors and the drag model (negative control at base commit aa65468),
-and ``beam_deposition_model`` (negative control at base commit
-ca444dd, where 'cdsa' constructs and silently runs beer_lambert). Both
-reproduction recipes are in ``gate_hoisted_guards``.
+Last, the FOUR run-time-first guards hoisted with this migration are asserted
+to refuse AT CONSTRUCTION -- ``dt_growth_factor``, the two scheme selectors and
+the drag model (negative control at base commit aa65468). The reproduction
+recipe is in ``gate_hoisted_guards``.
 
 Usage::
 
@@ -162,17 +160,9 @@ def family_values(family):
 #: ``'kinetic_two_moment'`` in its own family's block.
 PERTURBED = {
     # beam_tail_closure
-    "beam_deposition_model": "beer_lambert",
-    "beam_coulomb_model": "legacy_tau_ei",
     "beam_anomalous_model": "none",
     "ql_relaxation_coeff": 60.0,
-    "beam_product_transport": "nonlocal",
-    "heating_anomalous_transport": "tail_walk",
-    "heating_anomalous_disposal": "landau_branched",
-    "heating_anomalous_tail_energy_eV": 150.0,
-    "heating_anomalous_tail_ionization": "on",
-    "heating_anomalous_tail_energy_keying": "fixed",
-    "heating_anomalous_tail_phi_c_fraction": 0.25,
+    "heating_anomalous_transport": "plateau_multigroup",
     "heating_anomalous_tail_cathode_boundary": "escape",
     "heating_anomalous_tail_forward_fraction": 0.75,
     "beam_tail_anode_reflected_particles": 0.5,
@@ -181,9 +171,7 @@ PERTURBED = {
     "beam_clump_enhancement": 2.0,
     "beam_deposition_smoothing_cm": 25.0,
     "b_beam_excitation": 1.0,
-    "beam_excitation_model": "manifold",
     "beam_excitation_energy_eV": 22.218,
-    "beam_anode_interception": False,
     # cathode_surface_recycle
     "cathode_neutral_jet": False,
     "cathode_jet_R_N": 0.5,
@@ -647,38 +635,20 @@ def _bad_stance(stance_config, stance_dir, block_text):
 
 
 def gate_hoisted_guards():
-    """The FIVE run-time-first guards, now refused at construction.
+    """The FOUR run-time-first guards, now refused at construction.
 
-    Each of these domains was first checked only once a run was already moving
-    -- or, for the fifth, never checked at all.
+    Each of these domains was first checked only once a run was already moving.
 
-    NEGATIVE CONTROL for the first four, run at base commit aa65468 before the
-    hoist: all four of those configurations CONSTRUCTED, which is what made them
-    run-time-first rather than merely redundant. Reproduce it with::
+    NEGATIVE CONTROL, run at base commit aa65468 before the hoist: all four of
+    those configurations CONSTRUCTED, which is what made them run-time-first
+    rather than merely redundant. Reproduce it with::
 
         git archive aa65468 cablp | tar -x -C <tmp> && PYTHONPATH=<tmp> ...
 
-    NEGATIVE CONTROL for the fifth (``beam_deposition_model``, hoisted
-    2026-08-30 with the g1atrim block-form migration), run the same way at base
-    commit ca444dd::
-
-        git archive ca444dd | tar -x -C <tmp> && PYTHONPATH=<tmp> \\
-            python -c "from cablp.solvers._sim1d import LAPDSim1D, \\
-                default_config; p, f = default_config(); p['nx'] = 8; \\
-                p['beam_deposition_model'] = 'cdsa'; LAPDSim1D(p, f)"
-
-    At ca444dd that CONSTRUCTS and runs, carrying 'cdsa' and silently selecting
-    beer_lambert: every read of the key is an equality test against 'csda' with
-    a beer_lambert fallback, in solver.py (five sites), physics/cathode.py and
-    core/validation.py, so no per-call check refuses a name outside the domain.
-    That makes this one worse than late -- there was no later check to reach.
-    The domain now lives once, exported as
-    ``physics.cathode.BEAM_DEPOSITION_MODELS``.
-
-    The per-call checks of the first four are deliberately still in place; these
-    are additional construction-time refusals, not replacements.
+    The per-call checks are deliberately still in place; these are additional
+    construction-time refusals, not replacements.
     """
-    print("\n=== HOISTED RUN-TIME-FIRST GUARDS (the four + the fifth) ===")
+    print("\n=== HOISTED RUN-TIME-FIRST GUARDS (the four) ===")
     from cablp.solvers._sim1d import LAPDSim1D
 
     params, flags = default_config()
@@ -689,19 +659,11 @@ def gate_hoisted_guards():
         ("operator_splitting", "stang", "operator_splitting must be one of"),
         ("implicit_heat_scheme", "tr_bdf3", "implicit_heat_scheme must be one of"),
         ("ion_neutral_drag_model", "slipp", "ion_neutral_drag_model must be one of"),
-        ("beam_deposition_model", "cdsa", "beam_deposition_model must be one of"),
     ):
         refuses(
             f"{key}={value!r} refused AT CONSTRUCTION",
             lambda k=key, v=value: LAPDSim1D(dict(params, **{k: v}), dict(flags)),
             must_name=[needle],
-        )
-    # POSITIVE controls for the fifth: both accepted names still construct, so
-    # the new check refuses the typo and nothing else.
-    for value in ("csda", "beer_lambert"):
-        check(
-            f"beam_deposition_model={value!r} still constructs",
-            _constructs(dict(params, beam_deposition_model=value), flags),
         )
 
 

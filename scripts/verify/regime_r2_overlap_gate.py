@@ -79,7 +79,6 @@ def build_config(nx, tracer_on, extra=None):
         {
             "nx": nx,
             "cathode_solver_model": "current_driven",
-            "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
             "cathode_heat_capacity_J_per_K": 120.0,
             "cathode_emissivity": 0.7,

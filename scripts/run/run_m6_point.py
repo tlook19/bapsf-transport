@@ -55,17 +55,6 @@ from cablp.solvers._sim1d.results.io import save_result_hdf5
 from cablp.solvers._sim1d.results.health import summarize_result
 
 
-# The ionization electron-birth policy this driver names for itself. "local"
-# since 2026-08-26, matching core/config.py's default and the g1atrim stance
-# line; before that it was "floor", which every --stance run silently
-# superseded and every --no-stance run silently kept. What the code cannot
-# say: the retired "floor" was an explicit campaign choice carried over from
-# the production notebook, and the comment that used to sit at the use site
-# ("never inherit the shared 'local' default here again") is RETIRED, not
-# overlooked -- it was ruled on, not dropped.
-ELECTRON_BIRTH_POLICY = "local"
-
-
 def parse_npz_overrides(items):
     """Return ``({key: value}, {key: provenance})`` from ``KEY=path.npz:array``.
 
@@ -251,7 +240,6 @@ def main(argv=None):
         "nx": args.nx,
         "V_bank": op["V_bank"],
         "cathode_solver_model": "current_driven",
-        "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
         "cathode_Ts_base_K": op["Ts_standby_K"],
         "cathode_heat_capacity_J_per_K": args.c_th,
@@ -260,10 +248,6 @@ def main(argv=None):
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
         "cathode_cleaning_E_th_eV": 20.0,
-        # Named rather than inherited: this driver states its own
-        # configuration package, so a key it cares about is spelled out even
-        # where it agrees with the default. See ELECTRON_BIRTH_POLICY above.
-        "Te_birth_ionization": ELECTRON_BIRTH_POLICY,
         "gas_puff_mode": "square",
         "S_gp": args.sgp,
     }

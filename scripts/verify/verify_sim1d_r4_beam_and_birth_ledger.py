@@ -18,8 +18,8 @@ then states the repaired booking that R4.1 (A15) and R4.2 (A14) make -- each ter
 moved to its correct book -- so the two no longer conceal one another. The repaired
 values follow from the per-term identities the R4 unit gates prove exactly
 (verify_sim1d_r4_beam_interception.py: fluid beam deposition -> P_prim; the
-intercepted energy -> anode; verify_sim1d_r4_ionization_birth.py: electron birth
--> 0, dilution).
+intercepted energy -> anode; the smoke's ionization-birth-energy-model case:
+electron birth -> 0, dilution).
 
 Needs the settled M6 artifact, named with --h5: it is a run artifact under the
 artifacts root, not a file this repository carries.

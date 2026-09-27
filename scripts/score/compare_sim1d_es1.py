@@ -4504,44 +4504,6 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
-        "--beam-excitation",
-        default=None,
-        choices=("scalar14", "manifold"),
-        help=(
-            "beam excitation channel for the WP-A A/B "
-            "(A3): scalar14 (production 2p_scalar "
-            "with the historical b=1.4 estimate) or manifold (measured "
-            "Ralchenko singlet sum, b=1.0)"
-        ),
-    )
-    parser.add_argument(
-        "--beam-deposition",
-        default=None,
-        choices=("beer_lambert", "csda", "csda_ql"),
-        help=(
-            "beam deposition model for the WP-B B3 A/B: "
-            "beer_lambert (historical "
-            "single-event absorption), csda (slowing-down module, classical "
-            "fast-electron Coulomb), or csda_ql (csda + quasilinear "
-            "beam-plasma drag)"
-        ),
-    )
-    parser.add_argument(
-        "--beam-product-transport",
-        default=None,
-        choices=("local", "nonlocal", "terminal_nonlocal"),
-        help=(
-            "beam product transport for the WP-D A/B: "
-            "local (production stance and "
-            "config default -- products thermalize where they are born), "
-            "nonlocal (products walk, and the escape ledger is live), or "
-            "terminal_nonlocal (the terminal residual alone walks; the "
-            "along-ray products stay local). Both walking values require the "
-            "CSDA deposition module and raise at "
-            "construction under --beam-deposition beer_lambert"
-        ),
-    )
-    parser.add_argument(
         "--es",
         type=int,
         choices=(1, 2, 3, 4),
@@ -4727,32 +4689,9 @@ def main(argv=None):
             label += f" [stance={named.name}]"
         if args.drag_closure is not None:
             label += f" [drag={args.drag_closure}]"
-        if args.beam_excitation is not None:
-            label += f" [beam_exc={args.beam_excitation}]"
         extra = {}
         if args.tau_afterglow is not None:
             extra["tau_afterglow"] = args.tau_afterglow
-        # A/B instrument for A3: the measured singlet
-        # manifold vs the retired 1.4 estimate. "scalar14" is PARAM_OVERRIDES
-        # as-is; "manifold" swaps the cross-section set and drops b to the
-        # pure-multiplier benchmark value.
-        if args.beam_excitation == "manifold":
-            extra["beam_excitation_model"] = "manifold"
-            extra["b_beam_excitation"] = 1.0
-        if args.beam_deposition is not None:
-            label += f" [dep={args.beam_deposition}]"
-            extra["beam_deposition_model"] = (
-                "csda" if args.beam_deposition.startswith("csda")
-                else "beer_lambert"
-            )
-            if args.beam_deposition == "csda_ql":
-                extra["beam_anomalous_model"] = "quasilinear"
-        # WP-D arm. Lands in `extra`, which run_model applies LAST, so it wins
-        # over PARAM_OVERRIDES; PARAM_OVERRIDES itself never sets the key, so
-        # omitting the flag reproduces the production stance exactly.
-        if args.beam_product_transport is not None:
-            extra["beam_product_transport"] = args.beam_product_transport
-            label += beam_product_transport_note(extra)
         # No BreakdownError handler here: this driver never sets
         # prebreakdown_timeout_action, so it always runs the "switch_open"
         # default, under which a failed breakdown ends as an OPENED SWITCH

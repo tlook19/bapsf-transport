@@ -651,7 +651,7 @@ def print_ledger(ctx, stream=sys.stdout):
         file=stream,
     )
     print(
-        "    ionization_birth_energy_model='conservative' books for a birth "
+        "    bulk birth convention books for a birth "
         "and the carrier",
         file=stream,
     )
@@ -671,8 +671,8 @@ def print_ledger(ctx, stream=sys.stdout):
         file=stream,
     )
     print(
-        "    (3/2) k Te per beam ionization. NOT a mismatch at the stance: "
-        "'conservative'",
+        "    (3/2) k Te per beam ionization. NOT a mismatch: the bulk "
+        "birth convention",
         file=stream,
     )
     print(
@@ -681,13 +681,7 @@ def print_ledger(ctx, stream=sys.stdout):
         file=stream,
     )
     print(
-        "    a disagreement would have (a deprecated 'legacy' bulk arm would "
-        "carry it).",
-        file=stream,
-    )
-    print(
-        "  bulk birth model             "
-        f"{ctx.sim._input_dict.get('ionization_birth_energy_model', 'legacy')!r:>14}",
+        "    a disagreement would have.",
         file=stream,
     )
     print(file=stream)

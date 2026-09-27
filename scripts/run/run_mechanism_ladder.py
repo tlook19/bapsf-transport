@@ -67,17 +67,6 @@ ES_OPERATING = {
     4: {"V_bank": 98.978, "Ts_standby_K": 1972.0},
 }
 
-# The ionization electron-birth policy this driver names for itself. "local"
-# since 2026-08-26, aligned with run_m6_point.py's ELECTRON_BIRTH_POLICY,
-# core/config.py's default and the g1atrim stance line; before that it was
-# "floor", which every --stance run silently superseded and every --no-stance
-# run silently kept. The retired "floor" was an explicit campaign choice
-# carried over from the production notebook; retiring it was ruled on,
-# taken for run_m6_point.py first and applied here for the same
-# reason -- the two drivers must not disagree about which birth policy an
-# unstanced rung runs.
-ELECTRON_BIRTH_POLICY = "local"
-
 # Keys ``ES_OPERATING`` owns AND that are live in the solved configuration, so
 # a layer that overwrites one silently re-labels which rung the run is.
 #
@@ -294,12 +283,7 @@ def main(argv=None):
         "nx": args.nx,
         "V_bank": op["V_bank"],
         "cathode_solver_model": "current_driven",
-        "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
-        # Named rather than inherited: this driver states its own
-        # configuration package, so a key it cares about is spelled out even
-        # where it agrees with the default. See ELECTRON_BIRTH_POLICY above.
-        "Te_birth_ionization": ELECTRON_BIRTH_POLICY,
     }
     extra.update({
         "cathode_Ts_base_K": op["Ts_standby_K"],
