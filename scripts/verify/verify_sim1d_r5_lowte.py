@@ -28,7 +28,6 @@ from cablp.atomic.adas import he_rates
 CLEAN_PARAMS = {
     "ne0": 1e12, "nn0": 1e13, "Te0": 15.0, "Ti0": 2.0, "u0": 0.0,
     "gas_puff_enabled": False, "pump_enabled": False,
-    "atomic_rate_model": "adas",
     "phase_transition_mode": "scheduled",
     "tau_neutral_prebreakdown": 0.0, "tau_prebreakdown": 0.0,
     "tau_breakdown": 0.0, "tau_discharge": 1.0, "tau_afterglow": 0.0,

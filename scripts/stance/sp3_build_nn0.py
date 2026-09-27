@@ -918,11 +918,6 @@ def build(args):
         args.es, args.nx, args.sgp,
         extra_params=extra_params, extra_flags=extra_flags,
     )
-    if params["gas_type"] != "He":
-        raise ValueError(
-            "sp3_build_nn0 is helium-only: the collision cross section and the "
-            f"thermal speed are both He-He (stance gas_type={params['gas_type']!r})"
-        )
     geometry = LAPDSim1D(dict(params), dict(flags)).geometry
     cells = int(geometry.cells)
 

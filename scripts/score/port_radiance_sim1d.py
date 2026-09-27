@@ -8,7 +8,7 @@ saved state, so the instrument cannot report a different physics than the run
 carried.
 
 WHAT IS COMPUTED.  Two line-radiation channels, both taken straight from the
-OPEN-ADAS adf11 PLT coefficients that ``atomic_rate_model = "adas"`` runs on
+OPEN-ADAS adf11 PLT coefficients the solver runs on
 (``cablp/atomic/adas.he_rates``), evaluated at the saved cell state:
 
     e-i (He II) line power   eps_ei = PLT2(ne, Te) * ne * ne
@@ -216,13 +216,16 @@ def resolvable_ports(law, z_lo, z_hi):
 def require_adas(params):
     """Return the run's ADAS closure settings, or refuse the artifact.
 
-    A ``janev``-configured run has no PLT tables behind it at all: its cooling
-    terms are the IAEA fit expressions, and the He I fit even folds the
-    ionization potential into the "cooling" it reports.  Evaluating ADAS PLT
-    against such a run would report a radiance the run never had, so this
-    refuses rather than substituting.
+    The solver's rates are the ADAS coefficients unconditionally, and an
+    artifact it writes records no rate-model key. An artifact written before
+    that key was removed records it, and one that records anything other than
+    ``"adas"`` has no PLT tables behind it at all: its cooling terms are the
+    IAEA fit expressions, and the He I fit even folds the ionization potential
+    into the "cooling" it reports.  Evaluating ADAS PLT against such a run
+    would report a radiance the run never had, so this refuses rather than
+    substituting.
     """
-    model = str(params.get("atomic_rate_model", "<absent>"))
+    model = str(params.get("atomic_rate_model", "adas"))
     if model != "adas":
         raise ArtifactRefused(
             f"atomic_rate_model = {model!r}: this instrument reports the "
