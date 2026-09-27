@@ -900,6 +900,16 @@ against a barrier, so the three rows are absent, as they are on a geometry
 without a cathode face. The twin-cathode layout books each emitting face from
 its own circuit result at its own cell.
 
+The sheath SINKS of the electrode faces — the anode electron debit and the
+cathode face's collected climb — are carried implicitly wherever the operator
+split is in force: the implicit electron-energy substep applies each as a
+first-order loss rate under one shared accuracy bound, and each keeps its own
+booked-against-realised energy pair. The climb's rate is its booked loss over
+the cathode cell's electron heat capacity at the state the substep starts
+from, so it cannot take that cell's store below zero within a step. The
+face's two source rows and the end wall's sheath-climb row are applied
+explicitly. [`NUMERICS.md`](NUMERICS.md) carries the substep and the bound.
+
 **Prescribed drive.** `cathode_solver_model = "prescribed_measured"` imposes
 both loop quantities — $I(t)$ and $V_\text{dis}(t)$ interpolated from a
 supplied trace onto the model clock — and consults nothing about the surface
@@ -1225,7 +1235,7 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `end_wall_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (geometries with an end wall face) |
 | `cathode_e_emitted_enthalpy` | `physics/cathode.py:cathode_emission_sheath_power_W` (geometries with an emitting cathode face) |
 | `cathode_e_emitted_fall` | `physics/cathode.py:cathode_emission_sheath_power_W` (geometries with an emitting cathode face) |
-| `cathode_e_collected_climb` | `physics/cathode.py:cathode_emission_sheath_power_W` (geometries with an emitting cathode face) |
+| `cathode_e_collected_climb` | `physics/cathode.py:cathode_emission_sheath_power_W` (geometries with an emitting cathode face); REPORTED here and applied by the implicit heat substep as `solver.py:cathode_climb_ee_sink_rate` wherever the operator split is in force |
 | `anode_collection` | `physics/sources.py:anode_collection_rhs` |
 | `beam_ionization_birth` | `physics/cathode.py:beam_ionization_rhs_terms` |
 | `beam_power_deposition` | `physics/cathode.py:beam_ionization_rhs_terms` (beam banks, smoothing, and the ohmic gap booking) |
