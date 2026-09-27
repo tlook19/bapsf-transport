@@ -297,7 +297,6 @@ C_R = 9.3
 # recapture that accompanies this edit absorbs that move.
 cathode_conduction_W_per_K = 12058.0
 cathode_heat_capacity_J_per_K = 181.0
-cathode_emission_profile = "uniform"
 # T_s was the OTHER half of the 23b R4 deletion, deferred three times and now
 # RESOLVED BY RETIREMENT (2026-09-03): the key no longer exists, so this row
 # is gone with it and naming it again is refused at construction. The
@@ -422,19 +421,6 @@ max_steps_action = "stop"
 
 
 [input_flags]
-
-# CORRECTED ANODE SHEATH BOOKING. Armed 2026-08-25. The plasma electron store
-# is debited (2 Te + phi_a) per electron the anode collects -- the sheath-edge
-# energy flux of the truncated Maxwellian the sheath solve already closes on --
-# instead of the plasma-thermal 2 Te alone, and the anode mesh's Bohm
-# collection rows are re-cut to their sheath-edge values in the same arming.
-# The circuit ledger is untouched: the phi_a those electrons pay is field energy
-# the loop and the anode ions already book. The electron-ATTRACTING regime
-# (phi_a <= 0) keeps the unarmed thermal-only booking, because there the bank
-# pays the fall, and it is COUNTED rather than silent. It is a booking
-# correction, not a calibration. Requires characteristic_boundary, which this
-# stance takes from the config defaults.
-anode_sheath_full_debit = true
 
 # END-WALL SHEATH ELECTRON-ENERGY BOOKING. The plasma electron store is
 # debited, per electron the chamber's far end wall collects, the barrier those

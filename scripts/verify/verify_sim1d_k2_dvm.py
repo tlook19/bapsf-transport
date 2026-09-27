@@ -432,17 +432,12 @@ def advance_one_step(sim, operator_split=None):
         else operator_split
     )
     diag = sim.suggest_timestep(include_heat_conduction=not split)
-
-    def _generate():
-        attempt, retries, reason, events = sim._attempt_step_with_retries(
-            dt=diag.dt,
-            operator_split=operator_split,
-            diag=diag,
-        )
-        return attempt, (retries, reason, events)
-
-    result, _attempt, _extra = sim._accept_step_with_picard(_generate)
-    return result
+    attempt, _retries, _reason, _events = sim._attempt_step_with_retries(
+        dt=diag.dt,
+        operator_split=operator_split,
+        diag=diag,
+    )
+    return sim._accept_step_attempt(attempt)
 
 
 def run_until_updates(sim, n_updates, max_steps=6000):
@@ -2356,12 +2351,6 @@ REFUSALS = (
             d.__setitem__("neutral_kinetic_dvm_elastic", "bilinear"),
             None,
         )[1],
-    ),
-    (
-        "G7 Picard coupling refused",
-        dict(),
-        "coupled_circuit_picard",
-        lambda d, fl: (fl.__setitem__("coupled_circuit_picard", True), None)[1],
     ),
     (
         "G8 puff local ionization refused",
@@ -5609,30 +5598,37 @@ def gate_ja6():
     # necessarily starts disarmed -- there is no discharge current yet -- so
     # an armed fluid run and an inert one differ on step 1 no matter how low
     # the arm threshold is set. That difference is the criterion WORKING, not
-    # the thing this leg is about. So: advance one sim until the latch is
-    # armed, then step it twice from the SAME state through the solver's own
-    # Picard snapshot -- once under the criterion, once with the criterion
-    # stood down -- and compare. That is the actual claim: with the latch
-    # armed, the criterion is not in the way.
+    # the thing this leg is about. So: advance two identical sims until the
+    # latch is armed -- the stepping is deterministic, so they reach the SAME
+    # state -- then step one under the criterion and the other with the
+    # criterion stood down, and compare. That is the actual claim: with the
+    # latch armed, the criterion is not in the way.
     supra_sim = _ja_fluid_sim(
+        neutral_jet_arm_current_A=JA_IMMEDIATE_ARM_A,
+        neutral_jet_disarm_current_A=0.0,
+    )
+    twin_sim = _ja_fluid_sim(
         neutral_jet_arm_current_A=JA_IMMEDIATE_ARM_A,
         neutral_jet_disarm_current_A=0.0,
     )
     for _ in range(JA_FLUID_STEPS):
         advance_one_step(supra_sim)
+        advance_one_step(twin_sim)
     latch_armed = bool(supra_sim._jet_armed)
-    snap = supra_sim._picard_snapshot()
+    same_start = np.array_equal(
+        _ja_bits(np.asarray(supra_sim._y, dtype=float)),
+        _ja_bits(np.asarray(twin_sim._y, dtype=float)),
+    )
     advance_one_step(supra_sim)
     supra = {
         "y": np.asarray(supra_sim._y, dtype=float).copy(),
         "Ts_K": float(supra_sim._cathode_Ts_K),
     }
-    supra_sim._picard_restore(snap)
-    supra_sim._jet_arming_active = False
-    advance_one_step(supra_sim)
+    twin_sim._jet_arming_active = False
+    advance_one_step(twin_sim)
     inert = {
-        "y": np.asarray(supra_sim._y, dtype=float).copy(),
-        "Ts_K": float(supra_sim._cathode_Ts_K),
+        "y": np.asarray(twin_sim._y, dtype=float).copy(),
+        "Ts_K": float(twin_sim._cathode_Ts_K),
     }
     sub_ok = (
         np.array_equal(_ja_bits(sub["y"]), _ja_bits(absent["y"]))
@@ -5642,6 +5638,7 @@ def gate_ja6():
     )
     supra_ok = (
         latch_armed
+        and same_start
         and np.array_equal(_ja_bits(supra["y"]), _ja_bits(inert["y"]))
         and supra["Ts_K"] == inert["Ts_K"]
     )

@@ -84,25 +84,12 @@ INERT_PARAM_KEYS = frozenset({
     "tau_neutral_prebreakdown", "phase_transition_mode",
     # --- cathode / emission / warming / surface (no cathode during equil) ---
     "L_cath", "R_cath", "phi_wf",
-    "cathode_Ts_base_K", "cathode_Ts_fwhm_cm",
+    "cathode_Ts_base_K",
     "cathode_cleaning_E_th_eV", "cathode_cleaning_sigma_cm2",
-    "cathode_conduction_W_per_K", "cathode_emission_annuli",
-    "cathode_emission_profile", "cathode_emissivity",
-    "cathode_heat_capacity_J_per_K", "cathode_model", "cathode_phi_c_cap_V",
-    "cathode_phiwf_clean_eV", "cathode_sample_smoothing",
-    "cathode_solver_model", "cathode_surface_model", "cathode_warming_model",
-    "cathode_Rp_model",
-    # Which sampled state the CIRCUIT ADVANCE evaluates V_dis(I) on. Inert on
-    # the same ground as cathode_sample_smoothing and cathode_solver_model
-    # beside it, and more strongly: run_neutral_equilibration pins
-    # Plasma=False and cathode_coupling=False on the inner sim, so no circuit
-    # advance runs at all during an equilibration and the key selects between
-    # two states nothing reads. Categorised rather than left to fail closed
-    # for the reason spelled out for the prescribed cathode trace below --
-    # the fail-closed default would rotate every stored seed's signature the
-    # moment the key joined the template, an invalidation with no neutral
-    # content behind it.
-    "cathode_circuit_sample",
+    "cathode_conduction_W_per_K", "cathode_emissivity",
+    "cathode_heat_capacity_J_per_K", "cathode_phi_c_cap_V",
+    "cathode_phiwf_clean_eV",
+    "cathode_solver_model",
     # The prescribed measured drive, on the same ground as the solver model
     # itself: the equilibration runs with Plasma=False and
     # cathode_coupling=False, so no cathode solve happens and no trace is read.
@@ -111,14 +98,6 @@ INERT_PARAM_KEYS = frozenset({
     # joined the template -- an invalidation with no neutral content behind it.
     "cathode_prescribed_trace_path", "cathode_prescribed_t0_s",
     "cathode_prescribed_start_s",
-    # The ion-induced secondary emission yield, on the same ground as its flag
-    # in INERT_FLAG_KEYS below: run_neutral_equilibration CLEARS both on the
-    # inner sim's copy of the config, and a Plasma=False, cathode_coupling=
-    # False pre-solve has no cathode solve and no ion current arriving at an
-    # emitting face, so no armed value can reach a seed. Categorised rather
-    # than left to fail closed for the reason spelled out for the prescribed
-    # cathode trace above.
-    "cathode_ion_secondary_emission_yield",
     # --- beam deposition / excitation (no plasma/beam during equil) ---
     "beam_anomalous_model", "ql_relaxation_coeff",
     "beam_coulomb_model", "beam_deposition_model",
@@ -167,7 +146,7 @@ INERT_PARAM_KEYS = frozenset({
     "cfl", "density_dt_fraction",
     "implicit_heat_scheme", "operator_splitting", "heat_picard_iterations",
     "heat_picard_tol", "max_density_step_fraction",
-    "max_energy_step_fraction", "circuit_picard_max_iter", "circuit_picard_tol_rel",
+    "max_energy_step_fraction",
     "hyperbolic_wave_speed", "dt_growth_enabled", "dt_growth_factor",
     "adaptive_retries_enabled",
     # --- output cadence (run_neutral_equilibration overrides these) ---
@@ -181,8 +160,7 @@ INERT_FLAG_KEYS = frozenset({
     # plus the cache-control flags themselves (they select the seed source, not
     # its content).
     "Plasma", "cathode_coupling", "active_plasma_topology",
-    "beam_anode_interception", "cathode_emission_bridge", "cathode_schottky",
-    "coupled_circuit_picard", "cx",
+    "beam_anode_interception", "cx",
     "electron_heat_flux_limit", "heat_conduction", "hyperbolic_energy_consistent",
     "icool_recomb", "implicit_heat_conduction", "ion_neutral_drag",
     "ion_neutral_drag_cx_only", "ion_neutral_moment_closure",
@@ -200,46 +178,23 @@ INERT_FLAG_KEYS = frozenset({
     # is what keeps a default-config flag addition from rotating every
     # cached seed in the database.
     "end_recycle_to_annulus",
-    # The three end-face energy-booking flags are inert for a STRONGER reason
+    # The two end-face energy-booking flags are inert for a STRONGER reason
     # than end_recycle_to_annulus above: run_neutral_equilibration does not
-    # merely leave them unreached, it CLEARS all three on the inner sim's copy
-    # of the config (three assignments beside the Plasma=False and
+    # merely leave them unreached, it CLEARS both on the inner sim's copy of
+    # the config (two assignments beside the Plasma=False and
     # cathode_coupling=False lines that open that function), so the
     # equilibration runs with them off no matter what the outer run arms and no
     # armed value can reach a seed. Their content says the same thing:
     # end_wall_sheath_full_debit books the sheath fall of the electrons the end
-    # wall collects, cathode_face_full_debit books the emitting face's
-    # currents, and cathode_enthalpy_on_beam only MOVES the row the second of
-    # those places -- and a Plasma=False, cathode_coupling=False pre-solve has
-    # no plasma reaching either end face and no cathode solve to read a current
-    # from, so none of the three has a term to book even before the clearing.
+    # wall collects and cathode_face_full_debit books the emitting face's
+    # currents -- and a Plasma=False, cathode_coupling=False pre-solve has no
+    # plasma reaching either end face and no cathode solve to read a current
+    # from, so neither has a term to book even before the clearing.
     # Categorised rather than left to fail closed for the reason spelled out
     # for the prescribed cathode trace above: the fail-closed default rotates
     # every stored seed's signature the moment such a key joins the template,
     # an invalidation with no neutral content behind it.
     "end_wall_sheath_full_debit", "cathode_face_full_debit",
-    "cathode_enthalpy_on_beam",
-    # Ion-induced secondary electron emission is inert on the same two
-    # grounds: run_neutral_equilibration clears it (and its yield) on the
-    # inner sim's copy of the config, and with no cathode solve there is no
-    # ion current arriving at an emitting face for it to be proportional to,
-    # so it adds no current a neutral-only equilibration could see. Its
-    # partner number is in INERT_PARAM_KEYS above; the two must be listed
-    # together, because clearing one alone would refuse the inner sim.
-    "cathode_ion_secondary_emission",
-    # The over-wall projection of the current-driven circuit advance, inert on
-    # the same ground as cathode_coupling and coupled_circuit_picard beside it,
-    # and more strongly: run_neutral_equilibration pins Plasma=False and
-    # cathode_coupling=False on the inner sim, so NO CIRCUIT ADVANCE RUNS at
-    # all during an equilibration and this flag edits the starting current of
-    # a step that is never taken. Its partner is cathode_circuit_sample in
-    # INERT_PARAM_KEYS above, which selects the sample the same advance reads;
-    # the two describe one advance and are listed for one reason. Categorised
-    # rather than left to fail closed for the reason spelled out for the
-    # prescribed cathode trace above: the fail-closed default rotates every
-    # stored seed's signature the moment such a key joins the template, an
-    # invalidation with no neutral content behind it.
-    "cathode_circuit_project_over_wall",
     # cache-control + equilibration-trigger flags (not seed content)
     "neutral_equilibration", "launch_plasma_after_equilibration",
     "use_cached_neutral_seed",

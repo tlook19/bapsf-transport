@@ -174,7 +174,6 @@ def main(argv=None):
                    help="neutral_two_zone particle channel "
                         "-- nn becomes the column "
                         "density, nn_a the annulus")
-    p.add_argument("--no-smooth", action="store_true")
     p.add_argument("--nn0-profile-npz", default=None,
                    help="path to a shaped initial neutral profile written by "
                         "scripts/stance/sp3_build_nn0.py. The DRIVER does the file "
@@ -254,13 +253,10 @@ def main(argv=None):
         "cathode_solver_model": "current_driven",
         "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
-        "cathode_emission_profile": "gaussian",
-        "cathode_warming_model": "power_balance",
         "cathode_Ts_base_K": op["Ts_standby_K"],
         "cathode_heat_capacity_J_per_K": args.c_th,
         "cathode_emissivity": 0.7,
         "phi_wf": 2.869,
-        "cathode_surface_model": "ads_des",
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
         "cathode_cleaning_E_th_eV": 20.0,
@@ -277,8 +273,6 @@ def main(argv=None):
     # 8000 on every run that did not pass the flag).
     if args.g_cond is not None:
         extra["cathode_conduction_W_per_K"] = args.g_cond
-    if not args.no_smooth:
-        extra["cathode_sample_smoothing"] = "presheath"
     if args.close_lag is not None:
         extra["gas_puff_close_lag_s"] = args.close_lag
     if args.L is not None:

@@ -95,7 +95,6 @@ CALIBRATED_ONLY_KEYS = (
     "V_bank",
     "C_bank_F",
     "L_parasitic_H",
-    "cathode_warming_model",
     "cathode_heat_capacity_J_per_K",
     "cathode_conduction_W_per_K",
     "cathode_emissivity",
@@ -276,13 +275,6 @@ def resolve_prescribed_drive(input_dict, input_flags, solver_model):
                 "silent inert control"
             )
         return None
-    if bool(input_flags.get("cathode_circuit_voltage_bound", False)):
-        _refuse(
-            "cathode_circuit_voltage_bound bounds the sheath against what the "
-            "BANK LOOP can supply, and this mode has no loop equation -- the "
-            "device voltage is measured, not sourced. Turn the flag off"
-        )
-
     raw_path = input_dict.get("cathode_prescribed_trace_path")
     if raw_path is None:
         _refuse(

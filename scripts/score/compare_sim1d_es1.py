@@ -258,9 +258,9 @@ PARAM_OVERRIDES = {
     # NB the constant-surface-temperature era ended at the f=0.1 stance
     # promotion: the pin that held the surface at 273.15 + 1725 K is gone,
     # and so is the key it was written on (T_s, since retired).
-    # cathode_warming_model="power_balance" (a config default) evolves the
-    # surface from cathode_Ts_base_K, which this block leaves at its config
-    # default, so there is nothing to pin here.
+    # The surface power balance evolves the surface from cathode_Ts_base_K,
+    # which this block leaves at its config default, so there is nothing to
+    # pin here.
     # Neutral-equilibration puff width, MEASURED and boxed.
     # The ES1-4 total gas-puff pulse width was ~25 ms: operator practice is to
     # fire the valve, wait out the machine breakdown delay (~4-6 ms), hold
@@ -560,7 +560,6 @@ def run_model(
     exchange_model="knudsen",
     extra=None,
     drag_closure=None,
-    Rp_model=None,
     flags_extra=None,
     t_end=None,
     max_steps=None,
@@ -607,12 +606,6 @@ def run_model(
         flags["neutral_momentum"] = True
     elif drag_closure not in (None, "constant"):
         raise ValueError(f"unknown drag_closure {drag_closure!r}")
-    # A/B instrument for M1: profile-integrated
-    # cathode-anode gap resistance vs the historical single-sample R_p.
-    # With the production Rp == R_cath the geometric component vanishes, so
-    # this isolates the Te-profile effect on V_dis(t).
-    if Rp_model is not None:
-        params["cathode_Rp_model"] = Rp_model
     if extra:
         params.update(extra)
     # WHICH configuration this run named, when its caller named one. The
@@ -4505,16 +4498,6 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
-        "--Rp-model",
-        default=None,
-        choices=("sample", "resolved_gap"),
-        help=(
-            "cathode gap-resistance model for the M1 A/B: "
-            "sample (historical one-cell "
-            "Spitzer) or resolved_gap (profile-integrated over the gap)"
-        ),
-    )
-    parser.add_argument(
         "--beam-excitation",
         default=None,
         choices=("scalar14", "manifold"),
@@ -4738,8 +4721,6 @@ def main(argv=None):
             label += f" [stance={named.name}]"
         if args.drag_closure is not None:
             label += f" [drag={args.drag_closure}]"
-        if args.Rp_model is not None:
-            label += f" [Rp={args.Rp_model}]"
         if args.beam_excitation is not None:
             label += f" [beam_exc={args.beam_excitation}]"
         extra = {}
@@ -4789,7 +4770,6 @@ def main(argv=None):
             extra=extra,
             flags_extra=flags_extra,
             drag_closure=args.drag_closure,
-            Rp_model=args.Rp_model,
             configuration=configuration,
         )
         scored_params = params

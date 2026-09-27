@@ -23,7 +23,6 @@ from cablp.atomic.adas import he_rate_temperature_range_eV
 
 from .config import (
     coverage_closure_defaults,
-    emitting_area_defaults,
     model_mode_defaults,
     neutral_probe_source_defaults,
     parallel_momentum_sink_defaults,
@@ -111,10 +110,6 @@ def validate_r1_configuration_presence(
             float(input_dict.get("D_amb")),
             0.0,
         ),
-        "cathode_model": (
-            str(input_dict.get("cathode_model")),
-            "disabled",
-        ),
     }
     changed = [
         name
@@ -156,17 +151,13 @@ def validate_r1_configuration_presence(
         )
     _deprecated_selectors = {
         "D_amb_model": (str(input_dict.get("D_amb_model", "cs_dz")), "cs_dz"),
-        "cathode_model": (
-            str(input_dict.get("cathode_model", "disabled")), "disabled",
-        ),
     }
     _sel = [n for n, (a, d) in _deprecated_selectors.items() if a != d]
     if _sel:
         warnings.warn(
             "legacy-compat selectors " + ", ".join(_sel) + " are DEPRECATED "
             "and never consumed by the conservative solver (D_amb_model was "
-            "a _sim3-compat knob; cathode_model is superseded by the "
-            "cathode_coupling flag).",
+            "a _sim3-compat knob).",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -1025,18 +1016,12 @@ def resolve_coverage_config(input_dict, flags, *, geometry, neutral_model):
                 return value is None and default is None
             return bool(np.array_equal(value, default))
 
-        # coverage_growth_rate_per_s is the SHARED percolation clock: the
-        # cathode emitting-area closure reads the same key rather than
-        # minting a second rate, so it is live -- and a non-default value
-        # legitimate -- whenever that flag is armed. The other three keys
-        # are the column closure's alone and stay inert.
         inert = (
+            ("coverage_growth_rate_per_s", r),
             ("coverage_backfill_time_s", tau),
             ("coverage_initial_fraction", f0),
             ("coverage_initial_profile", profile),
         )
-        if not bool(flags.get("cathode_emitting_area", False)):
-            inert = (("coverage_growth_rate_per_s", r),) + inert
         configured = [
             name
             for name, value in inert
@@ -1323,74 +1308,6 @@ def resolve_electron_drift_transport_config(
         "anode_face": anode_face,
         "launch_cell": launch_cell,
     }
-
-
-def resolve_emitting_area_config(input_dict, flags):
-    """Validate and RESOLVE the cathode emitting-area closure (ea1).
-
-    Every failure here is a construction-time ``ValueError``: a throttle
-    that cannot be applied, or one that would be silently inert, must never
-    reach the first cathode solve. With the flag off the seed key must sit
-    at its shipped value, so a run that sets a seed and forgets the flag is
-    loud rather than silently fully lit.
-
-    Returns the lit-area fraction -- the closure's whole state -- or ``None``
-    when the flag is off, which is the presence gate every consumer reads.
-    """
-    enabled = bool(flags.get("cathode_emitting_area", False))
-    default_f0 = emitting_area_defaults()[
-        "cathode_emitting_area_initial_fraction"
-    ]
-    f0 = input_dict.get(
-        "cathode_emitting_area_initial_fraction", default_f0
-    )
-    if not enabled:
-        if f0 != default_f0:
-            raise ValueError(
-                "cathode_emitting_area_initial_fraction was configured "
-                f"({f0!r}) without the cathode_emitting_area flag, where "
-                "it is inert; set the flag or drop the parameter"
-            )
-        return None
-    if f0 is None or not (
-        math.isfinite(float(f0)) and 0.0 < float(f0) <= 1.0
-    ):
-        raise ValueError(
-            "cathode_emitting_area_initial_fraction (the lit fraction of "
-            "the emitting face at the time origin) must be finite and in "
-            f"(0, 1] (got {f0!r})"
-        )
-    if not bool(flags.get("cathode_coupling", False)):
-        raise ValueError(
-            "cathode_emitting_area requires cathode_coupling: the closure "
-            "throttles the thermionic emission of the cathode solve, and "
-            "with the coupling off there is no such solve, so the flag "
-            "would be a silent no-op"
-        )
-    profile = str(
-        input_dict.get("cathode_emission_profile", "uniform")
-    )
-    if profile != "gaussian":
-        raise ValueError(
-            "cathode_emitting_area requires "
-            "cathode_emission_profile='gaussian' (got "
-            f"{profile!r}): under 'uniform' the disc area A_c sets the "
-            "Richardson emission AND collects the ion current, so a lit "
-            "fraction applied to it would throttle the ion sink along "
-            "with the emission -- the throttle is not expressible there"
-        )
-    # The growth rate is the SHARED percolation clock, read from the
-    # coverage closure's key. It is validated here too because this flag
-    # can be armed with that closure off, in which case nothing else
-    # checks it.
-    r = input_dict.get("coverage_growth_rate_per_s", 0.0)
-    if not (math.isfinite(float(r)) and float(r) >= 0.0):
-        raise ValueError(
-            "coverage_growth_rate_per_s (the shared percolation clock of "
-            "df_em/dt = r*f_em*(1-f_em)) must be finite and >= 0 "
-            f"(got {r!r})"
-        )
-    return float(f0)
 
 
 def resolve_neutral_probe_config(

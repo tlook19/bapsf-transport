@@ -105,12 +105,8 @@ def scenario_config(name):
             "dt_save": 5.0e-5,
             "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
-            "cathode_warming_model": "none",
             "cathode_Ts_base_K": 1998.15,
-            "cathode_surface_model": "none",
-            "cathode_phiwf_clean_eV": None,
             "cathode_cleaning_E_th_eV": None,
-            "cathode_sample_smoothing": None,
             "coverage_initial_fraction": 0.3,
             "heating_anomalous_transport": "tail_walk",
             "heating_anomalous_tail_ionization": "on",
@@ -131,31 +127,6 @@ def scenario_config(name):
         # Beam-live, and f_cov still climbing at the handoff (it saturates at
         # 1.0 by ~3e-4 s), so both coverage members are moving when exported.
         return params, flags, 1.5e-4, 2.5e-4
-    if name == "emitting_area":
-        # ea1: the cathode lit-area fraction is a carried member of the
-        # cathode group. It is one scalar, but it multiplies every annulus's
-        # emission, so dropping it would relocate the discharge current
-        # rather than perturb it.
-        params.update({
-            "nx": 12,
-            "dt_save": 2.0e-7,
-            "cathode_solver_model": "current_driven",
-            "cathode_emission_profile": "gaussian",
-            "beam_deposition_model": "csda",
-            "beam_anomalous_model": "quasilinear",
-            # Pinned rather than inherited: this scenario wants the recovery
-            # branch reachable and its carried streak a LIVE control, and it
-            # says so itself instead of depending on whatever the shipped
-            # patience happens to be.
-            "dt_growth_recovery_patience": 3,
-        })
-        flags["cathode_coupling"] = True
-        flags["cathode_circuit_voltage_bound"] = True
-        flags["cathode_emitting_area"] = True
-        # The clock is still climbing at the handoff -- f_em saturates on the
-        # 1/r ~ 0.7 ms scale, far outside this window -- so the exported
-        # fraction is a moving member, not a frozen seed.
-        return params, flags, 1.0e-6, 2.0e-6
     raise SystemExit(f"unknown scenario {name!r}")
 
 
@@ -225,7 +196,6 @@ NEGATIVE_CONTROLS = {
     "cathode._cathode_x0": ("cathode", "_cathode_x0"),
     "circuit._circuit_I_loop": ("circuit", "_circuit_I_loop"),
     "circuit.V_dis_prev_save_integral": ("circuit", "V_dis_prev_save_integral"),
-    "cathode._cathode_f_em": ("cathode", "_cathode_f_em"),
     "coverage.f": ("coverage", "f"),
     "coverage.deficit": ("coverage", "deficit"),
     "run_loop.previous_accepted_dt": ("run_loop", "previous_accepted_dt"),
@@ -258,13 +228,6 @@ INERT_EXPECTATIONS = {
         "beam_atten_cross is identically zero until the sheath potential "
         "crosses the ionization threshold (~2e-4 s), so there is nothing to "
         "perturb in this short window; covered by meanfield_beam and coverage",
-    ("emitting_area", "cathode._cathode_beam_cross"):
-        "same cause as the meanfield entry, and measured on this scenario "
-        "(2026-08-13): beam_atten_cross is all-zero at the t_mid=1e-6 s "
-        "handoff AND at t_end, so the multiplicative perturbation has "
-        "nothing to act on. The window is short deliberately -- the member "
-        "under test here is the lit fraction, and the beam cache is covered "
-        "by meanfield_beam and coverage",
 }
 
 
@@ -294,11 +257,6 @@ def engagement_census(result, log):
     if "coverage_fraction" in diagnostics:
         f_cov = np.asarray(diagnostics["coverage_fraction"], dtype=float)
         notes.append(f"coverage f moved {f_cov.min():.6f} -> {f_cov.max():.6f}")
-    if "cathode_emitting_area_fraction" in diagnostics:
-        f_em = np.asarray(
-            diagnostics["cathode_emitting_area_fraction"], dtype=float
-        )
-        notes.append(f"f_em moved {f_em.min():.8f} -> {f_em.max():.8f}")
     for note in notes:
         log(f"  engaged: {note}")
     return census
@@ -445,8 +403,7 @@ def run_scenario(name, workdir, log, split_at=None, control=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenario", default=None,
-                        choices=("meanfield", "meanfield_beam", "coverage",
-                                 "emitting_area"))
+                        choices=("meanfield", "meanfield_beam", "coverage"))
     parser.add_argument("--keep-dir", default=None,
                         help="write payloads here instead of a temp dir")
     parser.add_argument("--split-at", type=float, default=None,
@@ -463,7 +420,7 @@ def main(argv=None):
     names = (
         (args.scenario,)
         if args.scenario
-        else ("meanfield", "meanfield_beam", "coverage", "emitting_area")
+        else ("meanfield", "meanfield_beam", "coverage")
     )
 
     lines = []

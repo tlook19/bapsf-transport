@@ -565,12 +565,11 @@ face,
 
 $$S_\text{an}=\eta\alpha_\text{ps}nc_s\frac{A}{V_\text{col}},$$
 
-removing $S_\text{an}$ particles and $m_iuS_\text{an}$ of momentum. Under
-`anode_sheath_full_debit` the energy debits are the SHEATH-EDGE moments,
-both per COLLECTED ION: $\tfrac12T_e$ from the electrons (the presheath work
-the collected pair has already done) and $\tfrac52T_i$ from the ions — the
-ion enthalpy, not its thermal energy alone. Clearing that selector books
-$\tfrac32T_e$ and $\tfrac32T_i$ instead. The neutralized atoms are returned to
+removing $S_\text{an}$ particles and $m_iuS_\text{an}$ of momentum. The
+energy debits are the SHEATH-EDGE moments, both per COLLECTED ION:
+$\tfrac12T_e$ from the electrons (the presheath work the collected pair has
+already done) and $\tfrac52T_i$ from the ions — the ion enthalpy, not its
+thermal energy alone. The neutralized atoms are returned to
 the annulus, falling back to the column where a cell has no annulus.
 
 ### Beam deposition
@@ -702,7 +701,7 @@ $$J_\text{eth,crit}(\psi_+)=J_i\sqrt{\mum_p/m_e}\frac{e^{-\psi_+}+\sqrt{1+2\psi_
 
 $\mu$ the ion mass in proton masses, and $I_\text{eth}^\star=J^\star T_e/R_p$.
 
-Under `cathode_schottky` the surface field LOWERS the barrier before that test.
+The surface field LOWERS the barrier before that test.
 For a classical (unclamped) sheath the Child–Langmuir width and its emitter
 field give
 
@@ -716,8 +715,7 @@ $\psi_-=\delta\ln(J_\text{eth}/J_\text{eth,crit})$ on a deep space-charge clamp
 (no surface field, no enhancement) and zero otherwise — including where the
 enhancement is exactly eaten by space charge.
 
-**The surface is not a constant.** Under `cathode_warming_model = "power_balance"`
-its temperature obeys
+**The surface is not a constant.** Its temperature obeys
 
 $$C_\text{th}\frac{dT_s}{dt}=P_\text{heater}+P_\text{ion}-P_\text{rad}-P_\text{emis}-P_\text{cond}-P_\text{back},$$
 
@@ -736,8 +734,8 @@ conduction into the heater-held substrate, and $P_\text{back}$ the energy the
 backscattered atoms of the cathode jet carry away, the $R_E$ share of the
 incident ion energy that the gas receives and the surface therefore loses.
 
-Under `cathode_surface_model = "ads_des"` the work function is not a constant
-either: an adsorbate coverage $\theta\in[0,1]$ obeys
+The work function is not a constant either: an adsorbate coverage
+$\theta\in[0,1]$ obeys
 
 $$\frac{d\theta}{dt}=-\sigma_\text{cl}(E)\Gamma_i\theta,\qquad \phi_\text{wf,eff}=\phi_\text{clean}+\left(\phi_\text{wf}-\phi_\text{clean}\right)\theta,$$
 
@@ -762,45 +760,10 @@ anode factors independent (the anode keeps the flat $e^{-1/2}$). Equivalently
 the cathode Kirchhoff sum closes the loop current, returning plasma electrons
 entering with a minus, $I_\text{tot}=I_\text{eth}^\star+I_i-I_{e,\text{ret}}$.
 
-**Ion-induced secondary emission.** Under `cathode_ion_secondary_emission` the
-ions arriving at the emitting face release electrons from it by potential
-(Auger) emission, a current the model otherwise omits,
-
-$$I_\text{see}=\gamma_\text{se}I_i,$$
-
-$\gamma_\text{se}$ the yield `cathode_ion_secondary_emission_yield` in
-electrons per arriving ion and $I_i$ the same Bohm ion current the solve draws
-to that face. It is a positive addition to the EMITTED side of the cathode
-balance, which stays the closure of the loop,
-
-$$I_\text{tot}=I_\text{eth}^\star+I_\text{see}+I_i-I_{e,\text{ret}},$$
-
-and, being independent of $\psi_+$, it reaches the monotone current match as a
-reduction of the imposed target rather than as a change to $J_\text{tot}(\psi_+)$:
-at any given $I_\text{tot}$ the sheath and its thermionic release need supply
-only $I_\text{tot}-I_\text{see}$, a smaller thermionic release for the same
-current match. On the current-driven circuit $I_\text{tot}$ is itself set
-self-consistently against the load line, and the added secondary current
-raises that equilibrium current (measured +12.7%, ~2967 -> ~3344 A, on the
-ES1 plateau); the shallower fall observed there ($\phi_c$ ~173.0 -> ~170.4 V)
-is the load line's response to that higher current, not a same-current
-sheath-root comparison. Secondaries leave the surface at a
-few eV and cross the SAME fall as the thermionic primaries, so they are part of
-the launched beam: $\Gamma_0=(I_\text{eth}^\star+I_\text{see})/e$ is the flux
-the deposition route launches, and $P_\text{prim}$, the gap bypass and the
-cathode field work are all priced at that sum. Three bookings are deliberately
-NOT extended to them: the space-charge ceiling and its virtual-cathode barrier,
-which describe a half-Maxwellian at $T_s$ and so overstate the released total
-once the ceiling binds; the emission-enthalpy row below, whose
-$2k_BT_s\Gamma_\text{em}$ is that same population's surface enthalpy; and the
-surface power balance, because a secondary's release energy comes from the
-arriving ion's neutralization rather than from the lattice. Unarmed,
-$I_\text{see}=0$ and every expression here is the one above it.
-
 The anode current the sheath must pass is the loop current less every directly
 collected population,
 
-$$J_\text{anode}=J_\text{tot}-\eta\beta_\text{bypass}\left(J^\star+J_\text{see}\right)-J_{\text{tail},a},$$
+$$J_\text{anode}=J_\text{tot}-\eta\beta_\text{bypass}J^\star-J_{\text{tail},a},$$
 
 $\beta_\text{bypass}=e^{-L_\text{cath}/l_b}$ the beam's gap survival at the
 coupling length $l_b$ ($1/l_b=1/(v_b\tau_{ei})+\sigma_bn_n^\text{col}$, zero for
@@ -841,7 +804,7 @@ $$L\frac{dI}{dt}=V_\text{src}-I\left(R_\text{comp}+R_\text{mesh}\right)-V_b(I),$
 so the loop current responds to the TOTAL series resistance while $x$ moves
 only the reported $V_\text{dis}$. The load power closes:
 
-$$P_\text{load}=I_\text{tot}V_b=\underbrace{\left(I_\text{eth}^\star+I_\text{see}\right)\phi_c+P_{c,i,\phi}-P_{c,e,\phi}}_\text{cathode field work}+\underbrace{I_\text{tot}V_p}_\text{gap ohmic}-\underbrace{I_\text{tot}\phi_a}_\text{anode field work}$$
+$$P_\text{load}=I_\text{tot}V_b=\underbrace{I_\text{eth}^\star\phi_c+P_{c,i,\phi}-P_{c,e,\phi}}_\text{cathode field work}+\underbrace{I_\text{tot}V_p}_\text{gap ohmic}-\underbrace{I_\text{tot}\phi_a}_\text{anode field work}$$
 
 The anode term SUBTRACTS, the same sign the device relation carries.
 
@@ -871,15 +834,14 @@ ohmic. $Q_e^\text{elec}$ is the plasma-thermal electron term of that split.
 
 **The electrode rows ride a SMOOTHED sample of the plasma.** Every $(n,T_e)$
 the sheath solve reads — at the cathode cell and at the two cells flanking the
-anode face — is the exponential moving average `cathode_sample_smoothing`
-maintains, seeded from the initial state and advanced on accepted steps only,
-with `"presheath"` setting the per-cell time constant to the ion transit
-$l_\text{cell}/c_s$ across that cell. So $I_i$, $I_{i,a}$, $\phi_a$, the
+anode face — is an exponential moving average, seeded from the initial state
+and advanced on accepted steps only, its per-cell time constant the ion
+transit $l_\text{cell}/c_s$ across that cell. So $I_i$, $I_{i,a}$, $\phi_a$, the
 cathode's $\alpha_\text{se}$ and the $T_e$ inside $Q_e^\text{elec}$ are
 evaluated on that average, while the fluid rows — including
 $S_\text{an}$, the split weights that distribute the anode row over its two
 cells, and the boundary operator's own $\alpha_\text{se}$ — read the raw cell
-state. `None` disables the smoothing bit-exactly.
+state.
 
 **The two transmission coefficients are not both charged to the plasma
 store.** The electron one is: $2T_e$ per collected electron, at both
@@ -892,8 +854,8 @@ the `anode_collection` row, formed on the fluid's own $S_\text{an}$ below,
 not on the circuit's ion current.
 
 **What the plasma pays is not the same at the two electrodes.** At the cathode
-it pays the thermal part alone. At the anode, under `anode_sheath_full_debit`
-and a REPELLING sheath ($\phi_a>0$), the collected electrons climbed the fall
+it pays the thermal part alone. At the anode, at a REPELLING sheath
+($\phi_a>0$), the collected electrons climbed the fall
 and the plasma pays $\phi_a$ per electron on top of the thermal $2T_e$; at an
 ATTRACTING sheath ($\phi_a\le0$) the field does work ON the electrons, the bank
 is the payer, and the thermal debit stands alone. A non-finite $\phi_a$ belongs
@@ -931,8 +893,7 @@ $-e\phi_c^+\Gamma_\text{ec}$, the barrier the returning plasma electrons
 climbed, charged to their own store exactly as the anode's repelling branch
 charges $\phi_a$. The fluxes are the solve's own,
 $\Gamma_\text{em}=I_\text{eth}^\star/e$ (the space-charge-released THERMIONIC
-current, not the Richardson ceiling and not the launched flux -- ion-induced
-secondaries carry no surface-thermal enthalpy here) and
+current, not the Richardson ceiling) and
 $\Gamma_\text{ec}=I_{e,\text{ret}}/e$. The beam
 deposition row is untouched, and the debit is NOT of the form
 $2(T_e-T_s)\Gamma_\text{em}$: emission and collection are two fluxes, not one
@@ -940,66 +901,6 @@ flux with a temperature difference. Because the emitted enthalpy is a heating
 term and the collected climb a cooling one, the face's net sign is a property
 of the state — an emitter releasing a large current into a sub-$T_s$ plasma
 heats it. The rows are absent entirely when the flag is off.
-
-**Where the launch enthalpy is booked.** `cathode_enthalpy_on_beam`, which
-requires `cathode_face_full_debit` and refuses at construction without it,
-moves the first of those three rows rather than changing it. Where the emitted
-electrons ARE the primary beam — the circuit's own regime test $\phi_c^-=0$,
-in which no virtual cathode has formed and the fall row above is identically
-zero — the enthalpy $2k_BT_s$ per emitted electron belongs with the beam launch
-energy, so it is added to the beam LAUNCH POTENTIAL ahead of the anode-mesh
-climb and deposited where the CSDA march deposits it, and the cathode-cell row
-$+2k_BT_s\Gamma_\text{em}$ is then exactly zero. Where the emitted population is
-NOT the launched beam — the virtual-cathode regime $\phi_c^->0$, and every
-floating, afterglow and inductive-tail phase — the cathode-cell booking stands
-unchanged. The gate lives in the sheath solve, which is what knows the regime,
-and the row reads its verdict back off the result, so the cell and the beam
-cannot both carry the enthalpy or both drop it. The placement moves energy
-between the cathode cell and the column; it creates none. Armed, the solve also
-reports the shift as $2k_BT_s/e$ in volts and the power it carries; both are
-exported to the cathode diagnostics, presence-gated on the flag.
-
-*Per route.* The shifted quantity is one object, the beam LAUNCH POTENTIAL
-$\phi_c+2k_BT_s/e$, and every route that launches a beam reads it there:
-
-- **Current-driven and prescribed-measured** (the two dispatched sheath
-  solves) carry the placement. The launch potential sets the ray energy, the
-  anode-mesh climb is subtracted from it rather than from the bare fall, and
-  the beam mean free path $l_b$ — hence the cathode-anode gap bypass — is
-  evaluated at it too, because the primary crosses the gap carrying its
-  emission enthalpy on top of the fall. That mean free path is the ONE channel
-  through which the placement moves a trajectory, and evaluating it at the
-  launch potential is what makes the CSDA $\sigma_\text{eff}$ inversion's own
-  premise true: that inversion, and the beam gap ledger's circuit view,
-  already solve at the launch potential. In the current-driven solve the
-  sheath root is a current match that the gap bypass does not enter, so the
-  fall and the released current are unmoved by the shift; only the bypass and
-  what it feeds move.
-- **CSDA deposition** is handed the FULL released flux $I_\text{eth}^\star/e$
-  at the launch potential and carries the gap itself, so the whole of
-  $\Delta\cdot I_\text{eth}^\star$ is launched into the column and the
-  reported on-beam power is that. $P_\text{prim}$ itself stays priced at the
-  launch potential BEFORE the anode-mesh climb (unlike the ray energy the
-  beam array's velocity and cross sections read), and the climbed-away
-  difference is not booked into any plasma or circuit power row. Under
-  `regime_vessel_node` that leaves the electrode-side power ledger open by
-  exactly the climbed-away term — a prediction channel, not a closed budget.
-  It closes at the reference configuration, where the climb is absent.
-- **Beer-Lambert deposition** heats the column through $P_\text{prim}$, which
-  already carries the gap-survival factor $1-\etab_\text{bypass}$, so only that
-  share of the beam — and of its enthalpy — ever enters the column and the
-  reported on-beam power is netted by the same factor. The deposition route
-  therefore selects the normalisation of that diagnostic, and nothing else; no
-  rhs row, potential or current reads the distinction, so it cannot move a
-  trajectory on either route. The anode-mesh climb above never applies here:
-  `regime_vessel_node` refuses any `beam_deposition_model` other than `"csda"` at
-  construction, so a nonzero climb and Beer-Lambert deposition cannot coexist.
-- **The off-dispatch voltage-driven beam assembly** (`solve_beam_system`, kept
-  as the voltage-driven reference and reached by no live caller) cannot carry
-  the placement at all: it takes no launch enthalpy and passes none to the
-  sheath solve, so its launch potential is identically $\phi_c$. It reads that
-  potential through the same accessor as every other route, so the omission is
-  zero rather than a bare drop kept silently.
 
 **Prescribed drive.** `cathode_solver_model = "prescribed_measured"` imposes
 both loop quantities — $I(t)$ and $V_\text{dis}(t)$ interpolated from a
@@ -1058,8 +959,7 @@ cell length $d$ (capped at $L_\text{ps}$) over the collisional presheath depth.
 The fluid boundary and the circuit read the same $\alpha_\text{se}$ EXPRESSION,
 but not the same state: the boundary operator evaluates it on the live cell's
 raw state, while the circuit evaluates it — and every other quantity it
-samples — on the exponential moving average `cathode_sample_smoothing`
-maintains. The
+samples — on the exponential moving average of the sampled electrode cells. The
 advective flux carries nothing at those faces — the ghost flux supplies
 $Mu+p$, and a wall pressure on top would count the wall momentum twice. Every
 other face bounding the plasma is closed, carrying no particle or
@@ -1087,7 +987,7 @@ sub-grid presheath model, and a sheath sends no wave back into the plasma. The
 numerical statement is [`NUMERICS.md`](NUMERICS.md).
 
 **End-face sheath debit at the end wall.** `end_wall_sheath_full_debit`
-completes that booking the way `anode_sheath_full_debit` completes the anode's.
+completes that booking the way the anode sheath debit completes the anode's.
 The two end-face keys are INDEPENDENT — different faces, different fluxes,
 different regimes — so either, both or neither may be armed and each refuses at
 construction on its own missing input alone. A
@@ -1145,7 +1045,7 @@ sheath-edge factor, the same sound speed and the same area, since the emitting
 disc IS the face the plasma terminates on ($A_f=A_c=\pi R_\text{cath}^2$,
 asserted at construction). What separates the two numbers is the SAMPLING and
 nothing else: the boundary operator reads the live cell's RAW state, the
-circuit the exponential moving average `cathode_sample_smoothing` maintains.
+circuit the exponential moving average of the sampled electrode cells.
 The residual between them is therefore that filter's lag and nothing but it —
 largest while the sampled cell is moving fast, since the EMA's time constant
 is the ion transit across it and a breakdown transient crosses that cell far
@@ -1156,7 +1056,7 @@ it, and gates the thing the model asserts: that the circuit's $I_i$ is the one
 expression above evaluated on the smoothed sample, to round-off, at every
 sampled step. The
 current-driven path's thermionic remainder — the emission the cathode Kirchhoff
-$I_\text{eth}^\star+I_\text{see}+I_i-I_{e,\text{ret}}=I_\text{tot}$ leaves to be
+$I_\text{eth}^\star+I_i-I_{e,\text{ret}}=I_\text{tot}$ leaves to be
 supplied — is built on that one number, and so is the ion power
 $I_i(T_e/2+\phi_c)$ the surface balance is credited with and the incident
 power the cathode recycle jet carries away from it. The anode is booked the

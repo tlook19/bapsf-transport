@@ -28,7 +28,7 @@ Two classes of row exist:
   ``"kinetic_dvm"`` does not.
 
 Controls that already have their own louder guard are deliberately ABSENT.
-``front_flux_model``, ``D_amb_model``, ``cathode_model`` and ``D_amb`` are
+``front_flux_model``, ``D_amb_model`` and ``D_amb`` are
 frozen by ``LAPDSim1D._validate_r1_configuration_presence`` and raise on
 non-default use; ``gas_puff_mode``'s retired waveform modes and the legacy
 ion-neutral path (``ion_neutral_moment_closure=False``) already warn from that
@@ -262,9 +262,6 @@ DEPRECATED_CONTROLS = {
     "tracer_refresh_tol": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: miscellaneous ======================================
     "plasma_area_max_vessel_fraction": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
-    "vessel_leak_resistance_ohm": DeprecatedControl(
         PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
     ),
     "beam_excitation_energy_eV": DeprecatedControl(

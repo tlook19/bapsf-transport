@@ -501,14 +501,10 @@ def step_once(sim):
     """Advance one step through the production step-acceptance path."""
     split = sim._flags.get("implicit_heat_conduction", False)
     diag = sim.suggest_timestep(include_heat_conduction=not split)
-
-    def generate():
-        attempt, retries, reason, events = sim._attempt_step_with_retries(
-            dt=diag.dt, operator_split=None, diag=diag,
-        )
-        return attempt, (retries, reason, events)
-
-    return sim._accept_step_with_picard(generate)
+    attempt, _retries, _reason, _events = sim._attempt_step_with_retries(
+        dt=diag.dt, operator_split=None, diag=diag,
+    )
+    return sim._accept_step_attempt(attempt)
 
 
 def _armed_golden(charge_death, anode_handshake):

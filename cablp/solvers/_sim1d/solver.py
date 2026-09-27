@@ -13,7 +13,6 @@ from scipy.linalg import solve_banded
 from .core.config import (
     ConfigurationLineage,
     coverage_closure_defaults,
-    emitting_area_defaults,
     neutral_probe_source_defaults,
     default_config,
     input_dict_template_1d,
@@ -76,7 +75,6 @@ from .core.validation import (
     refuse_te_floor_above_adas_table_edge,
     resolve_coverage_config,
     resolve_electron_drift_transport_config,
-    resolve_emitting_area_config,
     resolve_energy_exchange_rate_fraction,
     resolve_jet_arming_criterion,
     resolve_neutral_jet_config,
@@ -148,24 +146,15 @@ from .physics.cathode import (
     cathode_source_terms,
     solve_cathode_boundary,
     tail_reflect_face,
-    validate_cathode_Rp_model,
-    validate_cathode_ion_secondary_emission,
-    validate_cathode_lnL_model,
     validate_cathode_solver_model,
 )
 from cablp.cathode.circuit import beam_launched_current_A
-from cablp.cathode.circuit_idriven import beam_launch_energy_eV
 from .physics.cathode import (
     CATHODE_ENV_T_K,
     advance_circuit_current_driven,
-    circuit_bound_object,
     idriven_result_evaluator,
     idriven_vdis_evaluator,
-    resolve_vessel_node,
-    vessel_beam_climb_V,
-    vessel_node_advance,
 )
-from cablp.cathode.circuit_idriven import _CIRCUIT_BOUND_OBJECTS
 from .physics.energy import (
     electron_cooling_rhs,
     electron_cooling_rhs_terms,
@@ -561,61 +550,6 @@ _CATHODE_RESULT_KEYS = (
 #: because the onset is what a dedicated look is placing and the summary
 #: max/mean (which run over ALL limited steps) carry the amount regardless.
 DVM_LIMITED_STEP_RECORD_CAP = 4096
-
-
-#: The cathode-result members ``cathode_enthalpy_on_beam`` adds, exported
-#: PRESENCE-GATED on that key so an unarmed run's dataset set -- the golden
-#: included -- is what it was before the key existed.
-#: ``beam_launch_enthalpy_V`` is the ``2 k_B T_s / e`` [V] the beam launch
-#: potential carries this solve and ``P_emitted_enthalpy_on_beam`` [W] the
-#: power that enthalpy rides at, normalised at the flux the ACTIVE deposition
-#: route launches into the column -- the FULL emitted current under the CSDA
-#: march, that current netted by the gap survival under Beer-Lambert, whose
-#: column heating is ``P_prim``. Both are zero on a solve whose regime keeps
-#: the enthalpy on the cathode-adjacent cell, which is a computed zero and not
-#: an absence.
-_CATHODE_ENTHALPY_ON_BEAM_KEYS = (
-    "beam_launch_enthalpy_V",
-    "P_emitted_enthalpy_on_beam",
-)
-
-
-#: The cathode-result members ``cathode_ion_secondary_emission`` adds,
-#: exported PRESENCE-GATED on that key so an unarmed run's dataset set -- the
-#: golden included -- is what it was before the key existed. ``I_see_A`` is the
-#: secondary electron current the arriving ion flux releases, ``gamma_se*I_i``,
-#: and ``P_see_launched_W`` the share of ``P_prim`` those electrons carry into
-#: the column at the launch potential. A yield of exactly zero is a legal armed
-#: configuration and fills both with a computed zero, not an absence.
-_CATHODE_ION_SECONDARY_KEYS = (
-    "I_see_A",
-    "P_see_launched_W",
-)
-
-
-#: The values ``cathode_circuit_sample`` accepts. It selects which sampled
-#: electrode state the current-driven circuit advance evaluates ``V_dis(I)``
-#: on: ``"raw"`` the accepted end-of-step state itself, ``"smoothed"`` the
-#: supply-averaged EMA ``cathode_sample_smoothing`` maintains.
-_CIRCUIT_SAMPLES = ("raw", "smoothed")
-
-
-def _cathode_result_keys(flags):
-    """Return the cathode-result members this run exports, per key.
-
-    :data:`_CATHODE_RESULT_KEYS` always, plus
-    :data:`_CATHODE_ENTHALPY_ON_BEAM_KEYS` under
-    ``cathode_enthalpy_on_beam`` and :data:`_CATHODE_ION_SECONDARY_KEYS` under
-    ``cathode_ion_secondary_emission``. One function answers "which members
-    exist" for the seeding and for the write alike, so they cannot drift into
-    seeding a column nothing fills or filling one nothing seeded.
-    """
-    keys = _CATHODE_RESULT_KEYS
-    if flags.get("cathode_enthalpy_on_beam"):
-        keys = keys + _CATHODE_ENTHALPY_ON_BEAM_KEYS
-    if flags.get("cathode_ion_secondary_emission"):
-        keys = keys + _CATHODE_ION_SECONDARY_KEYS
-    return keys
 
 
 def _cathode_result_prefixes(flags):
@@ -1029,7 +963,6 @@ def _timestep_limiters(diag, count=3):
         ("ion_charge_exchange", diag.dt_ion_charge_exchange),
         ("heat_conduction", diag.dt_heat_conduction),
         ("ion_neutral_drag", diag.dt_ion_neutral_drag),
-        ("circuit", diag.dt_circuit),
         ("dt_max", diag.dt_max),
     )
     finite = [
@@ -1790,52 +1723,12 @@ class LAPDSim1D:
     def _init_numerical_guards(self):
         """Validate the step-controller and non-ignition guards.
 
-        These are budgets rather than physics: the Picard coupling, the
-        heat-flux limiter, the floor-exempt drain, the max-step and dt_min
-        locks, the wall-clock and accepted-step ignition caps, and the
-        dt_growth recovery. Each is checked HERE so a misconfigured guard
-        cannot be discovered hours into the run it exists to catch.
+        These are budgets rather than physics: the heat-flux limiter, the
+        floor-exempt drain, the max-step and dt_min locks, the wall-clock and
+        accepted-step ignition caps, and the dt_growth recovery. Each is
+        checked HERE so a misconfigured guard cannot be discovered hours into
+        the run it exists to catch.
         """
-        # R5.1 / audit A11: gated fluid<->circuit Picard coupling (default off).
-        self._coupled_circuit_picard = bool(
-            self._flags.get("coupled_circuit_picard")
-        )
-        if self._coupled_circuit_picard:
-            if self._kinetic is not None:
-                raise ValueError(
-                    "coupled_circuit_picard is incompatible with the K4a kinetic "
-                    "engine: the Picard re-run would double-trigger a kinetic "
-                    "refresh, whose state the step snapshot does not restore"
-                )
-            if self._dvm is not None:
-                raise ValueError(
-                    "coupled_circuit_picard is incompatible with "
-                    "neutral_model='kinetic_dvm': the Picard re-run would "
-                    "advance the transient distribution a second time on the "
-                    "same step, and the step snapshot does not restore it. "
-                    "Accepted: kinetic_dvm with coupled_circuit_picard off"
-                )
-            self._circuit_picard_tol_rel = float(
-                self._input_dict.get("circuit_picard_tol_rel")
-            )
-            self._circuit_picard_max_iter = int(
-                self._input_dict.get("circuit_picard_max_iter")
-            )
-            if self._circuit_picard_tol_rel <= 0.0:
-                raise ValueError(
-                    "circuit_picard_tol_rel must be > 0 "
-                    f"(got {self._circuit_picard_tol_rel})"
-                )
-            if self._circuit_picard_max_iter < 1:
-                raise ValueError(
-                    "circuit_picard_max_iter must be >= 1 "
-                    f"(got {self._circuit_picard_max_iter})"
-                )
-            # Diagnostics: how many accepted steps triggered a Picard re-run, and
-            # the total extra fluid re-solves (a null shows the frozen-current lag
-            # is below the trigger at production dt).
-            self._picard_triggered_steps = 0
-            self._picard_extra_solves = 0
         # R5.2 / audit A9: flux-limited electron heat conduction (default on).
         self._electron_heat_flux_limit = bool(
             self._flags.get("electron_heat_flux_limit")
@@ -2157,31 +2050,13 @@ class LAPDSim1D:
                 f"{_rates_at_accepted_state!r})"
             )
         self._rates_at_accepted_state = _rates_at_accepted_state
-        # Anode sheath-fall electron debit. A real bool is required for the
-        # same reason: the flag arms a ~10^2 kW plasma electron sink, and an
-        # int or a string smuggled in there would read like a value.
-        _anode_sheath_full_debit = self._flags.get(
-            "anode_sheath_full_debit"
-        )
-        if not isinstance(_anode_sheath_full_debit, bool):
-            raise ValueError(
-                "anode_sheath_full_debit must be a bool (got "
-                f"{_anode_sheath_full_debit!r})"
-            )
-        # This flag COMPLETES the thermal-only electrode routing by adding the
-        # sheath-fall share back onto the plasma electron store. That routing
-        # is now unconditional (the stance that switched it off was retired;
-        # see commit 1fc05c9), so the pairing this used to police -- arming the
-        # debit against the full-P_anode_e routing, which would have debited
-        # phi_a twice -- is no longer constructible and needs no refusal.
-        self._anode_sheath_full_debit = _anode_sheath_full_debit
-        # End-face sheath electron debit, the anode flag's twin at the two
+        # End-face sheath electron debit, the anode debit's twin at the two
         # ends of the machine -- and TWO INDEPENDENT keys, one per end,
         # because the two faces carry different fluxes in different regimes
         # and an arm that moves both cannot say which one the response came
-        # from. Each is a real bool for the same reason the anode flag is: it
-        # arms a multi-kilowatt re-booking of the electron store, and an int
-        # or a string there would read like a value. Each refuses on ITS OWN
+        # from. Each is a real bool: it arms a multi-kilowatt re-booking of
+        # the electron store, and an int or a string there would read like a
+        # value. Each refuses on ITS OWN
         # missing input only, so arming one never reports the other's.
         #
         # Each face is looked up through the SAME helper its own booking
@@ -2273,25 +2148,6 @@ class LAPDSim1D:
                     "does not supply " + "; ".join(missing) + "."
                 )
         self._cathode_face_full_debit = _cathode_face_full_debit
-        _cathode_enthalpy_on_beam = self._flags.get("cathode_enthalpy_on_beam")
-        if not isinstance(_cathode_enthalpy_on_beam, bool):
-            raise ValueError(
-                "cathode_enthalpy_on_beam must be a bool (got "
-                f"{_cathode_enthalpy_on_beam!r})"
-            )
-        if _cathode_enthalpy_on_beam and not _cathode_face_full_debit:
-            # The key MOVES a row; it does not create one. Without
-            # cathode_face_full_debit the emitted-enthalpy row is never
-            # computed, so there is nothing to place and an armed key here
-            # would be a silent inert control.
-            raise ValueError(
-                "cathode_enthalpy_on_beam cannot arm: this configuration "
-                "does not supply cathode_face_full_debit, the key that books "
-                "the emitted electrons' launch enthalpy at all; this key only "
-                "moves that booking onto the beam launch while the beam is "
-                "launched."
-            )
-        self._cathode_enthalpy_on_beam = _cathode_enthalpy_on_beam
         # Beam electron-energy deposition re-homed into the implicit heat
         # substep. A real bool for the same reason as the two flags above: the
         # flag MOVES a ~10^5 W source between operators, and an int or a string
@@ -2810,94 +2666,9 @@ class LAPDSim1D:
         self._circuit_V_cap = None  # lazily V_bank; drains when C_bank_F set
         # Fail at construction, not at the first cathode solve mid-run:
         # unknown model strings and the unsupported TwinCathode combination.
-        validate_cathode_Rp_model(self._input_dict, self._flags)
-        validate_cathode_lnL_model(self._input_dict)
         self._cathode_solver_model = validate_cathode_solver_model(
             self._input_dict, self._flags
         )
-        # Ion-induced secondary electron emission at the emitting face,
-        # validated immediately after the solver model it is gated on and
-        # BEFORE the prescribed drive is resolved -- so a configuration that
-        # arms the term under the measured drive is refused by name rather
-        # than by whatever the trace resolution happens to complain about
-        # first. Two of its refusals are about the solve this run will take
-        # (it needs the cathode circuit solve, and it is implemented for the
-        # current-driven root only); the other two are about the pair of keys.
-        # The resolved yield is not cached on the solver -- the sheath solve
-        # reads it off the same dicts through the same validator, so there is
-        # one resolution and no second copy to drift.
-        validate_cathode_ion_secondary_emission(
-            self._input_dict, self._flags
-        )
-        # WHICH SAMPLE THE CIRCUIT ADVANCE READS. Validated at construction --
-        # the advance runs once per accepted step deep inside the run, and a
-        # configuration that names a sample this run cannot supply must say so
-        # before it spends any time -- and, like the secondary-emission pair
-        # above, BEFORE the prescribed drive is resolved, so a configuration
-        # that names the smoothed sample under the measured drive is refused
-        # by name rather than by whatever the trace resolution happens to
-        # complain about first. "smoothed" names three things it needs -- an
-        # EMA to read, the current-driven advance that reads it, and the
-        # cathode coupling that runs that advance -- and each absence is
-        # refused by the name of the key that would have to change.
-        _circuit_sample = self._input_dict.get("cathode_circuit_sample")
-        if _circuit_sample not in _CIRCUIT_SAMPLES:
-            raise ValueError(
-                "cathode_circuit_sample must be one of "
-                f"{list(_CIRCUIT_SAMPLES)} (got {_circuit_sample!r})"
-            )
-        if _circuit_sample == "smoothed":
-            if self._input_dict.get("cathode_sample_smoothing") is None:
-                raise ValueError(
-                    "cathode_circuit_sample='smoothed' requires "
-                    "cathode_sample_smoothing to name a smoothing: with it "
-                    "None there is no supply-averaged sample for the circuit "
-                    "advance to read, and the mode would be a silent no-op"
-                )
-            if self._cathode_solver_model != "current_driven":
-                raise ValueError(
-                    "cathode_circuit_sample='smoothed' requires "
-                    "cathode_solver_model='current_driven' (got "
-                    f"{self._cathode_solver_model!r}): the sample it "
-                    "substitutes is read by the current-driven circuit "
-                    "advance, which no other solver model performs"
-                )
-            if not bool(self._flags.get("cathode_coupling")):
-                raise ValueError(
-                    "cathode_circuit_sample='smoothed' requires the "
-                    "cathode_coupling flag: with no cathode solve there is "
-                    "no circuit advance to evaluate V_dis(I) on any sample"
-                )
-        self._cathode_circuit_sample = _circuit_sample
-        # THE OVER-WALL PROJECTION, validated here for the reason the sample
-        # selector above is: it edits the circuit advance, the advance runs
-        # once per accepted step deep inside the run, and a configuration that
-        # arms an edit to an advance this run never performs must say so before
-        # it spends any time. Beside those refusals, and like them BEFORE the
-        # prescribed drive is resolved, so a configuration that arms the
-        # projection under the measured drive is refused by the name of the key
-        # that would have to change rather than by whatever the trace
-        # resolution happens to complain about first.
-        _project_over_wall = bool(
-            self._flags.get("cathode_circuit_project_over_wall", False)
-        )
-        if _project_over_wall:
-            if not bool(self._flags.get("cathode_coupling")):
-                raise ValueError(
-                    "cathode_circuit_project_over_wall requires the "
-                    "cathode_coupling flag: with no cathode solve there is no "
-                    "circuit advance whose starting current could be "
-                    "projected onto the emission wall"
-                )
-            if self._cathode_solver_model != "current_driven":
-                raise ValueError(
-                    "cathode_circuit_project_over_wall requires "
-                    "cathode_solver_model='current_driven' (got "
-                    f"{self._cathode_solver_model!r}): the projection edits "
-                    "the current-driven loop advance, which no other solver "
-                    "model performs"
-                )
-        self._circuit_project_over_wall = _project_over_wall
         # PRESCRIBED MEASURED DRIVE (cathode_solver_model =
         # "prescribed_measured"). Resolved ONCE, here: the trace file is read,
         # its columns and clock validated, its bytes digested, and the hand-off
@@ -2916,38 +2687,6 @@ class LAPDSim1D:
         self._prescribed_active = False
         self._circuit_V_dis_prescribed = 0.0
         self._prescribed_handoff = None
-        # Circuit voltage bound (R1): a ceiling on the device voltage set by
-        # what the loop can supply. It lives inside the current-driven sheath
-        # solve and is formed from the bank/capacitor source, so a
-        # configuration that has neither would turn it on and get nothing --
-        # exactly the silent no-op the house rules forbid.
-        if bool(self._flags.get("cathode_circuit_voltage_bound")):
-            if not bool(self._flags.get("cathode_coupling")):
-                raise ValueError(
-                    "cathode_circuit_voltage_bound requires the "
-                    "cathode_coupling flag: with no cathode solve there is "
-                    "no device voltage to bound"
-                )
-            if not float(self._input_dict.get("V_bank")) > 0.0:
-                raise ValueError(
-                    "cathode_circuit_voltage_bound requires a positive "
-                    f"V_bank (got {self._input_dict.get('V_bank')!r}); "
-                    "the bound is the source voltage minus the series "
-                    "resistive drop, so a zero source would leave it "
-                    "permanently inactive"
-                )
-            # Which quantity the available voltage bounds. Validated here so a
-            # typo is a construction error rather than a run that silently
-            # bounds nothing; the sheath solve validates it again where it is
-            # consumed, because it is reachable from callers that never build
-            # a solver.
-            _bound_object = circuit_bound_object(self._input_dict)
-            if _bound_object not in _CIRCUIT_BOUND_OBJECTS:
-                raise ValueError(
-                    "cathode_circuit_bound_object must be one of "
-                    f"{sorted(_CIRCUIT_BOUND_OBJECTS)} (got "
-                    f"{_bound_object!r})"
-                )
         # Current-driven circuit state: the loop current, integrated once
         # per accepted step.
         self._circuit_I_loop = 0.0
@@ -2965,138 +2704,69 @@ class LAPDSim1D:
         # (time, integral) pair at the previous trajectory save anchors it.
         self._circuit_V_dis_time_integral = 0.0
         self._circuit_V_dis_prev_save = None
-        # THE OVER-WALL PROJECTION's census, seeded on every run and mutated
-        # only while ``cathode_circuit_project_over_wall`` is armed. Three
-        # counters, none of which any exported value is a function of:
-        #   events        accepted steps whose starting current was replaced
-        #                 by the wall root;
-        #   energy_J      cumulative 0.5*L*(I^2 - I_root^2) [J] over those
-        #                 events -- the inductor energy the replacement drops,
-        #                 which is the whole non-conservative cost of the edit
-        #                 and is therefore measured rather than argued;
-        #   unbracketed   steps that TRIGGERED but whose widened bracket still
-        #                 did not straddle the root, so the current was left
-        #                 alone. A non-zero count here is the statement that
-        #                 the kick estimate under-covered the excursion.
-        # Exported presence-gated on the flag, so an unarmed run's diagnostic
-        # set and restart payload are unchanged.
-        self._circuit_projection_events = 0
-        self._circuit_projection_energy_J = 0.0
-        self._circuit_projection_unbracketed = 0
 
     def _init_cathode_surface_state(self):
-        """Arm the vessel node and the evolving cathode surface state.
+        """Arm the evolving cathode surface state.
 
-        The warming model's surface temperature and the ads/des coverage
-        are the two pieces of cathode state that evolve over a shot; both
-        are ``None`` under their default 'none' selectors, which is the
-        presence gate every consumer reads.
+        The power-balance surface temperature and the ads/des contaminant
+        coverage are the two pieces of cathode state that evolve over a shot.
         """
-        # Vessel / common-mode node (default absent). ``_vessel`` is the
-        # resolved constant record or None; ``_vessel_V_cm`` is the node's
-        # single state variable and stays None while the node is absent, so
-        # every consumer is presence-gated on one object.
-        self._configure_regime_vessel_node()
-        # Cathode warming state: the evolving emitter surface temperature [K]
-        # (config cathode_warming_model). None = the surface held static at
-        # cathode_Ts_base_K.
-        warming_model = str(
-            self._input_dict.get("cathode_warming_model")
-        )
-        if warming_model not in ("none", "power_balance"):
+        # Cathode warming state: the evolving emitter surface temperature [K],
+        # seeded at the heater-maintained standby value cathode_Ts_base_K.
+        Ts_base = self._input_dict.get("cathode_Ts_base_K")
+        if Ts_base is None:
             raise ValueError(
-                "cathode_warming_model must be 'none' or 'power_balance' "
-                f"(got {warming_model!r})"
+                "the cathode power balance requires cathode_Ts_base_K (the "
+                "heater-maintained standby surface temperature)"
             )
-        self._cathode_warming_model = warming_model
-        self._cathode_Ts_K = None
-        if warming_model == "power_balance":
-            Ts_base = self._input_dict.get("cathode_Ts_base_K")
-            if Ts_base is None:
-                raise ValueError(
-                    "cathode_warming_model='power_balance' requires "
-                    "cathode_Ts_base_K (the heater-maintained standby "
-                    "surface temperature)"
-                )
-            if float(
-                self._input_dict.get("cathode_heat_capacity_J_per_K")
-            ) <= 0.0:
-                raise ValueError(
-                    "cathode_heat_capacity_J_per_K must be positive"
-                )
-            eps = float(self._input_dict.get("cathode_emissivity"))
-            if not 0.0 < eps <= 1.0:
-                raise ValueError(
-                    f"cathode_emissivity must be in (0, 1] (got {eps})"
-                )
-            if float(
-                self._input_dict.get("cathode_conduction_W_per_K")
-            ) < 0.0:
-                raise ValueError(
-                    "cathode_conduction_W_per_K must be non-negative"
-                )
-            if float(Ts_base) <= CATHODE_ENV_T_K:
-                raise ValueError(
-                    "cathode_Ts_base_K must exceed the "
-                    f"{CATHODE_ENV_T_K:g} K chamber-wall temperature"
-                )
-            self._cathode_Ts_K = float(Ts_base)
-        else:
-            # The STATIC model holds the surface at cathode_Ts_base_K for the
-            # whole shot, so the key is as required here as it is above --
-            # every emission path, the T_s_surface diagnostic and the TPMC
-            # kinetic background read it, and there is no evolving value to
-            # fall back on. Left unset it reached those reads as None and
-            # failed as a TypeError inside the cathode solve; refuse it here
-            # instead, where the configuration is still the thing being
-            # talked about.
-            if self._input_dict.get("cathode_Ts_base_K") is None:
-                raise ValueError(
-                    "cathode_warming_model='none' holds the cathode surface "
-                    "at cathode_Ts_base_K for the whole shot, so that key is "
-                    "required and must not be None. It is the surface "
-                    "temperature under BOTH warming models: set it to the "
-                    "heater-maintained standby temperature, or select "
-                    "cathode_warming_model='power_balance' to evolve from it."
-                )
-        # Surface-state coverage (cathode_surface_model="ads_des",
-        # M5a): theta in [0, 1] is the contaminant
+        if float(
+            self._input_dict.get("cathode_heat_capacity_J_per_K")
+        ) <= 0.0:
+            raise ValueError(
+                "cathode_heat_capacity_J_per_K must be positive"
+            )
+        eps = float(self._input_dict.get("cathode_emissivity"))
+        if not 0.0 < eps <= 1.0:
+            raise ValueError(
+                f"cathode_emissivity must be in (0, 1] (got {eps})"
+            )
+        if float(
+            self._input_dict.get("cathode_conduction_W_per_K")
+        ) < 0.0:
+            raise ValueError(
+                "cathode_conduction_W_per_K must be non-negative"
+            )
+        if float(Ts_base) <= CATHODE_ENV_T_K:
+            raise ValueError(
+                "cathode_Ts_base_K must exceed the "
+                f"{CATHODE_ENV_T_K:g} K chamber-wall temperature"
+            )
+        self._cathode_Ts_K = float(Ts_base)
+        # Surface-state coverage (ads/des): theta in [0, 1] is the contaminant
         # coverage raising the effective work function,
         # phi_eff = phi_clean + (phi_wf - phi_clean) * theta, evolving as
         #   dtheta/dt = -sigma Gamma_i theta
-        # (ion-stimulated desorption -- M5a, the fluence-cleaning limit --
-        # which is the only coverage channel, so theta is monotonically
-        # non-increasing). None = static phi_wf (historical).
-        surface_model = str(
-            self._input_dict.get("cathode_surface_model")
-        )
-        if surface_model not in ("none", "ads_des"):
+        # (ion-stimulated desorption, the fluence-cleaning limit, which is the
+        # only coverage channel, so theta is monotonically non-increasing).
+        clean = self._input_dict.get("cathode_phiwf_clean_eV")
+        if clean is None:
             raise ValueError(
-                "cathode_surface_model must be 'none' or 'ads_des' "
-                f"(got {surface_model!r})"
+                "the ads/des cathode surface model requires "
+                "cathode_phiwf_clean_eV (the per-shot-accessible floor)"
             )
-        self._cathode_theta = None
-        if surface_model == "ads_des":
-            clean = self._input_dict.get("cathode_phiwf_clean_eV")
-            if clean is None:
-                raise ValueError(
-                    "cathode_surface_model='ads_des' requires "
-                    "cathode_phiwf_clean_eV (the per-shot-accessible floor)"
-                )
-            if not float(clean) < float(self._input_dict["phi_wf"]):
-                raise ValueError(
-                    "cathode_phiwf_clean_eV must be below phi_wf (the "
-                    "contaminated shot-start value)"
-                )
-            if float(self._input_dict.get("cathode_cleaning_sigma_cm2")) < 0.0:
-                raise ValueError(
-                    "cathode_cleaning_sigma_cm2 must be non-negative"
-                )
-            self._cathode_theta = 1.0
+        if not float(clean) < float(self._input_dict["phi_wf"]):
+            raise ValueError(
+                "cathode_phiwf_clean_eV must be below phi_wf (the "
+                "contaminated shot-start value)"
+            )
+        if float(self._input_dict.get("cathode_cleaning_sigma_cm2")) < 0.0:
+            raise ValueError(
+                "cathode_cleaning_sigma_cm2 must be non-negative"
+            )
+        self._cathode_theta = 1.0
         # Per-shot surface energy ledger [J]: running integrals of the
-        # balance terms over accepted steps. These FIVE rows are
-        # power_balance only and stay zero otherwise (the presence-gated
-        # backscatter row added just below is not -- see its own note). The net
+        # balance terms over accepted steps (the presence-gated backscatter
+        # row added just below has its own note). The net
         # (heater + ion - rad - emis - cond) is the shot's unreturned
         # energy into the emitting skin; cond is what the heater-held
         # substrate absorbed -- the quantity the open-loop-heater drift
@@ -3170,17 +2840,6 @@ class LAPDSim1D:
                 "are the CSDA ray's; under beer_lambert it would be a "
                 "silent no-op)"
             )
-        # The wall-charge leg of "terminal_nonlocal": the walked terminal
-        # electrons that reach an end land on a terminating surface, so their
-        # CURRENT joins the vessel node's electron channel while their energy
-        # leaves through the deposition module's end ledger. Presence-gated on
-        # BOTH the selector and an armed node (``_configure_regime_vessel_node``
-        # ran above), and resolved once here so no consumer re-reads a
-        # selector: with either absent this is False and the node's electron
-        # current is the transmitted-primary sum it always was.
-        self._beam_terminal_wall_charge = (
-            _bpt == "terminal_nonlocal" and self._vessel is not None
-        )
         # The anomalous closure family. Same discipline: the module validates
         # too, but a bad selector must fail at CONSTRUCTION rather than on the
         # first cathode solve, and selecting a closure the deposition path
@@ -3630,7 +3289,7 @@ class LAPDSim1D:
             )
 
     def _init_area_closures(self):
-        """Validate and arm the three area/coverage closures."""
+        """Validate and arm the coverage, probe, sink and drift closures."""
         # Clumpy-plasma coverage closure v1 (default off, bit-exact off).
         _cov = resolve_coverage_config(
             self._input_dict,
@@ -3648,10 +3307,6 @@ class LAPDSim1D:
         self._coverage_w_accum = _cov.w_accum
         self._coverage_reservoir_debit = _cov.reservoir_debit
         self._coverage_reservoir_burn_accum = _cov.reservoir_burn_accum
-        # Cathode emitting-area percolation (default off, bit-exact off).
-        self._cathode_f_em = resolve_emitting_area_config(
-            self._input_dict, self._flags
-        )
         # Ad-hoc probe neutral source (default off, bit-exact off).
         self._probe = resolve_neutral_probe_config(
             self._input_dict,
@@ -3697,9 +3352,8 @@ class LAPDSim1D:
         #
         # Counted on the ACCEPTANCE-COMMITTED write in
         # ``solve_cathode_boundary`` (the ``update_cache`` branch), so these
-        # count accepted solves and rejected attempts never move them; they
-        # ride ``_PICARD_DIRECT_ATTRS`` for the same reason the jet-arming
-        # census does. Diagnostic only -- no exported value is a function of
+        # count accepted solves and rejected attempts never move them.
+        # Diagnostic only -- no exported value is a function of
         # them and no trajectory moves.
         self._cathode_total_solves = 0
         self._cathode_clamped_solves = 0
@@ -3728,34 +3382,6 @@ class LAPDSim1D:
         self._load_restart_if_configured()
         if self._flags.get("debug_checks"):
             assert_finite_state(self._state, self._derived)
-
-    def _advance_emitting_area_fraction(self, dt):
-        """Advance the lit-area fraction ``f_em`` over one accepted step (ea1).
-
-        The law is the logistic ``df_em/dt = r*f_em*(1 - f_em)`` with ``r`` the
-        shared percolation clock. Held constant over the step it is exactly
-        integrable,
-
-            f' = 1 / (1 + (1/f - 1) * exp(-r * dt)),
-
-        which is unconditionally positive at any dt, cannot leave ``(0, 1]``,
-        is monotone non-decreasing for ``r >= 0`` -- so ``f_em`` never falls
-        below its seed -- and reduces to ``f`` identically wherever ``r`` is
-        zero and to exactly ``1.0`` wherever ``f`` is already 1 (the
-        ``1/f - 1`` factor is then exactly 0.0).
-
-        Called only from the accept path, so a rejected attempt leaves the
-        fraction untouched and a re-tried step re-runs against the same value.
-        """
-        r = float(self._input_dict.get("coverage_growth_rate_per_s"))
-        dt = float(dt)
-        if r == 0.0 or dt <= 0.0:
-            return
-        f = self._cathode_f_em
-        growth = math.exp(-r * dt)
-        self._cathode_f_em = min(
-            1.0 / (1.0 + (1.0 / f - 1.0) * growth), 1.0
-        )
 
     #: RHS terms whose neutral row is a COVERED-ONLY debit or return: their
     #: rate is proportional to a plasma or beam density, so the reaction can
@@ -4179,188 +3805,6 @@ class LAPDSim1D:
         self._tracer_depletion = np.zeros(self._geometry.cells, dtype=float)
         self._tracer_census = self._empty_tracer_census()
 
-    def _configure_regime_vessel_node(self):
-        """Validate and arm the vessel common-mode node, or leave it absent.
-
-        Every refusal names what the node ACCEPTS and fires at construction.
-        With the flag off ``self._vessel`` and ``self._vessel_V_cm`` are both
-        ``None``, which is what every consumer is presence-gated on, so the
-        off path enters no branch this feature added.
-        """
-        self._vessel = None
-        self._vessel_V_cm = None
-        self._vessel_wall_currents_A = (0.0, 0.0, 0.0)
-        self._vessel_charge_ledger_C = {
-            "electron": 0.0,
-            "ion": 0.0,
-            "leak": 0.0,
-            "node": 0.0,
-            "abs": 0.0,
-        }
-        if not self._flags.get("regime_vessel_node"):
-            return
-        if not self._flags.get("cathode_coupling"):
-            raise ValueError(
-                "regime_vessel_node needs the cathode solve: the electron "
-                "current landing on the wall IS the transmitted beam, and "
-                "without a beam the node has nothing to charge it. Accepted: "
-                "cathode_coupling on"
-            )
-        if not self._flags.get("Plasma"):
-            raise ValueError(
-                "regime_vessel_node needs the plasma: the ion wall flux that "
-                "balances the beam leakage -- the bootstrap the node exists "
-                "to describe -- is a column loss channel, and with the Plasma "
-                "flag off the node would charge in one direction forever. "
-                "Accepted: Plasma on"
-            )
-        if not self._flags.get("cathode_circuit_voltage_bound"):
-            raise ValueError(
-                "regime_vessel_node requires cathode_circuit_voltage_bound: "
-                "the climb V_cm is subtracted from the beam's birth energy, "
-                "and that energy must be the CIRCUIT-BOUNDED sheath drop. "
-                "Without the bound it is the raw cathode_phi_c_cap_V "
-                "atomic-data cap (far above what a bank supplying ~178 V "
-                "can carry), so the choke would be a small correction on a "
-                "wrong number. Accepted: cathode_circuit_voltage_bound on"
-            )
-        deposition_model = str(
-            self._input_dict.get("beam_deposition_model")
-        )
-        if deposition_model != "csda":
-            raise ValueError(
-                f"regime_vessel_node refuses beam_deposition_model="
-                f"{deposition_model!r}: the electron current the node books "
-                "is the beam flux that reaches the TERMINATING SURFACE, and "
-                "only the CSDA rays carry that flux "
-                "(BeamDepositionResult.transmitted_flux). Under any other "
-                "deposition model the wall electron channel would be "
-                "identically zero and the node would charge on the ion flux "
-                "alone -- a run that reads as though the bootstrap is live "
-                "when half of it is missing. Accepted: "
-                "beam_deposition_model='csda'"
-            )
-        self._vessel = resolve_vessel_node(self._input_dict, self._geometry)
-        # Stage 1 is WALL-REFERENCED: at the seed currents the build opens
-        # with, charging C_total to the bank scale takes far longer than the
-        # cycle, so the float cannot engage and the node starts at zero. That
-        # is an initial condition, not an assumption -- the ODE is free to
-        # leave it whenever the currents make it.
-        self._vessel_V_cm = 0.0
-
-    def _vessel_ion_wall_current_A(self):
-        """Return the column's ion current [A] onto the vessel, >= 0.
-
-        Reads the LIVE plasma-terminating boundary term -- whichever of the
-        characteristic ghost-cell outflow and the volumetric absorption the
-        run configured -- on the accepted state, and integrates its ``n`` row
-        over the end wall cells' plasma volume. The loss channel is not
-        re-derived here: this is the same term the fluid itself subtracts, so
-        the node cannot book an ion flux the column did not lose.
-
-        Zero when the step carries no cached cathode solve. That is a guard
-        with teeth rather than a convenience: the boundary term's cathode-jet
-        path re-solves the cathode with ``update_cache=True`` when it is handed
-        no solve, so reading the term here without one would let a DIAGNOSTIC
-        read mutate the continuation cache and move the trajectory. There is no
-        driven plasma to lose ions in that window anyway.
-        """
-        node = self._vessel
-        state = self.state
-        cathode_solve = self._cathode_solve
-        if cathode_solve is None:
-            return 0.0
-        term = self.characteristic_boundary_rhs(
-            state=state, cathode_solve=cathode_solve, time=self._time
-        )
-        row = np.asarray(term.n, dtype=float)
-        Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
-        cells = node.end_wall_cells
-        # The row is a SINK there (negative); a positive current onto the wall
-        # is its negation. Clamped at zero so a cell that is momentarily a net
-        # source cannot book a backwards wall current.
-        return qe_SI * max(-float(np.sum(row[cells] * Vp[cells])), 0.0)
-
-    def _vessel_electron_wall_current_A(self):
-        """Return the beam electron current [A] landing on the vessel, >= 0.
-
-        The CSDA rays' transmitted PRIMARY flux, summed over cathode ends. The
-        far end is the vessel, so the flux that leaves the domain there is
-        exactly the electron current the wall conductor collects; the flux the
-        anode mesh intercepts and the flux that stops in the column are
-        system-side and plasma-side respectively and are not booked here.
-
-        Under ``beam_product_transport="terminal_nonlocal"`` the walked
-        terminal residual that reaches an end is a SECOND population landing on
-        that same surface, and its flux is added on the identical convention
-        (summed over rays, whichever end each ray was heading for). Its energy
-        is not double-counted: the walk already booked that to the deposition
-        module's end ledger, which is an energy ledger and never a charge one.
-        With the selector at any other value the term is absent, not zero-by-
-        arithmetic -- ``_beam_terminal_wall_charge`` is resolved at
-        construction.
-        """
-        solve = self._cathode_solve
-        deposition = None if solve is None else getattr(
-            solve, "beam_deposition", None
-        )
-        if not deposition:
-            return 0.0
-        flux = 0.0
-        for dep in deposition.values():
-            if dep is not None:
-                flux += float(dep.transmitted_flux)
-                if self._beam_terminal_wall_charge:
-                    flux += float(dep.terminal_escape_flux_per_s)
-        return qe_SI * max(flux, 0.0)
-
-    def _vessel_advance(self, dt):
-        """Advance ``V_cm`` and its charge ledger over one ACCEPTED step.
-
-        Accepted steps only, exactly like the loop current: a rejected attempt
-        must not move the node. The two wall currents are read at the accepted
-        state and frozen across the step, so the choke they produce reaches
-        the beam at the next solve -- the same explicit coupling the circuit
-        and the cathode thermal state already use.
-        """
-        node = self._vessel
-        if node is None:
-            return
-        I_e = self._vessel_electron_wall_current_A()
-        I_i = self._vessel_ion_wall_current_A()
-        V_new, dV, dQ_e, dQ_i, dQ_leak = vessel_node_advance(
-            node, self._vessel_V_cm, I_e, I_i, dt
-        )
-        self._vessel_V_cm = V_new
-        ledger = self._vessel_charge_ledger_C
-        ledger["electron"] += dQ_e
-        ledger["ion"] += dQ_i
-        ledger["leak"] += dQ_leak
-        ledger["node"] += node.C_total_F * dV
-        # Scale for the ledger's closure test: the total charge MOVED, so a
-        # residual is judged against the traffic and not against a cancelling
-        # net that can pass through zero.
-        ledger["abs"] += abs(dQ_e) + abs(dQ_i) + abs(dQ_leak)
-        self._vessel_wall_currents_A = (
-            I_e,
-            I_i,
-            0.0 if node.R_leak_ohm is None else V_new / node.R_leak_ohm,
-        )
-
-    def vessel_charge_residual(self):
-        """Return the node's charge-ledger residual ``(absolute, relative)``.
-
-        ``C_total * sum(dV)`` against ``Q_electron - Q_ion - Q_leak``: the
-        auditable form of the node's conservation. Zero traffic returns a zero
-        pair rather than dividing by it.
-        """
-        ledger = self._vessel_charge_ledger_C
-        residual = ledger["node"] - (
-            ledger["electron"] - ledger["ion"] - ledger["leak"]
-        )
-        scale = ledger["abs"]
-        return residual, (0.0 if scale <= 0.0 else abs(residual) / scale)
-
     def _tracer_exempt_initial_floor(self, raw, floored):
         """Restore the RAW plasma rows on tracer cells in the initial condition.
 
@@ -4471,20 +3915,11 @@ class LAPDSim1D:
         }
 
     def _tracer_device_voltage_V(self, cathode_solve):
-        """Return the R1-bounded device voltage [V] criterion (a) is driven by.
+        """Return the device voltage [V] criterion (a) is driven by.
 
-        The sheath solve's own ``V_b``, which under
-        ``cathode_circuit_voltage_bound`` is held at or below
-        ``min(cathode_phi_c_cap_V, V_avail(I))``. Reading the raw atomic-data
-        cap instead would inflate the conducted current by exactly the factor
-        the R1 pass removed from the pre-breakdown build leg. Zero when there
-        is no solve, which makes criterion (a) inactive rather than undefined.
-
-        The vessel node does NOT shift this value, and that is deliberate:
-        ``V_cm`` moves the whole cathode/anode system against the wall, so it
-        cannot change the anode-to-cathode differential the column conducts
-        under. The node's offset enters the BEAM energy instead --
-        :meth:`_tracer_beam_energy_eV` is that seam.
+        The sheath solve's own ``V_b``, held at or below
+        ``cathode_phi_c_cap_V``. Zero when there is no solve, which makes
+        criterion (a) inactive rather than undefined.
         """
         beam_result = getattr(cathode_solve, "beam_result", None)
         if beam_result is None:
@@ -4499,17 +3934,11 @@ class LAPDSim1D:
     def _tracer_beam_energy_eV(self, cathode_solve):
         """Return the beam energy [eV] reaching the column, or 0 with no beam.
 
-        Keyed to the BOUNDED sheath drop, never to ``cathode_phi_c_cap_V``:
-        the cap is the He EII table top, an atomic-data domain guard, and using
-        it as a beam energy is the defect R1 removed. With the vessel node
-        armed the mesh-to-column climb is subtracted from that bounded drop by
-        the same function the beam readers use, so criterion (b) measures the
-        thinness of the plasma to the beam that actually arrives.
+        Keyed to the solved sheath drop, never to ``cathode_phi_c_cap_V``:
+        the cap is the He EII table top, an atomic-data domain guard, not a
+        beam energy.
         """
-        return beam_launch_energy_eV(
-            self._tracer_device_voltage_V(cathode_solve),
-            vessel_beam_climb_V(self._flags, self._vessel_V_cm),
-        )
+        return self._tracer_device_voltage_V(cathode_solve)
 
     def _tracer_launch_cells(self):
         """Return ``{end: launch cell index}`` for the beams criterion (b) sums."""
@@ -7350,19 +6779,14 @@ class LAPDSim1D:
         )
 
     def _cathode_phi_wf_eff(self):
-        """Effective work function [eV] under cathode_surface_model; None off."""
-        if self._cathode_theta is None:
-            return None
+        """Effective work function [eV] at the current contaminant coverage."""
         clean = float(self._input_dict["cathode_phiwf_clean_eV"])
         dirty = float(self._input_dict["phi_wf"])
         return clean + (dirty - clean) * float(self._cathode_theta)
 
     def _surface_effective_input_dict(self):
         """input_dict with the evolving phi_wf substituted (shared-constant rule)."""
-        eff = self._cathode_phi_wf_eff()
-        if eff is None:
-            return self._input_dict
-        return {**self._input_dict, "phi_wf": eff}
+        return {**self._input_dict, "phi_wf": self._cathode_phi_wf_eff()}
 
     def _accept_step_attempt(self, attempt):
         # The anode electron-sheath pair, committed for an ACCEPTED step
@@ -7593,14 +7017,10 @@ class LAPDSim1D:
                 self._dvm_advance(self._time - self._dvm_last_s)
         # Retain the accepted solve current for the measured-tail phase gate.
         solve = self._cathode_solve
-        if (
-            self._anode_sheath_full_debit
-            and solve is not None
-            and solve.beam_result is not None
-        ):
-            # anode_sheath_full_debit census. The flag's attracting-anode
-            # branch (phi_a <= 0: the bank pays the fall, so the plasma debit
-            # stays thermal-only) is loud by being COUNTED, not by printing.
+        if solve is not None and solve.beam_result is not None:
+            # Anode sheath debit census. The attracting-anode branch
+            # (phi_a <= 0: the bank pays the fall, so the plasma debit stays
+            # thermal-only) is loud by being COUNTED, not by printing.
             # Counted here and nowhere else, so the census measures ACCEPTED
             # steps: a rejected attempt never reaches this commit, and the
             # per-stage RHS evaluations inside one step are not steps.
@@ -7654,10 +7074,6 @@ class LAPDSim1D:
             # ZERO over the prescribed steps rather than a number computed
             # from a model that is no longer driving anything.
             and not self._prescribed_active
-            and (
-                self._cathode_warming_model == "power_balance"
-                or self._cathode_theta is not None
-            )
         ):
             # AT THE CURRENT THE STEP'S OWN SOLVE RAN AT. Driven phases: the
             # frozen loop current, the same float object as before. Open
@@ -7669,22 +7085,14 @@ class LAPDSim1D:
             #
             # The flags are the PHASE'S OWN in both phases, and what makes
             # this the driven or the open-circuit reading is the CURRENT
-            # below, which is the only thing that should. This evaluator reads
-            # ``TwinCathode``, ``cathode_schottky``,
-            # ``cathode_emission_bridge``, the ``cathode_Rp_model`` validator
-            # and the ion-secondary-emission validator from them, and the last
-            # of those asks whether the configuration SUPPLIES the cathode
-            # circuit solve -- a construction-time fact about the
-            # configuration, not a per-phase one. Asking here for the DRIVEN
-            # mapping (``active_only=False, floating=False``) as a way of
-            # saying "read the driven relation" cleared ``cathode_coupling``
-            # in the open-circuit afterglow, where a cathode solve does exist
-            # and is read at zero loop current: it told that validator the
-            # configuration had no cathode circuit at all, and refused a
-            # legally armed run at the first open-circuit step, having already
-            # spent the whole discharge. The phase's own reading says a solve
-            # is enabled in every phase this re-solve runs in, so it is both
-            # the truthful mapping and, in the driven phases, the same one.
+            # below, which is the only thing that should. The phase's own
+            # reading says a solve is enabled in every phase this re-solve
+            # runs in, so it is both the truthful mapping and, in the driven
+            # phases, the same one. The DRIVEN override
+            # (``active_only=False, floating=False``) would describe a
+            # configuration that does not exist in the open-circuit afterglow,
+            # where a cathode solve does exist and is read at zero loop
+            # current.
             #
             # THE PHASE READ AT THE STEP'S OWN TIME, not the caller's default
             # (``self._time``, which by here already holds the step's ACCEPTED
@@ -7695,34 +7103,14 @@ class LAPDSim1D:
             # current-driven route's dynamic end IS a phase boundary,
             # ``post_afterglow_start``): read at the default end time, the
             # mapping saw the phase the step landed IN, not the one the
-            # dispatched solve ran in, and reported no cathode circuit for a
-            # configuration that supplies one on the step it was dispatched
-            # on -- refusing the ion-secondary-emission validator on that
-            # step alone. Reading at the step's start time, exactly as the
-            # circuit advance below and its ``circuit_V_src_V`` already do,
-            # keeps this mapping describing the phase the solve was actually
-            # dispatched in.
+            # dispatched solve ran in. Reading at the step's start time,
+            # exactly as the circuit advance below does, keeps this mapping
+            # describing the phase the solve was actually dispatched in.
             honest_I_A = (
                 0.0
                 if bool(solve.metadata.get("floating", False))
                 else self._circuit_I_loop
             )
-            # AT THE STEP'S OWN SHEATH CEILING. Under
-            # ``cathode_circuit_voltage_bound`` the ceiling the dispatched
-            # solves were run against is the COMPOSED one -- the atomic-data
-            # cap ``cathode_phi_c_cap_V`` and the loop's available voltage
-            # V_src - I*(R_comp + R_mesh_ohm), whichever is lower -- and it
-            # is the source voltage that carries the circuit member.
-            # Withholding it here would leave this re-solve on the data cap
-            # alone, so on every step whose imposed current sits above the
-            # emission wall it would book the surface's ion power at the data
-            # cap (``cathode_phi_c_cap_V``) while the solve that actually ran
-            # sat on the load line. The value is read through the same
-            # expression the circuit advance below reads, at the same phase
-            # (this step's), so the two cannot disagree.
-            # The circuit member of that ceiling is ``None`` -- and with it
-            # the historical ceiling, bit for bit -- whenever the flag is
-            # off, which is where ``circuit_available_voltage_V`` returns it.
             honest_result = idriven_result_evaluator(
                 state=self._smoothed_sample_state(self.state),
                 floors=self._floors,
@@ -7736,24 +7124,12 @@ class LAPDSim1D:
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
-                f_em_override=self._cathode_f_em,
-                circuit_V_src_V=self._circuit_source_voltage_V(
-                    self._cathode_phase_options(
-                        time=self._time - float(attempt.dt)
-                    )
-                ),
             )(honest_I_A)
         # B5: the backscatter row of the surface energy ledger, booked on
         # EVERY accepted step the channel counted on -- not only on the ones
         # whose warming branch runs. What the row measures is what left WITH
-        # THE ATOMS, and that happens on every such step. Whether the SURFACE
-        # gives it up is a separate question with a different answer: only
-        # ``power_balance`` evolves T_s, so outside it the cathode is a fixed
-        # reservoir and gives up nothing -- there is no temperature for the
-        # debit to come out of -- exactly as the fluid channel's retention
-        # factor is inert outside ``power_balance``. Booking the row
-        # regardless is what makes that gap MEASURED rather than remembered,
-        # and it is what carries the cumulative identity
+        # THE ATOMS, and that happens on every such step. Booking the row
+        # regardless is what carries the cumulative identity
         #     backscatter row == sum of the ticks' birth_cathode_jet energy
         #                        + R_E * the not-yet-ticked accumulator
         # against the kinetic arm's own ledger.
@@ -7779,115 +7155,109 @@ class LAPDSim1D:
         # Cathode warming, accepted steps only (rejected attempts never move
         # the surface temperature).
         if (
-            self._cathode_Ts_K is not None
-            and solve is not None
+            solve is not None
             and solve.beam_result is not None
             # Frozen past the prescribed hand-off, for the reason given at the
             # honest re-solve above.
             and not self._prescribed_active
         ):
-            if self._cathode_warming_model == "power_balance":
-                result = solve.beam_result.result
-                # Honest accepted-state inputs (see the shared result above).
-                if honest_result is not None:
-                    result = honest_result
-                # EVAPORATIVE COOLING RUNS IN EVERY PHASE, at the released
-                # current the solve returns. An open circuit is zero NET
-                # current, not zero emission: at I_tot = 0 the surface still
-                # releases its space-charge-limited I_eth_star, and those
-                # electrons do leave -- the balance closes because the plasma
-                # returns a LARGER collected current I_e,ret = I_eth_star +
-                # I_i over the barrier, which is a separate flux arriving at
-                # the surface and not the emitted one turned back. So the
-                # cooling is continuous across the hand-off: the same
-                # expression, evaluated at zero loop current.
-                I_emis = float(result.I_eth_star)
-                # Emission cooling books the EVOLVING work function when
-                # the surface model is on (one shared constant).
-                # The surface keeps (1 - R_E) of the ion power when the jet's
-                # reflected-energy debit sensitivity arm is on (retention is
-                # 1.0 otherwise -- the M5a' calibration convention).
-                # ARMING CRITERION, fluid side of the conservation pair: while
-                # the latch is disarmed no backscattered atoms were launched
-                # this step, so the surface gives nothing up and keeps ALL of
-                # its ion bombardment power. Read from the SAME latch state
-                # the launch above consulted, so the surface can never be
-                # debited for atoms that were never born.
-                _retention = (
-                    1.0
-                    if self._cathode_jet_censored()
-                    else self._cathode_surface_ion_retention
+            result = solve.beam_result.result
+            # Honest accepted-state inputs (see the shared result above).
+            if honest_result is not None:
+                result = honest_result
+            # EVAPORATIVE COOLING RUNS IN EVERY PHASE, at the released
+            # current the solve returns. An open circuit is zero NET
+            # current, not zero emission: at I_tot = 0 the surface still
+            # releases its space-charge-limited I_eth_star, and those
+            # electrons do leave -- the balance closes because the plasma
+            # returns a LARGER collected current I_e,ret = I_eth_star +
+            # I_i over the barrier, which is a separate flux arriving at
+            # the surface and not the emitted one turned back. So the
+            # cooling is continuous across the hand-off: the same
+            # expression, evaluated at zero loop current.
+            I_emis = float(result.I_eth_star)
+            # Emission cooling books the EVOLVING work function (one
+            # shared constant).
+            # The surface keeps (1 - R_E) of the ion power when the jet's
+            # reflected-energy debit sensitivity arm is on (retention is
+            # 1.0 otherwise -- the M5a' calibration convention).
+            # ARMING CRITERION, fluid side of the conservation pair: while
+            # the latch is disarmed no backscattered atoms were launched
+            # this step, so the surface gives nothing up and keeps ALL of
+            # its ion bombardment power. Read from the SAME latch state
+            # the launch above consulted, so the surface can never be
+            # debited for atoms that were never born.
+            _retention = (
+                1.0
+                if self._cathode_jet_censored()
+                else self._cathode_surface_ion_retention
+            )
+            P_heat, P_ion, P_rad, P_emis, P_cond = (
+                cathode_power_balance_terms_W(
+                    T_s_K=self._cathode_Ts_K,
+                    P_ion_W=float(result.P_cathode_i) * _retention,
+                    I_eth_star_A=I_emis,
+                    input_dict=self._surface_effective_input_dict(),
                 )
-                P_heat, P_ion, P_rad, P_emis, P_cond = (
-                    cathode_power_balance_terms_W(
-                        T_s_K=self._cathode_Ts_K,
-                        P_ion_W=float(result.P_cathode_i) * _retention,
-                        I_eth_star_A=I_emis,
-                        input_dict=self._surface_effective_input_dict(),
+            )
+            C_th = float(
+                self._input_dict.get("cathode_heat_capacity_J_per_K")
+            )
+            # Semi-implicit in the linearized loss: dT = dt*P_net/(C_th
+            # + dt*dP_loss/dT). At production dt/tau ~ 5e-5 this is the
+            # explicit update to 4 decimal places; for tiny C_th it
+            # cannot overshoot the radiative equilibrium and ring.
+            eps = float(self._input_dict.get("cathode_emissivity"))
+            area = math.pi * float(self._input_dict["R_cath"]) ** 2
+            G_lin = (
+                4.0
+                * eps
+                * 5.670374419e-12
+                * float(area)
+                * self._cathode_Ts_K**3
+                + max(I_emis, 0.0) * 2.0 * 8.617333262e-5
+                + float(
+                    self._input_dict.get(
+                        "cathode_conduction_W_per_K"
                     )
                 )
-                C_th = float(
-                    self._input_dict.get("cathode_heat_capacity_J_per_K")
-                )
-                # Semi-implicit in the linearized loss: dT = dt*P_net/(C_th
-                # + dt*dP_loss/dT). At production dt/tau ~ 5e-5 this is the
-                # explicit update to 4 decimal places; for tiny C_th it
-                # cannot overshoot the radiative equilibrium and ring.
-                eps = float(self._input_dict.get("cathode_emissivity"))
-                area = math.pi * float(self._input_dict["R_cath"]) ** 2
-                G_lin = (
-                    4.0
-                    * eps
-                    * 5.670374419e-12
-                    * float(area)
-                    * self._cathode_Ts_K**3
-                    + max(I_emis, 0.0) * 2.0 * 8.617333262e-5
-                    + float(
-                        self._input_dict.get(
-                            "cathode_conduction_W_per_K"
-                        )
-                    )
-                )
-                # B5 BACKSCATTER DEBIT: the energy the R_E share left with,
-                # formed from the counted (particles, incident energy) pair
-                # this same accepted step committed -- NOT from a retention
-                # factor on P_cathode_i. The retention form reads the
-                # CIRCUIT's ion power while the backscattered atoms are
-                # counted off the BOUNDARY operator's recycle row, and the
-                # two are different books; taking the debit from the counted
-                # pair is what makes the surface give up exactly what the
-                # kinetic gas received. Erg here, watts in the balance.
-                P_back = (
-                    step_backscatter_erg * 1.0e-7 / float(attempt.dt)
-                    if attempt.dt > 0.0
-                    else 0.0
-                )
-                dT = (
-                    float(attempt.dt)
-                    * (P_heat + P_ion - P_rad - P_emis - P_cond - P_back)
-                    / (C_th + float(attempt.dt) * G_lin)
-                )
-                self._cathode_Ts_K = max(
-                    self._cathode_Ts_K + dT,
-                    CATHODE_ENV_T_K,
-                )
-                ledger = self._cathode_energy_ledger_J
-                ledger["heater"] += float(attempt.dt) * P_heat
-                ledger["ion"] += float(attempt.dt) * P_ion
-                ledger["rad"] += float(attempt.dt) * P_rad
-                ledger["emis"] += float(attempt.dt) * P_emis
-                ledger["cond"] += float(attempt.dt) * P_cond
+            )
+            # B5 BACKSCATTER DEBIT: the energy the R_E share left with,
+            # formed from the counted (particles, incident energy) pair
+            # this same accepted step committed -- NOT from a retention
+            # factor on P_cathode_i. The retention form reads the
+            # CIRCUIT's ion power while the backscattered atoms are
+            # counted off the BOUNDARY operator's recycle row, and the
+            # two are different books; taking the debit from the counted
+            # pair is what makes the surface give up exactly what the
+            # kinetic gas received. Erg here, watts in the balance.
+            P_back = (
+                step_backscatter_erg * 1.0e-7 / float(attempt.dt)
+                if attempt.dt > 0.0
+                else 0.0
+            )
+            dT = (
+                float(attempt.dt)
+                * (P_heat + P_ion - P_rad - P_emis - P_cond - P_back)
+                / (C_th + float(attempt.dt) * G_lin)
+            )
+            self._cathode_Ts_K = max(
+                self._cathode_Ts_K + dT,
+                CATHODE_ENV_T_K,
+            )
+            ledger = self._cathode_energy_ledger_J
+            ledger["heater"] += float(attempt.dt) * P_heat
+            ledger["ion"] += float(attempt.dt) * P_ion
+            ledger["rad"] += float(attempt.dt) * P_rad
+            ledger["emis"] += float(attempt.dt) * P_emis
+            ledger["cond"] += float(attempt.dt) * P_cond
         # Surface-state coverage, accepted steps only. Ion flux from the
         # honest accepted-state solve, which is now built in every phase; the
         # cached solve's I_i is the fallback for the phases that build none
         # (the prescribed drive past its hand-off).
         # Backward-Euler is exact-form for this linear ODE: theta stays in
         # [0, 1] and cannot overshoot the ads/des equilibrium.
-        if (
-            self._cathode_theta is not None
-            and solve is not None
-            and solve.beam_result is not None
-        ):
+        if solve is not None and solve.beam_result is not None:
             surf_res = (
                 honest_result
                 if honest_result is not None
@@ -7925,14 +7295,6 @@ class LAPDSim1D:
             self._cathode_theta = self._cathode_theta / (
                 1.0 + float(attempt.dt) * loss
             )
-        # Emitting-area percolation, accepted steps only, and at the SAME seam
-        # as the other two surface states above: the honest accepted-state
-        # re-solve read the pre-update surface (pre-update T_s, phi_wf_eff and
-        # f_em together), and the circuit advance below reads the post-update
-        # one. The clock is autonomous -- it takes no feedback from the state --
-        # so unlike the coverage field it needs no stage accumulator.
-        if self._cathode_f_em is not None:
-            self._advance_emitting_area_fraction(attempt.dt)
         # Current-driven circuit: advance the loop current by one TR-BDF2
         # step against V_dis(I) evaluated at the accepted end-of-step state
         # (and post-warming T_s). Accepted steps only, exactly like the
@@ -7974,21 +7336,11 @@ class LAPDSim1D:
                     self._input_dict.get("V_bank")
                 )
             V_src = self._circuit_source_voltage_V(step_phase)
-            # ONE SAMPLE FOR EVERY CIRCUIT READER, or the shipped two. Under
-            # cathode_circuit_sample = "smoothed" the loop relation is
-            # evaluated on the same supply-averaged sample the RHS-side
-            # sheath solve and the accepted-state re-solve read, so the
-            # circuit's wall and the fluid's wall are one object within
-            # an accepted step. "raw" (the default) reads the accepted
-            # state itself. Through ``_circuit_sample_state`` -- the same
-            # expression the timestep bound uses, so the bound and this
-            # advance cannot be built on different samples -- and NAMED here
-            # rather than left inline, so the over-wall projection's trigger
-            # solve is built on that one sample too: one sample for the
-            # bound, the advance and the projection alike.
-            circuit_state = self._circuit_sample_state(self.state)
+            # The loop relation is evaluated on the accepted end-of-step
+            # state itself (the raw sample, not the smoothed one the sheath
+            # solves read).
             vdis = idriven_vdis_evaluator(
-                state=circuit_state,
+                state=self.state,
                 floors=self._floors,
                 ion_mass_g=self._ion_mass_g,
                 mu=self._mu,
@@ -8003,9 +7355,7 @@ class LAPDSim1D:
                 # the mapping saw the afterglow the step landed in, and the
                 # ``floating=False`` override -- inert wherever this branch
                 # actually runs -- then cleared ``cathode_coupling`` for a
-                # configuration that supplies one. The ion-secondary-emission
-                # validator reads that key as a construction-time fact and
-                # refused the crossing step of every armed run.
+                # configuration that supplies one.
                 input_flags=self._effective_cathode_flags(
                     time=self._time - float(attempt.dt),
                     active_only=False, floating=False
@@ -8013,23 +7363,7 @@ class LAPDSim1D:
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
-                f_em_override=self._cathode_f_em,
-                circuit_V_src_V=V_src,
             )
-            # THE OVER-WALL PROJECTION, presence-gated. Mutates the ONE
-            # number the advance below starts from, and only on a step whose
-            # held current is above the emission wall; off, the block is not
-            # entered and no evaluator is built.
-            if self._circuit_project_over_wall:
-                self._project_circuit_over_wall(
-                    state=circuit_state,
-                    dt_s=float(attempt.dt),
-                    V_src_V=V_src,
-                    R_series_ohm=float(self._input_dict.get("R_comp"))
-                    * float(self._input_dict.get("R_comp_partition")),
-                    L_H=float(self._input_dict.get("L_parasitic_H")),
-                    vdis_of_I=vdis,
-                )
             I_new, V_cap_new, V_dis_step = advance_circuit_current_driven(
                 I_prev_A=self._circuit_I_loop,
                 dt_s=float(attempt.dt),
@@ -8070,172 +7404,7 @@ class LAPDSim1D:
             if not self._jet_armed:
                 self._jet_arming_censored_steps += 1
             self._update_jet_arming_latch(solve)
-        # Vessel common-mode node: one closed-form step of
-        # C dV_cm/dt = I_wall_net, after the circuit so the wall currents are
-        # read at the fully accepted state. Absent unless armed.
-        self._vessel_advance(float(attempt.dt))
         return self.get_initial_snapshot()
-
-    #: Absolute tolerance [A] of the over-wall projection's bracketed root
-    #: find. NUMERICS, not physics: it is three orders of magnitude inside the
-    #: electron-return tail current that separates the wall root from the
-    #: capability branch, and well outside the sheath root-find's own xtol
-    #: (1e-10 A), so the projected current is the wall root to a precision the
-    #: relation itself supports.
-    _PROJECTION_ROOT_XTOL_A = 1.0e-9
-
-    def _project_circuit_over_wall(
-        self, state, dt_s, V_src_V, R_series_ohm, L_H, vdis_of_I
-    ):
-        """Start the circuit advance ON the emission wall, not above it.
-
-        Presence-gated on ``cathode_circuit_project_over_wall``; the caller is
-        the accepted-step circuit advance and this is its only call site.
-        Mutates ``_circuit_I_loop`` in place -- the advance below then starts
-        its TR-BDF2 step from the projected current -- and books the
-        projection census. Returns nothing.
-
-        THE TRIGGER is the sheath's UNBOUNDED demand at the held current,
-        evaluated on ``state``: the caller passes the very
-        ``_circuit_sample_state`` result the advance's own ``V_dis(I)``
-        evaluator was built on, so within one accepted step the trigger and
-        the relation it projects onto are the SAME OBJECT -- and that
-        selector is the one the loop-relaxation timestep bound goes through
-        too, at the state its own step starts from, so all three read one
-        sample of the electrode cells under either
-        ``cathode_circuit_sample``. That
-        evaluator carries no circuit member in its ceiling
-        (``apply_circuit_bound=False``), so its composed ceiling IS the
-        atomic-data cap ``cathode_phi_c_cap_V`` and a ``capability_limited``
-        regime there means "on the data cap" and nothing else. The load line
-        is deliberately NOT a trigger: under
-        ``cathode_circuit_voltage_bound`` the bounded solve's accepted root
-        sits on the load line by construction, so a trigger reading the
-        circuit member would fire on every plateau step.
-
-        THE PROJECTION is the root of the loop equation's own residual
-
-            g(I) = V_src - I*R_series - V_dis(I),
-
-        i.e. the current at which the inductor sees no net EMF -- the
-        emission wall. It is sought on ``[I - 2*kick, I]`` with
-
-            kick = dt*(cap - V_supply)/L,   V_supply = V_src - I*R_loop,
-
-        the distance the advance's explicit half would throw the loop from a
-        device voltage pinned at the cap against that supply (``V_supply`` is
-        the expression ``circuit_available_voltage_V`` returns under the
-        bound flag, read here whether or not that flag is armed because the
-        quantity this sizes is a property of the loop equation, not of the
-        bound). The bracket is deliberately loose: the explicit half's actual
-        throw carries a stage weight below one, so ``2*kick`` covers the
-        excursion with margin. If it still does not straddle, it is widened
-        downward ONCE to ``4*kick`` (floored at zero current); if that fails
-        the held current is LEFT ALONE and the step is counted as
-        unbracketed, because a projection onto a root that was not bracketed
-        would be a guess.
-
-        WHAT IT COSTS. The replacement is not conservative in the inductor:
-        ``0.5*L*(I^2 - I_root^2)`` is dropped and booked cumulatively.
-
-        SCOPE OF THE MUTATION. The projected current is a TRANSIENT of the
-        advance's input: the advance overwrites ``_circuit_I_loop`` with its
-        own result on the next statement, and nothing reads the attribute in
-        between. Every reader outside this advance therefore sees the
-        advance's OUTPUT exactly as it did before -- the timestep bound's
-        bundle (``_circuit_timestep_kwargs``, built at the state the NEXT
-        step starts from) included, so that bundle's promise to carry the
-        same device relation the advance integrates is untouched. What DOES
-        change downstream is the value of that output: a projected step lands
-        on the wall root, so the bound reads a loop at its local equilibrium
-        and withdraws its candidate there, which is the honest reading of a
-        loop that has nothing left to relax.
-        """
-        from scipy.optimize import brentq
-
-        L = float(L_H)
-        dt = float(dt_s)
-        I_held = float(self._circuit_I_loop)
-        if not (L > 0.0 and dt > 0.0 and I_held > 0.0):
-            return
-        # The sheath's unbounded demand at the held current. Built with the
-        # SAME arguments as the advance's own evaluator (the call above), so
-        # the regime tested and the relation rooted describe one sheath.
-        solve_at = idriven_result_evaluator(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            mu=self._mu,
-            geometry=self._geometry,
-            input_dict=self._input_dict,
-            # AT THE STEP'S OWN PHASE -- ``self._time - dt``, which is the
-            # instant the caller read ``step_phase`` at and therefore the
-            # instant its branch gate excluded a floating phase at. ``dt_s``
-            # IS the caller's ``attempt.dt``, so this is that gate's time to
-            # the byte. Left at the default (the CURRENT time, past the end
-            # of the step) this asked for the driven mapping on the one step
-            # per run that crosses out of the drive, where the phase's own
-            # reading is already the floating afterglow -- the same
-            # gate-and-mapping disagreement the advance's own evaluator above
-            # carries a comment about, and the configuration
-            # ``_effective_cathode_flags`` now refuses outright.
-            input_flags=self._effective_cathode_flags(
-                time=self._time - dt,
-                active_only=False, floating=False
-            ),
-            beam_cross_prev=self._cathode_beam_cross,
-            T_s_override_K=self._cathode_Ts_K,
-            phi_wf_override_eV=self._cathode_phi_wf_eff(),
-            f_em_override=self._cathode_f_em,
-            circuit_V_src_V=V_src_V,
-            apply_circuit_bound=False,
-        )
-        if solve_at(I_held).regime != "capability_limited":
-            return
-        cap_V = float(self._input_dict.get("cathode_phi_c_cap_V", 1000.0))
-        R_loop_ohm = float(self._input_dict.get("R_comp", 0.0)) + float(
-            self._input_dict.get("R_mesh_ohm", 0.0)
-        )
-        V_supply = float(V_src_V) - I_held * R_loop_ohm
-        kick = dt * (cap_V - V_supply) / L
-        if not kick > 0.0:
-            # The cap is not above what the loop can supply, so the explicit
-            # half has no over-wall throw to undo and there is nothing to
-            # project. Not counted: no projection was attempted.
-            return
-
-        def residual(I_A):
-            return (
-                float(V_src_V)
-                - float(I_A) * float(R_series_ohm)
-                - float(vdis_of_I(I_A))
-            )
-
-        f_hi = residual(I_held)
-        I_root = None
-        for width in (2.0, 4.0):
-            I_lo = max(I_held - width * kick, 0.0)
-            if not I_lo < I_held:
-                break
-            if residual(I_lo) * f_hi > 0.0:
-                continue
-            I_root = float(
-                brentq(
-                    residual,
-                    I_lo,
-                    I_held,
-                    xtol=self._PROJECTION_ROOT_XTOL_A,
-                )
-            )
-            break
-        if I_root is None:
-            self._circuit_projection_unbracketed += 1
-            return
-        self._circuit_projection_energy_J += (
-            0.5 * L * (I_held * I_held - I_root * I_root)
-        )
-        self._circuit_projection_events += 1
-        self._circuit_I_loop = I_root
 
     def _update_jet_arming_latch(self, cathode_solve):
         """Advance the cathode-jet arming latch on one ACCEPTED step.
@@ -8269,124 +7438,6 @@ class LAPDSim1D:
         if self._jet_armed != was_armed:
             self._jet_arming_transitions += 1
             self._jet_arming_last_transition_s = float(self._time)
-
-    # Every attribute one accepted step mutates (fluid attempt cathode cache +
-    # accept), for the R5.1/A11 Picard snapshot. The persistent step cache is
-    # exactly the four cathode fields (`_restore_step_cache`), so restoring them
-    # restores it.
-    _PICARD_DIRECT_ATTRS = (
-        "_time",
-        "_circuit_I_loop",
-        "_circuit_I_prev",
-        "_circuit_V_dis_step",
-        "_circuit_V_dis_time_integral",
-        # Over-wall projection census: three counters written on the accepted
-        # circuit advance, so a Picard re-run must start from the values the
-        # step started from -- otherwise the re-run's projection would be
-        # counted, and its dropped inductor energy booked, twice.
-        "_circuit_projection_events",
-        "_circuit_projection_energy_J",
-        "_circuit_projection_unbracketed",
-        "_circuit_V_cap",
-        "_cathode_Ts_K",
-        "_cathode_theta",
-        "_cathode_f_em",
-        "_cathode_solve",
-        # A2a lag: a float, mutated only on the accepted-solve write, so a
-        # Picard re-run must start from the value the step started from.
-        "_cathode_tail_anode_I",
-        # Clamp census: four counters written on that same accepted-solve
-        # write, so a Picard re-run must start from the values the step
-        # started from -- otherwise the re-run's solve would be counted twice.
-        "_cathode_total_solves",
-        "_cathode_clamped_solves",
-        "_cathode_clamp_first_t_s",
-        "_cathode_clamp_last_t_s",
-        # Vessel node: the potential is a float, and the ledger/current
-        # records are copied below because they are mutable containers.
-        "_vessel_V_cm",
-        "_vessel_wall_currents_A",
-        # Cathode-jet arming latch and its census: all four are written on the
-        # accepted step, so a Picard re-run must start from the values the
-        # step started from. Omitting the latch here would let a re-run launch
-        # under a state a LATER step established.
-        "_jet_armed",
-        "_jet_arming_censored_steps",
-        "_jet_arming_transitions",
-        "_jet_arming_last_transition_s",
-        # Prescribed measured drive: both are written on the accepted step
-        # alongside _circuit_I_loop, so a Picard re-run must start from the
-        # values the step started from. Constant on every run whose mode is
-        # off.
-        "_prescribed_active",
-        "_circuit_V_dis_prescribed",
-        # The save-interval window the realised anode-debit profile is
-        # normalised by, advanced on the accepted-step write beside
-        # _anode_e_sheath_ledger_J, so a Picard re-run must start from the
-        # value the step started from -- otherwise a discarded iteration's
-        # window would be added into the saved mean. Its per-cell partner
-        # _anode_e_sheath_realised_accum is copied below, being an array.
-        "_anode_e_sheath_realised_window_s",
-    )
-
-    def _picard_snapshot(self):
-        """Capture the pre-step coupled state for a Picard re-run (R5.1/A11)."""
-        snap = {a: getattr(self, a) for a in self._PICARD_DIRECT_ATTRS}
-        snap["_vessel_charge_ledger_C"] = dict(self._vessel_charge_ledger_C)
-        snap["_y"] = self._y.copy()
-        snap["_cathode_x0"] = _copy_cache_value(self._cathode_x0)
-        snap["_cathode_x0_twin"] = _copy_cache_value(self._cathode_x0_twin)
-        bc = self._cathode_beam_cross
-        snap["_cathode_beam_cross"] = (
-            None if bc is None else np.asarray(bc, dtype=float).copy()
-        )
-        snap["_floor_ledger"] = dict(self._floor_ledger)
-        snap["_cathode_energy_ledger_J"] = dict(self._cathode_energy_ledger_J)
-        snap["_anode_e_sheath_ledger_J"] = dict(self._anode_e_sheath_ledger_J)
-        # The per-cell realised debit is accumulated IN PLACE on the accepted
-        # step, so the snapshot takes its own copy exactly as the ledger dict
-        # does; None is the pre-first-save state and survives the round trip.
-        accum = self._anode_e_sheath_realised_accum
-        snap["_anode_e_sheath_realised_accum"] = (
-            None if accum is None else np.asarray(accum, dtype=float).copy()
-        )
-        ema = self._sample_ema
-        snap["_sample_ema"] = (
-            None if ema is None else {c: list(v) for c, v in ema.items()}
-        )
-        return snap
-
-    def _picard_restore(self, snap):
-        """Restore exactly the state ``_picard_snapshot`` captured."""
-        for a in self._PICARD_DIRECT_ATTRS:
-            setattr(self, a, snap[a])
-        self._vessel_charge_ledger_C = dict(snap["_vessel_charge_ledger_C"])
-        self._cathode_x0 = _copy_cache_value(snap["_cathode_x0"])
-        self._cathode_x0_twin = _copy_cache_value(snap["_cathode_x0_twin"])
-        bc = snap["_cathode_beam_cross"]
-        self._cathode_beam_cross = (
-            None if bc is None else np.asarray(bc, dtype=float).copy()
-        )
-        self._floor_ledger = dict(snap["_floor_ledger"])
-        self._cathode_energy_ledger_J = dict(snap["_cathode_energy_ledger_J"])
-        self._anode_e_sheath_ledger_J = dict(snap["_anode_e_sheath_ledger_J"])
-        accum = snap["_anode_e_sheath_realised_accum"]
-        self._anode_e_sheath_realised_accum = (
-            None if accum is None else np.asarray(accum, dtype=float).copy()
-        )
-        ema = snap["_sample_ema"]
-        self._sample_ema = (
-            None if ema is None else {c: list(v) for c, v in ema.items()}
-        )
-        # Restore _y EXACTLY (the snapshot is the accepted, already-floored state);
-        # do NOT route through _set_state_vector, whose re-flooring is not
-        # guaranteed idempotent and would make a Picard re-run start from a
-        # perturbed state.
-        self._y = snap["_y"].copy()
-        self._state = self._unpack(self._y)
-        self._derived = derive_state(
-            self._state, self._floors, self._ion_mass_g
-        )
 
     # ---- restart: export and resume -------------------------------------
     #
@@ -8447,20 +7498,6 @@ class LAPDSim1D:
         "_circuit_V_dis_step",
         "_circuit_V_dis_time_integral",
     )
-    #: The over-wall projection's census, carried PRESENCE-GATED on
-    #: ``cathode_circuit_project_over_wall`` -- the vessel node's contract, not
-    #: the clamp census's -- so an unarmed run's payload is byte-unchanged by
-    #: the flag existing. They are counters: no exported value is a function of
-    #: them and restoring them moves no trajectory, so the flag is NOT a
-    #: structural restart key. A resume that changes the arming therefore
-    #: starts the census at its seed, and the resumed run's census covers its
-    #: own steps only, which is the honest reading of a payload whose producing
-    #: run projected nothing.
-    _RESTART_CIRCUIT_PROJECTION_ATTRS = (
-        "_circuit_projection_events",
-        "_circuit_projection_energy_J",
-        "_circuit_projection_unbracketed",
-    )
     # DELIBERATE OMISSION: the prescribed measured drive's two step members
     # (_prescribed_active, _circuit_V_dis_prescribed). Both are pure functions
     # of the resolved trace and the time, so the first accepted step after a
@@ -8498,15 +7535,6 @@ class LAPDSim1D:
         # readable: it restores to 0.0, which is what an unarmed run carries.
         cathode["_cathode_tail_anode_I"] = float(self._cathode_tail_anode_I)
         cathode["energy_ledger_J"] = None
-        # Emitting-area percolation, presence-gated exactly like the vessel
-        # node and the coverage section: the lit fraction is written only when
-        # the closure is armed, so a payload from a run without it is
-        # structurally what it always was and older payloads stay readable.
-        # ``cathode_emitting_area`` is a structural flag key, so a resume that
-        # changes the arming refuses rather than restoring a fraction nothing
-        # reads or leaving an armed closure at its seed.
-        if self._cathode_f_em is not None:
-            cathode["_cathode_f_em"] = float(self._cathode_f_em)
         # Cathode-jet arming latch, presence-gated on the criterion being
         # DECLARED. ``_jet_armed`` decides whether the next step's jets launch
         # at all and whether the surface is debited for them, so a resume that
@@ -8532,12 +7560,6 @@ class LAPDSim1D:
         circuit = {
             name: getattr(self, name) for name in self._RESTART_CIRCUIT_ATTRS
         }
-        # Over-wall projection census, presence-gated on the flag exactly like
-        # the vessel node below: written only when the projection is armed, so
-        # a payload from a run without it is structurally what it always was.
-        if self._circuit_project_over_wall:
-            for name in self._RESTART_CIRCUIT_PROJECTION_ATTRS:
-                circuit[name] = getattr(self, name)
         prev_save = self._circuit_V_dis_prev_save
         circuit["V_dis_prev_save_t"] = (
             None if prev_save is None else float(prev_save[0])
@@ -8545,16 +7567,6 @@ class LAPDSim1D:
         circuit["V_dis_prev_save_integral"] = (
             None if prev_save is None else float(prev_save[1])
         )
-        # Vessel node, presence-gated exactly like the coverage section below:
-        # the potential and its charge ledger are written only when the node is
-        # armed, so a payload from a run without it is structurally what it
-        # always was. ``regime_vessel_node`` is a structural flag key, so a
-        # resume that changes the arming refuses rather than reading half a
-        # node.
-        if self._vessel is not None:
-            circuit["vessel_V_cm"] = float(self._vessel_V_cm)
-            for key, value in self._vessel_charge_ledger_C.items():
-                circuit[f"vessel_Q_{key}_C"] = float(value)
         triggers = {
             name: getattr(self, name) for name in self._RESTART_TRIGGER_ATTRS
         }
@@ -8617,10 +7629,9 @@ class LAPDSim1D:
                 }
             )
         sample_ema = {}
-        if self._sample_ema is not None:
-            for cell, (n_ema, Te_ema) in self._sample_ema.items():
-                sample_ema[f"cell_{int(cell)}_n"] = float(n_ema)
-                sample_ema[f"cell_{int(cell)}_Te"] = float(Te_ema)
+        for cell, (n_ema, Te_ema) in self._sample_ema.items():
+            sample_ema[f"cell_{int(cell)}_n"] = float(n_ema)
+            sample_ema[f"cell_{int(cell)}_Te"] = float(Te_ema)
         return {
             "time": float(self._time),
             "cells": int(self._geometry.cells),
@@ -8709,8 +7720,6 @@ class LAPDSim1D:
         self._cathode_tail_anode_I = float(
             cathode.get("_cathode_tail_anode_I", 0.0)
         )
-        if self._cathode_f_em is not None:
-            self._cathode_f_em = float(cathode["_cathode_f_em"])
         # Cathode-jet arming latch, presence-gated on THIS solver's criterion:
         # with none declared the latch is permanently armed and restoring a
         # stored one would only mislabel a run summary nothing else reads.
@@ -8769,31 +7778,12 @@ class LAPDSim1D:
         circuit = payload["circuit"]
         for name in self._RESTART_CIRCUIT_ATTRS:
             setattr(self, name, circuit[name])
-        # Over-wall projection census: DEFAULTED, not required. A payload from
-        # a run that did not arm the projection carries none of these keys, and
-        # the resumed run's census then covers its own steps.
-        for name in self._RESTART_CIRCUIT_PROJECTION_ATTRS:
-            stored = circuit.get(name)
-            if stored is None:
-                continue
-            seed = getattr(self, name)
-            setattr(
-                self,
-                name,
-                int(stored) if isinstance(seed, int) else float(stored),
-            )
         prev_save_t = circuit["V_dis_prev_save_t"]
         self._circuit_V_dis_prev_save = (
             None
             if prev_save_t is None
             else (float(prev_save_t), float(circuit["V_dis_prev_save_integral"]))
         )
-        if self._vessel is not None:
-            self._vessel_V_cm = float(circuit["vessel_V_cm"])
-            for key in self._vessel_charge_ledger_C:
-                self._vessel_charge_ledger_C[key] = float(
-                    circuit[f"vessel_Q_{key}_C"]
-                )
         triggers = payload["triggers"]
         for name in self._RESTART_TRIGGER_ATTRS:
             setattr(self, name, triggers[name])
@@ -8848,16 +7838,16 @@ class LAPDSim1D:
                 self._anode_energy_ledger_J[key] = float(
                     ledgers[f"anode_energy_{key}_J"]
                 )
-        if self._sample_ema is not None:
-            stored = payload["sample_ema"]
-            for cell in self._sample_smooth_cells:
-                self._sample_ema[int(cell)] = [
-                    float(stored[f"cell_{int(cell)}_n"]),
-                    float(stored[f"cell_{int(cell)}_Te"]),
-                ]
+        stored = payload["sample_ema"]
+        for cell in self._sample_smooth_cells:
+            self._sample_ema[int(cell)] = [
+                float(stored[f"cell_{int(cell)}_n"]),
+                float(stored[f"cell_{int(cell)}_Te"]),
+            ]
         # State last, and EXACTLY: the payload holds an already-floored
-        # accepted state, and re-flooring it is not guaranteed idempotent
-        # (the same reasoning _picard_restore records).
+        # accepted state, and re-flooring it through _set_state_vector is not
+        # guaranteed idempotent, so a resumed run would start from a perturbed
+        # state.
         self._y = np.asarray(payload["y"], dtype=float).copy()
         self._state = self._unpack(self._y)
         self._derived = derive_state(
@@ -8868,61 +7858,16 @@ class LAPDSim1D:
         run_loop["resumed"] = True
         self._restart_run_loop = run_loop
 
-    def _accept_step_with_picard(self, generate_attempt):
-        """Accept one step, Picard-iterating the loop current at the knee (A11).
-
-        ``generate_attempt() -> (attempt, extra)``; returns
-        ``(accept_result, attempt, extra)``. With ``coupled_circuit_picard`` off
-        this is exactly one attempt + accept. On, and in a driven phase, the step
-        is re-run (<= ``circuit_picard_max_iter``) with the frozen loop current
-        set to the previous iteration's result until the loop current a step
-        produces matches the one it was run at (relative ``circuit_picard_tol_rel``),
-        so fluid + T_s + circuit share one self-consistent ``I_loop``. Rejected
-        iterations restore the snapshot exactly, mutating no accepted-step state.
-        """
-        if not self._coupled_circuit_picard:
-            attempt, extra = generate_attempt()
-            return self._accept_step_attempt(attempt), attempt, extra
-        snap = self._picard_snapshot()
-        t_start = self._time
-        phase = self._cathode_phase_options(time=t_start)
-        driven = bool(phase["solve_enabled"]) and not bool(phase["floating"])
-        I_frozen = float(self._circuit_I_loop)
-        last = None
-        for iteration in range(self._circuit_picard_max_iter):
-            if iteration > 0:
-                self._picard_restore(snap)
-                self._circuit_I_loop = I_frozen
-                self._picard_extra_solves += 1
-            attempt, extra = generate_attempt()
-            result = self._accept_step_attempt(attempt)
-            last = (result, attempt, extra)
-            if not driven:
-                break
-            I_new = float(self._circuit_I_loop)
-            if abs(I_new - I_frozen) <= self._circuit_picard_tol_rel * max(
-                abs(I_new), 1.0
-            ):
-                break
-            I_frozen = I_new
-            if iteration == 0:
-                self._picard_triggered_steps += 1
-        return last
-
     def advance_one_step(self, dt=None, operator_split=None):
         """Advance the conservative state by one explicit or split step."""
-        def _generate():
-            attempt = self._attempt_step(dt=dt, operator_split=operator_split)
-            reason, detail = self._step_rejection_info(attempt)
-            if reason:
-                raise ValueError(
-                    f"step candidate rejected before acceptance: {reason}; "
-                    f"{_rejection_detail_text(detail)}"
-                )
-            return attempt, None
-
-        result, _attempt, _extra = self._accept_step_with_picard(_generate)
-        return result
+        attempt = self._attempt_step(dt=dt, operator_split=operator_split)
+        reason, detail = self._step_rejection_info(attempt)
+        if reason:
+            raise ValueError(
+                f"step candidate rejected before acceptance: {reason}; "
+                f"{_rejection_detail_text(detail)}"
+            )
+        return self._accept_step_attempt(attempt)
 
     def operator_split_step(
         self,
@@ -9369,18 +8314,17 @@ class LAPDSim1D:
                 )
             if step_dt <= 0.0:
                 raise RuntimeError(f"non-positive timestep selected ({step_dt})")
-            def _generate_run_attempt():
-                a, rc, rr, ev = self._attempt_step_with_retries(
-                    dt=step_dt,
-                    operator_split=operator_split,
-                    diag=diag,
-                )
-                return a, (rc, rr, ev)
-
-            _result, attempt, _extra = self._accept_step_with_picard(
-                _generate_run_attempt
+            (
+                attempt,
+                retry_count,
+                rejection_reason,
+                step_rejection_events,
+            ) = self._attempt_step_with_retries(
+                dt=step_dt,
+                operator_split=operator_split,
+                diag=diag,
             )
-            retry_count, rejection_reason, step_rejection_events = _extra
+            self._accept_step_attempt(attempt)
             timestep_rejection_events.extend(step_rejection_events)
             self._update_current_phase_triggers()
             if ignition_budget_guards:
@@ -9620,16 +8564,6 @@ class LAPDSim1D:
         flags["cathode_coupling"] = False
         flags["neutral_equilibration"] = False
         flags["launch_plasma_after_equilibration"] = False
-        # The circuit voltage bound, cleared for the SAME reason as
-        # cathode_coupling above: it lives inside the current-driven sheath
-        # solve and its construction guard requires exactly the cathode
-        # solve the line above has just switched off, so leaving it armed
-        # would refuse the INNER sim on a state where the device voltage it
-        # bounds cannot exist -- a guard firing on a state where the thing
-        # it protects cannot happen. Clearing it changes no configuration
-        # that constructed before: every config that reaches this line
-        # armed is one that raised.
-        flags["cathode_circuit_voltage_bound"] = False
         # The inner sim IS the equilibration -- it must never consult the seed
         # database itself. Leaving this ON contradicts the two flags just
         # cleared, so validate_neutral_seed_cache_config would reject the inner
@@ -9653,29 +8587,6 @@ class LAPDSim1D:
         # signature and every existing trajectory are bit-identical.
         flags["end_wall_sheath_full_debit"] = False
         flags["cathode_face_full_debit"] = False
-        # ...and the key that only MOVES the cathode key's enthalpy row, for
-        # the same reason once more: its construction guard requires exactly
-        # the key the line above has just cleared, so leaving it armed would
-        # refuse the INNER sim on a state where the row it places does not
-        # exist. It is inert here twice over -- no cathode solve means no beam
-        # to carry the enthalpy and no row to move it off. Clearing it changes
-        # no configuration that constructed before: every config that reaches
-        # this line armed is one that raised.
-        flags["cathode_enthalpy_on_beam"] = False
-        # Ion-induced secondary emission, cleared for the SAME reason as
-        # cathode_coupling above and, like the end wall jet below, WITH its
-        # number: no cathode solve means no ion current arriving at an
-        # emitting face and no secondaries to release, and the key's own
-        # construction guard requires exactly the cathode solve the line above
-        # has switched off, so leaving it armed would refuse the INNER sim on
-        # a state where the current it adds cannot exist. The yield goes with
-        # it because a yield set while the flag is off is refused outright, so
-        # clearing the flag alone would turn a legal outer configuration into
-        # an inner refusal. Clearing them changes no configuration that
-        # constructed before: every config that reaches this line armed is one
-        # that raised.
-        flags["cathode_ion_secondary_emission"] = False
-        params["cathode_ion_secondary_emission_yield"] = None
         # The two DVM directed-recycle jets, cleared for the SAME reason as
         # cathode_coupling above: this pre-solve has no plasma and no cathode
         # solve, so there is no collected ion flux for either jet to split and
@@ -10032,7 +8943,6 @@ class LAPDSim1D:
                 state=state,
                 time=time,
             )[0]
-        circuit_kwargs = self._circuit_timestep_kwargs(state=state, time=time)
         diag = suggest_timestep(
             state=state,
             floors=self._floors,
@@ -10073,7 +8983,6 @@ class LAPDSim1D:
             neutral_energy_kwargs=(
                 self._neutral_energy_timestep_kwargs() if plasma_enabled else None
             ),
-            circuit_kwargs=circuit_kwargs,
             plasma_source_rhs=plasma_source_rhs,
             electrode_sink_rate=electrode_sink_rate,
             source_floor_exempt_rtol=self._surface_loss_floor_exempt_rtol,
@@ -10088,9 +8997,6 @@ class LAPDSim1D:
             ),
             neutral_dt_fraction=float(
                 self._input_dict.get("neutral_dt_fraction")
-            ),
-            circuit_dt_fraction=float(
-                self._input_dict.get("circuit_dt_fraction")
             ),
             energy_exchange_rate_fraction=(
                 self._energy_exchange_rate_fraction
@@ -10117,11 +9023,6 @@ class LAPDSim1D:
             neutral_candidates = {
                 "neutral_exchange": diag.dt_neutral_exchange,
                 "neutral_sources": diag.dt_neutral_sources,
-                # The loop is not a fluid row: a neutral-only phase can still
-                # carry a live current-driven circuit, so its bound survives
-                # the rebuild rather than being silently dropped. It is inf
-                # unless the bundle was built, so no unarmed run moves.
-                "circuit": diag.dt_circuit,
                 "dt_max": diag.dt_max,
             }
             active_constraint, raw_dt = min(
@@ -10764,11 +9665,7 @@ class LAPDSim1D:
         phi_c = float(cathode_solve.beam_result.result.phi_c)
         if not np.isfinite(phi_c):
             return None
-        T_s = float(
-            self._cathode_Ts_K
-            if self._cathode_Ts_K is not None
-            else float(self._input_dict.get("cathode_Ts_base_K"))
-        )
+        T_s = float(self._cathode_Ts_K)
         return {
             "R_N": self._cathode_jet_R_N,
             "R_E": self._cathode_jet_R_E,
@@ -10921,7 +9818,6 @@ class LAPDSim1D:
             geometry=self._plasma_geometry(),
             eta=float(self._input_dict.get("eta")),
             anode_jet=self._anode_jet_spec(cathode_solve),
-            sheath_edge_energy=self._anode_sheath_full_debit,
         )
 
     def ion_neutral_drag_rhs(self, y=None, state=None):
@@ -11307,11 +10203,7 @@ class LAPDSim1D:
                 {name: zeros.copy() for name in END_SHEATH_CATHODE_ROWS}
             )
         if self._cathode_face_full_debit and beam_result is not None:
-            T_s_K = float(
-                self._cathode_Ts_K
-                if self._cathode_Ts_K is not None
-                else float(self._input_dict.get("cathode_Ts_base_K"))
-            )
+            T_s_K = float(self._cathode_Ts_K)
             Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
             cathode_cells = cathode_adjacent_cells(self._geometry)
             pairs = [(int(cathode_cells[0]), beam_result.result)]
@@ -11504,7 +10396,6 @@ class LAPDSim1D:
         input_flags,
         floating,
         phi_wf_override_eV,
-        circuit_V_src_V,
         coverage,
     ):
         """Return the read-only cathode solve memo's key.
@@ -11529,7 +10420,6 @@ class LAPDSim1D:
             _memo_key_part(self._cathode_x0_twin),
             _memo_key_part(self._cathode_Ts_K),
             _memo_key_part(phi_wf_override_eV),
-            _memo_key_part(self._cathode_f_em),
             _memo_key_part(self._circuit_I_loop),
             # The prescribed drive's other half, and the switch that says
             # whether the pair is in force at all: two solves at one
@@ -11537,9 +10427,7 @@ class LAPDSim1D:
             # before and one after the hand-off -- are different solves.
             _memo_key_part(self._circuit_V_dis_prescribed),
             _memo_key_part(self._prescribed_active),
-            _memo_key_part(circuit_V_src_V),
             _memo_key_part(coverage),
-            _memo_key_part(self._vessel_V_cm),
         )
 
     def solve_cathode_boundary(
@@ -11563,7 +10451,6 @@ class LAPDSim1D:
             floating=bool(floating),
         )
         phi_wf_override_eV = self._cathode_phi_wf_eff()
-        circuit_V_src_V = self._circuit_source_voltage_V(cathode_phase)
         coverage = self._coverage_view(state, time)
         # READ-ONLY solve memo (R3 [cathode-accepted-solve-unify]). Several
         # consumers solve at the SAME resolved inputs within one accepted step
@@ -11580,8 +10467,8 @@ class LAPDSim1D:
         # the lag this member exists to resolve, and keying on state alone
         # would paper over it by serving one for the other. Everything else
         # this passes and that can move within a run joins for the same reason:
-        # the warm start (x0/x0_twin), the surface state (T_s, phi_wf, f_em),
-        # the circuit (I_loop, V_src, vessel node), the phase-derived flags and
+        # the warm start (x0/x0_twin), the surface state (T_s, phi_wf),
+        # the circuit (I_loop), the phase-derived flags and
         # ``floating``, and the coverage view. The remaining arguments
         # (``floors``, ``ion_mass_g``, ``mu``, ``geometry``, ``input_dict``,
         # ``I_ion``, ``gas_type``) are assigned once in __init__ and never
@@ -11595,7 +10482,6 @@ class LAPDSim1D:
                 input_flags=input_flags,
                 floating=floating,
                 phi_wf_override_eV=phi_wf_override_eV,
-                circuit_V_src_V=circuit_V_src_V,
                 coverage=coverage,
             )
             memo = self._cathode_solve_memo
@@ -11618,11 +10504,8 @@ class LAPDSim1D:
             floating=floating,
             T_s_override_K=self._cathode_Ts_K,
             phi_wf_override_eV=phi_wf_override_eV,
-            f_em_override=self._cathode_f_em,
             circuit_I_loop_A=self._circuit_I_loop,
-            circuit_V_src_V=circuit_V_src_V,
             coverage=coverage,
-            vessel_V_cm_V=self._vessel_V_cm,
             prescribed_drive=self._prescribed_drive_point(),
         )
         if memo_key is not None:
@@ -12215,70 +11098,6 @@ class LAPDSim1D:
             return float(self._circuit_V_cap)
         return float(self._input_dict.get("V_bank"))
 
-    def _circuit_timestep_kwargs(self, state=None, time=None):
-        """Bundle for the loop-relaxation timestep bound, or ``None``.
-
-        ``None`` withdraws the candidate. PRESENCE-GATED on
-        ``cathode_circuit_voltage_bound``: without the flag the sheath's
-        capability wall never clamps the device voltage, the loop equation
-        already carried its restoring force, and the historical adaptive
-        controller stands -- so an unarmed run never builds this bundle,
-        never spends its two probe solves, and keeps its dt sequence to the
-        bit. Also withdrawn where there is no loop to bound: an open circuit
-        (no solve, or the floating afterglow), which is the same phase gate
-        the circuit advance itself uses.
-
-        The bundle carries the SAME ``vdis_of_I`` the advance integrates,
-        built at the state the step starts from and -- through the one
-        ``_circuit_sample_state`` expression both readers go through -- on
-        the SAME sample of it, so the bound and the step cannot disagree
-        about the device relation under either ``cathode_circuit_sample``.
-        """
-        if not bool(self._flags.get("cathode_circuit_voltage_bound")):
-            return None
-        if time is None:
-            time = self._time
-        step_phase = self._cathode_phase_options(time=time)
-        if not step_phase["solve_enabled"] or step_phase["floating"]:
-            return None
-        vdis = idriven_vdis_evaluator(
-            # Through the SAME selector the advance reads, which is what
-            # keeps the invariant in this docstring true under every
-            # cathode_circuit_sample: one device relation, one sample.
-            state=self._circuit_sample_state(
-                self.state if state is None else state
-            ),
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            mu=self._mu,
-            geometry=self._geometry,
-            input_dict=self._input_dict,
-            # AT THE TIME THE GATE ABOVE WAS READ AT, for the reason the
-            # circuit advance carries: a mapping read at a different instant
-            # than the gate that let it be built can report a phase the gate
-            # already excluded, and the override below would then clear
-            # ``cathode_coupling`` on a configuration that has one.
-            input_flags=self._effective_cathode_flags(
-                time=time, active_only=False, floating=False
-            ),
-            beam_cross_prev=self._cathode_beam_cross,
-            T_s_override_K=self._cathode_Ts_K,
-            phi_wf_override_eV=self._cathode_phi_wf_eff(),
-            f_em_override=self._cathode_f_em,
-            circuit_V_src_V=self._circuit_source_voltage_V(step_phase),
-        )
-        return {
-            "vdis_of_I": vdis,
-            "I_A": float(self._circuit_I_loop),
-            "L_H": float(self._input_dict.get("L_parasitic_H")),
-            "V_src_V": self._circuit_source_voltage_V(step_phase),
-            # The external partition, exactly as the advance passes it: the
-            # internal partition and R_mesh are already inside vdis_of_I, and
-            # the two sum back to the total loop resistance.
-            "R_series_ohm": float(self._input_dict.get("R_comp"))
-            * float(self._input_dict.get("R_comp_partition")),
-        }
-
     def _effective_cathode_flags(self, time=None, active_only=True, floating=None):
         """Return ``self._flags`` with ``cathode_coupling`` set for this phase.
 
@@ -12380,7 +11199,14 @@ class LAPDSim1D:
         }
 
     def _init_sample_smoothing(self):
-        """Parse and seed the electrode sample-smoothing EMA (config.py).
+        """Seed the electrode sample-smoothing EMA.
+
+        The sheath solve's inputs are the instantaneous cathode-cell and
+        anode-flank (n, Te) cell averages, which carry grid-level
+        explicit-step noise the physical supply integrates over: the
+        presheath delivers flux averaged over an ion transit time
+        ``tau = l_cell / c_s(Te_ema)`` per sampled cell. The EMA holds that
+        supply-averaged sample.
 
         Tracked cells: the cathode sample cell and the first anode face's
         two flanking cells -- every (n, Te) a sheath solve samples. The EMA
@@ -12388,50 +11214,15 @@ class LAPDSim1D:
         accepted steps only, so dt-retries never move it.
 
         WHICH CONSUMERS SEE IT. The substitution happens in
-        ``_smoothed_sample_state``, and only its callers see it --
-
-        - the RHS/beam-side sheath solve (``solve_cathode_boundary``, which
-          smooths the state it was handed before dispatching), and
-        - the accepted-state re-solve that feeds the surface updates
-          (cathode warming and the coverage model),
-
-        both consume the EMA sample unconditionally. The CIRCUIT's two
-        readers of the current-driven ``V_dis(I)`` relation -- the
-        accepted-step advance and the loop-relaxation timestep bound -- are
-        SELECTABLE, by ``cathode_circuit_sample`` (config.py), and they move
-        TOGETHER because both go through the one ``_circuit_sample_state``
-        expression: under ``"raw"`` -- the default -- both build on the raw
+        ``_smoothed_sample_state``, and only its callers see it -- the
+        RHS/beam-side sheath solve (``solve_cathode_boundary``, which smooths
+        the state it was handed before dispatching) and the accepted-state
+        re-solve that feeds the surface updates (cathode warming and the
+        coverage model). The CIRCUIT's reader of the current-driven
+        ``V_dis(I)`` relation, the accepted-step advance, builds on the raw
         accepted sample, so the loop-current root-find reads the raw (n, Te)
-        of these cells and the two sides can evaluate the sheath from
-        different (n, Te) within one accepted step; under ``"smoothed"``
-        both build on the EMA sample instead, and the loop and the fluid
-        read one sample. Smoothing is off by default (``None``), where
-        ``_smoothed_sample_state`` returns its argument unchanged, every
-        consumer reads the identical state bit for bit, and
-        ``cathode_circuit_sample = "smoothed"`` is refused at construction
-        for want of a sample to read.
+        of these cells.
         """
-        raw = self._input_dict.get("cathode_sample_smoothing")
-        self._sample_smoothing = None
-        self._sample_ema = None
-        self._sample_smooth_cells = ()
-        if raw is None:
-            return
-        if isinstance(raw, str):
-            if raw != "presheath":
-                raise ValueError(
-                    "cathode_sample_smoothing must be None, 'presheath', or "
-                    f"a positive time constant in seconds (got {raw!r})"
-                )
-            self._sample_smoothing = "presheath"
-        else:
-            tau = float(raw)
-            if tau <= 0.0:
-                raise ValueError(
-                    "cathode_sample_smoothing time constant must be positive "
-                    f"(got {tau})"
-                )
-            self._sample_smoothing = tau
         cells = [cathode_sample_indices(self._geometry)[0]]
         anode_faces = np.asarray(
             getattr(self._geometry, "anode_face_indices", ()), dtype=int
@@ -12448,60 +11239,29 @@ class LAPDSim1D:
 
     def _update_sample_smoothing(self, dt):
         """Blend the accepted state into the electrode sample EMA."""
-        if self._sample_ema is None:
-            return
         derived = derive_state(self._state, self._floors, self._ion_mass_g)
         for c in self._sample_smooth_cells:
             n_ema, Te_ema = self._sample_ema[c]
-            if self._sample_smoothing == "presheath":
-                # Ion transit across the sampled cell at the (smoothed)
-                # sound speed: the physical supply-averaging time.
-                cs = ion_sound_speed(
-                    max(Te_ema, self._floors["Te"]), self._ion_mass_g
-                )
-                tau = float(self._geometry.length_cm[c]) / max(cs, 1.0)
-            else:
-                tau = float(self._sample_smoothing)
+            # Ion transit across the sampled cell at the (smoothed) sound
+            # speed: the physical supply-averaging time.
+            cs = ion_sound_speed(
+                max(Te_ema, self._floors["Te"]), self._ion_mass_g
+            )
+            tau = float(self._geometry.length_cm[c]) / max(cs, 1.0)
             alpha = 1.0 - math.exp(-float(dt) / tau)
             self._sample_ema[c] = [
                 n_ema + alpha * (float(self._state.n[c]) - n_ema),
                 Te_ema + alpha * (float(derived.Te[c]) - Te_ema),
             ]
 
-    def _circuit_sample_state(self, state):
-        """Return the state the CURRENT-DRIVEN circuit relation is built on.
-
-        The one expression both circuit readers of ``V_dis(I)`` go through --
-        the accepted-step advance and the loop-relaxation timestep bound --
-        so the bound and the step cannot be built on different samples.
-        ``cathode_circuit_sample`` selects: ``"raw"`` (the default) returns
-        ``state`` untouched and does not call the substitution at all, so
-        that path is what it was before the key existed; ``"smoothed"``
-        returns the supply-averaged sample ``cathode_sample_smoothing``
-        maintains, which is the sample the RHS-side sheath solve and the
-        accepted-state surface re-solve already read.
-        """
-        if self._cathode_circuit_sample != "smoothed":
-            return state
-        return self._smoothed_sample_state(state)
-
     def _smoothed_sample_state(self, state):
         """Return ``state`` with the sampled electrode cells' (n, Te)
-        replaced by their supply-averaged EMA values (config.py:
-        cathode_sample_smoothing). Off (the default) returns ``state``
-        unchanged -- the golden path is bit-exact.
+        replaced by their supply-averaged EMA values.
 
         This is the ONLY substitution site, so the smoothed sample reaches
         exactly its callers: the RHS/beam-side sheath solve and the
-        accepted-state surface-update re-solve unconditionally, and the
-        current-driven circuit's two ``V_dis(I)`` readers -- the accepted-step
-        advance and the loop-relaxation timestep bound -- only under
-        ``cathode_circuit_sample = "smoothed"``, both through the single
-        ``_circuit_sample_state`` expression. Under ``"raw"`` (the default)
-        neither of those two calls this method at all and both read the raw
-        accepted state. Described in full on ``_init_sample_smoothing``."""
-        if self._sample_ema is None:
-            return state
+        accepted-state surface-update re-solve. Described in full on
+        ``_init_sample_smoothing``."""
         n = np.asarray(state.n, dtype=float).copy()
         Ee = np.asarray(state.Ee, dtype=float).copy()
         for c in self._sample_smooth_cells:
@@ -14003,14 +12763,9 @@ class LAPDSim1D:
         )
         diag = {
             "enabled": float(bool(self._flags.get("cathode_coupling"))),
-            # Instantaneous emitter surface temperature [K]: the configured
-            # cathode_Ts_base_K, or the evolving value under
-            # cathode_warming_model.
-            "T_s_surface": float(
-                self._cathode_Ts_K
-                if self._cathode_Ts_K is not None
-                else float(self._input_dict.get("cathode_Ts_base_K"))
-            ),
+            # Instantaneous emitter surface temperature [K]: the evolving
+            # power-balance value.
+            "T_s_surface": float(self._cathode_Ts_K),
             "configured": float(cathode_phase["configured"]),
             # Current-driven circuit state (0.0 under the voltage-driven
             # solver, whose loop current lives in source_I_tot).
@@ -14029,66 +12784,10 @@ class LAPDSim1D:
             "circuit_V_dis_dt_integral": float(
                 self._circuit_V_dis_time_integral
             ),
-            # Over-wall projection census, PRESENCE-GATED on
-            # cathode_circuit_project_over_wall: a run without it saves
-            # exactly the diagnostic set it always did. Cumulative over the
-            # run, so the difference between two saves is that interval's
-            # share. What they record cannot be recovered from the
-            # trajectory -- the projection replaces a loop current between
-            # two saves and leaves no other trace.
-            **(
-                {}
-                if not self._circuit_project_over_wall
-                else {
-                    "circuit_projection_events": float(
-                        self._circuit_projection_events
-                    ),
-                    "circuit_projection_energy_J": float(
-                        self._circuit_projection_energy_J
-                    ),
-                    "circuit_projection_unbracketed": float(
-                        self._circuit_projection_unbracketed
-                    ),
-                }
-            ),
-            # Vessel common-mode node. Present only when armed, so a run
-            # without it saves exactly the diagnostic set it always did. This
-            # is the PREDICTION CHANNEL: V_cm(t) is written, never scored.
-            **(
-                {}
-                if self._vessel is None
-                else {
-                    "vessel_V_cm_V": float(self._vessel_V_cm),
-                    "vessel_beam_climb_V": max(
-                        float(self._vessel_V_cm), 0.0
-                    ),
-                    "vessel_I_e_wall_A": float(
-                        self._vessel_wall_currents_A[0]
-                    ),
-                    "vessel_I_i_wall_A": float(
-                        self._vessel_wall_currents_A[1]
-                    ),
-                    "vessel_I_leak_A": float(
-                        self._vessel_wall_currents_A[2]
-                    ),
-                    "vessel_I_wall_net_A": float(
-                        self._vessel_wall_currents_A[0]
-                        - self._vessel_wall_currents_A[1]
-                        - self._vessel_wall_currents_A[2]
-                    ),
-                    "vessel_Q_node_C": float(
-                        self._vessel_charge_ledger_C["node"]
-                    ),
-                    "vessel_charge_residual_C": float(
-                        self.vessel_charge_residual()[0]
-                    ),
-                }
-            ),
             # Cumulative surface energy ledger [J]. The heater/ion/rad/emis/
-            # cond rows are booked inside the power_balance warming branch
-            # and stay zero otherwise; the presence-gated backscatter row is
-            # booked on every accepted step the DVM cathode jet counted on,
-            # warming model or not. See _cathode_energy_ledger_J.
+            # cond rows are booked by the power-balance warming update; the
+            # presence-gated backscatter row is booked on every accepted step
+            # the DVM cathode jet counted on. See _cathode_energy_ledger_J.
             **{
                 f"warming_E_{k}_J": float(v)
                 for k, v in self._cathode_energy_ledger_J.items()
@@ -14128,18 +12827,9 @@ class LAPDSim1D:
                     for k, v in self._anode_energy_ledger_J.items()
                 }
             ),
-            # Surface-state coverage and the effective work function
-            # (cathode_surface_model; 1.0 / static phi_wf when off).
-            "surface_theta": float(
-                self._cathode_theta
-                if self._cathode_theta is not None
-                else 1.0
-            ),
-            "phi_wf_eff": float(
-                self._cathode_phi_wf_eff()
-                if self._cathode_theta is not None
-                else float(self._input_dict.get("phi_wf"))
-            ),
+            # Surface-state coverage and the effective work function.
+            "surface_theta": float(self._cathode_theta),
+            "phi_wf_eff": float(self._cathode_phi_wf_eff()),
             "phase_enabled": float(cathode_phase["cathode_enabled"]),
             "rhs_enabled": float(cathode_phase["cathode_enabled"]),
             "solve_enabled": float(cathode_phase["solve_enabled"]),
@@ -14211,15 +12901,6 @@ class LAPDSim1D:
             "beam_tail_above_bar_power_W": 0.0,
             "beam_tail_sub_threshold_fraction": np.nan,
         }
-        if self._cathode_f_em is not None:
-            # Emitting-area percolation: PRESENCE-GATED, so an unarmed run's
-            # saved diagnostic structure is byte-identical to before the
-            # closure existed. Saved because the closure's own state is what
-            # says whether an arm's f_em actually advanced -- a frozen
-            # fraction makes every number the arm produces a mean-field
-            # number under another name, and that has to be checkable from a
-            # saved trajectory rather than only from a live solver.
-            diag["cathode_emitting_area_fraction"] = float(self._cathode_f_em)
         if self._coverage is not None:
             # Clumpy-plasma coverage closure: PRESENCE-GATED so the saved
             # diagnostic structure of every mean-field run -- the golden
@@ -14274,20 +12955,16 @@ class LAPDSim1D:
                 )
             for name in ELECTRON_DRIFT_DIAGNOSTIC_SCALARS:
                 diag[name] = 0.0 if rows is None else float(rows[name])
-        if self._anode_sheath_full_debit:
-            # anode_sheath_full_debit census, PRESENCE-GATED so an unarmed
-            # run's saved diagnostic structure -- the golden included -- is
-            # byte-identical to before the flag existed. Cumulative count of
-            # ACCEPTED steps whose sheath solve returned an electron-ATTRACTING
-            # anode (phi_a <= 0), where the flag books the thermal-only debit
-            # and the bank pays the fall, plus the solver time of the last such
-            # step (NaN while none has occurred). Both are as-of-this-save
-            # values, so an armed run's transcript can state how much of it
-            # took that branch and when it stopped.
-            diag["anode_attracting_steps"] = float(self._anode_attracting_steps)
-            diag["anode_attracting_last_time_s"] = float(
-                self._anode_attracting_last_time_s
-            )
+        # Anode sheath debit census. Cumulative count of ACCEPTED steps whose
+        # sheath solve returned an electron-ATTRACTING anode (phi_a <= 0),
+        # where the debit is thermal-only and the bank pays the fall, plus the
+        # solver time of the last such step (NaN while none has occurred).
+        # Both are as-of-this-save values, so a run's transcript can state how
+        # much of it took that branch and when it stopped.
+        diag["anode_attracting_steps"] = float(self._anode_attracting_steps)
+        diag["anode_attracting_last_time_s"] = float(
+            self._anode_attracting_last_time_s
+        )
         if self._plateau_multigroup:
             # Multi-group plateau closure, PRESENCE-GATED so an unarmed run's
             # saved diagnostic structure -- the golden included -- is
@@ -14406,7 +13083,7 @@ class LAPDSim1D:
         # as they already defaulted the NaN.
         for prefix in _cathode_result_prefixes(self._flags):
             diag[f"{prefix}_regime"] = "none"
-            for key in _cathode_result_keys(self._flags):
+            for key in _CATHODE_RESULT_KEYS:
                 diag[f"{prefix}_{key}"] = np.nan
             diag[f"{prefix}_long_mfp"] = np.nan
             # At-cap regime flag: 1.0 where the exported ``phi_c`` is the
@@ -14607,7 +13284,7 @@ class LAPDSim1D:
         if result is None:
             return
         diag[f"{prefix}_regime"] = str(result.regime)
-        for key in _cathode_result_keys(self._flags):
+        for key in _CATHODE_RESULT_KEYS:
             if not current_driven and key in _CURRENT_DRIVEN_ONLY_CATHODE_KEYS:
                 diag[f"{prefix}_{key}"] = np.nan
                 continue
@@ -16134,11 +14811,7 @@ class LAPDSim1D:
             cathode_jet_counts=jet_counts,
             anode_jet_incident_erg=anode_jet_incident,
             end_wall_jet_incident_erg=end_wall_jet_incident,
-            T_s_K=(
-                float(self._cathode_Ts_K)
-                if self._cathode_Ts_K is not None
-                else float(self._input_dict.get("cathode_Ts_base_K"))
-            ),
+            T_s_K=float(self._cathode_Ts_K),
         )
         if (
             not self._dvm_ion_shortfall_warned
