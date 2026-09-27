@@ -725,7 +725,9 @@ class FileCheck:
             if _is_def(stmt):
                 args = stmt.args
                 for default in args.defaults + [d for d in args.kw_defaults if d]:
-                    if default.lineno <= line <= default.end_lineno:
+                    if default.lineno <= line <= default.end_lineno and (
+                            _has_call(default) or self.cov.phase(
+                                self.rel, self.old.body_lines(stmt))):
                         return "REACHED", (f"old line {line}: default argument "
                                            f"of {stmt.name}")
             return self._header_verdict(stmt, f"old line {line}")
@@ -887,8 +889,9 @@ class FileCheck:
                 if _is_def(top):
                     for default in top.args.defaults + [
                             k for k in top.args.kw_defaults if k]:
-                        if default.lineno <= line <= default.end_lineno:
-                            return "REACHED", f"new line {line}: default argument of {top.name}"
+                        if default.lineno <= line <= default.end_lineno and \
+                                _has_call(default):
+                            return "REACHED", f"new line {line}: default argument of {top.name} calls at import"
                 if self.new.scope_bindings(self.new.enclosing_stmt(top)).get(
                         top.name, 0) > 1:
                     return "REACHED", f"new line {line}: {top.name} is bound twice"
