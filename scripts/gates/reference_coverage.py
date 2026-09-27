@@ -323,8 +323,9 @@ def capture(args):
             env["CABLP_COMPILED_KERNELS"] = "1"
         raw_path = outdir / f"{stem}_{route}.raw.json"
         log_path = outdir / f"{stem}_{route}.log"
-        child = [sys.executable, str(Path(__file__).resolve()), "_trace",
-                 "--repo", str(repo), "--route", route, "--out", str(raw_path)]
+        child = [sys.executable, str(Path(__file__).resolve()),
+                 "--repo", str(repo), "_trace", "--route", route,
+                 "--out", str(raw_path)]
         env_prefix = f"PYTHONPATH={shlex.quote(str(repo))} " + (
             "CABLP_COMPILED_KERNELS=1 " if route == "compiled"
             else "env -u CABLP_COMPILED_KERNELS ")
