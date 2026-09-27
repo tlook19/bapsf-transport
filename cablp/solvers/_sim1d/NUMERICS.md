@@ -462,14 +462,9 @@ so the comparison to data quotes nothing from the afterglow beyond the
 
 ## The cathode solve
 
-The sheath root is bracketed on a monotone residual and closed by `brentq`. The
-voltage-driven form roots the coupled residual in $\psi_+$ at `xtol` $10^{-8}$
-and `rtol` $10^{-6}$, and its bracket search runs three stages IN THIS ORDER:
-where a previous root is available, two WARM WINDOWS about it first
-($\times[0.5,2]$, then $\times[0.125,8]$, each allowed two doublings); failing
-those, the full range, allowed fifteen; and only on a convergence failure there,
-an unconstrained re-bracket — the one path that can return a root the ceiling
-does not bound. The current-driven form roots $J_\text{tot}(\psi_+)=J_\text{imposed}$ at `xtol`
+The sheath root is bracketed on a monotone residual and closed by `brentq`.
+There are two forms, current-driven and prescribed-drive. The current-driven
+form roots $J_\text{tot}(\psi_+)=J_\text{imposed}$ at `xtol`
 $10^{-12}$ and `rtol` $10^{-14}$, doubling $\psi_\text{top}$ up to two hundred
 times and carrying a plateau tolerance of $64\epsilon$. The prescribed-drive
 form roots $\phi_c+V_p-\phi_a(\phi_c)-V_b$ on
@@ -477,18 +472,15 @@ $[10^{-8}\ \mathrm{V},\ \phi_{c,\text{cap}}]$ at the same tight tolerances; a
 residual already non-negative at the bottom returns $10^{-8}$ V UNTAGGED.
 Uniqueness rests on each residual's monotonicity.
 
-**A demand past the ceiling `cathode_phi_c_cap_V` is CLAMPED, not raised — in
-the current-driven and prescribed forms.** There the solve returns the ceiling
-value and TAGS itself `capability_limited`; no error is raised and the run
+**A demand past the ceiling `cathode_phi_c_cap_V` is CLAMPED, not raised.**
+The solve returns the ceiling value and TAGS itself `capability_limited`; no error is raised and the run
 continues. Because nothing
 raises, the clamp is COUNTED: the solver censuses how many of a run's accepted
 cathode solves were tagged that way out of how many it performed and when the
 first one fired, prints that census at run end, and saves it in the result file
 as the root attributes `cathode_clamped_solves`, `cathode_total_solves` and
 `cathode_clamp_first_t_s`; the windowed share is read per save from
-`source_regime`. The voltage-driven
-form does not share that contract: on a convergence failure it re-brackets
-UNCONSTRAINED, so a root it returns is not bounded by the ceiling.
+`source_regime`.
 
 The loop current is advanced by an L-stable TR-BDF2 stage split over
 $LdI/dt=V_\text{src}-IxR_\text{comp}-V_\text{dis}(I)$ — the external share
@@ -541,7 +533,6 @@ differs by form:
 
 | form | where $l_b$ is evaluated | iterated with |
 |---|---|---|
-| voltage-driven | between successive `brentq` solves, the bypass fraction held frozen as a parameter inside the residual | the $(\psi_+,l_b,\beta_\text{bypass})$ triple, to $10^{-4}$ in the bypass fraction over at most four passes |
 | current-driven | after the root: the residual is $J_\text{tot}(\psi_+)-J_\text{target}$ and never reads $l_b$ | nothing — one root, then $l_b$ once |
 | prescribed | inside the residual, through the anode state the root passes | nothing beyond the single bracketed root |
 
@@ -825,7 +816,7 @@ bookkeeping.
 | Floors and the floor ledger | `core/state.py:apply_state_floors`, `derive_state`; `solver.py:_floor_additions` |
 | Step attempt, validation, retry ladder | `solver.py:_attempt_step`, `_accept_step_attempt`, `_attempt_step_with_retries` |
 | Ignition guards | `core/ignition.py`; `solver.py:_open_ignition_switch` |
-| Sheath root find, loop advance | `cablp/cathode/circuit.py:solve`, `circuit_idriven.py:solve_idriven`, `circuit_prescribed.py:solve_prescribed`; `physics/cathode.py:advance_circuit_current_driven` |
+| Sheath root find, loop advance | `cablp/cathode/circuit_idriven.py:solve_idriven`, `circuit_prescribed.py:solve_prescribed` (shared primitives in `circuit_common.py`); `physics/cathode.py:advance_circuit_current_driven` |
 | CSDA beam march; plateau edge | `cablp/cathode/beam_deposition.py:deposit_beam`, `plateau_edge_energy_eV` |
 | Velocity grid, moment projection | `physics/kinetic_neutrals.py:stretched_axis`, `stretched_positive_axis`, `VGrid.maxwellian` |
 | Launch spectra; extent guard | `physics/kinetic_dvm.py:_cathode_jet_launch_spectrum`, `_anode_jet_launch_spectrum`, `_end_wall_jet_launch_spectrum`, `_refuse_unreachable_launch_band` |

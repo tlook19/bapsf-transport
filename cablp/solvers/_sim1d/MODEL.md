@@ -674,12 +674,10 @@ surfaces are one control surface feeding both the fluid sink and the loop.
 The sheath relations below are written in scaled variables. A potential is
 scaled by the electron temperature, $\psi=\phi/T_e$; a current by the gap's own
 resistance, $J=IR_p/T_e$; and the surface temperature by the electron
-temperature, $\delta=k_BT_s/(eT_e)$. Four scaled quantities recur:
+temperature, $\delta=k_BT_s/(eT_e)$. Three scaled quantities recur:
 
 - $J_i$ — the cathode's Bohm ion current, scaled: $J_i=I_iR_p/T_e$.
 - $J_{i,a}$ — the same for the anode mesh, $J_{i,a}=I_{i,a}R_p/T_e$.
-- $\psi_\text{bank}$ — the scaled bank voltage $V_\text{bank}/T_e$, read by the
-  voltage-driven solve.
 - $x$ — the EXTERNAL share of the compliance resistance
   (`R_comp_partition`), so $xR_\text{comp}$ is the part outside the reported
   discharge voltage and $(1-x)R_\text{comp}$ the part inside it.
@@ -737,15 +735,14 @@ factor $\left(1-(E_\text{th}/E)^{2/3}\right)\left(1-E_\text{th}/E\right)^2$ at
 the mean deposited energy per ion $E=P_{c,i}/I_i$ and vanishing at or below
 $E_\text{th}$. It is $\phi_\text{wf,eff}$ that enters the Richardson law.
 
-**Sheaths.** The cathode root solves
+**Sheaths.** The current-driven cathode root imposes $I_\text{tot}$ and solves
+the monotone
 
-$$0=\psi_+-\psi_-+(1+\gamma)J_\text{tot}(\psi_+)-\tau_a\Lambda+\tau_a\ln\left(1+\frac{J_\text{anode}}{J_{i,a}}\right)-\psi_\text{bank},\qquad J_\text{tot}=J_i\left(1-e^{\Lambda-\psi_+}\right)+J^\star(\psi_+)$$
+$$J_\text{tot}(\psi_+)=J_\text{imposed},\qquad J_\text{tot}=J_i\left(1-e^{\Lambda-\psi_+}\right)+J^\star(\psi_+)$$
 
-with $\gamma=R_\text{comp}/R_p$, $\tau_a=T_{e,\text{anode}}/T_e$,
-$\Lambda=\ln\sqrt{m_i/2\pi m_e}$ the electron lift, and
-$\phi_c=(\psi_+-\psi_-)T_e$; the current-driven form imposes $I_\text{tot}$ and
-roots the monotone $J_\text{tot}(\psi_+)=J_\text{imposed}$ instead, against a
-ceiling `cathode_phi_c_cap_V` it clamps to and tags rather than exceeding. Each
+against a ceiling `cathode_phi_c_cap_V` it clamps to and tags rather than
+exceeding, with $\Lambda=\ln\sqrt{m_i/2\pi m_e}$ the electron lift and
+$\phi_c=(\psi_+-\psi_-)T_e$. Each
 electrode carries its own sheath-edge factor $\alpha_\text{se}$, the electron
 lift generalizing as $\Lambda\to\Lambda-\ln\alpha_\text{se}$, the cathode and
 anode factors independent (the anode keeps the flat $e^{-1/2}$). Equivalently

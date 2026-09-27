@@ -108,7 +108,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         sys.path.insert(0, _dir)
 
 from cablp.cathode import kernels as _kernel_selector  # noqa: E402
-from cablp.cathode import circuit as _cathode_solver_mod
+from cablp.cathode import circuit_common as _cathode_solver_mod
 from cablp.cathode import circuit_idriven as _cathode_solver_idriven_mod
 from cablp.cathode import beam_deposition as _beam_deposition_mod
 from cablp.atomic import cross_sections as _cross_mod
@@ -127,7 +127,7 @@ from cablp.atomic.adas import he_rate_temperature_range_eV
 # main() re-imports deposit_beam locally further down (B1 block), which makes
 # the bare name local to the whole function -- alias it for the item-35 block.
 from cablp.cathode.beam_deposition import deposit_beam as _deposit_beam_ray
-from cablp.cathode.circuit import _compute_l_b, sheath_lift_lambda
+from cablp.cathode.circuit_common import compute_l_b, sheath_lift_lambda
 from cablp.solvers._sim1d import (
     BreakdownError,
     KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
@@ -505,7 +505,6 @@ _CAPFIX_ESCAPE_CONFIG = dict(
     A_c=706.8583470577034,
     mu=4,
     ion_mass_g=m_He_cgs,
-    V_bank=177.843,
     T_s=1910.0000073162657,
     phi_wf=2.8689998037499964,
     C_R=12.96,
@@ -513,10 +512,8 @@ _CAPFIX_ESCAPE_CONFIG = dict(
     R_comp_partition=1.0,
     R_mesh_ohm=0.0,
     eta=0.358,
-    Twin=False,
     L_cath=50.0,
     R_cath=15.0,
-    phi_sheath_max=None,
     emission_Ts_K=tuple(
         np.float64(v)
         for v in (
@@ -547,7 +544,6 @@ _CAPFIX_ESCAPE_KWARGS = dict(
     anode_current_A=0.0424709088850732,
     anode_T_e=2.9855005007754283,
     schottky=True,
-    bridge=False,
     phi_c_cap_V=1000.0,
     alpha_sheath=0.8738291673131621,
     alpha_sheath_anode=None,
@@ -1936,7 +1932,7 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     resolved_cathode_flags = _resolved_cathode_flags()
     import warnings as _warnings
 
-    from cablp.cathode.circuit import _c_log_ei
+    from cablp.cathode.circuit_common import c_log_ei
     from cablp.solvers._sim1d.physics.cathode import spitzer_sigma_par_ohm_cm
 
     # sigma_par carries a state-dependent Coulomb logarithm: the NRL
@@ -1944,17 +1940,17 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     # (p.38).
     assert np.isclose(
         spitzer_sigma_par_ohm_cm(4.0, 4.0e12),
-        (1.96 / (1.03e-2 * _c_log_ei(4.0, 4.0e12))) * 4.0**1.5,
+        (1.96 / (1.03e-2 * c_log_ei(4.0, 4.0e12))) * 4.0**1.5,
         rtol=0.0,
         atol=0.0,
     )
     # lnLambda LITERAL PIN, against an independent literal, so a
     # transcription error shared by the helper and its consumers cannot
     # cancel out of a comparison built from both.
-    assert np.isclose(_c_log_ei(3.0, 4.0e12), 10.1392, rtol=1e-5), _c_log_ei(
+    assert np.isclose(c_log_ei(3.0, 4.0e12), 10.1392, rtol=1e-5), c_log_ei(
         3.0, 4.0e12
     )
-    assert np.isclose(_c_log_ei(12.0, 4.0e12), 11.9762, rtol=1e-5), _c_log_ei(
+    assert np.isclose(c_log_ei(12.0, 4.0e12), 11.9762, rtol=1e-5), c_log_ei(
         12.0, 4.0e12
     )
 
@@ -2230,7 +2226,6 @@ def _case_cathode_boundary_beam_terms(cathode_face):
     assert cathode_solve.metadata["enabled"] is True
     assert cathode_solve.metadata["floating"] is False
     assert cathode_solve.metadata["result_twin"] is None
-    assert cathode_solve.device_config.Twin == cathode_flags["TwinCathode"]
     assert np.isclose(cathode_solve.device_config.R_cath, params["R_cath"])
     assert np.isclose(
         cathode_solve.device_config.A_c,
@@ -2393,7 +2388,7 @@ def _case_cathode_boundary_beam_terms(cathode_face):
 @_case(
     "cathode-annular-solve-fixtures",
     provides=(
-        "PlasmaState", "cathode_solve_fn", "gauss_cfg", "hot_cfg",
+        "PlasmaState", "gauss_cfg", "hot_cfg",
         "one_annulus", "plasma_probe", "uni_cfg",
     ),
 )
@@ -2404,7 +2399,8 @@ def _case_cathode_annular_solve_fixtures():
     # single warm annulus at the plasma footprint must reproduce the uniform
     # solve.
     sim, snapshot = _base_sim()
-    from cablp.cathode.circuit import PlasmaState, solve as cathode_solve_fn
+    from cablp.cathode.circuit_common import PlasmaState
+    from cablp.cathode.circuit_idriven import solve_idriven
     from cablp.solvers._sim1d.physics.cathode import cathode_device_config
     import dataclasses as _dc
 
@@ -2424,8 +2420,13 @@ def _case_cathode_annular_solve_fixtures():
         emission_area_cm2=(uni_cfg.A_c,),
         emission_plasma_frac=(1.0,),
     )
-    r_uni = cathode_solve_fn(uni_cfg, plasma_probe, x0=None, floating=False)
-    r_one = cathode_solve_fn(one_annulus, plasma_probe, x0=None, floating=False)
+    # The uniform-disc branch and the annular emission state
+    # (``circuit_common.annular_emission_state``) on one annulus, at the same
+    # imposed current: the same sheath.
+    r_uni = solve_idriven(uni_cfg, plasma_probe, I_tot_A=2823.3497327720015)
+    r_one = solve_idriven(
+        one_annulus, plasma_probe, I_tot_A=2823.3497327720015
+    )
     assert np.isclose(r_one.I_tot, r_uni.I_tot, rtol=1e-10)
     assert np.isclose(r_one.phi_c, r_uni.phi_c, rtol=1e-10)
     assert np.isclose(one_annulus.I_eth, uni_cfg.I_eth, rtol=1e-12)
@@ -2477,83 +2478,66 @@ def _case_cathode_annular_solve_fixtures():
     ),
 )
 def _case_cathode_current_driven_sheath_solve(
-    PlasmaState, cathode_solve_fn, gauss_cfg, hot_cfg, one_annulus,
-    plasma_probe, uni_cfg
+    PlasmaState, gauss_cfg, hot_cfg, one_annulus, plasma_probe, uni_cfg
 ):
-    # --- Current-driven sheath solve (M2): given the
-    # V-driven solve's I_tot, solve_idriven must reproduce the same operating
-    # point -- phi_c/phi_a/I_eth_star/regime -- through the monotone device
-    # relation, with no warm windows and no bypass iteration. The M2 gate.
+    # --- Current-driven sheath solve: over a sweep of device fixtures and
+    # plasma states, the imposed current is carried through the monotone
+    # device relation -- the reported I_tot recovers it and V_b is the device
+    # voltage -- in both the classical and the virtual-cathode regime. The imposed currents are literals: each
+    # is the operating point a sheath/Thevenin load-line solve reached at
+    # that state, so the sweep visits real operating points in both regimes.
     from cablp.cathode.circuit_idriven import solve_idriven
 
-    id_sweep = []
     id_plasmas = (
         plasma_probe,
         PlasmaState(T_e=3.0, n_e=5.0e11, n_n=2.0e13, sigma_b=0.0),
         PlasmaState(T_e=12.0, n_e=1.0e13, n_n=5.0e12, sigma_b=4e-17),
     )
-    for id_cfg in (uni_cfg, one_annulus, gauss_cfg, hot_cfg):
-        for id_pl in id_plasmas:
-            if id_cfg is gauss_cfg and id_pl is id_plasmas[1]:
-                # Degenerate flat-top corner: covered by its own test below,
-                # where psi is not recoverable from I within float precision.
-                continue
-            id_sweep.append((id_cfg, id_pl))
+    # (device, plasma index, imposed I_tot [A], regime). The degenerate
+    # gauss_cfg / plasma-1 corner is covered by its own test below, where psi
+    # is not recoverable from I within float precision.
+    id_sweep = (
+        (uni_cfg, 0, 2823.3497327720015, "classical"),
+        (uni_cfg, 1, 2058.350165559722, "virtual_cathode"),
+        (uni_cfg, 2, 3610.051981749392, "classical"),
+        (one_annulus, 0, 2823.3497327720015, "classical"),
+        (one_annulus, 1, 2058.350165559722, "virtual_cathode"),
+        (one_annulus, 2, 3610.051981749392, "classical"),
+        (gauss_cfg, 0, 2262.7823999747234, "virtual_cathode"),
+        (gauss_cfg, 2, 3525.011001921395, "virtual_cathode"),
+        (hot_cfg, 0, 4817.624297235924, "virtual_cathode"),
+        (hot_cfg, 1, 3265.2909611092355, "virtual_cathode"),
+        (hot_cfg, 2, 6079.781162732751, "virtual_cathode"),
+    )
     id_regimes = set()
-    for id_cfg, id_pl in id_sweep:
-        rv = cathode_solve_fn(id_cfg, id_pl, x0=None, floating=False)
-        ri = solve_idriven(id_cfg, id_pl, I_tot_A=rv.I_tot)
-        id_regimes.add(rv.regime)
-        assert ri.regime == rv.regime, (ri.regime, rv.regime)
-        for id_att in (
-            "phi_c",
-            "phi_c_plus",
-            "phi_c_minus",
-            "phi_a",
-            "I_eth_star",
-            "I_tot",
-            "V_p",
-            "beam_bypass_fraction",
-            "l_b",
-            "P_cathode_i",
-            "P_prim",
-        ):
-            assert np.isclose(
-                getattr(ri, id_att),
-                getattr(rv, id_att),
-                rtol=1e-8,
-                atol=1e-9,
-            ), (id_att, getattr(ri, id_att), getattr(rv, id_att))
-        # V_b contract: the I-driven V_b is the device voltage; the V-driven
-        # V_b equals it up to that solver's own root residual (~<=1e-3 V).
-        id_v_dev = rv.phi_c + rv.V_p - rv.phi_a
+    for id_cfg, id_k, id_I, id_regime in id_sweep:
+        ri = solve_idriven(id_cfg, id_plasmas[id_k], I_tot_A=id_I)
+        id_regimes.add(ri.regime)
+        assert ri.regime == id_regime, (id_k, ri.regime, id_regime)
+        assert np.isclose(ri.I_tot, id_I, rtol=1e-8), (id_k, ri.I_tot, id_I)
+        # V_b contract: the I-driven V_b is the device voltage.
+        id_v_dev = ri.phi_c + ri.V_p - ri.phi_a
         assert np.isclose(ri.V_b, id_v_dev, rtol=1e-8, atol=1e-8)
-        assert abs(rv.V_b - id_v_dev) < 1.0e-2, (rv.V_b, id_v_dev)
     assert {"classical", "virtual_cathode"} <= id_regimes
 
-    # Degenerate emission-exhausted plateau (the I-driven formulation's
-    # mirror-image weak spot): at this corner every annulus is released and
-    # the electron tail has underflowed, so J_tot(psi) is numerically
-    # constant -- psi is NOT recoverable from I alone. The solve must stay
-    # deterministic (leading-edge selection), reproduce the *currents*, and
-    # never raise; the potentials legitimately disagree with the V-driven
-    # root there.
-    id_deg_rv = cathode_solve_fn(
-        gauss_cfg, id_plasmas[1], x0=None, floating=False
-    )
-    id_deg_ri = solve_idriven(gauss_cfg, id_plasmas[1], I_tot_A=id_deg_rv.I_tot)
+    # Degenerate emission-exhausted plateau (the I-driven formulation's weak
+    # spot): at this corner every annulus is released and the electron tail
+    # has underflowed, so J_tot(psi) is numerically constant -- psi is NOT
+    # recoverable from I alone. The solve must stay deterministic
+    # (leading-edge selection), reproduce the *currents*, and never raise.
+    # The current literals are the load-line operating point at this corner.
+    id_deg_I = 1697.455580536431
+    id_deg_ri = solve_idriven(gauss_cfg, id_plasmas[1], I_tot_A=id_deg_I)
     assert id_deg_ri.regime in ("virtual_cathode", "capability_limited")
     assert np.isfinite(id_deg_ri.phi_c) and np.isfinite(id_deg_ri.V_b)
-    assert np.isclose(id_deg_ri.I_tot, id_deg_rv.I_tot, rtol=1e-8)
-    assert np.isclose(id_deg_ri.I_eth_star, id_deg_rv.I_eth_star, rtol=1e-6)
-    id_deg_repeat = solve_idriven(
-        gauss_cfg, id_plasmas[1], I_tot_A=id_deg_rv.I_tot
-    )
+    assert np.isclose(id_deg_ri.I_tot, id_deg_I, rtol=1e-8)
+    assert np.isclose(id_deg_ri.I_eth_star, 1650.5947226668688, rtol=1e-6)
+    id_deg_repeat = solve_idriven(gauss_cfg, id_plasmas[1], I_tot_A=id_deg_I)
     assert id_deg_repeat.phi_c == id_deg_ri.phi_c  # deterministic
 
     # Monotone by construction: deeper sheath carries more current, so the
     # inverse map I -> phi is single-valued and increasing.
-    id_ref = cathode_solve_fn(uni_cfg, plasma_probe, x0=None, floating=False)
+    id_ref = solve_idriven(uni_cfg, plasma_probe, I_tot_A=2823.3497327720015)
     id_ceiling = id_ref.I_i + id_ref.I_eth
     id_grid = np.linspace(10.0, 0.98 * id_ceiling, 25)
     id_phis = [
@@ -3272,7 +3256,7 @@ def _case_beam_excitation_channel(cathode_solve):
     # --- Beam excitation channel (b_beam_excitation, default 0 = historical).
     params, flags = _base_config()
     cathode_flags = _cathode_flags()
-    from cablp.cathode.circuit import beam_excitation_cross
+    from cablp.cathode.circuit_common import beam_excitation_cross
 
     sigma_exc_100 = beam_excitation_cross(100.0, 1.0, "He")
     assert 5.0e-18 < sigma_exc_100 < 2.0e-17
@@ -3327,7 +3311,7 @@ def _case_beam_excitation_channel(cathode_solve):
 )
 def _case_beam_manifold_excitation_model(beam_excitation_cross):
     # --- A2: the manifold excitation channel (WP-A).
-    from cablp.cathode.circuit import beam_excitation_channel
+    from cablp.cathode.circuit_common import beam_excitation_channel
     from cablp.atomic.cross_sections import (
         He_beam_excitation_channel as _He_manifold_channel,
     )
@@ -3569,7 +3553,7 @@ def _case_beam_gap_transmission_probe(
     )
     csda_unit_T = min(max(float(csda_unit.transmitted_flux), 1.0e-6), 1.0)
     csda_nn_launch = float(csda_state.nn[csda_launch])
-    csda_l_bi = _compute_l_b(
+    csda_l_bi = compute_l_b(
         csda_res.phi_c,
         float(csda_derived.Te[csda_launch]),
         float(csda_state.n[csda_launch]),
@@ -4654,7 +4638,7 @@ def _case_anode_tail_circuit_coupling():
     from cablp.cathode.circuit_prescribed import (
         solve_prescribed as _tc_prescribed,
     )
-    from cablp.cathode import circuit as _tc_circ
+    from cablp.cathode import circuit_common as _tc_circ
     from cablp.plasma.params import (
         bohm_sound_speed as _tc_cs, electron_mean_speed as _tc_ve,
     )
@@ -4678,7 +4662,6 @@ def _case_anode_tail_circuit_coupling():
 
     tc_variants = (
         ("idriven", _tc_idriven, dict(I_tot_A=3000.0)),
-        ("voltage", _tc_circ.solve, dict()),
     )
 
     # --- (e2) THE ALGEBRAIC IDENTITY. Where ``I_i_a`` IS the analytic
@@ -6351,25 +6334,25 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         # The default path binds the untouched pure kernel object -- no
         # wrapper, no per-call branch, so the arithmetic is bit-for-bit
         # historical.
-        assert _cathode_solver_mod._j_eth_crit is (
-            _cathode_solver_mod._j_eth_crit_pure
+        assert _cathode_solver_mod.j_eth_crit is (
+            _cathode_solver_mod.j_eth_crit_pure
         )
-        assert _cathode_solver_idriven_mod._j_eth_crit is (
-            _cathode_solver_mod._j_eth_crit_pure
+        assert _cathode_solver_idriven_mod.j_eth_crit is (
+            _cathode_solver_mod.j_eth_crit_pure
         )
         # Tier A (2026-08-02): the same contract for the rest of the unit --
         # one rebinding site per name, and the two solver modules resolve the
         # SAME object (idriven from-imports the shared ones from
-        # _cathode_solver, which rebinds before that import runs).
-        for _ta_name in ("_c_log_ei", "_compute_l_b"):
+        # circuit_common, which rebinds before that import runs).
+        for _ta_name in ("c_log_ei", "compute_l_b"):
             assert getattr(_cathode_solver_mod, _ta_name) is getattr(
                 _cathode_solver_mod, _ta_name + "_pure"
             ), _ta_name
-        assert _cathode_solver_idriven_mod._compute_l_b is (
-            _cathode_solver_mod._compute_l_b_pure
+        assert _cathode_solver_idriven_mod.compute_l_b is (
+            _cathode_solver_mod.compute_l_b_pure
         )
-        assert _beam_deposition_mod._c_log_ei is (
-            _cathode_solver_mod._c_log_ei_pure
+        assert _beam_deposition_mod.c_log_ei is (
+            _cathode_solver_mod.c_log_ei_pure
         )
         for _ta_name in ("_schottky_lowering_eV", "_annular_state_schottky"):
             assert getattr(_cathode_solver_idriven_mod, _ta_name) is getattr(
@@ -6419,7 +6402,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         except ImportError:
             _cy = None
         if _cy is not None:
-            assert _cy.pemr() == _cathode_solver_mod._pemr
+            assert _cy.pemr() == _cathode_solver_mod.PEMR
             _psi_sweep = np.concatenate(
                 [
                     np.array([-1.0, 0.0, 1e-3]),
@@ -6433,7 +6416,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             for _mu in (1.0, 4.0, 40.0):  # He (the thesis gas) is mu = 4
                 for _J_i in (1.0e-4, 1.0, 1.0e4):
                     for _psi in _psi_sweep:
-                        _pure = _cathode_solver_mod._j_eth_crit_pure(
+                        _pure = _cathode_solver_mod.j_eth_crit_pure(
                             float(_psi), _J_i, _mu
                         )
                         _comp = _cy.j_eth_crit(float(_psi), _J_i, _mu)
@@ -6451,18 +6434,18 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             # Every constant the compiled unit duplicates, checked against the
             # authoritative Python value the way the bind-time guards do.
             _cy.check_constants(
-                _cathode_solver_mod._pemr,
-                _cathode_solver_mod._erg_per_eV,
-                _cathode_solver_mod._me_cgs,
+                _cathode_solver_mod.PEMR,
+                _cathode_solver_mod.ERG_PER_EV,
+                _cathode_solver_mod.ME_CGS,
             )
             _cy.check_constants_idriven(
                 _cathode_solver_idriven_mod._SCHOTTKY_EV_PER_SQRT_V_M
             )
             for _ta_bad in (
                 lambda: _cy.check_constants(
-                    _cathode_solver_mod._pemr * (1.0 + 1e-15),
-                    _cathode_solver_mod._erg_per_eV,
-                    _cathode_solver_mod._me_cgs,
+                    _cathode_solver_mod.PEMR * (1.0 + 1e-15),
+                    _cathode_solver_mod.ERG_PER_EV,
+                    _cathode_solver_mod.ME_CGS,
                 ),
                 lambda: _cy.check_constants_idriven(3.7946866e-5),
             ):
@@ -6484,7 +6467,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             for _Te in _ta_Te:
                 for _ne in _ta_ne:
                     _ta_n += 1
-                    assert _cathode_solver_mod._c_log_ei_pure(
+                    assert _cathode_solver_mod.c_log_ei_pure(
                         float(_Te), float(_ne)
                     ) == _cy.c_log_ei(float(_Te), float(_ne)), (_Te, _ne)
             assert _ta_n > 4000, _ta_n
@@ -6501,12 +6484,12 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
                         for _nn in (0.0, 1.0e12, 1.0e15):
                             for _sb in (0.0, 1.0e-17, 1.0e-15):
                                 _ta_n += 1
-                                # _compute_l_b_pure calls the module-global
-                                # _c_log_ei, which IS the compiled one in an
+                                # compute_l_b_pure calls the module-global
+                                # c_log_ei, which IS the compiled one in an
                                 # opted-in process -- so this leg alone would
                                 # not catch a bad c_log_ei. The sweep above
                                 # does, independently, which is what closes it.
-                                assert _cathode_solver_mod._compute_l_b_pure(
+                                assert _cathode_solver_mod.compute_l_b_pure(
                                     float(_phi), float(_Te), float(_ne),
                                     float(_nn), float(_sb),
                                 ) == _cy.compute_l_b(
@@ -6590,7 +6573,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
                 def _J_tot(psi):
                     return (
                         J_i
-                        * (1.0 - _cathode_solver_mod._exp_clamped(Lambda - psi))
+                        * (1.0 - _cathode_solver_mod.exp_clamped(Lambda - psi))
                         + _state(psi)[0]
                     )
 
@@ -6637,7 +6620,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
                 return psi_c_plus, False
 
             _ta_tol = _cathode_solver_idriven_mod._J_PLATEAU_TOL_REL
-            _ta_lam = math.log(math.sqrt(4.0 * _cathode_solver_mod._pemr
+            _ta_lam = math.log(math.sqrt(4.0 * _cathode_solver_mod.PEMR
                                          / (2.0 * math.pi)))
             _ta_cap_seen = {True: 0, False: 0}
             _ta_cases = 0
@@ -12114,7 +12097,7 @@ def _case_adas_atomic_rate_model():
         assert np.all(fused[name] == single(fuse_ne, fuse_Te)), name
 
     # The float port of the 2^1P excitation cross section matches mpmath.
-    from cablp.cathode.circuit import _he_2p_excitation_cross_cm2
+    from cablp.cathode.circuit_common import _he_2p_excitation_cross_cm2
     from cablp.atomic.cross_sections import He_EIE_cross_DA
     from cablp.atomic.coefficients import b_11s_21p as _b21p
     for eps_probe in (1.5, 100.0 / 21.218, 8.0):
@@ -14034,7 +14017,7 @@ def _case_electrode_sample_smoothing(m3_params):
     # reads the smoothed state.
     resolved_cathode_flags = _resolved_cathode_flags()
     # The I_i-vs-n proportionality asserted below at rtol=1e-9 holds only in
-    # the near-vacuum limit: _compute_l_b harmonically combines the beam's
+    # the near-vacuum limit: compute_l_b harmonically combines the beam's
     # electron-ion MFP (l_bi ~ 1/n_e) with its electron-NEUTRAL MFP
     # (l_bn = 1/(sigma_b*n_n)). While n_n is negligible l_b is a pure 1/n_e
     # power law and the self-consistent phi_c leaves I_i exactly linear in n;
@@ -20826,9 +20809,9 @@ def _case_cathode_closed_audit_export():
             assert np.allclose(ce_old_dg[ce_name], ce_sentinel), ce_name
             assert np.allclose(ce_old_dg.get(ce_name), ce_sentinel), ce_name
 
-    # (f) THE FLOATING PATH EXPORTS NaN, NOT ZERO. The voltage-driven solve
-    # leaves the audit set at its dataclass defaults, and a zero in a power
-    # column is indistinguishable from a computed zero. Exercised on the
+    # (f) THE FLOATING PATH EXPORTS NaN, NOT ZERO. A solve that leaves the
+    # audit set at its dataclass defaults would export zeros, and a zero in a
+    # power column is indistinguishable from a computed zero. Exercised on the
     # solve already in hand rather than on a second run: the branch under
     # test is the export's, not the circuit's.
     ce_solve = ce_sim.solve_cathode_boundary(update_cache=False)
@@ -23654,19 +23637,10 @@ def _case_floating_open_circuit_current_balance():
          finite and the cathode thermal booking is strictly negative-going
          work on the plasma store (a positive P_cathode_e_thermal, which the
          RHS subtracts).
-      4. NEGATIVE CONTROL. ``circuit.solve(floating=True)`` -- the retired
-         separate open-circuit root -- refuses loudly. Before it was retired
-         it returned, on these same states, a sheath 12.4 (seed) and 12.6
-         (late) Te deep whose own current balance closed at 2*I_i rather than
-         at zero: 0.046409 A against I_i = 0.023209 A, and 10.968911 A
-         against I_i = 5.485271 A. Those numbers are banked with the run that
-         measured them; what stands here is that nothing can reach the root
-         that produced them.
     """
-    from cablp.cathode.circuit import (
+    from cablp.cathode.circuit_common import (
         DeviceConfig as _fb_DeviceConfig,
         PlasmaState as _fb_PlasmaState,
-        solve as _fb_solve_voltage,
     )
     from cablp.cathode.circuit_idriven import solve_idriven as _fb_solve_idriven
 
@@ -23677,7 +23651,6 @@ def _case_floating_open_circuit_current_balance():
         A_c=math.pi * 18.415 ** 2,
         mu=4.0026,
         ion_mass_g=m_He_cgs,
-        V_bank=177.843,
         phi_wf=2.869,
         C_R=9.3,
         R_comp=0.0072244,
@@ -23728,17 +23701,6 @@ def _case_floating_open_circuit_current_balance():
         assert _fb_r.P_anode_e_thermal > 0.0, (
             _fb_label, _fb_r.P_anode_e_thermal
         )
-        # 4. The retired root refuses.
-        try:
-            _fb_solve_voltage(_fb_cfg, _fb_pl, floating=True,
-                              anode_T_e=_fb_Te_a)
-        except ValueError as _fb_exc:
-            assert "retired" in str(_fb_exc), str(_fb_exc)
-        else:
-            raise AssertionError(
-                "circuit.solve(floating=True) returned a result on the "
-                f"{_fb_label} state; the retired open-circuit root must refuse"
-            )
 
     # 2. The emissive floating point, at the late-afterglow state.
     _fb_cfg = _fb_DeviceConfig(T_s=1913.453373340071, **_fb_cfg_kw)
@@ -23882,7 +23844,7 @@ def _case_tail_handoff_surface_continuity():
     deposit would be the larger of the face's two electron-energy quantities,
     so this case's continuity check covers only the smaller, modelled one.
     """
-    from cablp.cathode.circuit import (
+    from cablp.cathode.circuit_common import (
         DeviceConfig as _sc_DeviceConfig,
         PlasmaState as _sc_PlasmaState,
     )
@@ -23895,7 +23857,6 @@ def _case_tail_handoff_surface_continuity():
         A_c=math.pi * 18.415 ** 2,
         mu=4.0026,
         ion_mass_g=m_He_cgs,
-        V_bank=177.843,
         phi_wf=2.869,
         C_R=9.3,
         R_comp=0.0072244,
@@ -25822,7 +25783,7 @@ def _case_sound_speed_true_ion_mass():
         ion_sound_speed as _ss_cs_fn,
         plasma_wave_speed as _ss_wave,
     )
-    from cablp.cathode.circuit import sheath_lift_lambda as _ss_lambda
+    from cablp.cathode.circuit_common import sheath_lift_lambda as _ss_lambda
 
     for _ss_Te in (0.05, 1.0, 4.0, 17.5, 120.0):
         _ss_want = math.sqrt(_ss_Te * ev_to_erg / m_He_cgs)
@@ -25843,12 +25804,13 @@ def _case_sound_speed_true_ion_mass():
         A_c=706.8583470577034,
         mu=4,
         ion_mass_g=m_He_cgs,
-        V_bank=150.0,
         T_s=1910.0,
     )
     for _ss_Te in (0.05, 1.0, 4.0, 17.5, 120.0):
         _ss_circuit = float(
-            _cathode_solver_mod._bohm_sound_speed(_ss_Te, _ss_dev.ion_mass_g)
+            _cathode_solver_idriven_mod._bohm_sound_speed(
+                _ss_Te, _ss_dev.ion_mass_g
+            )
         )
         assert _ss_circuit == float(_ss_cs_fn(_ss_Te, m_He_cgs)), _ss_Te
 
@@ -26019,7 +25981,7 @@ def _case_cathode_face_one_ion_current():
     raw sample straight through it.
     (iii) A short run stays positive and finite.
     """
-    from cablp.cathode.circuit import PlasmaState as _cf_PlasmaState
+    from cablp.cathode.circuit_common import PlasmaState as _cf_PlasmaState
     from cablp.cathode.circuit_idriven import solve_idriven as _cf_idriven
     from cablp.cathode.circuit_prescribed import (
         solve_prescribed as _cf_prescribed,

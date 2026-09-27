@@ -8,7 +8,7 @@ from cablp.atomic.cross_sections import (
     phelps_cx_rate_cm3_s,
     phelps_momentum_transfer_rate_cm3_s,
 )
-from cablp.cathode.circuit import sheath_lift_lambda
+from cablp.cathode.circuit_common import sheath_lift_lambda
 from cablp.constants import ev_to_erg, kb_cgs, qe_SI
 
 from .flux import (
@@ -689,9 +689,9 @@ def cathode_jet_incident_energy_eV(phi_c_V, Te_eV):
     ``phi_c + Te/2``, clamped at zero: a Bohm ion enters the sheath with the
     half-``Te`` directed energy the presheath gave it and then falls through
     the cathode drop. That sum is exactly the circuit's own per-ion energy
-    (``cablp.cathode.circuit._P_ion``), so the power the jet launches and
-    the power ``P_cathode_i`` credits the surface with are one energy on one
-    count.
+    (``cablp.cathode.circuit_common.P_ion``), so the power the jet launches
+    and the power ``P_cathode_i`` credits the surface with are one energy on
+    one count.
 
     ``phi_c_V`` is the CLAMPED sheath drop the jet spec carries; ``Te_eV``
     the local electron temperature, scalar or per-cell.
@@ -953,8 +953,9 @@ def characteristic_boundary_rhs(
     ``(2 + Lambda_eff) Te`` per collected electron while this function's own
     row keeps its unconditional ``2 Te`` meaning. ``Lambda_eff = Lambda +
     ln(1/alpha)`` is the barrier those electrons climb at a surface drawing
-    no net current: ``Lambda`` (:func:`~cablp.cathode.circuit.sheath_lift_lambda`
-    at this call's ion mass, the same lift the circuit's sheath currents ride)
+    no net current: ``Lambda``
+    (:func:`~cablp.cathode.circuit_common.sheath_lift_lambda` at this call's
+    ion mass, the same lift the circuit's sheath currents ride)
     plus the presheath drop implied by the very ``alpha`` this face samples
     its Bohm flux at, so the two cannot describe different sheath edges. The
     fall is taken from the plasma electron store and handed to the ions,

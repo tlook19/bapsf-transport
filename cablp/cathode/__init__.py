@@ -3,11 +3,14 @@
 Members are imported by their own module path -- this package deliberately
 re-exports nothing, so there is exactly one name for every symbol.
 
-- :mod:`cablp.cathode.circuit` -- the self-consistent Richardson emission plus
-  sheath/Thevenin load-line solve giving boundary current and voltage.
-- :mod:`cablp.cathode.circuit_idriven` -- the same circuit formulation
-  inverted, with the inductor-integrated loop current as the independent
-  variable.
+- :mod:`cablp.cathode.circuit_common` -- the primitives the circuit solves
+  share: the device, plasma and result records, Richardson emission and its
+  space-charge ceiling, the beam mean free path and gap bypass, and the
+  electrode power expressions.
+- :mod:`cablp.cathode.circuit_idriven` -- the current-driven sheath solve,
+  with the inductor-integrated loop current as the independent variable.
+- :mod:`cablp.cathode.circuit_prescribed` -- the prescribed-measured sheath
+  solve, driven by a measured discharge current and voltage.
 - :mod:`cablp.cathode.beam_deposition` -- CSDA beam-deposition marches for the
   emitted electron beam.
 - :mod:`cablp.cathode.kernels` -- the ``CABLP_COMPILED_KERNELS`` opt-in

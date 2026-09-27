@@ -1,51 +1,31 @@
-"""Current-driven cathode sheath solve (M2).
+"""Current-driven cathode sheath solve.
 
-The voltage-driven solver (``_cathode_solver.solve``) finds the intersection
-of the device curve with a Thevenin load line; under an inductive circuit
-fold both curves are near-vertical and the intersection is ill-conditioned
-(measured: a <=0.1 V physical perturbation moving the operating point by
-800 A, and plateau per-solve V_b flapping over p5-p95 ~ 92-503 V while
-I_tot moves 3 A). This module inverts the formulation: given the loop
-current -- a smooth, inductor-integrated state -- find the sheath. The
-device relation
+Given the loop current -- a smooth, inductor-integrated state -- find the
+sheath. The device relation
 
     J_tot(psi) = J_i * (1 - exp(Lambda - psi)) + J_star(psi)
 
 is monotone increasing in psi (the electron-repelling term and the
 space-charge release both grow with sheath depth; the annular sum preserves
-this), so the root is unique on a fixed physical bracket and brentq needs
-no warm windows, no expanding-bracket ladder, and no ``phi_sheath_max``
-heuristics. The anode sheath and the beam-bypass fraction follow
-*explicitly* from the solved psi, so the voltage-driven path's bypass
-fixed-point iteration disappears as well: one bracketed root-find per
-solve, unconditionally.
+this), so the root is unique on a fixed physical bracket and one bracketed
+brentq finds it. The anode sheath and the beam-bypass fraction follow
+*explicitly* from the solved psi: one bracketed root-find per solve,
+unconditionally.
 
-Everything physical is **imported** from ``_cathode_solver`` -- Richardson
-emission via ``DeviceConfig``, the space-charge release ``_j_eth_crit``,
-the annular emission state, the sheath power bookkeeping, and the beam
-pieces -- so the two solvers cannot drift apart. ``_cathode_solver`` itself
-is not modified (a hard constraint of this design): its solve paths remain
-the historical voltage-driven ones.
+The shared physics is **imported** from :mod:`cablp.cathode.circuit_common`
+-- Richardson emission via ``DeviceConfig``, the space-charge release
+``j_eth_crit``, the annular emission state, the sheath power bookkeeping,
+and the beam pieces -- so this solve and the prescribed-measured one
+(:mod:`cablp.cathode.circuit_prescribed`) cannot drift apart.
 
-``SolverResult`` is returned field-for-field compatible, with two contract
-notes:
+Contract notes on the returned ``SolverResult``:
 
-- ``V_b`` is assembled as the device voltage ``phi_c + V_p - phi_a``. At a
-  voltage-driven operating point this equals that solver's
-  ``V_bank_eff - I_tot*R_comp_eff`` up to the *voltage-driven* root
-  residual (~1e-4 V); the equivalence gate therefore compares device
-  voltages on both sides.
-- ``regime`` may additionally be ``"capability_limited"``: the imposed
-  current exceeds what the sheath can carry at the bracket ceiling
-  (``phi_c_cap_V``, optionally composed with ``circuit_V_avail_V``), i.e.
-  a genuine inductive kick. The bracket-top
-  solution is returned with its correspondingly large ``V_b`` and the
-  circuit is expected to ramp the current down at ~V/L per step. No
-  exception, no fallback ladder. With the circuit bound in force the
-  REPORTED kick is limited to the loop's available voltage, but the ramp is
-  unaffected: the circuit integrates the unbounded demand, so the current
-  still ramps down rather than freezing. See ``circuit_V_avail_V`` in
-  ``solve_idriven`` and ``cathode.idriven_vdis_evaluator``.
+- ``V_b`` is assembled as the device voltage ``phi_c + V_p - phi_a``.
+- ``regime`` may be ``"capability_limited"``: the imposed current exceeds
+  what the sheath can carry at the bracket ceiling ``phi_c_cap_V``, i.e. a
+  genuine inductive kick. The bracket-top solution is returned with its
+  correspondingly large ``V_b`` and the circuit is expected to ramp the
+  current down at ~V/L per step. No exception, no fallback ladder.
 
 Floating (open-circuit) solves come HERE, at ``I_tot_A = 0``. An open
 circuit is the zero-current member of this same family: the surface finds
@@ -94,49 +74,37 @@ from cablp.cathode.beam_deposition import (
     HE_EII_EDGE_REL_TOL,
     HE_EII_EPS_TOP,
 )
-from cablp.cathode.circuit import (
-    CATHODE_LNL_MODELS,
+from cablp.cathode.circuit_common import (
+    E_SI,
+    ERG_PER_EV,
+    KB_SI,
+    ME_CGS,
     BeamResult,
     DeviceConfig,
+    P_ion,
     PlasmaState,
     SolverResult,
-    _LN_LAMBDA_MIN,
-    _P_elec,
-    _P_ion,
-    _annular_emission_state,
-    _beam_launch_enthalpy_V,
-    _c_log_ei,
-    _compute_beam_bypass_fraction,
-    _compute_l_b,
-    _e_SI,
-    _emitted_enthalpy_on_beam_W,
-    _erg_per_eV,
-    _exp_clamped,
-    _j_eth_crit,
-    _kB_SI,
-    _launch_potential_V,
-    _me_cgs,
-    _mp_cgs,
+    annular_emission_state,
     beam_excitation_channel,
-    beam_launch_potential_V,
     beam_launched_current_A,
+    c_log_ei,
+    compute_beam_bypass_fraction,
+    compute_l_b,
+    exp_clamped,
+    j_eth_crit,
 )
-from cablp.plasma.params import bohm_sound_speed as _bohm_sound_speed
+from cablp.plasma.params import (
+    LN_LAMBDA_MIN,
+    bohm_sound_speed as _bohm_sound_speed,
+)
 from cablp.atomic.cross_sections import H_EII_cross_lkup, He_EII_cross_lkup
 from cablp.cathode.kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 
 __all__ = [
     "assemble_beam_arrays",
-    "beam_launch_energy_eV",
     "solve_idriven",
     "solve_beam_system_idriven",
 ]
-
-#: Quantities ``circuit_bound_object`` may name as the circuit bound's object.
-#: ``"phi_c"`` bounds the net cathode drop (the historical composition);
-#: ``"device_voltage"`` bounds ``V_b = phi_c - phi_a + V_p``, the quantity the
-#: loop equation contains.
-_CIRCUIT_BOUND_OBJECTS = ("phi_c", "device_voltage")
 
 # Float-degeneracy margin for the emission-exhausted plateau. Where every
 # emission channel is released and the electron-repelling tail has
@@ -148,140 +116,13 @@ _CIRCUIT_BOUND_OBJECTS = ("phi_c", "device_voltage")
 # deterministic: the solve targets J_imposed minus a few ulps and lands on
 # the plateau's *leading edge* (the minimal sheath that carries the
 # current). At well-conditioned operating points the shift is
-# tol/(dJ/dpsi) ~ 1e-7 V -- far below the 1e-8-relative equivalence gate.
-# The Schottky term removes the degeneracy physically (the ceiling gains
-# dJ/dpsi > 0 everywhere); M3 should watch breakdown-adjacent states for
-# leading-edge/capability chatter if it runs with Schottky off.
+# tol/(dJ/dpsi) ~ 1e-7 V. The Schottky term removes the degeneracy
+# physically (the ceiling gains dJ/dpsi > 0 everywhere).
 _J_PLATEAU_TOL_REL = 64.0 * sys.float_info.epsilon
 
 # Schottky constant: dphi[eV] = sqrt(e * E / (4 pi eps0)) with E in V/m.
 _SCHOTTKY_EV_PER_SQRT_V_M = 3.7946865e-5
 
-# Thermal-bridge half-width, in units of kT_s of would-be barrier depth
-# (chatter diagnosis, 2026-07-21). The emitted
-# Maxwellian has energy spread kT_s, so the SCL<->classical release corner
-# is physically smooth over ~kT_s of barrier -- the transition variable is
-# x = ln(J_eff/J_crit) = (would-be barrier)/kT_s, and the corner max(0, x)
-# is blended over |x| < w. Fixed at 1 (the physical scale), deliberately
-# not exposed as a tuning key.
-_BRIDGE_HALF_WIDTH = 1.0
-
-
-def _bridge_release(J_eff: float, J_crit: float) -> tuple[float, float]:
-    """Smooth SCL<->classical release: ``(J_star, barrier/kT_s)``.
-
-    Replaces the razor corner ``J_star = min(J_eff, J_crit)`` /
-    ``psi_minus = delta * max(0, ln(J_eff/J_crit))`` with a C1 blend of
-    ``max(0, x)`` over the window ``|x| < w`` in ``x = ln(J_eff/J_crit)``:
-
-        b(x) = 0            (x <= -w, exact classical branch)
-             = (x+w)^2/4w   (|x| < w, quadratic bridge)
-             = x            (x >= +w, exact space-charge branch)
-
-    with ``J_star = J_eff * exp(-b)``. Properties (asserted in smoke):
-    exact hard-branch reduction outside the window, so calibrated
-    operating points away from the knee are untouched; ``J_star <=
-    min(J_eff, J_crit)`` everywhere (the blend only ever *adds* barrier);
-    and monotonicity of J_tot(psi) is preserved analytically -- writing
-    a = dlnJ_eff/dpsi >= 0, c = dlnJ_crit/dpsi >= 0, the blended slope is
-    dlnJ_star/dpsi = (1-s)*a + s*c with s = b'(x) in [0, 1], a convex
-    combination of the two (nonnegative) branch slopes. The architecture
-    rests on that monotonicity.
-
-    Returns the barrier in kT_s units (``psi_minus = delta * b``); the
-    caller owns the delta scaling because annuli carry per-annulus deltas.
-    """
-    if J_eff <= 0.0:
-        return 0.0, 0.0
-    if J_crit <= 0.0:
-        # Fully choked channel (mirrors the hard branches' J_crit <= 0
-        # handling: no current, no reported barrier).
-        return 0.0, 0.0
-    w = _BRIDGE_HALF_WIDTH
-    x = math.log(J_eff / J_crit)
-    if x <= -w:
-        return J_eff, 0.0
-    if x >= w:
-        return J_crit, x
-    b = (x + w) ** 2 / (4.0 * w)
-    return J_eff * math.exp(-b), b
-
-
-def _uniform_state_bridge(
-    psi: float,
-    J_i: float,
-    J_eth: float,
-    mu: float,
-    delta: float,
-    T_e: float,
-    n_e: float,
-    schottky: bool,
-) -> tuple[float, float, bool]:
-    """Uniform-disc ``(J_star, psi_minus, clamped)`` with the thermal bridge.
-
-    With Schottky on, the enhanced ``J_eff`` feeds the bridge directly and
-    the three-branch choke rule collapses into the smooth kernel: deep in
-    the clamp ``J_star -> J_crit`` becomes insensitive to ``J_eff``, so the
-    field enhancement self-attenuates without an explicit surface-field
-    cutoff. (Divergence from the hard Schottky branches, documented: the
-    deep-clamp barrier is referenced to ``J_eff`` rather than ``J_eth`` --
-    a ~dphi/T_e difference in the reported psi_minus, order 0.1 V.)
-    """
-    if J_eth <= 0.0:
-        return 0.0, 0.0, False
-    J_eff = J_eth
-    if schottky:
-        dphi = _schottky_lowering_eV(psi * T_e, T_e, n_e)
-        if dphi > 0.0:
-            J_eff = J_eth * math.exp(dphi / (delta * T_e))
-    J_crit = _j_eth_crit(psi, J_i, mu)
-    if J_crit <= 0.0:
-        return 0.0, 0.0, True
-    J_star, b = _bridge_release(J_eff, J_crit)
-    return J_star, delta * b, J_eff > J_crit
-
-
-def _annular_state_bridge(
-    psi: float,
-    J_i: float,
-    mu: float,
-    J_eth_k: tuple,
-    delta_k: tuple,
-    ion_frac_k: tuple,
-    T_e: float,
-    n_e: float,
-    schottky: bool,
-) -> tuple[float, float, bool]:
-    """Annular ``(J_star, psi_minus_eff, any_clamped)`` with the bridge.
-
-    Same equipotential-annuli structure as ``_annular_emission_state``;
-    each annulus passes through the smooth kernel with its own delta, and
-    the effective barrier is the emission-weighted mean over *all* annuli
-    carrying a (possibly partial, in-window) barrier -- the hard model's
-    weighting with the clamped-only restriction lifted, to which it
-    reduces when every annulus sits outside its bridge window.
-    """
-    dphi = _schottky_lowering_eV(psi * T_e, T_e, n_e) if schottky else 0.0
-    J_star_total = 0.0
-    weighted_pm = 0.0
-    any_clamped = False
-    for J_eth_a, delta_a, frac_a in zip(J_eth_k, delta_k, ion_frac_k):
-        if J_eth_a <= 0.0:
-            continue
-        J_crit_a = _j_eth_crit(psi, J_i * frac_a, mu) if frac_a > 0.0 else 0.0
-        J_eff_a = J_eth_a
-        if dphi > 0.0:
-            J_eff_a = J_eth_a * math.exp(dphi / (delta_a * T_e))
-        if J_crit_a <= 0.0:
-            any_clamped = True
-            continue
-        if J_eff_a > J_crit_a:
-            any_clamped = True
-        J_star_a, b_a = _bridge_release(J_eff_a, J_crit_a)
-        J_star_total += J_star_a
-        weighted_pm += J_star_a * delta_a * b_a
-    psi_minus_eff = weighted_pm / J_star_total if J_star_total > 0.0 else 0.0
-    return J_star_total, psi_minus_eff, any_clamped
 
 
 def _schottky_lowering_eV(phi_c_V: float, T_e: float, n_e: float) -> float:
@@ -313,7 +154,7 @@ def _uniform_state_schottky(
     """Uniform-disc ``(J_star, psi_minus, clamped)`` with Schottky lowering."""
     if J_eth <= 0.0:
         return 0.0, 0.0, False
-    J_crit = _j_eth_crit(psi, J_i, mu)
+    J_crit = j_eth_crit(psi, J_i, mu)
     if J_eth > J_crit:
         # Deep space-charge clamp: surface field ~ 0, no enhancement.
         if J_crit <= 0.0:
@@ -339,7 +180,7 @@ def _annular_state_schottky(
 ) -> tuple[float, float, bool]:
     """Annular ``(J_star, psi_minus_eff, any_clamped)`` with Schottky lowering.
 
-    Mirrors ``_cathode_solver._annular_emission_state`` (all annuli share the
+    Mirrors ``circuit_common.annular_emission_state`` (all annuli share the
     equipotential ``psi``; the effective barrier is the emission-weighted
     mean of the local ones) with the three-branch Schottky rule per annulus.
     """
@@ -350,7 +191,7 @@ def _annular_state_schottky(
     for J_eth_a, delta_a, frac_a in zip(J_eth_k, delta_k, ion_frac_k):
         if J_eth_a <= 0.0:
             continue
-        J_crit_a = _j_eth_crit(psi, J_i * frac_a, mu) if frac_a > 0.0 else 0.0
+        J_crit_a = j_eth_crit(psi, J_i * frac_a, mu) if frac_a > 0.0 else 0.0
         if J_eth_a > J_crit_a:
             any_clamped = True
             if J_crit_a <= 0.0:
@@ -374,47 +215,19 @@ def _annular_state_schottky(
 _schottky_lowering_eV_pure = _schottky_lowering_eV
 _annular_state_schottky_pure = _annular_state_schottky
 
-# Compiled-kernel selection (Tier A, 2026-08-02). Same contract as
-# ``_cathode_solver``'s block: one rebinding site per name, at module scope,
-# before any caller resolves it, so the hot path is a plain function object
-# with no per-call branch. ``_COMPILED_ROOT`` is the whole root find for the
-# PRODUCTION branch (annular + Schottky, no thermal bridge) -- the bracket
-# ladder plus brentq with the residual evaluated in C, which is what removes
-# the ~50-100 Python round-trips per solve. It is ``None`` on every other
-# branch and on the default pure path, and ``solve_idriven`` then runs the
-# historical Python ladder verbatim.
+# Compiled-kernel selection. Same contract as ``circuit_common``'s block: one
+# rebinding site per name, at module scope, before any caller resolves it, so
+# the hot path is a plain function object with no per-call branch.
+# ``_COMPILED_ROOT`` is the whole root find for the annular + Schottky branch
+# -- the bracket ladder plus brentq with the residual evaluated in C. It is
+# ``None`` on the default pure path, and ``solve_idriven`` then runs the
+# Python ladder, which is its reference transcription.
 _COMPILED_ROOT = None
 if _COMPILED_KERNELS is not None:
     _COMPILED_KERNELS.check_constants_idriven(_SCHOTTKY_EV_PER_SQRT_V_M)
     _schottky_lowering_eV = _COMPILED_KERNELS.schottky_lowering_eV
     _annular_state_schottky = _COMPILED_KERNELS.annular_state_schottky
     _COMPILED_ROOT = _COMPILED_KERNELS.solve_psi_annular_schottky
-
-
-def beam_launch_energy_eV(phi_c, climb_V):
-    """Return the energy [eV] the beam carries INTO the column.
-
-    ``phi_c`` is the solved net cathode drop -- under the circuit voltage
-    bound, the bounded one. ``climb_V`` is the potential [V] the transmitted
-    beam must climb between the anode mesh and the column; ``None`` means no
-    such step exists and the launch energy IS ``phi_c``, returned as the same
-    object so every downstream consumer is bit-for-bit unchanged. A climb is
-    only ever a decelerating step here, so a negative value contributes
-    nothing, and the result is floored at zero (a fully choked beam).
-
-    The single definition both beam readers use -- the Beer-Lambert beam-array
-    assembly in :func:`solve_beam_system_idriven` and the CSDA deposition
-    rays -- so a build cannot end up with two launch energies.
-
-    This is the value the beam readers deposit, NOT the sheath-launch
-    potential the ``P_prim`` ledger row is priced at: with a climb armed the
-    two differ by ``climb_V``, and that difference is not booked into any
-    plasma or circuit power row -- the mesh, not the model's energy ledger,
-    is what absorbs it.
-    """
-    if climb_V is None:
-        return phi_c
-    return max(float(phi_c) - max(float(climb_V), 0.0), 0.0)
 
 
 def solve_idriven(
@@ -425,28 +238,27 @@ def solve_idriven(
     anode_current_A: float | None = None,
     anode_T_e: float | None = None,
     schottky: bool = False,
-    bridge: bool = False,
     phi_c_cap_V: float = 1000.0,
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
     anode_electron_saturation_A: float | None = None,
-    circuit_V_avail_V: float | None = None,
-    circuit_bound_object: str = "phi_c",
     tail_anode_current_A: float = 0.0,
-    emitted_enthalpy_V: float = 0.0,
-    emitted_enthalpy_gap_netted: bool = False,
-    secondary_yield: float = 0.0,
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
 
-    Parameters mirror ``_cathode_solver.solve`` where shared:
-    ``cathode_current_A``/``anode_current_A``/``anode_T_e`` are the same
-    "the fluid already computed this" overrides. ``I_tot_A`` is the loop
+    ``cathode_current_A``/``anode_current_A``/``anode_T_e`` are "the fluid
+    already computed this" overrides of the cathode ion current, the anode
+    ion current and the anode electron temperature. ``I_tot_A`` is the loop
     current the external circuit is driving through the device this step
     (must be >= 0; the circuit's transistor/diode clamp owns the sign).
-    ``phi_c_cap_V`` is the fixed physical bracket ceiling on the classical
+    ``schottky`` arms Schottky barrier lowering of the emission (see the
+    module docstring).
+    ``phi_c_cap_V`` is the fixed physical bracket ceiling on the net
     sheath drop; a current the sheath cannot carry below it returns the
     bracket-top solution tagged ``regime="capability_limited"``.
+    ``alpha_sheath`` / ``alpha_sheath_anode`` are the two electrodes' own
+    presheath factors (the sheath-edge density ``n_se = alpha * n_e``);
+    ``None`` is the flat ``exp(-1/2)``.
     ``tail_anode_current_A`` is electron current [A] the anode collects
     DIRECTLY from the QL tail walkers the mesh intercepts, i.e. current that
     never crossed the anode sheath. It enters ``J_anode`` with the beam
@@ -454,8 +266,8 @@ def solve_idriven(
     plasma-borne current to pass -- so it raises ``phi_a`` logarithmically.
     Its caller supplies the value the LAST accepted step measured: the
     deposition that produces it is solved after this, so the coupling is
-    lagged one step rather than iterated. 0.0 (the default) leaves the solve
-    bit-for-bit as it was.
+    lagged one step rather than iterated. 0.0 (the default) is an exact
+    identity on every float here.
     ``anode_electron_saturation_A`` is the EXPLICIT electron saturation current
     the mesh wires can draw -- the electron random flux ``n <v_e> / 4`` on the
     wire area the two faces present, ``2 eta A``, at the anode sample's own
@@ -469,120 +281,8 @@ def solve_idriven(
     member is carried because it states the cap as what it is, an electron
     random flux on the wire area, and because a caller whose ``I_i_a`` is not
     that analytic form has no other way to say so.
-    ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy
-    ``2 k_B T_s / e`` [V] when ``cathode_enthalpy_on_beam`` has placed it on
-    the beam, 0.0 (the default) otherwise. It is applied only where the
-    emitted electrons ARE the primary beam -- ``phi_c_minus == 0`` -- and is
-    reported back as ``beam_launch_enthalpy_V``; elsewhere it is dropped and
-    the caller's cathode-adjacent booking stands. Where it applies, the beam
-    mean free path is evaluated at the LAUNCH potential ``phi_c + enthalpy``
-    rather than at the bare drop, because that sum is the energy the primary
-    carries across the gap. 0.0 is an exact identity on every float here.
-    ``emitted_enthalpy_gap_netted`` says whether the deposition route that
-    consumes this solve heats the column through ``P_prim`` and so already
-    nets out the gap-bypassing beam (Beer-Lambert), rather than launching the
-    full released flux and carrying the gap itself (the CSDA march). It
-    selects the flux the reported ``P_emitted_enthalpy_on_beam`` rides at and
-    NOTHING else -- see ``circuit._emitted_enthalpy_on_beam_W``. False (the
-    default) is the full-flux normalisation.
-    ``circuit_V_avail_V`` is the optional CIRCUIT-AVAILABLE device voltage
-    [V] -- the largest device voltage the external loop can sustain at this
-    current, ``V_src - I*(R_comp + R_mesh)``, which is the loop equation
-    ``L dI/dt = V_src - I*(R_comp + R_mesh) - V_b`` read at ``dI/dt = 0``.
-    ``None`` (the default) leaves the solve bit-for-bit as it was. Given, it
-    composes with ``phi_c_cap_V`` as an upper bound: the ceiling the sheath
-    root is solved against becomes ``min(phi_c_cap_V, circuit_V_avail_V)``,
-    so the returned ``phi_c`` -- and every consumer keyed to it, notably the
-    beam birth energy through ``_compute_l_b`` -- cannot exceed what the
-    circuit supplies, and the capability-limited device voltage ``V_b`` is
-    clamped to that same available voltage. Must be positive: a loop with no
-    available voltage has no ceiling to offer and the caller passes ``None``
-    there instead. NB the inductor's back-EMF is deliberately NOT counted as
-    available voltage: it is stored energy, not supply.
 
-    That exclusion no longer freezes the loop current (corrected 2026-08-12).
-    It once did, because the circuit integrated this same BOUNDED ``V_b``:
-    the loop residual was then identically zero wherever the bound bound, so
-    ``dI/dt >= 0`` everywhere and the current could only ratchet upward on
-    numerical overshoot. The circuit now integrates the sheath's UNBOUNDED
-    demand (``cathode.idriven_vdis_evaluator``), so the restoring force is
-    present on both sides of the capability wall and the current is free to
-    fall while the bound binds. The bound constrains the sheath and beam
-    objects only.
-
-    ``circuit_bound_object`` selects WHICH quantity the available voltage
-    bounds, and is read only when ``circuit_V_avail_V`` is given:
-
-    - ``"device_voltage"`` -- the bound's object is the DEVICE voltage
-      ``V_b = phi_c - phi_a + V_p``, the quantity the loop equation actually
-      contains. The circuit member of the composed ceiling is the *net sheath
-      drop at which* ``V_b(psi) = circuit_V_avail_V``, located by a bracketed
-      solve on the same monotone device relation the current root uses, with
-      ``phi_a`` and ``V_p`` evaluated by the identical expressions that
-      assemble the returned result. The composition, the ladder, the escape
-      invariant and the ``bound_active`` census are unchanged -- only the
-      number the circuit contributes to ``min`` changes -- so the compiled
-      root path is used exactly as before.
-    - ``"phi_c"`` -- the circuit member IS ``circuit_V_avail_V``, i.e. the
-      bound's object is the net cathode drop. Bit-for-bit the historical
-      composition.
-
-    The two coincide only where ``phi_a`` and ``V_p`` are negligible -- the
-    capability-limited / near-vacuum regime of the pre-breakdown build leg. At
-    the main-discharge plateau ``phi_a`` is not negligible, ``phi_c``
-    legitimately exceeds the available voltage while ``V_b`` does not, and
-    ``"phi_c"`` there clamps a correct solve and tags it
-    ``capability_limited`` with no error raised (only ``bound_active`` records
-    it). ``"device_voltage"`` cannot make that error. NB the object is
-    independent of the back-EMF exclusion above, which no longer costs the
-    falling leg anything: the bound holds the exported ``V_b`` at the
-    available voltage, but the circuit integrates the unbounded demand, so a
-    bound solve on a decaying current reports a clamped ``V_b`` while
-    ``dI/dt`` stays free.
-    ``secondary_yield`` is the ion-induced SECONDARY ELECTRON YIELD
-    ``gamma_se`` [electrons per arriving ion] at the emitting face, 0.0 (the
-    default) for a solve that carries no secondary emission. It must be finite
-    and in [0, 1]; anything else raises. The released secondary current is
-    ``I_see = gamma_se * I_i``, evaluated on the SAME ion current this solve
-    already draws to the face (the Bohm current, or the fluid's override where
-    one is passed), so the two populations cannot be built from different ion
-    fluxes.
-
-    WHERE IT ENTERS. ``I_see`` is INDEPENDENT of the sheath depth -- the ion
-    current is fixed by the plasma state, not by psi -- so it enters the
-    monotone current match as a shift of the IMPOSED TARGET rather than of the
-    device relation: the sheath and its thermionic release have only
-    ``I_tot - I_see`` left to supply. The device relation ``J_tot(psi)``, its
-    bracket ladder, its ceiling test and the compiled root are therefore the
-    historical ones evaluated at the reduced target, and the located
-    ``psi_c_plus`` is the exact root of the full balance
-    ``I_eth_star + I_see + I_i - I_e_ret = I_tot``, which
-    ``I_cathode_kirchhoff_residual`` still asserts unchanged. The reported
-    ``I_tot``, ``V_b`` and ``J_anode`` are reassembled WITH the secondary
-    current, so nothing downstream reads a loop current the secondaries are
-    missing from. The secondaries are LAUNCHED with the thermionic primaries:
-    they are released at the surface at a few eV and cross the same fall, so
-    they carry the same launch potential and are reported through
-    ``beam_launched_current_A``.
-
-    WHAT IT DOES NOT ENTER, stated because it is a modelling choice and not an
-    oversight: the space-charge ceiling ``_j_eth_crit`` and its virtual-cathode
-    barrier ``psi_minus = delta*ln(J_eth/J_crit)`` are left keyed to the ION
-    current alone. Both are statements about a half-Maxwellian AT THE EMITTER
-    TEMPERATURE -- ``delta = k_B T_s / (e T_e)`` is that population's width --
-    and Auger secondaries are not that population; this module carries no
-    emission-energy scale for them, so there is no ``delta`` to write for them.
-    The consequence is directional and disclosed: in the virtual-cathode regime
-    the secondaries are added on top of a thermionic flux the ceiling has
-    already clamped, so the released total is an OVERSTATEMENT there. In the
-    classical regime, where the ceiling does not bind, the treatment is exact.
-
-    ``bridge`` enables the kT_s-width thermal bridge across the
-    SCL<->classical release corner (``_bridge_release``); off reproduces
-    the hard branches bit-for-bit (the M2 equivalence gate's condition).
-
-    Returns a ``SolverResult`` field-for-field compatible with the
-    voltage-driven solver's (see the module docstring for the ``V_b`` and
+    Returns a ``SolverResult`` (see the module docstring for the ``V_b`` and
     ``regime`` contract notes).
     """
     if I_tot_A < 0.0:
@@ -592,46 +292,12 @@ def solve_idriven(
         )
     if phi_c_cap_V <= 0.0:
         raise ValueError(f"phi_c_cap_V must be positive (got {phi_c_cap_V})")
-    # Validated HERE as well as at solver construction, for the same reason
-    # circuit_bound_object is: this solve is reachable from callers that never
-    # build a LAPDSim1D, and a yield outside the domain would otherwise reach
-    # the current match as a silent scaling.
-    secondary_yield = float(secondary_yield)
-    if not math.isfinite(secondary_yield) or not (
-        0.0 <= secondary_yield <= 1.0
-    ):
-        raise ValueError(
-            "secondary_yield must be finite and in [0, 1] electrons per "
-            f"arriving ion (got {secondary_yield})"
-        )
-    # Validate the bound's inputs here, at the top, so a misconfigured call
-    # fails before it spends a solve. The COMPOSITION itself happens further
-    # down, once the device relation the "device_voltage" object is located on
-    # exists; off (``None``) the composed ceiling is ``phi_c_cap_V``, the same
-    # float object, and every comparison and bracket below is bit-for-bit the
-    # historical one.
-    if circuit_V_avail_V is not None:
-        circuit_V_avail_V = float(circuit_V_avail_V)
-        if not (circuit_V_avail_V > 0.0) or not math.isfinite(
-            circuit_V_avail_V
-        ):
-            raise ValueError(
-                "circuit_V_avail_V must be finite and positive when the "
-                f"circuit voltage bound is in force (got {circuit_V_avail_V})"
-            )
-        if circuit_bound_object not in _CIRCUIT_BOUND_OBJECTS:
-            raise ValueError(
-                "circuit_bound_object must be one of "
-                f"{sorted(_CIRCUIT_BOUND_OBJECTS)} when the circuit voltage "
-                f"bound is in force (got {circuit_bound_object!r})"
-            )
 
     T_e = plasma.T_e
     n_e = plasma.n_e
 
     # ------------------------------------------------------------------
-    # Plasma-derived quantities: identical formulas to the voltage-driven
-    # solve, so the two solvers agree bit-for-bit on the operating map.
+    # Plasma-derived quantities
     # ------------------------------------------------------------------
     # Parallel plasma conductivity [Ω⁻¹ cm⁻¹]. Spitzer, with the Coulomb
     # logarithm evaluated at the solve's own state rather than frozen: NRL
@@ -639,19 +305,11 @@ def solve_idriven(
     # eta_perp = 1.03e-2 Z lnLambda T_e^-3/2 [Ohm cm], and p.38 gives
     # sigma_par = 1.96 sigma_perp at Z = 1 (Braginskii). The two literature
     # factors are left un-collapsed so the lineage stays readable. lnLambda is
-    # floored at _LN_LAMBDA_MIN, the same floor the transport terms use -- it
+    # floored at LN_LAMBDA_MIN, the same floor the transport terms use -- it
     # is a positivity guard for the cold, tenuous corner and does not bind at
     # any physical discharge state.
-    ln_lambda = max(_c_log_ei(T_e, n_e), _LN_LAMBDA_MIN)
-    if config.lnL_model == "nrl_ei":
-        sigma_par = (1.96 / (1.03e-2 * ln_lambda)) * T_e**1.5
-    elif config.lnL_model == "fixed_14p6":
-        sigma_par = 14.6 * T_e**1.5
-    else:
-        raise ValueError(
-            "lnL_model must be one of "
-            f"{CATHODE_LNL_MODELS} (got {config.lnL_model!r})"
-        )
+    ln_lambda = max(c_log_ei(T_e, n_e), LN_LAMBDA_MIN)
+    sigma_par = (1.96 / (1.03e-2 * ln_lambda)) * T_e**1.5
     R_p = config.L_cath / (math.pi * config.R_cath**2 * sigma_par)
     C_s = float(_bohm_sound_speed(T_e, config.ion_mass_g))
     # Sheath-edge sampling (R3.2 / A16): the ion Bohm
@@ -662,7 +320,7 @@ def solve_idriven(
     # the circuit current and the fluid sink read one n_se. Electron saturation
     # stays at the bulk density (the ``lam_shift`` that lifts electrons back to
     # n_e is -ln(alpha_sheath), = +0.5 for the flat default). ``None`` keeps the
-    # exact +0.5 so the golden and the M2 equivalence gate are bit-exact.
+    # exact flat +0.5.
     #
     # The cathode and the anode are DISTINCT sheaths sampled on different
     # presheaths (the cathode's long collisional presheath vs the anode mesh's
@@ -683,7 +341,7 @@ def solve_idriven(
 
     alpha_eff, lam_shift = _sheath_factors(alpha_sheath)
     _alpha_eff_anode, lam_shift_anode = _sheath_factors(alpha_sheath_anode)
-    I_i = config.A_c * _e_SI * n_e * C_s * alpha_eff
+    I_i = config.A_c * E_SI * n_e * C_s * alpha_eff
     if cathode_current_A is not None:
         I_i = float(cathode_current_A)
     I_i_a = 2 * config.eta * I_i
@@ -699,28 +357,16 @@ def solve_idriven(
 
     I_e = I_i * math.exp(config.Lambda + lam_shift)
     I_eth = config.I_eth
-    delta = _kB_SI * config.T_s / (_e_SI * T_e)
+    delta = KB_SI * config.T_s / (E_SI * T_e)
     Lambda = config.Lambda + lam_shift
     Lambda_anode = config.Lambda + lam_shift_anode
     eta = config.eta
     mu = config.mu
 
-    # Ion-induced secondary electron emission: every arriving ion releases
-    # ``secondary_yield`` electrons from the surface, which the fall then
-    # accelerates into the gap alongside the thermionic primaries. Exactly
-    # 0.0 unarmed, on every float below.
-    I_see = secondary_yield * I_i
     J_i = I_i * R_p / T_e
     J_i_a = I_i_a * R_p / T_e
     J_eth = I_eth * R_p / T_e
-    J_see = I_see * R_p / T_e
-    # THE TARGET, NOT THE DEVICE RELATION (see ``secondary_yield`` in the
-    # docstring): the secondaries are a psi-independent current, so the sheath
-    # and its thermionic release have only what is left of the imposed loop
-    # current to supply. Subtracting an exact 0.0 leaves this the historical
-    # float, so the root, the ladder and the compiled kernel are untouched
-    # unarmed.
-    J_imposed = (float(I_tot_A) - I_see) * R_p / T_e
+    J_imposed = float(I_tot_A) * R_p / T_e
     # A2a two-population split: current the anode collects from the QL TAIL
     # walkers rather than through its own sheath, scaled like every other
     # current here. It enters J_anode with the beam bypass's sign and for the
@@ -755,23 +401,17 @@ def solve_idriven(
             area
             * config.C_R
             * T_k**2
-            * math.exp(-_e_SI * config.phi_wf / (_kB_SI * T_k))
+            * math.exp(-E_SI * config.phi_wf / (KB_SI * T_k))
             for T_k, area in zip(config.emission_Ts_K, config.emission_area_cm2)
         )
         J_eth_k = tuple(i * R_p / T_e for i in I_eth_k)
         delta_k = tuple(
-            _kB_SI * T_k / (_e_SI * T_e) for T_k in config.emission_Ts_K
+            KB_SI * T_k / (E_SI * T_e) for T_k in config.emission_Ts_K
         )
         wetted = sum(
             a * f
             for a, f in zip(config.emission_area_cm2, config.emission_plasma_frac)
         )
-        if config.emission_area_fraction != 1.0:
-            # See the same site in ``_cathode_solver.solve``: the lit patches
-            # collect the Bohm flux over their own share of the face, so the
-            # attribution sums to f_em, and this division is what keeps the
-            # scaled plasma fractions from being normalized straight back out.
-            wetted /= config.emission_area_fraction
         ion_frac_k = tuple(
             (a * f / wetted) if wetted > 0.0 else 0.0
             for a, f in zip(config.emission_area_cm2, config.emission_plasma_frac)
@@ -781,39 +421,29 @@ def solve_idriven(
     # The monotone device relation and its single bracketed root
     # ------------------------------------------------------------------
     def _emission_state(psi: float) -> tuple[float, float, bool]:
-        if bridge:
-            if annular:
-                return _annular_state_bridge(
-                    psi, J_i, mu, J_eth_k, delta_k, ion_frac_k,
-                    T_e, n_e, schottky,
-                )
-            return _uniform_state_bridge(
-                psi, J_i, J_eth, mu, delta, T_e, n_e, schottky
-            )
         if annular:
             if schottky:
                 return _annular_state_schottky(
                     psi, J_i, mu, J_eth_k, delta_k, ion_frac_k, T_e, n_e
                 )
-            return _annular_emission_state(
+            return annular_emission_state(
                 psi, J_i, mu, J_eth_k, delta_k, ion_frac_k
             )
         if schottky:
             return _uniform_state_schottky(
                 psi, J_i, J_eth, mu, delta, T_e, n_e
             )
-        # Historical uniform-disc branches (bit-identical to the voltage-
-        # driven solve's recovery step).
+        # Uniform-disc hard branches.
         if J_eth <= 0.0:
             return 0.0, 0.0, False
-        J_crit = _j_eth_crit(psi, J_i, mu)
+        J_crit = j_eth_crit(psi, J_i, mu)
         if J_eth <= J_crit:
             return J_eth, 0.0, False
         return J_crit, delta * math.log(J_eth / J_crit), True
 
     def _J_tot(psi: float) -> float:
         return (
-            J_i * (1.0 - _exp_clamped(Lambda - psi))
+            J_i * (1.0 - exp_clamped(Lambda - psi))
             + _emission_state(psi)[0]
         )
 
@@ -829,94 +459,8 @@ def solve_idriven(
         # within a ULP.
         return psi * T_e - _emission_state(psi)[1] * T_e
 
-    def _device_voltage(psi: float) -> float:
-        # V_b(psi) = phi_c + V_p - phi_a, assembled by the SAME expressions the
-        # returned result is built from below (see the "Everything else follows
-        # explicitly from the solved psi" block) so the bound's object and the
-        # reported object cannot drift apart. Monotone increasing in psi on the
-        # same premises the current root already rests on: phi_c and J_tot both
-        # rise with psi, and phi_a falls as the anode collects more.
-        J_star_p, psi_minus_p, _ = _emission_state(psi)
-        # The secondaries are part of the current the device carries, so they
-        # ride here exactly as they do in the assembled result below; adding an
-        # exact 0.0 leaves every unarmed float untouched.
-        J_tot_p = (
-            J_i * (1.0 - _exp_clamped(Lambda - psi)) + J_star_p + J_see
-        )
-        phi_c_p = psi * T_e - psi_minus_p * T_e
-        # The bound's beam is the LAUNCHED beam: same regime gate, same shift
-        # and same launch-potential object the solved sheath below uses, so the
-        # ceiling cannot be built from a beam energy the result contradicts.
-        # Unarmed, ``_launch_potential_V`` hands back ``phi_c_p`` itself.
-        l_b_p = _compute_l_b(
-            _launch_potential_V(
-                phi_c_p,
-                _beam_launch_enthalpy_V(emitted_enthalpy_V, psi_minus_p * T_e),
-            ),
-            T_e, n_e, plasma.n_n, plasma.sigma_b,
-        )
-        bypass_p = _compute_beam_bypass_fraction(l_b_p, config.L_cath)
-        # The bypassing population is the LAUNCHED one: the secondaries cross
-        # the gap with the primaries and are intercepted with them.
-        J_anode_p = (
-            J_tot_p - eta * bypass_p * (J_star_p + J_see) - J_tail_a
-        )
-        psi_a_p = math.log(
-            I_e_sat_a / max(I_i_a * (1.0 + J_anode_p / J_i_a), 1e-300)
-        )
-        I_tot_p = J_tot_p * T_e / R_p
-        return phi_c_p + I_tot_p * R_p - psi_a_p * T_e_anode
-
-    # ------------------------------------------------------------------
-    # Composed ceiling (see the circuit_V_avail_V / circuit_bound_object
-    # contract in the docstring). With no circuit bound this IS
-    # ``phi_c_cap_V``, the same float object.
-    # ------------------------------------------------------------------
     _PSI_LO = 1.0e-8
-    if circuit_V_avail_V is None:
-        phi_c_ceiling_V = phi_c_cap_V
-        _ceiling_is_circuit = False
-    else:
-        if circuit_bound_object == "phi_c":
-            _circuit_phi_c_ceiling_V = circuit_V_avail_V
-        else:
-            # The net sheath drop at which the DEVICE voltage reaches the
-            # available voltage. Same deterministic range extension on a
-            # monotone function the current root uses: grow the bracket top
-            # until either V_b has reached the target or the net sheath has
-            # already passed the data cap -- past which the cap is the binding
-            # member and what the circuit would have contributed is moot.
-            _psi_hi = max(phi_c_cap_V / T_e, Lambda + 2.0)
-            _reached = _device_voltage(_psi_hi) >= circuit_V_avail_V
-            for _ in range(200):
-                if _reached or _net_phi_c(_psi_hi) >= phi_c_cap_V:
-                    break
-                _psi_hi *= 2.0
-                _reached = _device_voltage(_psi_hi) >= circuit_V_avail_V
-            if not _reached:
-                # The device cannot produce the available voltage below the
-                # data cap, so the circuit offers no ceiling at all.
-                _circuit_phi_c_ceiling_V = math.inf
-            elif _device_voltage(_PSI_LO) >= circuit_V_avail_V:
-                # Degenerate: the loop cannot sustain even the smallest sheath.
-                # The bracket bottom IS the ceiling; keep it strictly positive
-                # so the escape invariant's comparison stays well-defined.
-                _circuit_phi_c_ceiling_V = _reported_phi_c(_PSI_LO)
-            else:
-                _circuit_phi_c_ceiling_V = _reported_phi_c(
-                    brentq(
-                        lambda x: _device_voltage(x) - circuit_V_avail_V,
-                        _PSI_LO,
-                        _psi_hi,
-                        xtol=1.0e-12,
-                        rtol=1.0e-14,
-                        full_output=False,
-                    )
-                )
-        _ceiling_is_circuit = _circuit_phi_c_ceiling_V < phi_c_cap_V
-        phi_c_ceiling_V = (
-            _circuit_phi_c_ceiling_V if _ceiling_is_circuit else phi_c_cap_V
-        )
+    phi_c_ceiling_V = phi_c_cap_V
 
     # The physical ceiling applies to the *net* sheath drop phi_c: in a deep
     # virtual cathode psi_c_plus legitimately exceeds any voltage-scale cap
@@ -926,7 +470,7 @@ def solve_idriven(
     # geometrically until either the root is inside (f >= 0) or the net
     # sheath exceeds the cap. This is deterministic range extension on a
     # monotone function -- there is exactly one root and no branch to
-    # mis-select -- not the voltage-driven path's root-hunting ladder.
+    # mis-select.
     #
     # The ceiling is enforced on the RETURNED ROOT, not merely on the ladder's
     # grid points (fix 2026-08-09). The doubling grid only SAMPLES the cap
@@ -945,13 +489,12 @@ def solve_idriven(
     # Compiled root find (Tier A, 2026-08-02). The ladder and brentq below
     # evaluate `_J_tot` / `_net_phi_c` ~50-100 times per solve, and each one is
     # a Python round-trip through `_emission_state` and its per-annulus loop.
-    # On the PRODUCTION branch -- annular emission with Schottky lowering and
-    # no thermal bridge -- the compiled unit runs the identical ladder with the
-    # identical residual in C, using SciPy's own C brentq (the same
-    # Zeros/brentq.c the Python `brentq` wraps, at the same xtol/rtol/maxiter),
-    # and hands back the same `psi_c_plus`. Every other branch, and the default
-    # pure path, falls through to the Python ladder unchanged.
-    if _COMPILED_ROOT is not None and annular and schottky and not bridge:
+    # On the annular branch with Schottky lowering the compiled unit runs the
+    # identical ladder with the identical residual in C, using SciPy's own C
+    # brentq (the same Zeros/brentq.c the Python `brentq` wraps, at the same
+    # xtol/rtol/maxiter), and hands back the same `psi_c_plus`. Every other
+    # branch, and the default pure path, runs the Python ladder.
+    if _COMPILED_ROOT is not None and annular and schottky:
         psi_c_plus, capability_limited, _ = _COMPILED_ROOT(
             J_i, mu, Lambda, T_e, n_e,
             J_eth_k, delta_k, ion_frac_k,
@@ -960,7 +503,7 @@ def solve_idriven(
     else:
         capability_limited = False
         # Stage 1: the exact target. Well-conditioned operating points resolve
-        # here and the equivalence with the voltage-driven solve is pristine.
+        # here.
         J_target = J_imposed
         for _ in range(200):
             if _J_tot(psi_top) >= J_target:
@@ -1026,13 +569,10 @@ def solve_idriven(
     # Everything else follows explicitly from the solved psi
     # ------------------------------------------------------------------
     J_star, psi_c_minus, clamped = _emission_state(psi_c_plus)
-    # The device carries the thermionic release, the net ion/returning-electron
-    # current AND the secondaries; the root above was solved on the first two
-    # against a target already reduced by the third, so this sum is the imposed
-    # loop current to root-finder roundoff. Unarmed, ``J_see`` is an exact 0.0.
-    J_tot = (
-        J_i * (1.0 - _exp_clamped(Lambda - psi_c_plus)) + J_star + J_see
-    )
+    # The device carries the thermionic release and the net
+    # ion/returning-electron current; this sum is the imposed loop current to
+    # root-finder roundoff.
+    J_tot = J_i * (1.0 - exp_clamped(Lambda - psi_c_plus)) + J_star
     regime = (
         "capability_limited"
         if capability_limited
@@ -1045,40 +585,21 @@ def solve_idriven(
     # The one signature the ceiling forbids, on BOTH the pure and the compiled
     # root: a net sheath above the ceiling that is not tagged as sitting on it.
     # One comparison, and it covers the compiled path too because phi_c is
-    # re-derived here from whichever root came back. The ceiling tested is the
-    # COMPOSED one, so the invariant covers the circuit bound as well as the
-    # data cap the moment that bound is in force.
+    # re-derived here from whichever root came back.
     if phi_c > phi_c_ceiling_V and regime != "capability_limited":
         raise RuntimeError(
             f"net phi_c={phi_c!r} V escaped the ceiling phi_c_ceiling_V="
-            f"{phi_c_ceiling_V!r} V (phi_c_cap_V={phi_c_cap_V!r}, "
-            f"circuit_V_avail_V={circuit_V_avail_V!r}) in regime {regime!r} "
-            f"(psi_c_plus={psi_c_plus!r}, T_e={T_e!r}, I_tot_A={I_tot_A!r})"
+            f"{phi_c_ceiling_V!r} V (phi_c_cap_V={phi_c_cap_V!r}) in regime "
+            f"{regime!r} (psi_c_plus={psi_c_plus!r}, T_e={T_e!r}, "
+            f"I_tot_A={I_tot_A!r})"
         )
 
-    # The launch enthalpy rides the beam only where the emitted electrons ARE
-    # the beam; with a virtual cathode present the caller books it on the
-    # cathode-adjacent cell instead and this is exactly 0.0. Resolved HERE,
-    # above the mean free path, because the path is the launched beam's.
-    beam_launch_enthalpy_V = _beam_launch_enthalpy_V(
-        emitted_enthalpy_V, phi_c_minus
-    )
-    # Beam MFP and bypass: explicit evaluation at the solved sheath (the
-    # voltage-driven path needs a fixed-point loop here only because its
-    # residual feeds bypass back into the root equation). At the LAUNCH
-    # potential -- the primary crosses the gap carrying its emission enthalpy
-    # on top of the fall -- which is ``phi_c`` itself, the same float object,
-    # on every unarmed solve.
-    l_b = _compute_l_b(
-        _launch_potential_V(phi_c, beam_launch_enthalpy_V),
-        T_e, n_e, plasma.n_n, plasma.sigma_b,
-    )
-    beam_bypass_fraction = _compute_beam_bypass_fraction(l_b, config.L_cath)
+    # Beam MFP and bypass: explicit evaluation at the solved sheath.
+    l_b = compute_l_b(phi_c, T_e, n_e, plasma.n_n, plasma.sigma_b)
+    beam_bypass_fraction = compute_beam_bypass_fraction(l_b, config.L_cath)
     long_mfp = l_b > 0.0 and l_b > config.L_cath
 
-    J_anode = (
-        J_tot - eta * beam_bypass_fraction * (J_star + J_see) - J_tail_a
-    )
+    J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
     # Anode floating potential: the anode's own sheath, on its own presheath.
     # phi_a = T_e,a ln(I_e,sat / I_e,a) with I_e,a = I_i,a + I_anode: the same
     # relation, with the saturation cap named instead of reached through
@@ -1088,15 +609,6 @@ def solve_idriven(
 
     I_tot = J_tot * T_e / R_p
     I_eth_star = J_star * T_e / R_p
-    # THE LAUNCHED FLUX. Secondaries born at the surface at a few eV are
-    # accelerated through the same fall as the thermionic primaries and are
-    # indistinguishable from them once they reach the plasma, so the beam
-    # power, the gap bypass and the cathode field work are all priced at this
-    # sum. ``I_see`` is reported alongside so a run can separate the two.
-    # ``I_eth_star`` keeps its meaning -- the THERMIONIC release -- because the
-    # emission enthalpy and the surface's evaporative cooling are properties of
-    # that population alone.
-    I_launched = I_eth_star + I_see
 
     V_p = I_tot * R_p
     # Device voltage from the loop bookkeeping (see module docstring).
@@ -1116,54 +628,14 @@ def solve_idriven(
         I_tot = max(I_tot, 0.0)
         V_p = I_tot * R_p
         V_b = max(V_b, float(phi_c_ceiling_V))
-        if circuit_V_avail_V is not None:
-            # ...and no larger than what the loop can supply. Without this the
-            # kick above is a device voltage the circuit never sourced: with
-            # the historical cap (``phi_c_cap_V``) as the floor, which the
-            # build leg reports against a bank supplying ~178 V (measured
-            # V_b/V_dis ~ 5.1). The floor and this clamp compose without
-            # fighting, because the floor value phi_c_ceiling_V is itself <=
-            # circuit_V_avail_V whenever the circuit bound is the binding
-            # member of the composition.
-            #
-            # THIS CLAMPED V_b IS NOT WHAT THE CIRCUIT INTEGRATES, and that
-            # separation is load-bearing (2026-08-12). Were it, the clamped
-            # branch would give vdis_of_I(I) = (V_src - I*(R_comp + R_mesh))
-            # + I*R_internal, hence a loop residual f(I) identically zero and
-            # a stage derivative g'(I) = 1 exactly: monotone and bracketed,
-            # but with NO restoring force, so dI/dt >= 0 everywhere and the
-            # loop current could only ratchet upward on whatever the TR
-            # stage's explicit kick overshot to (measured 156.7 A vs a
-            # converged 0.9 A). The circuit is handed the UNBOUNDED demand
-            # instead -- see cathode.idriven_vdis_evaluator -- which keeps
-            # g'(I) > 1 strictly and leaves the current free to fall. The
-            # runaway this floor was added to stop (I_loop -> 8e8 A,
-            # 2026-07-20) is still closed: past the ceiling the unbounded
-            # demand rises to the data cap, far above anything the loop can
-            # source, so f goes sharply negative there.
-            V_b = min(V_b, circuit_V_avail_V)
 
     P_wall = I_tot * (V_b + I_tot * config.R_comp)
     P_load = I_tot * V_b
     P_comp = I_tot**2 * config.R_comp
     gap_survival = 1.0 - eta * beam_bypass_fraction
-    P_emitted_enthalpy_on_beam = _emitted_enthalpy_on_beam_W(
-        beam_launch_enthalpy_V,
-        I_eth_star,
-        gap_survival,
-        emitted_enthalpy_gap_netted,
-    )
-    # Priced at the launch potential itself, BEFORE any anode-mesh climb: the
-    # beam readers deposit beam_launch_energy_eV(...) instead, net of that
-    # climb, and the climbed-away difference is not booked into this power.
-    _launch_V = _launch_potential_V(phi_c, beam_launch_enthalpy_V)
-    P_prim = gap_survival * I_launched * _launch_V
-    # The share of P_prim the secondaries carry, at the same launch potential
-    # and the same gap-survival normalisation. Exactly 0.0 unarmed.
-    P_see_launched_W = gap_survival * I_see * _launch_V
+    P_prim = gap_survival * I_eth_star * phi_c
     P_ohmic = I_tot * V_p
-    # Electron sheath powers with *physical flux barriers* -- a deliberate,
-    # documented divergence from the frozen module's `_P_elec(phi_net,...)`:
+    # Electron sheath powers with *physical flux barriers*:
     # (i) plasma electrons reaching the cathode surface climb the classical
     # peak phi_c_plus, not the net phi_c -- in a deep virtual cathode the
     # net can go slightly NEGATIVE while the barrier stays high, and the
@@ -1172,20 +644,19 @@ def solve_idriven(
     # the first I~0 drive solve, detonating the fluid in one step);
     # (ii) an attracting electrode (phi < 0) collects at most electron
     # *saturation* -- the flux factor is capped at exp(Lambda). Both reduce
-    # bit-for-bit to the historical formulas in the classical repelling
-    # regime (phi_minus = 0, phi_a >= 0), which is where the M2 equivalence
-    # gate lives.
+    # to ``I_i (2 T_e + phi) exp(Lambda - phi/T_e)`` in the classical
+    # repelling regime (phi_minus = 0, phi_a >= 0).
     # Electron flux factors: the fraction of electron saturation actually
     # reaching each electrode across its repelling sheath. The plasma-thermal
     # (2Te) and sheath-fall (phi) parts ride the SAME flux, so each electrode
     # power splits cleanly into ``_thermal + _phi`` (R3.2 / A16 routing).
-    fe_c = _exp_clamped(Lambda - max(phi_c_plus, 0.0) / T_e)
+    fe_c = exp_clamped(Lambda - max(phi_c_plus, 0.0) / T_e)
     # The anode's collected electron current as a fraction of ``I_i_a``, so
     # the powers below keep their historical ``I_i_a * (...) * fe_a`` shape.
     # The CAP is the explicit saturation, not ``I_i_a e^Lambda_a``.
     fe_a = (
         (I_e_sat_a / I_i_a)
-        * _exp_clamped(-max(phi_a, 0.0) / T_e_anode)
+        * exp_clamped(-max(phi_a, 0.0) / T_e_anode)
     )
     # P_*_e / P_*_i keep their EXACT historical expressions (they feed the golden
     # via the fluid deposit and the cathode warming); the split derives the phi
@@ -1197,10 +668,10 @@ def solve_idriven(
     )
     P_cathode_e_thermal = I_i * (2.0 * T_e) * fe_c
     P_cathode_e_phi = P_cathode_e - P_cathode_e_thermal
-    P_cathode_i = _P_ion(phi_c, T_e, I_i)
+    P_cathode_i = P_ion(phi_c, T_e, I_i)
     P_cathode_i_thermal = I_i * (T_e / 2.0)
     P_cathode_i_phi = P_cathode_i - P_cathode_i_thermal
-    P_cathode_i_pl = _P_ion(phi_c, T_e, I_i_a, pl=True)
+    P_cathode_i_pl = P_ion(phi_c, T_e, I_i_a, pl=True)
     P_anode_e = (
         I_i_a
         * (2.0 * T_e_anode + phi_a)
@@ -1215,11 +686,11 @@ def solve_idriven(
     # ``I_tail_a`` is LAGGED -- the deposition is solved after the circuit
     # within a step, so this reads the previous accepted step's cull.
     P_tail_phi = max(phi_a, 0.0) * float(tail_anode_current_A)
-    P_anode_i = _P_ion(phi_a, T_e_anode, I_i_a)
+    P_anode_i = P_ion(phi_a, T_e_anode, I_i_a)
     P_anode_i_thermal = I_i_a * (T_e_anode / 2.0)
     P_anode_i_phi = P_anode_i - P_anode_i_thermal
-    P_anode_i_pl = _P_ion(phi_a, T_e_anode, I_i_a, pl=True)
-    _P_beam_bypass = eta * beam_bypass_fraction * I_launched * V_b
+    P_anode_i_pl = P_ion(phi_a, T_e_anode, I_i_a, pl=True)
+    _P_beam_bypass = eta * beam_bypass_fraction * I_eth_star * V_b
     # DEPRECATED unclosed scalars (kept bit-exact for the R1-R4 golden only).
     # NO LONGER EXPORTED to the HDF5; the successors are the closed audit built
     # just below. P_cathode_i_pl -> P_cathode_i_thermal (it is the ANODE ion
@@ -1228,7 +699,8 @@ def solve_idriven(
     # powers with thermal-only ion powers), P_net -> P_into_plasma or
     # P_load_residual (P_net books each sheath fall twice), P_net2 ->
     # P_into_plasma, P_comp -> nothing (it is I_tot**2 * R_comp, never read).
-    # See the SolverResult field block in circuit.py for the full statement.
+    # See the SolverResult field block in circuit_common.py for the full
+    # statement.
     P_net = (
         P_load - P_cathode_e - P_cathode_i - P_anode_e - P_anode_i
         - _P_beam_bypass
@@ -1276,23 +748,16 @@ def solve_idriven(
     # I_e_ret = P_cathode_e_phi / phi_c is the returning-electron current; the
     # cathode Kirchhoff (I_eth_star + I_i - I_e_ret == I_tot) is the real check.
     I_e_ret = P_cathode_e_phi / phi_c if phi_c != 0.0 else 0.0
-    cathode_field_work = I_launched * phi_c + P_cathode_i_phi - P_cathode_e_phi
+    cathode_field_work = I_eth_star * phi_c + P_cathode_i_phi - P_cathode_e_phi
     P_load_ledger = cathode_field_work + P_ohmic - I_tot * phi_a
     P_load_residual = P_load - P_load_ledger
     I_cathode_kirchhoff_residual = (
-        I_launched + I_i - I_e_ret
+        I_eth_star + I_i - I_e_ret
     ) - I_tot
 
-    # Active-bound census (see SolverResult): which member of the composed
-    # ceiling this solve ended up sitting on. Derived from the regime tag and
-    # the composition already decided above -- no recomputation, no extra
-    # evaluation of anything.
-    if not capability_limited:
-        bound_active = 0.0
-    elif _ceiling_is_circuit:
-        bound_active = 2.0
-    else:
-        bound_active = 1.0
+    # Active-bound census (see SolverResult): whether this solve ended up
+    # sitting on the ceiling, derived from the regime tag.
+    bound_active = 1.0 if capability_limited else 0.0
 
     return SolverResult(
         phi_c_plus=phi_c_plus,
@@ -1345,14 +810,7 @@ def solve_idriven(
         P_load_residual=P_load_residual,
         I_cathode_kirchhoff_residual=I_cathode_kirchhoff_residual,
         phi_c_ceiling_V=phi_c_ceiling_V,
-        circuit_V_avail_V=(
-            float("nan") if circuit_V_avail_V is None else circuit_V_avail_V
-        ),
         bound_active=bound_active,
-        beam_launch_enthalpy_V=beam_launch_enthalpy_V,
-        P_emitted_enthalpy_on_beam=P_emitted_enthalpy_on_beam,
-        I_see_A=I_see,
-        P_see_launched_W=P_see_launched_W,
         regime=regime,
         long_mfp=long_mfp,
         beam_bypass_fraction=beam_bypass_fraction,
@@ -1377,58 +835,18 @@ def solve_beam_system_idriven(
     b_beam_excitation: float = 0.0,
     beam_excitation_energy_eV: float = 21.218,
     schottky: bool = False,
-    bridge: bool = False,
     phi_c_cap_V: float = 1000.0,
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
     anode_electron_saturation_A: float | None = None,
-    circuit_V_avail_V: float | None = None,
-    circuit_bound_object: str = "phi_c",
-    beam_climb_V: float | None = None,
     tail_anode_current_A: float = 0.0,
-    emitted_enthalpy_V: float = 0.0,
-    emitted_enthalpy_gap_netted: bool = False,
-    secondary_yield: float = 0.0,
 ) -> BeamResult:
-    """Current-driven, single-cathode counterpart of ``solve_beam_system``.
+    """Current-driven, single-cathode sheath solve plus its beam arrays.
 
-    Calls ``solve_idriven`` for the primary cathode and assembles the same
-    per-cell beam arrays with the same formulas (mirrored from the frozen
-    voltage-driven module because that assembly lives inside its
-    ``solve_beam_system``, which hardwires ``solve``). Twin cathodes are
-    out of scope for the current-driven path (the dispatcher raises before
-    this is reached), so ``result_twin`` is always ``None`` and the twin
-    arrays stay zero. ``x0_next`` is kept for contract compatibility --
-    the current-driven solve needs no warm start.
-
-    ``beam_climb_V`` is the potential [V] a transmitted beam electron must
-    CLIMB between the anode mesh and the column, i.e. the anode-to-wall
-    common-mode offset when the vessel node is armed. ``None`` (the default)
-    means no node: the launch energy is ``result.phi_c`` itself, the same
-    float object, and every beam array below is bit-for-bit the historical
-    one. Given, the energy the beam carries into the column is
-    ``max(phi_c - max(beam_climb_V, 0), 0)`` -- the FLUX is untouched, because
-    the same electrons arrive, decelerated. A climb that takes the launch
-    energy to or below ``I_ion`` launches no beam at all, which is the fully
-    choked limit and not an error. The sheath solve's own ``phi_c``, ``V_b``
-    and gap bypass are NOT shifted: the climb sits downstream of the mesh, and
-    the common-mode node moves the whole cathode/anode system together and so
-    cannot change the anode-to-cathode differential the circuit integrates.
-
-    ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy [V] the
-    beam carries when ``cathode_enthalpy_on_beam`` has placed it there; it is
-    handed to the sheath solve, which decides from its own ``phi_c_minus``
-    whether the regime admits it, and reaches the arrays through the result.
-    0.0 (the default) leaves every array bit-for-bit historical.
-    ``emitted_enthalpy_gap_netted`` is handed to that same solve and selects
-    the flux its ``P_emitted_enthalpy_on_beam`` DIAGNOSTIC is normalised at,
-    per deposition route; no array below reads it.
-
-    ``secondary_yield`` is the ion-induced secondary electron yield the sheath
-    solve releases at the emitting face; it is handed straight through, and it
-    reaches the arrays below through ``beam_launched_current_A``, which is the
-    launched flux the beam density is built from. 0.0 (the default) leaves
-    every array bit-for-bit historical.
+    Calls ``solve_idriven`` for the primary cathode and hands the result to
+    :func:`assemble_beam_arrays`. Twin cathodes are out of scope for the
+    current-driven path (the dispatcher raises before this is reached), so
+    ``result_twin`` is always ``None`` and the twin arrays stay zero.
     """
     result = solve_idriven(
         config,
@@ -1442,17 +860,11 @@ def solve_beam_system_idriven(
         anode_current_A=anode_current_A,
         anode_T_e=anode_T_e,
         schottky=schottky,
-        bridge=bridge,
         phi_c_cap_V=phi_c_cap_V,
         alpha_sheath=alpha_sheath,
         alpha_sheath_anode=alpha_sheath_anode,
         anode_electron_saturation_A=anode_electron_saturation_A,
-        circuit_V_avail_V=circuit_V_avail_V,
-        circuit_bound_object=circuit_bound_object,
         tail_anode_current_A=tail_anode_current_A,
-        emitted_enthalpy_V=emitted_enthalpy_V,
-        emitted_enthalpy_gap_netted=emitted_enthalpy_gap_netted,
-        secondary_yield=secondary_yield,
     )
     return assemble_beam_arrays(
         result=result,
@@ -1466,7 +878,6 @@ def solve_beam_system_idriven(
         cathode_index=cathode_index,
         b_beam_excitation=b_beam_excitation,
         beam_excitation_energy_eV=beam_excitation_energy_eV,
-        beam_climb_V=beam_climb_V,
     )
 
 
@@ -1482,7 +893,6 @@ def assemble_beam_arrays(
     cathode_index: int = 0,
     b_beam_excitation: float = 0.0,
     beam_excitation_energy_eV: float = 21.218,
-    beam_climb_V: float | None = None,
 ) -> BeamResult:
     """Wrap a solved single-cathode sheath in the per-cell beam arrays.
 
@@ -1495,8 +905,8 @@ def assemble_beam_arrays(
     drift away from the first.
 
     Twin cathodes are out of scope for both callers, so ``result_twin`` is
-    always ``None`` and the twin arrays stay zero. ``x0_next`` is kept for
-    contract compatibility -- neither caller needs a warm start.
+    always ``None`` and the twin arrays stay zero. ``x0_next`` carries the
+    solved ``phi_c_plus``; neither caller needs a warm start.
     """
     cells = len(Te)
     v_beam = np.zeros(cells)
@@ -1505,16 +915,14 @@ def assemble_beam_arrays(
     beam_exc_cross = np.zeros(cells)
     beam_exc_energy = np.zeros(cells)
 
-    phi_c_0 = beam_launch_energy_eV(
-        beam_launch_potential_V(result), beam_climb_V
-    )
+    phi_c_0 = result.phi_c
     if phi_c_0 > I_ion:
-        v_beam[cathode_index] = math.sqrt(2.0 * phi_c_0 * _erg_per_eV / _me_cgs)
+        v_beam[cathode_index] = math.sqrt(2.0 * phi_c_0 * ERG_PER_EV / ME_CGS)
         _I_beam_0 = beam_launched_current_A(result) * (
             1.0 - config.eta * result.beam_bypass_fraction
         )
         n_beam[cathode_index] = _I_beam_0 / (
-            _e_SI * plasma_cross[cathode_index] * v_beam[cathode_index]
+            E_SI * plasma_cross[cathode_index] * v_beam[cathode_index]
         )
         if gas_type == "He":
             # The tabulated He EII cross section ends at eps = E/I_ion =
@@ -1570,18 +978,14 @@ def assemble_beam_arrays(
             l_b[cathode_index] * beam_cross[cathode_index] * nn[cathode_index]
         )
 
-    # The Beer-Lambert column profile is the LAUNCH potential's, the same
-    # object ``phi_c_0`` above was built from, so the deposition length and the
-    # beam it attenuates cannot be launched at two different energies. It IS
-    # ``result.phi_c`` on every solve that placed no enthalpy on the beam.
-    # (The mesh climb ``beam_climb_V`` is deliberately NOT subtracted here --
-    # it never is on this route, which the vessel node refuses at
-    # construction -- so this stays the pre-climb launch potential.)
+    # The Beer-Lambert column profile is at the launch potential ``phi_c_0``,
+    # so the deposition length and the beam it attenuates cannot be launched
+    # at two different energies.
     l_b_profile = np.zeros(cells)
     if beam_cross[cathode_index] != 0.0:
         for j in range(cells):
-            l_b_profile[j] = _compute_l_b(
-                beam_launch_potential_V(result), Te[j], ne[j], nn[j],
+            l_b_profile[j] = compute_l_b(
+                phi_c_0, Te[j], ne[j], nn[j],
                 beam_atten_cross[cathode_index],
             )
 

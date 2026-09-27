@@ -147,7 +147,7 @@ from .physics.cathode import (
     tail_reflect_face,
     validate_cathode_solver_model,
 )
-from cablp.cathode.circuit import beam_launched_current_A
+from cablp.cathode.circuit_common import beam_launched_current_A
 from .physics.cathode import (
     CATHODE_ENV_T_K,
     advance_circuit_current_driven,
@@ -567,9 +567,8 @@ def _cathode_result_prefixes(flags):
 
 
 #: The members of :data:`_CATHODE_RESULT_KEYS` that only the CURRENT-DRIVEN
-#: circuit solve populates. The voltage-driven solve in ``cablp.cathode.circuit``
-#: never assigns them, so they sit at their ``SolverResult`` dataclass defaults
-#: there -- which are zeros, and a zero in a power column is indistinguishable
+#: circuit solve populates. A solve that never assigns them leaves them at
+#: their ``SolverResult`` dataclass defaults -- which are zeros, and a zero in a power column is indistinguishable
 #: from a computed zero. A result assembled without them is exported as NaN
 #: instead, so absence of a value is visible in the file rather than inferred.
 #: The solver's own dispatch no longer produces such a result -- every phase,
@@ -12370,14 +12369,13 @@ class LAPDSim1D:
             # power-balance value.
             "T_s_surface": float(self._cathode_Ts_K),
             "configured": float(cathode_phase["configured"]),
-            # Current-driven circuit state (0.0 under the voltage-driven
-            # solver, whose loop current lives in source_I_tot).
+            # Current-driven circuit state.
             "circuit_I_loop": float(self._circuit_I_loop),
             # Discharge voltage [V] (the inductor's view): dt-weighted
             # average of the step-integrated V_dis over the save interval
             # (see above) -- the honest discharge-voltage trace, agreeing
             # with per-solve source_V_b and the loop reconstruction on the
-            # plateau. 0.0 under voltage-driven. Runs saved before
+            # plateau. Runs saved before
             # 2026-07-21 store the biased last-step sample under this key
             # (~25 V low on the ES1 plateau).
             "circuit_V_dis_step": V_dis_save,
@@ -12656,10 +12654,8 @@ class LAPDSim1D:
                 diag[f"{prefix}_beam_plateau_edge_eV"] = np.nan
                 diag[f"{prefix}_beam_plateau_edge_clamped"] = np.nan
         # The ``end`` prefix is PRESENCE-GATED on the twin cathode. Only
-        # ``beam_result.result_twin`` ever fills these, and that object is
-        # non-``None`` only under ``TwinCathode`` (the voltage-driven solve
-        # builds it inside ``if config.Twin``; the current-driven and
-        # prescribed solves leave it ``None`` unconditionally). A
+        # ``beam_result.result_twin`` would fill these, and the current-driven
+        # and prescribed solves leave it ``None`` unconditionally. A
         # single-cathode file therefore carried a full second copy of the
         # cathode-result block that was all-NaN in every frame of every run
         # -- a column a reader has to know to ignore. Gating the SEED on the
@@ -13300,8 +13296,8 @@ class LAPDSim1D:
         recycle rate. That is the CIRCUIT's per-ion incident energy -- a Bohm
         ion enters the sheath with the half-``Te`` directed energy the
         presheath gave it and falls through the cathode drop
-        (:func:`~cablp.cathode.circuit._P_ion`) -- so the power this row books
-        and the power ``P_cathode_i`` credits the surface with are ONE
+        (:func:`~cablp.cathode.circuit_common.P_ion`) -- so the power this
+        row books and the power ``P_cathode_i`` credits the surface with are ONE
         per-ion energy on ONE count, and the backscatter debit taken from
         this row is the share of the very power the surface was credited.
 
