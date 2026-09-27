@@ -3316,7 +3316,7 @@ class LAPDSim1D:
             ionization_rate_per_neutral = np.asarray(
                 reaction_terms["ionization_birth"].n, dtype=float
             ) / np.maximum(
-                np.asarray(reaction_state.nn, dtype=float), self._floors["nn"]
+                np.asarray(state.nn, dtype=float), self._floors["nn"]
             )
             energy_wall_terms["neutral_hot_channel"] = (
                 self.neutral_hot_channel_rhs(
