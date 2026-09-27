@@ -1989,13 +1989,13 @@ def _case_implicit_ee_sink_substep_order():
     nu = np.zeros(geometry.cells, dtype=float)
     sink_cells = np.flatnonzero(nu_shape > 0.0)
     nu[sink_cells] = 0.30 / (window / 4.0)
-    # The electron heat-flux limiter is always on. Its per-cell factor is
-    # frozen at the substep's incoming Te, which is itself a first-order
-    # error in the conduction operator (TR-BDF2 reads 0.88 here at the
-    # reference f = 0.45), and this case is about the SINK, not the limiter.
-    # So the conduction runs in the limiter's Spitzer limit: at this
-    # free-streaming fraction the suppression factor on this state is 1 to
-    # within 5.5e-9 (against 0.55 at f = 0.45).
+    # The electron heat-flux limiter is always on, and at the reference
+    # f = 0.45 the LIMITED conduction operator reads its own orders on this
+    # fixture (backward Euler 0.89, Crank-Nicolson 1.90, TR-BDF2 0.88) --
+    # a property of the limiter, not of the sink this case is about. So the
+    # conduction runs in the limiter's Spitzer limit: at this free-streaming
+    # fraction the suppression factor on this state is 1 to within 5.5e-9
+    # (against 0.55 at f = 0.45).
     spitzer_limit_f = 1.0e8
 
     def integrate(scheme, picard, steps):

@@ -1999,6 +1999,7 @@ def _mach_signal_speed(Te, Ti, wave_speed):
         "'adiabatic', 'isothermal'"
     )
 
+
 #: Needle for the overlay clause that forbids ratioing the two faces'
 #: flux-tube fields, quoted in the block's legend.
 MACH_RATIO_CLAUSE_NEEDLE = "must never be ratioed"
