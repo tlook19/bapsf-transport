@@ -103,11 +103,11 @@ INERT_PARAM_KEYS = frozenset({
     "beam_anomalous_model", "ql_relaxation_coeff",
     "beam_excitation_energy_eV", "b_beam_excitation",
     # --- atomic-rate / cooling / plasma-physics scales (no plasma during equil) ---
-    "atomic_rate_model", "recombination_energy_return",
-    "sigma_in_model", "Ti_birth_ionization",
-    "b_ion_neutral_drag", "D_amb", "D_amb_model", "heat_flux_limiter_f",
+    "recombination_energy_return",
+    "Ti_birth_ionization",
+    "b_ion_neutral_drag", "heat_flux_limiter_f",
     "b_presheath_length",
-    "b_surface_loss", "alpha_isat", "alpha_front", "front_flux_model",
+    "b_surface_loss", "alpha_isat",
     "adas_low_te_extension",
     # --- plasma initial condition + plasma floors ---
     "ne0", "Te0", "Ti0", "u0", "ne_floor", "Te_floor", "Ti_floor",
@@ -130,8 +130,8 @@ INERT_PARAM_KEYS = frozenset({
     "initial_neutral_state",
     # The prescribed per-cell geometry keys (plasma_radius_profile_cm,
     # machine_radius_profile_cm, plasma_area_max_vessel_fraction,
-    # neutral_annulus_volume_fraction_min) are deliberately NOT listed here,
-    # and neither is prescribed_area_geometry in INERT_FLAG_KEYS: these change
+    # neutral_annulus_volume_fraction_min) are deliberately NOT listed here:
+    # these change
     # the GEOMETRY. The column volume Vp, the vessel volume Vm, the annulus volume
     # V_ann = Vm - Vp, the zone exchange conductance (~ Rp dz) and the
     # free-molecular face conductances (~ the hydraulic radius) are all read by
@@ -145,7 +145,7 @@ INERT_PARAM_KEYS = frozenset({
     "implicit_heat_scheme", "operator_splitting", "heat_picard_iterations",
     "heat_picard_tol", "max_density_step_fraction",
     "max_energy_step_fraction",
-    "hyperbolic_wave_speed", "dt_growth_enabled", "dt_growth_factor",
+    "dt_growth_enabled", "dt_growth_factor",
     "adaptive_retries_enabled",
     # --- output cadence (run_neutral_equilibration overrides these) ---
     "dt_save", "t_save_start", "max_output_steps",
@@ -157,28 +157,24 @@ INERT_FLAG_KEYS = frozenset({
     # plasma / cathode / circuit / numerics toggles inert to neutral-only equil,
     # plus the cache-control flags themselves (they select the seed source, not
     # its content).
-    "Plasma", "cathode_coupling", "active_plasma_topology",
-    "electron_heat_flux_limit", "heat_conduction", "hyperbolic_energy_consistent",
-    "icool_recomb", "implicit_heat_conduction", "ionization_energy_cost",
-    "raw_stage_validation",
+    "Plasma", "cathode_coupling",
+    "heat_conduction",
+    "implicit_heat_conduction", "ionization_energy_cost",
     "debug_checks",
-    # The two end-face energy-booking flags are inert because
-    # run_neutral_equilibration does not merely leave them unreached, it
-    # CLEARS both on the inner sim's copy of
-    # the config (two assignments beside the Plasma=False and
-    # cathode_coupling=False lines that open that function), so the
-    # equilibration runs with them off no matter what the outer run arms and no
-    # armed value can reach a seed. Their content says the same thing:
-    # end_wall_sheath_full_debit books the sheath fall of the electrons the end
-    # wall collects and cathode_face_full_debit books the emitting face's
-    # currents -- and a Plasma=False, cathode_coupling=False pre-solve has no
-    # plasma reaching either end face and no cathode solve to read a current
-    # from, so neither has a term to book even before the clearing.
-    # Categorised rather than left to fail closed for the reason spelled out
-    # for the prescribed cathode trace above: the fail-closed default rotates
-    # every stored seed's signature the moment such a key joins the template,
-    # an invalidation with no neutral content behind it.
-    "end_wall_sheath_full_debit", "cathode_face_full_debit",
+    # The cathode end-face energy-booking flag is inert because
+    # run_neutral_equilibration does not merely leave it unreached, it
+    # CLEARS it on the inner sim's copy of the config (an assignment beside
+    # the Plasma=False and cathode_coupling=False lines that open that
+    # function), so the equilibration runs with it off no matter what the
+    # outer run arms and no armed value can reach a seed. Its content says the
+    # same thing: cathode_face_full_debit books the emitting face's currents,
+    # and a cathode_coupling=False pre-solve has no cathode solve to read a
+    # current from. Categorised rather than left to fail closed for the
+    # reason spelled out for the prescribed cathode trace above: the
+    # fail-closed default rotates every stored seed's signature the moment
+    # such a key joins the template, an invalidation with no neutral content
+    # behind it.
+    "cathode_face_full_debit",
     # the cache-control flag (not seed content)
     "use_cached_neutral_seed",
 })
@@ -368,7 +364,7 @@ def fill_rate_meta(params, nn):
         # nn0 is deliberately absent: it is the direct-run fill, not the
         # equilibration's start (which is pinned at 1e8), so recording it here
         # would mislabel the entry's provenance.
-        "S_pump_R", "gas_type", "Tn_K", "nx",
+        "S_pump_R", "Tn_K", "nx",
         "neutral_equilibration_cycles",
     )
     meta = {k: params.get(k) for k in keys}

@@ -95,7 +95,6 @@ from cablp.constants import ev_to_erg, kb_cgs
 CLEAN_PARAMS = {
     "ne0": 1e12, "nn0": 1e13, "Te0": 15.0, "Ti0": 2.0, "u0": 0.0,
     "gas_puff_enabled": False, "pump_enabled": False,
-    "atomic_rate_model": "adas",
     "phase_transition_mode": "scheduled",
     "tau_neutral_prebreakdown": 0.0, "tau_prebreakdown": 0.0,
     "tau_breakdown": 0.0, "tau_discharge": 1.0, "tau_afterglow": 0.0,
@@ -119,7 +118,6 @@ def make_sim(neutral_energy=True, **overrides):
     params, flags = default_config()
     params.update(CLEAN_PARAMS)
     params["nx"] = 60
-    params["gas_type"] = "He"
     params["Tn_K"] = TN_K
     flags.update(CLEAN_FLAGS)
     flags["neutral_momentum"] = True
@@ -258,17 +256,17 @@ def gate_x1():
     Tn = np.full_like(Ti, TN_EV)
     nn = np.full_like(Ti, 3.0e12)
     nu_cx, nu_el = ion_neutral_cx_split_rates(
-        nn=nn, Ti=Ti, Tn=Tn, gas_type="He"
+        nn=nn, Ti=Ti, Tn=Tn
     )
     T_eff = 0.5 * (Ti + Tn)
-    nu_mt = nn * phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He")
+    nu_mt = nn * phelps_momentum_transfer_rate_cm3_s(T_eff)
     closure = float(np.max(np.abs((nu_cx + nu_el) / nu_mt - 1.0)))
     # The elastic remainder IS the half isotropic-elastic rate: that is what
     # makes the split a partition of nu_mt rather than a subtraction that
     # happens to be positive.
-    half_iso = nn * 0.5 * phelps_iso_rate_cm3_s(T_eff, gas_type="He")
+    half_iso = nn * 0.5 * phelps_iso_rate_cm3_s(T_eff)
     close = float(np.max(np.abs(nu_el / half_iso - 1.0)))
-    cx_exact = _bitwise(nu_cx, nn * phelps_cx_rate_cm3_s(T_eff, "He"))
+    cx_exact = _bitwise(nu_cx, nn * phelps_cx_rate_cm3_s(T_eff))
     floor_binds = bool(np.any(nu_el < 0.0))
     ok = closure < 1e-15 and close < 1e-12 and cx_exact and not floor_binds
     return "X1 CX/elastic split is exact and the zero floor never binds", ok, (
@@ -377,7 +375,7 @@ def gate_x5():
     der = derive_state(st, floors=sim._floors, ion_mass_g=sim._ion_mass_g)
     Tn = neutral_temperature_eV(st, floors=sim._floors, Tn_eV=TN_EV)
     nu_cx, nu_el = ion_neutral_cx_split_rates(
-        nn=st.nn, Ti=der.Ti, Tn=Tn, gas_type="He"
+        nn=st.nn, Ti=der.Ti, Tn=Tn
     )
     n = np.asarray(st.n, dtype=float)
     ratio = neutral_evr(sim, st)

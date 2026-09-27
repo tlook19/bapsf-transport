@@ -147,7 +147,6 @@ PROBE_PARAMS = {
     "C_bank_F": 9.5,
     "equilibration_gas_puff_on_s": 0.025,
     "S_gp": 9010.0,
-    "atomic_rate_model": "adas",
     "b_beam_excitation": 1.4,
     "Rp": 18.415,
     "R_cath": 18.415,

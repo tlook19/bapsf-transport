@@ -45,8 +45,33 @@ from ._harness import (
     _case,
     _cathode_flags,
     _cathode_unit_config,
+    _pin_pre_r2a_neutral_stance,
     _tracking_electrode_sample,
 )
+
+
+def _qlr_config(**overrides):
+    """Return a 12-cell, already-emitting current-driven cathode pair.
+
+    The surface is held hot (no step's temperature increment survives this
+    heat capacity, and nothing cleans at a zero cross section), so a beam
+    launches inside a smoke-sized window and the anomalous closures have
+    power to act on.
+    """
+    params, flags = default_config()
+    params["nx"] = 12
+    params["cathode_solver_model"] = "current_driven"
+    params["initial_neutral_state"] = "fill"
+    flags["cathode_coupling"] = True
+    _pin_pre_r2a_neutral_stance(params, flags)
+    params.update({
+        "cathode_Ts_base_K": 1998.15,
+        "cathode_heat_capacity_J_per_K": 1.0e30,
+        "cathode_cleaning_sigma_cm2": 0.0,
+        "cathode_cleaning_E_th_eV": None,
+    })
+    params.update(overrides)
+    return params, flags
 
 
 # --------------------------------------------------------------------
@@ -65,16 +90,10 @@ def _case_beam_excitation_channel(cathode_solve):
     cathode_flags = _cathode_flags()
     from cablp.cathode.circuit_common import beam_excitation_cross
 
-    sigma_exc_100 = beam_excitation_cross(100.0, 1.0, "He")
+    sigma_exc_100 = beam_excitation_cross(100.0, 1.0)
     assert 5.0e-18 < sigma_exc_100 < 2.0e-17
-    assert beam_excitation_cross(100.0, 0.0, "He") == 0.0
-    assert beam_excitation_cross(10.0, 1.0, "He") == 0.0  # below threshold
-    try:
-        beam_excitation_cross(100.0, 1.0, "H")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for H beam excitation")
+    assert beam_excitation_cross(100.0, 0.0) == 0.0
+    assert beam_excitation_cross(10.0, 1.0) == 0.0  # below threshold
 
     # The b_beam_excitation knob scales the sheath solve's excitation
     # channel.
@@ -126,27 +145,26 @@ def _case_beam_manifold_excitation_model(beam_excitation_cross):
     # Dispatch: the scalar path reproduces the historical function
     # byte-for-byte; the manifold path matches the _cross helper with
     # b_beam_excitation as a pure multiplier on the cross section only.
-    assert beam_excitation_channel(100.0, 1.4, "He") == (
-        beam_excitation_cross(100.0, 1.4, "He"),
+    assert beam_excitation_channel(100.0, 1.4) == (
+        beam_excitation_cross(100.0, 1.4),
         21.218,
     )
-    _mf_sigma, _mf_E = beam_excitation_channel(100.0, 1.0, "He", model="manifold")
+    _mf_sigma, _mf_E = beam_excitation_channel(100.0, 1.0, model="manifold")
     assert (_mf_sigma, _mf_E) == _He_manifold_channel(100.0)
     _mf_sigma_h, _mf_E_h = beam_excitation_channel(
-        100.0, 0.5, "He", model="manifold"
+        100.0, 0.5, model="manifold"
     )
     assert np.isclose(_mf_sigma_h, 0.5 * _mf_sigma) and _mf_E_h == _mf_E
-    assert beam_excitation_channel(100.0, 0.0, "He", model="manifold") == (0.0, 0.0)
+    assert beam_excitation_channel(100.0, 0.0, model="manifold") == (0.0, 0.0)
     # Below the lowest manifold threshold (2^1S, 20.6158 eV).
-    assert beam_excitation_channel(15.0, 1.0, "He", model="manifold") == (0.0, 0.0)
+    assert beam_excitation_channel(15.0, 1.0, model="manifold") == (0.0, 0.0)
     # The measured manifold vs the historical 2^1P channel at 100 eV
     # (measure_beam_manifold.py, 2026-07-20): 1.67x the events, mean
     # radiated energy 21.98 eV — within the retired estimate's 1.4 +- 0.4.
-    assert 1.55 < _mf_sigma / beam_excitation_cross(100.0, 1.0, "He") < 1.80
+    assert 1.55 < _mf_sigma / beam_excitation_cross(100.0, 1.0) < 1.80
     assert 21.5 < _mf_E < 22.5
     for bad_call in (
-        lambda: beam_excitation_channel(100.0, 1.0, "He", model="bogus"),
-        lambda: beam_excitation_channel(100.0, 1.0, "H", model="manifold"),
+        lambda: beam_excitation_channel(100.0, 1.0, model="bogus"),
     ):
         try:
             bad_call()
@@ -1564,16 +1582,18 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
     # NOT identify those cells -- the dead cells have a finite plasma volume --
     # so the support has to come from ``plasma_active``.
     #
-    # Checked on BOTH a uniform and a non-uniform (source_fixed_grid) mesh: the
-    # kernel is weighted by cell length, and without that weighting a refined
-    # region is over-weighted per cm, which makes the smoothing operator itself
-    # mesh-dependent even where it happens to conserve.
+    # Checked on two meshes, the default one and one with a pinned fixed
+    # source region (non-uniform: the source cells are shorter than the far
+    # column's): the kernel is weighted by cell length, and without that
+    # weighting a refined region is over-weighted per cm, which makes the
+    # smoothing operator itself mesh-dependent even where it happens to
+    # conserve.
     cathode_flags = _cathode_flags()
     smooth_sigma_cm = 50.0
     smoothing_meshes = (
-        ("uniform", dict(csda_params), dict(cathode_flags)),
+        ("default", dict(csda_params), dict(cathode_flags)),
         (
-            "source_fixed_grid",
+            "pinned_source_grid",
             {
                 **csda_params,
                 # Gap pinned with the region: see _case_source_fixed_grid.
@@ -1582,7 +1602,7 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
                 "source_region_dz_cm": 10.0,
                 "gas_puff_z_cm": 60.0,
             },
-            {**cathode_flags, "source_fixed_grid": True},
+            dict(cathode_flags),
         ),
     )
     for mesh_label, smooth_base, smooth_flags in smoothing_meshes:
@@ -1601,7 +1621,7 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
         # old ``Vp > 0`` support could not have found them.
         assert not smooth_active.all(), mesh_label
         assert (smooth_Vp > 0.0).all(), mesh_label
-        if mesh_label == "source_fixed_grid":
+        if mesh_label == "pinned_source_grid":
             assert np.unique(np.round(smooth_dz[smooth_active], 9)).size > 1
 
         # (a) The kernel itself: no weight on any row the RHS mask will zero,
@@ -1677,7 +1697,7 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
     # positions -- exactly what an nx-matched source_region_dz_cm refinement
     # sweep builds.
     cathode_flags = _cathode_flags()
-    smoothkey_flags = {**cathode_flags, "source_fixed_grid": True}
+    smoothkey_flags = dict(cathode_flags)
     smoothkey_base = dict(
         csda_params,
         # Gap pinned with the region: see _case_source_fixed_grid.
@@ -1763,7 +1783,7 @@ def _case_ionization_birth_energy_model(csda_sim):
     assert np.all(cons_react.Ee == 0.0)
     assert np.any(cons_react.n > 0.0)
 
-    rhs = sim.plasma_flux_rhs(include_front=False)
+    rhs = sim.plasma_flux_rhs()
     # A uniform stationary plasma has no advective divergence -- exactly, on
     # every row, everywhere EXCEPT the momentum row at the plasma-terminating
     # faces. There the advective flux is deliberately zeroed and the ghost
@@ -2699,7 +2719,7 @@ def _case_csda_ql_heating_locality(deposit_beam):
 # --------------------------------------------------------------------
 @_case("csda-walk-window-reflection-k7")
 def _case_csda_walk_window_reflection_k7(
-    cool_flat, cooling_kwargs, deposit_beam, knob_floors, knob_mass,
+    cooling_kwargs, deposit_beam, knob_floors, knob_mass,
     knob_state, shape_state, wpe_E0, wpe_G0, wpe_cells, wpe_removed,
     wpe_thin, wpe_walk
 ):
@@ -2814,48 +2834,29 @@ def _case_csda_walk_window_reflection_k7(
             "expected ValueError for reflection without a tail walk"
         )
 
-    adas_reaction_kwargs = dict(
+    S_ion_a, S_rad_a, S_3b_a = reaction_rates(
         state=knob_state,
         floors=knob_floors,
         ion_mass_g=knob_mass,
-        gas_type="He",
-        I_ion=24.587,
-    )
-    S_ion_j, S_rad_j, S_3b_j = reaction_rates(**adas_reaction_kwargs)
-    S_ion_a, S_rad_a, S_3b_a = reaction_rates(
-        **adas_reaction_kwargs, atomic_rate_model="adas"
     )
     for values in (S_ion_a, S_rad_a):
         assert np.all(np.isfinite(values)) and np.all(values >= 0.0)
-    assert np.all(S_ion_a > S_ion_j)  # SCD > direct at these (Te <= 6 eV) cells
     # ACD carries the whole sink; the three-body slot is empty.
     assert np.all(S_3b_a == 0.0)
-    try:
-        reaction_rates(**adas_reaction_kwargs, atomic_rate_model="nonsense")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for unknown atomic_rate_model")
 
-    cool_adas = electron_cooling_rhs(**cooling_kwargs, atomic_rate_model="adas")
+    cool_adas = electron_cooling_rhs(**cooling_kwargs)
     assert np.all(np.isfinite(cool_adas.Ee))
     assert np.all(cool_adas.Ee <= 0.0)
-    # Radiation-only: strictly weaker electron cooling than the IAEA fits on
-    # the same state (the ionization-cost double count is what's removed).
-    assert np.all(np.abs(cool_adas.Ee) < np.abs(cool_flat.Ee))
     # The cooling path's fused ionization cost must be bit-identical to
     # I_ion * S_ion from reaction_rates -- the cost charges exactly the
     # particles the particle equation creates.
     cost_kwargs = dict(cooling_kwargs)
     cost_kwargs["ionization_energy_cost"] = True
-    cost_terms = electron_cooling_rhs_terms(**cost_kwargs, atomic_rate_model="adas")
+    cost_terms = electron_cooling_rhs_terms(**cost_kwargs)
     S_ion_ref, _, _ = reaction_rates(
         state=shape_state,
         floors=knob_floors,
         ion_mass_g=knob_mass,
-        gas_type="He",
-        I_ion=24.587,
-        atomic_rate_model="adas",
     )
     assert np.allclose(
         cost_terms["ionization_energy_cost"].Ee,
@@ -3085,12 +3086,12 @@ def _case_ql_relaxation_compiled_kernel_refusal(_qlr_ray):
 # ql-relaxation-presence-gating
 # --------------------------------------------------------------------
 @_case("ql-relaxation-presence-gating")
-def _case_ql_relaxation_presence_gating(_r2ql_config):
+def _case_ql_relaxation_presence_gating():
     # ---- (e) PRESENCE GATING: byte-identity with ql_relaxation unselected ---
     # The key must not reach deposit_beam, and sweeping it must not move a
     # single bit of a run on either of the other two arms.
     def _qlr_unselected_bytes(model, coeff):
-        params, flags = _r2ql_config()
+        params, flags = _qlr_config()
         params["beam_anomalous_model"] = model
         params["ql_relaxation_coeff"] = coeff
         seen = []
@@ -3142,10 +3143,10 @@ def _case_ql_relaxation_presence_gating(_r2ql_config):
 # ql-relaxation-solver-refusals
 # --------------------------------------------------------------------
 @_case("ql-relaxation-solver-refusals")
-def _case_ql_relaxation_solver_refusals(_r2ql_config):
+def _case_ql_relaxation_solver_refusals():
     # ---- (f) construction-time refusals, at the SOLVER ----
     def _qlr_refuses(says, **overrides):
-        params, flags = _r2ql_config()
+        params, flags = _qlr_config()
         params["beam_anomalous_model"] = "ql_relaxation"
         params.update(overrides)
         try:
@@ -3163,11 +3164,11 @@ def _case_ql_relaxation_solver_refusals(_r2ql_config):
     _qlr_refuses(_qlr_bad_coeff, ql_relaxation_coeff=0.0)
     _qlr_refuses(_qlr_bad_coeff, ql_relaxation_coeff=-30.0)
     _qlr_refuses(_qlr_bad_coeff, ql_relaxation_coeff=float("nan"))
-    _qlr_ok_params, _qlr_ok_flags = _r2ql_config()
+    _qlr_ok_params, _qlr_ok_flags = _qlr_config()
     _qlr_ok_params["beam_anomalous_model"] = "ql_relaxation"
     LAPDSim1D(_qlr_ok_params, _qlr_ok_flags)
     # The selector domain is closed.
-    _qlr_zzz_params, _qlr_zzz_flags = _r2ql_config()
+    _qlr_zzz_params, _qlr_zzz_flags = _qlr_config()
     _qlr_zzz_params["beam_anomalous_model"] = "zzz"
     try:
         LAPDSim1D(_qlr_zzz_params, _qlr_zzz_flags)
@@ -3177,85 +3178,6 @@ def _case_ql_relaxation_solver_refusals(_r2ql_config):
         )
     else:
         raise AssertionError("beam_anomalous_model must reject 'zzz'")
-
-
-# --------------------------------------------------------------------
-# ql-relaxation-passive-cell-booking
-# --------------------------------------------------------------------
-@_case("ql-relaxation-passive-cell-booking")
-def _case_ql_relaxation_passive_cell_booking(_r2, _r2ql_config):
-    # ---- (g) a PASSIVE cell BOOKS ql_relaxation's power ----
-    # The option-3 refusal is keyed to the FIAT arm. This closure carries its
-    # own onset gate and its own density-dependent extracted fraction, so it
-    # already books what a low-density cell can absorb; refusing it wholesale
-    # would delete the physics the middle leg exists to supply.
-    _qlr_t_params, _qlr_t_flags = _r2ql_config()
-    _qlr_t_params["beam_anomalous_model"] = "ql_relaxation"
-    _qlr_t_sim = _tracking_electrode_sample(
-        LAPDSim1D(_qlr_t_params, _qlr_t_flags)
-    )
-    _qlr_t_sim.run(t_end=1.0e-6, dt=1.0e-7)
-    _qlr_t_passive = _qlr_t_sim._tracer_passive
-    _qlr_t_solve = _qlr_t_sim.solve_cathode_boundary(
-        state=_qlr_t_sim.state, time=_qlr_t_sim._time, update_cache=False
-    )
-    _qlr_t_kwargs = _qlr_t_sim._tracer_beam_kwargs(
-        _qlr_t_sim.state, _qlr_t_solve, _qlr_t_sim._time
-    )
-    _qlr_t_power = _r2.beam_anomalous_power_density(**_qlr_t_kwargs)
-    # PRECONDITION: there IS ql_relaxation power on passive cells here, so
-    # "the passive cell booked it" is a statement about something.
-    assert float(np.max(np.abs(_qlr_t_power[_qlr_t_passive]))) > 0.0, (
-        "the ql_relaxation booking assertions are vacuous: no anomalous power "
-        "on any passive cell at this state"
-    )
-    _qlr_t_S, _qlr_t_net, _qlr_t_full = _qlr_t_sim._tracer_beam_rows(
-        _qlr_t_sim.state, _qlr_t_solve, _qlr_t_sim._time
-    )
-    assert np.array_equal(_qlr_t_net, _qlr_t_full), (
-        "under ql_relaxation a passive cell must book the anomalous power in "
-        "full -- nothing may be subtracted"
-    )
-    assert float(
-        np.max(np.abs(_qlr_t_sim.tracer_passive_anomalous_leak()))
-    ) == 0.0
-
-    # ANTI-VACUITY for the BOOKING: hand the audit a build that wrongly refuses
-    # (the fiat arm's subtraction applied under this closure) and it must
-    # report the whole anomalous power. Without this the "leak == 0" above
-    # would be satisfied by an audit that checks nothing under this model.
-    _qlr_t_broken = _r2.passive_anomalous_leak(
-        P_beam_net_consumed=_qlr_t_full - np.where(
-            _qlr_t_passive, _qlr_t_power, 0.0
-        ),
-        P_beam_net_full=_qlr_t_full,
-        passive=_qlr_t_passive,
-        beam_kwargs=_qlr_t_kwargs,
-    )
-    assert np.array_equal(
-        _qlr_t_broken, -np.where(_qlr_t_passive, _qlr_t_power, 0.0)
-    ), (
-        "the ql_relaxation booking audit is vacuous: a build that refused the "
-        "channel on passive cells was not caught"
-    )
-    assert float(np.max(np.abs(_qlr_t_broken))) > 0.0
-    # ... and the MODEL KEY is what decides, read by the audit itself: relabel
-    # the same booking as the fiat arm and the expectation flips.
-    _qlr_t_relabel = _r2.passive_anomalous_leak(
-        P_beam_net_consumed=_qlr_t_full,
-        P_beam_net_full=_qlr_t_full,
-        passive=_qlr_t_passive,
-        beam_kwargs=dict(
-            _qlr_t_kwargs,
-            input_dict=dict(
-                _qlr_t_kwargs["input_dict"],
-                beam_anomalous_model="quasilinear",
-            ),
-        ),
-    )
-    assert np.array_equal(
-        _qlr_t_relabel, np.where(_qlr_t_passive, _qlr_t_power, 0.0)
-    ), "the passive-cell policy must be keyed on beam_anomalous_model"
 
 
 # --------------------------------------------------------------------

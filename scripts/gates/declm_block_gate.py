@@ -415,14 +415,14 @@ def gate_refusals():
     # branch a reader of the refusal table needs to be true.
     unowned = dict(family_values(cathode))
     unowned["C_R"] = 8.76
-    unowned["neutral_baffles"] = True
+    unowned["TwinCathode"] = False
     refuses(
         "a block naming config keys no family owns (both namespaces)",
         lambda: resolve_config(models={cathode.name: unowned}),
         must_name=[
             "C_R: an input_dict key no family owns",
             "state it flat under [params]",
-            "neutral_baffles: an input_flags key no family owns",
+            "TwinCathode: an input_flags key no family owns",
             "state it flat under [flags]",
         ],
     )

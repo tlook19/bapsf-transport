@@ -12,7 +12,7 @@ from ..physics.energy import (
     electron_ion_relaxation_rate,
     ion_charge_exchange_rhs,
 )
-from ..physics.flux import ion_sound_speed, plasma_flux_rhs, plasma_wave_speed
+from ..physics.flux import ion_sound_speed, plasma_wave_speed
 from ..physics.neutrals import (
     NEUTRAL_GAMMA,
     neutral_exchange_rhs,
@@ -45,6 +45,8 @@ ELECTRODE_SINK_DT_FRACTION = 1.0
 class TimestepDiagnostics:
     dt: float
     dt_plasma_cfl: float
+    # Constant infinity: the front-filling bound it reported is removed. The
+    # field is kept so the saved diagnostics do not move.
     dt_front_density: float
     dt_surface_loss: float
     dt_neutral_exchange: float
@@ -145,11 +147,7 @@ def suggest_timestep(
     dt_min=1e-12,
     dt_max=1e-6,
     dt_global_scale=1.0,
-    include_front=True,
-    alpha_front=1.0,
     plasma_active=None,
-    active_plasma_topology=False,
-    wave_speed="isothermal",
 ):
     """Return a bounded explicit timestep and diagnostics.
 
@@ -207,18 +205,6 @@ def suggest_timestep(
             geometry=geometry,
             cfl=cfl,
             plasma_active=plasma_active,
-            wave_speed=wave_speed,
-        ),
-        "front_density": front_density_timestep(
-            state=state,
-            floors=floors,
-            ion_mass_g=ion_mass_g,
-            geometry=geometry,
-            density_dt_fraction=density_dt_fraction,
-            include_front=include_front,
-            alpha_front=alpha_front,
-            plasma_active=plasma_active,
-            active_plasma_topology=active_plasma_topology,
         ),
         # Retain the historical diagnostic key while assigning it to the live
         # resolved electrode/source bundle. The old volumetric endpoint loss
@@ -346,7 +332,7 @@ def suggest_timestep(
     return TimestepDiagnostics(
         dt=float(dt),
         dt_plasma_cfl=float(dt_candidates["plasma_cfl"]),
-        dt_front_density=float(dt_candidates["front_density"]),
+        dt_front_density=np.inf,
         dt_surface_loss=float(dt_candidates["surface_loss"]),
         dt_neutral_exchange=float(dt_candidates["neutral_exchange"]),
         dt_neutral_sources=float(dt_candidates["neutral_sources"]),
@@ -385,13 +371,12 @@ def apply_dt_global_scale(dt, dt_global_scale):
 
 def plasma_cfl_timestep(
     state, floors, ion_mass_g, geometry, cfl=0.4, plasma_active=None,
-    wave_speed="isothermal",
 ):
     """Return the plasma wave CFL timestep [s]."""
     if cfl <= 0.0:
         raise ValueError(f"cfl must be positive (got {cfl})")
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g, wave_speed)
+    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g)
     face_speed = 0.5 * (
         np.abs(derived.u[:-1])
         + np.abs(derived.u[1:])
@@ -523,52 +508,6 @@ def plasma_source_timestep(
     return float(min(candidates))
 
 
-def front_density_timestep(
-    state,
-    floors,
-    ion_mass_g,
-    geometry,
-    density_dt_fraction=0.25,
-    include_front=True,
-    alpha_front=1.0,
-    plasma_active=None,
-    active_plasma_topology=False,
-):
-    """Return a fractional density-change timestep for front filling."""
-    if not include_front:
-        return np.inf
-    if density_dt_fraction <= 0.0:
-        raise ValueError(
-            f"density_dt_fraction must be positive (got {density_dt_fraction})"
-        )
-    rhs_with_front = plasma_flux_rhs(
-        state=state,
-        floors=floors,
-        ion_mass_g=ion_mass_g,
-        geometry=geometry,
-        include_front=True,
-        alpha_front=alpha_front,
-        active_plasma_topology=active_plasma_topology,
-    )
-    rhs_without_front = plasma_flux_rhs(
-        state=state,
-        floors=floors,
-        ion_mass_g=ion_mass_g,
-        geometry=geometry,
-        include_front=False,
-        alpha_front=alpha_front,
-        active_plasma_topology=active_plasma_topology,
-    )
-    dn_front = rhs_with_front.n - rhs_without_front.n
-    return _fractional_timestep(
-        state.n,
-        dn_front,
-        density_dt_fraction,
-        floors["n"],
-        active_mask=plasma_active,
-    )
-
-
 def ion_neutral_drag_timestep(
     state,
     floors,
@@ -590,7 +529,6 @@ def ion_neutral_drag_timestep(
     nu_in = ion_neutral_collision_frequency(
         nn=state.nn,
         Ti=derived.Ti,
-        gas_type=ion_neutral_drag_kwargs.get("gas_type"),
     )
     active = _active_values(nu_in, plasma_active)
     nu_max = (
@@ -678,7 +616,7 @@ def neutral_energy_timestep(
     )
     nn = np.maximum(np.asarray(state.nn, dtype=float), floors["nn"])
     nu_mt = nn * phelps_momentum_transfer_rate_cm3_s(
-        0.5 * (derived.Ti + Tn), gas_type=neutral_energy_kwargs["gas_type"]
+        0.5 * (derived.Ti + Tn)
     )
     rate = (
         abs(float(neutral_energy_kwargs["b_ion_neutral_drag"]))

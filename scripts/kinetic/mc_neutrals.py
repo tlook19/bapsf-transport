@@ -929,7 +929,7 @@ def load_background(path, window_ms, puff_orifice=None):
     n_safe = np.maximum(bg["n"], 1e6)
     rates = he_rates(n_safe, np.maximum(bg["Te"], 0.2), ("scd",))
     bg["nu_ion"] = bg["n"] * rates["scd"]
-    bg["nu_cx"] = bg["n"] * charge_ex_react(np.maximum(bg["Ti"], 0.05), "He")
+    bg["nu_cx"] = bg["n"] * charge_ex_react(np.maximum(bg["Ti"], 0.05))
     if puff_orifice is not None:
         # Presence-gated: unset (the default) leaves every row above exactly
         # as assembled, so this route cannot move an existing product.

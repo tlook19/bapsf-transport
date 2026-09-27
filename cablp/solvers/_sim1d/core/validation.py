@@ -14,7 +14,6 @@ without the object they used to hang off.
 """
 
 import math
-import warnings
 from types import SimpleNamespace
 
 import numpy as np
@@ -22,7 +21,6 @@ import numpy as np
 from cablp.atomic.adas import he_rate_temperature_range_eV
 
 from .config import (
-    model_mode_defaults,
     parallel_momentum_sink_defaults,
 )
 from .geometry import _anode_neutral_transparency
@@ -85,52 +83,8 @@ def validate_r1_configuration_presence(
     flags,
     *,
     geometry,
-    hyperbolic_wave_speed,
-    raw_stage_validation,
 ):
     """Reject R1-audited controls that would otherwise be silent no-ops."""
-    frozen_controls = {
-        "front_flux_model": (
-            str(input_dict.get("front_flux_model")),
-            "sonic_relaxation",
-        ),
-        "D_amb_model": (
-            str(input_dict.get("D_amb_model")),
-            "cs_dz",
-        ),
-        "D_amb": (
-            float(input_dict.get("D_amb")),
-            0.0,
-        ),
-    }
-    changed = [
-        name
-        for name, (actual, canonical) in frozen_controls.items()
-        if actual != canonical
-    ]
-    if changed:
-        raise ValueError(
-            "R1-audited compatibility/boundary controls are frozen at "
-            "their checkpoint values until their owning repair supplies "
-            "a replacement operator; noncanonical values would be silent "
-            "no-ops: "
-            + ", ".join(changed)
-        )
-    # R5 stance flip (2026-07-25) deprecations. These paths remain runnable
-    # (A/B arms + tag reproducibility) but are superseded by the repaired
-    # production baseline; a non-default/active use warns.
-    _deprecated_selectors = {
-        "D_amb_model": (str(input_dict.get("D_amb_model", "cs_dz")), "cs_dz"),
-    }
-    _sel = [n for n, (a, d) in _deprecated_selectors.items() if a != d]
-    if _sel:
-        warnings.warn(
-            "legacy-compat selectors " + ", ".join(_sel) + " are DEPRECATED "
-            "and never consumed by the conservative solver (D_amb_model was "
-            "a _sim3-compat knob).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
     # "neutral" is the partner of the En ionization sink, which debits the
     # neutral energy field.
     ti_birth = input_dict.get("Ti_birth_ionization")
@@ -149,28 +103,7 @@ def validate_r1_configuration_presence(
             "Ti_birth_ionization must be 'neutral', or a finite "
             f"non-negative numeric eV value (got {ti_birth!r})"
         )
-    end_mode = str(input_dict.get("end_mode", "end_wall"))
-    if end_mode != "end_wall":
-        renamed = (
-            " 'collector' was RENAMED to 'end_wall': the far face is the "
-            "chamber end wall and there is no distinct collector electrode, "
-            "so a configuration written before the rename states the same "
-            "boundary under the old name."
-            if end_mode == "collector"
-            else ""
-        )
-        raise ValueError(
-            f"end_mode={end_mode!r} is not available: the 'mirrored_source' "
-            "end boundary was removed at D3, 2026-08-21 (it was a 0D-era "
-            "selector that the conservative solver never branched on). "
-            f"Accepted: 'end_wall'.{renamed}"
-        )
-    if hyperbolic_wave_speed not in {"isothermal", "adiabatic"}:
-        raise ValueError(
-            "hyperbolic_wave_speed must be 'isothermal' or 'adiabatic' "
-            f"(got {hyperbolic_wave_speed!r})"
-        )
-    if raw_stage_validation and flags.get("Plasma", True):
+    if flags.get("Plasma", True):
         for initial_name, floor_name in (
             ("Te0", "Te_floor"),
             ("Ti0", "Ti_floor"),
@@ -180,8 +113,8 @@ def validate_r1_configuration_presence(
             if not initial > floor:
                 raise ValueError(
                     f"{initial_name} must be strictly greater than "
-                    f"{floor_name} when raw_stage_validation=True "
-                    f"(got {initial} <= {floor})"
+                    f"{floor_name}: raw-stage validation rejects a state "
+                    f"at its floor (got {initial} <= {floor})"
                 )
 
 
@@ -470,8 +403,8 @@ def resolve_neutral_jet_config(
         np.any(absorbing) and np.any(roles == "cathode")
     ):
         raise ValueError(
-            "cathode_neutral_jet requires an absorbing cathode face "
-            "(resolved_boundaries geometry): the jet rides the "
+            "cathode_neutral_jet requires an absorbing cathode face: "
+            "the jet rides the "
             "boundary-absorption recycle flux"
         )
     anode_faces = np.asarray(
@@ -827,12 +760,9 @@ def refuse_te_floor_above_adas_table_edge(input_dict):
     than by physics, and the standing statement that the floor sits below the
     table edge becomes false while every rate silently reads its edge value.
 
-    Presence-gated on ``atomic_rate_model = "adas"``: under ``"janev"`` the
-    adf11 grid is not consulted at all and its edge orders nothing.
-
     The check is INDEPENDENT of ``adas_low_te_extension``. That key extends
-    only ``acd`` and ``prb1`` below the edge, by the Janev recombination shape
-    ratio, and it does not move the edge itself -- it reads the same grid
+    only ``acd`` and ``prb1`` below the edge, by the analytic recombination
+    shape ratio, and it does not move the edge itself -- it reads the same grid
     edge and rescales beneath it. ``scd`` (ionization) and both ``plt`` line
     powers still clamp there either way, so the ordering claim is owed on the
     extended package exactly as it is on the clamped one.
@@ -841,16 +771,14 @@ def refuse_te_floor_above_adas_table_edge(input_dict):
     the same source the ``atomic_rate_domain`` writer reads) rather than
     written down, so this refusal cannot drift from the bundled data.
     """
-    if str(input_dict.get("atomic_rate_model", "janev")) != "adas":
-        return
     te_edge_eV, _ = he_rate_temperature_range_eV()
     te_floor_eV = float(input_dict["Te_floor"])
     if te_floor_eV < te_edge_eV:
         return
     raise ValueError(
         f"Te_floor={te_floor_eV!r} eV sits at or above the bundled He adf11 "
-        f"low-Te grid edge {te_edge_eV!r} eV, and atomic_rate_model='adas' "
-        "reads that grid. Below the edge every adf11 coefficient is CLAMPED "
+        f"low-Te grid edge {te_edge_eV!r} eV, and the atomic rates read that "
+        "grid. Below the edge every adf11 coefficient is CLAMPED "
         "to its edge value, so the floor is what keeps the clamped band a "
         "band the plasma cools through instead of the only band it occupies: "
         "with the floor at or above the edge no recovered Te can ever lie "
@@ -858,149 +786,10 @@ def refuse_te_floor_above_adas_table_edge(input_dict):
         "active_cell_fraction_below is zero by construction rather than by "
         "physics, and the documented ordering (the floor sits below the "
         "table edge) is false. Accepted: Te_floor strictly below "
-        f"{te_edge_eV!r} eV, or atomic_rate_model='janev', which does not "
-        "consult the adf11 grid. adas_low_te_extension does not lift this: "
+        f"{te_edge_eV!r} eV. adas_low_te_extension does not lift this: "
         "it rescales acd and prb1 beneath the same edge without moving it, "
         "and scd and both plt tables clamp there either way"
     )
-
-#: The declared endpoints of the charge-death bracket. ``"cell_1"`` is the
-#: advisor consult's bracket A -- the beam's charge dies in the cathode cell.
-ELECTRON_DRIFT_CHARGE_DEATHS = ("cell_1", "cell_2")
-
-#: The anode-handshake readings. ``"sheath_row_closes_all"`` is the DEFAULT and
-#: the registered closure: the kinetic anode sheath row is
-#: the total thermal-electron energy flux at the sheath edge, so every fluid
-#: channel closes at that face. The other two are RETAINED as disclosed
-#: INSTRUMENT arms bounding the double count, and are not claim-bearing.
-ELECTRON_DRIFT_ANODE_HANDSHAKES = (
-    "sheath_row_closes_all",
-    "sheath_row_closes",
-    "export_counts",
-)
-
-
-def resolve_electron_drift_transport_config(
-    input_dict, flags, *, geometry, active_plasma_topology
-):
-    """Validate and RESOLVE the electron drift-transport operator.
-
-    Every failure here is a construction-time ``ValueError``: an operator that
-    cannot say which faces its drift current enters and terminates on, or a
-    declared convention that would be silently inert, must never reach the
-    first step. With the flag off both convention keys must sit at their
-    shipped values, so a run that picks a bracket arm and forgets the flag is
-    loud rather than silently on the other arm.
-
-    Returns the resolved record -- the two conventions plus the two faces the
-    operator is bounded by -- or ``None`` when the flag is off, which is the
-    presence gate every consumer reads.
-
-    The three geometric refusals are refusals rather than fallbacks because
-    each leaves a physics form open that this function has no authority to
-    close. Without a resolved anode face the drift current has nothing to
-    terminate on, and letting it run off the end of the machine would invent a
-    boundary condition. Under ``TwinCathode`` there are two cathode faces
-    driving one column and the split of the loop current between them is not
-    something the operator can read off the circuit. Without
-    ``active_plasma_topology`` there are two live face conventions in the
-    solver and the operator would have to pick one silently.
-    """
-    enabled = bool(flags.get("electron_drift_transport", False))
-    defaults = model_mode_defaults()
-    conventions = {}
-    for name in (
-        "electron_drift_charge_death",
-        "electron_drift_anode_handshake",
-    ):
-        default = defaults[name]
-        value = input_dict.get(name, default)
-        if not enabled:
-            if value != default:
-                raise ValueError(
-                    f"{name} was configured ({value!r}) without the "
-                    "electron_drift_transport flag, where it is inert; set "
-                    "the flag or drop the parameter"
-                )
-            continue
-        conventions[name] = value
-    if not enabled:
-        return None
-
-    charge_death = conventions["electron_drift_charge_death"]
-    if charge_death not in ELECTRON_DRIFT_CHARGE_DEATHS:
-        raise ValueError(
-            f"unknown electron_drift_charge_death {charge_death!r}. "
-            f"Accepted: {', '.join(ELECTRON_DRIFT_CHARGE_DEATHS)}"
-        )
-    anode_handshake = conventions["electron_drift_anode_handshake"]
-    if anode_handshake not in ELECTRON_DRIFT_ANODE_HANDSHAKES:
-        raise ValueError(
-            "unknown electron_drift_anode_handshake "
-            f"{anode_handshake!r}. Accepted: "
-            f"{', '.join(ELECTRON_DRIFT_ANODE_HANDSHAKES)}"
-        )
-    if not active_plasma_topology:
-        raise ValueError(
-            "electron_drift_transport requires active_plasma_topology: the "
-            "operator carries T_e and n to faces by the typed-topology rule "
-            "(arithmetic mean between two live cells, one-sided where the "
-            "neighbour is plasma-dead), and with that flag off the solver "
-            "carries a second face convention the operator would have to "
-            "choose between silently. Accepted: "
-            "electron_drift_transport=True with "
-            "active_plasma_topology=True, or "
-            "electron_drift_transport=False"
-        )
-    if bool(flags.get("TwinCathode", False)):
-        raise ValueError(
-            "electron_drift_transport does not support TwinCathode: two "
-            "cathode faces drive one column, and how the booked loop current "
-            "divides between the two drift channels is not something the "
-            "operator can read off the circuit -- it would have to be "
-            "assumed. Accepted: electron_drift_transport=True with "
-            "TwinCathode=False, or electron_drift_transport=False"
-        )
-    cathode_faces = np.asarray(
-        getattr(geometry, "cathode_face_indices", ()), dtype=int
-    )
-    anode_faces = np.asarray(
-        getattr(geometry, "anode_face_indices", ()), dtype=int
-    )
-    if cathode_faces.size != 1 or anode_faces.size != 1:
-        raise ValueError(
-            "electron_drift_transport needs exactly one cathode face and one "
-            "anode face to bound the drift current; this geometry carries "
-            f"cathode_face_indices={cathode_faces.tolist()} and "
-            f"anode_face_indices={anode_faces.tolist()}. Without a resolved "
-            "anode the drift has nothing to terminate on and the operator "
-            "would be inventing its own outflow boundary"
-        )
-    cathode_face = int(cathode_faces[0])
-    anode_face = int(anode_faces[0])
-    if anode_face <= cathode_face:
-        raise ValueError(
-            "electron_drift_transport expects the anode face downstream of "
-            f"the cathode face (got cathode_face={cathode_face}, "
-            f"anode_face={anode_face}): the operator books the drift as "
-            "flowing from the cathode toward the anode, and a mirrored "
-            "layout would silently reverse every sign it produces"
-        )
-    launch_cell = int(geometry.plasma_face_live_cell[cathode_face])
-    if launch_cell < 0:
-        raise ValueError(
-            "electron_drift_transport found no live plasma cell against the "
-            f"cathode face {cathode_face}; there is nowhere for the drift to "
-            "enter"
-        )
-    return {
-        "charge_death": charge_death,
-        "anode_handshake": anode_handshake,
-        "cathode_face": cathode_face,
-        "anode_face": anode_face,
-        "launch_cell": launch_cell,
-    }
-
 
 def resolve_parallel_momentum_sink(input_dict, *, geometry):
     """Validate and RESOLVE the imposed parallel momentum sink.

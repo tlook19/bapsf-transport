@@ -1503,7 +1503,7 @@ def fluid_channel_moments(Ti, u_i, Tn, u_n):
     generalized form of the same operator and is labelled as such.
     """
     T_eff = 0.5 * (float(Ti) + float(Tn))
-    k_mt = float(phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"))
+    k_mt = float(phelps_momentum_transfer_rate_cm3_s(T_eff))
     du = float(u_i) - float(u_n)
     C_P = -M_HE * k_mt * du
     C_Ei = 0.5 * M_HE * k_mt * du**2 + 1.5 * k_mt * (float(Tn) - float(Ti)) * EV

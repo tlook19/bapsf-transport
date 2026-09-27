@@ -49,6 +49,7 @@ from cablp.solvers._sim1d.results.phase3_capture import (
     reserve_run_id,
     write_qualified_capture,
 )
+from cablp.solvers._sim1d.solver import END_SHEATH_DEBIT_ROWS
 
 from ._harness import (
     _CAPFIX_ESCAPE_CONFIG,
@@ -234,7 +235,11 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     )
     assert set(run_result.rhs_terms) == expected_rhs_terms
     assert set(run_result.electron_energy_terms_W_cm3) == expected_rhs_terms
-    assert set(run_result.ion_energy_terms_W_cm3) == expected_rhs_terms
+    # The end-face sheath rows are electron-only and written to the electron
+    # table alone; the end wall row is armed on this geometry's end wall face.
+    assert set(run_result.ion_energy_terms_W_cm3) == (
+        expected_rhs_terms - set(END_SHEATH_DEBIT_ROWS)
+    )
     assert run_result.cathode_diagnostics["enabled"].shape == (4,)
     assert np.allclose(run_result.cathode_diagnostics["enabled"], 0.0)
     assert np.allclose(run_result.cathode_diagnostics["configured"], 0.0)
@@ -264,10 +269,15 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             run_result.electron_energy_terms_W_cm3[term_name],
             1.0e-7 * term_fields["Ee"],
         )
-        assert np.allclose(
-            run_result.ion_energy_terms_W_cm3[term_name],
-            1.0e-7 * term_fields["Ei"],
-        )
+        if term_name in END_SHEATH_DEBIT_ROWS:
+            # Electron-only: Ei is exactly zero and the row is absent from
+            # the ion table.
+            assert np.all(term_fields["Ei"] == 0.0), term_name
+        else:
+            assert np.allclose(
+                run_result.ion_energy_terms_W_cm3[term_name],
+                1.0e-7 * term_fields["Ei"],
+            )
         saved_term_sum = saved_term_sum + np.concatenate(
             [term_fields[field_name] for field_name in STATE_NAMES_1D],
             axis=1,
@@ -448,7 +458,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             saved_params = json.loads(h5.attrs["params_json"])
             saved_flags = json.loads(h5.attrs["flags_json"])
             assert saved_params["dt_save"] == run_params["dt_save"]
-            assert saved_flags["front_flux"] == flags["front_flux"]
+            assert saved_flags["cathode_coupling"] == flags["cathode_coupling"]
             assert h5["time"].shape == run_result.time.shape
             assert h5["phase"].shape == run_result.phase.shape
             assert h5["phase_elapsed"].shape == run_result.phase_elapsed.shape
@@ -927,7 +937,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             assert np.allclose(loaded.current_trigger_samples["time"], [])
             assert np.allclose(loaded.current_trigger_samples["I_tot"], [])
             assert loaded.params["dt_save"] == run_params["dt_save"]
-            assert loaded.flags["front_flux"] == flags["front_flux"]
+            assert loaded.flags["cathode_coupling"] == flags["cathode_coupling"]
             assert np.allclose(loaded.time, run_result.time)
             assert np.all(loaded.phase == run_result.phase)
             assert np.allclose(loaded.phase_elapsed, run_result.phase_elapsed)
@@ -1212,7 +1222,6 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
     r1c_flags = dict(
         r1a_flags,
         neutral_momentum=True,
-        raw_stage_validation=True,
     )
     r1c_dt = 1.0e-10
     for bad_field in ("n", "nn", "nn_a", "Ee", "Ei"):
@@ -1342,23 +1351,7 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
     )
     assert debit_sim._floor_ledger == ledger_before_probe
 
-    # R1d configuration presence: valid R1 selectors perturb their intended
-    # operator; the still-frozen compatibility controls are rejected as silent
-    # no-ops pending their owning repair.
     import warnings as _dep_warnings
-    for stale_param in (
-        {"front_flux_model": "unregistered"},
-        {"D_amb_model": "constant"},
-        {"D_amb": 1.0},
-    ):
-        try:
-            LAPDSim1D(dict(r1a_params, **stale_param), r1a_flags)
-        except ValueError as error:
-            assert "silent no-ops" in str(error)
-        else:
-            raise AssertionError(
-                f"expected frozen surface-control rejection: {stale_param}"
-            )
     # A13 (R3.3, deleted at D3 2026-08-21): the four resolved-boundary
     # surface-loss controls were 0D artifacts standing in for un-separated
     # cathode/anode I_sat, and the resolved geometry measures the Bohm I_sat
@@ -1395,39 +1388,17 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
                 f"expected birth-selector rejection: {birth_name}={bad_value}"
             )
 
-    topo_off = LAPDSim1D(
-        r1a_params, dict(r1a_flags, active_plasma_topology=False)
-    )
+    # The masked reaction rows: the bare reaction operator books an
+    # ionization birth on the plasma-dead cells, and the typed topology
+    # removes it from the summed RHS there.
     topo_on = LAPDSim1D(r1a_params, r1a_flags)
     topo_dead = ~topo_on.geometry.plasma_active
     assert np.any(
-        topo_off.reaction_rhs_terms()["ionization_birth"].n[topo_dead] != 0.0
+        topo_on.reaction_rhs_terms()["ionization_birth"].n[topo_dead] != 0.0
     )
     assert np.all(
         topo_on.rhs_terms()["ionization_birth"].n[topo_dead] == 0.0
     )
-
-    raw_off = LAPDSim1D(
-        r1c_params, dict(r1c_flags, raw_stage_validation=False)
-    )
-    raw_off_fields = state_field_names(raw_off.state)
-    raw_off_row = raw_off_fields.index("nn_a")
-    raw_off_cells = raw_off.geometry.cells
-
-    def raw_off_rhs(y, time=None):
-        rhs = np.zeros_like(y)
-        start = raw_off_row * raw_off_cells
-        rhs[start : start + raw_off_cells] = (
-            -2.0 * np.asarray(y)[start : start + raw_off_cells] / r1c_dt
-        )
-        return rhs
-
-    raw_off.rhs = raw_off_rhs
-    raw_off_attempt = raw_off._attempt_step(
-        dt=r1c_dt, operator_split=False
-    )
-    assert raw_off_attempt.raw_rejection_reason == ""
-    assert raw_off_attempt.floor_ledger["nn_a_particles_added"] > 0.0
 
 
 # --------------------------------------------------------------------
@@ -1573,8 +1544,6 @@ def _case_resolved_config_manifest_r1e():
     # accepted-only floor ledger exactly null through plasma launch.
     repaired_params, repaired_flags = default_config()
     adas_te_min, adas_te_max = he_rate_temperature_range_eV()
-    assert repaired_flags["active_plasma_topology"] is True
-    assert repaired_flags["raw_stage_validation"] is True
     assert repaired_params["Te0"] == 0.21
     assert repaired_params["Ti0"] == 0.026
     assert repaired_params["Te0"] > adas_te_min

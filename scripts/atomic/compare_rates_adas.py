@@ -1,6 +1,6 @@
 """Compare the historical He atomic-rate fits against the packaged ADAS data.
 
-This regenerates the evidence behind ``atomic_rate_model = "adas"``:
+This regenerates the evidence behind the solver's ADAS rate coefficients:
 the IAEA He I "electron cooling rate" fit
 contains the ionization-potential loss (so the model's separate
 ionization-cost term double-counts it), the He II fit is roughly 2x high,
@@ -81,7 +81,7 @@ def implied_b_factors(ne):
     qei = IAEA_exp4(TE_EV, aHeII, recomb=False)
     plt1 = he_neutral_line_power(ne, TE_EV)
     plt2 = he_ion_line_power(ne, TE_EV)
-    print(f"\n--- implied janev-mode b(Te) at ne = {ne:.1e} cm^-3 ---")
+    print(f"\n--- implied historical-fit b(Te) at ne = {ne:.1e} cm^-3 ---")
     print(f"{'Te':>6} {'b_Qen':>7} {'b_Qei':>7}")
     for i, t in enumerate(TE_EV):
         print(f"{t:6.1f} {plt1[i] / qen[i]:7.3f} {plt2[i] / qei[i]:7.3f}")

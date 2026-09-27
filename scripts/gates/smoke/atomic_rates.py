@@ -16,10 +16,6 @@ from cablp.solvers._sim1d.physics.conduction import (
     heat_conduction_rhs,
     implicit_heat_conduction_step,
 )
-from cablp.solvers._sim1d.physics.energy import (
-    electron_cooling_rhs,
-    ion_charge_exchange_rhs,
-)
 from cablp.solvers._sim1d.physics.sources import (
     ion_neutral_collision_frequency,
 )
@@ -35,28 +31,11 @@ from ._harness import _base_config, _base_sim, _case, _resolved_cathode_flags
     historical_stance=True,
     provides=("expected_rhs_terms", "no_source_params"),
 )
-def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
-    # Hydrogen coverage was removed: the thesis scope is He-only (all
-    # experimental data is helium) and the adas rate default is wired for He.
-    # gas_type = "H" remains selectable with atomic_rate_model = "janev" but
-    # is no longer exercised here.
+def _case_helium_only_reaction_rates(dt_default):
     params, flags = _base_config()
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     state = snapshot.state
-    try:
-        ion_charge_exchange_rhs(
-            state=hot_ion_cx_state,
-            floors=sim.floors,
-            ion_mass_g=sim.ion_mass_g,
-            gas_type="Ar",
-            Tn_fit=params["Tn_fit"],
-        )
-    except ValueError as exc:
-        assert "unsupported gas_type" in str(exc)
-    else:
-        raise AssertionError("expected unsupported gas_type to fail")
-
     heat_state = conservative_from_primitives(
         n=np.full(geom.cells, 1.0e12),
         nn=state.nn,
@@ -152,14 +131,15 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         # unconditional, so its term is always present.
         "neutral_zone_exchange",
         "plasma_advective_flux",
+        # Constant zero row kept so the saved term set does not move.
         "plasma_front_flux",
         "boundary_absorption",
         "characteristic_boundary",
+        # The end wall sheath debit: armed by the geometry's end wall face,
+        # which this single-cathode layout carries.
+        "end_wall_e_sheath_climb",
         "pressure_work",
-        # Present with all-zero rows whether or not electron_drift_transport
-        # is armed: the term key is what keeps the saved term structure stable
-        # across the pre-breakdown phase change AND across the flag, so it
-        # belongs in the unarmed enumeration too.
+        # Constant zero row kept so the saved term set does not move.
         "electron_drift_transport",
         "hyperbolic_dissipation_heating",
         "ei_exchange",
@@ -263,51 +243,27 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
 # --------------------------------------------------------------------
 @_case(
     "sigma-in-phelps",
-    provides=("cool_flat", "cooling_kwargs", "shape_state"),
+    provides=("cooling_kwargs", "shape_state"),
 )
 def _case_sigma_in_phelps(knob_floors, knob_mass, knob_state):
     # --- Momentum-transfer rate. The two legacy arms ("constant",
-    # "cx_derived") were removed at D3 (2026-08-21) together with the
-    # solver's only non-helium path, so the Phelps rate is the whole
+    # "cx_derived") were removed at D3, so the Phelps rate is the whole
     # function: nu_in = nn * (k_b + 1/2 k_iso)((Ti + Tn)/2). It must be
     # positive, finite, and exactly the tabulated rate at the effective
-    # temperature -- gas_type is now required rather than selected.
+    # temperature.
     for Ti_probe in (0.1, 5.0):
-        nu_in = ion_neutral_collision_frequency(
-            nn=1e13, Ti=Ti_probe, gas_type="He"
-        )
+        nu_in = ion_neutral_collision_frequency(nn=1e13, Ti=Ti_probe)
         assert np.isfinite(nu_in) and nu_in > 0.0
         assert np.isclose(
             nu_in,
             1e13
             * phelps_momentum_transfer_rate_cm3_s(
-                0.5 * (Ti_probe + 0.025851), gas_type="He"
+                0.5 * (Ti_probe + 0.025851)
             ),
             rtol=0.0,
         )
-    # gas_type is no longer optional -- there is no gas-independent arm left.
-    try:
-        ion_neutral_collision_frequency(nn=1e13, Ti=1.0)
-    except ValueError as error:
-        assert "requires gas_type" in str(error), error
-    else:
-        raise AssertionError("expected ValueError without gas_type")
-    # The selector itself keeps 'phelps' and names the D3 removal for the rest.
-    _sigma_params, _sigma_flags = _base_config()
-    for _sigma_bad in ("constant", "cx_derived", "nonsense"):
-        try:
-            LAPDSim1D(
-                dict(_sigma_params, sigma_in_model=_sigma_bad), _sigma_flags
-            )
-        except ValueError as error:
-            assert "removed at D3, 2026-08-21" in str(error), error
-            assert "Accepted: 'phelps'" in str(error), error
-        else:
-            raise AssertionError(
-                f"expected sigma_in_model={_sigma_bad!r} to be refused"
-            )
 
-    # Reference state the ADAS-vs-janev cooling comparison below reads.
+    # Reference state the ADAS cooling checks downstream read.
     shape_state = conservative_from_primitives(
         n=np.full(3, 1e12),
         nn=np.full(3, 1e13),
@@ -320,13 +276,9 @@ def _case_sigma_in_phelps(knob_floors, knob_mass, knob_state):
         state=shape_state,
         floors=knob_floors,
         ion_mass_g=knob_mass,
-        gas_type="He",
         I_ion=24.587,
         ionization_energy_cost=False,
     )
-    # The janev-path reference the ADAS comparison downstream reads.
-    cool_flat = electron_cooling_rhs(**cooling_kwargs)
-    assert np.all(cool_flat.Ee < 0.0)
     return locals()
 
 
@@ -338,10 +290,10 @@ def _case_sigma_in_phelps(knob_floors, knob_mass, knob_state):
     provides=("_b21p", "_he_2p_excitation_cross_cm2"),
 )
 def _case_adas_atomic_rate_model():
-    # --- ADAS atomic rate model (atomic_rate_model = "adas"): adf11 tables
-    # parse, grid nodes reproduce exactly, edges clamp, and the physics the
-    # switch exists for shows up (effective SCD ionization above the direct
-    # ground-state rate at low Te, radiation-only cooling below the IAEA fit).
+    # --- ADAS atomic rates: adf11 tables parse, grid nodes reproduce
+    # exactly, edges clamp, and the physics the effective coefficients carry
+    # shows up (effective SCD ionization above the direct ground-state rate at
+    # low Te, radiation-only cooling below the IAEA fit).
     from cablp.atomic import adas as _adas
     from cablp.atomic.cross_sections import He_ion_rate_lkup
     from cablp.atomic.fits import IAEA_exp1
@@ -392,6 +344,55 @@ def _case_adas_atomic_rate_model():
             rtol=1e-12,
         )
     return locals()
+
+
+# --------------------------------------------------------------------
+# retired-gas-type-and-rate-model-keys
+# --------------------------------------------------------------------
+@_case("retired-gas-type-and-rate-model-keys")
+def _case_retired_gas_type_and_rate_model_keys():
+    # The species is helium and the atomic rates are the OPEN-ADAS effective
+    # coefficients, unconditionally. gas_type and atomic_rate_model are
+    # retired keys: a configuration naming either is refused at construction
+    # whatever value it carries -- the former defaults included, since the key
+    # owns no read -- and the refusal names the key as retired and states
+    # what is now unconditional.
+    from cablp.solvers._sim1d.core.config import (
+        RETIRED_PARAM_KEYS,
+        default_config,
+        input_dict_template_1d,
+    )
+
+    for _rk_key in ("gas_type", "atomic_rate_model"):
+        assert _rk_key not in input_dict_template_1d, _rk_key
+        assert _rk_key in RETIRED_PARAM_KEYS, _rk_key
+    _rk_params, _rk_flags = default_config()
+    for _rk_key, _rk_value in (
+        ("gas_type", "He"),
+        ("gas_type", "H"),
+        ("atomic_rate_model", "adas"),
+        ("atomic_rate_model", "janev"),
+    ):
+        try:
+            LAPDSim1D(dict(_rk_params, **{_rk_key: _rk_value}), _rk_flags)
+        except ValueError as _rk_exc:
+            _rk_msg = str(_rk_exc)
+            assert f"{_rk_key} is RETIRED" in _rk_msg, _rk_msg
+            assert "unconditional" in _rk_msg, _rk_msg
+        else:
+            raise AssertionError(
+                f"{_rk_key}={_rk_value!r} was accepted; a retired key must "
+                "be refused at construction"
+            )
+    # Misfiled into the flag namespace it is a plain unknown key, not a
+    # retired one: the retired register is per namespace.
+    try:
+        LAPDSim1D(_rk_params, dict(_rk_flags, gas_type="He"))
+    except ValueError as _rk_exc:
+        assert "flags=['gas_type']" in str(_rk_exc), str(_rk_exc)
+        assert "RETIRED" not in str(_rk_exc), str(_rk_exc)
+    else:
+        raise AssertionError("gas_type in input_flags was accepted")
 
 
 # --------------------------------------------------------------------
@@ -467,32 +468,13 @@ def _case_he_singlet_manifold_registry(_b21p, _he_2p_excitation_cross_cm2):
     historical_stance=True,
 )
 def _case_adas_low_te_extension_retired(m3_params):
-    # --- Retired deep-afterglow low-Te recipe: adas_low_te_extension with
-    # icool_recomb composes destructively (bare PRB charged, sub-edge PRB
-    # amplified ~9,300x -> thermal runaway to the Te floor and a permanent
-    # electron_cooling dt collapse). Construction must refuse the pair.
+    # --- The low-Te extension alone stays constructible.
     resolved_cathode_flags = _resolved_cathode_flags()
-    try:
-        LAPDSim1D(
-            dict(m3_params, adas_low_te_extension=True),
-            dict(resolved_cathode_flags, icool_recomb=True),
-        )
-    except ValueError as exc:
-        assert "adas_low_te_extension" in str(exc)
-        assert "icool_recomb" in str(exc)
-    else:
-        raise AssertionError(
-            "expected ValueError for adas_low_te_extension + icool_recomb"
-        )
-    # Either flag ALONE stays constructible -- the guard is on the pair only,
-    # and the recombination_energy_return guard's behavior is unchanged.
     LAPDSim1D(
         dict(m3_params, adas_low_te_extension=True), resolved_cathode_flags
     )
-    LAPDSim1D(m3_params, dict(resolved_cathode_flags, icool_recomb=True))
 
-    # --- Te_floor must stay BELOW the adf11 low-Te grid edge under
-    # atomic_rate_model='adas'. Below that edge every coefficient is clamped
+    # --- Te_floor must stay BELOW the adf11 low-Te grid edge. Below that edge every coefficient is clamped
     # to its edge value, so a floor at or above it makes the clamped band the
     # only band the plasma can occupy -- the atomic_rate_domain ledger's
     # "fraction below the table" is then zero by construction, and the
@@ -527,15 +509,8 @@ def _case_adas_low_te_extension_retired(m3_params):
     from baseline_sim1d import build_baseline_config as _tf_baseline
 
     _tf_params, _tf_flags = _tf_baseline()
-    assert str(_tf_params["atomic_rate_model"]) == "adas"
     assert float(_tf_params["Te_floor"]) < _tf_edge_eV
     LAPDSim1D(_tf_params, _tf_flags)
-    # Presence gate: under 'janev' the adf11 grid is not consulted and its
-    # edge orders nothing, so the same floor does NOT trip this guard.
-    LAPDSim1D(
-        dict(m3_params, Te_floor=0.25, Te0=0.5, atomic_rate_model="janev"),
-        resolved_cathode_flags,
-    )
 
 
 # --------------------------------------------------------------------
@@ -548,29 +523,15 @@ def _case_adas_low_te_extension_retired(m3_params):
 def _case_gcr_recombination_energy_pair(m3_params):
     # --- GCR-consistent recombination energy pair
     # (recombination_energy_return): +I_ion*S_rec - P_PRB on the electron
-    # fluid, adas-only, mutually exclusive with icool_recomb (double-charge).
+    # fluid.
     resolved_cathode_flags = _resolved_cathode_flags()
     from cablp.atomic.adas import he_rates as _rer_he_rates
     from cablp.solvers._sim1d.physics.reactions import (
         recombination_energy_return_rhs,
     )
 
-    for rer_bad_params, rer_bad_flags in (
-        (dict(m3_params, recombination_energy_return=True,
-              atomic_rate_model="janev"), resolved_cathode_flags),
-        (dict(m3_params, recombination_energy_return=True,
-              atomic_rate_model="adas"),
-         dict(resolved_cathode_flags, icool_recomb=True)),
-    ):
-        try:
-            LAPDSim1D(rer_bad_params, rer_bad_flags)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f"expected ValueError for {rer_bad_params}")
     rer_sim = LAPDSim1D(
-        dict(m3_params, recombination_energy_return=True,
-             atomic_rate_model="adas"),
+        dict(m3_params, recombination_energy_return=True),
         resolved_cathode_flags,
     )
     rer_state = rer_sim.state
@@ -590,9 +551,7 @@ def _case_gcr_recombination_energy_pair(m3_params):
     # Present in the ledger; identically zero when the key is off (the
     # golden path sums an exact zero term).
     assert "recombination_energy_return" in rer_sim.rhs_terms()
-    rer_off = LAPDSim1D(
-        dict(m3_params, atomic_rate_model="adas"), resolved_cathode_flags
-    )
+    rer_off = LAPDSim1D(m3_params, resolved_cathode_flags)
     assert np.all(rer_off.recombination_energy_return_rhs().Ee == 0.0)
     # Direction: heating (I_ion > E_rad/event) at the clamped afterglow
     # floor (Te = 0.2 eV, the adf11 grid edge, where E_rad/event ~ 15 eV),

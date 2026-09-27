@@ -7,9 +7,9 @@ term, and one must never be added here.**
 
 Why there is no force term here
 -------------------------------
-Because the mirror force is ALREADY IN the model, and has been since
-``prescribed_area_geometry`` shipped. The quasi-1D momentum equation the
-solver integrates under that flag is
+Because the mirror force is ALREADY IN the model, through the prescribed
+per-cell geometry. The quasi-1D momentum equation the solver integrates
+whenever ``plasma_radius_profile_cm`` is supplied is
 
     d_t(A rho u) + d_z[A(rho u^2 + p)] = p dA/dz + A F,
 

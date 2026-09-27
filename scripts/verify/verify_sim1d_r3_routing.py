@@ -144,8 +144,7 @@ def main():
         Te=np.full(cells, Te), Ti=np.full(cells, 1.0), ion_mass_g=mi,
     )
     kw = dict(state=st, floors=sim._floors, ion_mass_g=mi, geometry=geo,
-              alpha_isat=np.exp(-0.5), b_surface_loss=1.0,
-              gas_type=sim._gas_type)
+              alpha_isat=np.exp(-0.5), b_surface_loss=1.0)
     routed = characteristic_boundary_rhs(**kw)
     g5 = True
     for face, live in edges.items():

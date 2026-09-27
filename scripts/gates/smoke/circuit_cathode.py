@@ -85,7 +85,7 @@ _CAPFIX_WINDOW_I_A = (5.47, 5.5, _CAPFIX_ESCAPE_I_A, 5.57, 5.58, 6.0, 8.0)
     historical_stance=True,
 )
 def _case_twin_cathode_plateau_multigroup(
-    srcgrid_off_flags, srcgrid_off_params
+    twin_base_flags, twin_base_params
 ):
     # PRESENCE GATE for the plateau-edge pair, BOTH DIRECTIONS, on the twin
     # layout. The twin fixture in variable-area-well-balancedness resolves
@@ -103,7 +103,7 @@ def _case_twin_cathode_plateau_multigroup(
     # boundary, which the
     # twin's own refusal decides and which is asserted below rather than
     # assumed.
-    twin_flags = dict(srcgrid_off_flags)
+    twin_flags = dict(twin_base_flags)
     twin_flags["TwinCathode"] = True
     twin_flags["cathode_coupling"] = False
     _mg_rows = ("beam_plateau_edge_eV", "beam_plateau_edge_clamped")
@@ -113,7 +113,7 @@ def _case_twin_cathode_plateau_multigroup(
     # ever moved, the fixture below would be selecting a boundary for a reason
     # that no longer exists.
     mg_reflect_params = dict(
-        srcgrid_off_params,
+        twin_base_params,
         heating_anomalous_transport="plateau_multigroup",
         heating_anomalous_tail_cathode_boundary="reflect",
     )
@@ -127,7 +127,7 @@ def _case_twin_cathode_plateau_multigroup(
         )
 
     mg_params = dict(
-        srcgrid_off_params,
+        twin_base_params,
         heating_anomalous_transport="plateau_multigroup",
         heating_anomalous_tail_cathode_boundary="escape",
     )
@@ -141,7 +141,7 @@ def _case_twin_cathode_plateau_multigroup(
     # The OFF arm of the same fixture: identical geometry and identical flags,
     # the selector alone cleared, and the pair is gone from both prefixes.
     local_params = dict(
-        srcgrid_off_params,
+        twin_base_params,
         heating_anomalous_transport="local",
         heating_anomalous_tail_cathode_boundary="escape",
     )
@@ -274,7 +274,6 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     assert dt_default.phase_floating == 0.0
     assert dt_default.active_constraint in {
         "plasma_cfl",
-        "front_density",
         "surface_loss",
         "neutral_exchange",
         "neutral_sources",
@@ -303,7 +302,6 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     assert cathode_boundary.source.role == "cathode"
     assert cathode_boundary.end.index == geom.cells - 1
     assert cathode_boundary.end.role == "end_wall"
-    assert cathode_boundary.end_mode == params["end_mode"]
     assert cathode_boundary.twin_cathode == flags["TwinCathode"]
     for key in (
         "V_bank",
@@ -900,7 +898,6 @@ def _case_cathode_current_driven_sheath_solve(
             np.zeros(2),
             np.array([_cap_cfg.A_c, _cap_cfg.A_c]),
             I_ion,
-            "He",
             _CAPFIX_ESCAPE_I_A,
             cathode_index=0,
             **{**_CAPFIX_ESCAPE_KWARGS, "phi_c_cap_V": 2000.0},
@@ -922,7 +919,6 @@ def _case_cathode_current_driven_sheath_solve(
         np.zeros(2),
         np.array([_cap_cfg.A_c, _cap_cfg.A_c]),
         I_ion,
-        "He",
         _CAPFIX_ESCAPE_I_A,
         cathode_index=0,
         **_CAPFIX_ESCAPE_KWARGS,
@@ -1887,21 +1883,49 @@ def _case_cathode_power_balance_warming(
     growth_flags["heat_conduction"] = False
     growth_sim = LAPDSim1D(growth_params, growth_flags)
     growth_result = growth_sim.run(t_end=1.5e-6)
-    assert growth_result.steps == 3
-    assert np.allclose(growth_result.time, [0.0, 0.5e-6, 1.125e-6, 1.5e-6])
+    # The surface_loss drain bound is always evaluated, so it binds the
+    # first step and, once the ramp has re-approached it, the last two
+    # before t_end; the phase boundary cuts the step that crosses it, and
+    # the four steps after it are the dt_growth ramp (each 1.25x the last).
+    assert growth_result.steps == 9
+    assert np.allclose(
+        growth_result.time,
+        [
+            0.0, 4.39038e-7, 5.0e-7, 5.76202e-7, 6.71455e-7, 7.90522e-7,
+            9.39354e-7, 1.18683e-6, 1.38459e-6, 1.5e-6,
+        ],
+        rtol=1.0e-5, atol=0.0,
+    )
     assert [diag.step_cap for diag in growth_result.diagnostics] == [
+        "surface_loss",
         "phase_boundary",
         "dt_growth",
+        "dt_growth",
+        "dt_growth",
+        "dt_growth",
+        "surface_loss",
+        "surface_loss",
         "t_end",
     ]
+    growth_dts = [diag.accepted_dt for diag in growth_result.diagnostics]
     assert np.allclose(
-        [diag.accepted_dt for diag in growth_result.diagnostics],
-        [0.5e-6, 0.625e-6, 0.375e-6],
+        growth_dts,
+        [
+            4.39038e-7, 6.09619e-8, 7.62024e-8, 9.52530e-8, 1.19066e-7,
+            1.48833e-7, 2.47481e-7, 1.97755e-7, 1.15411e-7,
+        ],
+        rtol=1.0e-5, atol=0.0,
     )
+    for growth_step in range(2, 6):
+        assert np.isclose(
+            growth_dts[growth_step], 1.25 * growth_dts[growth_step - 1],
+            rtol=1.0e-12, atol=0.0,
+        ), growth_step
     growth_summary = summarize_result(growth_result)
     assert growth_summary.step_cap_counts == {
-        "dt_growth": 1,
+        "dt_growth": 4,
         "phase_boundary": 1,
+        "surface_loss": 3,
         "t_end": 1,
     }
     return locals()
@@ -2001,7 +2025,6 @@ def _case_electrode_sample_smoothing(m3_params):
     )
     r1a_flags.update(
         {
-            "active_plasma_topology": True,
             "cathode_coupling": False,
             # This block and the R1b/R1c blocks built on it step with
             # ``operator_split=False`` on purpose -- they are about the
@@ -2045,14 +2068,12 @@ def _case_electrode_sample_smoothing(m3_params):
         r1a_sim.floors,
         r1a_sim.ion_mass_g,
         r1a_geom,
-        active_plasma_topology=True,
     )
     div_dead_fast = velocity_divergence(
         r1a_dead_fast,
         r1a_sim.floors,
         r1a_sim.ion_mass_g,
         r1a_geom,
-        active_plasma_topology=True,
     )
     assert np.array_equal(div_reference[r1a_active], div_dead_fast[r1a_active])
 

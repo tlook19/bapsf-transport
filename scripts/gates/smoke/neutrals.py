@@ -29,7 +29,6 @@ from cablp.solvers._sim1d.physics.energy import (
     electron_cooling_rhs_terms,
     ion_charge_exchange_rhs,
 )
-from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
 from cablp.solvers._sim1d.physics.neutrals import (
     GAS_PUFF_DIAGNOSTIC_FIELDS,
     _effective_pump_speed,
@@ -315,34 +314,17 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         Ti=np.full(geom.cells, params["Ti0"]),
         ion_mass_g=sim.ion_mass_g,
     )
-    ramp_front = front_filling_fluxes(
-        state=ramp_state,
-        floors=sim.floors,
-        ion_mass_g=sim.ion_mass_g,
-        geometry=geom,
-        alpha_front=params["alpha_front"],
-    )
-    open_plasma_faces = np.asarray(geom.plasma_open, dtype=bool)
-    assert np.all(ramp_front.n[open_plasma_faces] > 0.0)
-    ramp_rhs = sim.plasma_flux_rhs(y=pack_state(ramp_state), include_front=True)
+    ramp_rhs = sim.plasma_flux_rhs(y=pack_state(ramp_state))
     for values in (ramp_rhs.n, ramp_rhs.nn, ramp_rhs.M, ramp_rhs.Ee, ramp_rhs.Ei):
         assert np.all(np.isfinite(values))
-    ramp_flux_terms = sim.plasma_flux_rhs_terms(
-        state=ramp_state,
-        include_front=True,
-    )
-    assert set(ramp_flux_terms) == {"plasma_advective_flux", "plasma_front_flux"}
+    ramp_flux_terms = sim.plasma_flux_rhs_terms(state=ramp_state)
+    assert set(ramp_flux_terms) == {"plasma_advective_flux"}
     ramp_flux_sum = np.zeros_like(pack_state(ramp_rhs))
     for term in ramp_flux_terms.values():
         for field_name in STATE_NAMES_1D:
             assert np.all(np.isfinite(getattr(term, field_name)))
         ramp_flux_sum = ramp_flux_sum + pack_state(term)
     assert np.allclose(ramp_flux_sum, pack_state(ramp_rhs))
-    no_front_terms = sim.plasma_flux_rhs_terms(
-        state=ramp_state,
-        include_front=False,
-    )
-    assert np.allclose(pack_state(no_front_terms["plasma_front_flux"]), 0.0)
 
     nn_ramp_state = conservative_from_primitives(
         n=state.n,
@@ -490,12 +472,9 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         state=cooling_state,
         floors=sim.floors,
         ion_mass_g=sim.ion_mass_g,
-        gas_type=params["gas_type"],
         I_ion=sim.I_ion,
         b_ionization_energy_cost=0.0,
-        atomic_rate_model=params["atomic_rate_model"],
         ionization_energy_cost=True,
-        icool_recomb=flags["icool_recomb"],
     )
     assert np.allclose(costless_terms["ionization_energy_cost"].Ee, 0.0)
     assert np.all(cooling_terms["ionization_energy_cost"].Ee < 0.0)
@@ -521,7 +500,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         state=hot_ion_cx_state,
         floors=sim.floors,
         ion_mass_g=sim.ion_mass_g,
-        gas_type=params["gas_type"],
         Tn_fit=params["Tn_fit"],
     )
     assert np.all(hot_ion_cx.Ei < 0.0)
@@ -547,7 +525,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         state=hot_ion_cx_state,
         floors=sim.floors,
         ion_mass_g=sim.ion_mass_g,
-        gas_type=params["gas_type"],
         Tn_fit=20.0,
     )
     assert np.all(warm_neutral_cx.Ei > 0.0)
@@ -729,7 +706,7 @@ def _case_equilibration_puff_width(
         ramp_derived_1.Ti,
     ):
         assert np.all(values >= 0.0)
-    ramp_after = sim.plasma_flux_rhs(y=ramp_y1, include_front=True)
+    ramp_after = sim.plasma_flux_rhs(y=ramp_y1)
     for values in (
         ramp_after.n,
         ramp_after.nn,
@@ -975,8 +952,6 @@ def _case_neutral_momentum_sources(
         floors=knob_floors,
         ion_mass_g=knob_mass,
         geometry=mn_geom,
-        gas_type="He",
-        I_ion=I_ion,
     )
     for mn_name in (
         "ionization_birth",
@@ -1006,8 +981,6 @@ def _case_neutral_momentum_sources(
         floors=knob_floors,
         ion_mass_g=knob_mass,
         geometry=mn_geom,
-        gas_type="He",
-        I_ion=I_ion,
     )["ionization_birth"].M_n is None
 
     # Pump sink: the wind leaves with the gas at the pump cells, so the
@@ -2547,15 +2520,17 @@ def _case_shaped_initial_neutral_fill_sp3():
         # The scalar arm below compares the two arms at the raw bit level, so
         # the stance names the cold layout rather than inheriting it.
         _pin_pre_r2a_neutral_stance(params, flags)
-        # A UNIFORM nx=12 column. The spreading-kernel checks in (e) state
-        # their widths in CELLS and convert with the mesh's MEAN cell length,
-        # which only means "cells" on a uniform mesh; the fixed source region
-        # (a config default since the R2a fold-in) makes cell sizes differ by
-        # a factor of several, and a 2-cell kernel would then be sub-cell where
-        # it lands. The IC construction under test is mesh-agnostic.
-        flags["source_fixed_grid"] = False
-        params["source_region_length_cm"] = None
-        params["source_region_dz_cm"] = None
+        # A UNIFORM column. The spreading-kernel checks in (e) state their
+        # widths in CELLS and convert with the mesh's MEAN cell length, which
+        # only means "cells" on a uniform column. The single-cathode mesh
+        # always carries the fixed source region, so the region is sized to
+        # the far column's own cell: 4 source cells + nx = 12 far cells of
+        # exactly (Lm - gap - end wall) / 16 = 128.546875 cm each (exact in
+        # binary). The IC construction under test is mesh-agnostic.
+        params["source_region_dz_cm"] = 128.546875
+        params["source_region_length_cm"] = (
+            params["cathode_anode_gap_cm"] + 4 * 128.546875
+        )
         params.update(over)
         return params, flags
 

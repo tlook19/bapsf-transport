@@ -20,66 +20,10 @@ from ..constants import (
     m_e_cgs,
 )
 
-# ── THE HYDROGEN QUARANTINE ──────────────────────────────────────────────────
-#
-# This module's hydrogen arms RAISE. They are quarantined, not removed: the
-# code and every coefficient table stay exactly where they are, so a validated
-# re-opening deletes a guard rather than rewriting an arm.
-#
-# Two independent reasons, and either alone is sufficient:
-#
-#   1. UNTESTED DOMAIN. The solver is hard helium-only:
-#      LAPDSim1D refuses gas_type != "He" at construction, so no hydrogen arm
-#      here has a solver-path consumer and none is covered by the golden, the
-#      digest gate or the smoke suite. Every H result this module can produce
-#      is therefore unexercised by any gate in the repository.
-#
-#   2. ONE CORRUPT TABLE -- SINCE REPAIRED.
-#      ``A_R318`` -- the H + H+ charge-exchange fit -- CARRIED a DUPLICATED
-#      coefficient: row 1 repeated 9.536923957409e-03 and so had 10 entries
-#      where every other row of A_R318, and every row of the helium A_R531,
-#      has 9. ``heavy_reaction`` iterates ``range(len(A[i]))``, so the ragged
-#      row silently contributed an extra polynomial term rather than failing;
-#      the import-time ``_cx_H`` table was built from it without complaint.
-#      The duplicate has been deleted and all 81 coefficients digit-proofed
-#      against a re-fetched IAEA HYDHEL 3.1.8 (see the provenance comment at
-#      the table). A_R531 was never affected -- the helium arm was untouched
-#      by the defect and by the repair.
-#
-#      THE QUARANTINE STANDS REGARDLESS: reason 1 is sufficient on its own,
-#      and repairing the table did not give the hydrogen arms a gate.
-#
-# Guarded entry points, the narrowest set covering every H route into this
-# module: H_EII_cross, H_EII_cross_lkup, and charge_ex_react's gas_type == "H"
-# branch.
-#
-# NOT guarded, deliberately: fits.py's IAEA_exp1/exp4/exp6 and rate_coeff are
-# gas-AGNOSTIC fit forms -- IAEA_exp1 is evaluated on the helium aHeI and the
-# hydrogen aHI alike, so the species lives in the caller's coefficient table,
-# not in the function. Likewise alpha_r/alpha_3 take the ionization potential
-# as an argument and are used on the helium path. Guarding any of those would
-# refuse helium.
-
-a215 = [
-    -7.7782130e2,
-    9.5401909e2,
-    -5.2277670e2,
-    1.5927011e2,
-    -2.9525572e1,
-    3.4130241e0,
-    -2.4055208e-1,
-    9.4651813e-3,
-    -1.5943253e-4,
-]
-
 A_HEII_11s = [5.857e-1, -4.457e-1, 7.680e-1, -2.521, 3.317, 0.0]
 
 # ── EII cross section lookup tables (loaded at import time) ──────────────────
 _DATA_DIR = Path(__file__).parent / "data"
-
-_h_data = np.loadtxt(_DATA_DIR / "h_eii_cross.csv", delimiter=",", comments="#")
-_H_LOG_E = np.log(_h_data[:, 0])
-_H_LOG_SIGMA = np.log(_h_data[:, 1])
 
 _he_data = np.loadtxt(_DATA_DIR / "he_eii_cross.csv", delimiter=",", comments="#")
 _HE_LOG_EPS = np.log(_he_data[:, 0])
@@ -107,36 +51,6 @@ else:
     _HE_ION_LOG_RATE = None
 
 
-def H_EII_cross(E, A=a215):
-    """
-    Hydrogen electron impact ionization cross section [cm^2].
-
-    Parameters
-    ----------
-    E : float
-        Beam energy [eV].
-    A : list
-        Janev polynomial coefficients (default: a215).
-
-    Raises
-    ------
-    ValueError
-        Always -- this is a quarantined hydrogen entry point. See the hydrogen
-        quarantine note at the top of this module.
-    """
-    raise ValueError(
-        "H_EII_cross is not available: the hydrogen arms of cablp.atomic are "
-        "QUARANTINED (untested domain -- no solver-path consumer and no gate "
-        "coverage). The quarantine's second ground, the corrupt A_R318 table, "
-        "has since been repaired and no longer applies; the untested domain "
-        "alone is sufficient. The solver is helium-only. Accepted: He -- use "
-        "He_EII_cross."
-    )
-    # RETAINED, not removed: the quarantine is reversible by construction, so
-    # a validated re-opening deletes the raise above and this line stands.
-    return np.exp(np.sum([a * np.log(E) ** i for i, a in enumerate(A)]))
-
-
 def He_EII_cross(eps, A):
     """
     Helium electron impact ionization cross section [cm^2].
@@ -153,38 +67,6 @@ def He_EII_cross(eps, A):
     term1 = mp.fmul(A[0], mp.log(eps))
     term2 = mp.fsum([mp.fmul(A[i], mp.power(mp.fsub(1, b), i)) for i in range(1, 6)])
     return mp.fmul(a, mp.fadd(term1, term2))
-
-
-def H_EII_cross_lkup(E):
-    """
-    Hydrogen electron impact ionization cross section [cm^2] via lookup table.
-
-    Log-linear interpolation over h_eii_cross.csv (13.6–1000 eV).
-
-    Parameters
-    ----------
-    E : float
-        Beam energy [eV].
-
-    Raises
-    ------
-    ValueError
-        Always -- this is a quarantined hydrogen entry point. See the hydrogen
-        quarantine note at the top of this module.
-    """
-    raise ValueError(
-        "H_EII_cross_lkup is not available: the hydrogen arms of cablp.atomic "
-        "are QUARANTINED (untested domain -- no solver-path consumer and no "
-        "gate coverage). The quarantine's second ground, the corrupt A_R318 "
-        "table, has since been repaired and no longer applies; the untested "
-        "domain alone is sufficient. The solver is helium-only. Accepted: "
-        "He -- use He_EII_cross_lkup."
-    )
-    # RETAINED, not removed: the quarantine is reversible by construction, so
-    # a validated re-opening deletes the raise above and this line stands.
-    return float(np.exp(_interp_scalar_fused(np.log(E), _H_LOG_E, _H_LOG_SIGMA,
-                                             left=_H_LOG_SIGMA[0],
-                                             right=_H_LOG_SIGMA[-1])))
 
 
 def He_EII_cross_lkup(eps):
@@ -549,130 +431,6 @@ def integrate_kern(cross_sec_func, a, T, I):
     return rate_coeff
 
 
-# H + H+ charge exchange, p + H(1s) -> H(1s) + p.
-# Source of record: IAEA HYDHEL, D. Reiter, FZJ, version 2020-01-13,
-# https://www.eirene.de/Documentation/hydhel.pdf, Sec. 3 H.3, Reaction 3.1.8,
-# printed p.165 (PDF p.176). Stored as A_R318[e][t], i.e. one list per source
-# E-Index column, indexed by T-Index 0..8.
-#
-# CITE HYDHEL, NOT THE SPRINGER BOOK. These are HYDHEL's REPLACEMENT fit, not
-# the 1987 Springer book coefficients: HYDHEL replaced the original for
-# consistency with the cross section (its own note on that page reads
-# "original fit from Springer book replaced by this one, which has better
-# consistency with cross-section, hence: better energy conservation"). A future
-# check against the Springer coefficients would report spurious mismatches, so
-# every re-verification must cite HYDHEL.
-#
-# SHAPE IS LOAD-BEARING. The table is 9 x 9 = 81 coefficients -- nine rows,
-# one per source E-Index column, with nine T-Index entries each, the same
-# shape as A_R531. heavy_reaction iterates range(len(A[i])), so a row of any
-# other length contributes a wrong number of polynomial terms to _cx_H
-# silently rather than failing: a ragged row is a transcription error that
-# only a digit-for-digit re-check catches. All 81 coefficients are verified
-# digit for digit against the source PDF; the source's max/mean relative fit
-# errors are 1.1026 % / 0.3105 %.
-A_R318 = [
-    [
-        -1.831670498376e01,
-        2.143624996483e-01,
-        5.139117192662e-02,
-        -9.896180369559e-04,
-        -2.495327546080e-03,
-        -2.417046684097e-05,
-        1.177406072793e-04,
-        -1.483036457978e-05,
-        5.351909441226e-07,
-    ],
-    [
-        1.650239332070e-01,
-        -1.067658289373e-01,
-        9.536923957409e-03,
-        6.315097684976e-03,
-        -1.265503371044e-03,
-        -6.945512319613e-05,
-        3.698501620365e-05,
-        -3.348172574417e-06,
-        9.728230870242e-08,
-    ],
-    [
-        5.025740610454e-02,
-        -5.304993033743e-03,
-        -1.306075129405e-02,
-        2.655464630308e-03,
-        7.569269700468e-04,
-        -2.956984088728e-04,
-        3.424317896619e-05,
-        -1.527018819072e-06,
-        1.676354786072e-08,
-    ],
-    [
-        5.288358515136e-03,
-        8.289383645942e-03,
-        -1.033166370333e-03,
-        -1.365781346175e-03,
-        2.756946036257e-04,
-        2.318277483195e-05,
-        -9.815693511794e-06,
-        8.362050692462e-07,
-        -2.237567830699e-08,
-    ],
-    [
-        -2.437122342843e-03,
-        -9.698773663345e-05,
-        1.280464204775e-03,
-        -1.859939123743e-04,
-        -1.107375149384e-04,
-        3.704494397140e-05,
-        -4.285719813022e-06,
-        2.058392726953e-07,
-        -3.081685803820e-09,
-    ],
-    [
-        -4.461891214720e-04,
-        -4.470180279338e-04,
-        -8.453294908907e-05,
-        1.237942304972e-04,
-        -7.217379426085e-06,
-        -6.066558692480e-06,
-        1.169257650609e-06,
-        -7.463594884928e-08,
-        1.450862501121e-09,
-    ],
-    [
-        1.731631548110e-04,
-        7.944326905066e-05,
-        -3.040874906105e-05,
-        -1.588253432932e-05,
-        5.769971321188e-06,
-        -4.951573401626e-07,
-        -4.968953461875e-10,
-        5.924370389093e-10,
-        4.434231893204e-11,
-    ],
-    [
-        -1.588434781959e-05,
-        -5.303688417551e-06,
-        4.747888095498e-06,
-        6.603560345800e-07,
-        -6.717311113584e-07,
-        1.437520597154e-07,
-        -1.618948982477e-08,
-        1.078208689229e-09,
-        -3.324377862622e-11,
-    ],
-    [
-        4.482291414386e-07,
-        1.235167254501e-07,
-        -1.923953750574e-07,
-        -1.970606344918e-09,
-        2.440961351104e-08,
-        -6.998724470004e-09,
-        9.440094842562e-10,
-        -6.619767848464e-11,
-        1.935019679501e-12,
-    ],
-]
-
 A_R531 = [
     [
         -1.992795874184e01,
@@ -782,8 +540,8 @@ def heavy_reaction(T, E, A):
 
     ln(<sigma*v>) = sum_{i,j} A[i][j] * ln(E)^i * ln(T)^j
 
-    Coefficient tables A_R318 (H + H⁺ charge exchange) and A_R531 (He + He⁺ charge
-    exchange) follow the IAEA heavy-particle reaction data format.
+    The coefficient table A_R531 (He + He⁺ charge exchange) follows the IAEA
+    heavy-particle reaction data format.
 
     Parameters
     ----------
@@ -808,54 +566,27 @@ def heavy_reaction(T, E, A):
 
 temps = np.logspace(-1, 4, 1000)
 _cx_He = heavy_reaction(temps, 0.1, A_R531)
-_cx_H = heavy_reaction(temps, 0.1, A_R318)
 
 
-def charge_ex_react(T, gas_type="He"):
+def charge_ex_react(T):
     """
-    Charge-exchange reaction rate coefficient [cm³/s] via table interpolation.
+    He + He⁺ charge-exchange reaction rate coefficient [cm³/s] via table
+    interpolation.
 
-    Pre-computed tables (_cx_He, _cx_H) are built at import time from
-    heavy_reaction() over T = 0.1–10,000 eV. Linear interpolation is used.
+    The table (_cx_He) is built at import time from heavy_reaction() on the
+    A_R531 coefficients over T = 0.1–10,000 eV. Linear interpolation is used.
 
     Parameters
     ----------
     T : float or array
         Ion temperature [eV].
-    gas_type : str
-        Gas species. "He" for helium (A_R531 table) is the only accepted value;
-        "H" (A_R318 table) is quarantined and raises.
 
     Returns
     -------
     float or array
         Charge-exchange rate coefficient [cm³/s].
-
-    Raises
-    ------
-    ValueError
-        For ``gas_type="H"`` -- a quarantined hydrogen entry point, and the one
-        that reads the A_R318 table directly. See the hydrogen quarantine note
-        at the top of this module.
     """
-    if gas_type == "He":
-        table = _cx_He
-    elif gas_type == "H":
-        # RETAINED, not removed: _cx_H above is still built at import, so a
-        # validated re-opening deletes this raise and restores `table = _cx_H`.
-        raise ValueError(
-            "gas_type='H' is not available: the hydrogen arms of cablp.atomic "
-            "are QUARANTINED, and this is the entry point that reads A_R318 "
-            "directly. That table's duplicated coefficient has since been "
-            "repaired and all 81 entries digit-proofed against IAEA HYDHEL "
-            "3.1.8, so the corruption ground no longer applies; the "
-            "quarantine stands on the untested domain alone -- no hydrogen "
-            "arm here has a solver-path consumer or any gate coverage. The "
-            "solver is helium-only. Accepted: 'He' (A_R531, unaffected)."
-        )
-    else:
-        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")
-    return np.interp(T, temps, table)
+    return np.interp(T, temps, _cx_He)
 
 
 # ── Phelps He+/He ion-neutral scattering cross sections (audit A7, R4.3) ──────
@@ -970,34 +701,26 @@ _phelps_kiso = np.array(
 )
 
 
-def phelps_cx_rate_cm3_s(T_eff, gas_type="He"):
+def phelps_cx_rate_cm3_s(T_eff):
     """He+/He charge-exchange rate coefficient ``<Qb v_rel>`` [cm^3/s].
 
     ``T_eff`` is the effective relative-velocity temperature ``(Ti+Tn)/2`` in eV.
     Grows ~sqrt(T_eff) at low temperature (no flat clamp), unlike the IAEA
     ``charge_ex_react`` table whose 0.1 eV floor holds the rate constant below it.
     """
-    if gas_type != "He":
-        raise ValueError(
-            f"Phelps ion-neutral cross sections are He-only (got {gas_type!r})"
-        )
     return np.interp(T_eff, _phelps_Teff, _phelps_kb)
 
 
-def phelps_iso_rate_cm3_s(T_eff, gas_type="He"):
+def phelps_iso_rate_cm3_s(T_eff):
     """He+/He isotropic-elastic rate coefficient ``<Qi v_rel>`` [cm^3/s].
 
     ``T_eff`` in eV. Velocity-independent (``Qi ~ 1/v``), so this is essentially
     constant (~7.49e-10 cm^3/s), matching the classic Langevin capture rate.
     """
-    if gas_type != "He":
-        raise ValueError(
-            f"Phelps ion-neutral cross sections are He-only (got {gas_type!r})"
-        )
     return np.interp(T_eff, _phelps_Teff, _phelps_kiso)
 
 
-def phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"):
+def phelps_momentum_transfer_rate_cm3_s(T_eff):
     """He+/He total momentum-transfer rate ``<sigma_mt v_rel>`` scaled by the
     equal-mass reduced-mass factor: ``k_b + 0.5*k_iso`` [cm^3/s].
 
@@ -1006,8 +729,8 @@ def phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type="He"):
     ``2*Qb -> k_b`` are the equal-mass ``mu/m_i = 1/2`` lab-frame factors.
     """
     return (
-        phelps_cx_rate_cm3_s(T_eff, gas_type)
-        + 0.5 * phelps_iso_rate_cm3_s(T_eff, gas_type)
+        phelps_cx_rate_cm3_s(T_eff)
+        + 0.5 * phelps_iso_rate_cm3_s(T_eff)
     )
 
 

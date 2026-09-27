@@ -68,7 +68,6 @@ class CathodeBoundaryState1D:
     source: CathodeCellState1D
     end: CathodeCellState1D
     enabled: bool
-    end_mode: str
     twin_cathode: bool
     circuit: dict
 
@@ -223,7 +222,7 @@ def cathode_sample_indices(geometry):
     temperature would drive the circuit with garbage.
 
     A twin machine samples both cathodes; otherwise the ``end`` slot is the
-    end wall, which is what ``end_mode`` describes.
+    end wall.
     """
     cathode_cells = cathode_adjacent_cells(geometry)
     if not cathode_cells:
@@ -256,7 +255,6 @@ def cathode_circuit_alpha_sheath(
         ion_mass_g=ion_mass_g,
         alpha_isat=float(input_dict.get("alpha_isat", math.exp(-0.5))),
         b_presheath_length=float(input_dict.get("b_presheath_length", 1.0)),
-        gas_type=input_dict.get("gas_type", "He"),
     )
 
 
@@ -275,7 +273,6 @@ def cathode_boundary_state(
         source=_cell_state(source_index, state, derived, geometry),
         end=_cell_state(end_index, state, derived, geometry),
         enabled=bool(input_flags.get("cathode_coupling", False)),
-        end_mode=input_dict.get("end_mode", "end_wall"),
         twin_cathode=bool(input_flags.get("TwinCathode", False)),
         circuit=_circuit_placeholders(input_dict),
     )
@@ -679,7 +676,6 @@ def solve_cathode_boundary(
     input_flags,
     beam_cross_prev,
     I_ion,
-    gas_type,
     x0=None,
     x0_twin=None,
     floating=False,
@@ -720,7 +716,6 @@ def solve_cathode_boundary(
                 "floating": bool(floating),
                 "source_index": boundary.source.index,
                 "end_index": boundary.end.index,
-                "end_mode": boundary.end_mode,
                 "twin_cathode": boundary.twin_cathode,
                 "circuit": dict(boundary.circuit),
             },
@@ -773,7 +768,6 @@ def solve_cathode_boundary(
             beam_cross_prev=beam_cross_prev,
             plasma_cross=geometry.plasma_area_cm2,
             I_ion=I_ion,
-            gas_type=gas_type,
             # Floored at zero on the same convention the current-driven
             # branch floors its loop current: the device carries what it can,
             # never a backwards current, and a trace sample below zero is
@@ -821,7 +815,6 @@ def solve_cathode_boundary(
             beam_cross_prev=beam_cross_prev,
             plasma_cross=geometry.plasma_area_cm2,
             I_ion=I_ion,
-            gas_type=gas_type,
             I_tot_A=I_tot_A,
             cathode_index=beam_launch(geometry, end=0)[0],
             anode_current_A=anode_source[0],
@@ -880,7 +873,6 @@ def solve_cathode_boundary(
             "floating": bool(floating),
             "source_index": boundary.source.index,
             "end_index": boundary.end.index,
-            "end_mode": boundary.end_mode,
             "twin_cathode": boundary.twin_cathode,
             "circuit": dict(boundary.circuit),
             "cathode_solver_model": solver_model,
@@ -1811,7 +1803,6 @@ def cathode_source_terms(
             metadata={
                 "source_index": boundary.source.index,
                 "end_index": boundary.end.index,
-                "end_mode": boundary.end_mode,
                 "twin_cathode": boundary.twin_cathode,
                 "circuit": dict(boundary.circuit),
                 "surface_particle_loss_s_inv": zeros.copy(),
@@ -1944,7 +1935,6 @@ def cathode_source_terms(
         metadata={
             "source_index": boundary.source.index,
             "end_index": boundary.end.index,
-            "end_mode": boundary.end_mode,
             "twin_cathode": boundary.twin_cathode,
             "circuit": dict(boundary.circuit),
             "surface_particle_loss_s_inv": dN_loss,
@@ -2213,7 +2203,7 @@ def _beam_smoothing_key(geometry, sigma_cm):
     by a differently meshed allocation at the same address would return the
     OLD mesh's matrix. A shape mismatch would raise at the matmul, but two
     geometries with the same cell count and different positions/lengths/roles
-    (a ``source_fixed_grid`` A/B, an nx-matched ``source_region_dz_cm`` sweep)
+    (an nx-matched ``source_region_dz_cm`` sweep)
     would silently smooth with the wrong kernel.
 
     Every geometry input the matrix build reads is in the key: ``z_cm`` and
@@ -2345,90 +2335,6 @@ def _smooth_beam_density(W, density, Vp):
     out = np.zeros_like(ext_s)
     live = Vp > 0.0
     out[live] = ext_s[live] / Vp[live]
-    return out
-
-
-def beam_anomalous_power_density(
-    state,
-    floors,
-    ion_mass_g,
-    geometry,
-    input_dict,
-    input_flags,
-    cathode_solve=None,
-):
-    """Return the anomalous share of ``beam_power_deposition`` [erg cm^-3 s^-1].
-
-    The beam-plasma channel's contribution to the ``Ee`` row that
-    :func:`beam_ionization_rhs_terms` books, read off the SAME
-    ``BeamDepositionResult`` objects and put through the SAME conservative
-    smoothing kernel that :func:`_beam_ionization_sources` applies to the
-    lumped power. Subtracting this from that row therefore removes exactly the
-    anomalous share and nothing else.
-
-    This is a READER and is closure-agnostic: it reports whatever
-    ``heating_anomalous_erg_s`` the selected ``beam_anomalous_model`` produced,
-    whether that is the fiat ``"quasilinear"`` drag or ``"ql_relaxation"``'s
-    gated, trapping-limited extraction. The POLICY of what a passive cell may
-    book is model-keyed and lives with the tracer
-    (``solver._tracer_beam_rows``), deliberately not here -- a reader that
-    silently returned zero for one closure could not be used to audit that
-    policy.
-
-    The argument list is the one :func:`beam_ionization_rhs_terms` takes, minus
-    what only the other rows need, and DELIBERATELY so: the two functions must
-    agree about whether there is a booking at all. The beam rows are gated on
-    ``cathode_boundary_state(...).enabled``, which depends on the phase-resolved
-    ``input_flags`` the CALLER passes and not on whether the cathode solve
-    happens to be carrying deposition objects -- a solve made with the cathode
-    enabled can be read back in a phase where the rows are zero. Re-deriving
-    that gate here from the same inputs is what makes it impossible for the
-    subtraction to remove power from a row that booked none. The smoothing
-    width is read from ``input_dict`` for the same reason.
-
-    Zero whenever there is no anomalous power to speak of: the booking is off,
-    no cathode solve, no CSDA deposition, ``beam_anomalous_model="none"`` (where
-    ``heating_anomalous_erg_s`` is identically zero by construction), or
-    ``"ql_relaxation"`` with its onset gate closed in every cell.
-
-    Under ``heating_anomalous_transport="plateau_multigroup"`` this is the
-    WALKED profile -- where the tail electrons actually deposited -- which is the
-    profile the booking used, so the two stay in step.
-
-    The ohmic gap booking is deliberately NOT included: it is the circuit's
-    ``I^2 R_p`` dissipated between cathode and anode, not a beam-plasma wave
-    channel, and it is added to the density after the smoothing in both
-    branches.
-    """
-    zeros = np.zeros(int(geometry.cells), dtype=float)
-    boundary = cathode_boundary_state(
-        state=state,
-        floors=floors,
-        ion_mass_g=ion_mass_g,
-        geometry=geometry,
-        input_dict=input_dict,
-        input_flags=input_flags,
-    )
-    if (
-        not boundary.enabled
-        or cathode_solve is None
-        or cathode_solve.beam_result is None
-    ):
-        return zeros
-    deposition = getattr(cathode_solve, "beam_deposition", None)
-    if deposition is None:
-        return zeros
-    Vp = np.asarray(geometry.plasma_volume_cm3, dtype=float)
-    out = zeros
-    for dep in deposition.values():
-        if dep is None:
-            continue
-        out = out + np.asarray(dep.heating_anomalous_erg_s, dtype=float) / Vp
-    smoothing_cm = float(input_dict.get("beam_deposition_smoothing_cm", 0.0))
-    if smoothing_cm > 0.0:
-        out = _smooth_beam_density(
-            _beam_smoothing_matrix(geometry, smoothing_cm), out, Vp
-        )
     return out
 
 
@@ -2628,8 +2534,8 @@ def _deposit_electrode_power(
     accelerated species is the ion, so the electron fall there is not
     plasma-electron energy IN THIS FUNCTION's own
     booking. The sibling rows ``end_wall_e_sheath_climb`` and
-    ``cathode_e_collected_climb`` -- presence-gated by ``end_wall_sheath_full_debit``
-    and ``cathode_face_full_debit`` respectively, and independent of this
+    ``cathode_e_collected_climb`` -- presence-gated by the geometry's end wall
+    face and by ``cathode_face_full_debit`` respectively, and independent of this
     function -- do book a collected-electron fall as plasma-electron energy,
     at the end wall and at the emitting cathode face. ``I_e_coll`` is the
     collected electron current ``I_i_a * fe_a``, and its ``phi_a`` moment is

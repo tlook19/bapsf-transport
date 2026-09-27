@@ -76,19 +76,6 @@ def _case_config_key_namespace_and_seed_cache():
     # A key added to the wrong namespace silently does nothing (input_dict and
     # input_flags validate neither), so the split is asserted here.
     _r2_reg_p, _r2_reg_f = default_config()
-    for _key in (
-        "tracer_passivity_current_ratio",
-        "tracer_passivity_thinness",
-        "tracer_passivity_depletion",
-        "tracer_passivity_hysteresis",
-        "tracer_refresh_tol",
-        "tracer_activation_ne",
-        "tracer_overlap_band_ne",
-        "tracer_overlap_rtol",
-    ):
-        assert _key in _r2_reg_p and _key not in _r2_reg_f, _key
-    assert "regime_tracer" in _r2_reg_f and "regime_tracer" not in _r2_reg_p
-    assert _r2_reg_f["regime_tracer"] is False, "regime_tracer must ship OFF"
     for _key in ("nn0_profile", "nn0_annulus_profile"):
         assert _key in _r2_reg_p and _key not in _r2_reg_f, _key
         assert _r2_reg_p[_key] is None, "a shaped IC ships no shape"
@@ -113,17 +100,10 @@ def _case_config_key_namespace_and_seed_cache():
     ):
         assert _r2_reg_p[_key] is None, "a per-cell geometry ships no shape"
     # The sliver guard is the one key here that is NOT presence-gated on the
-    # flag -- it constrains any two-zone geometry -- so it ships a value, and
+    # plasma profile -- it constrains any two-zone geometry -- so it ships a value, and
     # that value must be inert on a straight column (which leaves ~0.86) while
     # still above a capped 0.95-of-bore flux tube (0.05).
     assert 0.0 < _r2_reg_p["neutral_annulus_volume_fraction_min"] < 0.05
-    assert (
-        "prescribed_area_geometry" in _r2_reg_f
-        and "prescribed_area_geometry" not in _r2_reg_p
-    )
-    assert _r2_reg_f["prescribed_area_geometry"] is False, (
-        "prescribed_area_geometry must ship OFF"
-    )
     # The prescribed profiles change the GEOMETRY, so they must re-key the
     # equilibrated neutral seed: no key may sit on the seed cache's inert
     # allowlists (the fail-closed rule -- a key leaves the hash only when it
@@ -138,10 +118,8 @@ def _case_config_key_namespace_and_seed_cache():
         "neutral_annulus_volume_fraction_min",
     ):
         assert _key not in _seed_cache_mod.INERT_PARAM_KEYS, _key
-    assert "prescribed_area_geometry" not in _seed_cache_mod.INERT_FLAG_KEYS
     _pa_sig_p, _pa_sig_f = default_config()
     _pa_sig_flare_f = dict(_pa_sig_f)
-    _pa_sig_flare_f["prescribed_area_geometry"] = True
     for _key, _value in (
         ("plasma_radius_profile_cm", [18.415] * 3),
         ("machine_radius_profile_cm", [50.0] * 3),
@@ -155,19 +133,16 @@ def _case_config_key_namespace_and_seed_cache():
             _pa_sig_flare_p, _pa_sig_flare_f
         ), f"{_key} must invalidate a cached neutral seed"
 
-    # ---- the two end-face booking flags are OUT of the signature ----
-    # The other direction of the same fail-closed rule. These two CANNOT
-    # reach an equilibrated seed -- run_neutral_equilibration clears both
-    # on the inner sim's config before it builds it -- so hashing them would
+    # ---- the cathode end-face booking flag is OUT of the signature ----
+    # The other direction of the same fail-closed rule. It CANNOT
+    # reach an equilibrated seed -- run_neutral_equilibration clears it
+    # on the inner sim's config before it builds it -- so hashing it would
     # rotate every stored seed with no neutral content behind the
     # invalidation. The reference is loaded through build_baseline_config(),
     # so this tracks the stance of record instead of pinning a config.
     from baseline_sim1d import build_baseline_config as _sf_baseline_config
 
-    _sf_keys = (
-        "end_wall_sheath_full_debit",
-        "cathode_face_full_debit",
-    )
+    _sf_keys = ("cathode_face_full_debit",)
     for _key in _sf_keys:
         assert _key in _seed_cache_mod.INERT_FLAG_KEYS, _key
         assert _key not in _seed_cache_mod.INERT_PARAM_KEYS, _key
@@ -190,7 +165,7 @@ def _case_config_key_namespace_and_seed_cache():
     # ...and the exemption really did rotate the reference's signature once,
     # which is the disclosed cost of the change. Base is reconstructed by
     # importing the module source under its OWN name from a temp copy and
-    # putting the three keys back: an isolated module object, so restoring
+    # putting the key back: an isolated module object, so restoring
     # the pre-exemption key set cannot leak into any later case. Both
     # signatures are computed live -- pinning either hex would make this
     # clause stale at the next stance event, since every hashed key moves it.
@@ -214,8 +189,70 @@ def _case_config_key_namespace_and_seed_cache():
         )
         _sf_base_sig = _sf_base_mod.neutral_seed_signature(_sf_p, _sf_f)
     assert _sf_base_sig != _sf_sig, (
-        "exempting the three flags must rotate the reference's seed signature"
+        "exempting the flag must rotate the reference's seed signature"
     )
+
+
+# --------------------------------------------------------------------
+# closed-experiment-keys-retired
+# --------------------------------------------------------------------
+@_case("closed-experiment-keys-retired")
+def _case_closed_experiment_keys_retired():
+    # The closed experiments and one-value legacy selectors are gone from the
+    # templates, and supplying one -- at ANY value, its old default included --
+    # raises the retired-key ValueError naming it, in the namespace it lived
+    # in. Checked one key at a time so a key still read somewhere cannot hide
+    # behind another's refusal.
+    from cablp.solvers._sim1d.core.config import (
+        RETIRED_FLAG_KEYS,
+        RETIRED_PARAM_KEYS,
+    )
+
+    _retired_params = {
+        "front_flux_model": "sonic_relaxation",
+        "alpha_front": 1.0,
+        "D_amb_model": "cs_dz",
+        "D_amb": 0.0,
+        "sigma_in_model": "phelps",
+        "end_mode": "end_wall",
+        "electron_drift_charge_death": "cell_1",
+        "electron_drift_anode_handshake": "sheath_row_closes_all",
+        "tracer_passivity_current_ratio": 0.01,
+        "tracer_passivity_thinness": 0.01,
+        "tracer_passivity_depletion": 0.01,
+        "tracer_passivity_hysteresis": 3.0,
+        "tracer_refresh_tol": 0.01,
+        "tracer_activation_ne": 1.0e10,
+        "tracer_overlap_band_ne": [1.0e10, 1.0e11],
+        "tracer_overlap_rtol": 0.05,
+    }
+    _retired_flags = {
+        "regime_tracer": False,
+        "front_flux": False,
+        "rates_at_accepted_state": False,
+        "resolved_boundaries": True,
+        "icool_recomb": False,
+        "electron_drift_transport": False,
+    }
+    _tpl_p, _tpl_f = default_config()
+    for _namespace, _keys, _register in (
+        ("params", _retired_params, RETIRED_PARAM_KEYS),
+        ("flags", _retired_flags, RETIRED_FLAG_KEYS),
+    ):
+        for _key, _value in _keys.items():
+            assert _key in _register, (_namespace, _key)
+            assert _key not in _tpl_p and _key not in _tpl_f, _key
+            _p, _f = default_config()
+            (_p if _namespace == "params" else _f)[_key] = _value
+            try:
+                LAPDSim1D(_p, _f)
+            except ValueError as _exc:
+                _msg = str(_exc)
+                assert f"{_key} is RETIRED" in _msg, (_key, _msg)
+            else:
+                raise AssertionError(
+                    f"retired {_namespace} key {_key!r} was accepted"
+                )
 
 
 # --------------------------------------------------------------------
@@ -313,7 +350,7 @@ def _case_configuration_derived_resolution():
             "S_gp = 1234.0\n"
             "\n"
             "[input_flags]\n"
-            "neutral_baffles = false\n"
+            "cathode_face_full_debit = true\n"
         )
         _dv_params, _dv_flags, _dv_lineage = _sc.load_configuration("derived")
 
@@ -325,7 +362,7 @@ def _case_configuration_derived_resolution():
         _hand_f.update(_base.flags)
         _hand_p["nx"] = 42
         _hand_p["S_gp"] = 1234.0
-        _hand_f["neutral_baffles"] = False
+        _hand_f["cathode_face_full_debit"] = True
 
         assert _dv_params == _hand_p, sorted(
             k for k in set(_dv_params) | set(_hand_p)
@@ -339,7 +376,7 @@ def _case_configuration_derived_resolution():
         assert _dv_lineage.base_chain == ("g1atrim",)
         assert len(_dv_lineage.file_sha256) == 2
         assert _dv_lineage.delta_keys == (
-            "S_gp", "neutral_baffles", "nx",
+            "S_gp", "cathode_face_full_debit", "nx",
         ), _dv_lineage.delta_keys
 
         # NEGATIVE CONTROL. The identity is not a rubber stamp: move one delta
@@ -352,7 +389,7 @@ def _case_configuration_derived_resolution():
             "S_gp = 1235.0\n"
             "\n"
             "[input_flags]\n"
-            "neutral_baffles = false\n"
+            "cathode_face_full_debit = true\n"
         )
         _, _, _moved = _sc.load_configuration("derived_moved")
         assert _moved.identity != _dv_lineage.identity
@@ -1380,11 +1417,11 @@ def _case_configuration_file_value_typed_to_template():
 
         # ...and a STRING key likewise. This is the ONE place the file route
         # and the `--extra` route part company on purpose: a command-line
-        # token is text and IS its own value, so `--extra gas_type=1` gives
+        # token is text and IS its own value, so `--extra max_steps_action=1` gives
         # the string "1", while a TOML integer is an integer and the file
         # is refused rather than quietly stringified.
         (_room / "typed_str.toml").write_text(
-            'base = "g1atrim"\n\n[input_dict]\ngas_type = 1\n'
+            'base = "g1atrim"\n\n[input_dict]\nmax_steps_action = 1\n'
         )
         try:
             _sc.load_stance("typed_str")
@@ -1392,7 +1429,7 @@ def _case_configuration_file_value_typed_to_template():
             _ct_smsg = str(_ct_sexc)
         else:
             raise AssertionError("a str key ACCEPTED an integer")
-        assert "gas_type" in _ct_smsg, _ct_smsg
+        assert "max_steps_action" in _ct_smsg, _ct_smsg
         assert "carries str" in _ct_smsg, _ct_smsg
 
         # (iii) AN INT KEY TAKES A WHOLE FLOAT, and resolves to an int: `nx`

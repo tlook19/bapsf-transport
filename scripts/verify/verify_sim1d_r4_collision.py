@@ -55,7 +55,6 @@ from cablp.constants import ev_to_erg, kb_cgs
 CLEAN_PARAMS = {
     "ne0": 1e12, "nn0": 1e13, "Te0": 15.0, "Ti0": 2.0, "u0": 0.0,
     "gas_puff_enabled": False, "pump_enabled": False,
-    "atomic_rate_model": "adas",
     "phase_transition_mode": "scheduled",
     "tau_neutral_prebreakdown": 0.0, "tau_prebreakdown": 0.0,
     "tau_breakdown": 0.0, "tau_discharge": 1.0, "tau_afterglow": 0.0,
@@ -74,11 +73,10 @@ TN_K = 300.0
 TN_EV = TN_K * kb_cgs / ev_to_erg  # single cold-gas neutral temperature (A8)
 
 
-def make_sim(neutral_momentum=False, gas_type="He"):
+def make_sim(neutral_momentum=False):
     params, flags = default_config()
     params.update(CLEAN_PARAMS)
     params["nx"] = 60
-    params["gas_type"] = gas_type
     params["Tn_K"] = TN_K
     flags.update(CLEAN_FLAGS)
     flags["neutral_momentum"] = bool(neutral_momentum)
@@ -178,7 +176,7 @@ def gate_e1():
     der = derive_state(st, floors=sim._floors, ion_mass_g=sim._ion_mass_g)
     term = ion_neutral_collision_rhs(
         state=st, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
-        gas_type="He", Tn_eV=float(np.mean(der.Ti)), geometry=sim._geometry,
+        Tn_eV=float(np.mean(der.Ti)), geometry=sim._geometry,
     )
     u_rel = der.u  # u_n == 0 (no M_n)
     expected = -0.5 * u_rel * term.M  # = 0.5 m n nu_mt u_rel^2
@@ -199,7 +197,7 @@ def gate_t1():
     der = derive_state(st, floors=sim._floors, ion_mass_g=sim._ion_mass_g)
     T_eff = 0.5 * (der.Ti + TN_EV)
     nu_mt = np.asarray(st.nn, dtype=float) * phelps_momentum_transfer_rate_cm3_s(
-        T_eff, gas_type="He"
+        T_eff
     )
     expected = 1.5 * nu_mt * st.n * (TN_EV - der.Ti) * ev_to_erg
     act = _active(sim)
@@ -242,14 +240,20 @@ def gate_p2():
 
 
 def gate_g1():
+    # The species is helium unconditionally: gas_type is a retired key, so a
+    # configuration naming it is refused at construction.
+    params, flags = default_config()
+    params.update(CLEAN_PARAMS)
+    params["gas_type"] = "H"
+    flags.update(CLEAN_FLAGS)
     try:
-        make_sim(gas_type="H")
+        LAPDSim1D(params, flags)
     except ValueError as exc:
-        ok = "gas_type='He'" in str(exc) or "Phelps" in str(exc)
-        return "G1 construction guard: non-He raises", ok, (
+        ok = "gas_type is RETIRED" in str(exc)
+        return "G1 construction guard: gas_type is refused", ok, (
             f"raised: {str(exc)[:70]}"
         )
-    return "G1 construction guard: non-He raises", False, (
+    return "G1 construction guard: gas_type is refused", False, (
         "no ValueError raised"
     )
 

@@ -16,7 +16,7 @@ from cablp.solvers._sim1d.solver import (
     END_SHEATH_END_WALL_ROWS,
 )
 
-from ._harness import _base_config, _case
+from ._harness import _base_config, _case, _resolved_config
 
 
 # --------------------------------------------------------------------
@@ -24,66 +24,47 @@ from ._harness import _base_config, _case
 # --------------------------------------------------------------------
 @_case("end-face-full-debit-split", historical_stance=True)
 def _case_end_face_full_debit_split():
-    # THE TWO END-FACE KEYS, each default off and each arming ITS OWN rows.
-    # `end_wall_sheath_full_debit` books the end wall's sheath-climb row;
-    # `cathode_face_full_debit` books the emitting face's three. They are
-    # independent: either, both or neither.
+    # THE TWO END FACES, each arming ITS OWN rows. The end wall's sheath-climb
+    # row has no key: it is armed by the geometry's end wall face, so it is
+    # present on every run of this single-cathode layout.
+    # `cathode_face_full_debit` books the emitting face's three, default off.
     _es_params, _es_flags = _base_config()
     _es_flags = dict(_es_flags)
     _es_flags["cathode_coupling"] = True
 
-    # (i) OFF IS THE UNARMED RUN, structurally and bit for bit. Stating either
-    # flag False must not add a row, must not move the packed RHS, and must
-    # leave the term set exactly what a construction that never named them
-    # produces -- the rows are ABSENT, which is a different statement from
+    # (i) OFF IS THE UNARMED RUN, structurally and bit for bit. Stating the
+    # cathode flag False must not add a row, must not move the packed RHS, and
+    # must leave the term set exactly what a construction that never named it
+    # produces -- its rows are ABSENT, which is a different statement from
     # present-and-zero and is what keeps an unarmed saved ledger unchanged.
+    # The end wall row is present on both.
     _es_unnamed = LAPDSim1D(dict(_es_params), dict(_es_flags))
     _es_off_flags = dict(_es_flags)
-    _es_off_flags["end_wall_sheath_full_debit"] = False
     _es_off_flags["cathode_face_full_debit"] = False
     _es_off = LAPDSim1D(dict(_es_params), _es_off_flags)
     _es_unnamed_terms = _es_unnamed.rhs_terms()
     _es_off_terms = _es_off.rhs_terms()
     assert set(_es_off_terms) == set(_es_unnamed_terms)
-    assert not (set(_es_off_terms) & set(END_SHEATH_DEBIT_ROWS))
+    assert set(_es_off_terms) & set(END_SHEATH_DEBIT_ROWS) == set(
+        END_SHEATH_END_WALL_ROWS
+    )
     assert _es_off.rhs().tobytes() == _es_unnamed.rhs().tobytes()
 
-    # (ii) EACH KEY ARMS ITS OWN ROWS AND ONLY THOSE. The three arming
-    # combinations are checked against the same unarmed term set, so a row
-    # leaking across the split shows up as a set difference rather than as a
-    # number nobody looked at.
-    def _es_build(end_wall, cathode):
-        _flags = dict(_es_flags)
-        _flags["end_wall_sheath_full_debit"] = end_wall
-        _flags["cathode_face_full_debit"] = cathode
-        return LAPDSim1D(dict(_es_params), _flags)
-
-    _es_coll_only = _es_build(True, False)
-    _es_cath_only = _es_build(False, True)
-    _es_both = _es_build(True, True)
-    _es_coll_only_terms = _es_coll_only.rhs_terms()
-    _es_cath_only_terms = _es_cath_only.rhs_terms()
+    # (ii) THE CATHODE KEY ARMS ITS OWN ROWS AND ONLY THOSE, checked against
+    # the unarmed term set, so a row leaking across the split shows up as a
+    # set difference rather than as a number nobody looked at.
+    _es_both_flags = dict(_es_flags)
+    _es_both_flags["cathode_face_full_debit"] = True
+    _es_both = LAPDSim1D(dict(_es_params), _es_both_flags)
     _es_on_terms = _es_both.rhs_terms()
-    assert set(_es_coll_only_terms) == (
-        set(_es_off_terms) | set(END_SHEATH_END_WALL_ROWS)
-    ), sorted(set(_es_coll_only_terms) ^ set(_es_off_terms))
-    assert set(_es_cath_only_terms) == (
+    assert set(_es_on_terms) == (
         set(_es_off_terms) | set(END_SHEATH_CATHODE_ROWS)
-    ), sorted(set(_es_cath_only_terms) ^ set(_es_off_terms))
-    assert set(_es_on_terms) == set(_es_off_terms) | set(
-        END_SHEATH_DEBIT_ROWS
     ), sorted(set(_es_on_terms) ^ set(_es_off_terms))
-    # ... and each one-key run's rows are BIT-IDENTICAL to the same rows on
-    # the both-key run: the split changes which rows exist, never what any of
-    # them books.
+    # ... and the end wall row is BIT-IDENTICAL with and without the cathode
+    # key: the split changes which rows exist, never what any of them books.
     for _es_name in END_SHEATH_END_WALL_ROWS:
         assert (
-            _es_coll_only_terms[_es_name].Ee.tobytes()
-            == _es_on_terms[_es_name].Ee.tobytes()
-        ), _es_name
-    for _es_name in END_SHEATH_CATHODE_ROWS:
-        assert (
-            _es_cath_only_terms[_es_name].Ee.tobytes()
+            _es_off_terms[_es_name].Ee.tobytes()
             == _es_on_terms[_es_name].Ee.tobytes()
         ), _es_name
 
@@ -141,7 +122,6 @@ def _case_end_face_full_debit_split():
         ion_mass_g=_es_both.ion_mass_g,
         alpha_isat=float(_es_params["alpha_isat"]),
         b_presheath_length=float(_es_params["b_presheath_length"]),
-        gas_type=_es_params.get("gas_type"),
     )
     _es_lambda_eff = (
         sheath_lift_lambda(_es_both.ion_mass_g) - math.log(_es_alpha)
@@ -187,22 +167,21 @@ def _case_end_face_full_debit_split():
             _es_booked_W, _es_expect_W, rtol=1e-12, atol=0.0
         ), (_es_name, _es_booked_W, _es_expect_W)
 
-    # (vi) MISCONFIGURATION REFUSES AT CONSTRUCTION, naming what is missing --
-    # and each key names ONLY its own input. A non-bool reads like a value and
-    # is refused. The cathode key without the circuit solve leaves its three
-    # rows with no honest input, and it says so rather than booking zeros; the
-    # end wall key does NOT require that solve, because its row rides the
-    # boundary operator's own flux, so the same configuration constructs.
-    for _es_key in ("end_wall_sheath_full_debit", "cathode_face_full_debit"):
-        _es_bad_flags = dict(_es_flags)
-        _es_bad_flags[_es_key] = 1
-        try:
-            LAPDSim1D(dict(_es_params), _es_bad_flags)
-        except ValueError as _es_exc:
-            assert "must be a bool" in str(_es_exc), _es_exc
-            assert _es_key in str(_es_exc), _es_exc
-        else:
-            raise AssertionError(f"{_es_key} accepted a non-bool")
+    # (vi) MISCONFIGURATION REFUSES AT CONSTRUCTION, naming what is missing.
+    # A non-bool reads like a value and is refused. The cathode key without
+    # the circuit solve leaves its three rows with no honest input, and it
+    # says so rather than booking zeros; the end wall row does NOT require
+    # that solve, because it rides the boundary operator's own flux, so it is
+    # armed on the same configuration without the circuit.
+    _es_bad_flags = dict(_es_flags)
+    _es_bad_flags["cathode_face_full_debit"] = 1
+    try:
+        LAPDSim1D(dict(_es_params), _es_bad_flags)
+    except ValueError as _es_exc:
+        assert "must be a bool" in str(_es_exc), _es_exc
+        assert "cathode_face_full_debit" in str(_es_exc), _es_exc
+    else:
+        raise AssertionError("cathode_face_full_debit accepted a non-bool")
     _es_nocath_flags = dict(_es_flags)
     _es_nocath_flags["cathode_face_full_debit"] = True
     _es_nocath_flags["cathode_coupling"] = False
@@ -216,12 +195,12 @@ def _case_end_face_full_debit_split():
             "cathode_face_full_debit armed without the cathode circuit solve"
         )
     _es_nocirc_flags = dict(_es_flags)
-    _es_nocirc_flags["end_wall_sheath_full_debit"] = True
     _es_nocirc_flags["cathode_coupling"] = False
-    LAPDSim1D(dict(_es_params), _es_nocirc_flags)
+    _es_nocirc = LAPDSim1D(dict(_es_params), _es_nocirc_flags)
+    assert set(END_SHEATH_END_WALL_ROWS) <= set(_es_nocirc.rhs_terms())
 
     # (vii) THE MERGED KEY IS RETIRED and refuses at the configuration
-    # boundary, naming BOTH replacements -- the case a stored file written
+    # boundary, naming its replacement -- the case a stored file written
     # before the split hits. Its old default value is refused too: the name
     # owns no read any more, so stating it at all would be the silent inert
     # control that boundary exists to forbid.
@@ -235,8 +214,8 @@ def _case_end_face_full_debit_split():
                 _es_exc
             )
             assert "end_sheath_full_debit is RETIRED" in str(_es_exc), _es_exc
-            assert "end_wall_sheath_full_debit" in str(_es_exc), _es_exc
             assert "cathode_face_full_debit" in str(_es_exc), _es_exc
+            assert "end wall face" in str(_es_exc), _es_exc
         else:
             raise AssertionError(
                 f"end_sheath_full_debit={_es_value} was accepted"
@@ -246,8 +225,67 @@ def _case_end_face_full_debit_split():
     _es_default_params, _es_default_flags = default_config()
     assert "end_sheath_full_debit" not in _es_default_flags
     assert "end_sheath_full_debit" not in _es_default_params
-    assert "end_wall_sheath_full_debit" in _es_default_flags
+    assert "end_wall_sheath_full_debit" not in _es_default_flags
     assert "cathode_face_full_debit" in _es_default_flags
+
+
+# --------------------------------------------------------------------
+# end-wall-debit-armed-by-geometry-role
+# --------------------------------------------------------------------
+@_case("end-wall-debit-armed-by-geometry-role", historical_stance=True)
+def _case_end_wall_debit_armed_by_geometry_role():
+    # THE GEOMETRY KEYS ARE RETIRED and the end wall sheath debit is armed by
+    # presence on ROLE: exactly when the geometry has a plasma-absorbing face
+    # whose live cell carries the end wall role, never by a flag.
+    from stance_config import load_configuration
+
+    # (a) Every retired geometry key refuses at the configuration boundary
+    # with the retired-key ValueError, in its own namespace.
+    _rg_p, _rg_f = default_config()
+    for _rg_ns, _rg_key, _rg_value in (
+        ("flags", "end_expansion_geometry", False),
+        ("flags", "prescribed_area_geometry", True),
+        ("flags", "neutral_baffles", True),
+        ("flags", "end_wall_sheath_full_debit", True),
+        ("flags", "source_fixed_grid", True),
+        ("params", "end_expansion_cells", 10),
+        ("params", "end_expansion_machine_radius_cm", 100.0),
+        ("params", "end_expansion_plasma_radius_cm", 50.0),
+    ):
+        assert _rg_key not in _rg_p and _rg_key not in _rg_f, _rg_key
+        _rg_bad_p, _rg_bad_f = dict(_rg_p), dict(_rg_f)
+        (_rg_bad_f if _rg_ns == "flags" else _rg_bad_p)[_rg_key] = _rg_value
+        try:
+            LAPDSim1D(_rg_bad_p, _rg_bad_f)
+        except ValueError as _rg_exc:
+            assert "unknown LAPDSim1D configuration keys" in str(_rg_exc), (
+                _rg_exc
+            )
+            assert f"{_rg_key} is RETIRED" in str(_rg_exc), _rg_exc
+        else:
+            raise AssertionError(f"retired key {_rg_key} was accepted")
+
+    # (b) A TwinCathode geometry, circuit off, as its fixtures build it: it
+    # constructs on its own uniform-column mesh, has no end wall face, and
+    # so has no end wall debit armed and no end wall row in its ledger.
+    _rg_res_p, _rg_res_f = _resolved_config()
+    _rg_twin_p = dict(
+        _rg_res_p,
+        cathode_anode_gap_cm=50.0,
+        source_region_length_cm=None,
+        source_region_dz_cm=None,
+    )
+    _rg_twin_f = dict(_rg_res_f, TwinCathode=True, cathode_coupling=False)
+    _rg_twin = LAPDSim1D(_rg_twin_p, _rg_twin_f)
+    assert "end_wall" not in absorbing_live_cells_by_role(_rg_twin.geometry)
+    assert _rg_twin._end_wall_sheath_full_debit is False
+    assert not set(END_SHEATH_END_WALL_ROWS) & set(_rg_twin.rhs_terms())
+
+    # (c) The reference geometry has an end wall face and arms the debit.
+    _rg_ref_p, _rg_ref_f, _ = load_configuration("g1atrim")
+    _rg_ref = LAPDSim1D(_rg_ref_p, _rg_ref_f)
+    assert absorbing_live_cells_by_role(_rg_ref.geometry).get("end_wall")
+    assert _rg_ref._end_wall_sheath_full_debit is True
 
 
 # --------------------------------------------------------------------
@@ -276,7 +314,6 @@ def _case_end_wall_lambda_eff_barrier_bracket():
     _le_params, _le_flags = _base_config()
     _le_flags = dict(_le_flags)
     _le_flags["cathode_coupling"] = True
-    _le_flags["end_wall_sheath_full_debit"] = True
     # This case reads a barrier off two RHS rows, not a neutral profile, and
     # ``run()`` performs no equilibration -- so the equilibration flag is
     # cleared rather than left on to warn that it did nothing.
@@ -321,7 +358,6 @@ def _case_end_wall_lambda_eff_barrier_bracket():
             ion_mass_g=_le_sim.ion_mass_g,
             alpha_isat=float(_le_params["alpha_isat"]),
             b_presheath_length=float(_le_params["b_presheath_length"]),
-            gas_type=_le_params.get("gas_type"),
         )
         assert math.exp(-0.5) <= _le_alpha <= 1.0, (_le_i, _le_alpha)
         assert np.isclose(
@@ -341,9 +377,9 @@ def _case_end_wall_rename_retired_names():
     # every configuration key that carried the old ``collector`` name were
     # renamed to ``end_wall``. Two halves are asserted here:
     #
-    #   IN: a LIVE configuration naming a retired key, or the retired
-    #       ``end_mode`` VALUE, is REFUSED at construction with the
-    #       replacement named. A quietly accepted alias would be exactly the
+    #   IN: a LIVE configuration naming a retired key, ``end_mode``
+    #       included, is REFUSED at construction with the replacement
+    #       named. A quietly accepted alias would be exactly the
     #       silent/inert control the config boundary exists to forbid.
     #   BACK: a SAVED artifact written before the rename still reads, because
     #       ``load_result_hdf5`` maps the stored ``cell_role`` string and says
@@ -395,7 +431,7 @@ def _case_end_wall_rename_retired_names():
     # (b) the retired FLAG key, same statement in the other namespace.
     assert "collector_sheath_full_debit" not in input_flags_template_1d
     assert "collector_sheath_full_debit" in RETIRED_FLAG_KEYS
-    assert "end_wall_sheath_full_debit" in input_flags_template_1d
+    assert "end_wall_sheath_full_debit" not in input_flags_template_1d
     try:
         LAPDSim1D(_ew_p, dict(_ew_f, collector_sheath_full_debit=True))
     except ValueError as _ew_fexc:
@@ -406,27 +442,19 @@ def _case_end_wall_rename_retired_names():
         )
     assert "unknown LAPDSim1D configuration keys" in _ew_fmsg, _ew_fmsg
     assert "collector_sheath_full_debit is RETIRED" in _ew_fmsg, _ew_fmsg
-    assert "end_wall_sheath_full_debit" in _ew_fmsg, _ew_fmsg
+    assert "end wall face" in _ew_fmsg, _ew_fmsg
 
-    # (c) the retired end_mode VALUE. The key survives the rename; the value
-    # it names does not, and the refusal says what replaced it.
-    try:
-        LAPDSim1D(dict(_ew_p, end_mode="collector"), _ew_f)
-    except ValueError as _ew_vexc:
-        _ew_vmsg = str(_ew_vexc)
-    else:
-        raise AssertionError("end_mode='collector' was ACCEPTED")
-    assert "end_mode='collector' is not available" in _ew_vmsg, _ew_vmsg
-    assert "Accepted: 'end_wall'" in _ew_vmsg, _ew_vmsg
-    assert "RENAMED to 'end_wall'" in _ew_vmsg, _ew_vmsg
-    # NEGATIVE CONTROL on that clause: it is scoped to the retired value, so
-    # any other rejected end_mode gets the bare refusal.
-    try:
-        LAPDSim1D(dict(_ew_p, end_mode="mirrored_source"), _ew_f)
-    except ValueError as _ew_oexc:
-        assert "RENAMED" not in str(_ew_oexc), str(_ew_oexc)
-    else:
-        raise AssertionError("end_mode='mirrored_source' was ACCEPTED")
+    # (c) end_mode itself. The far face is the end wall unconditionally, so
+    # the key is retired and every value of it, the old 'collector' included,
+    # is refused with the retired-key message.
+    for _ew_mode in ("collector", "end_wall"):
+        try:
+            LAPDSim1D(dict(_ew_p, end_mode=_ew_mode), _ew_f)
+        except ValueError as _ew_vexc:
+            _ew_vmsg = str(_ew_vexc)
+        else:
+            raise AssertionError(f"end_mode={_ew_mode!r} was ACCEPTED")
+        assert "end_mode is RETIRED" in _ew_vmsg, _ew_vmsg
 
     # (d) THE READ SHIM. A stored role array is mapped, and the load reports
     # that it was; an array carrying none of the retired strings is returned
@@ -499,7 +527,6 @@ def _case_end_wall_face_sheath_edge_flux():
     _ew_params, _ew_flags = _base_config()
     _ew_params = dict(_ew_params, max_steps_action="stop")
     _ew_flags = dict(_ew_flags)
-    _ew_flags["end_wall_sheath_full_debit"] = True
     # run() is called directly below, so the equilibration pre-solve is
     # cleared rather than left on to warn that it did nothing.
     _ew_params["initial_neutral_state"] = "fill"
@@ -542,7 +569,6 @@ def _case_end_wall_face_sheath_edge_flux():
         b_presheath_length=float(
             _ew_sim._input_dict["b_presheath_length"]
         ),
-        gas_type=_ew_sim._gas_type,
     )
     _ew_Te = float(_ew_derived.Te[_ew_cell])
     _ew_Ti = float(_ew_derived.Ti[_ew_cell])

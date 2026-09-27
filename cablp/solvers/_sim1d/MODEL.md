@@ -3,8 +3,8 @@
 The equations `LAPDSim1D` integrates: a conservative axial fluid plasma
 coupled to a kinetic (discrete-velocity) neutral gas. Schemes are
 [`NUMERICS.md`](NUMERICS.md); configuration-file form is
-[`CONFIG_DECLARATIONS.md`](CONFIG_DECLARATIONS.md). Helium only —
-`gas_type` other than `"He"` raises at construction.
+[`CONFIG_DECLARATIONS.md`](CONFIG_DECLARATIONS.md). Helium only: the
+species is not configurable.
 
 ## Notation and units
 
@@ -289,8 +289,8 @@ $-p_{s,i}\left.\nabla_\parallel\cdot u\right|_i$ with
 
 $$\left.\nabla_\parallel\cdot u\right|_i=\frac{A_{i+1/2}u_{i+1/2}-A_{i-1/2}u_{i-1/2}}{V_{\text{col},i}},$$
 
-and the `hyperbolic_energy_consistent` selector does not move it. What the
-selector changes is the convective momentum flux (the kinetic-energy-preserving
+and the energy-consistent hyperbolic core leaves it as it is. What the core
+sets is the convective momentum flux (the kinetic-energy-preserving
 $\lbrace u\rbrace\lbrace M\rbrace$ form) and the booking of $Q_\text{diss}$; it adds nothing to the
 energy rows' pressure term.
 
@@ -420,8 +420,6 @@ solver.
 recombination at the tabulated density, so the whole recombination loss is the
 quadratic term above and the cubic channel is identically zero; the
 `recombination_3b_loss` term a result carries reads zero throughout. The
-`atomic_rate_model = "janev"` arm instead uses the analytic fits and does split
-the two, $\alpha_r(T_e)n^2$ radiative plus $\alpha_3(T_e)n^3$ three-body. The
 BULK coefficients carry no scale factor; the beam excitation channel is the one
 exception and carries `b_beam_excitation`. Each result records an
 `atomic_rate_domain` ledger of where the run sampled below the tabulated $T_e$
@@ -432,7 +430,8 @@ at the reference configuration all five coefficients — `scd`, `acd`,
 cell, under-booking recombination (still rising steeply toward low $T_e$)
 between the table edge and the solver's electron-temperature floor below
 it; under the default-off `adas_low_te_extension` flag, `acd` and `prb1`
-are instead extended below the edge by the Janev shape ratio while `scd`,
+are instead extended below the edge by the analytic
+$\alpha_r(T_e) + n_e\alpha_3(T_e)$ recombination shape ratio while `scd`,
 `plt1`, `plt2` clamp either way. `atomic_rate_domain`'s
 `active_cell_fraction_below` and `active_volume_fraction_below` report how
 much of the active plasma sat below the table edge at each save.
@@ -451,8 +450,7 @@ $$Q_\text{inel}=\underbrace{I_\text{ion}S_\text{ion}^\text{bulk}}_\text{ionizati
 Its ionization cost rides the BULK rate alone; the beam's own cost is booked
 separately, with the beam terms below. $I_\text{ion}$ is the ionization
 POTENTIAL and keeps that name. The $n^2$ term is He<sup>+</sup> LINE radiation
-(`plt2`), not recombination radiation; the recombination-radiation class
-`prb1` is added to it only under `icool_recomb`.
+(`plt2`), not recombination radiation.
 
 On the fluid path the new electron is born cold — zero $E_e$ birth energy, so
 $T_e$ falls by dilution as $n$ rises — and the ion mass-loading mixing energy
@@ -554,8 +552,7 @@ $f$ = `heat_flux_limiter_f` the free-streaming fraction,
 `heat_flux_limiter_exponent` its blending exponent (a value other than 1 gives
 $1/(1+(q_{SH}/q_\text{sat})^p)$), and $v_{th,e}=\sqrt{T_e/m_e}$. The flux caps
 at free-streaming where gradients are steep and recovers the local
-Spitzer–Härm law where they are shallow; `electron_heat_flux_limit = False`
-selects the unlimited local law.
+Spitzer–Härm law where they are shallow. The limiter is always on.
 
 ### Anode-mesh collection
 
@@ -934,8 +931,8 @@ $Q_i^\text{out}$ are the face fluxes themselves, but **$Q_e^\text{out}$
 is not**: the face's electron-energy flux is DISCARDED and the operator books
 instead $2T_e$ per collected electron on the face's own particle flux,
 $2T_e\Gamma_n$, at the end wall and zero at the
-cathode, where the electron thermal channel belongs to the circuit. When
-`end_wall_sheath_full_debit` is armed, $Q_e^\text{out}$ at the end wall
+cathode, where the electron thermal channel belongs to the circuit. Wherever
+the geometry has an end wall face, $Q_e^\text{out}$ at the end wall
 additionally carries the sheath climb $-\Lambda_\text{eff}T_e\Gamma_\text{coll}$
 of the paragraph below, saved as its own `end_wall_e_sheath_climb` row on that
 same particle flux. The sheath-edge
@@ -972,11 +969,14 @@ across a wave fan: the density step from the live cell to $n_\text{se}$ is the
 sub-grid presheath model, and a sheath sends no wave back into the plasma. The
 numerical statement is [`NUMERICS.md`](NUMERICS.md).
 
-**End-face sheath debit at the end wall.** `end_wall_sheath_full_debit`
-completes that booking the way the anode sheath debit completes the anode's.
-The two end-face keys are INDEPENDENT — different faces, different fluxes,
-different regimes — so either, both or neither may be armed and each refuses at
-construction on its own missing input alone. A
+The **end wall sheath debit** completes that
+booking the way the anode sheath debit completes the anode's. It has no key:
+it is armed by the geometry, present exactly when the mesh has a
+plasma-absorbing face whose live cell has the end wall role, and absent on a
+geometry without one (the twin-cathode layout). The two end faces are
+INDEPENDENT — different faces, different fluxes, different regimes — and the
+emitting cathode face's rows are armed separately by
+`cathode_face_full_debit`. A
 floating surface draws no net current, so the electrons that reach it climbed a
 barrier $\Lambda_\text{eff}T_e$ — and with no circuit branch behind the
 end wall there is nothing but the electron thermal store to supply it: the
@@ -1198,7 +1198,6 @@ Terms a result carries in `rhs_terms`, for the model above.
 | term | function |
 |---|---|
 | `plasma_advective_flux` | `physics/flux.py:plasma_flux_rhs_terms` |
-| `plasma_front_flux` | `physics/flux.py:front_filling_fluxes` |
 | `characteristic_boundary` | `physics/sources.py:characteristic_boundary_rhs` |
 | `pressure_work` | `physics/sources.py:pressure_work_rhs`, `velocity_divergence` |
 | `hyperbolic_dissipation_heating` | `physics/sources.py:hyperbolic_energy_correction_rhs` |
@@ -1214,7 +1213,7 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `recombination_energy_return` | `physics/reactions.py:recombination_energy_return_rhs` |
 | `cathode_surface_loss` | `physics/cathode.py:cathode_source_terms` |
 | `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode part); REPORTED here and applied by the implicit heat substep as `solver.py:electrode_ee_sink_rate` wherever the operator split is in force |
-| `end_wall_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (`end_wall_sheath_full_debit` only) |
+| `end_wall_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (geometries with an end wall face) |
 | `cathode_e_emitted_enthalpy` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
 | `cathode_e_emitted_fall` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
 | `cathode_e_collected_climb` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
@@ -1227,15 +1226,16 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `parallel_momentum_sink` | `physics/sources.py:parallel_momentum_sink_rhs` |
 | `parallel_momentum_sink_heating` | `physics/sources.py:parallel_momentum_sink_heating_rhs` |
 
-`boundary_absorption`, `surface_loss` and `gas_puff_local_ionization` are
-permanently zero terms kept for saved-ledger schema stability, as is
-`recombination_3b_loss` under the ADAS coefficients.
+`boundary_absorption`, `surface_loss`, `gas_puff_local_ionization`,
+`plasma_front_flux` and `electron_drift_transport` are permanently zero terms
+kept for saved-ledger schema stability, as is `recombination_3b_loss` under
+the ADAS coefficients. The saved timestep diagnostic `dt_front_density` is
+likewise a constant infinity.
 
 The model presented here is the equation set the reference configuration
 integrates. A result may carry further terms that are not part of it: those of
-the alternative fluid neutral closure, and the additional term
-`electron_drift_transport`, all available in the code and none described by
-this document.
+the alternative fluid neutral closure, available in the code and not
+described by this document.
 
 Supporting modules: `cablp/atomic/` (cross sections, ADAS access, empirical
 fits), `cablp/plasma/` (Braginskii conductivities, collision times),

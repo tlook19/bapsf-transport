@@ -16,19 +16,18 @@ Gates:
   I3  ledger completeness: every channel the engine declares is present in
       every ledger it emits, and no ledger entry is unaccounted
   I4  the same inventory closure and an independent transfer reconstruction
-      on the R5 STAND-IN expanded-end geometry (retired keys, kept as a
-      stand-in -- not production; see R5_STANDIN_PARAMS), where the column
-      and annulus areas jump at the plenum constriction and the end
-      expansion -- the case the throat-face flux form exists for and the one
-      the uniform default geometry cannot exercise
+      on the R5 STAND-IN geometry (not production; see
+      R5_STANDIN_PARAMS), where the annulus area jumps into and out of the
+      plenum constriction -- the case the throat-face flux form exists for
+      and the one the uniform default geometry cannot exercise
   J1  the bounded-chord annulus flight classes satisfy the two-dimensional
       mean-chord theorem, ``pi (Rm - Rp) / 2``, which nothing in their
       derivation was fitted to; and every class flight time is sharper than
       the exponential the rate arm implies
   J2  the bounded-chord jump operator routes every launched particle to
       exactly one outcome, and the running engine closes both ledger forms
-      and reproduces the booked transfer on the R5 stand-in expanded-end
-      geometry -- the I4 statement, made against the jump kernel
+      and reproduces the booked transfer on the R5 stand-in geometry -- the
+      I4 statement, made against the jump kernel
   J3  naming the shipped ``annulus_flights = "rates"`` is bit-identical to
       not naming it at all
   I5  the same two statements on a zero-annulus geometry, plus the
@@ -498,33 +497,29 @@ def zero_plasma(dvm):
     }
 
 
-# R5 STAND-IN GEOMETRY (retired keys, kept as a stand-in -- not production).
+# R5 STAND-IN GEOMETRY (kept as a stand-in -- not production).
 #
-# The R5 parametric flare: the end vessel expands to a 1 m neutral radius over
-# 10 cells with the plasma held at ``Rp = 15`` cm, and the plenum choke
-# (``Rcs = 40``, ``Lcs = 25``) constricts the annulus in front of the cathode.
-# Both are ANNULUS area jumps, which is what the throat-face flux form in
-# ``_march`` exists to handle; the column area is uniform throughout.
+# The plasma is held at ``Rp = 15`` cm and the plenum choke (``Rcs = 40``,
+# ``Lcs = 25``) constricts the annulus in front of the cathode: ANNULUS area
+# jumps into and out of the duct, which is what the throat-face flux form in
+# ``_march`` exists to handle; the column area is uniform throughout. The R5
+# end-vessel flare it once also carried was removed with the end-expansion
+# keys, so the end block is the single 100 cm end wall cell.
 #
-# These keys were RETIRED by the G1 measured geometry (compare_sim1d_es1.py
-# records the retirement, and the two area machineries are mutually exclusive
-# by construction), so this block is NOT production geometry and is no longer
-# labelled as one. It is kept for the two things it is the only geometry here
-# to supply:
+# This block is NOT production geometry and is not labelled as one. It is
+# kept for the two things it is the only geometry here to supply:
 #
 #   * a plenum obstruction, which puts the cathode's live cell at index 2
 #     rather than at the mesh start -- the offset the positional-constant
 #     deposit defect S1 guards against needs in order to be a test at all;
-#   * a coarse three-radius annulus with an exactly-representable chord split,
+#   * a coarse annulus with an exactly-representable chord split,
 #     on which the J2 flight-map routing residual is EXACTLY zero. On the
 #     280-cell stance mesh the same residual is 3.3e-16 -- roundoff, not a
 #     routing error, but the gate's statement is exact-zero and is not
 #     relaxed here.
 #
-# ``end_wall_length_cm`` is pinned at the R5 value. The config default dropped
-# 100 -> 7.8 at R2a, and inheriting it subdivided the ten-cell end block into
-# 0.78 cm cells -- a mesh R5 never had, and the one on which the explicit
-# neutral-diffusion checkerboard measured 2026-08-23 appeared.
+# ``end_wall_length_cm`` is pinned at the R5 value rather than inheriting the
+# config default's 7.8 cm.
 R5_STANDIN_PARAMS = {
     "Rp": 15.0,
     "R_cath": 15.0,
@@ -532,9 +527,6 @@ R5_STANDIN_PARAMS = {
     "Lcs": 25.0,
     "Rsup": 0.0,
     "end_wall_length_cm": 100.0,
-    "end_expansion_cells": 10,
-    "end_expansion_machine_radius_cm": 100.0,
-    "end_expansion_plasma_radius_cm": 15.0,
     # Gap pinned with the region: the fixed source span runs from the anode
     # face outward, so its far end rides the pinned gap or the span stops
     # being a whole number of source_region_dz_cm cells. ``L_cath`` is the
@@ -544,24 +536,16 @@ R5_STANDIN_PARAMS = {
     "source_region_length_cm": 100.0,
     "source_region_dz_cm": 10.0,
 }
-R5_STANDIN_FLAGS = {
-    "end_expansion_geometry": True,
-    "source_fixed_grid": True,
-}
-#: The same package in ``arm_config`` override form (``flag:`` prefixed flags).
-R5_STANDIN_GEOMETRY_KEYS = {
-    **R5_STANDIN_PARAMS,
-    **{f"flag:{key}": value for key, value in R5_STANDIN_FLAGS.items()},
-}
+#: The same package in ``arm_config`` override form.
+R5_STANDIN_GEOMETRY_KEYS = dict(R5_STANDIN_PARAMS)
 
 
 def expanded_end_geometry():
-    """Return the R5 stand-in expanded-end geometry (see R5_STANDIN_PARAMS)."""
+    """Return the R5 stand-in geometry (see R5_STANDIN_PARAMS)."""
     d, fl = default_config()
     d = dict(d)
     fl = dict(fl)
     d.update(R5_STANDIN_PARAMS)
-    fl.update(R5_STANDIN_FLAGS)
     return LAPDSim1D(input_dict=d, input_flags=fl).geometry
 
 
@@ -863,12 +847,6 @@ STANCE_GEOMETRY_PARAMS = (
     "neutral_baffle_positions_cm",
     "neutral_baffle_clear_radii_cm",
 )
-#: The two flags that package requires. ``prescribed_area_geometry`` is what
-#: makes the per-cell radii the geometry; ``neutral_baffles`` is what makes the
-#: baffle arrays live. They travel as part of the MACHINE rather than as a
-#: kinetic input: since B6 the DVM march does read the baffle faces, but only
-#: under the DVM arm, where it applies the same baffles to its annulus.
-STANCE_GEOMETRY_FLAGS = ("prescribed_area_geometry", "neutral_baffles")
 
 
 def _production_geometry_keys():
@@ -879,11 +857,7 @@ def _production_geometry_keys():
     "production geometry" cannot drift from what production runs.
     """
     stance = load_stance(PRODUCTION_STANCE)
-    keys = {name: stance.params[name] for name in STANCE_GEOMETRY_PARAMS}
-    keys.update(
-        {f"flag:{name}": stance.flags[name] for name in STANCE_GEOMETRY_FLAGS}
-    )
-    return keys
+    return {name: stance.params[name] for name in STANCE_GEOMETRY_PARAMS}
 
 
 #: The PRODUCTION machine geometry: the g1atrim stance's measured per-cell
@@ -1070,7 +1044,7 @@ def gate_i3():
 def gate_i4():
     geom = expanded_end_geometry()
     dvm, worst_dist, worst_dom, transfer_err = geometry_closure(
-        geom, "expanded end"
+        geom, "R5 stand-in"
     )
     area_ann = dvm.V_ann / dvm.dz
     jumps = area_ann[1:] / np.maximum(area_ann[:-1], 1e-300)
@@ -1081,7 +1055,7 @@ def gate_i4():
         and transfer_err < ROUNDOFF_REL
     )
     return (
-        "I4 expanded-end R5 stand-in geometry: closure and transfer exact "
+        "I4 R5 stand-in geometry: closure and transfer exact "
         "across the area jumps",
         ok,
         f"{dvm.nz} cells, annulus area-jump ratios {jumps}; worst "
@@ -1217,7 +1191,7 @@ def gate_j1():
 
 
 def gate_j2():
-    """The jump operator conserves on the R5 stand-in expanded-end geometry.
+    """The jump operator conserves on the R5 stand-in geometry.
 
     The I4 statement, made against the bounded-chord annulus: the routing
     map itself must send every launched particle to exactly one outcome,
@@ -1227,7 +1201,7 @@ def gate_j2():
     """
     geom = expanded_end_geometry()
     dvm, worst_dist, worst_dom, transfer_err = geometry_closure(
-        geom, "expanded end", annulus_flights="bounded_chord"
+        geom, "R5 stand-in", annulus_flights="bounded_chord"
     )
     area_ann = dvm.V_ann / dvm.dz
     jumps = area_ann[1:] / np.maximum(area_ann[:-1], 1e-300)
@@ -1280,7 +1254,7 @@ def gate_j3():
         "J3 annulus_flights='rates' is bit-identical to not naming it",
         same,
         "f_c, f_a and both transfer rows compared as raw bytes after 6 "
-        f"updates on the expanded-end geometry: "
+        f"updates on the R5 stand-in geometry: "
         f"{'identical' if same else 'DIFFER'}",
     )
 
@@ -1925,9 +1899,7 @@ def gate_d2():
         ion_mass_g=sim._ion_mass_g,
         ion_charge_exchange_kwargs=sim._ion_charge_exchange_kwargs(),
         density_dt_fraction=0.25,
-        plasma_active=(
-            sim._geometry.plasma_active if sim._active_plasma_topology else None
-        ),
+        plasma_active=sim._geometry.plasma_active,
     )
     terms = sim.rhs_terms()
     lines = [
@@ -7394,7 +7366,7 @@ def gate_bf3():
     """BF3 in-solver: the baffle books where it should and closes both ledgers.
 
     The stance baffle armed on the ENGAGED production arm
-    (``engaged_production_sim``, whose geometry arms ``neutral_baffles``),
+    (``engaged_production_sim``, whose geometry carries the baffle arrays),
     ticked, and
     read three ways:
 

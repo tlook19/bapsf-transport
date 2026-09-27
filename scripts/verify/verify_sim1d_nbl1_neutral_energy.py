@@ -72,7 +72,6 @@ from cablp.constants import ev_to_erg, kb_cgs
 CLEAN_PARAMS = {
     "ne0": 1e12, "nn0": 1e13, "Te0": 15.0, "Ti0": 2.0, "u0": 0.0,
     "gas_puff_enabled": False, "pump_enabled": False,
-    "atomic_rate_model": "adas",
     "phase_transition_mode": "scheduled",
     "tau_neutral_prebreakdown": 0.0, "tau_prebreakdown": 0.0,
     "tau_breakdown": 0.0, "tau_discharge": 1.0, "tau_afterglow": 0.0,
@@ -95,7 +94,6 @@ def make_sim(neutral_energy=True, **overrides):
     params, flags = default_config()
     params.update(CLEAN_PARAMS)
     params["nx"] = 60
-    params["gas_type"] = "He"
     params["Tn_K"] = TN_K
     flags.update(CLEAN_FLAGS)
     flags["neutral_momentum"] = True
@@ -146,7 +144,6 @@ def _collision(sim, state):
         state=state,
         floors=sim._floors,
         ion_mass_g=sim._ion_mass_g,
-        gas_type="He",
         Tn_eV=TN_EV,
         geometry=sim._geometry,
     )
@@ -209,7 +206,7 @@ def gate_c3():
     st = make_state(sim, u_i=4.0e5, u_n=0.0, Ti=Ti_eV, Tn_K=Ti_eV * ev_to_erg / kb_cgs)
     term = ion_neutral_collision_rhs(
         state=st, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
-        gas_type="He", Tn_eV=TN_EV, geometry=sim._geometry,
+        Tn_eV=TN_EV, geometry=sim._geometry,
     )
     Vp, V_En = _volumes(sim, st)
     u_rel = _u_rel(sim, st)
@@ -239,7 +236,7 @@ def gate_c4():
     der = derive_state(ramped, floors=sim._floors, ion_mass_g=sim._ion_mass_g)
     nu_mt = np.asarray(ramped.nn, dtype=float) * (
         phelps_momentum_transfer_rate_cm3_s(
-            0.5 * (der.Ti + Tn_ramp), gas_type="He"
+            0.5 * (der.Ti + Tn_ramp)
         )
     )
     expected = 1.5 * nu_mt * ramped.n * (Tn_ramp - der.Ti) * ev_to_erg
@@ -250,7 +247,7 @@ def gate_c4():
     # which is what makes the identity above evidence that the field is read.
     scalar_nu = np.asarray(ramped.nn, dtype=float) * (
         phelps_momentum_transfer_rate_cm3_s(
-            0.5 * (der.Ti + TN_EV), gas_type="He"
+            0.5 * (der.Ti + TN_EV)
         )
     )
     scalar_form = 1.5 * scalar_nu * ramped.n * (TN_EV - der.Ti) * ev_to_erg

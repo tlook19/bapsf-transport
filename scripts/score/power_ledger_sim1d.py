@@ -138,12 +138,12 @@ def legacy_get(mapping, key, default=None):
         return mapping[old]
     return default
 
-#: The four rhs_terms channels the two END-FACE keys add, in the order the
-#: per-window block reports them: `end_wall_sheath_full_debit`'s one row
-#: first, then `cathode_face_full_debit`'s emitting-face three.  Each row is
-#: PRESENCE-GATED on ITS OWN key, so a run may carry the end wall row alone,
-#: the three cathode rows alone, all four, or none -- absence here means
-#: "never booked", never "booked zero".
+#: The four END-FACE sheath rhs_terms channels, in the order the per-window
+#: block reports them: the end wall's one row first (armed wherever the
+#: geometry has an end wall face), then `cathode_face_full_debit`'s
+#: emitting-face three.  Each end is PRESENCE-GATED on its own, so a run may
+#: carry the end wall row alone, the three cathode rows alone, all four, or
+#: none -- absence here means "never booked", never "booked zero".
 END_SHEATH_ROWS = (
     "end_wall_e_sheath_climb",
     "cathode_e_emitted_enthalpy",
@@ -218,8 +218,8 @@ CHANNEL_PHASE = {
          "collected electrons climbed, taken from the electron store and "
          "handed to the ions. With the 2 Te of characteristic_boundary the "
          "end wall debit is the sheath-edge (2 + Lambda_eff) Te per "
-         "collected electron. Present only on a run with "
-         "end_wall_sheath_full_debit armed"),
+         "collected electron. Present on a run whose geometry has an end "
+         "wall face"),
     "cathode_e_emitted_enthalpy":
         ("BOTH",
          "END-FACE SHEATH CLOSURE (Ee only), HEATING: the 2 k_B T_s the "
@@ -277,7 +277,7 @@ CHANNEL_PHASE = {
     "hyperbolic_dissipation_heating":
         ("BOTH",
          "Rusanov numerical kinetic-energy dissipation deposited into the "
-         "ion internal energy; this row IS the energy-consistent selector's "
+         "ion internal energy; this row IS the energy-consistent core's "
          "whole energy booking, and nothing rides pressure_work"),
     "hyperbolic_energy_correction":
         ("BOTH",
@@ -720,7 +720,7 @@ def report_window(f, label, lo, hi, geom, port_top):
                       "channels in this window; move the window past the "
                       "tail or discount them explicitly.")
 
-    print("\n--- END-FACE SHEATH CLOSURE (end_wall_sheath_full_debit, "
+    print("\n--- END-FACE SHEATH CLOSURE (end wall, "
           "cathode_face_full_debit) [kW], window mean ---")
     if not table:
         print("  n/a -- rhs_terms ABSENT from this artifact")

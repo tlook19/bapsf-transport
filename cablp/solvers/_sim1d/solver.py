@@ -71,7 +71,6 @@ from .core.validation import (
     refuse_dvm_anode_jet_without_cathode_coupling,
     refuse_dvm_cathode_jet_without_cathode_coupling,
     refuse_te_floor_above_adas_table_edge,
-    resolve_electron_drift_transport_config,
     resolve_energy_exchange_rate_fraction,
     resolve_initial_neutral_state,
     resolve_jet_arming_criterion,
@@ -119,11 +118,9 @@ from .physics.cathode import (
     BEAM_GAP_LEDGER_POWER_ATOL,
     END_SHEATH_CATHODE_ROWS,
     cathode_emission_sheath_power_W,
-    beam_anomalous_power_density,
     beam_gap_ledger_mismatch,
     beam_ionization_rhs,
     beam_ionization_rhs_terms,
-    beam_launch,
     cathode_boundary_state,
     cathode_power_balance_terms_W,
     cathode_sample_indices,
@@ -132,7 +129,6 @@ from .physics.cathode import (
     tail_reflect_face,
     validate_cathode_solver_model,
 )
-from cablp.cathode.circuit_common import beam_launched_current_A
 from .physics.cathode import (
     CATHODE_ENV_T_K,
     advance_circuit_current_driven,
@@ -148,6 +144,7 @@ from .physics.flux import (
     ion_sound_speed,
     plasma_flux_rhs,
     plasma_flux_rhs_terms,
+    plasma_front_flux_rhs,
 )
 from .physics.neutrals import (
     GAS_PUFF_DIAGNOSTIC_FIELDS,
@@ -185,9 +182,6 @@ from .physics.sources import (
     cathode_jet_backscatter_speed,
     cathode_jet_incident_energy_eV,
     characteristic_boundary_rhs,
-    ELECTRON_DRIFT_DIAGNOSTIC_ROWS,
-    ELECTRON_DRIFT_DIAGNOSTIC_SCALARS,
-    electron_drift_transport_rhs,
     ion_neutral_collision_rhs,
     ionization_birth_neutral_temperature_eV,
     neutral_cx_channel_rhs,
@@ -203,23 +197,6 @@ from .physics.sources import (
     flux_tube_geometry_rhs,
     hyperbolic_energy_correction_rhs,
     pressure_work_rhs,
-)
-from .physics.tracer import (
-    CRITERION_NAMES,
-    affine_time_integral as tracer_affine_time_integral,
-    affine_update as tracer_affine_update,
-    beam_plasma_thinness as tracer_beam_plasma_thinness,
-    bind_census as tracer_bind_census,
-    conducted_current_A as tracer_conducted_current_A,
-    growth_rate as tracer_growth_rate,
-    passive_anomalous_leak as tracer_passive_anomalous_leak,
-    quasistatic_Te_eV,
-    relative_drift as tracer_relative_drift,
-    resolve_criteria as resolve_tracer_criteria,
-    transport_ratio as tracer_transport_ratio,
-)
-from .results.restart import (
-    REFUSED_NEUTRAL_MODELS as RESTART_REFUSED_NEUTRAL_MODELS,
 )
 from cablp.atomic.adas import he_rate_temperature_range_eV
 from cablp.cathode.beam_deposition import ANOMALOUS_MODELS
@@ -245,11 +222,10 @@ DT_REJECT_FACTOR = 0.5
 TWO_ZONE_MATRIX_CACHE_ENTRIES = 32
 
 #: Relative threshold [dimensionless] for the floor-aware drain exemption on
-#: the "surface_loss" timestep bound, consulted only when the
-#: ``surface_loss_floor_exempt`` flag is on. It separates a cell HOVERING at
-#: its temperature floor (clip plus one step of re-heating residue) from a
-#: healthy drained cell orders of magnitude above it; see the flag's entry in
-#: ``core/config.py``. It is the ENTRY threshold only: re-admission uses the
+#: the "surface_loss" timestep bound. It separates a cell HOVERING at its
+#: temperature floor (clip plus one step of re-heating residue) from a
+#: healthy drained cell orders of magnitude above it; see NUMERICS.md
+#: ("Floor-aware drain exemption"). It is the ENTRY threshold only: re-admission uses the
 #: wider outer threshold named by the params key
 #: ``surface_loss_floor_exempt_exit_rtol``, which must exceed this one and is
 #: armed at its default; that key set to 0 makes re-admission use this value
@@ -332,8 +308,6 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "plasma_advective_flux": "none",
     "plasma_front_flux": "none",
     "pressure_work": "none",
-    # The drift operator writes the ELECTRON row alone; it moves no particles
-    # of any species, so it has no neutrals to carry a birth temperature for.
     "electron_drift_transport": "none",
     "hyperbolic_dissipation_heating": "none",
     "flux_tube_geometry": "none",
@@ -360,21 +334,20 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
 }
 
 
-#: The RHS row ``end_wall_sheath_full_debit`` adds: the sheath fall the
-#: end wall's collected electrons climbed. A one-tuple rather than a bare
-#: name so the two end-face keys are read the same way wherever their rows
-#: are seeded, filled or tabulated.
+#: The end wall's sheath-debit row: the sheath fall the end wall's collected
+#: electrons climbed, present wherever the geometry has an end wall face. A
+#: one-tuple rather than a bare name so the two end faces' rows are read the
+#: same way wherever they are seeded, filled or tabulated.
 END_SHEATH_END_WALL_ROWS = ("end_wall_e_sheath_climb",)
 
 
-#: Every row the two end-face keys can add, in the order they are built:
-#: the end wall's, then the emitting cathode face's three in the order
+#: Every end-face sheath-debit row, in the order they are built: the end
+#: wall's, then the emitting cathode face's three in the order
 #: :func:`~.physics.cathode.cathode_emission_sheath_power_W` returns them.
-#: PRESENCE-GATED PER KEY -- this tuple is the union, not a group that arms
-#: together. With neither key armed none of them exists, so an unarmed run's
-#: saved term structure -- the golden included -- is what it was before the
-#: closure existed; with one key armed only that key's rows exist. Every
-#: reader defaults their absence.
+#: PRESENCE-GATED PER END -- this tuple is the union, not a group that arms
+#: together. The end wall row exists wherever the geometry has an end wall
+#: face, the cathode rows wherever ``cathode_face_full_debit`` is armed.
+#: Every reader defaults their absence.
 END_SHEATH_DEBIT_ROWS = END_SHEATH_END_WALL_ROWS + END_SHEATH_CATHODE_ROWS
 
 
@@ -583,11 +556,6 @@ class StepAttempt1D:
     cathode_jet_energy_booking: np.ndarray | None = None
     anode_jet_energy_booking: np.ndarray | None = None
     end_wall_jet_energy_booking: np.ndarray | None = None
-    # Regime-R2 tracer coefficients frozen at this attempt's step start, or
-    # None whenever the tracer is not engaged. Carried on the attempt for the
-    # same reason the DVM accumulators are: a rejected attempt
-    # must move neither the Picard cache nor the passive/active boundary.
-    tracer: dict | None = None
     # This attempt's anode electron-sheath book: the circuit's charge and the
     # implicit substep's realised debit [J], plus the per-cell realised
     # energy density [erg cm^-3] and the window it spans [s]. None whenever
@@ -598,18 +566,11 @@ class StepAttempt1D:
 def _atomic_rate_domain(result):
     """Return saved active-plasma coverage of the bundled He ADF11 grid."""
     te_min_eV, te_max_eV = he_rate_temperature_range_eV()
-    atomic_rate_model = str(
-        getattr(result, "params", {}).get("atomic_rate_model", "adas")
-    )
     Te = np.asarray(result.Te, dtype=float)
     active = np.asarray(result.plasma_active, dtype=bool)
     time = np.asarray(result.time, dtype=float)
     phase = np.asarray(result.phase, dtype=str)
-    if atomic_rate_model != "adas":
-        count_fraction = np.full(time.shape, np.nan, dtype=float)
-        volume_fraction = np.full(time.shape, np.nan, dtype=float)
-        active_min = np.full(time.shape, np.nan, dtype=float)
-    elif not np.any(active):
+    if not np.any(active):
         count_fraction = np.zeros(time.shape, dtype=float)
         volume_fraction = np.zeros(time.shape, dtype=float)
         active_min = np.full(time.shape, np.nan, dtype=float)
@@ -631,7 +592,7 @@ def _atomic_rate_domain(result):
         return float(time[indices[0]]) if indices.size else np.nan
 
     return {
-        "table_applies": atomic_rate_model == "adas",
+        "table_applies": True,
         "table_Te_min_eV": te_min_eV,
         "table_Te_max_eV": te_max_eV,
         "active_cell_fraction_below": count_fraction,
@@ -909,7 +870,6 @@ def _estimate_wall_remaining(elapsed_s, fraction):
 def _timestep_limiters(diag, count=3):
     candidates = (
         ("plasma_cfl", diag.dt_plasma_cfl),
-        ("front_density", diag.dt_front_density),
         ("surface_loss", diag.dt_surface_loss),
         ("neutral_exchange", diag.dt_neutral_exchange),
         ("neutral_sources", diag.dt_neutral_sources),
@@ -1026,8 +986,6 @@ class LAPDSim1D:
             self._input_dict,
             self._flags,
             geometry=self._geometry,
-            hyperbolic_wave_speed=self._hyperbolic_wave_speed,
-            raw_stage_validation=self._raw_stage_validation,
         )
         # The declarative half of the deprecation surface (core/deprecations.py):
         # one DeprecationWarning per deprecated control this config actually
@@ -1048,9 +1006,7 @@ class LAPDSim1D:
             self._input_dict,
             self._flags,
             geometry=self._geometry,
-            gas_type=self._gas_type,
             I_ion=self._I_ion,
-            electron_heat_flux_limit=self._electron_heat_flux_limit,
             heat_flux_limiter_f=self._heat_flux_limiter_f,
             heat_flux_limiter_exponent=self._heat_flux_limiter_exponent,
             neutral_energy=self._neutral_energy,
@@ -1108,61 +1064,23 @@ class LAPDSim1D:
         self._progress_interval_s = (
             1.0e-4 if progress_interval_s is None else progress_interval_s
         )
-        self._gas_type = self._input_dict.get("gas_type")
-        (
-            self._ion_mass_g,
-            self._mu,
-            self._mu_neutral,
-            self._I_ion,
-        ) = self._gas_constants(self._gas_type)
+        # Helium: ion mass, ion and neutral mass numbers, ionization energy.
+        self._ion_mass_g = m_He_cgs
+        self._mu = 4
+        self._mu_neutral = 4
+        self._I_ion = I_ion
         self._geometry = build_geometry(self._input_dict, self._flags)
         # Whether the plasma flux tube has a varying cross-section, and so
         # whether the quasi-1D p*dA/dz momentum source that pairs with the
-        # area-weighted pressure flux must be built. The two ways to configure
-        # one refuse each other at geometry construction (core.geometry), so
-        # this is an either/or, and it is False on every uniform-column
-        # configuration -- including the golden, which pins both flags off.
-        self._variable_area_geometry = bool(
-            self._flags.get("end_expansion_geometry")
-        ) or bool(self._flags.get("prescribed_area_geometry"))
-        self._active_plasma_topology = bool(
-            self._flags.get("active_plasma_topology")
-        )
-        self._raw_stage_validation = bool(
-            self._flags.get("raw_stage_validation")
-        )
-        self._hyperbolic_wave_speed = str(
-            self._input_dict.get("hyperbolic_wave_speed")
-        )
-        self._hyperbolic_energy_consistent = bool(
-            self._flags.get("hyperbolic_energy_consistent")
+        # area-weighted pressure flux must be built. Presence-gated on the
+        # prescribed plasma profile, the one way to configure a variable area
+        # (core.geometry); False on every uniform-column configuration.
+        self._variable_area_geometry = (
+            self._input_dict.get("plasma_radius_profile_cm") is not None
         )
         # R4.3 / audit A7+A8: the moment-closed reduced ion-neutral collision
         # operator (Phelps He+/He) carries the ion-neutral drag, frictional
-        # heating, thermalization and CX cooling as ONE term. He-only.
-        if self._gas_type != "He":
-            raise ValueError(
-                "the moment-closed ion-neutral collision operator uses the "
-                "Phelps He+/He cross sections and requires gas_type='He' "
-                f"(got {self._gas_type!r})"
-            )
-        # The presheath sigma_in model shares the He-only Phelps cross
-        # section. Its two legacy arms ("constant", "cx_derived") were the
-        # only non-helium path in the solver and were removed at D3.
-        _sigma_in_model = str(self._input_dict.get("sigma_in_model"))
-        if _sigma_in_model != "phelps":
-            raise ValueError(
-                f"sigma_in_model={_sigma_in_model!r} is not available: the "
-                "legacy 'constant' and 'cx_derived' arms were removed at D3, "
-                "2026-08-21. Accepted: 'phelps'."
-            )
-        if self._gas_type != "He":
-            raise ValueError(
-                "sigma_in_model='phelps' uses the Phelps He+/He cross section "
-                f"and requires gas_type='He' (got {self._gas_type!r}); the "
-                "non-helium arms were removed at D3, 2026-08-21 and the "
-                "solver is helium-only"
-            )
+        # heating, thermalization and CX cooling as ONE term.
 
     def _init_neutral_closure_selection(self):
         """Select and arm the neutral closure: zones, model, and recycle routing.
@@ -1519,40 +1437,33 @@ class LAPDSim1D:
         checked HERE so a misconfigured guard cannot be discovered hours into
         the run it exists to catch.
         """
-        # R5.2 / audit A9: flux-limited electron heat conduction (default on).
-        self._electron_heat_flux_limit = bool(
-            self._flags.get("electron_heat_flux_limit")
-        )
+        # Flux-limited electron heat conduction: the limiter is always on,
+        # and its factor and exponent must both be positive.
         self._heat_flux_limiter_f = float(
             self._input_dict.get("heat_flux_limiter_f")
         )
-        if self._electron_heat_flux_limit and self._heat_flux_limiter_f <= 0.0:
+        if self._heat_flux_limiter_f <= 0.0:
             raise ValueError(
-                "heat_flux_limiter_f must be > 0 when electron_heat_flux_limit "
-                f"is on (got {self._heat_flux_limiter_f})"
+                "heat_flux_limiter_f must be > 0: the electron heat-flux "
+                f"limiter is always on (got {self._heat_flux_limiter_f})"
             )
         self._heat_flux_limiter_exponent = float(
             self._input_dict.get("heat_flux_limiter_exponent")
         )
-        if self._electron_heat_flux_limit and self._heat_flux_limiter_exponent <= 0.0:
+        if self._heat_flux_limiter_exponent <= 0.0:
             raise ValueError(
-                "heat_flux_limiter_exponent must be > 0 when "
-                f"electron_heat_flux_limit is on (got {self._heat_flux_limiter_exponent})"
+                "heat_flux_limiter_exponent must be > 0: the electron "
+                "heat-flux limiter is always on "
+                f"(got {self._heat_flux_limiter_exponent})"
             )
-        # Floor-aware drain exemption on the "surface_loss" dt bound (default
-        # ON; presence-gated: None disables the exemption branch entirely so
-        # the off path is bit-exact historical behavior).
-        _surface_loss_floor_exempt = bool(
-            self._flags.get("surface_loss_floor_exempt")
-        )
-        self._surface_loss_floor_exempt_rtol = (
-            SURFACE_LOSS_FLOOR_EXEMPT_RTOL if _surface_loss_floor_exempt else None
-        )
+        # Floor-aware drain exemption on the "surface_loss" dt bound, always
+        # on at the entry threshold SURFACE_LOSS_FLOOR_EXEMPT_RTOL.
+        self._surface_loss_floor_exempt_rtol = SURFACE_LOSS_FLOOR_EXEMPT_RTOL
         # Hysteresis band on that exemption (armed at the default width; 0
         # restores the knife edge above). Validated here so a band that could
         # never be a band -- outer at or below the inner threshold, or wide
-        # enough to be a permanent exemption -- or one armed with the
-        # exemption itself off is refused before any compute.
+        # enough to be a permanent exemption -- is refused before any
+        # compute.
         _exempt_exit_rtol = self._input_dict.get(
             "surface_loss_floor_exempt_exit_rtol"
         )
@@ -1567,17 +1478,6 @@ class LAPDSim1D:
                 f"band (got {_exempt_exit_rtol!r})"
             )
         if _exempt_exit_value > 0.0:
-            if not _surface_loss_floor_exempt:
-                raise ValueError(
-                    "surface_loss_floor_exempt_exit_rtol is set "
-                    f"({_exempt_exit_rtol!r}) while the surface_loss_floor_exempt "
-                    "flag is off; the hysteresis band re-admits cells to an "
-                    "exemption that is not running, so it could never do "
-                    "anything. The band is armed by DEFAULT, so recovering "
-                    "the historical bound takes both keys: pass "
-                    "surface_loss_floor_exempt_exit_rtol=0.0 alongside the "
-                    "cleared flag"
-                )
             if _exempt_exit_value <= SURFACE_LOSS_FLOOR_EXEMPT_RTOL:
                 raise ValueError(
                     "surface_loss_floor_exempt_exit_rtol must be strictly "
@@ -1782,19 +1682,6 @@ class LAPDSim1D:
         self._energy_exchange_rate_fraction = resolve_energy_exchange_rate_fraction(
             self._input_dict
         )
-        # Rate-freezing instrument (I3). A real bool is required: the flag
-        # switches which STATE the explicit operator's reaction terms read,
-        # and an int or a string smuggled in there would arm a first-order
-        # rate channel while reading like a value.
-        _rates_at_accepted_state = self._flags.get(
-            "rates_at_accepted_state"
-        )
-        if not isinstance(_rates_at_accepted_state, bool):
-            raise ValueError(
-                "rates_at_accepted_state must be a bool (got "
-                f"{_rates_at_accepted_state!r})"
-            )
-        self._rates_at_accepted_state = _rates_at_accepted_state
         # End-face sheath electron debit, the anode debit's twin at the two
         # ends of the machine -- and TWO INDEPENDENT keys, one per end,
         # because the two faces carry different fluxes in different regimes
@@ -1844,28 +1731,16 @@ class LAPDSim1D:
                         f"{_A_c_cm2!r} cm^2 (R_cath = "
                         f"{float(self._input_dict['R_cath'])!r} cm)."
                     )
-        _end_wall_sheath_full_debit = self._flags.get(
-            "end_wall_sheath_full_debit"
+        # The end wall sheath debit is armed by presence on ROLE: exactly when
+        # the geometry carries a plasma-absorbing face whose live cell has the
+        # end wall role, the face whose collected electrons are charged the
+        # sheath fall. A geometry without one (the TwinCathode layout) has no
+        # such face and the row is simply absent. The cathode circuit solve is
+        # deliberately NOT required: this row rides the boundary operator's
+        # own flux and is honest without a circuit.
+        self._end_wall_sheath_full_debit = bool(
+            absorbing_live_cells_by_role(self._geometry).get("end_wall")
         )
-        if not isinstance(_end_wall_sheath_full_debit, bool):
-            raise ValueError(
-                "end_wall_sheath_full_debit must be a bool (got "
-                f"{_end_wall_sheath_full_debit!r})"
-            )
-        if _end_wall_sheath_full_debit and not absorbing_live_cells_by_role(
-            self._geometry
-        ).get("end_wall"):
-            # A face the mesh does not carry would book nothing at all -- an
-            # unarmed run that reads like an armed one. The cathode circuit
-            # solve is deliberately NOT required here: this row rides the
-            # boundary operator's own flux and is honest without a circuit.
-            raise ValueError(
-                "end_wall_sheath_full_debit cannot arm: this configuration "
-                "does not supply an end-wall-role plasma-absorbing face, "
-                "which is the face whose collected electrons are charged the "
-                "sheath fall."
-            )
-        self._end_wall_sheath_full_debit = _end_wall_sheath_full_debit
         _cathode_face_full_debit = self._flags.get("cathode_face_full_debit")
         if not isinstance(_cathode_face_full_debit, bool):
             raise ValueError(
@@ -2097,52 +1972,20 @@ class LAPDSim1D:
         self._jet_arming_censored_atoms = 0.0
 
     def _init_atomic_package_refusals(self):
-        """Refuse atomic-package combinations that would double-book photons."""
+        """Read the recombination energy-return switch."""
         self._recombination_energy_return = bool(
             self._input_dict.get("recombination_energy_return")
         )
-        if self._recombination_energy_return:
-            if (
-                str(self._input_dict.get("atomic_rate_model"))
-                != "adas"
-            ):
-                raise ValueError(
-                    "recombination_energy_return requires "
-                    "atomic_rate_model='adas' (the PRB radiated-power "
-                    "booking has no janev counterpart)"
-                )
-            if bool(self._flags.get("icool_recomb")):
-                raise ValueError(
-                    "recombination_energy_return already charges the full "
-                    "PRB; combining it with icool_recomb double-charges "
-                    "the recombination photons"
-                )
-        if bool(
-            self._input_dict.get("adas_low_te_extension")
-        ) and bool(self._flags.get("icool_recomb")):
-            raise ValueError(
-                "adas_low_te_extension must not be combined with "
-                "icool_recomb: icool_recomb charges bare PRB, and "
-                "adas_low_te_extension amplifies the sub-edge PRB by "
-                "~9,300x, so the electron fluid runs away thermally to the "
-                "Te floor and the electron_cooling timestep bound collapses "
-                "permanently. The consistent net booking "
-                "(I_ion*S_rec - P_PRB) that would make the pair sound is "
-                "not built. The deep-afterglow low-Te recipe that paired "
-                "them is RETIRED; without that booking the afterglow "
-                "validity window is Te > 0.2 eV (the ADF11 edge)"
-            )
 
     def _init_floors_and_initial_state(self):
         """Set the floors, arm the initial-condition features, and build state.
 
-        Order is load-bearing: the tracer and the shaped neutral fill are
-        armed BEFORE the initial condition, because the construction floor
-        is the thing the tracer has to be exempt from and the fill is the
-        only thing the profile touches.
+        Order is load-bearing: the shaped neutral fill is armed BEFORE the
+        initial condition, because the fill is the only thing the profile
+        touches.
         """
-        # The Te floor has to sit below the adf11 low-Te grid edge under
-        # atomic_rate_model='adas'; refused HERE, before the floor is armed,
+        # The Te floor has to sit below the adf11 low-Te grid edge; refused
+        # HERE, before the floor is armed,
         # and read off the loaded table rather than written down.
         refuse_te_floor_above_adas_table_edge(self._input_dict)
         self._floors = {
@@ -2152,14 +1995,6 @@ class LAPDSim1D:
             "Ti": float(self._input_dict["Ti_floor"]),
         }
         self._floor_ledger = self._empty_floor_ledger()
-        # Regime-R2 pre-breakdown passive tracer (default off, bit-exact off).
-        # Armed HERE, before the initial condition is floored, because the
-        # floor is the thing it has to be exempt from: ``ne0 = 0`` is a
-        # legitimate true-vacuum start under the tracer, and the construction
-        # floor would otherwise clip it to ``ne_floor`` before any feature
-        # existed to object. Everything it validates is already built (the
-        # floors, the geometry, both config namespaces, the topology flag).
-        self._configure_regime_tracer()
         # Shaped initial neutral fill (default off, bit-exact off). Armed
         # HERE, before the initial condition is built, because the initial
         # condition is the only thing it touches.
@@ -2168,10 +2003,6 @@ class LAPDSim1D:
         self._state = apply_state_floors(
             initial_raw, self._floors, self._ion_mass_g
         )
-        if self._tracer is not None:
-            self._state = self._tracer_exempt_initial_floor(
-                initial_raw, self._state
-            )
         self._accumulate_floor_ledger(
             self._floor_additions(initial_raw, self._state)
         )
@@ -2542,21 +2373,6 @@ class LAPDSim1D:
         self._momentum_sink = resolve_parallel_momentum_sink(
             self._input_dict, geometry=self._geometry
         )
-        # Electron drift transport and EMF work (default off, bit-exact off).
-        # ``None`` when unarmed IS the presence gate: the RHS reads it to
-        # decide whether to evaluate Gamma_d at all, so the off path never
-        # enters the operator.
-        self._electron_drift = resolve_electron_drift_transport_config(
-            self._input_dict,
-            self._flags,
-            geometry=self._geometry,
-            active_plasma_topology=self._active_plasma_topology,
-        )
-        # The operator's named power rows from the LAST RHS evaluation, for the
-        # saved diagnostics. Same discipline as the hot-channel rows: written
-        # by the evaluation, read by the snapshot that triggered it, never
-        # recomputed from the saved sample.
-        self._electron_drift_rows = None
 
     def _init_run_machinery(self):
         """Initialize the run-loop bookkeeping and apply any restart payload."""
@@ -2602,726 +2418,13 @@ class LAPDSim1D:
         if self._flags.get("debug_checks"):
             assert_finite_state(self._state, self._derived)
 
-    # ------------------------------------------------------------------
-    # Regime-R2 pre-breakdown passive-tracer bridge (default off).
-    # Method of record: ``physics/tracer.py``, which states the method beside
-    # the code. Every method below returns immediately unless ``self._tracer``
-    # is not None, which happens only under the ``regime_tracer`` flag: that is
-    # the presence gate, and it is why the off path is bit-exact.
-    # ------------------------------------------------------------------
-
-    def _configure_regime_tracer(self):
-        """Validate and arm the R2 passive tracer, or leave it absent.
-
-        Every refusal names what the tracer ACCEPTS and fires at construction,
-        never at the first step: a run that cannot legally use the tracer must
-        not spend compute discovering that.
-        """
-        self._tracer = None
-        self._tracer_passive = np.zeros(self._geometry.cells, dtype=bool)
-        self._tracer_geometry_cache = None
-        self._tracer_coefficients = None
-        self._tracer_background = None
-        self._tracer_depletion = None
-        self._tracer_census = None
-        self._tracer_refreshes = 0
-        self._tracer_first_activation = None
-        if not self._flags.get("regime_tracer"):
-            return
-        if not self._flags.get("Plasma"):
-            raise ValueError(
-                "regime_tracer describes the PLASMA's pre-breakdown build and "
-                "has nothing to integrate with the Plasma flag off; accepted: "
-                "Plasma on"
-            )
-        if not self._flags.get("cathode_coupling"):
-            raise ValueError(
-                "regime_tracer needs the cathode solve: the affine source S is "
-                "the beam-impact ionization birth the cathode/beam solver "
-                "produces, and without it the tracer has no source at all and "
-                "a true-vacuum start would stay at vacuum forever. Accepted: "
-                "cathode_coupling on"
-            )
-        if not self._active_plasma_topology:
-            raise ValueError(
-                "regime_tracer needs active_plasma_topology: the passive/"
-                "active interface is a typed plasma topology (a closed face "
-                "with one live cell), and the legacy all-cells flux path has "
-                "no notion of the live cell at a closed face, so it cannot "
-                "represent the interface. Accepted: active_plasma_topology on"
-            )
-        neutral_model = str(self._input_dict.get("neutral_model"))
-        if neutral_model in RESTART_REFUSED_NEUTRAL_MODELS:
-            raise ValueError(
-                f"regime_tracer refuses neutral_model={neutral_model!r}: the "
-                "tracer's growth rate is built from MOMENT neutral densities, "
-                "and the handoff instrument (results/restart.py) does not "
-                "serialise a distribution function either. R2 is fluid-arms "
-                "only and does not extend DVM support; accepted: "
-                f"{sorted(set(('moment',)) )} and any other moment closure"
-            )
-        if self._input_dict.get("restart_from") is not None:
-            raise ValueError(
-                "regime_tracer cannot be combined with restart_from: the "
-                "restart payload carries no tracer mask and no neutral-"
-                "depletion accumulator, so a resumed tracer would silently "
-                "restart criterion (c) from zero and under-report the burn it "
-                "has already done. The intended two-stage shape is the "
-                "opposite one -- stage 1 runs the conducting leg WITH the "
-                "tracer and exports, stage 2 resumes with the flag off"
-            )
-        self._tracer = resolve_tracer_criteria(self._input_dict, self._floors)
-        # Every cell that carries plasma at all starts passive: the tracer
-        # exists precisely because the fluid cannot describe the leg yet.
-        self._tracer_passive = np.asarray(
-            self._geometry.plasma_active, dtype=bool
-        ).copy()
-        self._tracer_depletion = np.zeros(self._geometry.cells, dtype=float)
-        self._tracer_census = self._empty_tracer_census()
-
-    def _tracer_exempt_initial_floor(self, raw, floored):
-        """Restore the RAW plasma rows on tracer cells in the initial condition.
-
-        Same exemption :meth:`floor_state_vector` applies every step, applied
-        once to the initial condition so ``ne0 = 0`` is a true-vacuum start
-        rather than a silent ``ne_floor`` fill. The NEUTRAL rows keep their
-        floor: the tracer owns the plasma, not the background.
-        """
-        passive = self._tracer_passive
-        return ConservativeState1D(
-            n=np.where(passive, raw.n, floored.n),
-            nn=floored.nn,
-            M=np.where(passive, raw.M, floored.M),
-            Ee=np.where(passive, raw.Ee, floored.Ee),
-            Ei=np.where(passive, raw.Ei, floored.Ei),
-            M_n=floored.M_n,
-            nn_a=floored.nn_a,
-            M_n_a=floored.M_n_a,
-            En=floored.En,
-        )
-
-    @property
-    def _tracer_engaged(self):
-        """True while any cell is still owned by the tracer."""
-        return self._tracer is not None and bool(np.any(self._tracer_passive))
-
     def _plasma_active_mask(self):
-        """Return the cells the FLUID owns: typed-active minus tracer-passive."""
-        active = np.asarray(self._geometry.plasma_active, dtype=bool)
-        if self._tracer is None:
-            return active
-        return active & ~self._tracer_passive
+        """Return the cells the plasma fluid owns: the typed-active cells."""
+        return np.asarray(self._geometry.plasma_active, dtype=bool)
 
     def _plasma_geometry(self):
-        """Return the geometry the PLASMA operators see this step.
-
-        Identical object to ``self._geometry`` unless the tracer owns cells, so
-        the flag-off path cannot even observe that this method exists. When it
-        does own cells, the returned view closes every passive/active interface
-        face by exactly the rule ``build_geometry`` uses for a typed
-        plasma-dead boundary (``dead[f-1] != dead[f]``), and recomputes
-        ``plasma_face_live_cell`` from the composed mask. A closed face carries
-        no particle, advective-momentum or thermal-energy flux and no
-        conduction, with the active cell's pressure acting on it -- which is
-        the closed-face interface a passive cell gets, reached by reusing the
-        operator that already implements it rather than by adding a branch
-        to the flux.
-        """
-        if not self._tracer_engaged:
-            return self._geometry
-        key = self._tracer_passive.tobytes()
-        cached = self._tracer_geometry_cache
-        if cached is not None and cached[0] == key:
-            return cached[1]
-        base = self._geometry
-        cells = int(base.cells)
-        active = self._plasma_active_mask()
-        dead = ~active
-        plasma_open = np.asarray(base.plasma_open, dtype=bool).copy()
-        plasma_transmission = np.asarray(
-            base.plasma_transmission, dtype=float
-        ).copy()
-        heat_transmission = np.asarray(
-            base.heat_transmission, dtype=float
-        ).copy()
-        for face in range(1, cells):
-            if dead[face - 1] != dead[face]:
-                plasma_open[face] = False
-                plasma_transmission[face] = 0.0
-                heat_transmission[face] = 0.0
-        live = np.full(cells + 1, -1, dtype=int)
-        for face in np.flatnonzero(~plasma_open):
-            face = int(face)
-            adjacent = []
-            if face > 0 and active[face - 1]:
-                adjacent.append(face - 1)
-            if face < cells and active[face]:
-                adjacent.append(face)
-            if len(adjacent) > 1:
-                raise ValueError(
-                    f"closed plasma face {face} has active cells on both "
-                    "sides under the tracer's passive mask"
-                )
-            if adjacent:
-                live[face] = int(adjacent[0])
-        view = replace(
-            base,
-            plasma_active=active,
-            plasma_open=plasma_open,
-            plasma_transmission=plasma_transmission,
-            heat_transmission=heat_transmission,
-            plasma_face_live_cell=live,
-        )
-        self._tracer_geometry_cache = (key, view)
-        return view
-
-    @staticmethod
-    def _empty_tracer_census():
-        return {
-            "criterion": np.zeros(0, dtype=int),
-            "worst_ratio": np.zeros(0, dtype=float),
-            "ratios": {},
-            "passive": np.zeros(0, dtype=bool),
-            "Te_qs_eV": np.zeros(0, dtype=float),
-            "gamma_per_s": np.zeros(0, dtype=float),
-            "S_cm3_s": np.zeros(0, dtype=float),
-            "refreshes": 0,
-        }
-
-    def _tracer_device_voltage_V(self, cathode_solve):
-        """Return the device voltage [V] criterion (a) is driven by.
-
-        The sheath solve's own ``V_b``, held at or below
-        ``cathode_phi_c_cap_V``. Zero when there is no solve, which makes
-        criterion (a) inactive rather than undefined.
-        """
-        beam_result = getattr(cathode_solve, "beam_result", None)
-        if beam_result is None:
-            return 0.0
-        voltages = [
-            abs(float(getattr(result, "V_b", 0.0)))
-            for result in (beam_result.result, beam_result.result_twin)
-            if result is not None
-        ]
-        return max(voltages) if voltages else 0.0
-
-    def _tracer_beam_energy_eV(self, cathode_solve):
-        """Return the beam energy [eV] reaching the column, or 0 with no beam.
-
-        Keyed to the solved sheath drop, never to ``cathode_phi_c_cap_V``:
-        the cap is the He EII table top, an atomic-data domain guard, not a
-        beam energy.
-        """
-        return self._tracer_device_voltage_V(cathode_solve)
-
-    def _tracer_launch_cells(self):
-        """Return ``{end: launch cell index}`` for the beams criterion (b) sums."""
-        launches = {0: int(beam_launch(self._geometry, end=0)[0])}
-        if self._flags.get("TwinCathode"):
-            launches[-1] = int(beam_launch(self._geometry, end=-1)[0])
-        return launches
-
-    def _tracer_reaction_kwargs(self):
-        """Return the subset of the reaction kwargs ``reaction_rates`` accepts."""
-        full = self._reaction_kwargs()
-        return {
-            name: full[name]
-            for name in (
-                "gas_type",
-                "I_ion",
-                "atomic_rate_model",
-                "adas_low_te_extension",
-            )
-        }
-
-    def _tracer_surface_kwargs(self):
-        """Return the surface-absorption kwargs, jet and DVM channels absent.
-
-        The jet moves only the ``M_n`` row and the tracer reads the ``n`` row;
-        ``Tn_presheath_eV`` comes from the kinetic arms, which the tracer
-        refuses at construction.
-        """
-        surface = self._surface_loss_kwargs()
-        return {
-            "alpha_isat": surface["alpha_isat"],
-            "b_surface_loss": surface["b_surface_loss"],
-            "b_presheath_length": float(
-                self._input_dict.get("b_presheath_length")
-            ),
-            "gas_type": self._gas_type,
-        }
-
-    def _tracer_boundary_rhs(self, cathode_solve, time):
-        """Return ``probe_state -> plasma-end loss term``.
-
-        The tracer must consume the SAME boundary operator the fluid does, or
-        ``gamma`` disagrees with the fluid's own ``n`` row -- which is exactly
-        what the smoke's identity assertion catches. Since the legacy
-        volumetric absorber was retired (see commit 1fc05c9) there is one
-        operator, so there is nothing left to select between.
-        """
-        surface_kwargs = self._tracer_surface_kwargs()
-
-        def boundary(probe):
-            return characteristic_boundary_rhs(
-                state=probe,
-                floors=self._floors,
-                ion_mass_g=self._ion_mass_g,
-                geometry=self._plasma_geometry(),
-                cathode_jet=None,
-                **surface_kwargs,
-            )
-
-        return boundary
-
-    def _tracer_exchange_kwargs(self):
-        return {}
-
-    def _tracer_beam_kwargs(self, state, cathode_solve, time):
-        """Return the argument set BOTH beam readers must be built from.
-
-        One object, passed to ``beam_ionization_rhs_terms`` and to
-        ``beam_anomalous_power_density`` alike, so the row and the anomalous
-        share it is asked to give back cannot be built from different flags
-        or a different smoothing width.
-        """
-        return {
-            "state": state,
-            "floors": self._floors,
-            "ion_mass_g": self._ion_mass_g,
-            "geometry": self._geometry,
-            "input_dict": self._input_dict,
-            "input_flags": self._effective_cathode_flags(
-                time=time, active_only=True
-            ),
-            "cathode_solve": cathode_solve,
-        }
-
-    def _tracer_beam_rows(self, state, cathode_solve, time):
-        """Return ``(S, P_net, P_full)``: the beam rows the balance consumes.
-
-        ``S`` is the ``n`` row of ``beam_ionization_birth`` -- the affine
-        source, independent of ``n`` to the accuracy criterion (b) enforces.
-        ``P_full`` is the sum of the three beam rows the fluid books on ``Ee``
-        (deposition, ionization cost, excitation radiation), i.e. the net beam
-        heating of the electron fluid.
-
-        Under ``beam_anomalous_model="quasilinear"`` ONLY, ``P_net`` is
-        ``P_full`` with the anomalous share removed on every cell the tracer
-        owns, and it is ``P_net`` -- not ``P_full`` -- that the quasi-static
-        balance absorbs. That closure books near-total absorption by fiat, and
-        it is a beam-PLASMA instability: it needs a wave medium, and a passive
-        cell by its own definition has no plasma to be that medium, so on such
-        a cell the channel does not exist and booking its power there was
-        describing an interaction with a plasma that is not there. The channels
-        that survive on a passive cell are the ones that do not need one:
-        collisional beam drag on plasma electrons (proportional to ``n``, and
-        at vacuum-class density accordingly tiny) and the ionization-birth
-        bookkeeping, both of which stay exactly as they were.
-
-        The refusal is MODEL-KEYED, and that is the whole of the difference
-        between the closure legs. ``"ql_relaxation"`` carries its own onset
-        gate and its own density-dependent extracted fraction, so it already
-        books what a low-density cell can actually absorb rather than a fiat
-        total; refusing it wholesale on the passive set would delete the
-        physics the closure exists to supply. A passive cell therefore BOOKS
-        ``ql_relaxation``'s power in full, exactly as an active one does, and
-        ``P_net == P_full`` everywhere. Under ``"none"`` there is no anomalous
-        power to move either way.
-
-        Where the subtraction does apply it is gated on the PASSIVE MASK and on
-        nothing else. No density threshold is introduced: the tracer-to-fluid
-        handoff and the onset of fiat quasilinear absorption are made the same
-        event by construction, so a cell that has become active books the
-        anomalous channel in full, unchanged. The booking described here is
-        the statement of record, and
-        :meth:`tracer_passive_anomalous_leak` is the auditable invariant.
-        """
-        zeros = np.zeros(self._geometry.cells, dtype=float)
-        if cathode_solve is None:
-            return zeros, zeros.copy(), zeros.copy()
-        beam_kwargs = self._tracer_beam_kwargs(state, cathode_solve, time)
-        terms = beam_ionization_rhs_terms(
-            I_ion=self._I_ion,
-            **beam_kwargs,
-        )
-        S = np.asarray(terms["beam_ionization_birth"].n, dtype=float)
-        P_full = (
-            np.asarray(terms["beam_power_deposition"].Ee, dtype=float)
-            + np.asarray(terms["beam_ionization_cost"].Ee, dtype=float)
-            + np.asarray(terms["beam_excitation_radiation"].Ee, dtype=float)
-        )
-        if str(
-            self._input_dict.get("beam_anomalous_model")
-        ) != "quasilinear":
-            return S, P_full.copy(), P_full
-        P_ql = beam_anomalous_power_density(**beam_kwargs)
-        P_net = P_full - np.where(self._tracer_passive, P_ql, 0.0)
-        return S, P_net, P_full
-
-    def tracer_passive_anomalous_leak(self, state=None, time=None):
-        """Return each PASSIVE cell's departure from its closure's policy; 0.
-
-        The audit form of the model-keyed booking in :meth:`_tracer_beam_rows`.
-        It re-reads both the anomalous share and the model key from the
-        deposition objects and the config through ``physics.tracer``'s own
-        references, so it does not travel through the code path it is checking
-        and a removed, neutered or mis-keyed refusal is still caught. Returns
-        zeros when the tracer is not engaged: there are no passive cells to
-        audit.
-        """
-        cells = int(self._geometry.cells)
-        if not self._tracer_engaged:
-            return np.zeros(cells, dtype=float)
-        if state is None:
-            state = self.state
-        if time is None:
-            time = self._time
-        cathode_solve = self._cathode_solve
-        if cathode_solve is None:
-            cathode_flags = self._effective_cathode_flags(
-                time=time, active_only=True
-            )
-            if cathode_flags.get("cathode_coupling", False):
-                cathode_solve = self.solve_cathode_boundary(
-                    state=state, time=time, update_cache=False
-                )
-        _S, P_net, P_full = self._tracer_beam_rows(state, cathode_solve, time)
-        return tracer_passive_anomalous_leak(
-            P_beam_net_consumed=P_net,
-            P_beam_net_full=P_full,
-            passive=self._tracer_passive,
-            beam_kwargs=self._tracer_beam_kwargs(state, cathode_solve, time),
-        )
-
-    def _tracer_prepare(self, dt):
-        """Return this attempt's frozen tracer coefficients, mutating nothing.
-
-        Called from ``_attempt_step`` so the coefficients are the STEP-START
-        ones (the Picard convention) and so a rejected attempt leaves no trace:
-        everything here is returned on the attempt and committed only by
-        ``_tracer_apply``.
-        """
-        if not self._tracer_engaged:
-            return None
-        state = self.state
-        time = self._time
-        cathode_solve = self._cathode_solve
-        if cathode_solve is None and self._flags.get("cathode_coupling"):
-            cathode_solve = self.solve_cathode_boundary(
-                state=state, time=time, update_cache=False
-            )
-        S, P_net, _P_full = self._tracer_beam_rows(state, cathode_solve, time)
-        n_true = np.maximum(np.asarray(state.n, dtype=float), 0.0)
-        n_probe = np.maximum(n_true, float(self._floors["n"]))
-        nn = np.asarray(state.nn, dtype=float)
-        background = {"n": n_true, "nn": nn, "S": S}
-        drift = tracer_relative_drift(self._tracer_background or {}, background)
-        cached = self._tracer_coefficients
-        refreshed = cached is None or drift > self._tracer["refresh_tol"]
-        if refreshed:
-            boundary_rhs = self._tracer_boundary_rhs(cathode_solve, time)
-            Ti = np.full(self._geometry.cells, float(self._floors["Ti"]))
-            Te, sign_changes = quasistatic_Te_eV(
-                state=state,
-                n_true=n_true,
-                n_probe=n_probe,
-                Ti_eV=Ti,
-                S_beam=S,
-                P_beam_net=P_net,
-                floors=self._floors,
-                ion_mass_g=self._ion_mass_g,
-                mu=self._mu,
-                cooling_kwargs=self._electron_cooling_kwargs(),
-                exchange_kwargs=self._tracer_exchange_kwargs(),
-                boundary_rhs=boundary_rhs,
-                # THE PASSIVE SET, and only it. A cell the fluid owns has its
-                # own electron energy equation, integrated with conduction and
-                # the boundary terms in it; asking the local quasi-static
-                # balance about that cell is asking a description that was
-                # never valid there, and the answer -- or the refusal -- would
-                # be about the wrong object. It is also where the anomalous
-                # booking is legitimately restored, so the balance would see
-                # the whole beam power and refuse for exactly the reason the
-                # amendment above removes on passive cells. Whatever reads a
-                # temperature on an active cell reads the FLUID's own Te (see
-                # :meth:`_tracer_criteria_Te_eV`).
-                active=self._tracer_passive & ((n_true > 0.0) | (S > 0.0)),
-                Te_ceiling_eV=self._tracer_beam_energy_eV(cathode_solve),
-            )
-            gamma = tracer_growth_rate(
-                state=state,
-                n_true=n_true,
-                n_probe=n_probe,
-                Te_eV=Te,
-                Ti_eV=Ti,
-                floors=self._floors,
-                ion_mass_g=self._ion_mass_g,
-                reaction_kwargs=self._tracer_reaction_kwargs(),
-                boundary_rhs=boundary_rhs,
-            )
-            coefficients = {
-                "gamma": gamma,
-                "Te": Te,
-                "Ti": Ti,
-                "sign_changes": sign_changes,
-            }
-        else:
-            coefficients = cached
-        return {
-            "dt": float(dt),
-            "refreshed": bool(refreshed),
-            "background": background,
-            "coefficients": coefficients,
-            "S": S,
-            "n_start": n_true,
-            "V_dev_V": self._tracer_device_voltage_V(cathode_solve),
-            "E_beam_eV": self._tracer_beam_energy_eV(cathode_solve),
-        }
-
-    def _tracer_criteria_Te_eV(self, Te_qs):
-        """Return the temperature the criteria and census read, per cell.
-
-        ``Te_qs`` on a cell the tracer owns; the FLUID's own ``Te`` on every
-        other cell. The quasi-static balance is solved on the passive set only,
-        so ``Te_qs`` off that set is the floor-by-convention filler and means
-        nothing -- reading it would have made criterion (a)'s Spitzer
-        conductivity, criterion (b)'s stopping power and the census all describe
-        a cold cell wherever the fluid was in fact running hot, and it is the
-        re-entry branch of the hysteresis that reads them there.
-
-        Called after the state vector for the step is installed, so the fluid
-        rows are this step's, not the previous one's.
-        """
-        passive = self._tracer_passive
-        Te_fluid = derive_state(
-            self.state, self._floors, self._ion_mass_g
-        ).Te
-        return np.where(
-            passive,
-            np.asarray(Te_qs, dtype=float),
-            np.asarray(Te_fluid, dtype=float),
-        )
-
-    def _tracer_criteria_n_cm3(self, n_next):
-        """Return the density the criteria read, per cell.
-
-        The density analogue of :meth:`_tracer_criteria_Te_eV`, and the same
-        principle: the criteria describe the STATE of a cell, and on a cell the
-        fluid owns the state is the fluid's. ``n_next`` there is that cell's
-        step-START density advanced by one step of the tracer's affine ODE --
-        an extrapolation by a description that does not own the cell, and one
-        that ignores everything the fluid actually did to it this step
-        (advection across its open faces, the flux divergence, the floor).
-
-        On a passive cell this is ``n_next`` by construction, which is also
-        exactly what the installed state carries there: ``_tracer_apply`` wrote
-        it and ``floor_state_vector`` exempts those cells, so no clip stands
-        between the two.
-        """
-        return np.where(
-            self._tracer_passive,
-            np.asarray(n_next, dtype=float),
-            np.asarray(self.state.n, dtype=float),
-        )
-
-    def _tracer_apply(self, prepared):
-        """Commit an accepted step's tracer update, mask move and census."""
-        if prepared is None:
-            return
-        dt = float(prepared["dt"])
-        gamma = prepared["coefficients"]["gamma"]
-        Te = prepared["coefficients"]["Te"]
-        Ti = prepared["coefficients"]["Ti"]
-        S = prepared["S"]
-        passive = self._tracer_passive
-        n_start = prepared["n_start"]
-        n_next = tracer_affine_update(n_start, gamma, S, dt)
-        n_integral = tracer_affine_time_integral(n_start, gamma, S, dt)
-
-        state = self.state
-        n = np.asarray(state.n, dtype=float).copy()
-        Ee = np.asarray(state.Ee, dtype=float).copy()
-        Ei = np.asarray(state.Ei, dtype=float).copy()
-        M = np.asarray(state.M, dtype=float).copy()
-        n[passive] = n_next[passive]
-        Ee[passive] = 1.5 * n_next[passive] * Te[passive] * ev_to_erg
-        Ei[passive] = 1.5 * n_next[passive] * Ti[passive] * ev_to_erg
-        # A passive cell exchanges no momentum: its interface faces are closed
-        # and its own ODE carries none.
-        M[passive] = 0.0
-        self._set_state_vector(
-            pack_state(
-                ConservativeState1D(
-                    n=n, nn=state.nn, M=M, Ee=Ee, Ei=Ei,
-                    M_n=state.M_n, nn_a=state.nn_a, M_n_a=state.M_n_a,
-                    En=state.En,
-                )
-            )
-        )
-
-        # Criterion (c) accumulator: the neutrals the PLASMA's own bulk
-        # ionization burnt, exactly integrated. The beam's debit is background
-        # and deliberately absent -- (c) measures the plasma's back-reaction on
-        # the neutrals, not the discharge's.
-        gamma_ion = np.maximum(gamma, 0.0)
-        self._tracer_depletion = self._tracer_depletion + np.where(
-            passive, gamma_ion * n_integral, 0.0
-        )
-        if prepared["refreshed"]:
-            self._tracer_coefficients = prepared["coefficients"]
-            self._tracer_background = prepared["background"]
-            self._tracer_refreshes += 1
-        self._tracer_update_mask(
-            prepared,
-            self._tracer_criteria_n_cm3(n_next),
-            self._tracer_criteria_Te_eV(Te),
-            gamma,
-        )
-
-    def _tracer_update_mask(self, prepared, n_next, Te, gamma):
-        """Move the passive/active boundary, with hysteresis, and census it.
-
-        ``n_next`` and ``Te`` here are the COMPOSED state from
-        :meth:`_tracer_criteria_n_cm3` and :meth:`_tracer_criteria_Te_eV` --
-        the tracer's on the cells it owns, the FLUID's own everywhere else --
-        not the raw affine update and not the raw balance output. The criteria
-        judge a cell by the state of that cell, and which description that
-        comes from is settled by who owns the cell.
-        """
-        state = self.state
-        criteria = self._tracer["criteria"]
-        hysteresis = self._tracer["hysteresis"]
-        geometry = self._geometry
-        nn = np.maximum(np.asarray(state.nn, dtype=float), 0.0)
-        L_plasma_cm = float(
-            np.sum(
-                np.asarray(geometry.length_cm, dtype=float)[
-                    np.asarray(geometry.plasma_active, dtype=bool)
-                ]
-            )
-        )
-        I_loop = abs(float(self._cathode_total_current_A()))
-        I_cond = tracer_conducted_current_A(
-            n_cm3=n_next,
-            Te_eV=Te,
-            geometry=geometry,
-            V_dev_V=prepared["V_dev_V"],
-            L_plasma_cm=L_plasma_cm,
-        )
-        ratios = {
-            "current": (
-                I_cond / (I_loop * criteria["current"])
-                if I_loop > 0.0
-                else np.zeros_like(I_cond)
-            ),
-            "thinness": tracer_beam_plasma_thinness(
-                n_cm3=n_next,
-                Te_eV=Te,
-                geometry=geometry,
-                E_beam_eV=prepared["E_beam_eV"],
-                launch_cells=self._tracer_launch_cells(),
-            ) / criteria["thinness"],
-            # An empty cell (nn == 0) has no neutrals left to burn, so its
-            # depletion is total and the ratio is inf -- the cell activates.
-            # NOTE the divisor is max(nn, 1): between 0 and 1 cm^-3 the ratio
-            # is UNDERSTATED (divided by 1 instead of by nn), so criterion (c)
-            # under-reports in a band it cannot physically reach -- 1 cm^-3 is
-            # five decades below nn_floor and twelve below any real fill, and
-            # the nn == 0 branch above already covers true vacuum. The clamp is
-            # there so the divide cannot produce a subnormal or overflow on a
-            # nonsense input, not to model anything.
-            "depletion": np.where(
-                nn > 0.0,
-                self._tracer_depletion / np.maximum(nn, 1.0),
-                np.inf,
-            ) / criteria["depletion"],
-        }
-        worst, binding = tracer_bind_census(ratios)
-        passive = self._tracer_passive
-        # Enter/exit hysteresis: a cell leaves passivity above 1 and can only
-        # return below 1/h. Monotone criteria never exercise the return branch;
-        # it exists so a cell sitting on a threshold cannot chatter.
-        activated = passive & (worst > 1.0) & (
-            n_next >= self._tracer["activation_ne"]
-        )
-        returning = (~passive) & (worst < 1.0 / hysteresis) & np.asarray(
-            geometry.plasma_active, dtype=bool
-        )
-        if np.any(activated) and self._tracer_first_activation is None:
-            self._tracer_first_activation = (
-                float(self._time),
-                int(np.flatnonzero(activated)[0]),
-                CRITERION_NAMES[int(binding[np.flatnonzero(activated)[0]])],
-            )
-        new_passive = (passive & ~activated) | returning
-        if not np.array_equal(new_passive, passive):
-            self._tracer_geometry_cache = None
-        self._tracer_passive = new_passive
-        self._tracer_census = {
-            "criterion": np.asarray(binding, dtype=int),
-            "worst_ratio": np.asarray(worst, dtype=float),
-            "ratios": {
-                name: np.asarray(value, dtype=float)
-                for name, value in ratios.items()
-            },
-            "transport_ratio": tracer_transport_ratio(
-                gamma=gamma,
-                Te_eV=Te,
-                ion_mass_g=self._ion_mass_g,
-                L_n_cm=0.5 * L_plasma_cm,
-            ),
-            "passive": new_passive.copy(),
-            # The temperature the criteria above actually read: quasi-static on
-            # the tracer's cells, the fluid's own on every other. Keeping the
-            # raw balance output here instead would publish the floor filler on
-            # active cells and disagree with the ratios beside it.
-            "Te_qs_eV": np.asarray(Te, dtype=float),
-            "gamma_per_s": np.asarray(gamma, dtype=float),
-            "S_cm3_s": np.asarray(prepared["S"], dtype=float),
-            "refreshes": int(self._tracer_refreshes),
-        }
-
-    def _tracer_census_line(self):
-        """Return the one-line end-of-run census, or ``None`` off the flag.
-
-        Names which criterion bound most often, where and when the first cell
-        activated, and whether the term the description DROPS (parallel
-        transport) stayed small. Printed by ``run()`` on every tracer run.
-        """
-        if self._tracer is None or not self._tracer_census:
-            return None
-        census = self._tracer_census
-        binding = np.asarray(census["criterion"], dtype=int)
-        worst = np.asarray(census["worst_ratio"], dtype=float)
-        ranked = np.bincount(
-            binding[np.isfinite(worst)], minlength=len(CRITERION_NAMES)
-        )
-        dominant = CRITERION_NAMES[int(np.argmax(ranked))] if ranked.size else "none"
-        transport = np.asarray(
-            census.get("transport_ratio", np.zeros(0)), dtype=float
-        )
-        finite_transport = transport[np.isfinite(transport)]
-        transport_text = (
-            f"{float(np.max(finite_transport)):.3g}"
-            if finite_transport.size
-            else "n/a (gamma <= 0 everywhere: nothing is growing for "
-                 "transport to be small against)"
-        )
-        first = self._tracer_first_activation
-        first_text = (
-            "no cell activated"
-            if first is None
-            else f"first activation t={first[0]:.6g} s cell {first[1]} on {first[2]}"
-        )
-        return (
-            f"regime_r2 tracer census: binding criterion {dominant!r} "
-            f"({int(np.max(ranked)) if ranked.size else 0} of {binding.size} "
-            f"cells); {int(np.count_nonzero(census['passive']))} cells still "
-            f"passive; {first_text}; refreshes={int(census['refreshes'])}; "
-            f"worst dropped-transport ratio c_s/(L_n gamma)={transport_text} "
-            "(tracer.transport_ratio states where that stops being small)"
-        )
+        """Return the geometry the plasma operators see: ``self._geometry``."""
+        return self._geometry
 
     @property
     def geometry(self):
@@ -3379,12 +2482,6 @@ class LAPDSim1D:
                 "the neutral momentum as the first moment of f, so an "
                 "evolved M_n field would be a second, unowned copy. "
                 "Accepted: neutral_momentum off"
-            )
-        if self._gas_type != "He":
-            raise ValueError(
-                "neutral_model='kinetic_dvm' is wired for gas_type='He' "
-                "only (the Phelps He+/He cross sections and the helium "
-                f"velocity grid); got {self._gas_type!r}"
             )
         cadence = float(
             self._input_dict.get("neutral_kinetic_dvm_cadence_s")
@@ -3652,14 +2749,14 @@ class LAPDSim1D:
                 )
         self._dvm_end_wall_jet = end_wall_jet
         # B6: the thin annular baffles act on the KINETIC annulus wherever the
-        # geometry carries them (the neutral_baffles flag with its two arrays),
-        # ABSENT rather than present at a neutral setting otherwise, exactly
-        # as the two jets are. The geometry has already validated and mapped
-        # them onto faces, and has already refused a clear radius below the
-        # local column radius and a baffle array supplied without its flag.
+        # geometry carries them (their two arrays supplied), ABSENT rather
+        # than present at a neutral setting otherwise, exactly as the two jets
+        # are. The geometry has already validated and mapped them onto faces,
+        # and has already refused a clear radius below the local column
+        # radius and one array supplied without the other.
         baffle_faces = ()
         baffle_radii = ()
-        if bool(self._flags.get("neutral_baffles")):
+        if self._geometry.neutral_baffle_face_indices.size:
             baffle_faces = np.asarray(
                 self._geometry.neutral_baffle_face_indices, dtype=int
             )
@@ -4062,6 +3159,8 @@ class LAPDSim1D:
                 **kinetic_terms,
                 **end_sheath_terms,
                 "plasma_advective_flux": self._zero_rhs_state(),
+                # Constant zero rows kept for saved-ledger schema stability;
+                # see the matching rows in the plasma branch below.
                 "plasma_front_flux": self._zero_rhs_state(),
                 # boundary_absorption is permanently zero everywhere since the
                 # legacy absorber was retired (see commit 1fc05c9); kept for
@@ -4069,10 +3168,6 @@ class LAPDSim1D:
                 "boundary_absorption": self._zero_rhs_state(),
                 "characteristic_boundary": self._zero_rhs_state(),
                 "pressure_work": self._zero_rhs_state(),
-                # Present with zero rows whether or not the flag is armed, so
-                # the saved term structure is stable across the phase change
-                # AND across the flag. There is no drive in this branch, so an
-                # armed run books zero here too.
                 "electron_drift_transport": self._zero_rhs_state(),
                 "hyperbolic_dissipation_heating": self._zero_rhs_state(),
                 "ei_exchange": self._zero_rhs_state(),
@@ -4109,16 +3204,7 @@ class LAPDSim1D:
                 self._apply_active_plasma_topology(terms), state
             )
         plasma_terms = self.plasma_flux_rhs_terms(state=state)
-        # I3 instrument. Armed, the bulk reaction terms are evaluated at the
-        # step-START accepted state -- ``self._y`` is only rewritten when a
-        # step is ACCEPTED, so it is exactly that state for every SSPRK2 stage
-        # and every rejected attempt -- which freezes the rates across the
-        # step and caps it at first order in them. Unarmed, this IS ``state``,
-        # object for object, so the evaluations below are unchanged.
-        reaction_state = (
-            self.state if self._rates_at_accepted_state else state
-        )
-        reaction_terms = self.reaction_rhs_terms(state=reaction_state)
+        reaction_terms = self.reaction_rhs_terms(state=state)
         electron_cooling_terms = self.electron_cooling_rhs_terms(state=state)
         cathode_phase = self._cathode_phase_options(time=time)
         cathode_solve = None
@@ -4157,7 +3243,7 @@ class LAPDSim1D:
             ionization_rate_per_neutral = np.asarray(
                 reaction_terms["ionization_birth"].n, dtype=float
             ) / np.maximum(
-                np.asarray(reaction_state.nn, dtype=float), self._floors["nn"]
+                np.asarray(state.nn, dtype=float), self._floors["nn"]
             )
             energy_wall_terms["neutral_hot_channel"] = (
                 self.neutral_hot_channel_rhs(
@@ -4189,26 +3275,26 @@ class LAPDSim1D:
             cathode_solve=cathode_solve,
             time=time,
         )
-        # The "pressure_work" row is pressure_work_rhs, whatever the selector
-        # says: -p_s div u is ALREADY the exact energy partner of the momentum
-        # equation's net pressure force, so nothing is folded onto it. What the
-        # energy-consistent selector adds is the Rusanov numerical-dissipation
-        # deposit, and that is its own row. Both rows are always present --
-        # unarmed, the dissipation row is the zero state -- so the saved term
-        # structure does not move with the flag.
+        # The "pressure_work" row is pressure_work_rhs: -p_s div u is ALREADY
+        # the exact energy partner of the momentum equation's net pressure
+        # force, so nothing is folded onto it. The Rusanov numerical-
+        # dissipation deposit the energy-consistent hyperbolic core returns to
+        # Ei is its own row.
         pressure_work = self.pressure_work_rhs(state=state)
-        if self._hyperbolic_energy_consistent:
-            hyperbolic_dissipation = self.hyperbolic_energy_correction_rhs(
-                state=state
-            )
-        else:
-            hyperbolic_dissipation = self._zero_rhs_state()
+        hyperbolic_dissipation = self.hyperbolic_energy_correction_rhs(
+            state=state
+        )
         terms = {
             **zone_terms,
             **momentum_sink_terms,
             **geometry_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
-            "plasma_front_flux": plasma_terms["plasma_front_flux"],
+            # The front-filling flux it carried is removed; the ROW is kept,
+            # at the divergence of zero face fluxes on the same geometry and
+            # under the same mask as before, so the saved bytes do not move.
+            "plasma_front_flux": plasma_front_flux_rhs(
+                self._plasma_geometry()
+            ),
             # Permanently zero since the legacy volumetric absorber was
             # retired; see commit 1fc05c9. The ROW is kept because it is
             # part of the saved ledger schema that existing artifacts and
@@ -4225,18 +3311,10 @@ class LAPDSim1D:
                 end_wall_climb_out=end_wall_climb_out,
             ),
             "pressure_work": pressure_work,
-            # The electron-velocity correction to the row above: pressure_work
-            # books with the ION velocity, which is exact only where J = 0.
-            # Presence-gated -- unarmed, the zero state is recorded and
-            # Gamma_d is never evaluated -- and always present, so the saved
-            # term structure does not move with the flag.
-            "electron_drift_transport": (
-                self.electron_drift_transport_rhs(
-                    state=state, cathode_solve=cathode_solve
-                )
-                if self._electron_drift is not None
-                else self._zero_rhs_state()
-            ),
+            # Constant zero row: the electron drift-transport operator it
+            # carried is removed. The ROW is kept so the saved term set does
+            # not move; nothing writes it.
+            "electron_drift_transport": self._zero_rhs_state(),
             # The Rusanov (n, M) numerical kinetic-energy dissipation, deposited
             # into the ion internal energy. It sits in the slot the combined
             # correction row occupied, so the dissipation booking keeps its
@@ -4526,17 +3604,7 @@ class LAPDSim1D:
         return rows
 
     def _apply_active_plasma_topology(self, terms):
-        """Mask plasma-coupled terms on typed plasma-dead cells.
-
-        With the R2 tracer engaged the mask also covers the cells the tracer
-        owns: their plasma rows are the exact affine update's, so a fluid
-        contribution to them would be a second, unowned opinion about the same
-        density. The tracer refuses to construct without
-        ``active_plasma_topology``, so this method is always reached when it is
-        engaged.
-        """
-        if not self._active_plasma_topology:
-            return terms
+        """Mask plasma-coupled terms on typed plasma-dead cells."""
         neutral_only = {
             "neutral_zone_exchange",
             "neutral_momentum_wall",
@@ -4581,19 +3649,8 @@ class LAPDSim1D:
         )
 
     def floor_state_vector(self, y):
-        """Apply configured density and temperature floors to a packed vector.
-
-        The cells the R2 tracer owns are EXEMPT: their density is the exact
-        integral of an affine ODE for which ``n = 0`` is a regular state, so
-        clipping them up to ``ne_floor`` would inject the very particles the
-        tracer exists to avoid inventing, and would make a true-vacuum initial
-        condition impossible. Their plasma rows are restored from the raw
-        vector after the shared floor runs, so the floor function itself is
-        untouched and the flag-off path is bit-identical. The neutral rows are
-        floored everywhere -- they are the background, and the tracer does not
-        own them.
-        """
-        floored = floor_state_vector(
+        """Apply configured density and temperature floors to a packed vector."""
+        return floor_state_vector(
             y=y,
             cells=self._geometry.cells,
             floors=self._floors,
@@ -4603,20 +3660,6 @@ class LAPDSim1D:
             neutral_annulus_momentum=False,
             neutral_energy=self._neutral_energy,
         )
-        if not self._tracer_engaged:
-            return floored
-        cells = int(self._geometry.cells)
-        floored = np.asarray(floored, dtype=float).copy()
-        raw = np.asarray(y, dtype=float)
-        passive = self._tracer_passive
-        for row, name in enumerate(STATE_NAMES_1D):
-            if name == "nn":
-                continue
-            lo = row * cells
-            floored[lo:lo + cells] = np.where(
-                passive, raw[lo:lo + cells], floored[lo:lo + cells]
-            )
-        return floored
 
     @staticmethod
     def _empty_floor_ledger():
@@ -4805,15 +3848,6 @@ class LAPDSim1D:
                     self._geometry.cells, dtype=float
                 )
 
-        # R2 tracer: freeze this attempt's affine coefficients at the STEP
-        # START, before any stage runs. Nothing is committed here -- the
-        # coefficients ride on the attempt and only ``_tracer_apply`` installs
-        # them, so a rejected attempt re-freezes at the smaller dt and leaves
-        # neither the Picard cache nor the refresh count moved. Absent (None)
-        # whenever the flag is off, which is the presence gate for the accept
-        # path below.
-        attempt_tracer = self._tracer_prepare(dt)
-
         # Arm the anode electron-sheath book for THIS attempt only, on the
         # same discipline the DVM accumulators use: the heat
         # substeps add into it, the ``finally`` below drops it, and only
@@ -4845,25 +3879,18 @@ class LAPDSim1D:
                     not self._flags.get("Plasma")
                     or self._neutral_prebreakdown_active()
                 ):
-                    if self._raw_stage_validation:
-                        raw_next = pack_state(
-                            self._implicit_neutral_step(
-                                dt=dt, apply_density_floor=False
-                            )
+                    raw_next = pack_state(
+                        self._implicit_neutral_step(
+                            dt=dt, apply_density_floor=False
                         )
-                        self._validate_raw_stage(raw_next, "implicit_neutral")
-                        y_next = floor_with_ledger(raw_next)
-                    else:
-                        y_next = pack_state(self._implicit_neutral_step(dt=dt))
+                    )
+                    self._validate_raw_stage(raw_next, "implicit_neutral")
+                    y_next = floor_with_ledger(raw_next)
                 elif operator_split:
                     y_next = self.operator_split_step(
                         dt=dt,
                         floor_func=floor_with_ledger,
-                        raw_stage_func=(
-                            self._validate_raw_stage
-                            if self._raw_stage_validation
-                            else None
-                        ),
+                        raw_stage_func=self._validate_raw_stage,
                     )
                 else:
                     y_next = ssprk2_step(
@@ -4872,11 +3899,7 @@ class LAPDSim1D:
                         rhs_func=self._explicit_stage_rhs(dt),
                         floor_func=floor_with_ledger,
                         time=self._time,
-                        raw_stage_func=(
-                            self._validate_raw_stage
-                            if self._raw_stage_validation
-                            else None
-                        ),
+                        raw_stage_func=self._validate_raw_stage,
                     )
             except _RawStageError as error:
                 y_next = error.y
@@ -4919,7 +3942,6 @@ class LAPDSim1D:
             end_wall_jet_energy_booking=(
                 attempt_end_wall_jet_energy_booking
             ),
-            tracer=attempt_tracer,
             electrode_sink_booking=attempt_electrode_sink,
         )
 
@@ -5503,12 +4525,6 @@ class LAPDSim1D:
             getattr(attempt, "floor_ledger", self._empty_floor_ledger())
         )
         self._time += float(attempt.dt)
-        # R2 tracer: the fluid left the passive cells' plasma rows untouched
-        # (their RHS was masked and the floor skipped them), so the state now
-        # carries their STEP-START density and the exact affine update installs
-        # the end-of-step one. Accepted steps only, and before every consumer
-        # below reads the state.
-        self._tracer_apply(getattr(attempt, "tracer", None))
         # Electrode sample smoothing: fold the newly accepted state into the
         # supply-average EMA before any accepted-state consumer reads it.
         self._update_sample_smoothing(attempt.dt)
@@ -6427,7 +5443,7 @@ class LAPDSim1D:
             splitting = validate_operator_splitting(splitting)
         if floor_func is None:
             floor_func = self.floor_state_vector
-        if raw_stage_func is None and self._raw_stage_validation:
+        if raw_stage_func is None:
             raw_stage_func = self._validate_raw_stage
 
         def heat(y_in, sub_dt, source_time=None):
@@ -6944,14 +5960,6 @@ class LAPDSim1D:
             result.run_status = (
                 "max_steps_reached" if max_steps_stopped else "completed"
             )
-        # R2 tracer census, from day one and on every tracer run: which
-        # criterion bound, where the interface got to, and how big the term the
-        # description DROPS became. Presence-gated -- a run without the flag
-        # prints nothing and carries no extra result field.
-        census_line = self._tracer_census_line()
-        if census_line is not None:
-            print(census_line)
-            result.tracer_criterion_census = self._tracer_census
         self._last_result = result
         return result
 
@@ -7064,20 +6072,15 @@ class LAPDSim1D:
         # control flags are inert to the seed signature, so clearing this here
         # cannot change the stored entry's key or content.
         flags["use_cached_neutral_seed"] = False
-        # The two end-face sheath keys, cleared for the SAME reason as
-        # cathode_coupling above and read the same way: they book the emitting
-        # face's currents and the collected electrons' sheath fall, and this
-        # pre-solve has no plasma reaching either end face and no cathode
-        # solve to read a current from, so both are inert here. Left armed,
-        # the cathode key's construction guard -- which requires exactly the
-        # cathode solve the line above has just switched off -- refuses the
-        # INNER sim, a guard firing on a state where the thing it protects
-        # cannot happen. Clearing them changes no configuration that
-        # constructed before: every config the cathode key touches is one that
-        # raised, and the end wall key only ever seeded zero rows on a
-        # Plasma=False pre-solve, so the equilibrated seed, its cache
-        # signature and every existing trajectory are bit-identical.
-        flags["end_wall_sheath_full_debit"] = False
+        # The cathode end-face sheath key, cleared for the SAME reason as
+        # cathode_coupling above: it books the emitting face's currents, and
+        # this pre-solve has no cathode solve to read a current from, so it is
+        # inert here. Left armed, its construction guard -- which requires
+        # exactly the cathode solve the line above has just switched off --
+        # refuses the INNER sim, a guard firing on a state where the thing it
+        # protects cannot happen. The end wall's sheath row has no key: it is
+        # armed by the geometry's end wall face in the inner sim as in the
+        # outer one, and on a Plasma=False pre-solve it seeds zero rows.
         flags["cathode_face_full_debit"] = False
         # The two DVM directed-recycle jets, cleared for the SAME reason as
         # cathode_coupling above: this pre-solve has no plasma and no cathode
@@ -7413,12 +6416,7 @@ class LAPDSim1D:
         dt_max = float(self._input_dict.get("dt_max"))
         dvm_superseded = plasma_enabled and self._dvm_rows_superseded()
         plasma_source_rhs = None
-        # The bundle's historical trigger is the raw-stage stance. An engaged
-        # DVM arm needs it unconditionally: its coupling term is the largest
-        # unbounded drain in the ledger, and whether it is bounded must not
-        # depend on a validation switch that has nothing to do with it. The
-        # widening reaches DVM-engaged runs only, so no other path moves.
-        if plasma_enabled and (self._raw_stage_validation or dvm_superseded):
+        if plasma_enabled:
             plasma_source_rhs = self._plasma_source_timestep_rhs(
                 state=state,
                 time=time,
@@ -7496,20 +6494,7 @@ class LAPDSim1D:
             dt_min=dt_min,
             dt_max=dt_max,
             dt_global_scale=self._dt_global_scale,
-            include_front=plasma_enabled and self._flags.get("front_flux"),
-            alpha_front=float(self._input_dict.get("alpha_front")),
-            # With the R2 tracer engaged this mask also excludes the cells the
-            # tracer owns. That is the whole point of the bridge: their update
-            # has no stability limit, so the floor-poisoned fractional bounds
-            # they would otherwise contribute must not set the step. The
-            # background is left to choose it.
-            plasma_active=(
-                self._plasma_active_mask()
-                if self._active_plasma_topology
-                else None
-            ),
-            active_plasma_topology=self._active_plasma_topology,
-            wave_speed=self._hyperbolic_wave_speed,
+            plasma_active=self._plasma_active_mask(),
         )
         if not plasma_enabled:
             neutral_candidates = {
@@ -7848,41 +6833,25 @@ class LAPDSim1D:
                 return float(boundary)
         return None
 
-    def plasma_flux_rhs(self, y=None, include_front=None):
+    def plasma_flux_rhs(self, y=None):
         """Return the conservative plasma flux RHS for inspection/testing."""
         state = self.state if y is None else self._unpack(y)
-        use_front = self._flags.get("front_flux")
-        if include_front is not None:
-            use_front = include_front
         return plasma_flux_rhs(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._plasma_geometry(),
-            include_front=use_front,
-            alpha_front=float(self._input_dict.get("alpha_front")),
-            active_plasma_topology=self._active_plasma_topology,
-            wave_speed=self._hyperbolic_wave_speed,
-            energy_consistent=self._hyperbolic_energy_consistent,
         )
 
-    def plasma_flux_rhs_terms(self, y=None, state=None, include_front=None):
+    def plasma_flux_rhs_terms(self, y=None, state=None):
         """Return split conservative plasma face-flux RHS terms."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
-        use_front = self._flags.get("front_flux")
-        if include_front is not None:
-            use_front = include_front
         return plasma_flux_rhs_terms(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._plasma_geometry(),
-            include_front=use_front,
-            alpha_front=float(self._input_dict.get("alpha_front")),
-            active_plasma_topology=self._active_plasma_topology,
-            wave_speed=self._hyperbolic_wave_speed,
-            energy_consistent=self._hyperbolic_energy_consistent,
         )
 
     def cathode_jet_neutral_energy_rhs(
@@ -8002,7 +6971,6 @@ class LAPDSim1D:
             # must be 1 for conservative pressure-work booking (hardwired).
             electron_scale=1.0,
             ion_scale=1.0,
-            active_plasma_topology=self._active_plasma_topology,
         )
 
     def hyperbolic_energy_correction_rhs(self, y=None, state=None):
@@ -8019,7 +6987,6 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._plasma_geometry(),
-            wave_speed=self._hyperbolic_wave_speed,
         )
 
     def flux_tube_geometry_rhs(self, y=None, state=None):
@@ -8046,51 +7013,6 @@ class LAPDSim1D:
             time=time,
             update_cache=True,
         )
-
-    def electron_drift_transport_rhs(self, state, cathode_solve):
-        """Return the electron drift-transport and EMF-work term.
-
-        Presence-gated on ``self._electron_drift``: unarmed, this method is
-        never called and ``Gamma_d`` is never evaluated. Armed but with no
-        cathode solve carrying a current -- the pre-drive phases, and any
-        afterglow frame whose solve did not converge -- the operator books
-        exactly zero, because with no current there is no drift.
-
-        The two currents come from the SAME solve, and therefore carry the
-        same lag as every other row built on it: the cathode solve is
-        evaluated against the loop current the last ACCEPTED step committed
-        (``_circuit_I_loop``), frozen across the step and part of the solve's
-        own memo key. Reading both from one object is what keeps ``I_beam``
-        from being subtracted off a different ``I_tot`` than the one the
-        electrode rows are proportional to.
-        """
-        if cathode_solve is None or cathode_solve.beam_result is None:
-            self._electron_drift_rows = None
-            return self._zero_rhs_state()
-        result = cathode_solve.beam_result.result
-        I_tot_A = float(result.I_tot)
-        # The LAUNCHED electron current, which is the beam the drift term has
-        # to subtract off the loop current: with ion-induced secondary
-        # emission armed the secondaries cross the gap with the thermionic
-        # primaries and are part of that beam. ``I_eth_star`` bit for bit
-        # unarmed.
-        I_beam_A = float(beam_launched_current_A(result))
-        if not (np.isfinite(I_tot_A) and np.isfinite(I_beam_A)):
-            # A solve that did not resolve its currents cannot say what the
-            # drift is; booking a guess would be worse than booking nothing.
-            self._electron_drift_rows = None
-            return self._zero_rhs_state()
-        rhs, rows = electron_drift_transport_rhs(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            geometry=self._plasma_geometry(),
-            spec=self._electron_drift,
-            I_tot_A=I_tot_A,
-            I_beam_A=I_beam_A,
-        )
-        self._electron_drift_rows = rows
-        return rhs
 
     def _cathode_jet_censored(self):
         """True when the arming criterion is declared and currently DISARMED.
@@ -8218,8 +7140,8 @@ class LAPDSim1D:
         ``carrier_out`` is the directed hot surface carrier's launch channel;
         ``None`` is the historical call and is unchanged bit for bit.
 
-        ``end_wall_climb_out`` is the ``end_wall_sheath_full_debit`` key's
-        end wall channel: given a dict, the operator writes the end wall
+        ``end_wall_climb_out`` is the end wall sheath debit's channel: given
+        a dict, the operator writes the end wall
         faces' sheath-fall electron row into it under ``"Ee"`` for the caller
         to book as its own named term. ``None`` -- the default and every
         diagnostic caller -- computes nothing.
@@ -8240,7 +7162,6 @@ class LAPDSim1D:
             b_presheath_length=float(
                 self._input_dict.get("b_presheath_length")
             ),
-            gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
             cathode_carrier_out=carrier_out,
             end_wall_sheath_climb_out=end_wall_climb_out,
@@ -8505,12 +7426,12 @@ class LAPDSim1D:
         )
 
     def _end_sheath_debit_terms(self, end_wall_climb_row, cathode_solve):
-        """Return the end-face sheath rows the two keys arm, per key.
+        """Return the end-face sheath rows armed on this machine, per end.
 
-        Keyed by :data:`END_SHEATH_END_WALL_ROWS` when
-        ``end_wall_sheath_full_debit`` is armed and by
-        :data:`END_SHEATH_CATHODE_ROWS` when ``cathode_face_full_debit`` is;
-        an unarmed key contributes NO key at all, so the caller's term dict
+        Keyed by :data:`END_SHEATH_END_WALL_ROWS` when the geometry has an
+        end wall face and by
+        :data:`END_SHEATH_CATHODE_ROWS` when ``cathode_face_full_debit`` is
+        armed; an unarmed end contributes NO key at all, so the caller's term dict
         carries exactly the rows the configuration asked for. Every row is
         ELECTRON ENERGY ONLY (``n``, ``nn``, ``M`` and ``Ei`` are exactly
         zero), because the particle, momentum and ion-thermal bookings at both
@@ -8679,10 +7600,9 @@ class LAPDSim1D:
         power_W = np.asarray(
             metadata.get("anode_power_loss_W", zeros), dtype=float
         )
-        if self._active_plasma_topology:
-            active = self._plasma_active_mask()
-            rate = np.where(active, rate, 0.0)
-            power_W = np.where(active, power_W, 0.0)
+        active = self._plasma_active_mask()
+        rate = np.where(active, rate, 0.0)
+        power_W = np.where(active, power_W, 0.0)
         return rate, power_W
 
     def beam_deposition_ee_source(
@@ -8733,9 +7653,7 @@ class LAPDSim1D:
         row = np.asarray(
             beam_terms[BEAM_POWER_DEPOSITION_TERM].Ee, dtype=float
         )
-        if self._active_plasma_topology:
-            row = np.where(self._plasma_active_mask(), row, 0.0)
-        return row
+        return np.where(self._plasma_active_mask(), row, 0.0)
 
     def _cathode_solve_memo_key(
         self,
@@ -8816,7 +7734,7 @@ class LAPDSim1D:
         # the circuit (I_loop), the phase-derived flags and
         # ``floating``. The remaining arguments
         # (``floors``, ``ion_mass_g``, ``mu``, ``geometry``, ``input_dict``,
-        # ``I_ion``, ``gas_type``) are assigned once in __init__ and never
+        # ``I_ion``) are assigned once in __init__ and never
         # mutated, so they cannot separate two calls in one run. A miss on any
         # component solves fresh; a stale memo is never served.
         memo_key = None
@@ -8842,7 +7760,6 @@ class LAPDSim1D:
             beam_cross_prev=self._cathode_beam_cross,
             tail_anode_current_prev_A=self._cathode_tail_anode_I,
             I_ion=self._I_ion,
-            gas_type=self._gas_type,
             x0=self._cathode_x0,
             x0_twin=self._cathode_x0_twin,
             floating=floating,
@@ -9085,11 +8002,7 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            gas_type=self._gas_type,
             I_ion=self._I_ion,
-            atomic_rate_model=str(
-                self._input_dict.get("atomic_rate_model")
-            ),
             enabled=self._recombination_energy_return,
             adas_low_te_extension=bool(
                 self._input_dict.get("adas_low_te_extension")
@@ -10728,8 +9641,8 @@ class LAPDSim1D:
         whether any beam survives downstream.
 
         ``end_wall_e_sheath_climb`` IS PART OF THE SURFACE LOAD and is summed
-        here on the same convention, whenever ``end_wall_sheath_full_debit``
-        put it in the ledger. That row takes the sheath fall out of the plasma
+        here on the same convention, whenever the end wall face put it in
+        the ledger. That row takes the sheath fall out of the plasma
         ELECTRON store and hands it to the ions, which carry it to the plate:
         it is a removal from the plasma exactly as the boundary rows are, so
         the same negation turns it into surface power and the plate reads the
@@ -10925,35 +9838,6 @@ class LAPDSim1D:
             "beam_tail_above_bar_power_W": 0.0,
             "beam_tail_sub_threshold_fraction": np.nan,
         }
-        if self._electron_drift is not None:
-            # The drift operator's named rows, PRESENCE-GATED so an unarmed
-            # run's saved diagnostic structure -- the golden included -- is
-            # byte-identical to before the operator existed. They ride the
-            # electrode-diagnostics channel because that is where the current
-            # they are built from already lives (``circuit_I_loop``), so a
-            # reader can check a row against its own input in one group.
-            #
-            # The four per-cell power rows [W] are the operator's own four
-            # terms and sum to its total, so the volume identity is checkable
-            # from a saved trajectory rather than only from a live solver.
-            # ``edt_inplasma_emf_V`` is the V_dis partition member: the
-            # in-plasma EMF the drift works against, W_EMF per ampere.
-            # ``edt_total_W`` is the per-step ledger total over the operator's
-            # support.
-            #
-            # Zeros, not absence, on a save whose RHS evaluation found no
-            # solve to read a current from: the row structure must not move
-            # between saves of one run, and "no current" is a measurement.
-            rows = self._electron_drift_rows
-            zeros = np.zeros(self._geometry.cells, dtype=float)
-            for name in ELECTRON_DRIFT_DIAGNOSTIC_ROWS:
-                diag[name] = (
-                    zeros.copy()
-                    if rows is None
-                    else np.asarray(rows[name], dtype=float).copy()
-                )
-            for name in ELECTRON_DRIFT_DIAGNOSTIC_SCALARS:
-                diag[name] = 0.0 if rows is None else float(rows[name])
         # Anode sheath debit census. Cumulative count of ACCEPTED steps whose
         # sheath solve returned an electron-ATTRACTING anode (phi_a <= 0),
         # where the debit is thermal-only and the bank pays the fall, plus the
@@ -11732,9 +10616,7 @@ class LAPDSim1D:
 
     def _dvm_transfer_apply_mask(self):
         """Cells the coupling term is actually applied on."""
-        if self._active_plasma_topology:
-            return np.asarray(self._geometry.plasma_active, dtype=bool)
-        return np.ones(self._geometry.cells, dtype=bool)
+        return np.asarray(self._geometry.plasma_active, dtype=bool)
 
     def _dvm_scope_step_transfer(self, dt):
         """Scope one step's applied DVM transfer (the K2d floor-aware relax).
@@ -12691,10 +11573,9 @@ class LAPDSim1D:
                 dtype=float,
             )
         nu = S / np.maximum(np.asarray(state.nn, dtype=float), self._floors["nn"])
-        if self._active_plasma_topology:
-            nu = np.where(
-                np.asarray(self._geometry.plasma_active, dtype=bool), nu, 0.0
-            )
+        nu = np.where(
+            np.asarray(self._geometry.plasma_active, dtype=bool), nu, 0.0
+        )
         return np.maximum(nu, 0.0)
 
     def _zero_rhs_state(self):
@@ -12880,24 +11761,6 @@ class LAPDSim1D:
                 NEUTRAL_ENERGY_FLOOR_T_K if self._neutral_energy else None
             ),
         )
-
-    @staticmethod
-    def _gas_constants(gas_type):
-        if gas_type == "He":
-            return m_He_cgs, 4, 4, I_ion
-        # The h-quarantine's successor row: this arm was the last m_p_cgs
-        # consumer in cablp/.
-        if gas_type == "H":
-            raise ValueError(
-                "gas_type='H' is not available: the hydrogen arm of "
-                "_gas_constants was retired as dead code; see commit "
-                "0195a02. It returned proton constants that no construction "
-                "could ever carry into physics -- the solver is helium-only "
-                "and refuses gas_type != 'He' a few lines later in "
-                "__init__, at the Phelps He+/He sigma_in_model gate. "
-                "Accepted: 'He'."
-            )
-        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")
 
 
 def _finite_or_nan(value):

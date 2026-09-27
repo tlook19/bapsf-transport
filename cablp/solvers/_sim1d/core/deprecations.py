@@ -24,19 +24,12 @@ Two classes of row exist:
   sets, which are scheduled for removal.
 * **value-scoped** (``values=(...)``) -- only the listed values are deprecated
   and the rest of the key stays fully supported. Used where a selector keeps
-  live arms, e.g. ``hyperbolic_wave_speed``: ``"isothermal"`` deprecates
-  while ``"adiabatic"`` does not.
-
-Controls that already have their own louder guard are deliberately ABSENT.
-``front_flux_model``, ``D_amb_model`` and ``D_amb`` are
-frozen by ``LAPDSim1D._validate_r1_configuration_presence`` and raise on
-non-default use. Adding a second warning for the same condition would only
-duplicate it.
+  live arms beside the deprecated ones.
 
 Closure families with a live A/B are APPARATUS, not legacy, and are absent for
-that reason: the beam-deposition family, the excitation models and
-``atomic_rate_model="janev"`` all stay usable and un-warned because the
-campaign quotes brackets and a bracket needs both arms.
+that reason: the beam-deposition family and the excitation models stay
+usable and un-warned because the campaign quotes brackets and a bracket needs
+both arms.
 """
 
 import warnings
@@ -104,21 +97,6 @@ DEPRECATED_CONTROLS = {
     # Each of these was a live branch only because the retired fixture pinned
     # it away from the production value. With the fixture re-anchored at the
     # stance, nothing committed selects them any more.
-    "active_plasma_topology": DeprecatedControl(
-        FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
-    ),
-    "raw_stage_validation": DeprecatedControl(
-        FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
-    ),
-    "hyperbolic_energy_consistent": DeprecatedControl(
-        FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
-    ),
-    "front_flux": DeprecatedControl(
-        FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
-    ),
-    "hyperbolic_wave_speed": DeprecatedControl(
-        PARAMS, _FREED_BRANCH, _FREED_BRANCH_FIX, values=("isothermal",),
-    ),
     "b_ion_neutral_drag": DeprecatedControl(
         PARAMS,
         "it scales the moment-closed Phelps ion-neutral collision rates, "
@@ -146,23 +124,6 @@ DEPRECATED_CONTROLS = {
     # The b_* rate/cooling/conduction/boundary scalars that stood here were
     # DELETED from the configuration surface (2026-08-28); supplying one now
     # raises the unknown-key ValueError rather than warning.
-    "alpha_front": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    # ==== dead levers: the regime-tracer passivity constants ===============
-    # The half of the tracer_* family nothing configures; the activation and
-    # overlap keys ARE exercised and are absent from this table.
-    "tracer_passivity_current_ratio": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
-    "tracer_passivity_depletion": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
-    "tracer_passivity_hysteresis": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
-    "tracer_passivity_thinness": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
-    "tracer_refresh_tol": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: miscellaneous ======================================
     "plasma_area_max_vessel_fraction": DeprecatedControl(
         PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,

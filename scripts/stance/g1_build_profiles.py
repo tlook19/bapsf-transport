@@ -19,7 +19,7 @@ way down. The ~156 cm "coil-location disagreement" reported against
 assumption in the MSI build and is retired.
 
 G1 is the measured CAD machine geometry. The solver takes the geometry as
-RADII, one entry per mesh cell, under the ``prescribed_area_geometry`` flag:
+RADII, one entry per mesh cell, whenever they are supplied:
 ``plasma_radius_profile_cm`` (the flux-tube radius, so the flux-tube AREA is
 ``pi r^2``) and ``machine_radius_profile_cm`` (the vessel bore). This script
 emits both, for the two end-field cases the census re-solve resolved, plus the
@@ -199,8 +199,8 @@ def _g1_config(params, flags):
     """Return the G1 (params, flags) pair carrying geometry deltas only.
 
     The profile arrays are NOT filled in here: this is the mesh probe, built
-    with ``prescribed_area_geometry`` off, whose only job is to resolve the
-    cell centres the profiles are then evaluated on.
+    on the uniform column, whose only job is to resolve the cell centres the
+    profiles are then evaluated on.
     """
     p = dict(params)
     f = dict(flags)
@@ -214,12 +214,6 @@ def _g1_config(params, flags):
     p["Rcs"] = RCS_CM
     p["Lcs"] = LCS_CM
     p["plenum_length_cm"] = PLENUM_LENGTH_CM
-    # The prescribed profile REPLACES the built-in half-cosine end flare; the
-    # two refuse to compose, and the stale parameters refuse the off flag.
-    p["end_expansion_cells"] = None
-    p["end_expansion_machine_radius_cm"] = None
-    p["end_expansion_plasma_radius_cm"] = None
-    f["end_expansion_geometry"] = False
     return p, f
 
 
@@ -572,8 +566,6 @@ def main(argv=None):
         params["machine_radius_profile_cm"] = [float(v) for v in vessel]
         params["neutral_baffle_positions_cm"] = list(BAFFLE_POSITIONS_CM)
         params["neutral_baffle_clear_radii_cm"] = list(BAFFLE_CLEAR_RADII_CM)
-        flags["prescribed_area_geometry"] = True
-        flags["neutral_baffles"] = True
         arm_configs[arm] = (params, flags)
         geometry = build_geometry(params, flags)
         say(f"[{arm} / {case}] build_geometry: OK (no ValueError)")
@@ -673,25 +665,15 @@ def main(argv=None):
             f"Rcs={RCS_CM}",
             f"Lcs={LCS_CM}",
             f"plenum_length_cm={PLENUM_LENGTH_CM}",
-            "end_expansion_cells=null",
-            "end_expansion_machine_radius_cm=null",
-            "end_expansion_plasma_radius_cm=null",
             f"neutral_baffle_positions_cm={_fmt_array(BAFFLE_POSITIONS_CM)}",
             f"neutral_baffle_clear_radii_cm={_fmt_array(BAFFLE_CLEAR_RADII_CM)}",
             f"plasma_radius_profile_cm={_fmt_array(profiles[case])}",
             f"machine_radius_profile_cm={_fmt_array(vessel)}",
         ]
-        flag_payload = [
-            "prescribed_area_geometry=true",
-            "neutral_baffles=true",
-            "end_expansion_geometry=false",
-        ]
         path = os.path.join(outdir, f"{arm.lower()}_extra_args.txt")
         with open(path, "w") as handle:
-            handle.write("--extra " + " ".join(payload) + "\n\n")
-            handle.write("--extra-flag " + " ".join(flag_payload) + "\n")
+            handle.write("--extra " + " ".join(payload) + "\n")
         say(f"{arm}: wrote {path} ({os.path.getsize(path)} bytes)")
-        say(f"  --extra-flag {' '.join(flag_payload)}")
         say(f"  --extra {' '.join(payload[:8])} <profile arrays in the file>")
     say()
 

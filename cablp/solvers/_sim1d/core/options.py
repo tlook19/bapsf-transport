@@ -15,8 +15,7 @@ fresh ``dict`` exactly as before, so a caller may still mutate what it gets.
 
 Bundles that depend on the STEP rather than the run stay on the solver:
 ``_neutral_source_kwargs`` (phase switches and the gas-puff waveform at
-``time``) and the ``_tracer_*`` builders (derived views, two of them keyed on
-the live state and cathode solve).
+``time``).
 """
 
 from dataclasses import dataclass
@@ -26,15 +25,14 @@ import numpy as np
 from cablp.constants import ev_to_erg, kb_cgs
 
 
-def collision_operator_kwargs(input_dict, flags, *, gas_type):
+def collision_operator_kwargs(input_dict, flags):
     """Return the rate bundle every ion-neutral collision channel shares.
 
     The moment-closed operator, the CX decoupling correction, and the hot
-    channel must all read ONE gas, ONE reference neutral temperature, and
-    ONE drag scale, or their split stops being a split.
+    channel must all read ONE reference neutral temperature and ONE drag
+    scale, or their split stops being a split.
     """
     return {
-        "gas_type": gas_type,
         "Tn_eV": float(input_dict.get("Tn_K", 300.0))
         * kb_cgs
         / ev_to_erg,
@@ -51,45 +49,31 @@ def surface_loss_kwargs(input_dict):
     # non-default use.
     return {
         "alpha_isat": float(input_dict.get("alpha_isat", np.exp(-0.5))),
-        "end_mode": input_dict.get("end_mode", "end_wall"),
         "b_surface_loss": float(input_dict.get("b_surface_loss", 1.0)),
     }
 
 
-def ion_neutral_drag_kwargs(input_dict, flags, *, gas_type):
+def ion_neutral_drag_kwargs(input_dict, flags):
     return {
-        "gas_type": gas_type,
         "b_ion_neutral_drag": float(input_dict.get("b_ion_neutral_drag", 1.0)),
     }
 
 
-def electron_cooling_kwargs(input_dict, flags, *, gas_type, I_ion):
+def electron_cooling_kwargs(input_dict, flags, *, I_ion):
     return {
-        "gas_type": gas_type,
         "I_ion": I_ion,
         # b_ionization_energy_cost removed as a config knob (R5 stance flip):
         # must be 1 for conservative energy booking, and the on/off is the
         # ionization_energy_cost flag. Hardwired 1.0.
         "b_ionization_energy_cost": 1.0,
-        "atomic_rate_model": str(
-            input_dict.get("atomic_rate_model", "adas")
-        ),
         "ionization_energy_cost": bool(
             flags.get("ionization_energy_cost", True)
-        ),
-        "icool_recomb": bool(flags.get("icool_recomb", False)),
-        # A18/R5.3: the low-Te extension defines ONE consistent atomic
-        # package -- the electron-cooling prb1 honors it just like the
-        # particle-rate acd. Default off => golden bit-exact.
-        "adas_low_te_extension": bool(
-            input_dict.get("adas_low_te_extension", False)
         ),
     }
 
 
-def ion_charge_exchange_kwargs(input_dict, flags, *, gas_type):
+def ion_charge_exchange_kwargs(input_dict, flags):
     return {
-        "gas_type": gas_type,
         "Tn_fit": float(input_dict.get("Tn_fit", 0.1)),
     }
 
@@ -98,13 +82,11 @@ def heat_conduction_kwargs(
     input_dict,
     flags,
     *,
-    electron_heat_flux_limit,
     heat_flux_limiter_f,
     heat_flux_limiter_exponent,
 ):
     return {
         "heat_conduction": bool(flags.get("heat_conduction", True)),
-        "electron_heat_flux_limit": electron_heat_flux_limit,
         "heat_flux_limiter_f": heat_flux_limiter_f,
         "heat_flux_limiter_exponent": heat_flux_limiter_exponent,
     }
@@ -114,7 +96,6 @@ def neutral_energy_timestep_kwargs(
     input_dict,
     flags,
     *,
-    gas_type,
     neutral_energy,
     neutral_energy_alpha,
     neutral_energy_wall_Tn_eV,
@@ -129,7 +110,6 @@ def neutral_energy_timestep_kwargs(
     if not neutral_energy:
         return None
     return {
-        "gas_type": gas_type,
         "Tn_eV": float(input_dict.get("Tn_K", 300.0))
         * kb_cgs
         / ev_to_erg,
@@ -139,13 +119,8 @@ def neutral_energy_timestep_kwargs(
     }
 
 
-def reaction_kwargs(input_dict, *, gas_type, I_ion):
+def reaction_kwargs(input_dict):
     return {
-        "gas_type": gas_type,
-        "I_ion": I_ion,
-        "atomic_rate_model": str(
-            input_dict.get("atomic_rate_model", "adas")
-        ),
         "adas_low_te_extension": bool(
             input_dict.get("adas_low_te_extension", False)
         ),
@@ -178,9 +153,7 @@ def build_solver_options(
     flags,
     *,
     geometry,
-    gas_type,
     I_ion,
-    electron_heat_flux_limit,
     heat_flux_limiter_f,
     heat_flux_limiter_exponent,
     neutral_energy,
@@ -194,42 +167,30 @@ def build_solver_options(
     than reaching into a half-built solver.
     """
     return SolverOptions(
-        collision_operator=collision_operator_kwargs(
-            input_dict, flags, gas_type=gas_type
-        ),
+        collision_operator=collision_operator_kwargs(input_dict, flags),
         # The electron-ion exchange term has no configuration surface left
         # (b_Qie was removed at commit 3e7d386); the bundle stays as the
         # PRESENCE signal the timestep candidate keys off, and None is
         # what withdraws it.
         energy_exchange={},
         surface_loss=surface_loss_kwargs(input_dict),
-        ion_neutral_drag=ion_neutral_drag_kwargs(
-            input_dict, flags, gas_type=gas_type
-        ),
+        ion_neutral_drag=ion_neutral_drag_kwargs(input_dict, flags),
         electron_cooling=electron_cooling_kwargs(
-            input_dict, flags, gas_type=gas_type, I_ion=I_ion
+            input_dict, flags, I_ion=I_ion
         ),
-        ion_charge_exchange=ion_charge_exchange_kwargs(
-            input_dict, flags, gas_type=gas_type
-        ),
+        ion_charge_exchange=ion_charge_exchange_kwargs(input_dict, flags),
         heat_conduction=heat_conduction_kwargs(
             input_dict,
             flags,
-            electron_heat_flux_limit=electron_heat_flux_limit,
             heat_flux_limiter_f=heat_flux_limiter_f,
             heat_flux_limiter_exponent=heat_flux_limiter_exponent,
         ),
         neutral_energy_timestep=neutral_energy_timestep_kwargs(
             input_dict,
             flags,
-            gas_type=gas_type,
             neutral_energy=neutral_energy,
             neutral_energy_alpha=neutral_energy_alpha,
             neutral_energy_wall_Tn_eV=neutral_energy_wall_Tn_eV,
         ),
-        reaction=reaction_kwargs(
-            input_dict,
-            gas_type=gas_type,
-            I_ion=I_ion,
-        ),
+        reaction=reaction_kwargs(input_dict),
     )
