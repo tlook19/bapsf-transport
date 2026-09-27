@@ -33,11 +33,6 @@ flux rather than discretized separately. As in [`MODEL.md`](MODEL.md),
 $\partial_z$ is the only spatial derivative and
 $\nabla_\parallel\cdot \Gamma\equiv A^{-1}\partial_z(A\Gamma)$.
 
-**`front_flux` selects a second face-flux operator** beside the Rusanov one: a
-sonic-relaxation front flux that fills unfilled cells, capped by `alpha_front`
-and carrying donor-cell energy. It is the operator the `front_density` timestep
-bound below describes.
-
 **Walls.** Every face bounding the plasma carries no particle or
 thermal-energy flux and keeps the live cell's pressure as its momentum flux
 (zero where there is no live cell at all). At the plasma-terminating subset the
@@ -318,7 +313,6 @@ over every cell.**
 | candidate | inequality |
 |---|---|
 | `plasma_cfl` | distance, $d$ the centre distance and $s=\tfrac12(\lvert u_L\rvert+\lvert u_R\rvert+c_L+c_R)$ per face, $\varepsilon$ = `cfl`; a face counts only where both cells are active and the face is open |
-| `front_density` | fractional on $n$ against the front-filling flux term, $\varepsilon$ = `density_dt_fraction` |
 | `reactions` | fractional on $n$ (floor $n_\text{floor}$) AND on $n_n$ (floor 0) against the bulk reaction term |
 | `surface_loss` | negative-margin — $\Delta t\le\varepsilon\min(\text{margin}/\lvert\dot X\rvert)$ over DRAINING cells only ($\varepsilon$ = `density_dt_fraction`), margins $n-n_\text{floor}$ and the exact conservative $E_s-\tfrac32nT_{s,\text{floor}}$ whose rates include the change in floor energy when $n$ changes, $d(E-\tfrac32nT_\text{floor})/dt=\dot E-\tfrac32T_\text{floor}\dot n$; a non-positive margin returns 0. Bundles the cathode/sheath, anode-collection and plasma-terminating boundary terms plus an engaged kinetic arm's coupling term, and is assembled only under `raw_stage_validation` or an engaged kinetic arm. It does NOT bundle the anode electron-sheath row wherever the operator split carries that row implicitly: the bound must describe what operator $A$ applies |
 | `energy_exchange` | fractional on $E_e$, $E_i$ against $Q_{ie}$ (floor 0) |
@@ -794,7 +788,6 @@ bookkeeping.
 |---|---|
 | Rusanov / LLF face flux | `physics/flux.py:_rusanov_raw_faces`, `_rusanov_face` |
 | Cell-centred physical fluxes; wall closure | `physics/flux.py:physical_fluxes`, `_apply_plasma_walls` |
-| Front-filling flux | `physics/flux.py:front_filling_fluxes` |
 | KEP single-face flux (boundary) | `physics/flux.py:kep_rusanov_face_scalar` |
 | Material-face physical flux (boundary) | `physics/flux.py:physical_face_scalar` |
 | Flux divergence | `physics/flux.py:_flux_divergence` |

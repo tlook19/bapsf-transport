@@ -152,15 +152,9 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         # unconditional, so its term is always present.
         "neutral_zone_exchange",
         "plasma_advective_flux",
-        "plasma_front_flux",
         "boundary_absorption",
         "characteristic_boundary",
         "pressure_work",
-        # Present with all-zero rows whether or not electron_drift_transport
-        # is armed: the term key is what keeps the saved term structure stable
-        # across the pre-breakdown phase change AND across the flag, so it
-        # belongs in the unarmed enumeration too.
-        "electron_drift_transport",
         "hyperbolic_dissipation_heating",
         "ei_exchange",
         "ionization_energy_cost",
@@ -292,20 +286,6 @@ def _case_sigma_in_phelps(knob_floors, knob_mass, knob_state):
         assert "requires gas_type" in str(error), error
     else:
         raise AssertionError("expected ValueError without gas_type")
-    # The selector itself keeps 'phelps' and names the D3 removal for the rest.
-    _sigma_params, _sigma_flags = _base_config()
-    for _sigma_bad in ("constant", "cx_derived", "nonsense"):
-        try:
-            LAPDSim1D(
-                dict(_sigma_params, sigma_in_model=_sigma_bad), _sigma_flags
-            )
-        except ValueError as error:
-            assert "removed at D3, 2026-08-21" in str(error), error
-            assert "Accepted: 'phelps'" in str(error), error
-        else:
-            raise AssertionError(
-                f"expected sigma_in_model={_sigma_bad!r} to be refused"
-            )
 
     # Reference state the ADAS-vs-janev cooling comparison below reads.
     shape_state = conservative_from_primitives(
@@ -467,29 +447,11 @@ def _case_he_singlet_manifold_registry(_b21p, _he_2p_excitation_cross_cm2):
     historical_stance=True,
 )
 def _case_adas_low_te_extension_retired(m3_params):
-    # --- Retired deep-afterglow low-Te recipe: adas_low_te_extension with
-    # icool_recomb composes destructively (bare PRB charged, sub-edge PRB
-    # amplified ~9,300x -> thermal runaway to the Te floor and a permanent
-    # electron_cooling dt collapse). Construction must refuse the pair.
+    # --- The low-Te extension alone stays constructible.
     resolved_cathode_flags = _resolved_cathode_flags()
-    try:
-        LAPDSim1D(
-            dict(m3_params, adas_low_te_extension=True),
-            dict(resolved_cathode_flags, icool_recomb=True),
-        )
-    except ValueError as exc:
-        assert "adas_low_te_extension" in str(exc)
-        assert "icool_recomb" in str(exc)
-    else:
-        raise AssertionError(
-            "expected ValueError for adas_low_te_extension + icool_recomb"
-        )
-    # Either flag ALONE stays constructible -- the guard is on the pair only,
-    # and the recombination_energy_return guard's behavior is unchanged.
     LAPDSim1D(
         dict(m3_params, adas_low_te_extension=True), resolved_cathode_flags
     )
-    LAPDSim1D(m3_params, dict(resolved_cathode_flags, icool_recomb=True))
 
     # --- Te_floor must stay BELOW the adf11 low-Te grid edge under
     # atomic_rate_model='adas'. Below that edge every coefficient is clamped
@@ -548,7 +510,7 @@ def _case_adas_low_te_extension_retired(m3_params):
 def _case_gcr_recombination_energy_pair(m3_params):
     # --- GCR-consistent recombination energy pair
     # (recombination_energy_return): +I_ion*S_rec - P_PRB on the electron
-    # fluid, adas-only, mutually exclusive with icool_recomb (double-charge).
+    # fluid, adas-only.
     resolved_cathode_flags = _resolved_cathode_flags()
     from cablp.atomic.adas import he_rates as _rer_he_rates
     from cablp.solvers._sim1d.physics.reactions import (
@@ -558,9 +520,6 @@ def _case_gcr_recombination_energy_pair(m3_params):
     for rer_bad_params, rer_bad_flags in (
         (dict(m3_params, recombination_energy_return=True,
               atomic_rate_model="janev"), resolved_cathode_flags),
-        (dict(m3_params, recombination_energy_return=True,
-              atomic_rate_model="adas"),
-         dict(resolved_cathode_flags, icool_recomb=True)),
     ):
         try:
             LAPDSim1D(rer_bad_params, rer_bad_flags)

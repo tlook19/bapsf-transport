@@ -126,6 +126,7 @@ _CASE_ORDER = (
     "prescribed-area-trivial-profile-identity",
     "prescribed-area-well-balancedness",
     "config-key-namespace-and-seed-cache",
+    "closed-experiment-keys-retired",
     "hot-channel-internal-wall",
     "mirror-field-loader",
     "mirror-field-loader-refusals",

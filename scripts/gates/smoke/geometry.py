@@ -164,12 +164,6 @@ def _case_shipped_defaults_and_base_geometry():
 
     _sel = _construction_error({"cathode_solver_model": "zzz"}, {})
     assert "cathode_solver_model" in _sel and "current_driven" in _sel, _sel
-    # resolved_boundaries is a BOOLEAN flag, read through bool(): a garbage
-    # string is truthy and passes, so False is its only invalid value and the
-    # one the guard exists for (a stale config still asking for the retired
-    # geometry). Probed with False for that reason, not with 'zzz'.
-    _sel = _construction_error({}, {"resolved_boundaries": False})
-    assert "resolved_boundaries" in _sel and "True" in _sel, _sel
 
     # Cathode and anode are *surfaces*: the cathode surface
     # is the origin and the anode sits one gap downstream. Lm is measured from the
@@ -763,7 +757,7 @@ def _case_variable_area_well_balancedness(
         ion_mass_g=expansion_sim.ion_mass_g,
     )
     expansion_advective = expansion_sim.plasma_flux_rhs_terms(
-        state=uniform_expansion, include_front=False
+        state=uniform_expansion
     )["plasma_advective_flux"]
     expansion_geometric = expansion_sim.flux_tube_geometry_rhs(
         state=uniform_expansion
@@ -1535,7 +1529,6 @@ def _case_anode_disc_radius(build_geometry):
     # 1 - eta*(Ra/Rm)^2; heat/Bohm keep the bare mesh values.
     disc_params, disc_flags = default_config()
     disc_params.update({"Rp": 15.0, "anode_radius_cm": 40.0})
-    disc_flags["resolved_boundaries"] = True
     disc_geom = build_geometry(disc_params, disc_flags)
     disc_face = int(disc_geom.anode_face_indices[0])
     eta_cfg = disc_params["eta"]
@@ -1868,7 +1861,7 @@ def _case_prescribed_area_well_balancedness(
         ion_mass_g=_pa_var_sim.ion_mass_g,
     )
     _pa_adv = _pa_var_sim.plasma_flux_rhs_terms(
-        state=_pa_static, include_front=False
+        state=_pa_static
     )["plasma_advective_flux"]
     _pa_geo = _pa_var_sim.flux_tube_geometry_rhs(state=_pa_static)
     _pa_terminating = sorted({

@@ -448,7 +448,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             saved_params = json.loads(h5.attrs["params_json"])
             saved_flags = json.loads(h5.attrs["flags_json"])
             assert saved_params["dt_save"] == run_params["dt_save"]
-            assert saved_flags["front_flux"] == flags["front_flux"]
+            assert saved_flags["cathode_coupling"] == flags["cathode_coupling"]
             assert h5["time"].shape == run_result.time.shape
             assert h5["phase"].shape == run_result.phase.shape
             assert h5["phase_elapsed"].shape == run_result.phase_elapsed.shape
@@ -927,7 +927,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             assert np.allclose(loaded.current_trigger_samples["time"], [])
             assert np.allclose(loaded.current_trigger_samples["I_tot"], [])
             assert loaded.params["dt_save"] == run_params["dt_save"]
-            assert loaded.flags["front_flux"] == flags["front_flux"]
+            assert loaded.flags["cathode_coupling"] == flags["cathode_coupling"]
             assert np.allclose(loaded.time, run_result.time)
             assert np.all(loaded.phase == run_result.phase)
             assert np.allclose(loaded.phase_elapsed, run_result.phase_elapsed)
@@ -1342,23 +1342,7 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
     )
     assert debit_sim._floor_ledger == ledger_before_probe
 
-    # R1d configuration presence: valid R1 selectors perturb their intended
-    # operator; the still-frozen compatibility controls are rejected as silent
-    # no-ops pending their owning repair.
     import warnings as _dep_warnings
-    for stale_param in (
-        {"front_flux_model": "unregistered"},
-        {"D_amb_model": "constant"},
-        {"D_amb": 1.0},
-    ):
-        try:
-            LAPDSim1D(dict(r1a_params, **stale_param), r1a_flags)
-        except ValueError as error:
-            assert "silent no-ops" in str(error)
-        else:
-            raise AssertionError(
-                f"expected frozen surface-control rejection: {stale_param}"
-            )
     # A13 (R3.3, deleted at D3 2026-08-21): the four resolved-boundary
     # surface-loss controls were 0D artifacts standing in for un-separated
     # cathode/anode I_sat, and the resolved geometry measures the Bohm I_sat

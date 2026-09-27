@@ -57,7 +57,6 @@ in `_CASE_ORDER`. A new case goes in its subsystem's module and at the end of
 - `end_wall.py`: the end-wall sheath, its face fluxes and its retired names.
 - `circuit_cathode.py`: the cathode sheath solve, the discharge circuit, the anode and the electrode sample.
 - `beam.py`: the primary beam, CSDA deposition, the walked hot tail and the quasilinear relaxation closure.
-- `tracer.py`: the regime tracer.
 - `neutrals.py`: neutral state, gas puff, fill, equilibration and the neutral closures.
 - `atomic_rates.py`: atomic rate models and cross sections.
 - `dvm.py`: the transient discrete-velocity neutral model and its exports.
@@ -122,9 +121,8 @@ builder, verifier and bench (`build_wall_return_reference.py`,
 `verify_wall_return_reference.py`, `bench_wall_return.py`). The rest split
 into four kinds: read-only audits/censuses of a saved run or build
 (`audit_sim1d_afterglow_ion_channel.py`, `census_afterglow_tail_handoff.py`,
-`t23c_pairwise_audit.py`); regime- or lane-equivalence checks
-(`r3lane_equivalence.py`, `regime_r2_handoff_check.py`,
-`regime_r2_overlap_gate.py`); one fixed-point/underflow fence
+`t23c_pairwise_audit.py`); a lane-equivalence check
+(`r3lane_equivalence.py`); one fixed-point/underflow fence
 (`r3fma_underflow_fence.py`); and one-build acceptance instruments not named
 `verify_sim1d_*.py` (`k2_dvm_exchange_acceptance.py`,
 `k2_dvm_exchange_measure.py`,

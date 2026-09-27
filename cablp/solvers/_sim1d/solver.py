@@ -121,7 +121,6 @@ from .physics.cathode import (
     beam_gap_ledger_mismatch,
     beam_ionization_rhs,
     beam_ionization_rhs_terms,
-    beam_launch,
     cathode_boundary_state,
     cathode_power_balance_terms_W,
     cathode_sample_indices,

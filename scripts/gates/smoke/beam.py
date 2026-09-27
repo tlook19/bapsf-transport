@@ -1788,7 +1788,7 @@ def _case_ionization_birth_energy_model(csda_sim):
     assert np.all(cons_react.Ee == 0.0)
     assert np.any(cons_react.n > 0.0)
 
-    rhs = sim.plasma_flux_rhs(include_front=False)
+    rhs = sim.plasma_flux_rhs()
     # A uniform stationary plasma has no advective divergence -- exactly, on
     # every row, everywhere EXCEPT the momentum row at the plasma-terminating
     # faces. There the advective flux is deliberately zeroed and the ghost

@@ -274,7 +274,6 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     assert dt_default.phase_floating == 0.0
     assert dt_default.active_constraint in {
         "plasma_cfl",
-        "front_density",
         "surface_loss",
         "neutral_exchange",
         "neutral_sources",
@@ -303,7 +302,6 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     assert cathode_boundary.source.role == "cathode"
     assert cathode_boundary.end.index == geom.cells - 1
     assert cathode_boundary.end.role == "end_wall"
-    assert cathode_boundary.end_mode == params["end_mode"]
     assert cathode_boundary.twin_cathode == flags["TwinCathode"]
     for key in (
         "V_bank",

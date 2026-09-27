@@ -451,8 +451,7 @@ $$Q_\text{inel}=\underbrace{I_\text{ion}S_\text{ion}^\text{bulk}}_\text{ionizati
 Its ionization cost rides the BULK rate alone; the beam's own cost is booked
 separately, with the beam terms below. $I_\text{ion}$ is the ionization
 POTENTIAL and keeps that name. The $n^2$ term is He<sup>+</sup> LINE radiation
-(`plt2`), not recombination radiation; the recombination-radiation class
-`prb1` is added to it only under `icool_recomb`.
+(`plt2`), not recombination radiation.
 
 On the fluid path the new electron is born cold — zero $E_e$ birth energy, so
 $T_e$ falls by dilution as $n$ rises — and the ion mass-loading mixing energy
@@ -1198,7 +1197,6 @@ Terms a result carries in `rhs_terms`, for the model above.
 | term | function |
 |---|---|
 | `plasma_advective_flux` | `physics/flux.py:plasma_flux_rhs_terms` |
-| `plasma_front_flux` | `physics/flux.py:front_filling_fluxes` |
 | `characteristic_boundary` | `physics/sources.py:characteristic_boundary_rhs` |
 | `pressure_work` | `physics/sources.py:pressure_work_rhs`, `velocity_divergence` |
 | `hyperbolic_dissipation_heating` | `physics/sources.py:hyperbolic_energy_correction_rhs` |
@@ -1233,9 +1231,8 @@ permanently zero terms kept for saved-ledger schema stability, as is
 
 The model presented here is the equation set the reference configuration
 integrates. A result may carry further terms that are not part of it: those of
-the alternative fluid neutral closure, and the additional term
-`electron_drift_transport`, all available in the code and none described by
-this document.
+the alternative fluid neutral closure, available in the code and not
+described by this document.
 
 Supporting modules: `cablp/atomic/` (cross sections, ADAS access, empirical
 fits), `cablp/plasma/` (Braginskii conductivities, collision times),

@@ -7,7 +7,7 @@ from cablp.atomic.cross_sections import (
     phelps_momentum_transfer_rate_cm3_s,
 )
 from cablp.cathode.circuit_common import sheath_lift_lambda
-from cablp.constants import ev_to_erg, kb_cgs, qe_SI
+from cablp.constants import ev_to_erg, kb_cgs
 
 from .flux import (
     ion_sound_speed,
