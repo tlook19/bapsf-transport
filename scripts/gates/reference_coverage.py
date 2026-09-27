@@ -572,6 +572,36 @@ def _is_def(node):
     return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
 
 
+def _is_dunder(name):
+    return len(name) > 4 and name.startswith("__") and name.endswith("__")
+
+
+def _class_header_lines(cls):
+    lines = set(range(cls.lineno, cls.body[0].lineno))
+    for dec in cls.decorator_list:
+        lines.update(range(dec.lineno, dec.end_lineno + 1))
+    return lines
+
+
+def _arg_exprs(fn):
+    """A def's default and annotation expressions."""
+    args = fn.args
+    exprs = list(args.defaults) + [k for k in args.kw_defaults if k]
+    for arg in args.posonlyargs + args.args + args.kwonlyargs + [
+            args.vararg, args.kwarg]:
+        if arg is not None and arg.annotation is not None:
+            exprs.append(arg.annotation)
+    if fn.returns is not None:
+        exprs.append(fn.returns)
+    return exprs
+
+
+def _is_literal(expr):
+    if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, (ast.USub, ast.UAdd)):
+        expr = expr.operand
+    return isinstance(expr, ast.Constant)
+
+
 def _has_call(node):
     return any(isinstance(n, ast.Call) for n in ast.walk(node))
 
@@ -830,7 +860,7 @@ class FileCheck:
             old_owner = self._old_stmt_for_new(owner)
             if _is_def(owner):
                 if old_owner is None:
-                    if self._new_def_ok(owner, line):
+                    if self._new_def_ok(owner):
                         return "UNREACHED", None
                     return "REACHED", f"new line {line}: body of new {owner.name}"
                 phase = self.cov.phase(self.rel, self.old.body_lines(old_owner)) \
@@ -848,7 +878,7 @@ class FileCheck:
                                    "entry cannot be placed")
             node = owner
 
-    def _new_def_ok(self, fn, line):
+    def _new_def_ok(self, fn):
         """A wholly new def binds a fresh name and evaluates nothing at import."""
         if any(_has_call(d) for d in fn.decorator_list):
             return False
@@ -877,7 +907,7 @@ class FileCheck:
             if old_def is None:
                 if isinstance(top, ast.ClassDef):
                     return "REACHED", f"new line {line}: new class {top.name} runs its body at import"
-                if self._new_def_ok(top, line):
+                if self._new_def_ok(top):
                     return "IMPORT-ONLY", f"new line {line}: new def {top.name}"
                 return "REACHED", (f"new line {line}: new def {top.name} "
                                    "rebinds a name, calls at import, or is "
@@ -899,6 +929,48 @@ class FileCheck:
         return "REACHED", (f"new line {line}: import-time "
                            f"{type(top).__name__} (defines data)")
 
+    # -- hunk-level rules --------------------------------------------------
+
+    def _structural(self, a, b, c, d):
+        """Changes that reach the run whatever the maps say, else None.
+
+        A dunder method (Python calls it implicitly), a class header (bases,
+        keywords, metaclass, decorators) and a non-literal default or
+        annotation (evaluated at import from live names) count as REACHED when
+        a hunk changes or adds them. Removing a non-literal default or
+        annotation together with its whole def is left to the other rules.
+        """
+        for side, src, lines, other_defs in (
+                ("old", self.old, set(range(a, a + b)), self.new_defs),
+                ("new", self.new, set(range(c, c + d)), None)):
+            lines &= src.code_lines
+            if not lines:
+                continue
+            for stmt in src.stmts:
+                if isinstance(stmt, ast.ClassDef):
+                    hit = sorted(_class_header_lines(stmt) & lines)
+                    if hit:
+                        return (f"{side} line {hit[0]}: changes the header of "
+                                f"class {stmt.name}")
+                if not _is_def(stmt):
+                    continue
+                span = src.span(stmt)
+                if _is_dunder(stmt.name) and span & lines:
+                    return (f"{side} line {min(span & lines)}: changes dunder "
+                            f"method {stmt.name}")
+                if other_defs is not None and \
+                        src.qualname(stmt) not in other_defs:
+                    continue
+                for expr in _arg_exprs(stmt):
+                    if _is_literal(expr):
+                        continue
+                    hit = sorted(set(range(expr.lineno, expr.end_lineno + 1))
+                                 & lines)
+                    if hit:
+                        return (f"{side} line {hit[0]}: non-literal default or "
+                                f"annotation of {stmt.name}")
+        return None
+
     # -- hunks -------------------------------------------------------------
 
     def classify(self):
@@ -909,6 +981,9 @@ class FileCheck:
                 verdicts.append(self.classify_old_line(line))
             for line in range(c, c + d):
                 verdicts.append(self.classify_new_line(line))
+            structural = self._structural(a, b, c, d)
+            if structural:
+                verdicts.append(("REACHED", structural))
             reached = [r for v, r in verdicts if v == "REACHED"]
             imports = [r for v, r in verdicts if v == "IMPORT-ONLY"]
             if reached:
@@ -963,24 +1038,33 @@ def check(args):
         status, path = row.split("\t", 1)
         touched.append((status[0], path))
 
+    # A map describes the base only if every file it recorded is unchanged
+    # there, touched by the diff or not: a merge between capture and base can
+    # put unexecuted code on the route through a file the diff never touches,
+    # and the name guard reads the base with the map's line numbers.
+    base_py = [p for p in _git(repo, "ls-tree", "-r", "--name-only", base,
+                               "--", "cablp").splitlines() if p.endswith(".py")]
     for m in maps:
         if m["commit"] == base:
             continue
-        recorded = {**m["files"], **m["route_files"]}
         bad = []
-        for status, path in touched:
+        recorded = {**m["files"], **m["route_files"]}
+        for path in sorted(recorded):
+            entry = recorded[path]
+            if not entry.get("tracked", True):
+                continue
             data = _git_show(repo, base, path)
             if data is None:
-                continue
-            if path in recorded:
-                if recorded[path]["sha256"] != _sha256(data):
-                    bad.append(f"{path} (sha256 differs)")
-            elif path.startswith("cablp/") and path.endswith(".py"):
-                bad.append(f"{path} (not in the map)")
+                bad.append(f"{path} (absent at the base)")
+            elif entry["sha256"] != _sha256(data):
+                bad.append(f"{path} (sha256 differs)")
+        for path in base_py:
+            if path not in m["files"]:
+                bad.append(f"{path} (tracked at the base, not in the map)")
         if bad:
             print(f"refusing: map {m['route']} is at {m['commit'][:12]}, not "
-                  f"the base {base[:12]}, and these touched files differ "
-                  "from it:\n  " + "\n  ".join(bad))
+                  f"the base {base[:12]}, and these recorded files differ "
+                  "at the base:\n  " + "\n  ".join(bad))
             return 2
 
     cov = Coverage(maps)
