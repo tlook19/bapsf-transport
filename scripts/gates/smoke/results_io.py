@@ -49,6 +49,7 @@ from cablp.solvers._sim1d.results.phase3_capture import (
     reserve_run_id,
     write_qualified_capture,
 )
+from cablp.solvers._sim1d.solver import END_SHEATH_DEBIT_ROWS
 
 from ._harness import (
     _CAPFIX_ESCAPE_CONFIG,
@@ -234,7 +235,11 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     )
     assert set(run_result.rhs_terms) == expected_rhs_terms
     assert set(run_result.electron_energy_terms_W_cm3) == expected_rhs_terms
-    assert set(run_result.ion_energy_terms_W_cm3) == expected_rhs_terms
+    # The end-face sheath rows are electron-only and written to the electron
+    # table alone; the end wall row is armed on this geometry's end wall face.
+    assert set(run_result.ion_energy_terms_W_cm3) == (
+        expected_rhs_terms - set(END_SHEATH_DEBIT_ROWS)
+    )
     assert run_result.cathode_diagnostics["enabled"].shape == (4,)
     assert np.allclose(run_result.cathode_diagnostics["enabled"], 0.0)
     assert np.allclose(run_result.cathode_diagnostics["configured"], 0.0)

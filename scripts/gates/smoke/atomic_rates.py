@@ -155,6 +155,9 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         "plasma_front_flux",
         "boundary_absorption",
         "characteristic_boundary",
+        # The end wall sheath debit: armed by the geometry's end wall face,
+        # which this single-cathode layout carries.
+        "end_wall_e_sheath_climb",
         "pressure_work",
         # Present with all-zero rows whether or not electron_drift_transport
         # is armed: the term key is what keeps the saved term structure stable
