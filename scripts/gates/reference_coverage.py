@@ -983,7 +983,7 @@ class FileCheck:
                 verdicts.append(self.classify_new_line(line))
             structural = self._structural(a, b, c, d)
             if structural:
-                verdicts.append(("REACHED", structural))
+                verdicts.insert(0, ("REACHED", structural))
             reached = [r for v, r in verdicts if v == "REACHED"]
             imports = [r for v, r in verdicts if v == "IMPORT-ONLY"]
             if reached:
