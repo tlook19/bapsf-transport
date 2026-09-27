@@ -3230,8 +3230,8 @@ def _deposit_electrode_power(
     sheath-fall ``phi`` on the electrode/circuit surface instead of removing it
     from the plasma thermal store.
 
-    THE ANODE FULL DEBIT: add the anode's sheath-fall share ``phi_a * I_e_coll`` back onto the plasma electron
-    store, so the ANODE debit is the sheath-edge ``(2 Te + phi_a)`` per
+    THE ANODE FULL DEBIT: add the anode's sheath-fall share
+    ``phi_a * I_e_coll`` back onto the plasma electron store, so the ANODE debit is the sheath-edge ``(2 Te + phi_a)`` per
     collected electron while the cathode side keeps its thermal-only
     routing -- at the cathode the accelerated species is the ion, so the
     electron fall there is not plasma-electron energy IN THIS FUNCTION's own
@@ -3256,8 +3256,8 @@ def _deposit_electrode_power(
     the electrons and the BANK is the payer, so the plasma-side debit is the
     thermal ``2 Te`` alone: NO increment is applied. That branch is not
     silent -- ``LAPDSim1D`` counts the accepted steps that take it and records
-    the last such time, and exposes both on the cathode diagnostics. A non-finite ``phi_a``
-    belongs to neither regime and raises.
+    the last such time, and exposes both on the cathode diagnostics. A
+    non-finite ``phi_a`` belongs to neither regime and raises.
 
     Composition with the thermal-only routing above, which always runs, so
     the repelling-regime anode deposit is
@@ -3381,13 +3381,13 @@ def cathode_emission_sheath_power_W(result, T_s_K):
     ``-e phi_c_plus Gamma_ec``
         The barrier the COLLECTED plasma electrons climbed, taken from their
         own thermal store -- the plasma-pays convention the anode sheath
-        debit books, applied to the identical physics at the cathode. ``Gamma_ec = I_e_ret / e`` is the returning
-        plasma-electron flux. Always <= 0 for a repelling face.
+        debit books, applied to the identical physics at the cathode.
+        ``Gamma_ec = I_e_ret / e`` is the returning plasma-electron flux. Always <= 0 for a repelling face.
 
     ``result`` is a cathode circuit ``SolverResult`` and ``T_s_K`` the
     emitter surface temperature [K] the solve was run at (the evolving
-    power-balance value). A non-finite potential or current here has no booking either
-    way and raises rather than planting a NaN in an energy row.
+    power-balance value). A non-finite potential or current here has no
+    booking either way and raises rather than planting a NaN in an energy row.
     """
     I_em = float(result.I_eth_star)
     I_ec = float(result.I_e_ret)

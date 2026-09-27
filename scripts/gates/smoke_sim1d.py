@@ -18177,7 +18177,9 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
     _cov_split_sim = LAPDSim1D(_cov_live_p, _cov_live_f)
     for _ in range(40):
         _cov_split_sim.advance_one_step(dt=2.0e-9)
-    _cov_solve = _cov_split_sim.solve_cathode_boundary(state=_cov_split_sim.state)
+    _cov_solve = _cov_split_sim.solve_cathode_boundary(
+        state=_cov_split_sim.state
+    )
     _cov_f0_split = _cov_split_sim.coverage_fraction()
     _cov_res_dep = _cov_solve.beam_reservoir_deposition
     _cov_total_dep = _cov_solve.beam_deposition
@@ -19875,8 +19877,9 @@ def _case_tracer_passive_anomalous_leak_phase_gated_solve():
     ``solve_cathode_boundary``'s module function returns a disabled,
     no-op ``CathodeSolve1D`` -- measured directly below. So the pre-fix
     call was silently WASTEFUL in this phase rather than a hard refusal;
-    the fix is for phase-consistency with the other solve sites. What IS tested, both ways: the
-    fixed method dispatches a solve only in a phase that has one.
+    the fix is for phase-consistency with the other solve sites. What IS
+    tested, both ways: the fixed method dispatches a solve only in a phase
+    that has one.
     """
     def _tpal_build():
         params, flags = default_config()
@@ -27597,8 +27600,8 @@ def _case_effective_cathode_flags_refuses_driven_override_in_floating_phase():
     ``active_only=False, floating=False`` asks for the DRIVEN mapping
     regardless of phase -- the circuit advance passes exactly this, and
     returns before reaching the call on ``step_phase["floating"]``, so the
-    override is inert for it by construction. A caller that CAN reach a floating phase and still passes
-    this override is handed a configuration that does not exist (a floating
+    override is inert for it by construction. A caller that CAN reach a
+    floating phase and still passes this override is handed a configuration that does not exist (a floating
     phase reported as ``cathode_coupling=False``), which is the same class
     of silent mis-booking the hand-off and final-step-boundary fixes closed
     (2026-09-10) -- so the method now refuses it loudly instead.

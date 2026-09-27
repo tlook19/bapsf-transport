@@ -132,7 +132,8 @@ def main(argv=None):
         results[n] = _fresh_to_t0_then_window(t0, T, n)
         r = results[n]
         print(f"  N={n:3d} dt={T/n*1e9:7.2f} ns : V_b={r['V_b']:.6g} "
-              f"phi_c={r['phi_c']:.6g} T_s={r['T_s']:.7g} I_tot={r['I_tot']:.7g}")
+              f"phi_c={r['phi_c']:.6g} T_s={r['T_s']:.7g} "
+              f"I_tot={r['I_tot']:.7g}")
 
     # self-convergence order + production-dt error (coarsest vs finest)
     print("\nself-convergence (order p from successive halvings; "

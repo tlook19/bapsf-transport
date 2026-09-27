@@ -871,9 +871,10 @@ def model_mode_defaults():
         arms that bound the size of the double count; neither is
         claim-bearing.
 
-        Under every reading the anode sheath debit is untouched, and the anode PRESHEATH term is NOT booked here -- it
-        belongs to the separate anode-potential-debit question, and only one
-        of the two may ever book it. Read only under the
+        Under every reading the anode sheath debit is untouched, and the
+        anode PRESHEATH term is NOT booked here -- it belongs to the separate
+        anode-potential-debit question, and only one of the two may ever book
+        it. Read only under the
         ``electron_drift_transport`` flag, and refused at a non-default value
         without it.
     neutral_model:
@@ -2783,8 +2784,8 @@ def cathode_defaults():
         # tabulated coefficients above are published in.
         "anode_jet_energy_convention": None,
         # Debit the cathode surface's ion heating by the reflected-energy
-        # fraction (the power balance receives (1 - R_E) * P_cathode_i); off, the
-        # jet is momentum-only and the surface keeps that power. Requires
+        # fraction (the power balance receives (1 - R_E) * P_cathode_i); off,
+        # the jet is momentum-only and the surface keeps that power. Requires
         # cathode_neutral_jet, and is REQUIRED by neutral_energy with the jet
         # armed -- with an En field the reflected power is booked into the gas,
         # so without the debit the same R_E would be spent twice.
@@ -3860,14 +3861,14 @@ input_flags_template_1d = {
     # b_ion_neutral_drag / slip closures are
     # superseded and DEPRECATED.
     "ion_neutral_moment_closure": True,
-    # The cathode/anode/bank circuit solve. OFF, no cathode solve is produced for the
-    # whole run: the boundary carries no device current or voltage, the cathode
+    # The cathode/anode/bank circuit solve. OFF, no cathode solve is produced
+    # for the whole run: the boundary carries no device current or voltage, the cathode
     # and anode jets return nothing, and the tracer's beam rows get no source.
     # run_neutral_equilibration pins it off on its inner sim.
     # Three construction-time refusals of things that need a solve that would
     # not exist: regime_tracer (its affine source IS the beam-impact ionization
-    # birth), and the two DVM jets, whose launch energies are the sheath potentials
-    # phi_c and phi_a -- armed without a solve they would silently launch at the
+    # birth), and the two DVM jets, whose launch energies are the sheath
+    # potentials phi_c and phi_a -- armed without a solve they would silently launch at the
     # thermal Ti alone. With the flag ON, a zero anode ion current is a runtime
     # error rather than a clamp: the circuit cannot close, and the message names
     # clearing this flag as the way to model a machine with no anode collection.

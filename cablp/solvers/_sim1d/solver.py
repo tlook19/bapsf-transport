@@ -1724,8 +1724,8 @@ class LAPDSim1D:
         """Validate the step-controller and non-ignition guards.
 
         These are budgets rather than physics: the heat-flux limiter, the
-        floor-exempt drain, the max-step and dt_min locks, the wall-clock and accepted-step ignition caps, and the
-        dt_growth recovery. Each is checked HERE so a misconfigured guard
+        floor-exempt drain, the max-step and dt_min locks, the wall-clock and
+        accepted-step ignition caps, and the dt_growth recovery. Each is checked HERE so a misconfigured guard
         cannot be discovered hours into the run it exists to catch.
         """
         # R5.2 / audit A9: flux-limited electron heat conduction (default on).
