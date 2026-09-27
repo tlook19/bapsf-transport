@@ -10,8 +10,9 @@ panels with the adopted sigma_tot error bars:
       mean; on older overlays only the SEM band is drawn, unchanged;
   (2) Te(z) and ne(z) at t=15 and 19 ms, model line vs measured port points
       (sigma_tot bars), with vertical dashed lines at the probe/port locations;
-  (3) Isat(z) = n*sqrt(Te) (systematics-robust) model vs measured ports, plus
-      nn(z)/Ti(z) profiles;
+  (3) Isat(z) = n*sqrt(Te) (a development magnitude/shape diagnostic, where
+      the sweep inversion cancels) model vs measured ports, plus nn(z)/Ti(z)
+      profiles;
   (4) per-port Te(t) and ne(t) time series, model line vs measured mean with a
       sigma_tot band, one colour per ES port.
 

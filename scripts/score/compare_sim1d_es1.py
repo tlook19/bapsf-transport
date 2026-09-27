@@ -611,9 +611,8 @@ def run_model(
 # NB the dominant biases push LP Te HIGH and hence inverted n LOW -- the
 # model-hot / model-underdense residuals are, if anything, understated.
 # The "Isat" rows compare in I_sat space (n*sqrt(Te), both sides), where
-# the sweep inversion cancels identically -- the systematics-robust
-# magnitude/shape observable (the stage-(iii) tau metric already lives
-# there by design).
+# the sweep inversion cancels identically -- a development magnitude/shape
+# diagnostic (the stage-(iii) tau metric already lives there by design).
 TE_SYS_FRAC = 0.25
 TE_SYS_FLOOR_EV = 0.20
 TE_SEMIQUANT_EV = 1.0
