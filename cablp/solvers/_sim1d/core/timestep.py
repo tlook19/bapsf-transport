@@ -45,6 +45,9 @@ ELECTRODE_SINK_DT_FRACTION = 1.0
 class TimestepDiagnostics:
     dt: float
     dt_plasma_cfl: float
+    # Constant infinity: the front-filling bound it reported is removed. The
+    # field is kept so the saved diagnostics do not move.
+    dt_front_density: float
     dt_surface_loss: float
     dt_neutral_exchange: float
     dt_neutral_sources: float
@@ -329,6 +332,7 @@ def suggest_timestep(
     return TimestepDiagnostics(
         dt=float(dt),
         dt_plasma_cfl=float(dt_candidates["plasma_cfl"]),
+        dt_front_density=np.inf,
         dt_surface_loss=float(dt_candidates["surface_loss"]),
         dt_neutral_exchange=float(dt_candidates["neutral_exchange"]),
         dt_neutral_sources=float(dt_candidates["neutral_sources"]),

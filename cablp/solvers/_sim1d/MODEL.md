@@ -1226,9 +1226,11 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `parallel_momentum_sink` | `physics/sources.py:parallel_momentum_sink_rhs` |
 | `parallel_momentum_sink_heating` | `physics/sources.py:parallel_momentum_sink_heating_rhs` |
 
-`boundary_absorption`, `surface_loss` and `gas_puff_local_ionization` are
-permanently zero terms kept for saved-ledger schema stability, as is
-`recombination_3b_loss` under the ADAS coefficients.
+`boundary_absorption`, `surface_loss`, `gas_puff_local_ionization`,
+`plasma_front_flux` and `electron_drift_transport` are permanently zero terms
+kept for saved-ledger schema stability, as is `recombination_3b_loss` under
+the ADAS coefficients. The saved timestep diagnostic `dt_front_density` is
+likewise a constant infinity.
 
 The model presented here is the equation set the reference configuration
 integrates. A result may carry further terms that are not part of it: those of

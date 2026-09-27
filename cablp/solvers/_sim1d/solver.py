@@ -305,7 +305,9 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "recombination_3b_loss": "ion",
     # --- everything else never touches nn --------------------------------
     "plasma_advective_flux": "none",
+    "plasma_front_flux": "none",
     "pressure_work": "none",
+    "electron_drift_transport": "none",
     "hyperbolic_dissipation_heating": "none",
     "flux_tube_geometry": "none",
     "ei_exchange": "none",
@@ -3156,12 +3158,16 @@ class LAPDSim1D:
                 **kinetic_terms,
                 **end_sheath_terms,
                 "plasma_advective_flux": self._zero_rhs_state(),
+                # Constant zero rows kept for saved-ledger schema stability;
+                # see the matching rows in the plasma branch below.
+                "plasma_front_flux": self._zero_rhs_state(),
                 # boundary_absorption is permanently zero everywhere since the
                 # legacy absorber was retired (see commit 1fc05c9); kept for
                 # saved-ledger schema stability.
                 "boundary_absorption": self._zero_rhs_state(),
                 "characteristic_boundary": self._zero_rhs_state(),
                 "pressure_work": self._zero_rhs_state(),
+                "electron_drift_transport": self._zero_rhs_state(),
                 "hyperbolic_dissipation_heating": self._zero_rhs_state(),
                 "ei_exchange": self._zero_rhs_state(),
                 "ionization_energy_cost": self._zero_rhs_state(),
@@ -3282,6 +3288,10 @@ class LAPDSim1D:
             **momentum_sink_terms,
             **geometry_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
+            # Constant zero row: the front-filling flux it carried is
+            # removed. The ROW is kept so the saved term set does not move;
+            # nothing writes it.
+            "plasma_front_flux": self._zero_rhs_state(),
             # Permanently zero since the legacy volumetric absorber was
             # retired; see commit 1fc05c9. The ROW is kept because it is
             # part of the saved ledger schema that existing artifacts and
@@ -3298,6 +3308,10 @@ class LAPDSim1D:
                 end_wall_climb_out=end_wall_climb_out,
             ),
             "pressure_work": pressure_work,
+            # Constant zero row: the electron drift-transport operator it
+            # carried is removed. The ROW is kept so the saved term set does
+            # not move; nothing writes it.
+            "electron_drift_transport": self._zero_rhs_state(),
             # The Rusanov (n, M) numerical kinetic-energy dissipation, deposited
             # into the ion internal energy. It sits in the slot the combined
             # correction row occupied, so the dissipation booking keeps its
@@ -6503,6 +6517,7 @@ class LAPDSim1D:
                 diag,
                 dt=float(neutral_dt),
                 dt_plasma_cfl=np.inf,
+                dt_front_density=np.inf,
                 dt_surface_loss=np.inf,
                 dt_reactions=np.inf,
                 dt_energy_exchange=np.inf,
