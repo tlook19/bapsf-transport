@@ -22,11 +22,10 @@ from the distribution each tick rather than independently evolved.
 
 $$\Gamma=\tfrac12\left(\Gamma_L+\Gamma_R\right)-\tfrac12a_\text{max}\left(U_R-U_L\right),\qquad a_\text{max}=\max\left(\lvert u_L\rvert+c_L,\ \lvert u_R\rvert+c_R\right)$$
 
-`hyperbolic_wave_speed` selects the sound speed in that pair: `"adiabatic"`
-uses $\sqrt{\tfrac53(T_e+T_i)/m_i}$, the exact spectral radius of the
-$\gamma=5/3$ two-species system, `"isothermal"` uses $\sqrt{T_e/m_i}$, which
-under-bounds it. It sets the dissipation strength and the CFL, not the physical
-wave speed, which the pressure flux carries. RHS terms are formed as
+The sound speed in that pair is $\sqrt{\tfrac53(T_e+T_i)/m_i}$, the exact
+spectral radius of the $\gamma=5/3$ two-species system
+(`flux.plasma_wave_speed`). It sets the dissipation strength and the CFL, not
+the physical wave speed, which the pressure flux carries. RHS terms are formed as
 $-\Delta(\text{area}\cdot\Gamma)/\text{volume}$ per cell, each
 $u\partial_z$ derivative fused with its compression partner inside one face
 flux rather than discretized separately. As in [`MODEL.md`](MODEL.md),
@@ -62,13 +61,13 @@ the surface to average across. Every plasma-terminating face is a material
 surface and is treated this way; the two-state kernel
 (`flux.kep_rusanov_face_scalar`) is the INTERIOR's.
 
-**Energy-consistent hyperbolic core** (`hyperbolic_energy_consistent`). The
-convective momentum flux becomes the kinetic-energy-preserving $\lbrace u\rbrace\lbrace M\rbrace$
-form, and the Rusanov $(n,M)$ numerical kinetic-energy dissipation is deposited
-into $E_i$ as `hyperbolic_dissipation_heating` — a flux divergence contracted
-with the local velocity, so non-negative only in the volume-weighted total. The
-selector does NOT touch the `pressure_work` term: that row is
-$-p_{s,i}\left.\nabla_\parallel\cdot u\right|_i$ on either side of the flag.
+**Energy-consistent hyperbolic core.** The convective momentum flux is the
+kinetic-energy-preserving $\lbrace u\rbrace\lbrace M\rbrace$ form, and the
+Rusanov $(n,M)$ numerical kinetic-energy dissipation is deposited into $E_i$ as
+`hyperbolic_dissipation_heating` — a flux divergence contracted with the local
+velocity, so non-negative only in the volume-weighted total. The core does NOT
+touch the `pressure_work` term: that row is
+$-p_{s,i}\left.\nabla_\parallel\cdot u\right|_i$.
 
 The conservation statement is LOCAL. With the face velocity
 $\bar u_f=\tfrac12(u_L+u_R)$ of $\nabla_\parallel\cdot u$ and the face
@@ -320,7 +319,7 @@ over every cell.**
 | `plasma_cfl` | distance, $d$ the centre distance and $s=\tfrac12(\lvert u_L\rvert+\lvert u_R\rvert+c_L+c_R)$ per face, $\varepsilon$ = `cfl`; a face counts only where both cells are active and the face is open |
 | `front_density` | fractional on $n$ against the front-filling flux term, $\varepsilon$ = `density_dt_fraction` |
 | `reactions` | fractional on $n$ (floor $n_\text{floor}$) AND on $n_n$ (floor 0) against the bulk reaction term |
-| `surface_loss` | negative-margin — $\Delta t\le\varepsilon\min(\text{margin}/\lvert\dot X\rvert)$ over DRAINING cells only ($\varepsilon$ = `density_dt_fraction`), margins $n-n_\text{floor}$ and the exact conservative $E_s-\tfrac32nT_{s,\text{floor}}$ whose rates include the change in floor energy when $n$ changes, $d(E-\tfrac32nT_\text{floor})/dt=\dot E-\tfrac32T_\text{floor}\dot n$; a non-positive margin returns 0. Bundles the cathode/sheath, anode-collection and plasma-terminating boundary terms plus an engaged kinetic arm's coupling term, and is assembled only under `raw_stage_validation` or an engaged kinetic arm. It does NOT bundle the anode electron-sheath row wherever the operator split carries that row implicitly: the bound must describe what operator $A$ applies |
+| `surface_loss` | negative-margin — $\Delta t\le\varepsilon\min(\text{margin}/\lvert\dot X\rvert)$ over DRAINING cells only ($\varepsilon$ = `density_dt_fraction`), margins $n-n_\text{floor}$ and the exact conservative $E_s-\tfrac32nT_{s,\text{floor}}$ whose rates include the change in floor energy when $n$ changes, $d(E-\tfrac32nT_\text{floor})/dt=\dot E-\tfrac32T_\text{floor}\dot n$; a non-positive margin returns 0. Bundles the cathode/sheath, anode-collection and plasma-terminating boundary terms plus an engaged kinetic arm's coupling term, and is assembled whenever the plasma phase runs. It does NOT bundle the anode electron-sheath row wherever the operator split carries that row implicitly: the bound must describe what operator $A$ applies |
 | `energy_exchange` | fractional on $E_e$, $E_i$ against $Q_{ie}$ (floor 0) |
 | `energy_exchange_rate` | rate, $\Delta t\le c/\max\nu_\text{eq}$ at $c$ = `energy_exchange_rate_fraction`; withdrawn to infinity at that key's default `None` |
 | `electrode_sink_rate` | rate, $\Delta t\le c/\max\nu$ over the plasma-active cells at $c$ = `ELECTRODE_SINK_DT_FRACTION` = 1, $\nu$ the electrode electron-energy sink the implicit substep carries. An ACCURACY bound, not a stability one — the sink is L-stable at any step, but a second-order substep only expresses its order while $\nu\Delta t$ is order one, and the anode sheath can change regime between steps taken longer. Withdrawn to infinity wherever the row is applied explicitly instead |
@@ -334,7 +333,7 @@ over every cell.**
 | `neutral_energy` | rate — $\Delta t$ times the summed neutral-energy relaxation rates below `neutral_dt_fraction`, folding in the neutral signal speed $(\lvert u_n\rvert+c_n)/\Delta z$ |
 | `dt_max` | the configured ceiling |
 
-**Floor-aware drain exemption** (under `surface_loss_floor_exempt`). A cell
+**Floor-aware drain exemption.** A cell
 whose energy margin above its floor energy is within
 `SURFACE_LOSS_FLOOR_EXEMPT_RTOL` of it is dropped from the `surface_loss` bound
 alone, re-admitted at the wider `surface_loss_floor_exempt_exit_rtol` so a
@@ -418,7 +417,7 @@ non-finite value, a negative density or energy, or a fractional change past
 `max_energy_step_fraction` where those are set; rejection events and constraint
 histories are stored for post-run diagnostics.
 
-`raw_stage_validation` additionally inspects both SSPRK candidates, the implicit
+Raw-stage validation additionally inspects both SSPRK candidates, the implicit
 heat candidate and the neutral-only candidate *before* floors are applied,
 covering $n$, $n_n^\text{col}$, $n_n^\text{ann}$, $E_e$ and $E_i$, with non-finiteness scanned
 over the whole packed vector; a failed candidate carries its raw rejection

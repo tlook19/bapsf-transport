@@ -2124,7 +2124,7 @@ class LAPDSim1D:
         # legitimate true-vacuum start under the tracer, and the construction
         # floor would otherwise clip it to ``ne_floor`` before any feature
         # existed to object. Everything it validates is already built (the
-        # floors, the geometry, both config namespaces, the topology flag).
+        # floors, the geometry, both config namespaces).
         self._configure_regime_tracer()
         # Shaped initial neutral fill (default off, bit-exact off). Armed
         # HERE, before the initial condition is built, because the initial

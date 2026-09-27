@@ -277,7 +277,7 @@ CHANNEL_PHASE = {
     "hyperbolic_dissipation_heating":
         ("BOTH",
          "Rusanov numerical kinetic-energy dissipation deposited into the "
-         "ion internal energy; this row IS the energy-consistent selector's "
+         "ion internal energy; this row IS the energy-consistent core's "
          "whole energy booking, and nothing rides pressure_work"),
     "hyperbolic_energy_correction":
         ("BOTH",

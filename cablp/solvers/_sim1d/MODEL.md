@@ -289,8 +289,8 @@ $-p_{s,i}\left.\nabla_\parallel\cdot u\right|_i$ with
 
 $$\left.\nabla_\parallel\cdot u\right|_i=\frac{A_{i+1/2}u_{i+1/2}-A_{i-1/2}u_{i-1/2}}{V_{\text{col},i}},$$
 
-and the `hyperbolic_energy_consistent` selector does not move it. What the
-selector changes is the convective momentum flux (the kinetic-energy-preserving
+and the energy-consistent hyperbolic core leaves it as it is. What the core
+sets is the convective momentum flux (the kinetic-energy-preserving
 $\lbrace u\rbrace\lbrace M\rbrace$ form) and the booking of $Q_\text{diss}$; it adds nothing to the
 energy rows' pressure term.
 
@@ -554,8 +554,7 @@ $f$ = `heat_flux_limiter_f` the free-streaming fraction,
 `heat_flux_limiter_exponent` its blending exponent (a value other than 1 gives
 $1/(1+(q_{SH}/q_\text{sat})^p)$), and $v_{th,e}=\sqrt{T_e/m_e}$. The flux caps
 at free-streaming where gradients are steep and recovers the local
-Spitzer–Härm law where they are shallow; `electron_heat_flux_limit = False`
-selects the unlimited local law.
+Spitzer–Härm law where they are shallow. The limiter is always on.
 
 ### Anode-mesh collection
 
