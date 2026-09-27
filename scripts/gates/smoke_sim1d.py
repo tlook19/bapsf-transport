@@ -29074,9 +29074,17 @@ def _case_anode_e_sheath_realised_equals_booked():
         diag["anode_e_sheath_booked_W"] * step_dt, step_booked,
         rtol=1.0e-12, atol=0.0,
     ), (diag["anode_e_sheath_booked_W"], step_dt, step_booked)
-    assert np.isclose(
+    # The step value is a difference of the cumulative ledger, so it cannot
+    # be resolved more finely than a few ulps of that ledger.
+    realised_tol = 8.0 * np.finfo(float).eps * max(
+        abs(sim._anode_e_sheath_ledger_J["realised"]),
+        abs(before["realised"]),
+    )
+    assert abs(
+        diag["anode_e_sheath_realised_W"] * step_dt - step_realised
+    ) <= realised_tol, (
         diag["anode_e_sheath_realised_W"] * step_dt, step_realised,
-        rtol=1.0e-12, atol=0.0,
+        realised_tol,
     )
 
 
