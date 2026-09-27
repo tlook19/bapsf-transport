@@ -144,6 +144,7 @@ from .physics.flux import (
     ion_sound_speed,
     plasma_flux_rhs,
     plasma_flux_rhs_terms,
+    plasma_front_flux_rhs,
 )
 from .physics.neutrals import (
     GAS_PUFF_DIAGNOSTIC_FIELDS,
@@ -3288,10 +3289,12 @@ class LAPDSim1D:
             **momentum_sink_terms,
             **geometry_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
-            # Constant zero row: the front-filling flux it carried is
-            # removed. The ROW is kept so the saved term set does not move;
-            # nothing writes it.
-            "plasma_front_flux": self._zero_rhs_state(),
+            # The front-filling flux it carried is removed; the ROW is kept,
+            # at the divergence of zero face fluxes on the same geometry and
+            # under the same mask as before, so the saved bytes do not move.
+            "plasma_front_flux": plasma_front_flux_rhs(
+                self._plasma_geometry()
+            ),
             # Permanently zero since the legacy volumetric absorber was
             # retired; see commit 1fc05c9. The ROW is kept because it is
             # part of the saved ledger schema that existing artifacts and

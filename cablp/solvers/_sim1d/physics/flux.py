@@ -217,6 +217,23 @@ def plasma_flux_rhs_terms(
     }
 
 
+def plasma_front_flux_rhs(geometry):
+    """Return the ``plasma_front_flux`` row: the divergence of zero face fluxes.
+
+    The front-filling flux is removed; this row is the value it had with the
+    flux off, computed through the same divergence, so a signed zero comes out
+    where that operation gives one.
+    """
+    # Kept at the value base computed until the saved-structure change removes it.
+    zeros = np.zeros(geometry.cells + 1, dtype=float)
+    return _flux_rhs(
+        PlasmaFaceFluxes1D(
+            n=zeros, M=zeros.copy(), Ee=zeros.copy(), Ei=zeros.copy()
+        ),
+        geometry,
+    )
+
+
 def _flux_rhs(fluxes, geometry):
     return ConservativeState1D(
         n=_flux_divergence(fluxes.n, geometry),
