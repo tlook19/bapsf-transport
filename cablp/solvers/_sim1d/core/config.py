@@ -490,8 +490,7 @@ def neutral_source_defaults():
         added to the background neutral density. The diverted neutrals are
         debited from the puff and booked as an ionization source under the
         same birth-temperature and ionization-cost conventions as bulk
-        ionization (``Te_birth_ionization``, ``Ti_birth_ionization``,
-        ``ionization_birth_energy_model``), so the term conserves mass and
+        ionization (``Ti_birth_ionization``), so the term conserves mass and
         energy. It is built from the configured puff shape and waveform, so
         it is localized wherever the puff is and follows the same time
         dependence. Must be in ``[0, 1)``; ``0`` returns a zero source
@@ -762,16 +761,11 @@ def model_mode_defaults():
         diagnostics as a label. ``"end_wall"`` is the only accepted value;
         the 0D-era ``"mirrored_source"`` alternative, which the conservative
         solver never branched on, was removed at D3 (2026-08-21) and raises.
-    Te_birth_ionization:
-        Electron birth temperature model for ionization. Options are
-        ``"local"`` to use the local electron temperature, ``"floor"`` to use
-        the electron temperature floor, or a numeric eV value.
     Ti_birth_ionization:
         Ion birth temperature model for ionization -- the temperature the ion
         BORN by bulk ionization, by a beam ionization, and by the gas-puff
-        local-ionization channel carries. Options are ``"local"`` (the local
-        ion temperature), ``"floor"`` (the ion temperature floor),
-        ``"neutral"`` (the default), or a numeric eV value.
+        local-ionization channel carries. Options are ``"neutral"`` (the
+        default) or a numeric eV value.
 
         ``"neutral"`` is the option that PAIRS with the neutral energy field:
         the ion is born at the local neutral temperature
@@ -783,31 +777,19 @@ def model_mode_defaults():
         neutral temperature, and the birth falls back to the cold-gas scalar
         ``Tn_K``.
 
-        ``"floor"``, ``"local"`` and a numeric value are NON-CONSERVING
-        against an evolved ``En``: the sink still removes ``(3/2) k Tn`` per
-        ionized atom while the ion is born at an unrelated temperature, and
-        the difference leaves the model. That difference is reported per cell
-        and per save by the ``ionization_birth_thermal_deficit_*_W_cm3``
-        diagnostic rows, which read zero to roundoff under ``"neutral"``. They
-        stay selectable, and warn, so a pre-adoption artifact can be reproduced
-        bit-for-bit.
-    ionization_birth_energy_model:
-        How ionization births book their energy moments. ``"legacy"``
-        (historical): the electron birth adds ``3/2 Te_birth S_ion`` to ``Ee``
-        and the ion birth adds ``3/2 Ti_birth S_ion`` to ``Ei``; under
-        ``Te_birth_ionization="local"`` the electron term creates ``3 Te/2`` of
-        thermal energy per new electron, cancelling most of the ionization
-        potential cost -- unphysical (a new electron carries no kinetic energy).
-        ``"conservative"`` (default): reconciles bulk (and beam) births to the
-        defensible
-        ``Ee = 0`` convention the beam already uses -- the new electron is born
-        cold, so ``Te`` falls by dilution -- and books the ion mass-loading
-        relative-drift mixing energy ``1/2 m (u_i - u_n)^2 S_ion`` to ``Ei``
-        explicitly, so ion total energy (internal + kinetic) closes to the
-        consumed neutral's energy instead of losing the drift energy through the
-        bulk kinetic derivative. Under ``"conservative"`` the
-        ``Te_birth_ionization`` selector is inert (the electron birth energy is
-        physically zero).
+        A numeric value is NON-CONSERVING against an evolved ``En``: the sink
+        still removes ``(3/2) k Tn`` per ionized atom while the ion is born at
+        an unrelated temperature, and the difference leaves the model. That
+        difference is reported per cell and per save by the
+        ``ionization_birth_thermal_deficit_*_W_cm3`` diagnostic rows, which
+        read zero to roundoff under ``"neutral"``.
+
+        Ionization births book their energy moments on one convention, for
+        bulk, beam and gas-puff births alike: the new electron is born cold
+        (``Ee`` gains nothing, so ``Te`` falls by dilution), and the ion gains
+        ``3/2 Ti_birth S_ion`` plus the mass-loading relative-drift mixing
+        energy ``1/2 m (u_i - u_n)^2 S_ion``, so ion total energy (internal +
+        kinetic) closes to the consumed neutral's energy.
     neutral_exchange_model:
         Axial neutral transport model. ``"constant"`` uses a fixed coefficient.
 
@@ -1388,9 +1370,6 @@ def model_mode_defaults():
         "hyperbolic_wave_speed": "adiabatic",
         "end_mode": "end_wall",
         "Ti_birth_ionization": "neutral",
-        # "conservative": no spurious 3Te/2 electron birth energy; ion
-        # mass-loading mixing energy booked explicitly.
-        "ionization_birth_energy_model": "conservative",
         "neutral_exchange_model": "knudsen",
         # The ratified v1-primary: conductances frozen at Tn_K. Read only under
         # the neutral_energy flag, which ships ON.
@@ -1408,9 +1387,6 @@ def model_mode_defaults():
         "operator_splitting": "strang",
         "implicit_heat_scheme": "tr_bdf2",
         # --- INERT under these defaults (kept for the A/B arms) ---
-        # Dead under ionization_birth_energy_model="conservative" (electron
-        # birth energy is physically zero):
-        "Te_birth_ionization": "local",
         # Dead under neutral_model="moment" (the K4a kinetic engine, gated on
         # neutral_two_zone, is the only consumer):
         "neutral_kinetic_refresh_s": 5e-4,
@@ -2008,70 +1984,28 @@ def cathode_defaults():
         well-posed version of the inductive kick. It bounds a REGIME of the
         solve rather than describing a drop the device sustains, so the
         ceiling value is reported as ``phi_c`` for as long as that regime
-        holds, and every consumer keyed to ``phi_c`` (notably the tail birth
-        energy under ``heating_anomalous_tail_energy_keying="phi_c"``) sees it.
+        holds, and every consumer keyed to ``phi_c`` (notably the top of the
+        multi-group plateau spectrum) sees it.
         This cap is a domain guard on the atomic data and holds in every
         regime.
     b_beam_excitation:
         Scale on the neutral-excitation cross section added to the primary
-        beam's inelastic channels. ``0`` (default) is the historical beam:
-        ionization-only attenuation and every deposited eV heating the
-        plasma. Nonzero adds beam-driven neutral excitation, whose ~21-22 eV
-        per event radiates away promptly as He I light (the
-        ``beam_excitation_radiation`` term) and whose cross section shortens
-        the beam's inelastic deposition length. What the scale multiplies
-        depends on ``beam_excitation_model``: under ``"2p_scalar"`` it scales
-        the 2^1P cross section alone, so ``1.0`` books that channel and a
-        larger value stands in for the rest of the singlet manifold; under
-        ``"manifold"`` it scales the measured manifold sum, so it is a pure
-        sensitivity multiplier whose benchmark value is ``1.0``.
-        Triplet/metastable excitation is exchange-driven and collapses above
-        ~50 eV, so it is deliberately absent. He-only.
-    beam_excitation_model:
-        Which cross-section set the beam's excitation channel uses.
-        ``"2p_scalar"`` (default, historical): the single 2^1P cross section
-        with ``beam_excitation_energy_eV`` radiated per event.
-        ``"manifold"``: the summed Ralchenko et al. (2008) singlet manifold
-        (fitted n <= 4 levels plus the Eq. (5) n >= 5 tail,
-        ``atomic.coefficients.He_singlet_manifold``) with the energy-weighted mean
-        radiated energy per event computed at the beam energy. Over 60-180 eV
-        the manifold gives 1.65-1.75x the 2^1P events and 1.71-1.81x its
-        radiated power, so it is knob-free where ``"2p_scalar"`` needs
-        ``b_beam_excitation`` to stand in for the missing levels. The
-        current-driven sheath consumes the channel through
-        ``beam_excitation_channel``.
+        beam's inelastic channels in the cathode sheath solve. ``0``
+        (default) is ionization-only attenuation. Nonzero adds beam-driven
+        neutral excitation, whose ~21-22 eV per event radiates away promptly
+        as He I light and whose cross section shortens the beam's inelastic
+        deposition length. It scales the 2^1P cross section alone, so ``1.0``
+        books that channel and a larger value stands in for the rest of the
+        singlet manifold. Triplet/metastable excitation is exchange-driven
+        and collapses above ~50 eV, so it is deliberately absent. He-only.
     beam_excitation_energy_eV:
-        Threshold and radiated energy per beam excitation event [eV]
-        (the 2^1P excitation energy). Used by ``"2p_scalar"`` only; under
-        ``"manifold"`` the thresholds and radiated energies come from the
-        manifold registry and this key is inert.
-    beam_deposition_model:
-        How the primary beam deposits along the column.
-        ``"beer_lambert"`` (historical): single-event absorption
-        over the mixed Coulomb/inelastic profile (``l_b_profile`` +
-        ``beam_absorption_weights``). ``"csda"`` (default): the deterministic
-        slowing-down module (``cathode/beam_deposition.deposit_beam``, a pure
-        function of the beam and the column — B2):
-        primaries survive multiple inelastic events, per-cell ionization/
-        excitation/heating/radiation come from the integrated ray, and the
-        sheath solve's bypass fraction is driven by the module's gap
-        transmission through an effective attenuation cross section at the
-        launch cell (exact when the transmission is at or below the frozen
-        solve's Coulomb-only ceiling ``exp(-L_cath/l_bi)``; clamped to the
-        ceiling otherwise). Under ``"csda"`` the ``b_beam_excitation`` and
-        ``beam_excitation_model`` knobs are inert — the module always uses
-        the measured manifold, knob-free. He-only.
-    beam_coulomb_model:
-        Coulomb drag closure for the CSDA module (inert under
-        ``"beer_lambert"``). ``"fast_electron"`` (default): the physical
-        stopping power ``dE/dx = 2 pi e^4 n_e lnL / E`` (~30 m e-fold at
-        150 eV, n_e = 5e12). ``"legacy_tau_ei"``: the historical
-        ``v(E) tau_ei(Te)`` form (~1 m; overestimates classical drag ~30x).
-        Both parameter-free.
+        Threshold and radiated energy per beam excitation event [eV] (the
+        2^1P excitation energy) in the cathode sheath solve's excitation
+        channel.
     beam_anomalous_model:
-        Anomalous (beam-plasma instability) drag for the CSDA module (inert
-        under ``"beer_lambert"``). A declared closure BRACKET of three arms; a
-        result states which one produced it.
+        Anomalous (beam-plasma instability) drag for the CSDA deposition
+        module (``cathode/beam_deposition.deposit_beam``). A declared closure
+        BRACKET of three arms; a result states which one produced it.
         ``"none"``.
         ``"quasilinear"`` (default): mean-energy relaxation over
         ``l_QL = (n_e/n_b)(v_b/w_pe) ln(n_e/n_b)`` (~5-10 cm at production
@@ -2099,77 +2033,17 @@ def cathode_defaults():
         value. Must be finite and > 0 or construction raises. It is a
         REGISTERED BRACKET rather than a tuned number, and results under this
         closure are quoted at the bracket endpoints, not at the default alone.
-    beam_product_transport:
-        Where the CSDA ray's event PRODUCTS deposit (inert under
-        ``"beer_lambert"``, which never launches the module; selecting the
-        non-default value there raises). ``"local"`` (default, historical,
-        bit-exact): the mean secondary energy ``<W_sec>`` per ionization and
-        the primary's terminal sub-threshold residual are banked as plasma
-        heating in the cell where the event happened — perfect local
-        confinement. ``"nonlocal"``: each product
-        instead walks along B from its birth cell on its own mini-CSDA
-        Coulomb slowing integral (the SAME ``beam_coulomb_model`` the primary
-        uses), depositing until it thermalizes at the local Maxwellian mean
-        ``1.5*Te`` or leaves an end, where its remaining energy is booked to
-        the new END LEDGER and leaves the system. Secondaries split 50/50
-        into +z/-z half-weight walks (broadly isotropic OPB emission);
-        the terminal residual keeps the primary's direction.
-        ``"terminal_nonlocal"``: the MIDDLE point -- the terminal residual
-        walks exactly as under ``"nonlocal"`` (same machinery, same
-        thermalization rule, same end ledger) while every ALONG-RAY product,
-        the secondaries included, is banked in its birth cell exactly as under
-        ``"local"``. It differs from ``"nonlocal"`` in one further booking:
-        the transmitted primary keeps its own term instead of joining the end
-        ledger (so under this value the ledger holds the walked terminal
-        escape alone). Not available on the compiled kernel, which takes
-        product transport as a single boolean covering both populations and
-        so cannot express one walking without the other; selecting it takes
-        the Python march. Motivation: at
-        breakdown both products sit BELOW every He inelastic threshold and
-        Coulomb-couple at ~1 eV per machine pass (n_e ~ 1e10), i.e. they are
-        near-collisionless along B exactly where ``"local"`` assumes perfect
-        confinement. Under ``"nonlocal"`` the end ledger also books the
-        transmitted PRIMARY's ``Gamma_t*E_t``, closing a standing hole
-        (computed since B1, never
-        banked). Parameter-free; no pitch-angle diffusion and no elastic
-        e-He channel (~5 meV/collision) — stated limitations. ENERGY-ONLY:
-        ionization events and the particle rows are
-        identical under all three values, and so are the circuit currents
-        except for the one charge channel ``"terminal_nonlocal"`` adds at an
-        armed vessel node. The three settings are a bracket, not a
-        prediction, so a result must state which one it used.
     heating_anomalous_transport:
-        Where the CSDA ray's ANOMALOUS (quasilinear) heating lands (inert
-        under ``"beer_lambert"``, and requires an active anomalous channel;
-        selecting the non-default value without either raises). ``"local"``
-        (default, historical, bit-exact): the QL drag is banked as
-        instantaneous local bulk electron heating in the cell that drove it —
-        the Langmuir turbulence Landau-damps near where it grows, so its
-        energy is handed to the background there. ``"tail_walk"``:
-        quasilinear diffusion does not warm a
-        Maxwellian in place, it fills a fast-tail plateau first, and at
-        breakdown densities a tail electron is collisionally decoupled
-        (Coulomb range ~km at n_e ~ 1e10, hundreds of machine lengths) and
-        free-streams along B. Under ``"tail_walk"`` each cell's QL power is
-        withheld and carried by tail electrons at
-        ``heating_anomalous_tail_energy_eV``, launched along +-B on the split
-        ``heating_anomalous_tail_forward_fraction`` states (50/50 by default)
-        and walked on the SAME closed-form Coulomb machinery the
-        ``beam_product_transport`` product walks use (the ray's own
-        ``beam_coulomb_model``, the same ``1.5*Te`` thermalization floor) — no
-        new physics parameters beyond the tail energy. Energy still hot at a
-        domain end goes to a SEPARATE tail end ledger (kept apart from the
-        product ledger so both stay readable when the two closures are on
-        together) and leaves the system.
-        Motivation: this is an effective heating lag plus an end loss during
-        exactly the e-folds that set the avalanche growth rate. ``"tail_walk"``
-        is the FREE-ESCAPE bound (no sheath/ambipolar throttle), so
-        {local, tail_walk} is a bracket, not a prediction, and a result must
-        state which one it used. ENERGY-ONLY: ionization events, the particle
-        rows and the circuit currents are identical in both modes.
-        ``"plateau_multigroup"``: the quasilinear plateau is not one energy,
-        and this value carries the SPECTRUM instead of a line. In the flux
-        frame the relaxed distribution is flat over the resonant band, so
+        Where the CSDA ray's ANOMALOUS (quasilinear) heating lands. Selecting
+        the non-default value without an active anomalous channel raises.
+        ``"local"`` (default): the QL drag is banked as instantaneous local
+        bulk electron heating in the cell that drove it — the Langmuir
+        turbulence Landau-damps near where it grows, so its energy is handed
+        to the background there.
+        ``"plateau_multigroup"``: quasilinear diffusion does not warm a
+        Maxwellian in place, it fills a fast-tail plateau, and the plateau is
+        not one energy, so this value carries the SPECTRUM. In the flux frame
+        the relaxed distribution is flat over the resonant band, so
         ``dGamma/dE`` is flat and ``dP/dE`` goes as ``E`` from the plateau
         EDGE ``E_1`` up to the beam energy ``E_b = e*phi_c``. ``E_1`` is a
         state-dependent solve, not a dial: it is where the flat plateau meets
@@ -2182,232 +2056,87 @@ def cathode_defaults():
         extraction cells, and a STREAMING share ``(E_b + E_1)/2E_b`` split
         into ``N`` equal-power groups with ``E^2``-uniform edges (equal power
         AND equal classical range by construction), each launched at its
-        arithmetic-midpoint energy and walked by exactly the machinery
-        ``"tail_walk"`` uses. Nothing is fitted and no new parameter appears:
-        the shares, edges and weights all follow from the flat plateau. The
-        two single-line arms are its two heirs taken one at a time, which is
-        why the ``f`` dial, the fixed rung and the keying selector are all
-        INERT under it and are REFUSED at construction rather than ignored.
-        The range law is unchanged (classical Coulomb). ENERGY-ONLY in the
-        same sense as ``"tail_walk"``, and it inherits that value's tail
-        ionization, cathode-boundary and end-ledger conventions unchanged.
-        Not supported under ``coverage_closure`` (the two-stream march shares
-        one withholding bank and its reservoir carries the density floor, so
-        an edge solved there would be a floor artifact) -- that raises.
-    heating_anomalous_disposal:
-        How each cell's extracted anomalous power is SPLIT between the local
-        bulk and the walked tail (inert under ``"beer_lambert"``, and requires
-        an active anomalous channel; selecting the non-default value without
-        either raises). ``"local"`` (default, bit-exact): no split — the
-        disposition is whatever ``heating_anomalous_transport`` says, which is
-        all-or-nothing. ``"landau_branched"``: the wave the beam drives loses
-        its energy through two channels at once, Landau damping on the resonant
-        electrons (which makes a nonlocal tail) and collisional damping of the
-        wave (which makes local bulk heat), and their ratio is a COMPUTED
-        property of each cell rather than a choice —
-        ``f_Landau = gamma_L / (gamma_L + nu_en/2)`` with ``nu_en = nn*K_m(Te)``
-        on the boxed He e-n momentum-transfer coefficient and ``gamma_L`` the
-        Maxwellian Landau rate at the beam-resonant phase velocity
-        (``cathode.beam_deposition.landau_branching_fraction``, which carries the
-        formula and its ``v_phi/v_te`` validity caveat). That share of each
-        cell's power is walked exactly as ``"tail_walk"`` walks all of it —
-        same birth energy, launch, Coulomb machinery, cathode and end wall
-        conventions and tail end ledger — and ``1 - f_Landau`` is banked
-        locally exactly as ``"local"`` banks all of it. NO new physical
-        constant: the branching is computed from boxed inputs and the birth
-        energy is the existing ``phi_c`` keying.
-        The ``heating_anomalous_transport`` values ``"tail_walk"`` and
-        ``"local"`` are the ``f_Landau ≡ 1`` and ``f_Landau ≡ 0`` corners of
-        this one, so selecting ``"landau_branched"`` together with any
-        non-``"local"`` transport RAISES — both name a disposition for the
-        same bank. ``"landau_branched"`` requires
-        ``heating_anomalous_tail_energy_keying="phi_c"`` (the registered birth
-        energy is the live cathode drop, and the fixed rung is an assumed
-        constant this closure does not carry) with
-        ``heating_anomalous_tail_phi_c_fraction`` stated explicitly, and it
-        RAISES under ``coverage_closure``: the two-stream march shares one
-        withholding bank between the channel and reservoir arms and the
-        reservoir carries the density FLOOR, so a branching there would be an
-        artifact of the floor convention (see
-        ``cathode.beam_deposition.deposit_beam_two_stream``). ENERGY-ONLY,
-        exactly like ``heating_anomalous_transport``.
-    heating_anomalous_tail_energy_eV:
-        QL plateau energy ``E_tail`` [eV] the tail electrons are launched at.
-        **Read ONLY when the QL tail is WALKED (``heating_anomalous_transport
-        ="tail_walk"``; ``heating_anomalous_disposal="landau_branched"`` walks
-        only the Landau share) WITH
-        ``heating_anomalous_tail_energy_keying="fixed"``** -- inert otherwise,
-        and supplying a value other than the shipped one under
-        ``"phi_c"`` keying or under
-        ``heating_anomalous_transport="plateau_multigroup"`` (where the birth
-        energies are the derived group midpoints) raises rather than being
-        silently ignored. Must be
-        finite and > 0. It sets the walkers' Coulomb
-        range and therefore how far the QL power travels before thermalizing;
-        the equivalent tail flux is ``P_QL / E_tail``, so the power carried is
-        independent of it. The plateau energy is a kinetic quantity a fluid
-        model cannot pin, so this is an ASSUMED value and a run that uses it
-        must report a bracket rather than a single number.
+        arithmetic-midpoint energy along +-B on the
+        ``heating_anomalous_tail_forward_fraction`` split and walked on the
+        CSDA module's Coulomb slowing machinery (the fast-electron
+        stopping power, a ``1.5*Te`` thermalization floor). Nothing is fitted
+        and no new parameter appears: the shares, edges and weights all
+        follow from the flat plateau. Energy still hot at a domain end goes to
+        a SEPARATE tail end ledger and leaves the system.
+        The walkers IONIZE and EXCITE the column gas they pass through: each
+        group is marched on the CSDA module's own integration, attenuating on
+        the local COLUMN neutral density (under ``neutral_two_zone`` the
+        column channel ``nn``) with the He ionization and excitation cross
+        sections at the walker's CURRENT energy, simultaneously with its
+        Coulomb slowing. Each ionization event births one ion/electron pair at
+        the event cell on the beam's own birth convention, invests ``I_ion``,
+        banks the mean secondary ``<W_sec>`` as local electron heat and each
+        excitation threshold as radiation; what still reaches a domain end
+        goes to the tail end ledger. The two depth-1 truncation bars are
+        evaluated PER GROUP on each group's midpoint energy: at or below the
+        lowest inelastic threshold a group reverts to the energy-only walk
+        (exact, since no inelastic channel is open there), and above the
+        ``<W_sec>(E)`` crossing it marches with the depth-1 truncation, which
+        there understates the tail's ionization by a MEASURED <= 2.0%. The
+        power in each band is carried in the tail diagnostics
+        (``beam_tail_sub_threshold_power_W`` /
+        ``beam_tail_sub_threshold_fraction`` /
+        ``beam_tail_above_bar_power_W``), so neither regime is silent. A
+        group energy past the tabulated He EII cross section is refused at
+        every cathode solve; the edge is INCLUSIVE within a relative tolerance
+        of 1e-12 (``_beam_deposition.HE_EII_EDGE_REL_TOL``), because
+        ``phi_c`` at ``cathode_phi_c_cap_V`` can put the top of the spectrum
+        on the edge to the last bit.
+        The range law is classical Coulomb. Not supported under
+        ``coverage_closure`` (the two-stream march shares one withholding bank
+        and its reservoir carries the density floor, so an edge solved there
+        would be a floor artifact) -- that raises.
     heating_anomalous_tail_forward_fraction:
         The share of each launched tail population sent along +z -- the
         direction from the cathode toward the end wall, the one the beam
         itself travels and the one the ``_tail_high`` end-loss row books. The
         remaining ``1 - f`` is launched along -z. **Read ONLY when the QL tail
-        is WALKED** (``heating_anomalous_transport="tail_walk"`` or
-        ``"plateau_multigroup"``, or
-        ``heating_anomalous_disposal="landau_branched"``) -- inert otherwise,
-        and a non-default value without one of them raises rather than being
-        silently ignored. Dimensionless, in ``[0.5, 1.0]``; anything outside
-        that range, and any non-finite value, raises at construction. ``0.5``
-        (default, bit-exact): the symmetric launch. ``1.0``: no -z walker is
-        launched at all. It applies to every walked-tail route -- the ionizing
-        march, the energy-only walk and its reflecting-face arms, and every
-        plateau group. The launched POWER is ``flux * E_tail`` at any split, so
-        this key moves where the tail power is delivered and never how much of
-        it there is; the cathode-boundary, ionization and end-ledger
-        conventions are untouched.
-    heating_anomalous_tail_energy_keying:
-        How the tail birth energy ``E_tail`` is set. **Read ONLY when the QL
-        tail is WALKED** (``heating_anomalous_transport="tail_walk"`` or
-        ``heating_anomalous_disposal="landau_branched"``) -- inert otherwise,
-        and the branched disposal accepts ``"phi_c"`` alone.
-        ``heating_anomalous_transport="plateau_multigroup"`` keys the
-        spectrum's TOP to the live ``e*phi_c`` and its BOTTOM to the solved
-        plateau edge, so there is no rung to select: a non-default keying
-        raises there rather than being ignored.
-        ``"phi_c"`` (default): ``E_tail = f * e*phi_c(t)``, keyed to the LIVE
-        cathode accelerating drop of the ray that drove the QL power, with
-        ``f`` from ``heating_anomalous_tail_phi_c_fraction``. ``"fixed"``: the
-        constant ``heating_anomalous_tail_energy_eV``, the WP-E/K6 behaviour,
-        bit-exact when selected. The plateau is filled by a beam whose energy
-        IS ``phi_c``, so a fixed rung makes the walkers' reflection margin at
-        the sheath an accident of how far the drive happens to sit from that
-        rung; keying removes that dependence. Under ``"phi_c"`` with
-        ``heating_anomalous_tail_ionization="on"`` the two depth-1 truncation
-        bars are evaluated on the LIVE ``E_tail`` at every solve, so which
-        band the walkers march in is a per-frame property of the DRIVE rather
-        than of the configuration: a cold foot sits below the lower bar and
-        the march reverts to the energy-only walk there, and ``f = 1.0``
-        crosses the upper bar at production drive and marches under the
-        disclosed depth-1 understatement. Both are recorded per frame in the
-        tail diagnostics (``beam_tail_sub_threshold_power_W`` /
-        ``beam_tail_sub_threshold_fraction`` /
-        ``beam_tail_above_bar_power_W``), so neither regime is silent.
-    heating_anomalous_tail_phi_c_fraction:
-        The fraction ``f`` in ``E_tail = f * e*phi_c(t)``. **Read ONLY under
-        ``heating_anomalous_tail_energy_keying="phi_c"``**; must be ``None``
-        under ``"fixed"``, where supplying one would silently do nothing, and
-        must be ``None`` under
-        ``heating_anomalous_transport="plateau_multigroup"``, whose derived
-        spectrum spans the whole band and carries BOTH ends of this bracket
-        at once.
-        ``None`` (default) selects the shipped arm ``f = 0.25``, except under
-        ``heating_anomalous_disposal="landau_branched"``, which requires the
-        arm to be stated and raises on ``None``. The only
-        accepted values are the DECLARED BRACKET ``{0.25, 0.5, 1.0}`` -- any
-        other value raises, because ``f`` is a bracket the campaign reports
-        across and never a fitted number.
+        is WALKED** (``heating_anomalous_transport="plateau_multigroup"``) --
+        inert otherwise, and a non-default value without it raises rather than
+        being silently ignored. Dimensionless, in ``[0.5, 1.0]``; anything
+        outside that range, and any non-finite value, raises at construction.
+        ``0.5`` (default): the symmetric launch. ``1.0``: no -z walker is
+        launched at all. It applies to every plateau group. The launched POWER
+        is ``flux * E`` at any split, so this key moves where the tail power is
+        delivered and never how much of it there is; the cathode-boundary,
+        ionization and end-ledger conventions are untouched.
     heating_anomalous_tail_cathode_boundary:
         What the CATHODE end does to a tail walker that reaches it. **Read
-        ONLY when the QL tail is WALKED** (``heating_anomalous_transport=
-        "tail_walk"`` or ``"plateau_multigroup"``, or
-        ``heating_anomalous_disposal="landau_branched"``)
-        -- inert otherwise. ``"reflect"`` (default): a walker arriving at the cathode
+        ONLY when the QL tail is WALKED**
+        (``heating_anomalous_transport="plateau_multigroup"``) -- inert
+        otherwise. ``"reflect"`` (default): a walker arriving at the cathode
         face of the plasma-active window with energy below ``e*phi_c(t)`` is
         turned around at the same energy and keeps walking; only a walker at or
-        above that drop escapes. ``"escape"``: the WP-E/K6 free-escape
-        convention, in which every walker reaching the face leaves and its
-        energy is booked to the tail end ledger -- selectable, and bit-exact
-        when selected. The cathode sits at an accelerating drop of a few
-        hundred volts through drive, above every plateau energy the bracket
-        carries, so free escape there deletes tail power the sheath in fact
+        above that drop escapes. ``"escape"``: the free-escape convention, in
+        which every walker reaching the face leaves and its energy is booked
+        to the tail end ledger. The cathode sits at an accelerating drop of a
+        few hundred volts through drive, at or above every plateau group
+        energy, so free escape there deletes tail power the sheath in fact
         returns to the column. Under ``"reflect"`` the cathode-face row of the
         tail end ledger (``source_beam_end_loss_tail_low_W``) is therefore
-        EXACTLY ZERO for the whole of a ``"phi_c"``-keyed run -- birth energy
-        ``f*e*phi_c`` with ``f <= 1`` against a threshold of ``e*phi_c``, and
-        walkers only lose energy -- but NOT for a ``"fixed"``-keyed one, where
-        the rung is decoupled from the drive and any frame with
-        ``e*phi_c`` below the rung lets walkers out through that face. A reader
-        deriving the escaping fraction must sum the whole end ledger rather
-        than name the far-end row alone. Selecting ``"reflect"`` also makes the
-        plasma-active window bound the ENERGY-ONLY walk (which otherwise runs
-        the whole grid): the reflecting face has to be a face the walk stops
-        at. Reflection is total by construction, with no partial-reflection
+        EXACTLY ZERO -- every group is born below ``e*phi_c`` and walkers only
+        lose energy. A reader deriving the escaping fraction must still sum
+        the whole end ledger rather than name the far-end row alone.
+        Reflection is total by construction, with no partial-reflection
         coefficient -- the radial fraction of the returning tail that misses
         the emitting disc is UNSIZED in 1D and is a documented limitation, not
         a knob. Requires a single cathode: with ``TwinCathode`` both window
         faces reflect, trapping the walkers, and that raises.
-    heating_anomalous_tail_ionization:
-        Whether the QL tail walkers may IONIZE and EXCITE the column gas they
-        pass through. **Read ONLY when the QL tail is WALKED**
-        (``heating_anomalous_transport="tail_walk"`` or
-        ``"plateau_multigroup"``, or
-        ``heating_anomalous_disposal="landau_branched"``) -- inert otherwise,
-        and selecting ``"on"`` without one of them raises. Under
-        ``"plateau_multigroup"`` the two depth-1 bars below are evaluated PER
-        GROUP, on each group's own midpoint energy, so the band exposures
-        become power-weighted shares of the launched streaming bank rather
-        than all-or-nothing. ``"off"`` (default, bit-exact):
-        the walk is energy-only, the walkers Coulomb-slow and nothing else, and
-        every particle row is what it would be under ``"local"``. ``"on"``: each
-        tail population is marched on the CSDA module's own integration, so it
-        attenuates on the local COLUMN neutral density (under
-        ``neutral_two_zone`` that is the column channel ``nn``, the only gas on
-        the walker's field line) with the He ionization and excitation cross
-        sections evaluated at the walker's CURRENT energy, simultaneously with
-        its Coulomb slowing. Each ionization event births one ion/electron pair
-        at the event cell on the same convention the beam's own births use,
-        invests ``I_ion``, banks the mean secondary ``<W_sec>`` as local
-        electron heat and each excitation threshold as radiation; the walker
-        continues on the reduced energy, and what still reaches a domain end
-        goes to the same tail end ledger the energy-only walk uses. So
-        ``"on"`` adds a PARTICLE channel where the rest of WP-E is
-        energy-only, and both settings share one end convention -- the flag
-        moves one thing.
-        Motivation: the omitted channel is negligible in the main discharge
-        (Coulomb blocking, thin target) but brushes materiality in the
-        breakdown foot, where it feeds back on the very density that
-        suppresses it.
-        BAND TREATMENT (K7b): the two depth-1 bars are still computed from the
-        thresholds themselves, but each selects a treatment for the ray rather
-        than refusing it, so a ``phi_c``-keyed arm can run from cold. At or
-        below the lowest inelastic threshold the ionizing march REVERTS to the
-        energy-only walk -- exact, since no inelastic channel is open there,
-        and bit-identical to what ``"off"`` would do for that frame. Above the
-        ``<W_sec>(E_tail)`` crossing the march RUNS with the depth-1
-        truncation, which there understates the tail's ionization by a
-        MEASURED <= 2.0%. Neither regime is silent: the tail diagnostics carry
-        the power marched in each. The one refusal left is a tail energy past
-        the tabulated He EII cross section, where the lookup would clamp to its
-        last node and the walk would attenuate on an extrapolated cross
-        section. That edge is checked against the table itself, and it is
-        checked in TWO places because they see different values: construction
-        tests ``heating_anomalous_tail_energy_eV``, which under ``"phi_c"``
-        keying is the inert fixed rung, and the deposition module tests the
-        LIVE ``E_tail = f*phi_c(t)`` at every cathode solve. The runtime one is
-        the binding check under keying, and it is REACHABLE: with ``f = 1.0``
-        and ``phi_c`` at ``cathode_phi_c_cap_V`` (the capability-limited
-        ceiling, a numerical bound on the sheath solve rather than a drop the
-        device sustains) ``E_tail`` lands on the edge to the last bit. The edge
-        is therefore INCLUSIVE within a relative tolerance of 1e-12
-        (``_beam_deposition.HE_EII_EDGE_REL_TOL``): within it the lookup is
-        clamped to the table's last node, which AT the edge is that node's own
-        value and not an extrapolation, and beyond it the march raises and the
-        message reports the measured relative excess.
     beam_tail_anode_reflected_particles:
         Reversed-walker rider, PARTICLE half (default 0.0 = the rider OFF,
         bit-exact). The share ``R_e`` of the QL tail walkers the anode mesh
         intercepts that come back off it, PER INCIDENT walker. Read ONLY
-        where the anode tail cull fires -- a resolved mesh
-        (``beam_anode_interception``) and a walked tail -- and refused with a
-        non-zero value anywhere else. Dimensionless, in ``[0, 1]``. At 0.0
-        nothing returns and the whole culled share lands on
-        the anode, which is the cull with no rider on top. The rider needs a
-        per-walker launch to reverse, so it additionally requires the marched
-        tail (``heating_anomalous_tail_ionization="on"``) and is refused, not
-        approximated, under the energy-only walk. A crossing whose incident
-        energy is below the module's rider energy floor returns nothing
-        whatever this value says: the walker is absorbed there.
+        where the anode tail cull fires -- a resolved mesh and a walked tail
+        -- and refused with a non-zero value anywhere else. Dimensionless, in
+        ``[0, 1]``. At 0.0 nothing returns and the whole culled share lands on
+        the anode, which is the cull with no rider on top. A crossing whose
+        incident energy is below the module's rider energy floor returns
+        nothing whatever this value says: the walker is absorbed there.
     beam_tail_anode_reflected_energy:
         Reversed-walker rider, ENERGY half (default 0.0 = OFF, bit-exact).
         The share ``eta_E`` of the intercepted walkers' incident ENERGY that
@@ -2449,8 +2178,7 @@ def cathode_defaults():
         unchanged. Because the width is a FIXED length (not a cell count) the
         deposition profile is mesh-convergent, which removes the grid-scale
         current-step artifact where the beam range crossing a cell boundary
-        kicks the sheath solve. CSDA only (inert under ``beer_lambert``). Must
-        be ``>= 0``.
+        kicks the sheath solve. Must be ``>= 0``.
     cathode_neutral_jet:
         Gives the neutral flux recycled at an absorbing CATHODE face directed
         axial momentum instead of rebirthing it at rest: a fraction
@@ -2674,37 +2402,20 @@ def cathode_defaults():
         "anode_radius_cm": None,
         "L_cath": 53.25,
         "R_cath": 18.415,
-        # --- ACTIVE: beam deposition (CSDA production stack; b_beam_excitation
-        # + beam_excitation_model are INERT under csda -- the module uses the
-        # measured manifold, knob-free -- and matter only for the beer_lambert
-        # A/B arm) ---
-        "beam_deposition_model": "csda",
-        "beam_coulomb_model": "fast_electron",
+        # --- ACTIVE: beam deposition (the CSDA march) ---
         "beam_anomalous_model": "quasilinear",
         # ql_relaxation's plateau-formation bracket constant. INERT unless that
         # closure is selected; the shipped value is the bracket's geometric
         # centre and every headline under the closure is quoted at 10 and 100
         # as well.
         "ql_relaxation_coeff": 30.0,
-        # Non-local product transport: DEFAULT OFF (bit-exact).
-        "beam_product_transport": "local",
-        # QL heating locality: DEFAULT OFF (bit-exact). The tail energy is
-        # inert under "local".
+        # QL heating locality: DEFAULT local (bit-exact).
         "heating_anomalous_transport": "local",
-        # Branched disposal of the extracted QL power: DEFAULT OFF
-        # (bit-exact). Inert under "local"; see the docstring above.
-        "heating_anomalous_disposal": "local",
-        "heating_anomalous_tail_energy_eV": 75.0,
         # Launch-direction split of the walked tail: DEFAULT SYMMETRIC
         # (bit-exact). Inert unless the tail is walked.
         "heating_anomalous_tail_forward_fraction": 0.5,
-        "heating_anomalous_tail_ionization": "off",
-        # K7 sheath-aware tail closure. Both keys are inert unless the walk is
-        # engaged, and when it is they DEFAULT TO THE CORRECTED closure; the
-        # WP-E/K6 arms stay reachable, and bit-exact, by naming "fixed" and
-        # "escape" explicitly.
-        "heating_anomalous_tail_energy_keying": "phi_c",
-        "heating_anomalous_tail_phi_c_fraction": None,
+        # The cathode face of the tail walk. Inert unless the tail is walked;
+        # "escape" is the free-escape arm.
         "heating_anomalous_tail_cathode_boundary": "reflect",
         # Reversed-walker rider on the anode tail cull: DEFAULT OFF
         # (bit-exact). Both are read only where the cull fires.
@@ -2716,7 +2427,6 @@ def cathode_defaults():
         "beam_clump_enhancement": 1.0,
         "beam_deposition_smoothing_cm": 0.0,
         "b_beam_excitation": 0.0,
-        "beam_excitation_model": "2p_scalar",
         "beam_excitation_energy_eV": 21.218,
         # --- cathode surface power balance ---
         "cathode_Ts_base_K": 1910.0,
@@ -3613,11 +3323,10 @@ input_flags_template_1d = {
     # stable in it. OFF takes one fully explicit SSPRK2 step and dt carries the
     # parabolic conduction bound. The scheme, splitting order and Picard count
     # of the substep are the implicit_heat_scheme / operator_splitting /
-    # heat_picard_iterations parameters. beam_deposition_in_heat_substep REQUIRES
-    # this flag -- it re-homes the beam electron-energy source out of A and into
-    # B, so with the split off the source would have nowhere to land; that is a
-    # construction-time raise, and a per-step raise if a caller asks a single
-    # step for operator_split=False while it is armed.
+    # heat_picard_iterations parameters. ON also re-homes the beam
+    # electron-energy deposition and the anode electron-sheath debit out of A
+    # and into B, so a caller asking a single step for operator_split=False
+    # while it is on is refused: those rows would have nowhere to land.
     "implicit_heat_conduction": True,
     # Flux-limited electron heat conduction. The classical Spitzer-Harm flux
     # can exceed the free-streaming scale n*Te*v_the at resolved gap faces,
@@ -3643,19 +3352,6 @@ input_flags_template_1d = {
     # plasma energy K+Ee+Ei telescopes LOCALLY, against a face flux that
     # carries the enthalpy.
     "hyperbolic_energy_consistent": True,
-    # Anode-mesh beam interception (R4): the CSDA beam
-    # ray launches the full emitted flux Gamma0 = I_eth_star/e through the
-    # whole column, so without this the fluid deposits the entire emitted beam
-    # while the circuit books only the (1 - eta*beam_bypass_fraction) fraction
-    # into the plasma. This adds the missing interception event at the
-    # anode-face crossing: the mesh solid fraction eta of the flux surviving
-    # the gap is removed (the anode surface takes I_bypass*V_b, the sheath
-    # returns I_bypass*phi_a to the circuit) and only (1 - eta) transmits
-    # downstream. Like beam_coulomb_model / beam_anomalous_model it is a csda
-    # control: inert under beam_deposition_model="beer_lambert" (which never
-    # launches the CSDA module) and where the resolved geometry has no anode
-    # faces. Set False for the with/without-interception A/B.
-    "beam_anode_interception": True,
     # Ion-neutral friction. Implemented as a SCALE TO ZERO rather than a branch:
     # off forces b_ion_neutral_drag = 0.0 in every collision bundle, which
     # short-circuits the drag term, its frictional heating, its neutral-energy
@@ -3933,21 +3629,6 @@ input_flags_template_1d = {
     # Set that key to 0.0 for the knife edge, where any real margin re-admits
     # the cell immediately.
     "surface_loss_floor_exempt": True,
-    # Include the beam_ionization_birth row in the resolved electrode/source
-    # ("surface_loss") timestep bound. Default OFF and bit-exact off.
-    #
-    # The row is in NO timestep bound today: the bundle carries only the
-    # boundary, anode-collection and cathode-surface rows, so beam-driven
-    # birth -- a volumetric plasma source of unbounded magnitude that CAN
-    # drive a cell into a floor within one step -- has never constrained dt.
-    # That is pre-existing and solver-wide, not specific to any arm, and the
-    # row is measured healthy on the current arms; this is insurance, not a
-    # hot fix.
-    #
-    # Turning it ON changes the suggested timestep wherever the row is live,
-    # so it MOVES THE GOLDEN and the default-flip decision is deliberately
-    # left open rather than taken here.
-    "beam_ionization_birth_timestep_bound": False,
     # Clumpy-plasma coverage closure v1. Breakdown in the machine is
     # azimuthally patchy -- discrete channels carry the discharge -- which the
     # 1D mean-field solver azimuthally averages away. When ON, a scalar
@@ -3959,8 +3640,7 @@ input_flags_template_1d = {
     # f_cov = 1 every factor reduces to the shipped model. Default OFF and
     # bit-exact off (presence-gated: the off path never builds the coverage
     # view and every consumer keeps its historical argument list). Requires
-    # coverage_initial_fraction, beam_deposition_model="csda",
-    # neutral_model="moment", no beam clumping, and the pure-Python kernels;
+    # coverage_initial_fraction, neutral_model="moment", no beam clumping, and the pure-Python kernels;
     # each is a construction-time ValueError.
     "coverage_closure": False,
     # Ad-hoc probe neutral source S_probe(z,t) = A p(z) w(t), a volumetric
@@ -4126,45 +3806,6 @@ input_flags_template_1d = {
     # structure is stable across the phase change and across the flag.
     # Bit-exact when off.
     "electron_drift_transport": False,
-    # Operator home of the beam's electron-energy deposition, default OFF.
-    # Armed, the beam_power_deposition Ee row leaves the explicit operator A
-    # and is applied instead by the implicit heat substep B, as a source held
-    # constant over each substep and solved together with the tridiagonal
-    # conduction operator. Nothing else about the beam moves: the ionization
-    # births, the ionization cost and the excitation radiation are
-    # reaction-channel terms and stay in A, and the deposited power is booked
-    # exactly once either way -- the term row still reports the same
-    # deposition, only which operator applies it changes.
-    #
-    # WHY. All heat conduction lives in B, so inside A the deposition cell has
-    # no operator opposing it: the beam heats Te there over the whole explicit
-    # step unopposed, and the reaction rates the SSPRK2 stages evaluate are
-    # read off that swung state. Conduction is the split-cycle RESTORING
-    # operator for that cell, so the defect is the COMPOSITION, and putting the
-    # source where the restoring operator already is removes it. The substep
-    # stays second-order under a constant source: tr_bdf2's two stage weights
-    # sum to one, and backward_euler's monotonicity guarantee is untouched
-    # because a POSITIVE source cannot drive an undershoot.
-    #
-    # SOURCE EVALUATION POINT. Each substep evaluates the deposition at the
-    # state it starts from and at the time that state represents, so Strang's
-    # two half-substeps take it at (y_n, t_n) and (post-A, t_n + dt) -- the
-    # same instants operator A's own SSPRK2 stages use, making the pair a
-    # trapezoidal quadrature of the source over the step. The cost is one extra
-    # cathode/beam solve per substep; the flag is an accuracy instrument, not a
-    # free one.
-    #
-    # Requires implicit_heat_conduction: with the split off there is no B to
-    # host the source, and the combination is a construction-time ValueError.
-    # A step explicitly asked for operator_split=False while armed raises for
-    # the same reason. Must be a real bool. Bit-exact when off.
-    #
-    # NOT CERTIFIABLE BY scripts/gates/verify_sim1d_order.py: that harness measures
-    # the split step in a deliberately cathode-free regime, where the beam
-    # deposition row is identically zero and this flag therefore changes
-    # nothing. It changes the A/B commutator, so any split-order measurement
-    # taken with it clear is stale under it until re-measured.
-    "beam_deposition_in_heat_substep": False,
     # The electron-energy sink charged per ionization event, I_ion * S_ion. Off
     # zeroes that cooling row, so ionizations cost the electrons nothing. This
     # flag is the whole on/off: the companion scale is hardwired to 1.0 and is
@@ -4349,6 +3990,57 @@ RETIRED_PARAM_KEYS = {
     "vessel_leak_resistance_ohm": (
         "nothing: the vessel common-mode node it configured is removed"
     ),
+    # Beam-deposition and hot-tail selectors and their parameters, removed
+    # with the closures they served. Selectors whose one surviving value is
+    # now unconditional name that behaviour; the rest name nothing.
+    "beam_deposition_model": (
+        "nothing: the beam deposits by the CSDA slowing-down march "
+        "('csda'), unconditionally"
+    ),
+    "beam_coulomb_model": (
+        "nothing: the CSDA Coulomb drag is the fast-electron stopping power "
+        "('fast_electron'), unconditionally"
+    ),
+    "beam_excitation_model": (
+        "nothing: the sheath solve's beam excitation channel is the 2^1P "
+        "cross section scaled by b_beam_excitation ('2p_scalar'), "
+        "unconditionally"
+    ),
+    "beam_product_transport": (
+        "nothing: the CSDA ray's event products are banked in their birth "
+        "cell ('local'), unconditionally"
+    ),
+    "heating_anomalous_disposal": (
+        "nothing: the extracted anomalous power is disposed of as "
+        "heating_anomalous_transport says, with no per-cell split ('local')"
+    ),
+    "heating_anomalous_tail_energy_keying": (
+        "nothing: the only walked tail left, "
+        "heating_anomalous_transport='plateau_multigroup', keys its spectrum "
+        "to the live e*phi_c and the solved plateau edge"
+    ),
+    "heating_anomalous_tail_energy_eV": (
+        "nothing: it was the fixed-rung birth energy of the removed "
+        "single-line tail walk"
+    ),
+    "heating_anomalous_tail_phi_c_fraction": (
+        "nothing: it was the f in E_tail = f*e*phi_c of the removed "
+        "single-line tail walk; the plateau spectrum spans the whole band"
+    ),
+    "heating_anomalous_tail_ionization": (
+        "nothing: the walked tail "
+        "(heating_anomalous_transport='plateau_multigroup') ionizes and "
+        "excites the column gas ('on'), unconditionally"
+    ),
+    "ionization_birth_energy_model": (
+        "nothing: ionization births book the cold-electron convention with "
+        "the ion mass-loading mixing energy ('conservative'), "
+        "unconditionally"
+    ),
+    "Te_birth_ionization": (
+        "nothing: a new electron is born cold, so no birth temperature is "
+        "read"
+    ),
 }
 
 
@@ -4373,7 +4065,7 @@ RETIRED_FLAG_KEYS = {
         "nothing: the QL tail walkers are culled at the anode mesh wherever "
         "the mesh is resolved and the closure walks a tail, on the same "
         "solid fraction eta and into the same anode_intercepted row as the "
-        "primary's beam_anode_interception -- a mesh opaque to the streaming "
+        "primary's anode interception -- a mesh opaque to the streaming "
         "beam is opaque to its tail, so there was no second decision for a "
         "flag to carry"
     ),
@@ -4420,6 +4112,21 @@ RETIRED_FLAG_KEYS = {
     ),
     "regime_vessel_node": (
         "nothing: the vessel common-mode node is removed"
+    ),
+    # Beam flags. The adopted ones name the behaviour that is now
+    # unconditional; the deleted one names nothing.
+    "beam_anode_interception": (
+        "nothing: the anode mesh intercepts its solid fraction eta of the "
+        "CSDA beam at the anode-face crossing wherever the geometry resolves "
+        "an anode face, unconditionally"
+    ),
+    "beam_deposition_in_heat_substep": (
+        "nothing: the beam electron-energy deposition is applied by the "
+        "implicit heat substep whenever implicit_heat_conduction is on, "
+        "unconditionally"
+    ),
+    "beam_ionization_birth_timestep_bound": (
+        "nothing: the beam ionization-birth row is in no timestep bound"
     ),
 }
 

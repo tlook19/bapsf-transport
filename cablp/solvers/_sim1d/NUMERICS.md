@@ -168,16 +168,17 @@ electron-sheath debit** always does: at a frozen circuit solve the row is
 $I_{e,a}(2+\psi_a^+)T_e$, exactly linear in $T_e$, so $B$ carries it as a
 first-order REACTION RATE rather than as a power (below), which is what keeps
 the two anode-flanking cells off a within-step sawtooth and takes the row out
-of the `surface_loss` bundle. `beam_deposition_in_heat_substep` additionally
-moves the beam's electron-energy term from $A$'s explicit sum into $B$, applied
-as a source held constant over each substep on the same tridiagonal operator;
-the beam's particle births, ionization cost and excitation radiation stay in
-$A$. Both are still reported by `rhs_terms` at the same power — only which
+of the `surface_loss` bundle. The **beam's electron-energy deposition** always
+does too, applied as a source held constant over each substep on the same
+tridiagonal operator: all heat conduction lives in $B$, so inside $A$ the
+deposition cell would have no operator opposing the beam over the whole
+explicit step. The beam's particle births, ionization cost and excitation
+radiation stay in $A$. Both are still reported by `rhs_terms` at the same power — only which
 operator applies them moves — and each substep's terms are evaluated at the
 state it starts from and the time that state represents, which under Strang
 pairs $(y^n,t^n)$ with $(A y,t^n+\Delta t)$ and makes the two halves a
 trapezoidal quadrature. With `implicit_heat_conduction` off there is no $B$,
-the anode row stays in $A$, and a step explicitly asked for
+both rows stay in $A$, and a step explicitly asked for
 `operator_split=False` on a split stance is REFUSED rather than dropping the
 debit.
 
