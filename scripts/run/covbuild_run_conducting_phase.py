@@ -1,4 +1,4 @@
-"""Run the conducting-phase window, optionally with the coverage closure on.
+"""Run the conducting-phase window.
 
 Runs a NAMED configuration and prints the breakdown instant, so the window can
 be checked against the measured >= 4.5 ms conducting phase.
@@ -9,16 +9,7 @@ last over it. Until 2026-09-03 that delta's base was whatever the shared driver
 dicts happened to hold, stated in the table's own comment and enforced by
 nobody; a run that genuinely names none now says so with ``--no-stance``.
 
-The delta is NOT a derived configuration file, and cannot be one today: the
-reference configuration runs ``heating_anomalous_transport =
-"plateau_multigroup"``, which the solver refuses together with the coverage
-closure this instrument's A/B arm arms. Naming a base inside the delta would
-make ``--coverage`` unrunnable; naming it on the command line lets the plain
-window run stand on the reference while the coverage arm names a configuration
-it can actually use.
-
-Shakedown instrument for the coverage-closure build: direction only, never
-scored. ``--coverage f0[,r]`` turns the closure on for the A/B arm.
+Shakedown instrument: direction only, never scored.
 """
 
 import argparse
@@ -49,7 +40,7 @@ from stance_config import available_stances, load_named_configuration_or_exit
 DELTA_TOML = Path(__file__).resolve().parent / "covbuild_conducting_phase.toml"
 
 
-def build_config(nx, coverage=None, extra=None, configuration=None):
+def build_config(nx, extra=None, configuration=None):
     """Return ``(params, flags, lineage)`` for the window run.
 
     Layering, in order: this file's shared instrument package, the ES1 rung and
@@ -79,7 +70,6 @@ def build_config(nx, coverage=None, extra=None, configuration=None):
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
         "cathode_cleaning_E_th_eV": 20.0,
-        "gas_puff_mode": "square",
         "cathode_sample_smoothing": "presheath",
     })
     lineage = None
@@ -91,17 +81,6 @@ def build_config(nx, coverage=None, extra=None, configuration=None):
     delta = tomllib.loads(DELTA_TOML.read_text())
     params.update(delta.get("params", {}))
     flags.update(delta.get("flags", {}))
-    if coverage is not None:
-        f0, r = coverage
-        params["coverage_initial_fraction"] = f0
-        params["coverage_growth_rate_per_s"] = r
-        flags["coverage_closure"] = True
-        # The coverage deficit partitions nn alone, so the solver refuses a
-        # single mean En over a concentrated gas. neutral_energy (and the hot
-        # internal wall that requires it) became config defaults at the R2a
-        # fold-in, so the coverage arm has to name the layout it composes with.
-        flags["neutral_energy"] = False
-        flags["neutral_hot_internal_wall"] = False
     if extra:
         params.update(extra)
     return params, flags, lineage
@@ -154,15 +133,12 @@ def _deposition_profile_split(sim, result):
 def main(argv=None):
     raise SystemExit(
         "covbuild_run_conducting_phase: retired -- its instrument package "
-        "names configuration keys the solver no longer has, and the coverage "
-        "closure it serves is being removed"
+        "names configuration keys the solver no longer has"
     )
     p = argparse.ArgumentParser()
     p.add_argument("--nx", type=int, default=120)
     p.add_argument("--t-end", type=float, default=None)
     p.add_argument("--max-steps", type=int, default=None)
-    p.add_argument("--coverage", default=None,
-                   help="f_cov0[,r] -- turns the coverage closure on")
     p.add_argument("--extra", nargs="*", default=(),
                    help="additional k=v input_dict overrides, read and typed "
                         "by extra_overrides.parse_extra_overrides: each value "
@@ -195,14 +171,10 @@ def main(argv=None):
         )
     configuration = args.stance
 
-    coverage = None
-    if args.coverage is not None:
-        parts = args.coverage.split(",")
-        coverage = (float(parts[0]), float(parts[1]) if len(parts) > 1 else 0.0)
     extra = parse_extra_overrides(args.extra, "--extra")
 
     params, flags, lineage = build_config(
-        args.nx, coverage=coverage, extra=extra, configuration=configuration
+        args.nx, extra=extra, configuration=configuration
     )
     if lineage is not None:
         lineage = lineage.with_identity(params, flags)
@@ -222,10 +194,8 @@ def main(argv=None):
     result = sim.get_results()
     save_result_hdf5(args.save_h5, result, params=params, flags=flags)
 
-    # Where the beam actually put its energy. Under the coverage closure's
-    # two-medium split the reservoir arm is supposed to reach past the source
-    # region, so the share deposited beyond mid-machine is the direct readout
-    # of whether it does.
+    # Where the beam actually put its energy: the share deposited beyond
+    # mid-machine.
     _deposition_profile_split(sim, result)
 
     times = np.asarray(result.time, dtype=float)
@@ -250,107 +220,7 @@ def main(argv=None):
         hit = np.flatnonzero(I_loop >= threshold)
         when = f"{times[hit[0]] * 1e3:.4f} ms" if hit.size else "never"
         print(f"I_loop first reaches {threshold:g} A at {when}")
-    if coverage is not None:
-        f_cov = np.asarray(
-            result.cathode_diagnostics["coverage_fraction"], dtype=float
-        )
-        print(
-            f"f_cov trace (column mean): start {f_cov[0]:.6f}, "
-            f"end {f_cov[-1]:.6f}, reaches 0.5 at "
-            + (
-                f"{times[np.flatnonzero(f_cov >= 0.5)[0]] * 1e3:.4f} ms"
-                if np.any(f_cov >= 0.5)
-                else "never"
-            )
-        )
-        for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
-            i = min(int(frac * (times.size - 1)), times.size - 1)
-            print(
-                f"  t={times[i] * 1e3:9.4f} ms  f_cov={f_cov[i]:.6f}  "
-                f"nn_deficit_max="
-                f"{result.cathode_diagnostics['coverage_nn_deficit_max'][i]:.6e}"
-            )
-        _coverage_profile_read(sim, result)
     print(f"saved {args.save_h5}")
-
-
-def _coverage_profile_read(sim, result):
-    """Print f_cov(z, t) snapshots and the front-lengthening direction read.
-
-    Under v2 the coverage field is z-resolved and driven by the LOCAL beam
-    ionization, so the question the snapshots answer is whether downstream
-    cells' coverage grows LATER than near-source ones -- a front lengthening in
-    kind. Direction only; nothing here is a score.
-    """
-    diag = getattr(result, "cathode_diagnostics", None) or {}
-    profile = diag.get("coverage_fraction_profile")
-    if profile is None:
-        print("f_cov(z) profile: not saved in this result")
-        return
-    profile = np.asarray(profile, dtype=float)
-    if profile.ndim != 2:
-        print("f_cov(z) profile: unexpected shape", profile.shape)
-        return
-    times = np.asarray(result.time, dtype=float)
-    geom = sim.geometry
-    length = np.asarray(geom.length_cm, dtype=float)
-    z = np.cumsum(length) - 0.5 * length
-    live = np.flatnonzero(np.asarray(geom.plasma_active, dtype=bool))
-    print("f_cov(z, t) snapshots  [plasma-active cells only]")
-    picks = [min(int(f * (times.size - 1)), times.size - 1)
-             for f in (0.0, 0.25, 0.5, 0.75, 1.0)]
-    for i in picks:
-        row = profile[i][live]
-        # Six evenly spaced positions along the live column, so the axial
-        # shape is readable at a glance without dumping nx numbers per frame.
-        idx = np.linspace(0, row.size - 1, 6).round().astype(int)
-        cells = "  ".join(
-            f"z={z[live][j]:6.0f}:{row[j]:.6f}" for j in idx
-        )
-        print(f"  t={times[i] * 1e3:9.4f} ms  {cells}")
-    # The front read. The threshold is a quarter of the run's OWN largest
-    # relative growth, so it is meaningful whatever the window's absolute
-    # growth turns out to be (a short window grows f_cov by a fraction of a
-    # percent, and a fixed 10% bar would simply never be crossed). A monotone
-    # increase of the crossing time with z is coverage growth arriving later
-    # downstream -- a front lengthening in kind.
-    f0 = profile[0][live]
-    rel = profile[:, live] / f0 - 1.0
-    peak = float(np.max(rel))
-    if peak <= 0.0:
-        print("f_cov(z) did not grow over this window; no front read")
-        return
-    threshold = 0.25 * peak
-    print(
-        f"relative growth f_cov(z, t_end)/f_cov(z, 0) - 1: "
-        f"max {peak:.6e}, min {float(np.min(rel[-1])):.6e}"
-    )
-    idx = np.linspace(0, f0.size - 1, 6).round().astype(int)
-    print("  final relative growth by position:")
-    for j in idx:
-        print(f"    z={z[live][j]:6.0f} cm  {rel[-1][j]:.6e}")
-    print(f"first time f_cov(z) grows by {threshold:.6e} (0.25 x the peak):")
-    onset = []
-    for j in range(f0.size):
-        hit = np.flatnonzero(rel[:, j] >= threshold)
-        onset.append(times[hit[0]] if hit.size else np.nan)
-    onset = np.asarray(onset, dtype=float)
-    for j in idx:
-        when = "never" if not np.isfinite(onset[j]) else f"{onset[j] * 1e3:.4f} ms"
-        print(f"    z={z[live][j]:6.0f} cm  onset={when}")
-    finite = np.isfinite(onset)
-    if finite.sum() >= 2:
-        slope = np.polyfit(z[live][finite], onset[finite] * 1e3, 1)[0]
-        print(
-            f"  onset-vs-z slope: {slope:+.6e} ms/cm "
-            f"({'LATER downstream' if slope > 0 else 'EARLIER downstream'}; "
-            f"{int(finite.sum())}/{f0.size} cells crossed)"
-        )
-    else:
-        print(
-            f"  onset-vs-z slope: only {int(finite.sum())}/{f0.size} cells "
-            "crossed; no slope"
-        )
 
 
 # Step-gated only: interval_fraction above 1 can never come due, so the

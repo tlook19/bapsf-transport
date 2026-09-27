@@ -33,11 +33,9 @@ STRUCTURAL_FLAG_KEYS = (
     "Plasma",
     "TwinCathode",
     "cathode_coupling",
-    "coverage_closure",
     "neutral_momentum",
-    "neutral_two_zone",
     # En is a packed row, so the layout check already refuses a mismatch; the
-    # flag is listed for the same reason the two above are, so the refusal
+    # flag is listed for the same reason the one above is, so the refusal
     # names the closure that changed rather than only its width.
     "neutral_energy",
 )
@@ -49,7 +47,7 @@ STRUCTURAL_PARAM_KEYS = (
 #: Neutral models whose evolving state is a distribution function this payload
 #: does not serialise. Combining one with a restart raises rather than silently
 #: reseeding the kinetic half from a Maxwellian.
-REFUSED_NEUTRAL_MODELS = ("kinetic", "kinetic_dvm")
+REFUSED_NEUTRAL_MODELS = ("kinetic_dvm",)
 
 
 def save_restart_state(path, sim):
@@ -70,8 +68,8 @@ def save_restart_state(path, sim):
         h5.attrs["flags_json"] = _json_dumps(payload["flags"])
         h5.attrs["compiled_kernels"] = str(payload["compiled_kernels"])
         h5.create_dataset("y", data=np.asarray(payload["y"], dtype=float))
-        for group_name in ("cathode", "circuit", "coverage", "triggers",
-                           "ignition", "ledgers", "sample_ema", "run_loop"):
+        for group_name in ("cathode", "circuit", "triggers", "ignition",
+                           "ledgers", "sample_ema", "run_loop"):
             _write_mapping(h5.create_group(group_name), payload[group_name])
     return path
 
@@ -98,8 +96,8 @@ def load_restart_state(path):
             "compiled_kernels": _decode(h5.attrs["compiled_kernels"]),
             "y": np.asarray(h5["y"][()], dtype=float),
         }
-        for group_name in ("cathode", "circuit", "coverage", "triggers",
-                           "ignition", "ledgers", "sample_ema", "run_loop"):
+        for group_name in ("cathode", "circuit", "triggers", "ignition",
+                           "ledgers", "sample_ema", "run_loop"):
             payload[group_name] = _read_mapping(h5[group_name])
     return payload
 

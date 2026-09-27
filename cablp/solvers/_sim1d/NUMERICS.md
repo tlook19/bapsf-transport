@@ -325,7 +325,7 @@ over every cell.**
 | `energy_exchange_rate` | rate, $\Delta t\le c/\max\nu_\text{eq}$ at $c$ = `energy_exchange_rate_fraction`; withdrawn to infinity at that key's default `None` |
 | `electrode_sink_rate` | rate, $\Delta t\le c/\max\nu$ over the plasma-active cells at $c$ = `ELECTRODE_SINK_DT_FRACTION` = 1, $\nu$ the electrode electron-energy sink the implicit substep carries. An ACCURACY bound, not a stability one — the sink is L-stable at any step, but a second-order substep only expresses its order while $\nu\Delta t$ is order one, and the anode sheath can change regime between steps taken longer. Withdrawn to infinity wherever the row is applied explicitly instead |
 | `electron_cooling` | fractional on $E_e$ against the inelastic and radiative terms |
-| `ion_charge_exchange` | fractional on $E_i$ against the charge-exchange term |
+| `ion_charge_exchange` | fractional on $E_i$ against the charge-exchange cooling rate, which the moment-closed collision operator carries and which is not a saved term of its own |
 | `ion_neutral_drag` | rate, $\Delta t\max\nu_{in}\le$ `DRAG_DT_FRACTION`, $\nu$ scaled by $\lvert b\rvert$ (`b_ion_neutral_drag`) |
 | `heat_conduction` | explicit parabolic bound $\displaystyle\Delta t\le\varepsilon\min_i\frac{V_iC_i}{\sum_{\text{faces of }i}A_f\kappa_fh_f/d_f}$ at `conduction.HEAT_DT_FRACTION`, $h_f$ the face transmission — on a uniform grid $\varepsilon\Delta z^2C/(2\kappa)$, the 2 being the two faces; withdrawn on the implicit path |
 | `neutral_exchange` | fractional on $n_n$ against the pair-exchange term, $\varepsilon$ = `neutral_dt_fraction` |
@@ -618,13 +618,10 @@ the array actually placed, closing by construction rather than by the
 projection's accuracy. A launch energy at or below $\tfrac32kT_\text{launch}$
 has no drift and raises.
 
-**Energy-matched wall return.** Under
-`neutral_kinetic_dvm_wall_reflection = "diffuse_elastic"` the non-accommodated
-share is re-emitted on the cosine shape at a temperature that must be SOLVED, so
-the spectrum carries the retained share's own incident mean energy per atom
-$\bar e=E_\text{incident}/N_\text{incident}$; the `"specular"` alternative
-instead returns the incident array scaled by $1-\alpha_\text{acc}$ and solves
-nothing. The discrete mean energy
+**Energy-matched wall return.** The non-accommodated share is re-emitted on
+the cosine shape at a temperature that must be SOLVED, so the spectrum carries
+the retained share's own incident mean energy per atom
+$\bar e=E_\text{incident}/N_\text{incident}$. The discrete mean energy
 
 $$E(s)=\sum_{jk}f_{jk}(s)\tfrac12m\left(v_{\parallel,j}^2+c_{\perp,k}^2\right),\qquad s=\sqrt{kT/m}$$
 
@@ -742,13 +739,13 @@ independent of the trajectory format; it carries one instant, not a history.
 
 **The kinetic neutral closure cannot be restarted, and says so.** The payload
 serialises fluid fields, not a distribution function, so combining `restart_from`
-with `neutral_model` in `{"kinetic", "kinetic_dvm"}` RAISES at construction
+with `neutral_model = "kinetic_dvm"` RAISES at construction
 rather than resuming: reseeding the kinetic half from a Maxwellian would not be
 a continuation. The model [`MODEL.md`](MODEL.md) presents uses that closure, so
 what follows covers the fluid neutral closure and every plasma-side member and
-does NOT cover a run of the presented model. `neutral_equilibration` is refused
-alongside it, for the different reason that it would overwrite the restored
-state.
+does NOT cover a run of the presented model. The equilibrating values of
+`initial_neutral_state` are refused alongside it, for the different reason that
+the equilibration would overwrite the restored state.
 
 **The contract is continuation bit-identity**: running $0\to t_\text{end}$ in one
 call and running $0\to t_\text{mid}$, exporting, restarting, then

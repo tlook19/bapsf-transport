@@ -28,48 +28,70 @@ def initial_condition_defaults():
         conventions and ``"H"`` for hydrogen neutral/proton conventions.
     ne0:
         Uniform initial plasma/electron density [cm^-3].
+    initial_neutral_state:
+        How the initial neutral state is established. One of:
+
+        ``"equilibrate"`` (default): ``start_simulation()`` runs the pre-run
+        puff/off neutral accumulation -- an inner neutral-only sim with
+        ``Plasma`` and ``cathode_coupling`` off, for
+        ``neutral_equilibration_cycles`` at ``neutral_equilibration_dt`` --
+        seeds ``nn`` (and ``nn_a``) from its settled state, and proceeds into
+        the plasma run.
+
+        ``"equilibrate_only"``: the same accumulation, after which
+        ``start_simulation()`` stops and returns the equilibration result
+        itself. This is how the neutral-only seed is produced.
+
+        ``"fill"``: no accumulation; the run starts from the uniform scalar
+        ``nn0`` fill.
+
+        ``"profile"``: the run starts from the per-cell ``nn0_profile`` (and
+        optionally ``nn0_annulus_profile``), which supersedes the scalar
+        ``nn0``.
+
+        Calling ``run()`` directly under the two equilibrating values performs
+        NO equilibration and WARNS rather than raising, since the run is well
+        defined -- it starts from the direct ``nn0`` fill. The equilibrating
+        values and ``"profile"`` each refuse ``restart_from`` at construction:
+        a restart payload replaces the whole initial condition after
+        construction, so either would be silently overwritten. Any other value
+        raises at construction naming the four accepted.
     nn0:
-        Uniform initial neutral density [cm^-3]. REQUIRED, except under the
-        ``neutral_initial_profile`` flag, which supersedes it and requires
+        Uniform initial neutral density [cm^-3]. REQUIRED, except under
+        ``initial_neutral_state = "profile"``, which supersedes it and requires
         ``None``; a ``None`` reaching ``resolve_nn0`` any other way raises,
         the frozen gas-puff table that used to fill one in being retired.
 
-        This is the DIRECT-RUN fill only. The equilibrated path
-        (``neutral_equilibration`` via ``start_simulation``) does NOT read this
-        value: ``run_neutral_equilibration`` pins its inner sim's start at 1e8
-        and overwrites nn with the equilibrated
-        profile, so the two paths are decoupled and this default can move
-        without disturbing any equilibrated run. Since ``neutral_equilibration``
-        ships ON, the uniform value is a PLACEHOLDER that no shipped
+        This is the DIRECT-RUN fill only. The equilibrated path does NOT read
+        this value: ``run_neutral_equilibration`` pins its inner sim's start
+        at 1e8 and overwrites nn with the equilibrated profile, so the two
+        paths are decoupled and this default can move without disturbing any
+        equilibrated run. Since ``initial_neutral_state`` ships at
+        ``"equilibrate"``, the uniform value is a PLACEHOLDER that no shipped
         configuration reads -- equilibration is the convention for the fill a
         run starts from.
     nn0_profile:
         PER-CELL initial neutral density [cm^-3]: a sequence of length ``nx``
         (the grid's cell count), every entry finite and ``> 0``. Read ONLY
-        under the ``neutral_initial_profile`` flag, and REQUIRED by it; with
-        the flag off it must be ``None`` or construction raises.
+        under ``initial_neutral_state = "profile"``, and REQUIRED by it; under
+        any other value it must be ``None`` or construction raises.
 
         Supplied as VALUES, not as a shape: these are the absolute densities
         the run starts from, cell by cell, and nothing rescales or normalizes
         them. This is the externally-computed-profile hook for the INITIAL
         CONDITION -- the solver does no file I/O, so a hypothesized axial fill
-        is built outside and passed here. (Its source-side counterpart,
-        ``neutral_probe_profile``, is a normalized SHAPE; the two are not
-        interchangeable.)
+        is built outside and passed here.
 
         It supersedes the scalar ``nn0`` for BOTH zones, so ``nn0`` must be
-        ``None`` when the flag is armed -- an armed flag with a non-``None``
-        scalar raises rather than establishing a silent precedence.
-        ``resolve_nn0`` is not consulted on the armed path.
+        ``None`` under ``"profile"`` -- a non-``None`` scalar there raises
+        rather than establishing a silent precedence. ``resolve_nn0`` is not
+        consulted on that path.
     nn0_annulus_profile:
-        PER-CELL initial ANNULUS neutral density [cm^-3] under the
-        ``neutral_two_zone`` closure: same length, finiteness and positivity
-        rules as ``nn0_profile``. Read ONLY under the
-        ``neutral_initial_profile`` flag, and valid only with
-        ``neutral_two_zone`` on -- setting it without that closure raises,
-        because there is no second neutral field for it to land in.
+        PER-CELL initial ANNULUS neutral density [cm^-3]: same length,
+        finiteness and positivity rules as ``nn0_profile``. Read ONLY under
+        ``initial_neutral_state = "profile"``.
 
-        OPTIONAL when armed: omitted, the annulus starts at ``nn0_profile``,
+        OPTIONAL under ``"profile"``: omitted, the annulus starts at ``nn0_profile``,
         which is the shaped form of the shipped convention that both zones
         start at the same fill density. Supplying it addresses the two zones
         separately, which is what a construction that routes its inventory
@@ -83,21 +105,22 @@ def initial_condition_defaults():
     Tn_fit:
         DEPRECATED; superseded by the single cold-gas ``Tn_K``. Was the neutral
         collision temperature used by the legacy IAEA reaction-rate fits and the
-        legacy ion-neutral drag/thermalization/CX quartet -- all retired under
-        the Phelps ``ion_neutral_moment_closure`` baseline, so it is inert
-        whenever that flag is on. The deferred M_n wall accommodation should
-        read ``Tn_K``.
+        legacy ion-neutral drag/thermalization/CX quartet -- all retired in
+        favour of the Phelps moment-closed ion-neutral collision operator, so
+        it is inert. The deferred M_n wall accommodation should read
+        ``Tn_K``.
     """
     return {
         # --- ACTIVE (production) ---
         "gas_type": "He",
         "ne0": 1e9,
+        "initial_neutral_state": "equilibrate",
         # Pre-shot neutral background for DIRECT runs. The equilibrated path
         # never reads this (see the docstring above).
         "nn0": 2.0e13,
-        # Shaped initial neutral fill (neutral_initial_profile flag). Both are
-        # None on every shipped configuration: a per-cell IC has no default
-        # shape to inherit, and the flag's whole content is what the caller
+        # Shaped initial neutral fill (initial_neutral_state = "profile"). Both
+        # are None on every shipped configuration: a per-cell IC has no default
+        # shape to inherit, and the route's whole content is what the caller
         # computed outside.
         "nn0_profile": None,
         "nn0_annulus_profile": None,
@@ -228,7 +251,7 @@ def geometry_defaults():
         binds the hard refusal cannot fire.
     neutral_annulus_volume_fraction_min:
         Minimum ``V_ann / V_neutral`` allowed in any cell that HAS an annulus,
-        under the ``neutral_two_zone`` closure [1]. Cells with no annulus at
+        [1]. Cells with no annulus at
         all (``V_ann = 0`` exactly -- the plenum, and any cell the plasma
         fills) are untouched: every annulus consumer already gates on
         ``V_ann > 0``, so an absent zone is inert by construction.
@@ -312,7 +335,7 @@ def floor_defaults():
         below, which must not be run.
     Ti_floor:
         Minimum ion temperature recovered from conservative energy [eV].
-        The Phelps ``ion_neutral_moment_closure`` collision operator is
+        The Phelps moment-closed ion-neutral collision operator is
         thermal-valid with no 0.1 eV clamp; the only consumer that required
         0.1 eV was the retired legacy IAEA CX table. All remaining Ti consumers
         (kappa_par_ion, pressure, sound speed) need only Ti > 0.
@@ -352,64 +375,26 @@ def neutral_source_defaults():
         Source-side gas puff flow [sccm].
     Twin_S_gp:
         End-side gas puff flow used when ``TwinCathode`` is enabled [sccm].
-    gas_puff_mode:
-        Phase-dependent gas-puff schedule. ``"square"`` (default) holds the
-        flow flat at ``S_gp`` between an opening and a closing erf edge (see
-        below). The remaining modes are DEPRECATED (retained runnable for the
-        frozen waveform-comparison figures; non-default use warns):
-        ``"decay_after_breakdown"`` for steady puffing until optional decay
-        after breakdown/main-discharge start,
-        ``"pulse_decay_to_level"`` for a full-rate pulse followed by decay
-        toward the configured target flow, and ``"double_erf"`` for a
-        valve-like waveform: an erf (S-shaped) rise ``0 -> S_gp``, a
-        plateau, then an erf drop ``S_gp -> S_gp_decay_target`` which is
-        held for the rest of the discharge. Both transitions sit on the
-        *scheduled* main-discharge clock (centers may be negative, i.e.
-        during prebreakdown -- a real valve opens before breakdown), and
-        the waveform replaces the other modes' full-rate prebreakdown
-        behaviour. The twin puff shares the timing with its own levels.
-        Smooth everywhere; clamped at zero if the transitions are set to
-        overlap pathologically.
     gas_puff_rise_center_s:
-        ``"square"`` opening-edge center [s], measured from the end of the
+        The puff waveform is a square valve pulse: the flow is flat at
+        ``S_gp`` between an opening and a closing erf edge, and the three
+        timings below set those edges.
+
+        Opening-edge center [s], measured from the end of the
         neutral-prebreakdown phase (the instant the cathode circuit closes),
         so the opening edge does not wait for breakdown. Must be ``>= 0``.
     gas_puff_rise_width_s:
-        Erf width scale [s] shared by BOTH ``"square"`` edges -- the opening
+        Erf width scale [s] shared by BOTH edges -- the opening
         edge and the closing edge are built with this one width. The 10-90%
         transition time is ~1.81x this value. Must be positive.
     gas_puff_close_lag_s:
         Delay [s] from the end of the main discharge (``tau_discharge`` after
-        the main-discharge start) to the ``"square"`` closing-edge center, so
+        the main-discharge start) to the closing-edge center, so
         the closing tail runs on past the drive. Must be ``>= 0``.
 
-        The three ``"square"`` timings above are read and validated only in
-        that mode; a bad value raises at construction. The envelope is
+        A bad value of any of the three raises at construction. The envelope is
         ``max(rise - fall, 0)``, so edges configured to overlap clamp at zero
         flow rather than going negative.
-    tau_gp_rise_center:
-        ``double_erf`` rise-transition center [s], relative to the
-        scheduled main-discharge start (negative = before breakdown).
-    tau_gp_rise_width:
-        ``double_erf`` rise erf width scale [s]; the 10-90% rise time is
-        ~1.81x this value.
-    tau_gp_drop_center:
-        ``double_erf`` drop-transition center [s], same clock as the rise.
-    tau_gp_drop_width:
-        ``double_erf`` drop erf width scale [s].
-    S_gp_decay_target:
-        Source-side target puff level for pulse decay modes [sccm].
-    Twin_S_gp_decay_target:
-        End-side target puff level for pulse decay modes [sccm].
-    tau_gp_after_breakdown:
-        Delay after breakdown/main-discharge start before puff decay begins [s].
-        ``None`` keeps the puff steady through the main discharge.
-    tau_gp_decay_factor:
-        Multiplier applied to the main-discharge decay time constant.
-    tau_gp_pulse_duration:
-        Full-rate puff duration after breakdown for pulse decay modes [s].
-    tau_gp_decay_duration:
-        E-folding time toward the decay target for pulse decay modes [s].
     S_pump_L:
         Source-side vacuum pump speed [L/s], lumped per END: the whole
         pumping speed seen by that end cell, ducting included.
@@ -427,77 +412,42 @@ def neutral_source_defaults():
         at the single shared sccm-to-particles conversion, so ``S_gp`` means
         the flow delivered AT THE VALVE and the flow injected into the model
         volume is ``S_gp * gas_puff_delivery_fraction``. It enters exactly
-        where ``gas_puff_valves`` does, at both conversion sites (the
-        ``"cell"`` profile and the distributed profiles), so it scales the
-        puff magnitude without touching its axial shape or its waveform, and
-        it applies to the source-end and twin-end puffs alike. Consumed by the
-        neutral gas-puff source term in ``physics.neutrals`` -- the explicit
-        RHS, the implicit backward-Euler neutral matrices, the local-ionization
-        channel, and the saved ``puff_particles_per_s`` diagnostic all read the
-        same value, so none can desync. Must be in ``(0, 1]`` and finite; a
+        where ``gas_puff_valves`` does, so it scales the puff magnitude
+        without touching its axial shape or its waveform, and it applies to
+        the source-end and twin-end puffs alike. Consumed by the neutral
+        gas-puff source term in ``physics.neutrals`` -- the explicit RHS, the
+        implicit backward-Euler neutral matrices and the saved
+        ``puff_particles_per_s`` diagnostic all read the same value, so none
+        can desync. Must be in ``(0, 1]`` and finite; a
         value outside that range raises at construction. ``1.0`` (the default)
         is the identity and is bit-exact.
-    gas_puff_profile:
-        Axial shape of the puff. ``"cell"`` (the historical
-        behaviour) puts the whole flow in the role-tagged puff cell, which
-        under ``source_fixed_grid`` follows ``gas_puff_z_cm`` and otherwise
-        is the column cell against the anode face. ``"cosine_pipe"``
-        (default) is the physical source -- a small pipe at the chamber wall,
-        at the measured mid-plane puff ports on the anode stack, pointing
-        radially inward with a Lambertian (cosine) outlet;
-        its first-flight axial deposition is the cosine-lobe pattern
-        ``[1 + ((z - z0)/d)^2]^-2`` with throw ``d ~ 2*Rm``, so centre and
-        width both come from geometry rather than tuning. ``"gaussian"`` is
-        the generic tunable shape. ``"orifice"`` is the tube-beamed injection
-        row: the feed pipe at the same ports is treated as a collimating tube
-        in free-molecular flow, and the row is the ray-optics first-flight
-        landing distribution of its exit distribution on the plasma column,
-        with the wall and column radii read off the grid at the port cell. It
-        requires ``gas_puff_orifice_id_cm`` and ``gas_puff_orifice_length_cm``
-        and rejects them under any other profile. Unlike the other
-        distributed shapes it is not re-weighted by cell length and not masked
-        to the main-chamber roles -- it lands where the rays land. All
-        distributed profiles conserve the total inflow exactly, and one shared
-        implementation feeds both the explicit RHS and the implicit neutral
-        matrix, so the two sites cannot desync.
     gas_puff_z_cm:
-        Distributed-puff centre [cm, machine coordinates]; ``None`` falls back
+        The axial shape of the puff is the tube-beamed injection row: the
+        feed pipe at the mid-plane puff ports is treated as a collimating
+        tube in free-molecular flow, and the row is the ray-optics
+        first-flight landing distribution of its exit distribution on the
+        plasma column, with the wall and column radii read off the grid at
+        the port cell. The row is not re-weighted by cell length and not
+        masked to the main-chamber roles -- it lands where the rays land. It
+        conserves the total inflow exactly, and one shared implementation
+        feeds both the explicit RHS and the implicit neutral matrix, so the
+        two sites cannot desync.
+
+        Puff-port centre [cm, machine coordinates]; ``None`` falls back
         to whichever cell currently holds the ``puff`` role. Mirrored through
         the chamber midpoint for the twin puff. Pinning it in machine
         coordinates is what makes an nx refinement a resolution study: with
         ``None`` the source centre follows the puff cell's centre, so changing
-        nx silently moves the source. Ignored by the ``"cell"`` profile, which
-        puts the whole flow in the role-tagged cell.
-    gas_puff_sigma_cm:
-        Gaussian puff axial width [cm].
-    gas_puff_throw_cm:
-        Cosine-pipe throw distance ``d`` [cm], of order the chord across the
-        chamber (~2*Rm). Sets the lobe's HWHM = 0.64*d.
+        nx silently moves the source.
     gas_puff_orifice_id_cm:
         Inner diameter of the collimating feed pipe [cm], the emitting
-        aperture of the ``"orifice"`` profile. ``None`` (the default) is the
-        only value accepted under any other profile, and ``"orifice"`` refuses
-        to construct without it. Must be finite and positive.
+        aperture of the injection row. Must be finite and positive.
     gas_puff_orifice_length_cm:
         Length of that same feed pipe [cm]. Only its ratio to
         ``gas_puff_orifice_id_cm`` enters -- that aspect ratio is the beaming
         parameter of the tube's exit distribution, and the row narrows as it
         grows. Must be finite, positive, and at least 4/3 of the bore, below
         which the long-tube expression has no branch and construction raises.
-        Same presence gating as ``gas_puff_orifice_id_cm``.
-    gas_puff_local_ionization_fraction:
-        Fraction of the gas-puff neutral source ionized IN PLACE rather than
-        added to the background neutral density. The diverted neutrals are
-        debited from the puff and booked as an ionization source under the
-        same birth-temperature and ionization-cost conventions as bulk
-        ionization (``Ti_birth_ionization``), so the term conserves mass and
-        energy. It is built from the configured puff shape and waveform, so
-        it is localized wherever the puff is and follows the same time
-        dependence. Must be in ``[0, 1)``; ``0`` returns a zero source
-        without evaluating the term. Raises at construction outside that
-        range, or if the ``neutral_two_zone`` flag is on (which routes the
-        puff through the annulus zone instead). Inert while the gas puff is
-        disabled.
     pump_elbow_conductance_lps:
         Conductance of the unmodeled pump elbow [L/s], combined in series with
         the pump speed as ``1/S_eff = 1/S_pump + 1/C_elbow``. Applies only to a
@@ -518,8 +468,7 @@ def neutral_source_defaults():
         # 3649.84) to hold the fitted particle flux fixed.
         "S_gp": 3649.84,
         "Twin_S_gp": 3649.84,
-        "gas_puff_mode": "square",
-        # "square" waveform edge timings. The piezo is driven by a square
+        # Square-waveform edge timings. The piezo is driven by a square
         # voltage pulse from the SAME trigger that closes the cathode circuit
         # and is held for the discharge, so the flow is FLAT at S_gp with only
         # the piezo-opening/entry-transit erf edges. The rise ANCHORS ON
@@ -548,43 +497,12 @@ def neutral_source_defaults():
         # separate quantities rather than one lumped constant.
         "gas_puff_delivery_fraction": 1.0,
         "pump_elbow_conductance_lps": None,
-        # Physical Lambertian pipe source at the measured mid-plane puff ports
-        # on the anode stack; its centre is measured and its width is
-        # geometry-derived, and neither is tunable.
-        "gas_puff_profile": "cosine_pipe",
-        # The pipe position, in machine coordinates so it does not move with nx.
+        # The puff-port position, in machine coordinates so it does not move
+        # with nx.
         "gas_puff_z_cm": 86.3,
-        "gas_puff_sigma_cm": 50.0,
-        "gas_puff_throw_cm": 100.0,
-        # The collimating feed pipe behind those ports. Both None off the
-        # "orifice" profile, which is the only consumer and requires both.
-        "gas_puff_orifice_id_cm": None,
-        "gas_puff_orifice_length_cm": None,
-        # Fresh-puff fractional-coverage local ionization (default 0 = OFF,
-        # bit-exact). Fraction of the localized gas-puff neutral source that is
-        # ionized IN PLACE (the dense spotty jet has a short beam/bulk mfp, so
-        # it burns to a localized plasma seed that launches the sonic
-        # accumulation front) instead of spreading into the background nn. The
-        # diverted
-        # neutrals are debited from the puff and booked as ionization with the
-        # bulk-reaction birth + I_ion cost (mass/energy conserving); it rides the
-        # puff shape+waveform so it is auto-localized and relaxes with the ~1 ms
-        # feed. Single-zone only (loud error with neutral_two_zone). In [0, 1).
-        "gas_puff_local_ionization_fraction": 0.0,
-        # --- DEPRECATED (only read by the retired pulse/decay/double_erf puff
-        # modes; kept runnable for the frozen waveform-comparison figures) ---
-        # Same FITTED-FLUX rescale as S_gp above (1500 -> 1610.23); the twin
-        # target is zero and is invariant under any conversion.
-        "S_gp_decay_target": 1610.23,
-        "Twin_S_gp_decay_target": 0.0,
-        "tau_gp_after_breakdown": None,
-        "tau_gp_decay_factor": 1.0,
-        "tau_gp_pulse_duration": 1e-3,
-        "tau_gp_decay_duration": 5e-3,
-        "tau_gp_rise_center": -5e-3,
-        "tau_gp_rise_width": 1e-3,
-        "tau_gp_drop_center": 1e-3,
-        "tau_gp_drop_width": 1e-3,
+        # The collimating feed pipe behind those ports: bore and length [cm].
+        "gas_puff_orifice_id_cm": 3.95,
+        "gas_puff_orifice_length_cm": 22.0,
     }
 
 
@@ -770,7 +688,7 @@ def model_mode_defaults():
         ``"neutral"`` is the option that PAIRS with the neutral energy field:
         the ion is born at the local neutral temperature
         ``Tn = (2/3) En / (nn k)`` of the very population the ``En``
-        ionization sink debits (the column ``nn`` under ``neutral_two_zone``),
+        ionization sink debits (the column ``nn``),
         so the ion gains exactly the ``(3/2) k Tn`` per particle the neutral
         gas gives up and the pair conserves energy by construction. With
         ``neutral_energy`` off the state carries no ``En``, there is no local
@@ -800,28 +718,6 @@ def model_mode_defaults():
         orifice conductance in series. Prefer this for resolved runs, where the
         puff-to-pump back-path is the physics of interest and the historical model
         under-predicts it by 2-14x depending on cell size.
-    neutral_knudsen_temperature:
-        Which temperature the Knudsen conductances take their thermal speed
-        from. Read only under the ``neutral_energy`` flag, which is the only
-        setting in which a second answer exists.
-
-        ``"frozen"`` (default, and the ratified v1-primary) evaluates every
-        conductance once at the configured ``Tn_K``, so axial and radial
-        neutral transport is a fixed property of the geometry.
-
-        ``"local"`` scales each conductance by ``sqrt(Tn_local / Tn_K)`` from
-        the evolved per-cell neutral temperature -- the thermal-transpiration
-        arm, in which a hot patch of gas conducts faster than a cold one.
-
-        WHAT THIS ARM DOES AND DOES NOT DO. It scales the RATE, not the
-        equilibrium. The driving potential stays the density difference, so a
-        temperature gradient at uniform density still drives no flow and the
-        steady state is still uniform ``nn``: this is not the textbook
-        transpiration relation ``n ~ 1/sqrt(T)``, which would require the
-        driving potential itself to change and is NOT built. It is a DISCLOSED
-        sensitivity arm on the transport timescale, not the production closure.
-        Selecting it without ``neutral_energy`` raises at construction, because
-        there is no per-cell ``Tn`` for it to read.
     electron_drift_charge_death:
         Where the launched beam's CHARGE is taken to die, and hence which
         faces of the source region still carry beam current in the drift flux
@@ -863,13 +759,6 @@ def model_mode_defaults():
         Which engine carries the neutral population. ``"moment"`` integrates
         the fluid neutral density (and, with the ``neutral_momentum`` flag,
         its momentum) directly from the conservative RHS terms.
-        ``"kinetic"`` drives the neutrals toward per-cell targets and
-        relaxation times produced by a velocity-space kinetic solve of the
-        two-zone neutral state. Those solves run at step ACCEPTANCE only --
-        never inside a trial RHS evaluation, so step retries are
-        deterministic -- and only once the plasma phase is live; the
-        neutral-prebreakdown fill is carried by the moment terms in both
-        settings, as is the whole run until the first refresh completes.
         ``"kinetic_dvm"`` carries LIVE transient column and annulus
         distributions ``f(z, v_z, v_perp)`` and advances them with one split
         implicit transport/collision step per neutral-clock tick, at step
@@ -881,18 +770,16 @@ def model_mode_defaults():
         minus the corresponding moment of the kinetic operator, so the two
         sides are antisymmetric by construction. Electron-side costs
         (ionization potential, radiation, excitation) stay on the plasma
-        book unchanged. Like ``"kinetic"`` it rides on the two-zone state and
-        engages only once the plasma phase is live, so the pre-breakdown fill
+        book unchanged. It rides on the two-zone state and engages only once
+        the plasma phase is live, so the pre-breakdown fill
         and the neutral equilibration stay on the moment terms.
 
         ``"kinetic_dvm"`` is a top-level MODEL SELECTION and OWNS a member
         set -- every control in it is M_n or En physics the kinetic state
         already carries, so the two cannot both own it. The measured set is
         ``core/model_families.KINETIC_DVM_INCOMPATIBLE_DEFAULTS``, which is
-        the authority here: the ``neutral_momentum``, ``neutral_energy``,
-        ``neutral_hot_internal_wall`` and ``neutral_hot_birth_drift`` flags,
-        the ``neutral_momentum_radial`` and ``neutral_knudsen_temperature``
-        selectors, the cathode jet (``cathode_neutral_jet``,
+        the authority here: the ``neutral_momentum``, ``neutral_energy`` and
+        ``neutral_hot_internal_wall`` flags, the cathode jet (``cathode_neutral_jet``,
         ``cathode_jet_surface_debit``, ``cathode_jet_energy_convention``,
         ``cathode_jet_hot_carrier``) and the anode-side momentum channel
         (``anode_neutral_jet``, ``anode_jet_energy_convention``,
@@ -903,11 +790,8 @@ def model_mode_defaults():
         ``ValueError`` at construction naming the selection, the whole
         member set and every offending key.
 
-        Outside that set the arm still requires the ``neutral_two_zone``
-        flag (a prerequisite, never resolved for you) and refuses a nonzero
-        ``gas_puff_local_ionization_fraction``, and ``gas_type`` other than
-        ``"He"``. Any other value, or ``"kinetic"``/``"kinetic_dvm"`` without
-        the two-zone flag, raises at construction.
+        Outside that set the arm refuses ``gas_type`` other than ``"He"``.
+        Any other value raises at construction.
     neutral_kinetic_dvm_cadence_s:
         Neutral-clock interval [s] between transient DVM updates under
         ``neutral_model = "kinetic_dvm"``. The kinetic state advances on this
@@ -982,10 +866,24 @@ def model_mode_defaults():
         distinction by incident energy.
 
         The non-accommodated share is returned at the incident energy. At
-        the cylinder its spectrum is chosen by
-        ``neutral_kinetic_dvm_wall_reflection``; at an end wall it is always
-        the exact ``v_z`` bin mirror, which the symmetric stretched axis
-        represents without re-projection error.
+        the CYLINDRICAL wall it is returned, per cell, on a cosine-wall
+        spectrum whose temperature parameter is solved so that the
+        spectrum's DISCRETE mean energy equals the retained share's own
+        incident mean energy per atom: the count and the energy are both
+        exact and the return carries zero net axial momentum, so the surface
+        randomizes the direction while exchanging no energy. The solve is a
+        bracketed bisection on a monotone function and RAISES at the tick
+        rather than falling back when the target lies outside what the
+        velocity grid can re-emit. At an end wall it is always the exact
+        ``v_z`` bin mirror, which the symmetric stretched axis represents
+        without re-projection error; the anode mesh and the interior closed
+        faces use their own channels.
+
+        The arm also carries the polarization-elastic ion-neutral channel: a
+        BGK-like relaxation toward the local ion Maxwellian at the Phelps
+        isotropic rate, alongside the charge-exchange channel at the Phelps
+        backscatter rate, so the arm's momentum-transfer cross section is the
+        fluid operator's ``Qi + 2 Qb``.
 
         Behavioural note on the LEFT end: the accommodated share there
         re-emits at the live cathode surface temperature ``T_s`` rather than
@@ -995,43 +893,6 @@ def model_mode_defaults():
 
         A boxed surface property, never a fit parameter. Raises at
         construction outside ``[0, 1]``.
-    neutral_kinetic_dvm_wall_reflection:
-        Spectrum the NON-accommodated ``(1 - alpha_E)`` share is returned on
-        at the CYLINDRICAL wall of the transient DVM. ``"specular"`` returns
-        it in its incident bin -- on the axisymmetric ``(v_z, v_perp)`` grid
-        a specular reflection off the cylinder reverses only the unresolved
-        radial component -- so the share keeps its energy AND its axial
-        velocity. ``"diffuse_elastic"`` returns the same count, per cell, on
-        a cosine-wall spectrum whose temperature parameter is solved so that
-        the spectrum's DISCRETE mean energy equals the retained share's own
-        incident mean energy per atom: the count and the energy are both
-        exact and the return carries zero net axial momentum, so the surface
-        randomizes the direction while exchanging no energy. The solve is a
-        bracketed bisection on a monotone function and RAISES at the tick
-        rather than falling back when the target lies outside what the
-        velocity grid can re-emit.
-
-        The END plates keep the ``v_z`` mirror under both values -- that
-        mirror already fully accommodates the directed axial momentum -- and
-        the anode mesh and the interior closed faces never read this key.
-        The two values degenerate at ``alpha_E = 1``, where there is no
-        share to place. Inert unless ``neutral_model = "kinetic_dvm"``: under
-        any other neutral model the key must RESOLVE to its shipped default
-        -- left alone, or naming that same value -- and setting the other
-        value there raises at construction, because off the arm there is no
-        wall share to place and a value that differs from the shipped one is
-        a configured choice that can do nothing. A value outside the two
-        raises anywhere.
-    neutral_kinetic_dvm_elastic:
-        Polarization-elastic ion-neutral channel of the transient DVM.
-        ``"phelps_iso"`` adds a BGK-like relaxation toward the local ion
-        Maxwellian at the Phelps isotropic rate, alongside the charge-exchange
-        channel at the Phelps backscatter rate; ``"off"`` drops it, leaving
-        charge exchange to carry all ion-neutral momentum transfer. The arm
-        supersedes the fluid ion-neutral collision family wholesale and that
-        operator's momentum-transfer cross section is ``Qi + 2 Qb``, so
-        ``"off"`` deliberately omits the ``Qi`` half. Any other value raises
-        at construction.
     neutral_kinetic_dvm_exchange:
         Column/annulus zone-exchange closure of the transient DVM: the
         per-``(cell, v_perp)`` frequencies at which a neutral crosses
@@ -1073,9 +934,8 @@ def model_mode_defaults():
         ``neutral_kinetic_dvm_exchange`` still sets its escape rate
         ``nu_c->a`` and is not ignored. Neither branch has a free
         parameter. Inert unless ``neutral_model = "kinetic_dvm"``;
-        selecting ``"bounded_chord"`` without that model and the
-        ``neutral_two_zone`` flag, or any other value, raises at
-        construction.
+        selecting ``"bounded_chord"`` without that model, or any other
+        value, raises at construction.
     neutral_kinetic_dvm_cathode_jet:
         Whether the transient DVM splits the counted cathode recycle into an
         ENERGETIC BACKSCATTER share and a thermal remainder. Off, every
@@ -1305,26 +1165,6 @@ def model_mode_defaults():
         on the floor within the step and leaves nothing for the other terms.
         Inert unless ``neutral_model = "kinetic_dvm"``; raises at
         construction outside the interval.
-    neutral_kinetic_refresh_s:
-        Maximum interval [s] between full kinetic solves under
-        ``neutral_model = "kinetic"``. Between full refreshes the targets are
-        updated from the response functions frozen at the last one. Must be
-        positive; raises at construction otherwise. Inert under ``"moment"``.
-    neutral_kinetic_refresh_tol:
-        Relative drift in the neutral absorption field that forces a full
-        refresh early, ahead of ``neutral_kinetic_refresh_s``. The absorption
-        field is the response functions' only staleness channel; the test is
-        the maximum over cells of ``|nu_ion - nu_ref| / max(|nu_ref|, 1e2)``
-        against this value, so a larger tolerance permits staler response
-        functions between refreshes. Inert under ``"moment"``.
-    neutral_kinetic_nvz:
-        Number of axial-velocity (``v_z``) bins in the kinetic engine's
-        shared velocity grid. The axis is signed and stretched, placing bins
-        finely near zero. Inert under ``"moment"``.
-    neutral_kinetic_nvp:
-        Number of perpendicular-speed (``v_perp``) bins in that same grid.
-        This axis is positive-only -- it carries the 2D perpendicular speed
-        measure -- and is likewise stretched. Inert under ``"moment"``.
     adas_low_te_extension:
         Extends the ADAS ``acd`` (recombination) and ``prb1`` (recombination
         radiated power) coefficients consistently below the bundled ADF11
@@ -1370,10 +1210,6 @@ def model_mode_defaults():
         "hyperbolic_wave_speed": "adiabatic",
         "end_mode": "end_wall",
         "Ti_birth_ionization": "neutral",
-        "neutral_exchange_model": "knudsen",
-        # The ratified v1-primary: conductances frozen at Tn_K. Read only under
-        # the neutral_energy flag, which ships ON.
-        "neutral_knudsen_temperature": "frozen",
         "neutral_model": "moment",
         # The two DECLARED conventions of the electron drift-transport
         # operator. Both are bracket ENDPOINTS, not chosen readings: the
@@ -1387,14 +1223,8 @@ def model_mode_defaults():
         "operator_splitting": "strang",
         "implicit_heat_scheme": "tr_bdf2",
         # --- INERT under these defaults (kept for the A/B arms) ---
-        # Dead under neutral_model="moment" (the K4a kinetic engine, gated on
-        # neutral_two_zone, is the only consumer):
-        "neutral_kinetic_refresh_s": 5e-4,
-        "neutral_kinetic_refresh_tol": 0.2,
-        "neutral_kinetic_nvz": 48,
-        "neutral_kinetic_nvp": 12,
-        # Dead under neutral_model="moment" (the K2a transient DVM arm, also
-        # gated on neutral_two_zone, is the only consumer). The cadence is
+        # Dead under neutral_model="moment" (the K2a transient DVM arm is the
+        # only consumer). The cadence is
         # PROVISIONAL -- a conservative placeholder, not an accuracy result:
         "neutral_kinetic_dvm_cadence_s": 2.5e-5,
         "neutral_kinetic_dvm_nvz": 48,
@@ -1403,8 +1233,6 @@ def model_mode_defaults():
         # produce"; a positive float pins the half-extent [cm/s] instead:
         "neutral_kinetic_dvm_vmax_cm_s": None,
         "neutral_kinetic_dvm_accommodation": 0.40,
-        "neutral_kinetic_dvm_wall_reflection": "diffuse_elastic",
-        "neutral_kinetic_dvm_elastic": "phelps_iso",
         "neutral_kinetic_dvm_exchange": "cauchy_chord",
         "neutral_kinetic_dvm_annulus_flights": "rates",
         "neutral_kinetic_dvm_transfer_relax_fraction": 0.5,
@@ -1521,50 +1349,10 @@ def fudge_factor_defaults():
     b_surface_loss:
         Plasma surface neutralization/loss scale factor.
     b_ion_neutral_drag:
-        Ion-neutral drag (friction) momentum-sink scale factor. With the
-        ``constant`` drag model this is the whole neutral-flow closure,
-        asserting a fixed velocity slip ``u_n = (1 - b)*u`` everywhere; with
-        the ``slip`` model it remains as an overall multiplier (leave at 1
-        unless doing a sensitivity study).
-    ion_neutral_drag_model:
-        Closure for the neutral flow the drag acts against. ``"constant"``
-        (default) uses ``b_ion_neutral_drag`` alone. ``"slip"`` computes a
-        per-cell slip factor ``s = 1/(1 + E)`` from the entrainment balance
-        ``E = nu_ni * tau_wall`` (ions entrain neutrals at ``n*sigma_in*v_ti``;
-        neutrals lose the momentum to the wall in ``Rm / vbar_n``), so the slip
-        sweeps from ~1 in rarefied plasma to ~0 at full entrainment instead of
-        being asserted constant. Applies to the drag and frictional-heating
-        terms (the latter quadratically). The ``neutral_momentum`` flag
-        replaces both closures with an evolved neutral wind and is mutually
-        exclusive with ``"slip"`` (which is that equation's own steady state).
-    neutral_momentum_radial:
-        Radial closure for the evolved neutral wind (requires the
-        ``neutral_momentum`` flag; inert without it and errors if set to
-        ``"two_zone"`` while the flag is off). ``"uniform"`` (default, the
-        original M2 behaviour) treats ``M_n`` as radially uniform: the drag
-        pushes against the chamber-mean wind and the wall sink is
-        ``vbar_n/Rm``. ``"two_zone"`` closes the radial profile
-        algebraically (``neutral_wind_two_zone_factors``): drag acts only in
-        the plasma column, whose gas is entrained faster than it can escape
-        radially, while the annulus gas is held slow by diffuse wall
-        reflection -- so the drag, frictional heating, and ionization birth
-        sample the *column* wind (chamber mean times ~3.3 on production
-        geometry) and only the slow annulus gas reaches the wall (effective
-        sink ~1.9e3 1/s vs the uniform 4.9e3 1/s). Net effect: less drag
-        input, slower chamber-mean wind. ``"kinetic_two_moment"`` requires
-        ``neutral_two_zone`` and evolves separate column and annulus
-        momenta. Their radial exchange rates are fixed by the fast-ion and
-        300-K free-molecular crossing times; annulus momentum alone reaches
-        the vessel and optional baffles. This selector has no fitted
-        coefficient.
-    b_ion_neutral_thermalization:
-        Scale factor for the elastic ion-neutral thermal-equilibration term.
-        ``None`` (default) inherits ``b_ion_neutral_drag`` -- the historical
-        coupling, kept for reproducibility -- but that term relaxes
-        *temperature*, not momentum, so a slip-motivated drag scalar has no
-        physical business scaling it. Set explicitly (e.g. 1.0) to decouple;
-        an explicit value also frees the term from the ``ion_neutral_drag``
-        flag's zeroing.
+        Ion-neutral drag (friction) momentum-sink scale factor. Without an
+        evolved neutral momentum this is the whole neutral-flow closure of the
+        legacy drag term, asserting a fixed velocity slip ``u_n = (1 - b)*u``
+        everywhere (leave at 1 unless doing a sensitivity study).
     b_presheath_length:
         Scale factor on the collisional presheath depth `c_s / nu_in` used to
         sample the upstream density for the Bohm flux at plasma-terminating
@@ -1575,13 +1363,12 @@ def fudge_factor_defaults():
         depth. Inert in legacy geometry, which has no absorbing faces.
     sigma_in_model:
         Source of the ion-neutral momentum-transfer rate, which feeds the
-        drag, the slip closure's entrainment, thermalization, the drag
-        timestep bound, and the presheath depth.
+        drag, the drag timestep bound, and the presheath depth.
 
         ``"phelps"`` is the only accepted value: the definitive
         momentum-transfer rate, the same Phelps He+/He isotropic +
-        backscatter cross section the ``ion_neutral_moment_closure`` operator
-        uses, ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with
+        backscatter cross section the moment-closed ion-neutral collision
+        operator uses, ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with
         ``T_eff = (Ti + Tn)/2`` at the single cold-gas ``Tn`` (300 K). This
         ties the presheath sampling to the same collision physics as the
         drag. He-only, gated at construction; the legacy ``"constant"`` and
@@ -1611,8 +1398,8 @@ def fudge_factor_defaults():
         "alpha_front": 1.0,
         # Ion-neutral momentum-transfer rate, which also feeds the presheath
         # depth (electrode_sheath_alpha). "phelps" is the same cross section
-        # ion_neutral_moment_closure uses, and since D3 the only accepted
-        # value: the solver is helium-only.
+        # the moment-closed ion-neutral collision operator uses, and the only
+        # accepted value: the solver is helium-only.
         "sigma_in_model": "phelps",
         "D_amb": 0.0,          # dead with the deprecated D_amb_model
         # GCR-consistent recombination energy booking (default-off closure
@@ -1651,15 +1438,9 @@ def fudge_factor_defaults():
         # column near-Spitzer -- the startup-front pre-heating vs established-
         # column trade a single free-streaming factor cannot separate.
         "heat_flux_limiter_exponent": 1.0,
-        # Radial closure for the evolved neutral wind (needs the
-        # neutral_momentum flag; the deferred ladder).
-        "neutral_momentum_radial": "uniform",
-        # --- DEPRECATED: legacy ion-neutral drag (superseded by the Phelps
-        # ion_neutral_moment_closure). Warn on non-default/active use;
-        # retained runnable for reproducibility. ---
+        # Multiplier on the moment-closed ion-neutral collision coefficient
+        # and the drag timestep bound. Warns on a non-default value.
         "b_ion_neutral_drag": 1.0,
-        "ion_neutral_drag_model": "constant",
-        "b_ion_neutral_thermalization": None,
     }
 
 
@@ -2065,8 +1846,7 @@ def cathode_defaults():
         a SEPARATE tail end ledger and leaves the system.
         The walkers IONIZE and EXCITE the column gas they pass through: each
         group is marched on the CSDA module's own integration, attenuating on
-        the local COLUMN neutral density (under ``neutral_two_zone`` the
-        column channel ``nn``) with the He ionization and excitation cross
+        the local COLUMN neutral density (the column channel ``nn``) with the He ionization and excitation cross
         sections at the walker's CURRENT energy, simultaneously with its
         Coulomb slowing. Each ionization event births one ion/electron pair at
         the event cell on the beam's own birth convention, invests ``I_ion``,
@@ -2087,10 +1867,7 @@ def cathode_defaults():
         of 1e-12 (``_beam_deposition.HE_EII_EDGE_REL_TOL``), because
         ``phi_c`` at ``cathode_phi_c_cap_V`` can put the top of the spectrum
         on the edge to the last bit.
-        The range law is classical Coulomb. Not supported under
-        ``coverage_closure`` (the two-stream march shares one withholding bank
-        and its reservoir carries the density floor, so an edge solved there
-        would be a floor artifact) -- that raises.
+        The range law is classical Coulomb.
     heating_anomalous_tail_forward_fraction:
         The share of each launched tail population sent along +z -- the
         direction from the cathode toward the end wall, the one the beam
@@ -2551,20 +2328,6 @@ def physics_fit_defaults():
         specular (no energy exchange at the wall) and ``1`` is full
         accommodation in a single visit. Must lie in ``[0, 1]``; anything
         outside raises at construction.
-    neutral_wall_partition_sigma_hehe_cm2:
-        He--He MOMENTUM-TRANSFER cross section ``sigma_mt`` [cm^2] (the
-        ``Omega^(1,1)``-derived moment, NOT a total elastic one) setting the
-        neutral-neutral mean free path ``1/(nn_a sigma)`` that the
-        ``neutral_wall_momentum_partition`` flag uses to weight the two-zone
-        wall branch. The partition attenuates DIRECTED MOMENTUM, so the
-        forward-peaked small-angle encounters a total cross section counts at
-        full weight barely remove any, and a total would over-suppress the
-        wall branch. REQUIRED by that flag and read by nothing else: it has no
-        default, so arming the flag without it raises at construction, and
-        supplying it without the flag raises as well. Must be finite and
-        strictly positive.
-    neutral_exchange_coeff_cm3_s:
-        Constant neutral exchange coefficient for the constant model [cm^3/s].
     neutral_clausing_scale:
         Scale factor applied to the Knudsen tube and orifice conductances.
     """
@@ -2580,15 +2343,8 @@ def physics_fit_defaults():
         # neutral_energy flag is on, which ships ON -- so this key IS read
         # under the shipped defaults):
         "neutral_energy_wall_accommodation": 0.40,
-        # REQUIRED by the neutral_wall_momentum_partition flag (which ships
-        # off) and forbidden without it. None is the "not supplied" sentinel,
-        # not a physical value -- there is no defaulted He-He cross section.
-        "neutral_wall_partition_sigma_hehe_cm2": None,
-        # Only the "constant" neutral_exchange_model reads this (the default is
-        # "knudsen"):
-        "neutral_exchange_coeff_cm3_s": 1.0e5,
-        # LIVE on the default "knudsen" path (it scales every tube and orifice
-        # conductance); inert only because the default multiplier is 1.0:
+        # LIVE (it scales every Knudsen tube and orifice conductance); inert
+        # only because the default multiplier is 1.0:
         "neutral_clausing_scale": 1.0,
     }
 
@@ -2793,61 +2549,6 @@ def timestep_defaults():
     }
 
 
-def coverage_closure_defaults():
-    """Return clumpy-plasma coverage-closure defaults (v2, z-resolved).
-
-    Every key here is read ONLY under the ``coverage_closure`` flag and is
-    inert otherwise. The closure carries a PER-CELL coverage fraction
-    ``f_cov(z, t) in (0, 1]``: the plasma occupies that fraction of the column
-    cross-section at each axial position, so channel-local densities are the
-    mean divided by ``f_cov(z)`` and the remaining ``1 - f_cov(z)`` is a
-    neutral reservoir.
-
-    coverage_growth_rate_per_s:
-        Column-mean logistic growth rate ``r0`` [s^-1] of the coverage field,
-        which evolves as
-        ``df_cov(z)/dt = r0 * w(z, t) * f_cov(z) * (1 - f_cov(z))`` from its
-        initial condition at the plasma-phase time origin. ``w(z, t)`` is the
-        local beam-ionization rate normalized to its own volume-weighted
-        column mean, so ``<w> = 1`` by construction and ``r0`` keeps its
-        meaning as the mean rate -- it introduces no constant of its own and
-        is the calibration target. Must be finite and ``>= 0``; ``0`` freezes
-        the field at its initial condition. The law takes feedback from the
-        state (deposition depends on the coverage it drives), so the solver
-        CO-INTEGRATES it on the step's stage structure rather than evaluating
-        a closed form.
-    coverage_backfill_time_s:
-        Relaxation time ``tau_backfill`` [s] over which the uncovered
-        reservoir refills the covered column's neutral density toward the
-        cell mean. Must be finite and ``> 0``. The exchange moves no particles
-        between cells and none into or out of the conserved mean neutral
-        field, so total particle inventory is unaffected by construction.
-    coverage_initial_fraction:
-        UNIFORM initial coverage fraction ``f_cov0`` at the plasma-phase time
-        origin, applied to every cell. ``None`` (the default) is the only
-        value permitted with the flag off; with the flag on it must lie in
-        ``(0, 1]``. This is an initial condition, not a physical constant.
-    coverage_initial_profile:
-        PER-CELL initial coverage ``f_cov0(z)``: a sequence of length ``nx``
-        (the grid's cell count) with every entry finite and in ``(0, 1]``.
-        ``None`` (the default) is the only value permitted with the flag off.
-        With the flag on, EXACTLY ONE of this and
-        ``coverage_initial_fraction`` must be given -- they are two spellings
-        of the same initial condition and neither modifies the other, so
-        supplying both is a construction-time ``ValueError`` rather than a
-        rule the reader has to remember. This is the per-realization ensemble
-        hook: the solver contains no randomness, and an ensemble is generated
-        by building profiles externally and passing them here, one run per
-        realization.
-    """
-    return {
-        "coverage_growth_rate_per_s": 1390.0,
-        "coverage_backfill_time_s": 3.0e-5,
-        "coverage_initial_fraction": None,
-        "coverage_initial_profile": None,
-    }
-
-
 def restart_defaults():
     """Continuation of a previous run from an exported end state.
 
@@ -2863,7 +2564,8 @@ def restart_defaults():
         The load raises ``ValueError`` at construction if the file is missing,
         carries another format, or was produced under a different grid, packed
         state layout, or structural closure key; and if the run also requests
-        ``neutral_equilibration`` (which would overwrite the restored state) or
+        an equilibrating ``initial_neutral_state`` (which would overwrite the
+        restored state) or
         a ``neutral_model`` whose distribution function the payload does not
         carry. The full inventory, and the justification for each deliberately
         dropped member, is ``_sim1d/results/restart.py`` together with the
@@ -2872,127 +2574,6 @@ def restart_defaults():
     """
     return {
         "restart_from": None,
-    }
-
-
-def neutral_probe_source_defaults():
-    """Ad-hoc probe neutral source ``S_probe(z, t)`` (v1, moment model only).
-
-    Every key here is read ONLY under the ``neutral_probe_source`` flag and is
-    inert otherwise; with the flag off each must sit at its ``None`` default or
-    construction raises. Nothing in this group has a shipped value: the source
-    is an INSTRUMENT whose whole content is what the caller asks for, so there
-    is no default amplitude, shape, waveform or placement to inherit.
-
-    The term is a volumetric particle source on the neutral density equation,
-
-        S_probe(z, t) = A * p(z) * w(t)   [cm^-3 s^-1],
-
-    added to ``dn_n/dt`` as its own named RHS row (``neutral_probe_source``).
-    Its injection conventions -- zero net momentum, and the single cold-gas
-    ``Tn_K`` population -- are documented on
-    ``physics.neutrals.neutral_probe_source_rhs``, which is the term.
-
-    The source is a PLASMA-RUN source. Whenever the solver is on the
-    neutral-only implicit stepper (the ``Plasma`` flag off, or the
-    ``neutral_prebreakdown`` phase) the term is identically zero, so a probe
-    can neither fuel a pre-shot fill nor reach a cached neutral-equilibration
-    seed.
-
-    neutral_probe_amplitude_cm3_s:
-        Amplitude ``A`` [cm^-3 s^-1]: the source rate at ``w = 1``, averaged
-        over the whole grid weighted by chamber (neutral) cell volume. The
-        axial profile is normalized so that mean is exactly ``A``, which makes
-        the volume-integrated influx ``A * w(t) * sum(V_chamber)``
-        [particles/s] independent of the grid and of the profile's own scale.
-        Must be finite and ``>= 0``; ``0`` is an explicit null-control arm, not
-        a default.
-    neutral_probe_profile:
-        PER-CELL axial shape ``p(z)``: a sequence of length ``nx`` (the grid's
-        cell count), every entry finite and ``>= 0``, not all zero. Supplied
-        as a SHAPE -- its overall scale is divided out by the normalization
-        above, so only its relative form matters. This is the
-        externally-computed-profile hook: the solver contains no randomness and
-        does no file I/O, so an arbitrary hypothesized axial source is built
-        outside and passed here. EXACTLY ONE of this and
-        ``neutral_probe_shape`` must be given with the flag on.
-    neutral_probe_shape:
-        Built-in parametric profile family, for arms that need no profile
-        file. ``"gaussian"`` is the only member:
-        ``p(z) = exp(-(z - z0)^2 / (2 sigma^2))`` sampled at cell centres, with
-        ``z0 = neutral_probe_center_cm`` and ``sigma = neutral_probe_width_cm``,
-        both then required. EXACTLY ONE of this and ``neutral_probe_profile``
-        must be given with the flag on.
-    neutral_probe_center_cm:
-        Gaussian centre ``z0`` [cm] on the same axial coordinate as
-        ``geometry.z_cm``. Required with ``neutral_probe_shape="gaussian"`` and
-        forbidden otherwise. Must be finite; a centre outside the grid is
-        permitted (it is a one-sided tail, not an error).
-    neutral_probe_width_cm:
-        Gaussian standard deviation ``sigma`` [cm]. Required with
-        ``neutral_probe_shape="gaussian"`` and forbidden otherwise. Must be
-        finite and ``> 0``.
-    neutral_probe_waveform:
-        Time dependence ``w(t)``, dimensionless, on the ABSOLUTE solver clock
-        (seconds since the start of the run, the same ``time`` the RHS is
-        evaluated at). One of:
-
-        * ``"const"`` -- ``w = 1`` for all time; no further keys.
-        * ``"square"`` -- ``w = 1`` on ``[t_on, t_off)`` and ``0`` outside;
-          ``neutral_probe_t_on_s`` and ``neutral_probe_t_off_s`` required.
-          The edges are hard: nothing is smoothed and no smoothing constant
-          exists. Both edges are registered as step boundaries, which keeps
-          the APPLIED rate a square; the delivered inventory does not depend
-          on that and is exact on any lattice.
-        * ``"table"`` -- ``neutral_probe_waveform_table`` required; linear
-          interpolation between its nodes and exactly ``0`` outside their
-          span.
-
-        There is no default: the waveform decides what a probe arm measured,
-        so it is stated rather than inherited.
-
-        Whatever the form, the integration stages consume the waveform's EXACT
-        AVERAGE over the step being taken, not its value at the stage times,
-        so the inventory a run delivers is ``A * int w dt * sum(V)`` exactly
-        -- the hypothesis as stated, independent of the step lattice. See
-        ``physics.neutrals.neutral_probe_waveform_mean`` for why a pointwise
-        waveform would not be.
-    neutral_probe_t_on_s:
-        Square-waveform rising edge [s], absolute solver clock. Required with
-        ``neutral_probe_waveform="square"`` and forbidden otherwise. Must be
-        finite and strictly less than ``neutral_probe_t_off_s``.
-    neutral_probe_t_off_s:
-        Square-waveform falling edge [s], absolute solver clock. Required with
-        ``neutral_probe_waveform="square"`` and forbidden otherwise.
-    neutral_probe_waveform_table:
-        Tabulated ``w(t)`` as a sequence of ``[t_s, w]`` pairs: at least two
-        rows, ``t`` strictly increasing, every entry finite and every ``w``
-        ``>= 0``. Required with ``neutral_probe_waveform="table"`` and
-        forbidden otherwise. ``w`` is ``0`` strictly outside the tabulated
-        span -- a table states what the source does at the times it lists, and
-        holding an end value indefinitely would deliver inventory nobody asked
-        for.
-    neutral_probe_zone:
-        Which neutral zone the source feeds under the ``neutral_two_zone``
-        closure: ``"column"`` (the plasma column, ``nn``) or ``"annulus"``
-        (the surrounding chamber, ``nn_a``). Required when that flag is on --
-        the two land the gas in different places and the plasma's response to
-        them differs, so there is no defensible default -- and forbidden when
-        it is off, where there is only one neutral field. Where a cell has no
-        annulus (``V_ann = 0``) an annulus-routed source falls back to the
-        column for that cell, exactly as the gas puff does.
-    """
-    return {
-        "neutral_probe_amplitude_cm3_s": None,
-        "neutral_probe_profile": None,
-        "neutral_probe_shape": None,
-        "neutral_probe_center_cm": None,
-        "neutral_probe_width_cm": None,
-        "neutral_probe_waveform": None,
-        "neutral_probe_t_on_s": None,
-        "neutral_probe_t_off_s": None,
-        "neutral_probe_waveform_table": None,
-        "neutral_probe_zone": None,
     }
 
 
@@ -3194,9 +2775,7 @@ _PARAMETER_DEFAULT_GROUPS = (
     cathode_defaults,
     physics_fit_defaults,
     timestep_defaults,
-    coverage_closure_defaults,
     restart_defaults,
-    neutral_probe_source_defaults,
     regime_tracer_defaults,
     parallel_momentum_sink_defaults,
 )
@@ -3287,20 +2866,6 @@ input_flags_template_1d = {
     # Thin annular apertures. Positions and clear radii are required together
     # when on and forbidden when off; the plasma channel stays open.
     "neutral_baffles": False,
-    # Make those same baffles act on the transient DVM's annulus as well as on
-    # the fluid neutral field. The fluid books each one as a zero-thickness
-    # series orifice of open area pi(R_clear^2 - R_col^2) on the annulus
-    # conductance alone; on the kinetic arm the annulus flux crossing each
-    # baffle face is INTERCEPTED in the blocked fraction of the face area and
-    # re-emitted at the wall temperature in the cell it came from, particle-
-    # conserving, in the anode mesh's channel form. The column is untouched in
-    # both, because a baffle's bore is at least the local plasma radius. Adds
-    # no coefficient: the clear radius is the geometry's measured CAD value.
-    # REQUIRES neutral_model='kinetic_dvm' and the neutral_baffles flag with
-    # its two arrays; refused at construction otherwise. Default OFF and
-    # bit-exact off, including on a geometry whose baffles are armed for the
-    # fluid.
-    "neutral_kinetic_dvm_baffles": False,
     # Fixed-cell-size source region, so a mesh refinement study is not
     # self-confounding: the column between the anode face and
     # source_region_length_cm is meshed at exactly source_region_dz_cm
@@ -3352,65 +2917,12 @@ input_flags_template_1d = {
     # plasma energy K+Ee+Ei telescopes LOCALLY, against a face flux that
     # carries the enthalpy.
     "hyperbolic_energy_consistent": True,
-    # Ion-neutral friction. Implemented as a SCALE TO ZERO rather than a branch:
-    # off forces b_ion_neutral_drag = 0.0 in every collision bundle, which
-    # short-circuits the drag term, its frictional heating, its neutral-energy
-    # channel and its timestep bound alike. The zeroing also reaches the
-    # thermalization term unless b_ion_neutral_thermalization is set explicitly,
-    # which frees that term from this flag. Inert under
-    # ion_neutral_moment_closure, where the drag is folded into the moment-closed
-    # collision term and this flag reaches only that operator's coefficient.
-    "ion_neutral_drag": True,
-    # Which collision frequency drives the drag. OFF uses the total ion-neutral
-    # frequency (resonant charge exchange plus elastic momentum transfer); ON
-    # uses the resonant charge-exchange frequency ALONE, dropping the elastic
-    # channel. Inert under ion_neutral_moment_closure.
-    "ion_neutral_drag_cx_only": False,
     # Evolve axial neutral momentum M_n as a sixth conservative field:
     # the drag deposits its momentum into the
     # neutral wind instead of a closure, ionization/recombination exchange
-    # momentum between species, and the wall/pump remove it. Mutually
-    # exclusive with ion_neutral_drag_model="slip", whose closure is this
-    # equation's own local steady state. Off => the 5-field state.
+    # momentum between species, and the wall/pump remove it. Off => the
+    # 5-field state.
     "neutral_momentum": True,
-    # Split the neutral density into plasma-column and annulus zones:
-    # an optional conservative field nn_a
-    # carries the annulus density and nn becomes the COLUMN density. Axial
-    # Knudsen transport runs per zone (the annulus is a free conduit), the
-    # zones exchange free-molecularly at the column surface, and the
-    # plasma only ever absorbs column gas. Requires
-    # neutral_exchange_model="knudsen" (the per-zone conductances have no
-    # constant counterpart). Off => single-field
-    # chamber-mean nn.
-    "neutral_two_zone": True,
-    # Route the END-REGION recycle stream into the annulus. The plasma-
-    # terminating faces whose live cell has the END WALL role rebirth their
-    # absorbed flux as thermal diffuse gas in that cell's annulus row nn_a
-    # (dN_loss / V_ann) instead of in its column row nn; the CATHODE faces are
-    # untouched, so the ratified jet/debit closure over them is unchanged. The
-    # plasma-side rows (n, M, Ee, Ei and the sonic momentum debit) are
-    # unchanged either way -- this moves where the returning atoms land, not
-    # how much plasma the surface takes. The routed atoms carry NO directed
-    # momentum, on M_n or M_n_a: a diffuse thermal re-emission has none, and
-    # the chamber-mean wind is left alone.
-    #
-    # ENERGY. The recycled atoms are booked at the wall temperature exactly
-    # once. The routed stream leaves the column nn row, and with it the
-    # (3/2) k T_wall column-En credit the neutral-energy routing table grants
-    # every "wall" source; the annulus carries no energy field, and the
-    # zone-exchange convention already re-supplies wall-temperature enthalpy
-    # when annulus gas re-enters the column. Booking both would plant the same
-    # energy twice.
-    #
-    # Requires neutral_two_zone (the destination row must exist), refuses
-    # any geometry whose routed end wall cell has no annulus (V_ann = 0),
-    # and refuses a kinetic neutral_model ('kinetic', 'kinetic_dvm'), whose
-    # end wall wall-return source channel counts the column nn row alone and
-    # would therefore lose the routed stream entirely; all three are
-    # construction-time ValueErrors. Default OFF and bit-exact off
-    # (presence-gated: the off path passes no annulus volume to the
-    # boundary term and adds no nn_a row).
-    "end_recycle_to_annulus": False,
     # Evolve the neutral thermal energy density En as an optional conservative
     # field, packed last, AND with it the decoupled two-channel neutral gas the
     # field only makes sense inside.
@@ -3435,59 +2947,12 @@ input_flags_template_1d = {
     # the wall), in re-CX (momentum and energy handed to the ions where they
     # got to), or ionized in flight.
     #
-    # Requires ion_neutral_moment_closure and neutral_momentum; refuses
-    # coverage_closure (its deficit partitions nn only, so a mean En under
-    # concentration would be an unstated closure), the two-momentum reduction
-    # (an annulus momentum row with no annulus energy row), and every kinetic
-    # neutral model (which carries the neutral energy as a moment of f). With
+    # Requires neutral_momentum; refuses every
+    # kinetic neutral model (which carries the neutral energy as a moment of f). With
     # cathode_neutral_jet it additionally requires cathode_jet_surface_debit,
     # so the backscatter energy is booked once rather than twice. Each is a
     # construction-time ValueError. Off => the historical layout, bit-exact.
     "neutral_energy": True,
-    # Launch the hot channel's CX-born atoms at the local (Ti, u_i) instead of
-    # at Ti alone: the ion drift enters the ballistic flight kinematics as
-    # v_z = v_hot*mu + u_i, so the axial hop becomes
-    # dz = chord*(mu + m)/sqrt(1 - mu^2) with m = u_i/v_hot, and the landing,
-    # residence and end-plane matrices become row-wise drift-asymmetric.
-    # Consumed by the neutral_hot_channel term alone (physics.hot_neutrals):
-    # it selects directed_flight_kernels over ballistic_flight_kernels and
-    # additionally computes the hot_n_flight / hot_flux_z streaming
-    # diagnostics, which read zero when this flag is off.
-    #
-    # mu stays uniform on [-1, 1] and v_perp is untouched (the drift is axial),
-    # so nu_ball = v_hot/Rp, every branching ratio and the standing population
-    # are unchanged; only WHERE the flights get to moves. The momentum a hot
-    # atom carries, p_hot = m*u_i, is the launch MEAN and already directed, so
-    # no new momentum source is booked and the ion/cold/hot closure is the same
-    # one. No new constant: m is local state.
-    #
-    # COST: the kernel stops being a pure function of the geometry (the speed
-    # no longer cancels from dz), so it is rebuilt on every RHS evaluation
-    # rather than once per run.
-    #
-    # Requires neutral_energy -- there is no hot channel to launch without it
-    # -- as a construction-time ValueError. Default OFF and bit-exact off
-    # (presence-gated: the off path builds no drift kernel and the isotropic
-    # one is untouched).
-    "neutral_hot_birth_drift": False,
-    # Partition the two-zone WALL BRANCH of the neutral momentum ledger. The
-    # free-molecular wall sink -nu_wall*M_n_a assumes every annulus atom
-    # reaches the vessel wall; at finite gas density a He-He elastic collision
-    # can intercept it first, and that momentum stays in the annulus gas
-    # instead of accommodating on the surface. The surviving fraction is the
-    # cosine-averaged slab transmission 2*E_3(tau) across the annulus radial
-    # thickness, tau = (Rm - Rp)*nn_a*sigma_HeHe (see
-    # physics.sources.neutral_wall_partition_survival). MOMENTUM ONLY: the
-    # particle and energy channels are untouched.
-    #
-    # Requires neutral_momentum_radial='kinetic_two_moment' (the only closure
-    # that owns a wall branch on its own annulus momentum row) and REQUIRES
-    # neutral_wall_partition_sigma_hehe_cm2, which has no default -- arming the
-    # flag without it raises at construction, and setting the cross section
-    # without the flag raises too. Default OFF and bit-exact off (presence
-    # gated: the off path passes sigma_hehe_cm2=None and the operator's
-    # arithmetic is unchanged).
-    "neutral_wall_momentum_partition": False,
     # Wall the hot channel's ballistic flight at the INTERNAL plasma
     # boundaries, not only at the two global end planes. The walls are the
     # closed plasma faces (geometry.plasma_open false: every face where a
@@ -3496,7 +2961,7 @@ input_flags_template_1d = {
     # refinement of that set. A flight reaching one is clipped to the wall
     # plane and the atom is booked in the cell on its OWN side of it, which is
     # exactly the fold/absorb treatment the end planes already get; the landed
-    # atoms rejoin the COLD neutral books (nn, or nn_a under neutral_two_zone)
+    # atoms rejoin the COLD neutral books (nn, or the annulus nn_a)
     # at that boundary-adjacent cell, at the unchanged landing energy.
     #
     # PER-CELL BEHAVIOUR. Every cell is confined to its own contiguous run of
@@ -3514,9 +2979,7 @@ input_flags_template_1d = {
     # had.
     #
     # Consumed by the neutral_hot_channel term alone (physics.hot_neutrals):
-    # it is passed to ballistic_flight_kernels, and to directed_flight_kernels
-    # under neutral_hot_birth_drift so the two kernels cannot disagree about
-    # where the walls are. hot_end_fraction then reads "folded at a wall"
+    # it is passed to ballistic_flight_kernels. hot_end_fraction then reads "folded at a wall"
     # rather than "folded at an end plane".
     #
     # Requires neutral_energy -- there is no hot channel to wall without it --
@@ -3524,39 +2987,6 @@ input_flags_template_1d = {
     # the off path's wall bounds ARE the two end planes, so every clip reduces
     # to the historical one).
     "neutral_hot_internal_wall": True,
-    # Shaped initial neutral fill. The run's neutral IC comes from a PER-CELL
-    # profile of absolute densities (nn0_profile, and optionally
-    # nn0_annulus_profile under neutral_two_zone) instead of the uniform
-    # scalar nn0. Values, not a shape: nothing is rescaled or normalized, so
-    # the array IS the initial condition. Requires nn0_profile, requires
-    # nn0 = None (the scalar is superseded, and an armed flag with an
-    # explicit scalar raises rather than establishing a
-    # silent precedence), and REFUSES neutral_equilibration and restart_from
-    # -- both of those overwrite nn after construction, so a shaped IC under
-    # either would be silently discarded. Each is a construction-time
-    # ValueError, as is either profile key set with this flag off. Default
-    # OFF and bit-exact off (presence-gated: the off path builds no profile
-    # and the initial condition is the historical uniform fill).
-    "neutral_initial_profile": False,
-    # The elastic ion-neutral thermal-equilibration source: an Ei relaxation
-    # toward the neutral temperature Tn_fit, scaled by
-    # b_ion_neutral_thermalization (which falls back to b_ion_neutral_drag when
-    # left at None). Gated SEPARATELY from ion_neutral_drag, so the friction and
-    # the thermal equilibration can be armed independently. Off returns a zero
-    # RHS. Superseded by ion_neutral_moment_closure, which zeroes this term
-    # ahead of the flag entirely. A non-default value warns at construction
-    # (deprecation register).
-    "ion_neutral_thermalization": False,
-    # Replace the drag + frictional-heating + elastic thermalization +
-    # CX-cooling quartet with ONE moment-closed reduced ion-neutral collision
-    # operator (Phelps He+/He isotropic+backscatter rates, T_eff=(Ti+Tn)/2).
-    # Presence-gated: when ON the four legacy ion-neutral terms are forced to
-    # zero and this single operator runs; when OFF it is a strict no-op.
-    # He-only. Uses the single cold-gas Tn_K for the neutral temperature,
-    # ending the Tn_K/Tn_fit term-by-term mix. With this ON the ad-hoc
-    # b_ion_neutral_drag / slip closures are
-    # superseded and DEPRECATED.
-    "ion_neutral_moment_closure": True,
     # The cathode/anode/bank circuit solve. OFF, no cathode solve is produced
     # for the whole run: the boundary carries no device current or voltage, the
     # cathode and anode jets return nothing, and the tracer's beam rows get no
@@ -3571,40 +3001,11 @@ input_flags_template_1d = {
     # with no anode collection.
     # A structural restart key.
     "cathode_coupling": True,
-    # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON while
-    # tau_neutral_prebreakdown defaults to 0.0: the duration alone decides
-    # whether the phase runs, so ON + zero duration is already inert
-    # (`_neutral_prebreakdown_duration` returns 0.0 either way, which is why
-    # flipping this to False would be bit-exact and buys nothing). What it
-    # would cost is the opt-in: a study that sets a positive
-    # tau_neutral_prebreakdown would then get NO phase and no error -- exactly
-    # the silent fallback the house rules forbid. Keeping it True leaves the
-    # duration as the single sufficient control.
-    "neutral_prebreakdown": True,
-    # The pre-run puff/off neutral accumulation that seeds nn. ONLY
-    # start_simulation() honours it: an inner sim runs with Plasma,
-    # cathode_coupling, this flag and launch_plasma_after_equilibration all off,
-    # for neutral_equilibration_cycles at neutral_equilibration_dt, and its
-    # settled neutral state becomes the outer run's initial fill. Calling run()
-    # directly with this ON performs NO equilibration and WARNS rather than
-    # raising, since the run is well defined -- it just starts from the direct
-    # nn0 fill. One of the three mutually exclusive initial-neutral-state routes.
-    # Refused with restart_from (a restart payload IS the neutral seed, and the
-    # accumulation would overwrite the restored state) and with
-    # neutral_initial_profile (which the accumulation would likewise discard);
-    # both at construction.
-    "neutral_equilibration": True,
-    # Whether start_simulation() proceeds into the plasma run after that
-    # accumulation. OFF, it stops and returns the equilibration result itself,
-    # which is how the neutral-only seed is produced. Pinned off on the
-    # equilibration inner sim. use_cached_neutral_seed requires it ON -- with
-    # nothing launched there is nothing for the cached seed to seed.
-    "launch_plasma_after_equilibration": True,
     # Reuse a cached neutral-equilibration seed (the equilibrated nn/nn_a
     # profile) instead of re-running the ~1-min 100-cycle equilibration every
     # run. Default OFF and bit-exact off.
-    # When ON, requires neutral_equilibration + launch_plasma_after_equilibration
-    # ON and a neutral_seed_cache_dir (the signature-keyed seed DATABASE):
+    # When ON, requires initial_neutral_state = "equilibrate" and a
+    # neutral_seed_cache_dir (the signature-keyed seed DATABASE):
     # a miss (new neutral-flow config) equilibrates once and stores it. See
     # core/neutral_seed_cache.py and scripts/run/build_neutral_seed_cache.py.
     "use_cached_neutral_seed": False,
@@ -3629,39 +3030,13 @@ input_flags_template_1d = {
     # Set that key to 0.0 for the knife edge, where any real margin re-admits
     # the cell immediately.
     "surface_loss_floor_exempt": True,
-    # Clumpy-plasma coverage closure v1. Breakdown in the machine is
-    # azimuthally patchy -- discrete channels carry the discharge -- which the
-    # 1D mean-field solver azimuthally averages away. When ON, a scalar
-    # coverage fraction f_cov(t) in (0, 1] splits the beam by AREA between the
-    # covered channels (concentrated plasma, n -> n/f_cov) and the uncovered
-    # reservoir (tenuous, its own neutrals), and splits the neutrals into a
-    # burnt covered column and a reservoir that refills it. The MEAN equations
-    # are untouched, so total particle inventory is conserved identically; at
-    # f_cov = 1 every factor reduces to the shipped model. Default OFF and
-    # bit-exact off (presence-gated: the off path never builds the coverage
-    # view and every consumer keeps its historical argument list). Requires
-    # coverage_initial_fraction, neutral_model="moment", no beam clumping, and the pure-Python kernels;
-    # each is a construction-time ValueError.
-    "coverage_closure": False,
-    # Ad-hoc probe neutral source S_probe(z,t) = A p(z) w(t), a volumetric
-    # particle source on the neutral density equation. An INFERENCE
-    # INSTRUMENT: an arm with this on measures the plasma's response to a
-    # hypothesized neutral source, so it is never a validation channel and a
-    # run carrying it must say so. Supports the moment neutral model only
-    # (the kinetic arms take over the fluid nn rows). Requires an amplitude,
-    # exactly one of neutral_probe_profile / neutral_probe_shape, a waveform
-    # with its own keys, and -- under neutral_two_zone -- an explicit
-    # neutral_probe_zone; each is a construction-time ValueError, as is any of
-    # the ten keys set with this flag off. Default OFF and bit-exact off
-    # (presence-gated: the off path builds no profile and adds no RHS row).
-    "neutral_probe_source": False,
     # Pre-breakdown PASSIVE-TRACER bridge (regime R2). On a cell that is still
     # passive -- conducting a negligible share of the loop current, absorbing a
     # negligible share of the beam's single pass, and burning a negligible
     # share of the local neutrals -- the plasma feeds back on nothing, so its
     # density is integrated as the EXACT solution of the affine scalar ODE
     # dn/dt = gamma*n + S while the background (circuit ramp, cathode thermal,
-    # coverage, neutrals) owns the timestep. That removes the floor-poisoned
+    # neutrals) owns the timestep. That removes the floor-poisoned
     # dt collapse the fluid solver suffers when n sits near ne_floor, and makes
     # n = 0 a regular state, so ne0 = 0 is a legitimate initial condition.
     # Cells hand back to the full solver individually, at a closed interface
@@ -3812,11 +3187,6 @@ input_flags_template_1d = {
     # not a config knob. Note atomic_rate_model="janev" double-counts this
     # channel. Also read by the tracer's quasi-static Te balance.
     "ionization_energy_cost": True,
-    # The ion charge-exchange cooling term (an Ei sink). Off returns a zero RHS
-    # for it. Superseded by ion_neutral_moment_closure, which folds CX cooling
-    # into the moment-closed collision term and zeroes this row ahead of the
-    # flag -- so with that closure on, this flag reaches nothing.
-    "cx": True,
     # Charge the bare ADAS PRB -- the recombination and bremsstrahlung radiated
     # power -- as an electron cooling channel. Off, the PRB block is not even
     # requested and the channel is absent from the cooling sum. Two
@@ -4041,6 +3411,170 @@ RETIRED_PARAM_KEYS = {
         "nothing: a new electron is born cold, so no birth temperature is "
         "read"
     ),
+    # Neutral and ion-neutral experiment keys, removed with the closures they
+    # served. Selectors whose one surviving value is now unconditional name
+    # that behaviour; the rest name nothing.
+    "neutral_probe_amplitude_cm3_s": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_probe_profile": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_probe_shape": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_probe_center_cm": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_probe_width_cm": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_probe_waveform": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_probe_t_on_s": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_probe_t_off_s": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_probe_waveform_table": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_probe_zone": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_wall_partition_sigma_hehe_cm2": (
+        "nothing: the wall-branch momentum partition it weighted is removed"
+    ),
+    "neutral_knudsen_temperature": (
+        "nothing: the Knudsen conductances are evaluated once at Tn_K "
+        "('frozen'), unconditionally"
+    ),
+    "neutral_momentum_radial": (
+        "nothing: the evolved neutral wind is radially uniform ('uniform'), "
+        "unconditionally"
+    ),
+    "neutral_kinetic_refresh_s": (
+        "nothing: the relaxation-coupled kinetic neutral engine "
+        "(neutral_model='kinetic') is removed; neutral_model='kinetic_dvm' "
+        "is the kinetic neutral closure"
+    ),
+    "neutral_kinetic_refresh_tol": (
+        "nothing: the relaxation-coupled kinetic neutral engine "
+        "(neutral_model='kinetic') is removed; neutral_model='kinetic_dvm' "
+        "is the kinetic neutral closure"
+    ),
+    "neutral_kinetic_nvz": (
+        "nothing: the relaxation-coupled kinetic neutral engine "
+        "(neutral_model='kinetic') is removed; neutral_model='kinetic_dvm' "
+        "is the kinetic neutral closure"
+    ),
+    "neutral_kinetic_nvp": (
+        "nothing: the relaxation-coupled kinetic neutral engine "
+        "(neutral_model='kinetic') is removed; neutral_model='kinetic_dvm' "
+        "is the kinetic neutral closure"
+    ),
+    "ion_neutral_drag_model": (
+        "nothing: the legacy drag's neutral flow is closed by the constant "
+        "b_ion_neutral_drag ('constant'), unconditionally"
+    ),
+    "b_ion_neutral_thermalization": (
+        "nothing: the elastic ion-neutral thermalization term it scaled is "
+        "removed"
+    ),
+    "coverage_growth_rate_per_s": (
+        "nothing: the clumpy-plasma coverage closure is removed"
+    ),
+    "coverage_backfill_time_s": (
+        "nothing: the clumpy-plasma coverage closure is removed"
+    ),
+    "coverage_initial_fraction": (
+        "nothing: the clumpy-plasma coverage closure is removed"
+    ),
+    "coverage_initial_profile": (
+        "nothing: the clumpy-plasma coverage closure is removed"
+    ),
+    # The adopted neutral, ion-neutral and gas-puff selections, whose keys
+    # had one legal value left, and the puff shapes and waveforms they
+    # retired.
+    "neutral_exchange_model": (
+        "nothing: axial neutral exchange is Knudsen transport "
+        "('knudsen'), unconditionally"
+    ),
+    "neutral_exchange_coeff_cm3_s": (
+        "nothing: the constant axial neutral exchange model it fed is "
+        "removed"
+    ),
+    "neutral_kinetic_dvm_elastic": (
+        "nothing: the kinetic_dvm arm carries the polarization-elastic "
+        "channel ('phelps_iso'), unconditionally"
+    ),
+    "neutral_kinetic_dvm_wall_reflection": (
+        "nothing: the kinetic_dvm arm returns the non-accommodated wall "
+        "share on the energy-matched cosine spectrum "
+        "('diffuse_elastic'), unconditionally"
+    ),
+    "gas_puff_mode": (
+        "nothing: the gas puff is the square valve pulse, "
+        "unconditionally; its edges are gas_puff_rise_center_s, "
+        "gas_puff_rise_width_s and gas_puff_close_lag_s"
+    ),
+    "gas_puff_profile": (
+        "nothing: the puff's axial shape is the tube-beamed orifice "
+        "row, unconditionally; its pipe is gas_puff_orifice_id_cm and "
+        "gas_puff_orifice_length_cm"
+    ),
+    "gas_puff_sigma_cm": (
+        "nothing: the gaussian puff shape it widened is removed"
+    ),
+    "gas_puff_throw_cm": (
+        "nothing: the cosine_pipe puff shape it set is removed"
+    ),
+    "gas_puff_local_ionization_fraction": (
+        "nothing: the in-place puff ionization channel is removed (the "
+        "two-zone puff routes through the annulus)"
+    ),
+    "S_gp_decay_target": (
+        "nothing: the pulse, decay and double_erf puff waveforms it "
+        "served are removed; the gas puff is the square valve pulse"
+    ),
+    "Twin_S_gp_decay_target": (
+        "nothing: the pulse, decay and double_erf puff waveforms it "
+        "served are removed; the gas puff is the square valve pulse"
+    ),
+    "tau_gp_after_breakdown": (
+        "nothing: the pulse, decay and double_erf puff waveforms it "
+        "served are removed; the gas puff is the square valve pulse"
+    ),
+    "tau_gp_decay_factor": (
+        "nothing: the pulse, decay and double_erf puff waveforms it "
+        "served are removed; the gas puff is the square valve pulse"
+    ),
+    "tau_gp_pulse_duration": (
+        "nothing: the pulse, decay and double_erf puff waveforms it "
+        "served are removed; the gas puff is the square valve pulse"
+    ),
+    "tau_gp_decay_duration": (
+        "nothing: the pulse, decay and double_erf puff waveforms it "
+        "served are removed; the gas puff is the square valve pulse"
+    ),
+    "tau_gp_rise_center": (
+        "nothing: the pulse, decay and double_erf puff waveforms it "
+        "served are removed; the gas puff is the square valve pulse"
+    ),
+    "tau_gp_rise_width": (
+        "nothing: the pulse, decay and double_erf puff waveforms it "
+        "served are removed; the gas puff is the square valve pulse"
+    ),
+    "tau_gp_drop_center": (
+        "nothing: the pulse, decay and double_erf puff waveforms it "
+        "served are removed; the gas puff is the square valve pulse"
+    ),
+    "tau_gp_drop_width": (
+        "nothing: the pulse, decay and double_erf puff waveforms it "
+        "served are removed; the gas puff is the square valve pulse"
+    ),
 }
 
 
@@ -4127,6 +3661,72 @@ RETIRED_FLAG_KEYS = {
     ),
     "beam_ionization_birth_timestep_bound": (
         "nothing: the beam ionization-birth row is in no timestep bound"
+    ),
+    # Neutral and ion-neutral experiment flags, removed with the closures
+    # they served.
+    "end_recycle_to_annulus": (
+        "nothing: the end wall recycle is rebirthed on the column row, "
+        "unconditionally"
+    ),
+    "neutral_hot_birth_drift": (
+        "nothing: the hot channel's CX-born atoms launch at the local Ti "
+        "alone, unconditionally"
+    ),
+    "neutral_probe_source": (
+        "nothing: the ad-hoc probe neutral source is removed"
+    ),
+    "neutral_wall_momentum_partition": (
+        "nothing: the wall-branch momentum partition is removed with the "
+        "kinetic_two_moment radial closure"
+    ),
+    "ion_neutral_drag_cx_only": (
+        "nothing: the legacy drag is driven by the total ion-neutral "
+        "momentum-transfer frequency, unconditionally"
+    ),
+    "ion_neutral_thermalization": (
+        "nothing: the elastic ion-neutral thermalization term is removed"
+    ),
+    "coverage_closure": (
+        "nothing: the clumpy-plasma coverage closure is removed"
+    ),
+    # The initial-neutral-state flags, folded into one selector.
+    "neutral_equilibration": (
+        "initial_neutral_state: 'equilibrate' (or 'equilibrate_only' where "
+        "launch_plasma_after_equilibration was off) for the ON value, and "
+        "'fill' (or 'profile' where neutral_initial_profile was on) for OFF"
+    ),
+    "launch_plasma_after_equilibration": (
+        "initial_neutral_state: 'equilibrate' launches the plasma run after "
+        "the accumulation, 'equilibrate_only' stops there"
+    ),
+    "neutral_initial_profile": (
+        "initial_neutral_state='profile'"
+    ),
+    # The adopted neutral and ion-neutral flags: the behaviour is
+    # unconditional.
+    "cx": (
+        "nothing: charge-exchange cooling is carried by the "
+        "moment-closed ion-neutral collision operator, unconditionally"
+    ),
+    "ion_neutral_drag": (
+        "nothing: ion-neutral friction is carried by the moment-closed "
+        "ion-neutral collision operator, unconditionally"
+    ),
+    "ion_neutral_moment_closure": (
+        "nothing: the moment-closed ion-neutral collision operator is "
+        "unconditional"
+    ),
+    "neutral_two_zone": (
+        "nothing: the neutral gas is split into column and annulus "
+        "zones, unconditionally"
+    ),
+    "neutral_kinetic_dvm_baffles": (
+        "nothing: the kinetic_dvm arm applies the neutral_baffles "
+        "geometry to its annulus whenever that flag is on"
+    ),
+    "neutral_prebreakdown": (
+        "tau_neutral_prebreakdown: the phase runs whenever its duration "
+        "is positive"
     ),
 }
 
@@ -4364,7 +3964,7 @@ def resolve_nn0(input_dict):
 
     Raises ``ValueError`` on a ``None``, which under the solver's call order
     is a construction-time refusal. ``None`` is still the REQUIRED value under
-    the ``neutral_initial_profile`` flag -- that path supersedes the scalar
+    ``initial_neutral_state = "profile"`` -- that path supersedes the scalar
     with a per-cell array and does not call this function at all.
     """
     nn0 = input_dict.get("nn0")
@@ -4373,7 +3973,7 @@ def resolve_nn0(input_dict):
             "nn0 is None and there is no table to resolve it from (the "
             "frozen gas-puff nn0 table was retired). nn0 accepts a uniform "
             "initial neutral density in cm^-3; None is accepted ONLY under "
-            "the neutral_initial_profile flag, which supersedes the scalar "
+            "initial_neutral_state='profile', which supersedes the scalar "
             "with the per-cell nn0_profile array."
         )
     return nn0

@@ -27,7 +27,7 @@ Usage:
         --stance scripts/stances/examples/g1atrim_fluid_comparator.toml \
         --sgp 9010 --save-h5 out.h5
     python scripts/run/run_m6_point.py --es 1 --no-stance --sgp 9010 \
-        --close-lag 2e-3 --save-h5 out.h5 [--mn] [--L 8.1e-6] [--extra k=v ...]
+        --close-lag 2e-3 --save-h5 out.h5 [--L 8.1e-6] [--extra k=v ...]
 """
 
 import argparse
@@ -158,30 +158,16 @@ def main(argv=None):
                         "defer to the shared production config "
                         "(compare_sim1d_es1.PARAM_OVERRIDES)")
     p.add_argument("--c-th", type=float, default=120.0)
-    p.add_argument("--mn", action="store_true")
-    p.add_argument("--two-zone", action="store_true",
-                   help="neutral_two_zone particle channel "
-                        "-- nn becomes the column "
-                        "density, nn_a the annulus")
     p.add_argument("--nn0-profile-npz", default=None,
                    help="path to a shaped initial neutral profile written by "
                         "scripts/stance/sp3_build_nn0.py. The DRIVER does the file "
                         "I/O -- the solver never opens a file -- and passes "
-                        "the arrays in as input_dict values. It arms the "
-                        "neutral_initial_profile flag, sets nn0=None (the "
-                        "scalar is superseded, and the solver refuses an "
-                        "armed flag alongside an explicit scalar), and passes "
-                        "nn0_annulus_profile too when the npz carries one. "
-                        "NOT set here: the reference stance already ships "
-                        "neutral_equilibration OFF, but the solver REFUSES "
-                        "neutral_initial_profile alongside an armed "
-                        "neutral_equilibration at construction (the "
-                        "equilibration seed would overwrite the shaped "
-                        "profile), so a run against a config that ships it "
-                        "ON must pass --extra-flag "
-                        "neutral_equilibration=false itself -- a stance "
-                        "delta the arm states rather than inherits. Applied "
-                        "AFTER --stance and BEFORE "
+                        "the arrays in as input_dict values. It selects "
+                        "initial_neutral_state='profile', sets nn0=None (the "
+                        "scalar is superseded, and the solver refuses the "
+                        "profile route alongside an explicit scalar), and "
+                        "passes nn0_annulus_profile too when the npz carries "
+                        "one. Applied AFTER --stance and BEFORE "
                         "--extra/--extra-flag, so it overrides a stance's own "
                         "shaped fill and either of those can still override "
                         "any of it")
@@ -248,7 +234,6 @@ def main(argv=None):
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
         "cathode_cleaning_E_th_eV": 20.0,
-        "gas_puff_mode": "square",
         "S_gp": args.sgp,
     }
     # Passthrough overrides: absent => inherit the shared production config
@@ -262,16 +247,6 @@ def main(argv=None):
     if args.L is not None:
         extra["L_parasitic_H"] = args.L
     flags_extra = {}
-    if args.two_zone:
-        flags_extra["neutral_two_zone"] = True
-    if args.mn:
-        extra.update({
-            "ion_neutral_drag_model": "constant",
-            "b_ion_neutral_drag": 1.0,
-            "neutral_momentum_radial": "two_zone",
-            "neutral_mesh_accommodation": True,
-        })
-        flags_extra["neutral_momentum"] = True
     # The rung values AS THE RUNG SET THEM, snapshotted before any stance or
     # command-line layer can touch them. Read from ``extra`` rather than from
     # ``op`` again so there is exactly one place the rung reaches this driver.
@@ -320,9 +295,11 @@ def main(argv=None):
                 str(data["provenance"]) if "provenance" in data else "(absent)"
             )
         extra["nn0"] = None
-        flags_extra["neutral_initial_profile"] = True
-        cli_supplied.update(("nn0", "nn0_profile", "nn0_annulus_profile"))
-        cli_supplied_flags.add("neutral_initial_profile")
+        extra["initial_neutral_state"] = "profile"
+        cli_supplied.update(
+            ("nn0", "nn0_profile", "nn0_annulus_profile",
+             "initial_neutral_state")
+        )
         print(f"shaped nn0 from {args.nn0_profile_npz}: {provenance}")
     npz_params, npz_provenance = parse_npz_overrides(args.extra_npz)
     for key, value in npz_params.items():

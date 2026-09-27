@@ -30,9 +30,10 @@ STATE_NAMES_1D = ("n", "nn", "M", "Ee", "Ei")
 # STATE_NAMES_1D stays the 5-field tuple because it anchors the historical
 # packed layout, the golden fixture, and the HDF5 format.
 NEUTRAL_MOMENTUM_NAME = "M_n"
-# The optional annulus neutral density: present only
-# when the `neutral_two_zone` flag builds it, and `nn` is then the COLUMN
-# density. Packed after M_n in flag-introduction order -- which puts it in
+# The annulus neutral density: present on every solver state (the two-zone
+# split is unconditional), and `nn` is then the COLUMN density; optional here
+# because the state helpers also serve single-field test states and older
+# files. Packed after M_n in flag-introduction order -- which puts it in
 # the SIXTH row whenever M_n is absent, as it is under every kinetic neutral
 # closure.
 NEUTRAL_ANNULUS_NAME = "nn_a"

@@ -75,14 +75,12 @@ base = "g1atrim"
 # out regardless of value; the two array rows are what this file moves, and
 # the rest agree with the base because the two arms differ in the fill alone.
 [models.initial_neutral_state]
-neutral_equilibration = false
-launch_plasma_after_equilibration = true
+initial_neutral_state = "profile"
 neutral_equilibration_cycles = 100
 neutral_equilibration_dt = 0.01
 equilibration_gas_puff_on_s = 0.027
 use_cached_neutral_seed = false
 
-neutral_initial_profile = true
 nn0_profile = [
   6346857948118.348, 6793585531013.516, 6845702177478.383, 6888487714367.598,
   6921675400372.252, 6949082460260.043, 18516133637590.3, 18536695152266.875,

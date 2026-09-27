@@ -22,17 +22,10 @@ import numpy as np
 from cablp.atomic.adas import he_rate_temperature_range_eV
 
 from .config import (
-    coverage_closure_defaults,
     model_mode_defaults,
-    neutral_probe_source_defaults,
     parallel_momentum_sink_defaults,
 )
 from .geometry import _anode_neutral_transparency
-from ..physics.neutrals import (
-    NEUTRAL_PROBE_WAVEFORMS,
-    neutral_probe_profile_weights,
-    neutral_probe_waveform_table,
-)
 from ..physics.sources import (
     ANODE_JET_ENERGY_CONVENTIONS,
     CATHODE_JET_ENERGY_CONVENTIONS,
@@ -92,7 +85,6 @@ def validate_r1_configuration_presence(
     flags,
     *,
     geometry,
-    ion_neutral_moment_closure,
     hyperbolic_wave_speed,
     raw_stage_validation,
 ):
@@ -127,28 +119,6 @@ def validate_r1_configuration_presence(
     # R5 stance flip (2026-07-25) deprecations. These paths remain runnable
     # (A/B arms + tag reproducibility) but are superseded by the repaired
     # production baseline; a non-default/active use warns.
-    if not ion_neutral_moment_closure:
-        warnings.warn(
-            "the legacy ion-neutral drag/CX/thermalization path "
-            "(ion_neutral_moment_closure=False, with b_ion_neutral_drag, "
-            "ion_neutral_drag_model, b_ion_neutral_thermalization, and the "
-            "Tn_fit collision temperature) is DEPRECATED: the Phelps "
-            "moment-closed operator (ion_neutral_moment_closure) is the "
-            "production drag baseline. Still runnable as an A/B arm; the "
-            "results it once reproduced are not reproducible from this "
-            "repository, their anchor having been retired.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-    _gp_mode = str(input_dict.get("gas_puff_mode", "square"))
-    if _gp_mode in ("pulse_decay_to_level", "decay_after_breakdown", "double_erf"):
-        warnings.warn(
-            f"gas_puff_mode={_gp_mode!r} is DEPRECATED (the measured "
-            "waveform is 'square'); retained runnable only for the frozen "
-            "waveform-comparison figures.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
     _deprecated_selectors = {
         "D_amb_model": (str(input_dict.get("D_amb_model", "cs_dz")), "cs_dz"),
     }
@@ -283,26 +253,49 @@ def resolve_energy_exchange_rate_fraction(input_dict):
     return fraction
 
 
+#: The accepted values of ``initial_neutral_state``, and what each one arms:
+#: ``(equilibrate, launch, profile)``. ``equilibrate`` runs the pre-run
+#: puff/off accumulation in ``start_simulation()``; ``launch`` proceeds into
+#: the plasma run after it; ``profile`` starts from the per-cell
+#: ``nn0_profile``. An equilibrated seed and a shaped profile would each
+#: overwrite the other, so no value arms both.
+INITIAL_NEUTRAL_STATES = {
+    "equilibrate": (True, True, False),
+    "equilibrate_only": (True, False, False),
+    "fill": (False, False, False),
+    "profile": (False, False, True),
+}
+
+
+def resolve_initial_neutral_state(input_dict):
+    """Return ``(value, equilibrate, launch, profile)`` for the configuration.
+
+    Raises ``ValueError`` naming the accepted values for any other value.
+    """
+    value = input_dict.get("initial_neutral_state")
+    if value not in INITIAL_NEUTRAL_STATES:
+        raise ValueError(
+            "initial_neutral_state must be one of "
+            f"{sorted(INITIAL_NEUTRAL_STATES)} (got {value!r})"
+        )
+    return (value, *INITIAL_NEUTRAL_STATES[value])
+
+
 def validate_neutral_seed_cache_config(input_dict, flags):
     """Reject an incoherent cached-neutral-seed configuration (loud, at build).
 
     ``use_cached_neutral_seed`` replaces the live neutral equilibration with a
     cached seed, so it requires the equilibration pipeline to be selected
-    (``neutral_equilibration`` + ``launch_plasma_after_equilibration``) and a
-    cache path. A missing path or a contradictory flag would otherwise be a
-    silent no-op.
+    (``initial_neutral_state = "equilibrate"``) and a cache path. A missing
+    path or a contradictory selection would otherwise be a silent no-op.
     """
     if not flags.get("use_cached_neutral_seed", False):
         return
     problems = []
-    if not flags.get("neutral_equilibration", False):
+    if input_dict.get("initial_neutral_state") != "equilibrate":
         problems.append(
-            "neutral_equilibration must be ON (the cache seeds that pipeline)"
-        )
-    if not flags.get("launch_plasma_after_equilibration", False):
-        problems.append(
-            "launch_plasma_after_equilibration must be ON (nothing to seed "
-            "otherwise)"
+            "initial_neutral_state must be 'equilibrate' (the cache seeds "
+            "that pipeline, and nothing is launched to seed otherwise)"
         )
     if not input_dict.get("neutral_seed_cache_dir"):
         problems.append(
@@ -330,133 +323,40 @@ def validate_phase_config(mode, action):
 
 
 def validate_gas_puff_config(input_dict):
-    # Accepted-values gate for the axial shape selector. The same set is
-    # checked inside physics.neutrals.gas_puff_rate_profile, which is where a
-    # misspelling used to first surface -- at the FIRST RHS evaluation, long
-    # after construction. Both checks stay: this one is the construction-time
-    # refusal, the other is the defence in depth for direct callers of the
-    # shared implementation.
-    profile = input_dict.get("gas_puff_profile", "cell")
-    if profile not in ("cell", "gaussian", "cosine_pipe", "orifice"):
-        raise ValueError(
-            "gas_puff_profile must be 'cell', 'gaussian', 'cosine_pipe', or "
-            f"'orifice' (got {profile!r})"
-        )
-    mode = input_dict.get("gas_puff_mode", "decay_after_breakdown")
-    if mode not in {
-        "decay_after_breakdown",
-        "pulse_decay_to_level",
-        "double_erf",
-        "square",
-    }:
-        raise ValueError(
-            "gas_puff_mode must be 'decay_after_breakdown', "
-            "'pulse_decay_to_level', 'double_erf', or 'square' "
-            f"(got {mode!r})"
-        )
-    if mode == "square":
-        for key in ("gas_puff_rise_width_s",):
-            width = float(input_dict.get(key, 5.0e-4))
-            if width <= 0.0:
-                raise ValueError(f"{key} must be positive (got {width})")
-        for key in ("gas_puff_rise_center_s", "gas_puff_close_lag_s"):
-            value = float(input_dict.get(key, 5.0e-4))
-            if value < 0.0:
-                raise ValueError(f"{key} must be >= 0 (got {value})")
-    if mode == "double_erf":
-        for key in ("tau_gp_rise_width", "tau_gp_drop_width"):
-            width = float(input_dict.get(key, 1e-3))
-            if width <= 0.0:
-                raise ValueError(f"{key} must be positive (got {width})")
-    tau_after_breakdown = input_dict.get("tau_gp_after_breakdown", None)
-    if tau_after_breakdown is not None and float(tau_after_breakdown) < 0.0:
-        raise ValueError(
-            "tau_gp_after_breakdown must be >= 0 s, or None to keep S_gp "
-            f"steady (got {tau_after_breakdown})"
-        )
-    tau_decay_factor = float(input_dict.get("tau_gp_decay_factor", 1.0))
-    if tau_decay_factor <= 0.0:
-        raise ValueError(
-            f"tau_gp_decay_factor must be > 0 (got {tau_decay_factor})"
-        )
-    tau_pulse_duration = float(input_dict.get("tau_gp_pulse_duration", 0.0))
-    if tau_pulse_duration < 0.0:
-        raise ValueError(
-            f"tau_gp_pulse_duration must be >= 0 (got {tau_pulse_duration})"
-        )
-    tau_decay_duration = float(input_dict.get("tau_gp_decay_duration", 1e-3))
-    if tau_decay_duration <= 0.0:
-        raise ValueError(
-            f"tau_gp_decay_duration must be > 0 (got {tau_decay_duration})"
-        )
-    validate_gas_puff_orifice_config(input_dict)
-
-
-def validate_gas_puff_orifice_config(input_dict):
-    """Presence-gate the two feed-pipe keys against ``gas_puff_profile``.
-
-    They belong to ``gas_puff_profile = "orifice"`` and to nothing else, so
-    both directions raise: set without the profile they would be silently
-    inert, and missing with it there is no aperture to derive a row from.
-    Also refuses an aspect ratio the long-tube angular law has no branch for,
-    and a shut valve, where the derivation would place no flow while still
-    reporting itself as the injection geometry.
+    """Refuse square-waveform edge timings and feed-pipe dimensions the puff
+    cannot use: a non-positive edge width, a negative opening center or
+    closing lag, and a feed pipe whose bore or length is not finite and
+    positive or whose aspect ratio the long-tube angular law has no branch
+    for.
 
     The refusals that need the MESH -- a port off the grid, a plasma column
     that is not inside the vessel wall -- are raised by the row derivation
     itself, which the solver runs once at construction for that reason.
     """
-    profile = input_dict.get("gas_puff_profile", "cell")
-    keys = ("gas_puff_orifice_id_cm", "gas_puff_orifice_length_cm")
-    values = {key: input_dict.get(key) for key in keys}
-    for key, value in values.items():
-        if value is not None and profile != "orifice":
-            raise ValueError(
-                f"{key} belongs to gas_puff_profile='orifice' and is inert "
-                f"under {profile!r}; drop it or change the profile"
-            )
-        if value is None and profile == "orifice":
-            raise ValueError(
-                f"gas_puff_profile='orifice' requires {key}: the tube-beamed "
-                "row is derived from the feed pipe's own bore and length, and "
-                "there is no default aperture to fall back on"
-            )
-    if profile != "orifice":
-        return
-    bore = float(values["gas_puff_orifice_id_cm"])
-    length = float(values["gas_puff_orifice_length_cm"])
-    for key, value in (
-        ("gas_puff_orifice_id_cm", bore),
-        ("gas_puff_orifice_length_cm", length),
-    ):
-        if not math.isfinite(value) or value <= 0.0:
+    for key in ("gas_puff_rise_width_s",):
+        width = float(input_dict.get(key, 5.0e-4))
+        if width <= 0.0:
+            raise ValueError(f"{key} must be positive (got {width})")
+    for key in ("gas_puff_rise_center_s", "gas_puff_close_lag_s"):
+        value = float(input_dict.get(key, 5.0e-4))
+        if value < 0.0:
+            raise ValueError(f"{key} must be >= 0 (got {value})")
+    pipe = {}
+    for key in ("gas_puff_orifice_id_cm", "gas_puff_orifice_length_cm"):
+        value = input_dict.get(key)
+        if value is None or not math.isfinite(float(value)) or float(value) <= 0.0:
             raise ValueError(
                 f"{key} must be finite and positive (got {value})"
             )
+        pipe[key] = float(value)
+    bore = pipe["gas_puff_orifice_id_cm"]
+    length = pipe["gas_puff_orifice_length_cm"]
     if length / bore < 4.0 / 3.0:
         raise ValueError(
             "gas_puff_orifice_length_cm / gas_puff_orifice_id_cm must be "
             f">= 4/3 (got {length} / {bore} = {length / bore}): the beaming "
             "law is a LONG-tube result whose end-effect prescription inverts "
             "below that ratio, and it has no short-tube branch"
-        )
-    if not bool(input_dict.get("gas_puff_enabled", True)):
-        raise ValueError(
-            "gas_puff_profile='orifice' derives the injection geometry of a "
-            "puff that gas_puff_enabled=False never delivers; enable the puff "
-            "or choose a profile that is not a derivation"
-        )
-    flow = (
-        float(input_dict.get("S_gp", 0.0))
-        * float(input_dict.get("gas_puff_valves", 2))
-        * float(input_dict.get("gas_puff_delivery_fraction", 1.0))
-    )
-    if flow <= 0.0:
-        raise ValueError(
-            "gas_puff_profile='orifice' was configured but the puff delivers "
-            f"no flow (S_gp x gas_puff_valves x gas_puff_delivery_fraction = "
-            f"{flow}): there is nothing to place, and a derived row over a "
-            "shut valve would report a geometry it never applies"
         )
 
 
@@ -964,176 +864,6 @@ def refuse_te_floor_above_adas_table_edge(input_dict):
         "and scd and both plt tables clamp there either way"
     )
 
-def resolve_coverage_config(input_dict, flags, *, geometry, neutral_model):
-    """Validate and RESOLVE the clumpy-plasma coverage closure (v2).
-
-    Every failure here is a construction-time ``ValueError``: an
-    incomplete or unrepresentable coverage configuration must never reach
-    the first cathode solve. With the flag off the four coverage keys
-    must all sit at their defaults, so a run that configures the closure
-    and forgets the flag is loud rather than silently mean-field.
-
-    Returns the resolved record the solver arms its coverage attributes from.
-    """
-    enabled = bool(flags.get("coverage_closure", False))
-    r = input_dict.get("coverage_growth_rate_per_s", 0.0)
-    tau = input_dict.get("coverage_backfill_time_s", 0.0)
-    f0 = input_dict.get("coverage_initial_fraction", None)
-    profile = input_dict.get("coverage_initial_profile", None)
-    if not enabled:
-        defaults = coverage_closure_defaults()
-
-        def _is_default(value, default):
-            # coverage_initial_profile is sequence-valued, and ``!=`` on a
-            # sequence is elementwise, so the comparison is reduced to one
-            # bool here before it is used as a truth value.
-            if value is None or default is None:
-                return value is None and default is None
-            return bool(np.array_equal(value, default))
-
-        inert = (
-            ("coverage_growth_rate_per_s", r),
-            ("coverage_backfill_time_s", tau),
-            ("coverage_initial_fraction", f0),
-            ("coverage_initial_profile", profile),
-        )
-        configured = [
-            name
-            for name, value in inert
-            if not _is_default(value, defaults[name])
-        ]
-        if configured:
-            raise ValueError(
-                "the coverage-closure parameters "
-                f"{sorted(configured)} were configured without the "
-                "coverage_closure flag, where they are inert; set the "
-                "flag or drop the parameters"
-            )
-        return SimpleNamespace(
-            coverage=None,
-            r=0.0,
-            tau_s=0.0,
-            f=None,
-            deficit=None,
-            burn_accum=None,
-            burn_weight=0.0,
-            w_accum=None,
-            reservoir_debit=None,
-            reservoir_burn_accum=None,
-        )
-    cells = geometry.cells
-    if (f0 is None) == (profile is None):
-        raise ValueError(
-            "the coverage_closure flag requires EXACTLY ONE initial "
-            "condition: coverage_initial_fraction (one uniform covered "
-            "fraction in (0, 1]) or coverage_initial_profile (a per-cell "
-            f"f_cov0 of length nx={cells}). "
-            + (
-                "Both were given; they are two spellings of the same "
-                "initial condition and neither modifies the other, so "
-                "there is no composition rule to apply -- drop one."
-                if f0 is not None
-                else "Neither was given; there is no neutral default -- "
-                "1.0 is the fully-covered mean-field limit and would "
-                "make the closure a silent no-op."
-            )
-        )
-    if profile is not None:
-        f_init = np.asarray(profile, dtype=float).reshape(-1)
-        if f_init.size != cells:
-            raise ValueError(
-                "coverage_initial_profile must have one entry per grid "
-                f"cell (nx={cells}); got {f_init.size}"
-            )
-        if not np.all(np.isfinite(f_init)) or np.any(
-            f_init <= 0.0
-        ) or np.any(f_init > 1.0):
-            raise ValueError(
-                "every coverage_initial_profile entry must be finite and "
-                f"in (0, 1] (got min {float(np.min(f_init)):.6g}, max "
-                f"{float(np.max(f_init)):.6g})"
-            )
-    else:
-        f0 = float(f0)
-        if not (math.isfinite(f0) and 0.0 < f0 <= 1.0):
-            raise ValueError(
-                "coverage_initial_fraction must be finite and in (0, 1] "
-                f"(got {f0!r})"
-            )
-        f_init = np.full(cells, f0, dtype=float)
-    r = float(r)
-    if not (math.isfinite(r) and r >= 0.0):
-        raise ValueError(
-            "coverage_growth_rate_per_s (the column-mean logistic rate of "
-            "df_cov/dt = r0*w*f_cov*(1-f_cov)) must be finite and >= 0 "
-            f"(got {r!r})"
-        )
-    tau = float(tau)
-    if not (math.isfinite(tau) and tau > 0.0):
-        raise ValueError(
-            "coverage_backfill_time_s (the reservoir->column neutral "
-            f"refill time) must be finite and > 0 (got {tau!r})"
-        )
-    if float(input_dict.get("beam_clump_fraction", 0.0)) > 0.0:
-        raise ValueError(
-            "coverage_closure is incompatible with beam_clump_fraction > "
-            "0: both split the beam into rays over different neutral "
-            "media, and their product is a four-ray composition this "
-            "build does not define. Disable one"
-        )
-    if neutral_model != "moment":
-        raise ValueError(
-            "coverage_closure requires neutral_model='moment' (got "
-            f"{neutral_model!r}): the kinetic arms take over the "
-            "fluid nn rows once engaged, and the closure's covered-column "
-            "burn is read from exactly those rows, so under a kinetic "
-            "neutral model the column would never deplete and the "
-            "backfill would be a silent no-op"
-        )
-    # NB there is deliberately NO refusal of the compiled kernels here.
-    # v1 carried one, on the belief that the closure's beam split ran on
-    # transcribed arithmetic that had never been bit-compared under
-    # coverage. That is not what the opt-in reaches: the compiled march
-    # (``_CSDA_MARCH``) is bound only inside ``deposit_beam``, the
-    # SINGLE-MEDIUM ray, and ``deposit_beam_two_stream`` -- the closure's
-    # own two-medium wrapper, its per-cell re-split, its re-mix and all of
-    # its banking -- has no compiled branch at all. So under coverage the
-    # opt-in accelerates exactly the nested single-medium walker marches
-    # (the ray shape the tierA+csda transcription was bit-verified over)
-    # plus the tier-A cathode kernels, and both paths were measured
-    # raw-uint64 identical over coverage trajectories before the refusal
-    # was lifted. Bit-identity, not the refusal, is the standing guard:
-    # smoke's compiled-kernel equivalence block runs a beam-live coverage
-    # arm both ways and asserts the raw state bytes match.
-    return SimpleNamespace(
-        coverage=True,
-        r=r,
-        tau_s=tau,
-        # The coverage FIELD itself [1], per cell, in (0, 1]. v2 co-integrates
-        # it (see _advance_coverage_fraction): its growth law is driven by the
-        # beam ionization the coverage itself shapes, so there is no closed
-        # form to evaluate and the field is carried as accepted-step state.
-        f=f_init,
-        # The covered column's neutral DEFICIT relative to the cell mean
-        # [cm^-3], per cell. The mean field nn is untouched by the closure and
-        # keeps every particle, so this auxiliary is a pure re-partition and
-        # total inventory is conserved identically whatever happens to it.
-        # It starts at zero: at the phase origin nothing has burnt yet.
-        deficit=np.zeros(geometry.cells, dtype=float),
-        burn_accum=None,
-        burn_weight=0.0,
-        # The stage-accumulated growth driver for the CURRENT attempt; armed by
-        # _attempt_step and dropped with the attempt, exactly like the burn
-        # tally above, so a rejected step cannot advance the field.
-        w_accum=None,
-        # The reservoir arm's neutral debit published by the beam terms of the
-        # CURRENT RHS evaluation; reset by rhs_terms on every call so it can
-        # never be read from a stale solve.
-        reservoir_debit=None,
-        reservoir_burn_accum=None,
-    )
-
-
 #: The declared endpoints of the charge-death bracket. ``"cell_1"`` is the
 #: advisor consult's bracket A -- the beam's charge dies in the cathode cell.
 ELECTRON_DRIFT_CHARGE_DEATHS = ("cell_1", "cell_2")
@@ -1270,190 +1000,6 @@ def resolve_electron_drift_transport_config(
         "anode_face": anode_face,
         "launch_cell": launch_cell,
     }
-
-
-def resolve_neutral_probe_config(
-    input_dict, flags, *, geometry, neutral_model, neutral_two_zone
-):
-    """Validate and RESOLVE the ad-hoc probe neutral source (v1).
-
-    Every failure here is a construction-time ``ValueError``: an incomplete
-    or unrepresentable probe configuration must never reach the first step.
-    With the flag off all ten probe keys must sit at their ``None``
-    defaults, so a run that configures a probe and forgets the flag is loud
-    rather than silently unprobed.
-
-    Returns the resolved instrument -- amplitude, normalized axial weights,
-    waveform selector and its own parameters, and the two-zone target -- or
-    ``None`` when the flag is off, which is the presence gate every consumer
-    reads.
-    """
-    enabled = bool(flags.get("neutral_probe_source", False))
-    defaults = neutral_probe_source_defaults()
-    values = {
-        name: input_dict.get(name, default)
-        for name, default in defaults.items()
-    }
-    if not enabled:
-        # Every default in this group is None -- the instrument ships no
-        # number, deliberately -- so "at its default" is exactly "is
-        # None", and the two sequence-valued keys need no elementwise
-        # comparison here.
-        configured = [
-            name for name, value in values.items() if value is not None
-        ]
-        if configured:
-            raise ValueError(
-                "the probe-source parameters "
-                f"{sorted(configured)} were configured without the "
-                "neutral_probe_source flag, where they are inert; set the "
-                "flag or drop the parameters"
-            )
-        return None
-    if neutral_model != "moment":
-        raise ValueError(
-            "neutral_probe_source requires neutral_model='moment' (got "
-            f"{neutral_model!r}): the kinetic arms take over the "
-            "fluid nn rows once engaged, so a source written into those "
-            "rows would be stripped or double-counted rather than felt -- "
-            "the probe would silently inject nothing. Supporting the "
-            "kinetic arms means injecting into their distribution "
-            "function, which is a different instrument, not a flag"
-        )
-    amplitude = values["neutral_probe_amplitude_cm3_s"]
-    if amplitude is None:
-        raise ValueError(
-            "the neutral_probe_source flag requires "
-            "neutral_probe_amplitude_cm3_s (the volume-mean source rate "
-            "[cm^-3 s^-1] at w = 1). There is no default: the amplitude is "
-            "the hypothesis the arm states, and 0 -- an explicit null "
-            "control -- is a value that has to be asked for"
-        )
-    amplitude = float(amplitude)
-    if not (math.isfinite(amplitude) and amplitude >= 0.0):
-        raise ValueError(
-            "neutral_probe_amplitude_cm3_s must be finite and >= 0 (got "
-            f"{values['neutral_probe_amplitude_cm3_s']!r})"
-        )
-    # The shape's own presence gating (exactly one of profile/family, and
-    # the family's parameters required with it and forbidden without it)
-    # lives with the shape builder, so the rule and its implementation
-    # cannot drift apart.
-    shape = values["neutral_probe_shape"]
-    for name, value in (
-        ("neutral_probe_center_cm", values["neutral_probe_center_cm"]),
-        ("neutral_probe_width_cm", values["neutral_probe_width_cm"]),
-    ):
-        if shape is None and value is not None:
-            raise ValueError(
-                f"{name} is a parameter of the built-in profile family and "
-                "has no meaning without neutral_probe_shape; drop it, or "
-                "select a family (this run supplies its own "
-                "neutral_probe_profile)"
-            )
-        if shape == "gaussian" and value is None:
-            raise ValueError(
-                f"neutral_probe_shape='gaussian' requires {name}"
-            )
-    weights = neutral_probe_profile_weights(
-        geometry,
-        profile=values["neutral_probe_profile"],
-        shape=shape,
-        center_cm=values["neutral_probe_center_cm"],
-        width_cm=values["neutral_probe_width_cm"],
-    )
-    waveform = values["neutral_probe_waveform"]
-    if waveform is None:
-        raise ValueError(
-            "the neutral_probe_source flag requires "
-            "neutral_probe_waveform, one of "
-            f"{list(NEUTRAL_PROBE_WAVEFORMS)}. There is no default: the "
-            "waveform decides what the arm measured"
-        )
-    if waveform not in NEUTRAL_PROBE_WAVEFORMS:
-        raise ValueError(
-            "neutral_probe_waveform must be one of "
-            f"{list(NEUTRAL_PROBE_WAVEFORMS)} (got {waveform!r})"
-        )
-    t_on = values["neutral_probe_t_on_s"]
-    t_off = values["neutral_probe_t_off_s"]
-    table = values["neutral_probe_waveform_table"]
-    for name, value, owner in (
-        ("neutral_probe_t_on_s", t_on, "square"),
-        ("neutral_probe_t_off_s", t_off, "square"),
-        ("neutral_probe_waveform_table", table, "table"),
-    ):
-        if value is not None and waveform != owner:
-            raise ValueError(
-                f"{name} belongs to neutral_probe_waveform={owner!r} and "
-                f"is inert under {waveform!r}; drop it or change the "
-                "waveform"
-            )
-        if value is None and waveform == owner:
-            raise ValueError(
-                f"neutral_probe_waveform={owner!r} requires {name}"
-            )
-    if waveform == "square":
-        t_on = float(t_on)
-        t_off = float(t_off)
-        if not (math.isfinite(t_on) and math.isfinite(t_off)):
-            raise ValueError(
-                "neutral_probe_t_on_s and neutral_probe_t_off_s must be "
-                f"finite (got {t_on!r}, {t_off!r})"
-            )
-        if not t_on < t_off:
-            raise ValueError(
-                "neutral_probe_t_on_s must be strictly less than "
-                f"neutral_probe_t_off_s (got {t_on!r} >= {t_off!r}); the "
-                "square window is the half-open [t_on, t_off), so an empty "
-                "or inverted window injects nothing and is a "
-                "misconfiguration rather than a null control"
-            )
-    table_cumulative = None
-    if waveform == "table":
-        table, table_cumulative = neutral_probe_waveform_table(table)
-    zone = values["neutral_probe_zone"]
-    if neutral_two_zone:
-        if zone not in ("column", "annulus"):
-            raise ValueError(
-                "under the neutral_two_zone closure the probe source "
-                "requires neutral_probe_zone = 'column' (the plasma "
-                "column, nn) or 'annulus' (the surrounding chamber, "
-                f"nn_a); got {zone!r}. There is no default: the two put "
-                "the gas in different places and the plasma responds to "
-                "them differently, which is precisely what a probe arm is "
-                "measuring"
-            )
-    elif zone is not None:
-        raise ValueError(
-            "neutral_probe_zone selects between the two-zone closure's "
-            "column and annulus neutral fields and has no meaning without "
-            f"the neutral_two_zone flag (got {zone!r}); this run has one "
-            "neutral field"
-        )
-    # COVERAGE COMPOSES, deliberately and without a refusal. The closure
-    # partitions the MEAN nn into a covered column and a reservoir through
-    # a deficit that only the COVERAGE_BURN_TERMS move -- terms whose rate
-    # is set by a plasma or beam density. The probe is not one of those: it
-    # is uniform across the cross-section by construction, exactly like the
-    # gas puff and the pump, which that ledger already names as
-    # deliberately absent. So a probe raises the covered column and the
-    # reservoir by the same amount, leaves the deficit untouched, and the
-    # partition identity f*col + (1-f)*res = nn keeps closing. The answer
-    # to "does probe-injected inventory belong to the reservoir or the
-    # column?" is therefore neither-and-both, in area proportion, and it is
-    # forced rather than chosen -- which is why this is an allowance with a
-    # statement and not a guess.
-    return SimpleNamespace(
-        amplitude_cm3_s=amplitude,
-        weights=weights,
-        waveform=waveform,
-        t_on_s=None if waveform != "square" else t_on,
-        t_off_s=None if waveform != "square" else t_off,
-        table=None if waveform != "table" else table,
-        table_cumulative=table_cumulative,
-        zone=zone,
-    )
 
 
 def resolve_parallel_momentum_sink(input_dict, *, geometry):

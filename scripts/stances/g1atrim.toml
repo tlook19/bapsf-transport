@@ -22,7 +22,7 @@
 # neutral_closure became DECLARABLE at the kinetic stance event (2026-09-02).
 # A family with a selector may only be declared when that selector is at its
 # engaging value, and this stance now runs neutral_model = "kinetic_dvm".
-# Its fourteen members INCLUDE the four cathode-jet keys and the three
+# Its eleven members INCLUDE the four cathode-jet keys and the three
 # anode-jet keys that the cathode_surface_recycle and anode_surface_recycle
 # blocks used to declare, and two blocks may not claim one key -- so those two
 # blocks are GONE from this file and the neutral_closure block below states
@@ -33,8 +33,6 @@
 # DVM jets read their own neutral_kinetic_dvm_{cathode,anode}_jet_R_N/_R_E
 # pairs, which are the same numbers and are also config defaults.
 #
-# neutral_radial_closure stays UNDECLARABLE: its selector
-# neutral_momentum_radial is "uniform", not the engaging "kinetic_two_moment".
 # See cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md for the form, its resolver
 # and its refusals.
 #
@@ -312,18 +310,18 @@ cathode_heat_capacity_J_per_K = 181.0
 # [models.initial_neutral_state] and is stated there.
 S_gp = 9010.0
 # INJECTION ROW. The puff is placed by the tube-beamed row derived from the CAD
-# port geometry and the feed pipe behind it, not by the fluid cosine lobe: the
-# in-solver puff, the equilibrated seed and the shaped foot below now share ONE
-# shape at ONE geometry. The bore is the MIDPOINT of the ruled [3.8, 4.1] cm
-# hardware bracket and the length is its one-sided lower bound; the two bracket
-# endpoints move the derived fill by < 0.1 %, so the midpoint is the value and
-# the endpoints stay the bracket. Both keys are refused under any other profile.
-gas_puff_profile = "orifice"
+# port geometry and the feed pipe behind it: the in-solver puff, the
+# equilibrated seed and the shaped foot below share ONE shape at ONE geometry.
+# The bore is the MIDPOINT of the ruled [3.8, 4.1] cm hardware bracket and the
+# length is its one-sided lower bound; the two bracket endpoints move the
+# derived fill by < 0.1 %, so the midpoint is the value and the endpoints stay
+# the bracket. Both keys equal their config default and are stated anyway, as
+# class-1 declarations of the feed pipe.
 gas_puff_orifice_id_cm = 3.95
 gas_puff_orifice_length_cm = 22.0
 
 # KINETIC NEUTRAL CLOSURE -- the DVM engine's own controls. The closure
-# SELECTION and the thirteen keys it forces are [models.neutral_closure]
+# SELECTION and the ten keys it forces are [models.neutral_closure]
 # below; the keys here belong to no family and are therefore stated flat.
 #
 # VELOCITY MESH AND NEUTRAL CLOCK. Numerical choices, not physics. The kinetic
@@ -355,23 +353,20 @@ neutral_kinetic_dvm_cadence_s = 3.125e-6
 # tick reports how often the floor bound, in the engine's per-tick ledger.
 neutral_kinetic_dvm_jet_launch_width = 0.13
 
-# WALL INTERACTION. Both keys equal their config default and are stated anyway,
-# as class-1 declarations: the closure IS this pair of choices, and a stance
-# that ran them by silence would not read as having made them.
+# WALL INTERACTION. The key equals its config default and is stated anyway, as
+# a class-1 declaration: a stance that ran it by silence would not read as
+# having made the choice.
 # neutral_kinetic_dvm_accommodation is the thermal accommodation coefficient
 # alpha_E of the room-temperature technical-metal surfaces, read at the
 # cylinder and the end plates only (the anode mesh and the interior closed
 # faces are fully accommodating by construction and do not read it). Under the
 # Maxwell specular-diffuse kernel the diffuse fraction IS alpha_E exactly.
-# neutral_kinetic_dvm_wall_reflection chooses the spectrum the remaining
-# (1 - alpha_E) share leaves the CYLINDER on: "diffuse_elastic" returns the
-# same count on a cosine spectrum whose temperature is solved so the discrete
-# mean energy equals the retained share's own incident mean, so the surface
-# randomizes direction while exchanging no energy and returning no net axial
-# momentum. The shipped 0.40 sits inside a declared bracket rather than being
+# The remaining (1 - alpha_E) share leaves the CYLINDER on a cosine spectrum
+# whose temperature is solved so the discrete mean energy equals the retained
+# share's own incident mean, so the surface randomizes direction while
+# exchanging no energy and returning no net axial momentum. The shipped 0.40 sits inside a declared bracket rather than being
 # a pinned number, so a result states the arm it ran.
 neutral_kinetic_dvm_accommodation = 0.40
-neutral_kinetic_dvm_wall_reflection = "diffuse_elastic"
 
 # THE DVM'S OWN DIRECTED-RECYCLE JETS, armed at both electrode faces. They are
 # the kinetic closure's form of the channels the FLUID cathode_neutral_jet and
@@ -444,20 +439,11 @@ end_wall_sheath_full_debit = true
 # since the R2a fold-in -- are members of the neutral_closure family and are
 # stated in [models.neutral_closure] below, not here.
 #
-# neutral_two_zone is NOT a member: it is a PREREQUISITE of the kinetic
-# closure, which the solver requires rather than resolves, so it is stated
-# flat. It equals the config default and is written anyway, as a class-1
-# declaration: the DVM carries column AND annulus, and the campaign driver's
-# --two-zone flag sets nothing this row does not already say.
-neutral_two_zone = true
-
-# The baffles act on the DVM annulus as well as on the fluid neutral field:
-# the annulus flux crossing each baffle face is intercepted in the blocked
-# fraction of the face area and re-emitted at the wall temperature in the cell
-# it came from, particle-conserving. It adds no coefficient -- the clear radius
-# is the measured CAD value already named in [input_dict] -- and it requires
-# the neutral_baffles flag and its two arrays, which follow.
-neutral_kinetic_dvm_baffles = true
+# The baffles armed below act on the DVM annulus as well as on the fluid
+# neutral field: the annulus flux crossing each baffle face is intercepted in
+# the blocked fraction of the face area and re-emitted at the wall temperature
+# in the cell it came from, particle-conserving. It adds no coefficient -- the
+# clear radius is the measured CAD value already named in [input_dict].
 
 # GEOMETRY: the per-cell prescribed areas and the baffles that go with the
 # measured machine. Both stay stance-side because the arrays they require are
@@ -514,7 +500,7 @@ beam_excitation_energy_eV = 21.218
 # the transient discrete-velocity model: a distribution f(z, v_z, v_perp) on
 # the column and the annulus, advanced on its own clock, rather than by the
 # two-moment fluid this stance ran until now. The selection is the first row;
-# the other thirteen keys are what it FORCES, and they are written here at
+# the other ten keys are what it FORCES, and they are written here at
 # those required values rather than left to be resolved one refusal at a time.
 #
 # Everything below the selection says the same thing twice over: the DVM state
@@ -525,19 +511,14 @@ beam_excitation_energy_eV = 21.218
 #     moment of f;
 #   * neutral_energy books the frictional half of the collisional exchange
 #     against u - u_n, which has no meaning without that fluid wind, and the
-#     hot internal wall and the hot birth drift are presence gates standing on
-#     the hot channel neutral_energy creates;
-#   * neutral_momentum_radial closes the RADIAL profile of the evolved wind,
-#     so "uniform" is the only reading left;
+#     hot internal wall is a presence gate standing on the hot channel
+#     neutral_energy creates;
 #   * the four cathode-jet keys and the two anode-jet keys are M_n momentum
 #     physics for the same reason. The recycle channels themselves are NOT
 #     given up: the DVM's own cathode and anode jets carry them, armed in
 #     [input_dict] above, and cathode_jet_energy_convention drops to "legacy"
 #     because "total_reflected" rescales the FLUID jet's launch energy and
-#     requires that fluid jet to exist;
-#   * neutral_knudsen_temperature = "local" would scale the Knudsen
-#     conductances by an evolved per-cell Tn, which only exists under
-#     neutral_energy.
+#     requires that fluid jet to exist.
 #
 # The block therefore SUPERSEDES this file's former cathode_surface_recycle and
 # anode_surface_recycle blocks: it claims seven of their eleven keys, and two
@@ -548,9 +529,6 @@ neutral_model = "kinetic_dvm"
 neutral_momentum = false
 neutral_energy = false
 neutral_hot_internal_wall = false
-neutral_hot_birth_drift = false
-neutral_momentum_radial = "uniform"
-neutral_knudsen_temperature = "frozen"
 cathode_neutral_jet = false
 cathode_jet_surface_debit = false
 cathode_jet_energy_convention = "legacy"
@@ -565,14 +543,13 @@ none_valued = ["anode_jet_energy_convention"]
 
 [models.initial_neutral_state]
 
-# The equilibrate route is OFF and the profile route is armed: the equilibrated
-# seed would overwrite the shaped foot, and the solver refuses the pair. The
-# equilibration cycle count, its dt and the cached-seed modifier are config
-# defaults, inert while the route is off, and are stated because a block is an
-# inventory. equilibration_gas_puff_on_s is NOT inert -- the 27 ms puff window
+# The selector takes the profile route: the shaped foot below IS the initial
+# fill, and an equilibrated seed would overwrite it, so the one selector arms
+# either and never both. The equilibration cycle count, its dt and the
+# cached-seed modifier are config defaults, inert on this route, and are stated
+# because a block is an inventory. equilibration_gas_puff_on_s is NOT inert -- the 27 ms puff window
 # is a stance value the golden's own re-cut re-arms the route to use.
-neutral_equilibration = false
-launch_plasma_after_equilibration = true
+initial_neutral_state = "profile"
 neutral_equilibration_cycles = 100
 neutral_equilibration_dt = 0.01
 equilibration_gas_puff_on_s = 0.027
@@ -611,9 +588,6 @@ use_cached_neutral_seed = false
 # scripts/data/nn0_legacy_ballistic_reference_geometry.npz and a base of this
 # configuration on that wall, with the same builder run at --kernel ballistic
 # and that foot.
-# The profile flag stays stance-side because the per-cell nn0_profile it
-# requires is sized to this mesh.
-neutral_initial_profile = true
 nn0_profile = [
   6341136458302.529, 39372308507217.72, 39637229270091.125, 40318131886828.53,
   40595122800739.99, 40968239862055.4, 43789406432470.89, 44128590627064.984,

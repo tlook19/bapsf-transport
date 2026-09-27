@@ -147,8 +147,6 @@ PROBE_PARAMS = {
     "C_bank_F": 9.5,
     "equilibration_gas_puff_on_s": 0.025,
     "S_gp": 9010.0,
-    "tau_gp_pulse_duration": 0.001,
-    "tau_gp_decay_duration": 0.005,
     "atomic_rate_model": "adas",
     "b_beam_excitation": 1.4,
     "Rp": 18.415,
@@ -163,9 +161,7 @@ PROBE_PARAMS = {
     "C_R": 8.76,
     "beam_deposition_smoothing_cm": 50.0,
 }
-PROBE_FLAGS = {
-    "ion_neutral_drag_cx_only": False,
-}
+PROBE_FLAGS = {}
 
 #: Applied over ``PROBE_PARAMS`` (and over the ES1 operating point below);
 #: where a key appears in both, this value wins. ``S_gp`` is in sccm.
@@ -178,7 +174,6 @@ EXTRA = {
     "cathode_phiwf_clean_eV": 2.809,
     "cathode_cleaning_sigma_cm2": 3.5e-16,
     "cathode_cleaning_E_th_eV": 20.0,
-    "gas_puff_mode": "square",
     "S_gp": 3000.0,
     "nx": 240,
     "tau_afterglow": 0.006,
@@ -222,8 +217,6 @@ def build_arm(arm):
     params, flags = default_config()
     params.update(PROBE_PARAMS)
     flags.update(PROBE_FLAGS)
-    flags["neutral_two_zone"] = True
-    params["neutral_exchange_model"] = "knudsen"
     op = ES_OPERATING[1]
     params["V_bank"] = op["V_bank"]
     params["cathode_Ts_base_K"] = op["Ts_standby_K"]

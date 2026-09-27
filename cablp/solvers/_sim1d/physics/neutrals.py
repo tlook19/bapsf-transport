@@ -11,7 +11,6 @@ from ..core.geometry import (
 from ..core.state import ConservativeState1D, neutral_energy_floor
 from .puff_orifice import launch_row_for_grid
 from .sources import neutral_wind_velocity
-from cablp.numerics.interp import interp_scalar_fused
 from cablp.constants import kb_cgs, m_He_cgs
 
 
@@ -150,26 +149,17 @@ def knudsen_flow_coefficients(
 
 def neutral_exchange_coefficients(
     geometry,
-    model,
-    constant_coeff_cm3_s,
     Tn_K,
     mu_neutral,
     clausing_scale=1.0,
 ):
-    """Return internal-face neutral exchange coefficients [cm^3/s]."""
-    if model == "constant":
-        return _as_face_coefficients(constant_coeff_cm3_s, geometry)
-    if model == "knudsen":
-        coefficients = knudsen_flow_coefficients(
-            geometry=geometry,
-            Tn_K=Tn_K,
-            mu_neutral=mu_neutral,
-            clausing_scale=clausing_scale,
-        )
-    else:
-        raise ValueError(
-            f"neutral_exchange_model must be 'constant' or 'knudsen' (got {model!r})"
-        )
+    """Return internal-face Knudsen neutral exchange coefficients [cm^3/s]."""
+    coefficients = knudsen_flow_coefficients(
+        geometry=geometry,
+        Tn_K=Tn_K,
+        mu_neutral=mu_neutral,
+        clausing_scale=clausing_scale,
+    )
     # Escape hatch: a face whose conductance is known directly rather than
     # geometrically overrides the computed value (NaN => keep the computed one).
     prescribed = np.asarray(geometry.neutral_face_conductance_cm3_s[1:-1], dtype=float)
@@ -215,9 +205,7 @@ def neutral_zone_exchange_conductance(geometry, Tn_K, mu_neutral):
     return np.where(V_ann > 0.0, conductance, 0.0)
 
 
-def neutral_zone_exchange_rhs(
-    state, geometry, conductance_cm3_s, floors=None, temperature_scale=None
-):
+def neutral_zone_exchange_rhs(state, geometry, conductance_cm3_s, floors=None):
     """Return the conservative column/annulus free-molecular exchange.
 
     A state without ``nn_a`` gets zeros (the term is presence-gated, like
@@ -229,10 +217,6 @@ def neutral_zone_exchange_rhs(
     temperature, which is where the v1 cut holds the annulus. So the column's
     ``En`` sees ``-flow_out (En/nn)`` and ``+flow_in (3/2) k T_wall``, and the
     asymmetry is the cut, stated here rather than hidden in a mean.
-
-    ``temperature_scale`` (the thermal-transpiration arm) multiplies the radial
-    conductance per cell; the conductance is ``vbar/4`` times an area, so it
-    scales with the same square root the axial one does.
     """
     zeros = np.zeros(geometry.cells, dtype=float)
     if state.nn_a is None:
@@ -245,8 +229,6 @@ def neutral_zone_exchange_rhs(
         )
     V_col, V_ann = neutral_zone_volumes(geometry)
     conductance = np.asarray(conductance_cm3_s, dtype=float)
-    if temperature_scale is not None:
-        conductance = conductance * np.asarray(temperature_scale, dtype=float)
     flow = conductance * (
         np.asarray(state.nn_a, dtype=float) - np.asarray(state.nn, dtype=float)
     )
@@ -396,7 +378,6 @@ def neutral_exchange_two_zone_rhs(
     column_coeff_cm3_s,
     annulus_coeff_cm3_s,
     floors=None,
-    temperature_scale=None,
 ):
     """Return conservative per-zone axial Knudsen exchange.
 
@@ -408,9 +389,6 @@ def neutral_exchange_two_zone_rhs(
     the reason ``neutral_exchange_rhs`` states. The ANNULUS channel carries no
     energy at all: under the ratified v1 cut the annulus gas is held at the wall
     temperature and has no energy field to move.
-
-    ``temperature_scale`` (the thermal-transpiration arm) multiplies BOTH zones'
-    internal-face conductances per face.
     """
     if state.nn_a is None:
         raise ValueError(
@@ -426,8 +404,6 @@ def neutral_exchange_two_zone_rhs(
         (annulus_coeff_cm3_s, state.nn_a, V_ann, dnn_a),
     ):
         coeff = np.asarray(coeff, dtype=float)
-        if temperature_scale is not None:
-            coeff = coeff * np.asarray(temperature_scale, dtype=float)
         face_rates = coeff * (
             np.asarray(values[:-1], dtype=float)
             - np.asarray(values[1:], dtype=float)
@@ -496,14 +472,11 @@ def _donor_upwind(face_rates, values):
     )
 
 
-def neutral_exchange_rhs(
-    state, geometry, exchange_coeff_cm3_s, floors=None, temperature_scale=None
-):
+def neutral_exchange_rhs(state, geometry, exchange_coeff_cm3_s, floors=None):
     """Return conservative RHS for pairwise neutral exchange.
 
-    ``temperature_scale`` (the thermal-transpiration arm) multiplies the
-    internal-face conductances per face; ``None`` leaves them at the frozen
-    value the construction-time coefficients carry.
+    The internal-face conductances are the construction-time coefficients,
+    frozen at ``Tn_K``.
 
     ENTHALPY CARRIAGE. With the state carrying ``En`` the particle current
     across each face takes the DONOR cell's energy per atom with it,
@@ -519,8 +492,6 @@ def neutral_exchange_rhs(
     oversight.
     """
     coeff = _as_face_coefficients(exchange_coeff_cm3_s, geometry)
-    if temperature_scale is not None:
-        coeff = coeff * np.asarray(temperature_scale, dtype=float)
     face_rates = neutral_exchange_face_rates(
         nn=state.nn,
         geometry=geometry,
@@ -593,14 +564,14 @@ def neutral_fluid_flux_rhs(
 
     - ``nn`` and ``En`` share a volume by construction (the ``En`` field is
       defined on it), so both use ``V_nn`` and ``A_nn``: the plasma column
-      under ``neutral_two_zone``, the chamber otherwise;
+      on a two-zone state (``nn_a`` present), the chamber otherwise;
     - ``M_n`` is a CHAMBER-MEAN momentum density, so it uses ``V_m`` and
       ``A_m`` -- the same convention the donor-cell term it replaces already
       used, so the momentum inventory ``sum M_n V_m`` is conserved by the
       interior fluxes exactly as before;
     - the PRESSURE FORCE crosses the area the pressure actually acts on
-      (``A_nn``) and lands on the momentum's volume (``V_m``). Under
-      ``neutral_two_zone`` that is the column pressure pushing on the chamber
+      (``A_nn``) and lands on the momentum's volume (``V_m``). On a two-zone
+      state that is the column pressure pushing on the chamber
       mean, which is the correct total force per chamber volume from the
       modelled gas. The annulus gas's own pressure gradient is NOT modelled --
       the annulus carries no energy field under the v1 cold cut -- and that
@@ -965,10 +936,7 @@ def neutral_source_sink_rhs(
     pump_enabled=True,
     gas_puff_valves=2,
     pump_elbow_conductance_lps=None,
-    gas_puff_profile="cell",
     gas_puff_z_cm=None,
-    gas_puff_sigma_cm=50.0,
-    gas_puff_throw_cm=100.0,
     gas_puff_delivery_fraction=1.0,
     gas_puff_orifice_id_cm=None,
     gas_puff_orifice_length_cm=None,
@@ -997,8 +965,8 @@ def neutral_source_sink_rhs(
     what the pass-1 flag-on watch item was missing: the puff added particles
     with no energy of their own and the floor had to invent it, one clip at a
     time. The PUMP removes gas at the local energy per atom, so pumping is
-    temperature-preserving. Under ``neutral_two_zone`` the puff feeds the
-    annulus, which carries no energy field, so nothing is booked there.
+    temperature-preserving. On a two-zone state the puff feeds the annulus,
+    which carries no energy field, so nothing is booked there.
     """
     dnn = np.zeros(geometry.cells, dtype=float)
     dEn = None if state.En is None else np.zeros(geometry.cells, dtype=float)
@@ -1010,10 +978,7 @@ def neutral_source_sink_rhs(
             geometry,
             S_gp,
             gas_puff_valves,
-            profile=gas_puff_profile,
             z_cm=gas_puff_z_cm,
-            sigma_cm=gas_puff_sigma_cm,
-            throw_cm=gas_puff_throw_cm,
             end=0,
             delivery_fraction=gas_puff_delivery_fraction,
             orifice_id_cm=gas_puff_orifice_id_cm,
@@ -1024,10 +989,7 @@ def neutral_source_sink_rhs(
                 geometry,
                 Twin_S_gp,
                 gas_puff_valves,
-                profile=gas_puff_profile,
                 z_cm=gas_puff_z_cm,
-                sigma_cm=gas_puff_sigma_cm,
-                throw_cm=gas_puff_throw_cm,
                 end=-1,
                 delivery_fraction=gas_puff_delivery_fraction,
                 orifice_id_cm=gas_puff_orifice_id_cm,
@@ -1112,9 +1074,9 @@ def neutral_source_sink_rhs(
 
 # --- Saved per-sample gas-puff waveform fields ------------------------------
 # The EFFECTIVE puff the solver actually applied at each save: the configured
-# S_gp after waveform shaping (``gas_puff_mode``) AND the phase gate, not the
-# nominal input_dict level. Recording it removes the need to reconstruct the
-# waveform from the phase switch plus the mode's formula after the fact.
+# S_gp after the square waveform's shaping AND the phase gate, not the nominal
+# input_dict level. Recording it removes the need to reconstruct the waveform
+# from the phase switch plus the envelope's formula after the fact.
 # Pure recording -- nothing here feeds an RHS row.
 GAS_PUFF_DIAGNOSTIC_FIELDS = (
     # Source-end and twin-end valve rates [sccm] as applied; zero whenever the
@@ -1215,10 +1177,7 @@ def gas_puff_rate_profile(
     geometry,
     sccm,
     valves,
-    profile="cell",
     z_cm=None,
-    sigma_cm=50.0,
-    throw_cm=100.0,
     end=0,
     delivery_fraction=1.0,
     orifice_id_cm=None,
@@ -1231,57 +1190,25 @@ def gas_puff_rate_profile(
     matrix in the solver -- so the two cannot desync (the historical trap was
     two independently maintained copies of this shape).
 
-    ``profile = "cell"`` (default) reproduces the historical behaviour
-    bit-exactly: the whole flow lands in the role-tagged puff cell.
+    The row is the tube-beamed injection row of :mod:`.puff_orifice`, derived
+    by ray optics from the feed-pipe aperture (``orifice_id_cm`` wide,
+    ``orifice_length_cm`` long) and the grid's own wall and plasma-column
+    radii at the port cell. It is already a per-cell mass fraction, so it is
+    NOT re-weighted by cell length and NOT masked to the eligible roles: the
+    cells it lands in are the cells the ray optics reaches, and folding either
+    operation on top would move fuel away from the geometry that derived it.
+    It is a kinetic first-flight row read as a fluid deposition row -- a
+    disclosed closure, stated in :mod:`.puff_orifice`. It is normalized to
+    conserve the total inflow exactly. ``z_cm = None`` centres on the puff
+    cell; ``end = -1`` selects the twin puff cell and mirrors an explicit
+    centre through the machine midpoint.
 
-    ``profile = "cosine_pipe"`` is the physical source: a small pipe at the
-    chamber wall pointing radially inward with a Lambertian (cosine) outlet.
-    Its first-flight deposition along the wall is the standard cosine-lobe
-    illumination ``[1 + ((z - z0)/d)^2]^-2`` with throw distance ``d``
-    (``throw_cm``) of order the chord across the chamber (~2*Rm), after which
-    the neutral transport model does the spreading. Centre and width both
-    come from geometry, so this adds no free shape parameter.
-
-    ``profile = "gaussian"`` is the generic tunable shape,
-    ``exp(-(z - z0)^2 / (2 sigma^2))``.
-
-    ``profile = "orifice"`` is the tube-beamed injection row of
-    :mod:`.puff_orifice`, derived by ray optics from the feed-pipe aperture
-    (``orifice_id_cm`` wide, ``orifice_length_cm`` long -- both REQUIRED here
-    and rejected under every other profile) and the grid's own wall and
-    plasma-column radii at the port cell. Unlike the two shapes above it is
-    already a per-cell mass fraction, so it is NOT re-weighted by cell length
-    and NOT masked to the eligible roles: the cells it lands in are the cells
-    the ray optics reaches, and folding either operation on top would move
-    fuel away from the geometry that derived it. It is a kinetic first-flight
-    row read as a fluid deposition row -- a disclosed closure, stated in
-    :mod:`.puff_orifice`.
-
-    The ``"gaussian"`` and ``"cosine_pipe"`` profiles weight by cell length and
-    land only on main-chamber cells. Every distributed profile, ``"orifice"``
-    included, is normalized to conserve the total inflow exactly.
-    ``z_cm = None`` centres on the puff cell; ``end = -1`` selects the twin
-    puff cell and mirrors an explicit centre through the machine midpoint.
-
-    ``delivery_fraction`` [1] scales the sccm-to-particles conversion at both
-    of its sites -- the ``"cell"`` profile's ``puff_rate`` and the distributed
-    profiles' ``total_particles_per_s`` -- so the shape is untouched and only
-    the delivered flow moves. ``1.0`` (the default) is the identity.
+    ``delivery_fraction`` [1] scales the sccm-to-particles conversion, so the
+    shape is untouched and only the delivered flow moves. ``1.0`` (the
+    default) is the identity.
     """
-    dnn = np.zeros(geometry.cells, dtype=float)
     puff_index, puff_twin_index = puff_cell_indices(geometry)
     index = puff_twin_index if end == -1 else puff_index
-    if profile == "cell":
-        dnn[index] = puff_rate(
-            sccm, valves, geometry.neutral_volume_cm3[index], delivery_fraction
-        )
-        return dnn
-    if profile not in ("gaussian", "cosine_pipe", "orifice"):
-        raise ValueError(
-            "gas_puff_profile must be 'cell', 'gaussian', 'cosine_pipe', or "
-            f"'orifice' (got {profile!r})"
-        )
-
     roles = np.asarray(geometry.cell_role)
     eligible = np.asarray(
         [role in _PUFF_ELIGIBLE_ROLES for role in roles], dtype=bool
@@ -1296,54 +1223,20 @@ def gas_puff_rate_profile(
             z_hi = float(np.max(z_centers[eligible]))
             z0 = z_lo + z_hi - z0  # mirror through the chamber midpoint
 
-    if profile == "orifice":
-        # Already a per-cell mass fraction summing to 1 (off-grid rays are
-        # folded into the end cells by the derivation, so no fuel is lost):
-        # scale by the throughput and divide by the cell volume, which is the
-        # same normalization the length-weighted shapes below arrive at.
-        row = launch_row_for_grid(
-            geometry,
-            pipe_id_cm=orifice_id_cm,
-            pipe_length_cm=orifice_length_cm,
-            z_port_cm=z0,
-        )
-        return (
-            puff_particles_per_s(sccm, valves, delivery_fraction)
-            * np.asarray(row, dtype=float)
-            / np.asarray(geometry.neutral_volume_cm3, dtype=float)
-        )
-
-    weights = np.zeros(geometry.cells, dtype=float)
-    if profile == "gaussian":
-        sigma = float(sigma_cm)
-        if sigma <= 0.0:
-            raise ValueError(f"gas_puff_sigma_cm must be positive (got {sigma})")
-        shape = np.exp(-0.5 * ((z_centers[eligible] - z0) / sigma) ** 2)
-    else:  # cosine_pipe
-        throw = float(throw_cm)
-        if throw <= 0.0:
-            raise ValueError(f"gas_puff_throw_cm must be positive (got {throw})")
-        shape = 1.0 / (1.0 + ((z_centers[eligible] - z0) / throw) ** 2) ** 2
-    weights[eligible] = shape * np.asarray(
-        geometry.length_cm, dtype=float
-    )[eligible]
-    total_weight = weights.sum()
-    if total_weight <= 0.0:
-        # Profile centred far outside the chamber: fall back to the puff cell
-        # rather than silently deleting the fueling.
-        dnn[index] = puff_rate(
-            sccm, valves, geometry.neutral_volume_cm3[index], delivery_fraction
-        )
-        return dnn
-    total_particles_per_s = puff_particles_per_s(
-        sccm, valves, delivery_fraction
+    # Already a per-cell mass fraction summing to 1 (off-grid rays are folded
+    # into the end cells by the derivation, so no fuel is lost): scale by the
+    # throughput and divide by the cell volume.
+    row = launch_row_for_grid(
+        geometry,
+        pipe_id_cm=orifice_id_cm,
+        pipe_length_cm=orifice_length_cm,
+        z_port_cm=z0,
     )
-    dnn = (
-        total_particles_per_s
-        * (weights / total_weight)
-        / geometry.neutral_volume_cm3
+    return (
+        puff_particles_per_s(sccm, valves, delivery_fraction)
+        * np.asarray(row, dtype=float)
+        / np.asarray(geometry.neutral_volume_cm3, dtype=float)
     )
-    return dnn
 
 
 def neutral_initial_profile_values(geometry, profile, key):
@@ -1352,9 +1245,7 @@ def neutral_initial_profile_values(geometry, profile, key):
     ``profile`` is a sequence of length ``geometry.cells``; ``key`` names the
     config key it came from and appears in every message. The array is
     returned as VALUES -- absolute densities, copied and cast to float, with
-    no normalization, rescaling or role masking of any kind. That is what
-    separates an initial condition from :func:`neutral_probe_profile_weights`,
-    whose input is a shape whose scale divides out.
+    no normalization, rescaling or role masking of any kind.
 
     Every entry must be finite and strictly ``> 0``: a neutral density is
     positive, and zero would be a hole in the fill that the state floor would
@@ -1382,365 +1273,6 @@ def neutral_initial_profile_values(geometry, profile, key):
             f"{float(np.min(raw)):.6g}"
         )
     return raw
-
-
-#: Registered axial shape families for the ad-hoc probe source. The membership
-#: is deliberately tiny: a family exists so a cheap arm needs no profile file,
-#: and anything richer is expressible as an explicit per-cell profile, which
-#: carries its own provenance instead of hiding a shape behind a name.
-NEUTRAL_PROBE_SHAPES = ("gaussian",)
-
-#: Registered time dependences for the ad-hoc probe source.
-NEUTRAL_PROBE_WAVEFORMS = ("const", "square", "table")
-
-
-def neutral_probe_profile_weights(
-    geometry, profile=None, shape=None, center_cm=None, width_cm=None
-):
-    """Return the ad-hoc probe source's normalized axial shape ``p(z)`` [1].
-
-    Exactly one of ``profile`` (a per-cell sequence of length
-    ``geometry.cells``) and ``shape`` (a member of
-    :data:`NEUTRAL_PROBE_SHAPES`, with its own parameters) selects the raw
-    shape; supplying both or neither raises. ``"gaussian"`` is
-    ``exp(-(z - center_cm)^2 / (2 width_cm^2))`` sampled at the cell centres
-    ``geometry.z_cm``.
-
-    The raw shape is then rescaled so its CHAMBER-VOLUME-WEIGHTED MEAN over the
-    whole grid is exactly 1,
-
-        sum_i p_i V_i / sum_i V_i == 1,   V = geometry.neutral_volume_cm3,
-
-    to roundoff. The input is therefore a shape and not a magnitude: its
-    overall scale divides out, the amplitude carries the whole scale, and the
-    volume-integrated influx ``A * w * sum(V)`` depends on neither the grid nor
-    the profile's normalization.
-
-    No cell role is excluded and no cell length weighting is applied: ``p`` is
-    a field sampled at cell centres, so a refinement of the grid converges to
-    the continuum shape rather than redistributing it. Placing the source is
-    the caller's job, which is what makes this an instrument.
-
-    Raises ``ValueError`` on a wrong-length, non-finite, negative or
-    identically-zero profile, on an unknown shape name, and on a
-    non-positive or non-finite width.
-    """
-    cells = int(geometry.cells)
-    if (profile is None) == (shape is None):
-        raise ValueError(
-            "the probe source needs EXACTLY ONE axial shape: "
-            "neutral_probe_profile (a per-cell sequence of length "
-            f"nx={cells}) or neutral_probe_shape (a parametric family, one of "
-            f"{list(NEUTRAL_PROBE_SHAPES)}). "
-            + (
-                "Both were given; they are two spellings of the same p(z) and "
-                "neither modifies the other, so there is no composition rule "
-                "to apply -- drop one."
-                if profile is not None
-                else "Neither was given; there is no default profile -- a "
-                "probe source with no stated placement measures nothing."
-            )
-        )
-    if profile is not None:
-        raw = np.asarray(profile, dtype=float).reshape(-1)
-        if raw.size != cells:
-            raise ValueError(
-                "neutral_probe_profile must have one entry per grid cell "
-                f"(nx={cells}); got {raw.size}"
-            )
-        if not np.all(np.isfinite(raw)) or np.any(raw < 0.0):
-            raise ValueError(
-                "every neutral_probe_profile entry must be finite and >= 0 "
-                f"(got min {float(np.min(raw)):.6g}, max "
-                f"{float(np.max(raw)):.6g})"
-            )
-    else:
-        if shape not in NEUTRAL_PROBE_SHAPES:
-            raise ValueError(
-                "neutral_probe_shape must be one of "
-                f"{list(NEUTRAL_PROBE_SHAPES)} (got {shape!r})"
-            )
-        z0 = float(center_cm)
-        sigma = float(width_cm)
-        if not math.isfinite(z0):
-            raise ValueError(
-                f"neutral_probe_center_cm must be finite (got {center_cm!r})"
-            )
-        if not (math.isfinite(sigma) and sigma > 0.0):
-            raise ValueError(
-                "neutral_probe_width_cm must be finite and > 0 (got "
-                f"{width_cm!r})"
-            )
-        z = np.asarray(geometry.z_cm, dtype=float)
-        raw = np.exp(-0.5 * ((z - z0) / sigma) ** 2)
-    volume = np.asarray(geometry.neutral_volume_cm3, dtype=float)
-    weighted = float(np.sum(raw * volume))
-    if not (math.isfinite(weighted) and weighted > 0.0):
-        # An all-zero profile, or a gaussian so far outside the grid that every
-        # sample underflows, is a source that injects nothing anywhere. That is
-        # a misconfiguration, not a null control: the amplitude is the null
-        # control and it is a separate key.
-        raise ValueError(
-            "the probe source's axial profile carries no weight on this grid "
-            f"(volume-weighted sum {weighted!r}): every cell sample is zero, "
-            "so the normalization is undefined. Use "
-            "neutral_probe_amplitude_cm3_s = 0 for a null-control arm"
-        )
-    return raw * (float(np.sum(volume)) / weighted)
-
-
-def neutral_probe_waveform_value(
-    time, waveform, t_on_s=None, t_off_s=None, table=None
-):
-    """Return the ad-hoc probe source's dimensionless ``w(t)`` at ``time`` [s].
-
-    The INSTANTANEOUS value, i.e. the ``dt -> 0`` limit of
-    :func:`neutral_probe_waveform_mean`. This is what a diagnostic read of the
-    term reports at a save instant; it is NOT what an integration step
-    consumes, which is the step average -- see that function for why the
-    difference matters.
-
-    ``time`` is the ABSOLUTE solver clock. ``waveform`` is a member of
-    :data:`NEUTRAL_PROBE_WAVEFORMS`:
-
-    * ``"const"`` -- 1.0 everywhere.
-    * ``"square"`` -- 1.0 on the half-open interval ``[t_on_s, t_off_s)`` and
-      0.0 outside, with hard edges. Half-open so the two edges are
-      unambiguous and ``int w dt`` over any window is unambiguous with them.
-    * ``"table"`` -- linear interpolation between the rows of ``table``
-      (``[t_s, w]`` pairs, ``t`` strictly increasing) and exactly 0.0 strictly
-      outside their span.
-
-    The table's validity is checked by :func:`neutral_probe_waveform_table`
-    at construction; this reads an already-validated array.
-    """
-    t = float(time)
-    if waveform == "const":
-        return 1.0
-    if waveform == "square":
-        return 1.0 if float(t_on_s) <= t < float(t_off_s) else 0.0
-    if waveform == "table":
-        nodes = np.asarray(table, dtype=float)
-        if t < nodes[0, 0] or t > nodes[-1, 0]:
-            return 0.0
-        return interp_scalar_fused(t, nodes[:, 0], nodes[:, 1])
-    raise ValueError(
-        "neutral_probe_waveform must be one of "
-        f"{list(NEUTRAL_PROBE_WAVEFORMS)} (got {waveform!r})"
-    )
-
-
-def neutral_probe_waveform_mean(
-    t0, dt, waveform, t_on_s=None, t_off_s=None, table=None,
-    table_cumulative=None,
-):
-    """Return the probe waveform's EXACT step average over ``[t0, t0 + dt]``.
-
-    ``w_bar = (1/dt) * int_{t0}^{t0+dt} w(t) dt``, in closed form for every
-    registered waveform. ``dt <= 0`` returns the instantaneous value, which is
-    the same quantity's ``dt -> 0`` limit.
-
-    THIS, not the instantaneous value, is what an integration step consumes,
-    and the reason is a property of the integrator rather than of the source.
-    The explicit step is Heun: it samples the RHS pointwise at ``t0`` and
-    ``t0 + dt`` and averages the two with equal weights, so a pointwise
-    waveform would be integrated by the TRAPEZOID RULE. On a smooth waveform
-    that is merely second-order; across a hard edge it is WRONG BY A FINITE
-    AMOUNT, because the trapezoid reads a step that merely touches an edge as
-    half a step of delivery. A step ending exactly at a rising edge books
-    ``0.5*dt`` of source from outside the window, and one ending at a falling
-    edge loses the same, so the error cancels only when the two edge-adjacent
-    steps happen to carry equal ``dt`` -- which adaptive stepping does not
-    arrange (measured: -1.9e-2 of the stated inventory on an off-lattice
-    window, +2.9e-2 on an unequal-dt lattice).
-
-    The probe term is state-independent and separable, so consuming ``w_bar``
-    in BOTH Heun stages fixes this identically rather than approximately: the
-    stages then carry the same value, the ``0.5/0.5`` combination returns it
-    unchanged, and the step delivers ``A * p * int w dt`` exactly. That holds
-    for any ``dt``, any edge placement, and any asymmetry between adjacent
-    steps, so the delivered inventory is the stated hypothesis and not an
-    artifact of where the stepper put its samples.
-
-    ``table_cumulative`` is the companion returned by
-    :func:`neutral_probe_waveform_table`: ``cum[i]`` is the integral from the
-    first node to node ``i``, so a window costs two interpolations and one
-    subtraction instead of a walk over the table.
-    """
-    t0 = float(t0)
-    dt = float(dt)
-    if dt <= 0.0:
-        return neutral_probe_waveform_value(
-            t0, waveform, t_on_s=t_on_s, t_off_s=t_off_s, table=table
-        )
-    if waveform == "const":
-        return 1.0
-    if waveform == "square":
-        overlap = min(t0 + dt, float(t_off_s)) - max(t0, float(t_on_s))
-        return max(overlap, 0.0) / dt
-    if waveform == "table":
-        nodes = np.asarray(table, dtype=float)
-        cum = np.asarray(table_cumulative, dtype=float)
-        lo = max(t0, float(nodes[0, 0]))
-        hi = min(t0 + dt, float(nodes[-1, 0]))
-        if hi <= lo:
-            return 0.0
-        return (
-            _table_integral(nodes, cum, hi) - _table_integral(nodes, cum, lo)
-        ) / dt
-    raise ValueError(
-        "neutral_probe_waveform must be one of "
-        f"{list(NEUTRAL_PROBE_WAVEFORMS)} (got {waveform!r})"
-    )
-
-
-def _table_integral(nodes, cum, x):
-    """Return ``int`` of the tabulated waveform from its first node to ``x``.
-
-    ``x`` must already lie within the tabulated span. Exact for the piecewise
-    linear interpolant: whole segments come from the precomputed cumulative
-    sum and the partial one is a single trapezoid.
-    """
-    t = nodes[:, 0]
-    w = nodes[:, 1]
-    i = int(np.searchsorted(t, x, side="right")) - 1
-    if i >= t.size - 1:
-        return float(cum[-1])
-    span = t[i + 1] - t[i]
-    frac = (x - t[i]) / span
-    w_x = w[i] + frac * (w[i + 1] - w[i])
-    return float(cum[i] + 0.5 * (w[i] + w_x) * (x - t[i]))
-
-
-def neutral_probe_waveform_table(table):
-    """Return the validated probe waveform table and its cumulative integral.
-
-    Returns ``(nodes, cumulative)``: ``nodes`` is the ``(N, 2)`` float array of
-    ``[t_s, w]`` rows, and ``cumulative[i]`` is the exact integral of the
-    piecewise-linear interpolant from the first node to node ``i`` (so
-    ``cumulative[0] == 0``). The cumulative half is precomputed here, once at
-    construction, because :func:`neutral_probe_waveform_mean` reads it on every
-    integration stage.
-
-    Requires at least two rows, strictly increasing times, all entries finite,
-    and every ``w >= 0``. Raises ``ValueError`` otherwise.
-    """
-    nodes = np.asarray(table, dtype=float)
-    if nodes.ndim != 2 or nodes.shape[1] != 2 or nodes.shape[0] < 2:
-        raise ValueError(
-            "neutral_probe_waveform_table must be a sequence of at least two "
-            "[t_s, w] pairs, i.e. shape (N >= 2, 2); got shape "
-            f"{tuple(nodes.shape)}"
-        )
-    if not np.all(np.isfinite(nodes)):
-        raise ValueError(
-            "every neutral_probe_waveform_table entry must be finite"
-        )
-    if not np.all(np.diff(nodes[:, 0]) > 0.0):
-        raise ValueError(
-            "neutral_probe_waveform_table times must be strictly increasing "
-            f"(got {nodes[:, 0].tolist()})"
-        )
-    if np.any(nodes[:, 1] < 0.0):
-        raise ValueError(
-            "every neutral_probe_waveform_table w must be >= 0 (got min "
-            f"{float(np.min(nodes[:, 1])):.6g})"
-        )
-    segments = 0.5 * (nodes[:-1, 1] + nodes[1:, 1]) * np.diff(nodes[:, 0])
-    cumulative = np.concatenate(([0.0], np.cumsum(segments)))
-    return nodes, cumulative
-
-
-def neutral_probe_source_rhs(
-    state, geometry, amplitude_cm3_s, weights, waveform_value, zone=None
-):
-    """Return the conservative RHS of the ad-hoc probe neutral source.
-
-    The term is ``S_probe(z, t) = A * p(z) * w(t)`` [cm^-3 s^-1] on the neutral
-    density row and nothing else. ``weights`` is ``p`` as returned by
-    :func:`neutral_probe_profile_weights` (chamber-volume-weighted mean 1), so
-    the volume-integrated influx is ``A * w * sum(neutral_volume_cm3)``
-    [particles/s] exactly.
-
-    ``waveform_value`` is the waveform factor the CALLER resolved, and which
-    one it resolves decides what the term means. An integration stage passes
-    the step average over the step it is taking
-    (:func:`neutral_probe_waveform_mean`), which is what makes the delivered
-    inventory exactly the stated hypothesis; a diagnostic read passes the
-    instantaneous value at its instant
-    (:func:`neutral_probe_waveform_value`). The two differ only on a step that
-    straddles a hard edge.
-
-    INJECTION CONVENTIONS, both inherited unchanged from the gas puff rather
-    than invented here:
-
-    * ZERO NET MOMENTUM. The momentum rows are identically zero: the injected
-      gas arrives at rest in the lab frame, so it carries no directed momentum
-      of its own. Where a neutral wind is evolved (``M_n`` present) this
-      DILUTES it -- ``u_n = M_n / (m_n n_n)`` falls as ``n_n`` rises at fixed
-      ``M_n`` -- which is the physical content of injecting at rest and is not
-      a separate drag term.
-    * TEMPERATURE. Under the ``neutral_energy`` flag the injected particles
-      arrive at the wall/feed temperature and carry the ``En`` floor energy
-      each -- ``(3/2) k T_wall``, exactly what a gas-puff particle carries --
-      so an injection into gas already at the floor cannot move ``Tn`` at all.
-      This term does NOT return that row: it is booked for it centrally, by
-      ``solver._attach_neutral_energy_rows`` under the ``"wall"`` mode
-      ``_NEUTRAL_ENERGY_TERM_BOOKING`` records for it, which is why the
-      returned ``En`` is always ``None`` here. Only the COLUMN share is
-      booked; the annulus carries no energy field. With ``neutral_energy``
-      off there is no ``En`` row at all and the injected particles join the
-      single ``Tn_K`` cold-gas population. There is deliberately no probe
-      temperature key either way: a distinct injection temperature would be a
-      new field, not a new parameter.
-
-    Under the two-zone closure ``zone`` selects which neutral field is fed,
-    ``"column"`` (``nn``) or ``"annulus"`` (``nn_a``). The per-cell particle
-    rate is formed on the CHAMBER volume first and then re-normalized to the
-    target zone's volume, so the total influx is the same number whichever
-    zone is chosen and the amplitude keeps one meaning. Cells with no annulus
-    (``V_ann = 0``) route to the column, as the gas puff does.
-    """
-    cells = int(geometry.cells)
-    zeros = np.zeros(cells, dtype=float)
-    rate = (
-        float(amplitude_cm3_s)
-        * float(waveform_value)
-        * np.asarray(weights, dtype=float)
-    )
-    dnn = np.zeros(cells, dtype=float)
-    two_zone = state.nn_a is not None
-    dnn_a = np.zeros(cells, dtype=float) if two_zone else None
-    if two_zone:
-        V_col, V_ann = neutral_zone_volumes(geometry)
-        particles = rate * np.asarray(geometry.neutral_volume_cm3, dtype=float)
-        if zone == "annulus":
-            into_annulus = V_ann > 0.0
-            dnn_a += np.where(
-                into_annulus, particles / np.maximum(V_ann, 1e-300), 0.0
-            )
-            dnn += np.where(
-                into_annulus, 0.0, particles / np.maximum(V_col, 1e-300)
-            )
-        elif zone == "column":
-            dnn += particles / np.maximum(V_col, 1e-300)
-        else:
-            raise ValueError(
-                "neutral_probe_zone must be 'column' or 'annulus' under the "
-                f"two-zone closure (got {zone!r})"
-            )
-    else:
-        dnn += rate
-    return ConservativeState1D(
-        n=zeros.copy(),
-        nn=dnn,
-        M=zeros.copy(),
-        Ee=zeros.copy(),
-        Ei=zeros.copy(),
-        M_n=None if state.M_n is None else zeros.copy(),
-        nn_a=dnn_a,
-        M_n_a=None if state.M_n_a is None else zeros.copy(),
-    )
 
 
 def _effective_pump_speed(lps, elbow_conductance_lps):

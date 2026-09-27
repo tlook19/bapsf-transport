@@ -1,9 +1,8 @@
 """Top-level model selections, the keys each one owns, and their resolver.
 
 The user-facing config surface is MODEL SELECTIONS, not flag stacks. A
-top-level selection -- ``neutral_model = "kinetic_dvm"``,
-``neutral_momentum_radial = "kinetic_two_moment"`` -- OWNS a set of member
-keys whose value the selection determines. This module carries those sets as
+top-level selection -- ``neutral_model = "kinetic_dvm"`` -- OWNS a set of
+member keys whose value the selection determines. This module carries those sets as
 DATA, one per family, and resolves them at construction:
 
 * a member left AT ITS CONFIG DEFAULT is set to the value the selection
@@ -11,10 +10,7 @@ DATA, one per family, and resolves them at construction:
 * a member the caller EXPLICITLY set (its value differs from the config
   template's) to something the selection refuses raises ONE ``ValueError``
   naming the selection, every offending key with its required-vs-given
-  value and a one-line WHY, and the complete set the selection owns;
-* a FAMILY-INTERNAL key -- one that has no meaning at all unless the
-  selection is engaged -- raises the same single collected error when it is
-  armed while the selection is not.
+  value and a one-line WHY, and the complete set the selection owns.
 
 What this replaces is the one-guard-at-a-time cascade: engage a selection,
 read the refusal, clear the key it names, run again, read the next refusal.
@@ -34,9 +30,7 @@ they remain the authority on what each edge means, and this module's WHY
 strings are summaries of them.
 
 **Prerequisites are not members.** A selection that REQUIRES another control
-to be ON (``kinetic_dvm`` requires ``neutral_two_zone``;
-``kinetic_two_moment`` requires ``neutral_momentum`` and
-``neutral_two_zone``) keeps its own standalone guard. Those are not
+to be ON keeps its own standalone guard. Those are not
 incompatibilities to be cleared away -- turning them on silently would arm
 physics the caller did not ask for -- and every one of them is already ON in
 the shipped defaults, so nothing is resolved there in practice.
@@ -105,11 +99,6 @@ KINETIC_DVM_INCOMPATIBLE_DEFAULTS = (
     #     standing on the six above. Required value == config default for
     #     every one of them.
     (
-        PARAMS, "neutral_momentum_radial", "uniform",
-        "'two_zone' and 'kinetic_two_moment' close the radial profile of "
-        "the EVOLVED wind and require the neutral_momentum flag.",
-    ),
-    (
         PARAMS, "anode_neutral_jet", False,
         "The cathode/anode jets and the mesh accommodation are M_n momentum "
         "physics and require the neutral_momentum flag.",
@@ -126,79 +115,9 @@ KINETIC_DVM_INCOMPATIBLE_DEFAULTS = (
         "without the jet.",
     ),
     (
-        FLAGS, "neutral_hot_birth_drift", False,
-        "It directs the CX-born hot channel's birth kinematics; without "
-        "neutral_energy there is no hot channel and the flag would be "
-        "inert.",
-    ),
-    (
         PARAMS, "cathode_jet_hot_carrier", False,
         "It carries the cathode jet's backscatter share and needs that jet, "
         "its surface debit, and an En field for the CX partner atoms.",
-    ),
-    (
-        PARAMS, "neutral_knudsen_temperature", "frozen",
-        "'local' scales the Knudsen conductances by the evolved per-cell "
-        "Tn, which only exists under neutral_energy.",
-    ),
-)
-
-
-# The same measurement for ``neutral_momentum_radial = "kinetic_two_moment"``
-# (measured 2026-08-23; the later entries measured 2026-08-23 with the DVM set
-# above). The reduction gives the annulus its own momentum row while nothing
-# gives it an energy row, so the whole neutral-ENERGY package is what this
-# closure refuses -- ``neutral_energy`` itself and every control standing on
-# it. As above, only the first two differ from their config defaults.
-KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS = (
-    (
-        FLAGS, "neutral_energy", False,
-        "The reduction gives the annulus its own momentum row while nothing "
-        "gives it an energy row, so the single cold fluid the mini-flux "
-        "transports would be split across two momenta and one energy.",
-    ),
-    (
-        FLAGS, "neutral_hot_internal_wall", False,
-        "It walls the CX-born hot channel's ballistic flight; without "
-        "neutral_energy there is no hot channel and the flag would be "
-        "inert.",
-    ),
-    (
-        FLAGS, "neutral_hot_birth_drift", False,
-        "It directs the CX-born hot channel's birth kinematics; without "
-        "neutral_energy there is no hot channel and the flag would be "
-        "inert.",
-    ),
-    (
-        PARAMS, "cathode_jet_hot_carrier", False,
-        "Every charge exchange along the beam returns an atom born at the "
-        "local ion state, and without an En field there is nowhere to book "
-        "the (3/2) k Ti it carries.",
-    ),
-    (
-        PARAMS, "neutral_knudsen_temperature", "frozen",
-        "'local' scales the Knudsen conductances by the evolved per-cell "
-        "Tn, which only exists under neutral_energy.",
-    ),
-)
-
-
-# Keys that belong to the two-moment closure and have no reading at all
-# without it: the flag partitions the wall branch of the two-zone momentum
-# operator, and the cross section is the number that partition is built
-# from. Entries are ``(namespace, key, why)``.
-KINETIC_TWO_MOMENT_INTERNAL_MEMBERS = (
-    (
-        FLAGS, "neutral_wall_momentum_partition",
-        "It partitions the wall branch of the two-zone momentum operator, "
-        "and no other radial closure carries an annulus momentum row for "
-        "that branch to act on.",
-    ),
-    (
-        PARAMS, "neutral_wall_partition_sigma_hehe_cm2",
-        "The He-He elastic cross section sets the mean free path the "
-        "partition's survival weight is built from; it is read only under "
-        "the neutral_wall_momentum_partition flag.",
     ),
 )
 
@@ -209,8 +128,7 @@ class ModelFamily:
     ``selector_space``/``selector_key`` name the control that engages the
     family and ``engaged_value`` the value that engages it. ``members`` is
     the measured incompatibility set as
-    ``(namespace, key, required_value, why)``; ``internal_members`` is
-    ``(namespace, key, why)`` for keys that exist only under this selection.
+    ``(namespace, key, required_value, why)``.
     """
 
     __slots__ = (
@@ -219,7 +137,6 @@ class ModelFamily:
         "selector_key",
         "engaged_value",
         "members",
-        "internal_members",
     )
 
     def __init__(
@@ -229,14 +146,12 @@ class ModelFamily:
         selector_key,
         engaged_value,
         members,
-        internal_members=(),
     ):
         self.name = name
         self.selector_space = selector_space
         self.selector_key = selector_key
         self.engaged_value = engaged_value
         self.members = tuple(members)
-        self.internal_members = tuple(internal_members)
 
     @property
     def selection(self):
@@ -244,10 +159,7 @@ class ModelFamily:
         return f"{self.selector_key}={self.engaged_value!r}"
 
 
-#: Every family the resolver owns, in resolution order. ``kinetic_dvm`` runs
-#: first: it forbids the radial closure the two-moment family selects, so a
-#: config asking for both is refused by the DVM's own member set rather than
-#: half-resolved by the other family first.
+#: Every family the resolver owns, in resolution order.
 MODEL_FAMILIES = (
     ModelFamily(
         name="kinetic_dvm",
@@ -255,14 +167,6 @@ MODEL_FAMILIES = (
         selector_key="neutral_model",
         engaged_value="kinetic_dvm",
         members=KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
-    ),
-    ModelFamily(
-        name="kinetic_two_moment",
-        selector_space=PARAMS,
-        selector_key="neutral_momentum_radial",
-        engaged_value="kinetic_two_moment",
-        members=KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS,
-        internal_members=KINETIC_TWO_MOMENT_INTERNAL_MEMBERS,
     ),
 )
 
@@ -293,17 +197,6 @@ MODEL_FAMILIES = (
 #: Family A, DVM half. The selection plus every key it forces.
 NEUTRAL_CLOSURE_MEMBERS = ((PARAMS, "neutral_model"),) + tuple(
     (space, key) for space, key, _required, _why in KINETIC_DVM_INCOMPATIBLE_DEFAULTS
-)
-
-#: Family A, two-moment half. The selection, every key it forces, and the two
-#: keys that have no reading without it.
-NEUTRAL_RADIAL_CLOSURE_MEMBERS = (
-    ((PARAMS, "neutral_momentum_radial"),)
-    + tuple(
-        (space, key)
-        for space, key, _required, _why in KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS
-    )
-    + tuple((space, key) for space, key, _why in KINETIC_TWO_MOMENT_INTERNAL_MEMBERS)
 )
 
 #: Family K -- beam deposition, the anomalous (quasilinear) channel, and the
@@ -354,14 +247,12 @@ ANODE_SURFACE_RECYCLE_MEMBERS = (
 
 #: Family F -- how the initial neutral state is established.
 INITIAL_NEUTRAL_STATE_MEMBERS = (
-    (FLAGS, "neutral_equilibration"),
-    (FLAGS, "launch_plasma_after_equilibration"),
+    (PARAMS, "initial_neutral_state"),
     (PARAMS, "neutral_equilibration_cycles"),
     (PARAMS, "neutral_equilibration_dt"),
     (PARAMS, "equilibration_gas_puff_on_s"),
     (FLAGS, "use_cached_neutral_seed"),
     (PARAMS, "neutral_seed_cache_dir"),
-    (FLAGS, "neutral_initial_profile"),
     (PARAMS, "nn0"),
     (PARAMS, "nn0_profile"),
     (PARAMS, "nn0_annulus_profile"),
@@ -372,26 +263,21 @@ INITIAL_NEUTRAL_STATE_MEMBERS = (
 #: as ``(route, (space, key), off_value, why)``: a route is ARMED when its key
 #: holds anything other than ``off_value``, and at most one may be armed.
 #:
-#: THREE routes, not the census's four. MEASURED 2026-08-30: ``cached_seed`` is
-#: NOT a fourth exclusive route -- it REQUIRES ``neutral_equilibration`` (the
-#: co-requisite is validation.py's ``use_cached_neutral_seed is ON but the
-#: configuration is incoherent`` refusal) and its dispatch is a hit/miss branch
-#: INSIDE the equilibration path, so it is a modifier of ``equilibrate``, not
-#: an alternative to it. That also settles the count: three routes have three
-#: pairs, and the code carries exactly three direct pairwise refusals, not the
-#: census's six. Collapsing the four-route reading into one selector would have
-#: made cached_seed and equilibrate mutually exclusive -- a behaviour change,
-#: and one this migration is forbidden to make.
+#: TWO routes. The equilibrated seed and the shaped per-cell fill are values
+#: of the one ``initial_neutral_state`` selector, so they cannot both be armed
+#: at all; the selector is armed at any value but ``"fill"``, the scalar fill a
+#: restart payload replaces. ``cached_seed`` is NOT a route: it REQUIRES
+#: ``initial_neutral_state = "equilibrate"`` (validation.py's
+#: ``use_cached_neutral_seed is ON but the configuration is incoherent``
+#: refusal) and its dispatch is a hit/miss branch INSIDE the equilibration
+#: path, so it is a modifier of that value, not an alternative to it.
 INITIAL_NEUTRAL_STATE_ROUTES = (
     (
-        "equilibrate", (FLAGS, "neutral_equilibration"), False,
-        "start_simulation() runs the puff/off accumulation and seeds nn from "
-        "it, overwriting whatever the initial condition put there.",
-    ),
-    (
-        "profile", (FLAGS, "neutral_initial_profile"), False,
-        "the shaped per-cell nn0_profile IS the initial fill, and it "
-        "supersedes the scalar nn0 for both zones.",
+        "initial_neutral_state", (PARAMS, "initial_neutral_state"), "fill",
+        "'equilibrate' and 'equilibrate_only' run the puff/off accumulation "
+        "and seed nn from it, and 'profile' makes the shaped per-cell "
+        "nn0_profile the initial fill; each establishes the initial "
+        "condition a restart payload would otherwise replace.",
     ),
     (
         "restart", (PARAMS, "restart_from"), None,
@@ -426,10 +312,6 @@ def values_equal(a, b):
         return False
 
 
-def _describe(space, key, value):
-    return f"{space}:{key} = {value!r}"
-
-
 def _owned_set_block(family):
     lines = [
         f"The complete set {family.selection} owns (required value in "
@@ -455,27 +337,6 @@ def _raise_member_conflicts(family, conflicts):
         lines.append(f"      WHY {why}")
     lines.append("")
     lines.extend(_owned_set_block(family))
-    raise ValueError("\n".join(lines))
-
-
-def _raise_internal_members_armed(family, selector_given, armed):
-    names = ", ".join(f"{space}:{key}" for space, key, _given, _why in armed)
-    lines = [
-        f"{names} belong to the {family.selection} closure and have no "
-        f"reading under {family.selector_key}={selector_given!r}; they are "
-        "armed here anyway.",
-        "",
-    ]
-    for space, key, given, why in armed:
-        lines.append(f"  {_describe(space, key, given)}")
-        lines.append(f"      WHY {why}")
-    lines.append("")
-    lines.append(
-        f"Set {family.selection} to use them. That selection additionally "
-        "owns the keys below, so engaging it is the whole decision, not "
-        "half of one:"
-    )
-    lines.extend(_owned_set_block(family)[1:])
     raise ValueError("\n".join(lines))
 
 
@@ -514,15 +375,6 @@ def resolve_model_families(params, flags):
                 conflicts.append((space, key, required, given, why))
             if conflicts:
                 _raise_member_conflicts(family, conflicts)
-            continue
-        armed = []
-        for space, key, why in family.internal_members:
-            given = spaces[space].get(key)
-            if values_equal(given, member_default(space, key)):
-                continue
-            armed.append((space, key, given, why))
-        if armed:
-            _raise_internal_members_armed(family, selector_given, armed)
     return params, flags
 
 
@@ -567,9 +419,8 @@ class DeclaredFamily:
 
 
 #: Every family a declaration block may name. A key appears in more than one
-#: family here (``neutral_momentum_radial`` is the two-moment selector AND a
-#: member the DVM selection forces; the jet keys are members of family B AND of
-#: the DVM set that forbids them), which is why two blocks claiming one key is
+#: family here (the jet keys are members of family B AND of the DVM set that
+#: forbids them), which is why two blocks claiming one key is
 #: refused rather than merged: overlapping membership means the two families
 #: disagree about who owns the decision, and only the caller can settle it.
 DECLARED_FAMILIES = (
@@ -579,13 +430,6 @@ DECLARED_FAMILIES = (
         members=NEUTRAL_CLOSURE_MEMBERS,
         selector="neutral_model",
         engaged_value="kinetic_dvm",
-    ),
-    DeclaredFamily(
-        name="neutral_radial_closure",
-        summary="the radial closure of the evolved neutral wind",
-        members=NEUTRAL_RADIAL_CLOSURE_MEMBERS,
-        selector="neutral_momentum_radial",
-        engaged_value="kinetic_two_moment",
     ),
     DeclaredFamily(
         name="beam_tail_closure",

@@ -62,8 +62,7 @@ def measure(params, flags, cycles, dt, nx):
     params["nx"] = int(nx)
     flags["Plasma"] = False
     flags["cathode_coupling"] = False
-    flags["neutral_equilibration"] = False
-    flags["launch_plasma_after_equilibration"] = False
+    params["initial_neutral_state"] = "fill"
     flags["use_cached_neutral_seed"] = False
     # The two DVM directed-recycle jets, cleared for the same reason as
     # cathode_coupling above: with no plasma and no cathode solve there is no

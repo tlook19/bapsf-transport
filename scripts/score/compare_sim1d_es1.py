@@ -271,20 +271,9 @@ PARAM_OVERRIDES = {
     # delivered fuel) and NOT the golden, which pins the key back to None.
     "equilibration_gas_puff_on_s": _STANCE["equilibration_gas_puff_on_s"],
     "S_gp": _STANCE["S_gp"],
-    # S_gp_decay_target is no longer mirrored from the stance: the stance
-    # dropped it (2026-08-21) because it is read only by the retired
-    # pulse/decay/double_erf puff waveforms and the stance runs "square", so
-    # it was inert and trajectory-invariant. The config default now applies,
-    # equally inertly.
-    "tau_gp_pulse_duration": 1e-3,
-    "tau_gp_decay_duration": 5e-3,
-    # Ion-neutral closure: R5 STANCE FLIP (2026-07-25) -- the ad-hoc constant
-    # drag / cx_derived stance (b=0.5, constant, cx_derived, thermalization) is
-    # RETIRED in favour of the R4.3 Phelps moment operator
-    # (ion_neutral_moment_closure, now the config.py production default;
-    # first-principles drag+CX+thermal, no knob). The legacy drag keys are
-    # DEPRECATED and no longer set here, nor in the golden, which has run the
-    # shipped moment-closure defaults since the R2b re-anchor.
+    # Ion-neutral closure: the Phelps moment-closed operator is unconditional
+    # (first-principles drag+CX+thermal, no knob), so no ion-neutral key is
+    # set here.
     # ADAS GCR rates (see cablp/atomic/data/adas/README.md): effective ionization/
     # recombination and radiation-only cooling, consistent with the separate
     # ionization-cost term. The rate channels carry no scale factor: the b_*
@@ -352,9 +341,6 @@ PARAM_OVERRIDES = {
     # source artifacts ran at the config default 5.
 }
 FLAG_OVERRIDES = {
-    # R5 stance flip: the legacy ion-neutral thermalization arm is subsumed by
-    # the Phelps moment operator (config.py default); no longer set here.
-    "ion_neutral_drag_cx_only": False,
     # NB end_expansion_geometry is NOT set here any more: the G1 measured
     # geometry replaced the built-in flare with per-cell prescribed radii, and
     # the solver refuses the two together. It comes with the stance.
@@ -558,7 +544,6 @@ PRODUCTION_NX = 240
 
 def run_model(
     nx=PRODUCTION_NX,
-    exchange_model="knudsen",
     extra=None,
     drag_closure=None,
     flags_extra=None,
@@ -571,39 +556,15 @@ def run_model(
     flags.update(FLAG_OVERRIDES)
     if flags_extra:
         flags.update(flags_extra)
-    params["neutral_exchange_model"] = exchange_model
     if nx is not None:
         params["nx"] = nx
     # A/B instrument for the drag-closure gate (M4):
     # swap the drag closure without touching the rest of the production
     # config. "constant" is PARAM_OVERRIDES as-is (the calibrated 0.5);
-    # "slip" is the entrainment closure; "neutral_momentum" evolves M_n with
-    # the honest b = 1 (the field replaces the compensation constant).
-    if drag_closure == "slip":
-        params["ion_neutral_drag_model"] = "slip"
+    # "neutral_momentum" evolves M_n with the honest b = 1 (the field replaces
+    # the compensation constant).
+    if drag_closure == "neutral_momentum":
         params["b_ion_neutral_drag"] = 1.0
-        # The slip closure IS the evolved M_n equation's local steady state, so
-        # the solver refuses the pair. Since the R2a fold-in made
-        # neutral_momentum a config default, this arm has to switch the field
-        # off explicitly to be the closure arm it names -- and with it
-        # everything the solver presence-gates on M_n: the neutral energy
-        # channel and its hot internal wall, and the cathode jet (M_n momentum
-        # physics), whose debit and total_reflected convention in turn require
-        # the jet. This arm is the whole pre-M_n closure stack, not one key.
-        flags["neutral_momentum"] = False
-        flags["neutral_energy"] = False
-        flags["neutral_hot_internal_wall"] = False
-        params["cathode_neutral_jet"] = False
-        params["cathode_jet_surface_debit"] = False
-        params["cathode_jet_energy_convention"] = "legacy"
-    elif drag_closure == "neutral_momentum":
-        params["ion_neutral_drag_model"] = "constant"
-        params["b_ion_neutral_drag"] = 1.0
-        flags["neutral_momentum"] = True
-    elif drag_closure == "neutral_momentum_two_zone":
-        params["ion_neutral_drag_model"] = "constant"
-        params["b_ion_neutral_drag"] = 1.0
-        params["neutral_momentum_radial"] = "two_zone"
         flags["neutral_momentum"] = True
     elif drag_closure not in (None, "constant"):
         raise ValueError(f"unknown drag_closure {drag_closure!r}")
@@ -650,9 +611,8 @@ def run_model(
 # NB the dominant biases push LP Te HIGH and hence inverted n LOW -- the
 # model-hot / model-underdense residuals are, if anything, understated.
 # The "Isat" rows compare in I_sat space (n*sqrt(Te), both sides), where
-# the sweep inversion cancels identically -- the systematics-robust
-# magnitude/shape observable (the stage-(iii) tau metric already lives
-# there by design).
+# the sweep inversion cancels identically -- a development magnitude/shape
+# diagnostic (the stage-(iii) tau metric already lives there by design).
 TE_SYS_FRAC = 0.25
 TE_SYS_FLOOR_EV = 0.20
 TE_SEMIQUANT_EV = 1.0
@@ -4459,9 +4419,6 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--nx", type=int, default=PRODUCTION_NX)
     parser.add_argument(
-        "--exchange-model", default="knudsen", choices=("knudsen", "constant")
-    )
-    parser.add_argument(
         "--tau-afterglow",
         type=float,
         default=None,
@@ -4493,15 +4450,12 @@ def main(argv=None):
         default=None,
         choices=(
             "constant",
-            "slip",
             "neutral_momentum",
-            "neutral_momentum_two_zone",
         ),
         help=(
             "swap the ion-neutral drag closure for the gate-#2 A/B: "
-            "constant (production 0.5), slip (entrainment closure, b=1), "
-            "neutral_momentum (evolved M_n wind, b=1), or "
-            "neutral_momentum_two_zone (M_n wind + two-zone radial closure)"
+            "constant (production 0.5) or neutral_momentum (evolved M_n "
+            "wind, b=1)"
         ),
     )
     parser.add_argument(
@@ -4680,7 +4634,7 @@ def main(argv=None):
         # nonlocal run must not be scored under a production-stance label.
         label += beam_product_transport_note(getattr(result, "params", None))
     else:
-        label = f"resolved ({args.exchange_model}, nx={args.nx or 'default'})"
+        label = f"resolved (nx={args.nx or 'default'})"
         # The named configuration, applied over this file's shared package,
         # where the campaign drivers apply theirs.
         configuration = None
@@ -4712,7 +4666,6 @@ def main(argv=None):
             flags_extra = None
         result, geometry, params, flags = run_model(
             nx=args.nx,
-            exchange_model=args.exchange_model,
             extra=extra,
             flags_extra=flags_extra,
             drag_closure=args.drag_closure,

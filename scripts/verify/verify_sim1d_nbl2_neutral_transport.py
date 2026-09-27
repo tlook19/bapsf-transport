@@ -50,17 +50,8 @@ Gates:
       and every term declared 'none' really does leave nn alone
   W3  WALL RATE: the energy channel's wall-visit rate is built from the 300 K
       thermal speed, not the momentum closure's 0.1 eV Tn_fit
-  T1  TRANSPIRATION ARM: 'local' at a uniform Tn = Tn_K reproduces 'frozen' to
-      the bit, and separates from it once Tn varies
-  G6  RESOLVER DOWNGRADE: the two-momentum reduction no longer REFUSES the
-      neutral-energy package -- 40c519c made neutral_energy a shipped default,
-      and 2f3638a made a model selection resolve a member left at its config
-      default instead of raising on it -- so the gate pins the downgrade:
-      construction succeeds and the resolved arm reports _neutral_energy False
-      with _neutral_two_momentum True
-  G7, G8 construction guards: the jet without the surface debit, and a bad or
-      unusable transpiration selector, each raise a loud ValueError naming what
-      is accepted; the happy paths construct
+  G7  construction guard: the jet without the surface debit raises a loud
+      ValueError naming what is accepted; the happy path constructs
 
 Usage:
     PYTHONPATH=<checkout>/cablp python scripts/verify/verify_sim1d_nbl2_neutral_transport.py
@@ -112,11 +103,10 @@ CLEAN_PARAMS = {
     "dt_min": 1e-16, "dt_max": 1.0,
     "max_density_step_fraction": 0.0, "max_neutral_step_fraction": 0.0,
     "max_energy_step_fraction": 0.0,
+    "initial_neutral_state": "fill",
 }
 CLEAN_FLAGS = {
     "Plasma": True, "implicit_heat_conduction": True,
-    "neutral_prebreakdown": False, "neutral_equilibration": False,
-    "launch_plasma_after_equilibration": False,
     "cathode_coupling": False, "debug_checks": False,
 }
 
@@ -125,16 +115,14 @@ TN_EV = TN_K * kb_cgs / ev_to_erg
 WALL_EV = NEUTRAL_ENERGY_FLOOR_T_K * kb_cgs / ev_to_erg
 
 
-def make_sim(neutral_energy=True, two_zone=False, **overrides):
+def make_sim(neutral_energy=True, **overrides):
     params, flags = default_config()
     params.update(CLEAN_PARAMS)
     params["nx"] = 60
     params["gas_type"] = "He"
     params["Tn_K"] = TN_K
     flags.update(CLEAN_FLAGS)
-    flags["ion_neutral_moment_closure"] = True
     flags["neutral_momentum"] = True
-    flags["neutral_two_zone"] = bool(two_zone)
     flags["neutral_energy"] = bool(neutral_energy)
     for key, value in overrides.items():
         if key in flags:
@@ -144,8 +132,7 @@ def make_sim(neutral_energy=True, two_zone=False, **overrides):
     return LAPDSim1D(params, flags)
 
 
-def make_state(sim, u_i, u_n, Ti=2.0, Tn_K=TN_K, En_shape=None, nn=None,
-               two_zone=False):
+def make_state(sim, u_i, u_n, Ti=2.0, Tn_K=TN_K, En_shape=None, nn=None):
     cells = sim._geometry.cells
     if nn is None:
         nn = np.full(cells, 1.0e13)
@@ -158,7 +145,7 @@ def make_state(sim, u_i, u_n, Ti=2.0, Tn_K=TN_K, En_shape=None, nn=None,
         Ti=np.full(cells, float(Ti)) if np.isscalar(Ti) else np.asarray(Ti),
         ion_mass_g=sim._ion_mass_g,
         un=np.full(cells, float(u_n)),
-        nn_a=nn.copy() if two_zone else None,
+        nn_a=nn.copy(),
         Tn_K=Tn_K,
     )
     if En_shape is not None:
@@ -184,12 +171,12 @@ def _channels(sim, state, ionization_rate=None):
     kwargs = sim._collision_operator_kwargs()
     coll = ion_neutral_collision_rhs(
         state=state, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
-        geometry=sim._geometry, wind_column_factor=sim._wind_column_factor,
+        geometry=sim._geometry,
         **kwargs,
     )
     cx = neutral_cx_channel_rhs(
         state=state, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
-        geometry=sim._geometry, wind_column_factor=sim._wind_column_factor,
+        geometry=sim._geometry,
         **kwargs,
     )
     rate = (
@@ -198,8 +185,7 @@ def _channels(sim, state, ionization_rate=None):
     hot, diagnostics = neutral_hot_channel_rhs(
         state=state, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
         geometry=sim._geometry, kernels=sim._hot_neutral_kernels,
-        I_ion=sim._I_ion, ionization_rate_per_neutral=rate,
-        wind_column_factor=sim._wind_column_factor, **kwargs,
+        I_ion=sim._I_ion, ionization_rate_per_neutral=rate, **kwargs,
     )
     return coll, cx, hot, diagnostics
 
@@ -297,9 +283,9 @@ def _ionization_rate(sim, state):
     return 1.0e3 * np.ones_like(np.asarray(state.nn, dtype=float))
 
 
-def gate_x2(two_zone=False):
-    sim = make_sim(two_zone=two_zone)
-    st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0, two_zone=two_zone)
+def gate_x2():
+    sim = make_sim()
+    st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0)
     rate = _ionization_rate(sim, st)
     coll, cx, hot, diag = _channels(sim, st, rate)
     Vp, V_En = _volumes(sim, st)
@@ -327,46 +313,31 @@ def gate_x2(two_zone=False):
     scale = max(abs(dissipated), abs(wall_loss), 1e-300)
     rel = abs(residual) / scale
     ok = rel < 1e-11 and abs(dissipated) > 0.0 and wall_loss > 0.0
-    label = "two-zone" if two_zone else "single-zone"
     return (
-        f"X2 three-way energy closure dEi*Vp + dEn*V_En == P_diss - L_wall "
-        f"({label})",
+        "X2 three-way energy closure dEi*Vp + dEn*V_En == P_diss - L_wall",
         ok,
         f"rel residual = {rel:.2e}  P_diss = {dissipated:.6e} erg/s  "
         f"L_wall = {wall_loss:.6e} erg/s",
     )
 
 
-def gate_x2_two_zone():
-    return gate_x2(two_zone=True)
-
-
-def gate_x3(two_zone=False):
-    sim = make_sim(two_zone=two_zone)
-    st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0, two_zone=two_zone)
+def gate_x3():
+    sim = make_sim()
+    st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0)
     coll, cx, hot, _diag = _channels(sim, st, _ionization_rate(sim, st))
     Vp, V_En = _volumes(sim, st)
     V_ann = np.asarray(sim._geometry.neutral_volume_cm3, dtype=float) - Vp
     cold = float(np.sum(np.asarray(cx.nn) * V_En))
-    landed = (
-        float(np.sum(np.asarray(hot.nn_a) * V_ann))
-        if two_zone
-        else float(np.sum(np.asarray(hot.nn) * V_En))
-    )
+    landed = float(np.sum(np.asarray(hot.nn_a) * V_ann))
     plasma = float(np.sum(np.asarray(hot.n) * Vp))
     total = cold + landed + plasma
     scale = max(abs(cold), 1e-300)
     rel = abs(total) / scale
     ok = rel < 1e-12 and abs(cold) > 0.0 and landed > 0.0 and plasma > 0.0
-    label = "two-zone" if two_zone else "single-zone"
-    return f"X3 whole-system particle closure ({label})", ok, (
+    return "X3 whole-system particle closure", ok, (
         f"eroded = {cold:.6e} /s  landed = {landed:.6e} /s  "
         f"ionized = {plasma:.6e} /s  rel residual = {rel:.2e}"
     )
-
-
-def gate_x3_two_zone():
-    return gate_x3(two_zone=True)
 
 
 def gate_x4():
@@ -379,7 +350,6 @@ def gate_x4():
         state=st, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
         geometry=sim._geometry, ionization_rate_per_neutral=_ionization_rate(sim, st),
         residence=sim._hot_neutral_kernels[1],
-        wind_column_factor=sim._wind_column_factor,
         **sim._collision_operator_kwargs(),
     )
     wall_momentum = float(np.sum(rates["wall"] * rates["p_hot"] * Vp))
@@ -487,8 +457,10 @@ def gate_a3():
         state=st, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
         geometry=sim._geometry,
     )
-    V = np.asarray(sim._geometry.neutral_volume_cm3, dtype=float)
-    A = np.asarray(sim._geometry.neutral_face_area_cm2, dtype=float)
+    # nn and En live on the COLUMN books (the two-zone split is
+    # unconditional): the plasma-column volume and face areas.
+    V = np.asarray(sim._geometry.plasma_volume_cm3, dtype=float)
+    A = np.asarray(sim._geometry.plasma_face_area_cm2, dtype=float)
     dn = float(np.sum(np.asarray(term.nn) * V))
     dE = float(np.sum(np.asarray(term.En) * V))
     scale_n = float(np.sum(np.abs(np.asarray(term.nn)) * V))
@@ -603,8 +575,19 @@ def gate_s1():
             return np.inf
         return float(np.max(np.abs(a - b) / np.maximum(np.abs(b), 1e-300)))
 
-    puff_rel = _rel(En_row[source], nn_row[source] * wall)
-    puff_ok = bool(np.any(source)) and puff_rel < 1e-14
+    # The puff feeds the ANNULUS, which carries no energy field, so it books
+    # no En at all: the column En row is the pump's alone. Where the puff
+    # does land in the column (a cell with no annulus) it arrives at the wall
+    # energy per particle.
+    annulus_fed = bool(np.any(np.asarray(term.nn_a) > 0.0))
+    puff_rel = (
+        _rel(En_row[source], nn_row[source] * wall) if np.any(source) else 0.0
+    )
+    puff_ok = (
+        annulus_fed
+        and bool(np.all(En_row[~sink & ~source] == 0.0))
+        and puff_rel < 1e-14
+    )
     pump_rel = _rel(En_row[sink], nn_row[sink] * per_particle[sink])
     pump_ok = bool(np.any(sink)) and pump_rel < 1e-14
     # Ionization: the ledger's booking must debit the local per-particle energy.
@@ -660,41 +643,6 @@ def gate_w3():
     )
 
 
-def gate_t1():
-    frozen = make_sim(neutral_knudsen_temperature="frozen")
-    local = make_sim(neutral_knudsen_temperature="local")
-    # The arm scales a conductance, so it can only show up where a density
-    # gradient is driving a current: a uniform-nn state has no flow to scale.
-    cells = frozen._geometry.cells
-    nn = 1.0e13 * (1.0 + 0.4 * np.cos(np.linspace(0.0, 5.0, cells)))
-    # Uniform Tn == Tn_K: the scale is exactly 1, so the two must agree bitwise.
-    flat = make_state(frozen, u_i=0.0, u_n=0.0, Ti=2.0, Tn_K=TN_K, nn=nn)
-    a = np.asarray(frozen.neutral_exchange_rhs(state=flat).nn)
-    b = np.asarray(local.neutral_exchange_rhs(state=flat).nn)
-    # Not bit-for-bit: Tn is RECONSTRUCTED from En, so sqrt(Tn/Tn_K) lands an
-    # ulp off unity even when the gas is exactly at Tn_K, and the exchange row
-    # is a DIFFERENCE of face rates, which amplifies that. The crisp identity
-    # is on the scale factor itself; the row is quoted as corroboration.
-    scale = local._transpiration_face_scale(flat)
-    scale_err = float(np.max(np.abs(scale - 1.0)))
-    live_flat = np.abs(a) > 0.0
-    identity = float(np.max(np.abs(b[live_flat] / a[live_flat] - 1.0)))
-    same = scale_err < 1e-15 and identity < 1e-12
-    # Non-uniform Tn: the arm must actually separate.
-    ramp = np.asarray(flat.En) * np.linspace(1.0, 25.0, cells)
-    hot = make_state(frozen, u_i=0.0, u_n=0.0, Ti=2.0, nn=nn, En_shape=ramp)
-    c = np.asarray(frozen.neutral_exchange_rhs(state=hot).nn)
-    d = np.asarray(local.neutral_exchange_rhs(state=hot).nn)
-    live = np.abs(c) > 0.0
-    separation = float(np.max(np.abs(d[live] / c[live] - 1.0)))
-    ok = same and separation > 1e-2 and bool(np.any(live))
-    return "T1 transpiration: identity at uniform Tn, separates when it varies", ok, (
-        f"uniform-Tn scale factor departs from 1 by {scale_err:.2e}; the "
-        f"exchange row agrees to {identity:.2e}  max relative separation on a "
-        f"25x Tn ramp = {separation:.3f}"
-    )
-
-
 def _guard(label, expect_fragment, **overrides):
     try:
         make_sim(**overrides)
@@ -702,42 +650,6 @@ def _guard(label, expect_fragment, **overrides):
         text = str(exc)
         return label, expect_fragment in text, f"raised: {text[:104]}"
     return label, False, "no ValueError raised"
-
-
-def gate_g6():
-    """Pin the RESOLVER's downgrade, which replaced this gate's old refusal.
-
-    40c519c flipped ``neutral_energy`` ON in the shipped defaults, so the
-    two-moment reduction's incompatibility with the neutral-energy package is
-    now with a member sitting AT ITS CONFIG DEFAULT, not with an explicit
-    caller choice.
-
-    2f3638a made a model selection OWN its member keys: a member left at its
-    config default is resolved to the value the selection requires instead of
-    raising, and only an EXPLICITLY set member still raises.
-
-    Together those make this configuration construct rather than refuse, so
-    the gate certifies what the resolver documents it does -- the arm comes
-    back with the neutral-energy package off and the two-momentum closure on,
-    which is the state the earlier ValueError stood for.
-    """
-    label = (
-        "G6 resolver: neutral_energy at its default downgrades under the "
-        "two-momentum reduction"
-    )
-    try:
-        sim = make_sim(
-            neutral_two_zone=True,
-            neutral_momentum_radial="kinetic_two_moment",
-        )
-    except ValueError as exc:
-        return label, False, f"construction REFUSED: {exc}"
-    ok = sim._neutral_energy is False and sim._neutral_two_momentum is True
-    return label, ok, (
-        f"constructs=True  resolved _neutral_energy={sim._neutral_energy} "
-        f"(expect False)  _neutral_two_momentum={sim._neutral_two_momentum} "
-        f"(expect True)"
-    )
 
 
 def gate_g7():
@@ -762,33 +674,14 @@ def gate_g7():
     return label, ok and happy, f"{detail} | {happy_detail}"
 
 
-def gate_g8():
-    label, ok, detail = _guard(
-        "G8 guard: a bad or unusable transpiration selector raises",
-        "must be 'frozen' or 'local'",
-        neutral_knudsen_temperature="sqrt",
-    )
-    # neutral_hot_internal_wall is a shipped default (True) whose own
-    # neutral_energy guard fires FIRST, masking the selector guard this
-    # sub-gate is for; clear it so the transpiration refusal is what is read.
-    label2, ok2, detail2 = _guard(
-        "local without neutral_energy",
-        "requires the neutral_energy flag",
-        neutral_energy=False,
-        neutral_hot_internal_wall=False,
-        neutral_knudsen_temperature="local",
-    )
-    return label, ok and ok2, f"{detail} | {label2}: {detail2[:96]}"
-
-
 def main():
     gates = [
         gate_k1, gate_k2,
-        gate_x1, gate_x2, gate_x2_two_zone, gate_x3, gate_x3_two_zone,
+        gate_x1, gate_x2, gate_x3,
         gate_x4, gate_x5,
         gate_a1, gate_a2, gate_a3, gate_a4, gate_e1,
-        gate_s1, gate_s2, gate_w3, gate_t1,
-        gate_g6, gate_g7, gate_g8,
+        gate_s1, gate_s2, gate_w3,
+        gate_g7,
     ]
     all_ok = True
     print("NBL pass-2 gate suite (decoupled two-channel neutral transport)")

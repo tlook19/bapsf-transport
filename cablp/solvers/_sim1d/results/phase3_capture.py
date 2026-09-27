@@ -531,7 +531,7 @@ def _source_state_rows(result):
 def _canonical_state_rows(params, flags, present_optional):
     expectations = (
         (NEUTRAL_MOMENTUM_NAME, bool(flags.get("neutral_momentum", False))),
-        (NEUTRAL_ANNULUS_NAME, bool(flags.get("neutral_two_zone", False))),
+        (NEUTRAL_ANNULUS_NAME, bool(flags.get("neutral_two_zone", True))),
         (
             NEUTRAL_ANNULUS_MOMENTUM_NAME,
             params.get("neutral_momentum_radial", "uniform")

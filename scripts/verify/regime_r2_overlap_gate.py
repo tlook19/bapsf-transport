@@ -74,7 +74,6 @@ def build_config(nx, tracer_on, extra=None):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
-    params["neutral_exchange_model"] = "knudsen"
     params.update(
         {
             "nx": nx,
@@ -84,7 +83,7 @@ def build_config(nx, tracer_on, extra=None):
             "cathode_emissivity": 0.7,
         }
     )
-    flags["neutral_equilibration"] = False
+    params["initial_neutral_state"] = "fill"
     flags["regime_tracer"] = bool(tracer_on)
     if extra:
         for key, value in extra.items():

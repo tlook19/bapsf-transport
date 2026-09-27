@@ -162,14 +162,12 @@ CLEAN_PARAMS = {
     "max_density_step_fraction": 0.0,
     "max_neutral_step_fraction": 0.0,
     "max_energy_step_fraction": 0.0,
+    "initial_neutral_state": "fill",
 }
 
 CLEAN_FLAGS = {
     "Plasma": True,
     "implicit_heat_conduction": True,
-    "neutral_prebreakdown": False,
-    "neutral_equilibration": False,
-    "launch_plasma_after_equilibration": False,
     # The cathode solve caches a continuation guess across steps, which would
     # make a run depend on its own step history.
     "cathode_coupling": False,

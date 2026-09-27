@@ -89,7 +89,6 @@ def reaction_rhs(
     atomic_rate_model="janev",
     adas_low_te_extension=False,
     Ti_birth_ionization="neutral",
-    wind_column_factor=None,
     Tn_K=300.0,
 ):
     """Return conservative source terms for local bulk plasma reactions."""
@@ -103,7 +102,6 @@ def reaction_rhs(
         atomic_rate_model=atomic_rate_model,
         adas_low_te_extension=adas_low_te_extension,
         Ti_birth_ionization=Ti_birth_ionization,
-        wind_column_factor=wind_column_factor,
         Tn_K=Tn_K,
     )
     ionization = terms["ionization_birth"]
@@ -128,7 +126,6 @@ def reaction_rhs_terms(
     atomic_rate_model="janev",
     adas_low_te_extension=False,
     Ti_birth_ionization="neutral",
-    wind_column_factor=None,
     Tn_K=300.0,
 ):
     """Return ionization and recombination conservative source terms."""
@@ -174,15 +171,11 @@ def reaction_rhs_terms(
     # momentum between the species: an ionized neutral is born drifting at
     # u_n (fixing the historical zero-drift birth), and a recombined ion
     # hands its momentum to the wind. Both close M*Vp + M_n*Vm exactly
-    # through the same (Vp/Vm) conversion the particles use. Ionization only
-    # ever consumes *column* gas, so the two-zone closure's column factor
-    # (when given) scales the sampled wind up from the chamber mean.
+    # through the same (Vp/Vm) conversion the particles use.
     if state.M_n is not None:
         u_n = neutral_wind_velocity(
             state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
         )
-        if wind_column_factor is not None:
-            u_n = wind_column_factor * u_n
         M_birth = ion_mass_g * u_n * S_ion
         M_n_birth = -M_birth * momentum_ratio
         u_birth = u_n
@@ -311,73 +304,6 @@ def particle_inventory_rate(rhs, geometry):
     """Return total plasma-plus-neutral particle inventory rate [particles/s]."""
     terms = rhs.n * geometry.plasma_volume_cm3 + rhs.nn * geometry.neutral_volume_cm3
     return math.fsum(terms.tolist())
-
-
-def gas_puff_local_ionization_rhs(
-    state,
-    floors,
-    ion_mass_g,
-    geometry,
-    puff_profile,
-    fraction,
-    I_ion,
-    Ti_birth_ionization="neutral",
-    Tn_K=300.0,
-):
-    """Local ionization of the fresh dense gas-puff clumps (fractional coverage).
-
-    The fresh puff is a dense SPOTTY jet (hardware: 45 psi line -> 1/4" choke ->
-    KF40 jet -> ~1-2e15 cm^-3 near the source, boxed). Its beam/bulk ionization
-    mean free path is short (l_b ~ tens of cm), so a fraction ``f`` of the
-    localized puff neutral source is ionized IN PLACE -- burning to a localized
-    plasma seed that launches the sonic accumulation front -- instead of
-    spreading into the background nn (which the radially-uniform model would
-    otherwise do, filling the mid column instantly and missing the front). The
-    diverted neutral particles are removed from the puff's neutral source and
-    booked with the SAME birth (+ ``I_ion`` cost) as the bulk-reaction ionization
-    channel, so particle and energy inventories close exactly. It is automatically
-    localized and puff-enveloped (relaxing with the ~1 ms feed) because it rides
-    the ``puff_profile`` shape/waveform. Single-zone only (the two-zone annulus
-    puff routing is a separate closure). Default off (``fraction=0``, bit-exact).
-    """
-    zeros = np.zeros_like(state.n, dtype=float)
-    f = float(fraction)
-    if f <= 0.0:
-        return ConservativeState1D(
-            n=zeros, nn=zeros.copy(), M=zeros.copy(),
-            Ee=zeros.copy(), Ei=zeros.copy(),
-        )
-    if state.nn_a is not None:
-        raise ValueError(
-            "gas_puff_local_ionization_fraction is not supported with "
-            "neutral_two_zone (annulus puff routing); disable one"
-        )
-    volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
-    puff = np.asarray(puff_profile, dtype=float)  # neutral-density rate [cm^-3/s]
-    nn_sink = f * puff                            # neutral density removed from nn
-    # plasma-density source: same particles, converted V_neutral -> V_plasma
-    S_li = nn_sink / np.maximum(volume_ratio, 1e-300)
-    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    Ti_birth = _birth_temperature(
-        Ti_birth_ionization,
-        derived.Ti,
-        neutral_temperature=(
-            ionization_birth_neutral_temperature_eV(state, floors, Tn_K)
-            if Ti_birth_ionization == "neutral"
-            else None
-        ),
-    )
-    Ee_birth = zeros.copy()
-    mixing = 0.5 * ion_mass_g * derived.u ** 2 * S_li  # born at rest, u_birth=0
-    Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_li + mixing
-    cost = I_ion * ev_to_erg * S_li
-    return ConservativeState1D(
-        n=S_li,
-        nn=-nn_sink,
-        M=zeros.copy(),      # fresh cold puff born at rest
-        Ee=Ee_birth - cost,
-        Ei=Ei_birth,
-    )
 
 
 def _birth_temperature(value, local_temperature, neutral_temperature=None):

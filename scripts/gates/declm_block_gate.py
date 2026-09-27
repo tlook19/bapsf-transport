@@ -155,9 +155,7 @@ def family_values(family):
 #:
 #: A key appearing in two families takes one value here; where that key is the
 #: OTHER family's selector, the selector force in
-#: :func:`perturbed_family_values` overrides it, which is why
-#: ``neutral_momentum_radial`` can be ``'two_zone'`` here and still be
-#: ``'kinetic_two_moment'`` in its own family's block.
+#: :func:`perturbed_family_values` overrides it.
 PERTURBED = {
     # beam_tail_closure
     "beam_anomalous_model": "none",
@@ -186,36 +184,28 @@ PERTURBED = {
     "anode_jet_energy_convention": "total_reflected",
     "neutral_mesh_accommodation": True,
     # initial_neutral_state
-    "neutral_equilibration": False,
-    "launch_plasma_after_equilibration": False,
+    "initial_neutral_state": "profile",
     "neutral_equilibration_cycles": 200,
     "neutral_equilibration_dt": 0.02,
     "equilibration_gas_puff_on_s": 0.025,
     "use_cached_neutral_seed": True,
     "neutral_seed_cache_dir": "/tmp/declm_block_gate_seed_cache",
-    "neutral_initial_profile": True,
     "nn0": 4.0e13,
     "nn0_profile": [1.0, 2.0, 3.0, 4.0],
     "nn0_annulus_profile": [1.0, 2.0, 3.0, 4.0],
-    # neutral_closure / neutral_radial_closure
+    # neutral_closure
     "neutral_model": "kinetic_dvm",
     "neutral_momentum": False,
     "neutral_energy": False,
     "neutral_hot_internal_wall": False,
-    "neutral_momentum_radial": "two_zone",
-    "neutral_hot_birth_drift": True,
-    "neutral_knudsen_temperature": "local",
-    "neutral_wall_momentum_partition": True,
-    "neutral_wall_partition_sigma_hehe_cm2": 1.5e-15,
 }
 
 #: Members deliberately LEFT at their config default in the perturbed fixture,
 #: with the reason. ``restart_from`` is a mutually exclusive ROUTE of
-#: ``initial_neutral_state``: the fixture already arms the ``profile`` route, so
-#: giving the restart payload a value would arm a second route and the block
-#: would be refused before the equivalence comparison ever ran. The perturbation
-#: is applied to the two route keys that CAN move together -- equilibrate is
-#: disarmed and profile is armed, both away from their defaults.
+#: ``initial_neutral_state``: the fixture already arms the selector route at
+#: ``"profile"``, away from its ``"equilibrate"`` default, so giving the restart
+#: payload a value would arm a second route and the block would be refused
+#: before the equivalence comparison ever ran.
 PERTURB_KEEP_DEFAULT = {"restart_from"}
 
 
@@ -412,11 +402,11 @@ def gate_refusals():
     )
 
     misfiled = dict(family_values(cathode))
-    misfiled["neutral_equilibration"] = False
+    misfiled["use_cached_neutral_seed"] = False
     refuses(
         "a block naming another family's member",
         lambda: resolve_config(models={cathode.name: misfiled}),
-        must_name=["neutral_equilibration", "models.initial_neutral_state"],
+        must_name=["use_cached_neutral_seed", "models.initial_neutral_state"],
     )
 
     # The same refusal's OTHER two owner branches: a real config key that no
@@ -475,12 +465,12 @@ def gate_refusals():
     )
 
     two_routes = dict(family_values(fill))
-    two_routes["neutral_equilibration"] = True
-    two_routes["neutral_initial_profile"] = True
+    two_routes["initial_neutral_state"] = "profile"
+    two_routes["restart_from"] = "/tmp/declm_block_gate_payload.h5"
     refuses(
         "two mutually exclusive fill routes armed at once",
         lambda: resolve_config(models={fill.name: two_routes}),
-        must_name=["mutually exclusive", "equilibrate", "profile"],
+        must_name=["mutually exclusive", "initial_neutral_state", "restart"],
     )
 
     both_valued = dict(family_values(cathode))
@@ -489,37 +479,6 @@ def gate_refusals():
         "a member declared with a value AND in none_valued",
         lambda: resolve_config(models={cathode.name: both_valued}),
         must_name=["cathode_jet_R_N", "one declared value"],
-    )
-
-    # kinetic_two_moment's INTERNAL-MEMBER refusal, on the FLAT route. The two
-    # internal members of the radial closure are armed while the selector is
-    # left at its default, which is the shape the mistake actually takes: a
-    # reader arms the partition and its cross section without engaging the
-    # closure that gives them a reading. The refusal must collect BOTH members
-    # in one message and name the selection that would make them readable --
-    # the whole decision, not the first guard hit. Until this check, only
-    # scripts/preset_resolver_demo.py (retired; see commit 48be9a4)
-    # (unregistered, so nothing runs it in a
-    # gate) reached this branch.
-    def _two_moment_members_armed():
-        params, flags = default_config()
-        params["nx"] = 60
-        flags["neutral_wall_momentum_partition"] = True
-        params["neutral_wall_partition_sigma_hehe_cm2"] = 1.26e-15
-        from cablp.solvers._sim1d import LAPDSim1D
-
-        LAPDSim1D(params, flags)
-
-    refuses(
-        "kinetic_two_moment internal members armed without the selection",
-        _two_moment_members_armed,
-        must_name=[
-            "flags:neutral_wall_momentum_partition",
-            "params:neutral_wall_partition_sigma_hehe_cm2",
-            "neutral_momentum_radial='kinetic_two_moment'",
-            "have no reading under",
-            "engaging it is the whole decision",
-        ],
     )
 
 
@@ -635,11 +594,11 @@ def _bad_stance(stance_config, stance_dir, block_text):
 
 
 def gate_hoisted_guards():
-    """The FOUR run-time-first guards, now refused at construction.
+    """The THREE run-time-first guards, now refused at construction.
 
     Each of these domains was first checked only once a run was already moving.
 
-    NEGATIVE CONTROL, run at base commit aa65468 before the hoist: all four of
+    NEGATIVE CONTROL, run at base commit aa65468 before the hoist: each of
     those configurations CONSTRUCTED, which is what made them run-time-first
     rather than merely redundant. Reproduce it with::
 
@@ -648,7 +607,7 @@ def gate_hoisted_guards():
     The per-call checks are deliberately still in place; these are additional
     construction-time refusals, not replacements.
     """
-    print("\n=== HOISTED RUN-TIME-FIRST GUARDS (the four) ===")
+    print("\n=== HOISTED RUN-TIME-FIRST GUARDS (the three) ===")
     from cablp.solvers._sim1d import LAPDSim1D
 
     params, flags = default_config()
@@ -658,7 +617,6 @@ def gate_hoisted_guards():
         ("dt_growth_factor", 0.9, "dt_growth_factor must be > 1"),
         ("operator_splitting", "stang", "operator_splitting must be one of"),
         ("implicit_heat_scheme", "tr_bdf3", "implicit_heat_scheme must be one of"),
-        ("ion_neutral_drag_model", "slipp", "ion_neutral_drag_model must be one of"),
     ):
         refuses(
             f"{key}={value!r} refused AT CONSTRUCTION",

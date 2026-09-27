@@ -284,10 +284,10 @@ def assert_end_recycle_routed_live(ba, ba_ann, path, window_ms):
 
 
 def _square_puff_envelope(times, params, flags, t_breakdown_trigger):
-    """Return the ``gas_puff_mode="square"`` envelope [1] at ``times`` [s].
+    """Return the square puff envelope [1] at ``times`` [s].
 
-    A transcription of the solver's own envelope (the ``"square"`` branch of
-    ``LAPDSim1D._effective_gas_puff_sccm``): an erf opening edge anchored on
+    A transcription of the solver's own envelope
+    (``LAPDSim1D._effective_gas_puff_sccm``): an erf opening edge anchored on
     the end of the neutral-prebreakdown phase plus ``gas_puff_rise_center_s``,
     an erf closing edge anchored on the main-discharge start plus
     ``tau_discharge`` and ``gas_puff_close_lag_s``, both built with the one
@@ -300,7 +300,9 @@ def _square_puff_envelope(times, params, flags, t_breakdown_trigger):
     having if it reproduces the applied waveform bit for bit.
     """
     origin = 0.0
-    if flags.get("Plasma", True) and flags.get("neutral_prebreakdown", False):
+    # An artifact written after the prebreakdown flag was adopted carries no
+    # flag: its phase runs whenever the duration is positive.
+    if flags.get("Plasma", True) and flags.get("neutral_prebreakdown", True):
         origin = max(float(params.get("tau_neutral_prebreakdown", 0.0)), 0.0)
     width = float(params.get("gas_puff_rise_width_s", 5.0e-4))
     t_on = origin + float(params.get("gas_puff_rise_center_s", 5.0e-4))
@@ -343,7 +345,8 @@ def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_ful
 
     Raises ``ValueError`` -- loudly, rather than returning a number nobody can
     check -- on any configuration outside the certified one: a non-``square``
-    waveform, a phase-transition mode whose main-discharge start is not the
+    waveform or a non-``orifice`` puff shape (both recorded by artifacts
+    written before those were unconditional), a phase-transition mode whose main-discharge start is not the
     saved trigger, a geometry that does not rebuild, or a missing trigger.
     """
     mode = str(params.get("gas_puff_mode", "square"))
@@ -354,6 +357,15 @@ def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_ful
             "the puff is absent from the neutral ledger and only the config "
             "can supply it; the config derivation implemented here covers the "
             "'square' waveform alone. Refusing to guess a rate."
+        )
+    shape = str(params.get("gas_puff_profile", "orifice"))
+    if shape != "orifice":
+        raise ValueError(
+            f"UNRECOVERABLE two-zone puff: gas_puff_profile={shape!r}.\n"
+            "  The artifact saved no rhs_terms/neutral_sources/nn_a row, and "
+            "this checkout builds only the orifice puff row, so the saved "
+            "shape cannot be rebuilt. Score the artifact at the anchor tag it "
+            "was produced on."
         )
     transition = str(params.get("phase_transition_mode", "current"))
     if transition != "current":
@@ -382,10 +394,7 @@ def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_ful
         geometry,
         params.get("S_gp", 0.0),
         params.get("gas_puff_valves", 2),
-        profile=str(params.get("gas_puff_profile", "cell")),
         z_cm=params.get("gas_puff_z_cm"),
-        sigma_cm=float(params.get("gas_puff_sigma_cm", 50.0)),
-        throw_cm=float(params.get("gas_puff_throw_cm", 100.0)),
         orifice_id_cm=params.get("gas_puff_orifice_id_cm"),
         orifice_length_cm=params.get("gas_puff_orifice_length_cm"),
         end=0,
@@ -396,10 +405,7 @@ def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_ful
             geometry,
             params.get("Twin_S_gp", 0.0),
             params.get("gas_puff_valves", 2),
-            profile=str(params.get("gas_puff_profile", "cell")),
             z_cm=params.get("gas_puff_z_cm"),
-            sigma_cm=float(params.get("gas_puff_sigma_cm", 50.0)),
-            throw_cm=float(params.get("gas_puff_throw_cm", 100.0)),
             orifice_id_cm=params.get("gas_puff_orifice_id_cm"),
             orifice_length_cm=params.get("gas_puff_orifice_length_cm"),
             end=-1,
@@ -462,15 +468,13 @@ PUFF_ORIFICE_ENDPOINTS = ("wide", "narrow")
 def _apply_orifice_puff_row(bg, endpoint, z_port_cm, path):
     """Replace the puff row with the CAD-derived tube-beamed launch row.
 
-    THE KINETIC ROW IS THE INJECTION GEOMETRY. The row this overwrites is the
-    solver's own ``gas_puff_profile`` row, which under the config of record is
-    the fluid ``"cosine_pipe"`` DEPOSITION envelope: with no neutral transport
-    of its own the fluid model must spread its source, so its width is a
-    closure, not the aperture. The engines fed from here transport their own
-    atoms, so what they need is where the gas ENTERS -- the tube-beamed jet
-    from the measured port, derived in :mod:`puff_orifice`. The two rows
-    disagree by construction; that difference is a registered finding, and the
-    fluid stance is not touched by this route.
+    THE KINETIC ROW IS THE INJECTION GEOMETRY. The engines fed from here
+    transport their own atoms, so what they need is where the gas ENTERS --
+    the tube-beamed jet from the measured port, derived in
+    :mod:`puff_orifice`. The row this overwrites is the run's own puff row,
+    which on an artifact written before the orifice row became the solver's
+    only puff shape can be a fluid DEPOSITION envelope instead; the fluid
+    stance is not touched by this route.
 
     Only the SHAPE moves: the total ``sources["puff"]`` is carried through
     unchanged, so the delivered flow is the run's own. ``sources["puff_z"]``
@@ -512,7 +516,7 @@ def _apply_orifice_puff_row(bg, endpoint, z_port_cm, path):
     bg.setdefault("source_provenance", {})["puff_cells"] = (
         f"puff row DERIVED from the CAD port geometry ([puff-orifice], "
         f"{endpoint} bracket endpoint) rather than read as the solver's "
-        f"gas_puff_profile row: tube-beamed Clausing launch at z = "
+        f"puff row: tube-beamed Clausing launch at z = "
         f"{z_port_cm:.4g} cm, flown from the vessel wall to the plasma column"
     )
     for line in orifice.describe(
@@ -531,7 +535,7 @@ def load_background(path, window_ms, puff_orifice=None):
 
     ``puff_orifice`` selects the axial placement of the gas puff. ``None``
     (the default) keeps the row the run itself carries -- the neutral
-    ledger's, or the solver's own ``gas_puff_profile`` row where the ledger
+    ledger's, or the solver's own puff row where the ledger
     cannot supply one. Either ruled bracket endpoint, ``"wide"`` or
     ``"narrow"``, replaces that row with the CAD-derived tube-beamed
     injection row instead (:func:`_apply_orifice_puff_row`), carrying the
@@ -2143,7 +2147,7 @@ def main(argv=None):
     ap.add_argument(
         "--puff-orifice", choices=PUFF_ORIFICE_ENDPOINTS, default=None,
         help="place the puff by the CAD-derived tube-beamed injection row "
-             "instead of the run's own gas_puff_profile row, at the named "
+             "instead of the run's own puff row, at the named "
              "endpoint of the one-sided feed-line bracket (default: unset, "
              "the run's own row)",
     )

@@ -5,11 +5,9 @@ DVM-side consumers of `kinetic_neutrals.puff_launch_bins`) place the puff by an
 AXIAL ROW of birth rates, `bg["sources"]["puff_cells"]`, and then transport the
 atoms themselves. What that row must carry is therefore the INJECTION geometry
 -- where gas from the feed line first reaches the plasma column -- not a
-deposition envelope. The fluid `gas_puff_profile = "cosine_pipe"` row is the
-other thing: with no neutral transport of its own the fluid model has to spread
-the source itself, so its `throw_cm` is an end-state closure.
+deposition envelope.
 
-TWO CONSUMERS, ONE ROW. `gas_puff_profile = "orifice"` hands this same row to
+TWO CONSUMERS, ONE ROW. The fluid solver's gas puff hands this same row to
 the FLUID solver as its per-cell deposition profile, through the shared
 `neutrals.gas_puff_rate_profile`. That is a DISCLOSED CLOSURE, not an identity:
 a kinetic FIRST-FLIGHT row is being read as a fluid DEPOSITION row, so the

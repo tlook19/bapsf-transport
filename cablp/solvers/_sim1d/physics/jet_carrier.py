@@ -108,7 +108,7 @@ WHERE THE THREE END UP:
                 standard ADAS binding cost ``I_ion`` -- the same cost the bulk
                 channel pays, from the same rate.
 ``escape``      the atom crosses the column boundary and joins the gas outside
-                it (the annulus under ``neutral_two_zone``). Under the
+                it (the annulus). Under the
                 ratified annulus-cold v1 cut that gas carries no energy field,
                 so the atom's whole energy leaves the model as a NAMED wall
                 leak, reported rather than deleted. Its directed momentum is

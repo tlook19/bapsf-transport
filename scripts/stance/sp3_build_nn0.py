@@ -1,7 +1,7 @@
 """Build the sp3 shaped initial neutral profile nn0(z) for the foot-shape arm.
 
 INSTRUMENT, not repo physics: this script is the VALUE PRODUCER behind the
-solver's ``neutral_initial_profile`` capability, which ships no number of its
+solver's ``initial_neutral_state = "profile"`` capability, which ships no number of its
 own. It writes an ``.npz`` that ``run_m6_point.py --nn0-profile-npz`` hands to
 the solver as ``nn0_profile`` / ``nn0_annulus_profile``.
 
@@ -37,11 +37,9 @@ THE CONSTRUCTION (leg 3a of the sp campaign):
   uniform base entirely, and the ledger records which was used.
 * the lobe -- the gas puff's first-flight axial deposition, taken from the
   repo's own ``gas_puff_rate_profile`` at the named configuration's own puff
-  keys: whichever ``gas_puff_profile`` that configuration resolves, together
-  with its centre, width, throw and orifice bore and length. PROFILE-AGNOSTIC
-  -- nothing here names or assumes a shape; it imports whatever puff row the
-  configuration carries, never re-deriving one, so the accumulated shape is
-  by construction the shape the running model deposits.
+  keys: its port centre and orifice bore and length. Nothing here re-derives
+  the row; it imports the puff row the configuration carries, so the
+  accumulated shape is by construction the shape the running model deposits.
 * the throughput -- AS-APPLIED, valves included: the same
   ``4.171431e17 * sccm * valves`` [particles/s] the solver applies, obtained
   from the repo's ``puff_rate`` rather than restated here. The ledger also
@@ -192,13 +190,13 @@ a file rather than a kilobyte of argv, via ``--extra-npz KEY=path.npz:array``.
 
 Usage:
 
-    python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
+    python scripts/stance/sp3_build_nn0.py --sgp 5200 \
         --out nn0_foot_es1.npz
 
-    python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
+    python scripts/stance/sp3_build_nn0.py --sgp 5200 \
         --knudsen-member slow --out nn0_foot_es1_slow.npz
 
-    python scripts/stance/sp3_build_nn0.py --sgp 5200 --two-zone \
+    python scripts/stance/sp3_build_nn0.py --sgp 5200 \
         --kernel ballistic --out nn0_foot_es1_legacy.npz
 
 (No kernel argument builds the REGISTERED member: the Knudsen reference at
@@ -470,7 +468,7 @@ def parse_npz_overrides(items):
     return values, provenance
 
 
-def stance_config(es, nx, sgp, two_zone, extra_params=None, extra_flags=None):
+def stance_config(es, nx, sgp, extra_params=None, extra_flags=None):
     """Return (params, flags) for the production stance, as run_model builds it.
 
     ``extra_params`` and ``extra_flags`` are applied LAST, after the stance is
@@ -487,8 +485,6 @@ def stance_config(es, nx, sgp, two_zone, extra_params=None, extra_flags=None):
     params["nx"] = nx
     params["S_gp"] = float(sgp)
     params["V_bank"] = op["V_bank"]
-    if two_zone:
-        flags["neutral_two_zone"] = True
     if extra_params:
         params.update(extra_params)
     if extra_flags:
@@ -499,7 +495,7 @@ def stance_config(es, nx, sgp, two_zone, extra_params=None, extra_flags=None):
     return params, flags
 
 
-def base_profiles_from_h5(path, cells, two_zone):
+def base_profiles_from_h5(path, cells):
     """Return ``(base_column, base_annulus)`` from a result's ``t = 0`` frames.
 
     The base is the run's INITIAL neutral state, so the first saved frame must
@@ -507,11 +503,10 @@ def base_profiles_from_h5(path, cells, two_zone):
     (a ``t_save_start`` beyond zero) is refused rather than silently treated as
     an initial condition it is not.
 
-    ``base_annulus`` is the ``nn_a`` frame under the two-zone closure and
-    ``None`` without it. The closure must MATCH: a two-zone build needs an
-    ``nn_a`` to read, and a single-field build refuses a two-zone source,
-    because collapsing two zones into one field is a modelling choice this
-    script does not get to make silently.
+    ``base_annulus`` is the ``nn_a`` frame. A source that carries no ``nn_a``
+    (a single-field run from before the two-zone split was unconditional) is
+    refused, because splitting one field into two zones is a modelling choice
+    this script does not get to make silently.
     """
     result = load_result_hdf5(path)
     time = np.asarray(result.time, dtype=float)
@@ -529,26 +524,16 @@ def base_profiles_from_h5(path, cells, two_zone):
             "(check --nx and the geometry keys)"
         )
     source_nn_a = getattr(result, "nn_a", None)
-    if two_zone:
-        if source_nn_a is None:
-            raise ValueError(
-                f"--two-zone needs an annulus base, but {path} carries no "
-                "nn_a (it is a single-field run). Use a two-zone source, or "
-                "drop --two-zone"
-            )
-        base_ann = np.array(source_nn_a[0], dtype=float).reshape(-1)
-        if base_ann.size != int(cells):
-            raise ValueError(
-                f"{path} nn_a has {base_ann.size} cells, expected {cells}"
-            )
-    else:
-        if source_nn_a is not None:
-            raise ValueError(
-                f"{path} is a TWO-ZONE run but this build is single-field; "
-                "folding its two zones into one neutral field is a modelling "
-                "choice, not a conversion. Pass --two-zone"
-            )
-        base_ann = None
+    if source_nn_a is None:
+        raise ValueError(
+            f"the build needs an annulus base, but {path} carries no nn_a "
+            "(it is a single-field run). Use a two-zone source"
+        )
+    base_ann = np.array(source_nn_a[0], dtype=float).reshape(-1)
+    if base_ann.size != int(cells):
+        raise ValueError(
+            f"{path} nn_a has {base_ann.size} cells, expected {cells}"
+        )
     for label, arr in (("nn", base_col), ("nn_a", base_ann)):
         if arr is None:
             continue
@@ -930,7 +915,7 @@ def build(args):
     extra_params.update(inline_params)
     extra_flags = parse_extra_overrides(args.extra_flag, "--extra-flag")
     params, flags = stance_config(
-        args.es, args.nx, args.sgp, args.two_zone,
+        args.es, args.nx, args.sgp,
         extra_params=extra_params, extra_flags=extra_flags,
     )
     if params["gas_type"] != "He":
@@ -947,11 +932,11 @@ def build(args):
         base_col_profile, base_ann_profile = None, None
         base_scalar = float(resolve_nn0(params))
         base_col = np.full(cells, base_scalar)
-        base_ann = np.full(cells, base_scalar) if args.two_zone else None
+        base_ann = np.full(cells, base_scalar)
         base_source = "resolve_nn0 at the stance config (shipped convention)"
     else:
         base_col_profile, base_ann_profile = base_profiles_from_h5(
-            args.base_from_h5, cells, args.two_zone
+            args.base_from_h5, cells
         )
         base_col = base_col_profile
         base_ann = base_ann_profile
@@ -962,12 +947,9 @@ def build(args):
     # honest single number for a spread that is computed once for the grid.
     # lambda goes as 1/n and the diffusive reach as sqrt(lambda), so the choice
     # is a weak one, and --mfp-cm overrides it outright.
-    if base_ann is None:
-        base_particles = float(np.sum(base_col * V_chamber_all))
-    else:
-        base_particles = float(
-            np.sum(base_col * V_col_all + base_ann * V_ann_all)
-        )
+    base_particles = float(
+        np.sum(base_col * V_col_all + base_ann * V_ann_all)
+    )
     base_density = base_particles / float(np.sum(V_chamber_all))
     Tn_K = float(args.tn_k if args.tn_k is not None else params["Tn_K"])
     vbar = mean_speed_cm_s(Tn_K, m_He_cgs)
@@ -979,10 +961,7 @@ def build(args):
         geometry,
         params["S_gp"],
         params["gas_puff_valves"],
-        profile=params["gas_puff_profile"],
         z_cm=params["gas_puff_z_cm"],
-        sigma_cm=params["gas_puff_sigma_cm"],
-        throw_cm=params["gas_puff_throw_cm"],
         orifice_id_cm=params["gas_puff_orifice_id_cm"],
         orifice_length_cm=params["gas_puff_orifice_length_cm"],
         end=0,
@@ -1090,11 +1069,8 @@ def build(args):
     # --- routing into the neutral field(s) ---------------------------------
     V_col, V_ann = V_col_all, V_ann_all
     add_col = np.zeros(cells, dtype=float)
-    add_ann = np.zeros(cells, dtype=float) if args.two_zone else None
-    if not args.two_zone:
-        # One chamber-mean neutral field: the whole cell volume holds it.
-        add_col = accumulated / V_chamber
-    elif args.zone == "chamber":
+    add_ann = np.zeros(cells, dtype=float)
+    if args.zone == "chamber":
         # Radially well-mixed: both zones rise by the same density, so the
         # particle count is conserved cell by cell (V_col + V_ann = V_chamber).
         add_col = accumulated / V_chamber
@@ -1112,14 +1088,11 @@ def build(args):
         raise ValueError(f"unknown --zone {args.zone!r}")
 
     nn0_profile = base_col + add_col
-    nn0_annulus_profile = None if add_ann is None else base_ann + add_ann
+    nn0_annulus_profile = base_ann + add_ann
 
     # Round-trip particle check: the densities written out must hold the
     # inventory the spread produced, in whichever zone(s) it was routed to.
-    if args.two_zone:
-        held = float(np.sum(add_col * V_col + add_ann * V_ann))
-    else:
-        held = float(np.sum(add_col * V_chamber))
+    held = float(np.sum(add_col * V_col + add_ann * V_ann))
     routing_rel = abs(held - grid_in) / max(grid_in, 1e-300)
     assert routing_rel < 1e-10, (
         f"zone routing lost inventory: spread {grid_in:.9e}, held {held:.9e}, "
@@ -1132,11 +1105,13 @@ def build(args):
         "cells": cells,
         "S_gp_sccm": float(params["S_gp"]),
         "gas_puff_valves": int(params["gas_puff_valves"]),
-        "gas_puff_profile": params["gas_puff_profile"],
         "gas_puff_z_cm": float(params["gas_puff_z_cm"]),
-        "gas_puff_throw_cm": float(params["gas_puff_throw_cm"]),
-        "two_zone": bool(args.two_zone),
-        "zone": args.zone if args.two_zone else "single-field",
+        "gas_puff_orifice_id_cm": float(params["gas_puff_orifice_id_cm"]),
+        "gas_puff_orifice_length_cm": float(
+            params["gas_puff_orifice_length_cm"]
+        ),
+        "two_zone": True,
+        "zone": args.zone,
         "base_kind": "uniform" if args.base_from_h5 is None else "profile_h5",
         "base_source": base_source,
         "base_from_h5": args.base_from_h5,
@@ -1201,8 +1176,9 @@ def print_ledger(
     print(
         f"stance: ES{ledger['es']} nx={ledger['nx']} cells={ledger['cells']} "
         f"S_gp={ledger['S_gp_sccm']:g} sccm x {ledger['gas_puff_valves']} valves, "
-        f"puff {ledger['gas_puff_profile']} at z={ledger['gas_puff_z_cm']:g} cm, "
-        f"throw {ledger['gas_puff_throw_cm']:g} cm"
+        f"orifice puff at z={ledger['gas_puff_z_cm']:g} cm, "
+        f"bore {ledger['gas_puff_orifice_id_cm']:g} cm x "
+        f"{ledger['gas_puff_orifice_length_cm']:g} cm"
     )
     # Presence-gated exactly as the ledger entries are: an invocation that
     # overrides nothing prints what it always printed.
@@ -1317,7 +1293,7 @@ def print_ledger(
     )
     print("--- profile (enhancement is CELL-LOCAL: profile / base at that cell) ---")
     for label, prof, base in (
-        ("column" if ledger["two_zone"] else "nn", nn0_profile, base_col),
+        ("column", nn0_profile, base_col),
         ("annulus", nn0_annulus_profile, base_ann),
     ):
         if prof is None:
@@ -1345,12 +1321,9 @@ def main(argv=None):
     p.add_argument("--nx", type=int, default=PRODUCTION_NX)
     p.add_argument("--sgp", type=float, required=True,
                    help="gas puff level [sccm]; must match the verdict run's")
-    p.add_argument("--two-zone", action="store_true",
-                   help="build for the neutral_two_zone closure (writes an "
-                        "annulus profile as well); must match the run's")
     p.add_argument("--zone", choices=("chamber", "annulus", "column"),
                    default="chamber",
-                   help="two-zone routing of the accumulated inventory. "
+                   help="zone routing of the accumulated inventory. "
                         "'chamber' (default) raises both zones by the same "
                         "density -- the radially well-mixed convention, whose "
                         "justification is that the free-molecular zone "
@@ -1506,8 +1479,6 @@ def main(argv=None):
 
     if args.dt_foot_s < 0.0 or not math.isfinite(args.dt_foot_s):
         p.error("--dt-foot-s must be finite and >= 0 (0 is the null control)")
-    if args.zone != "chamber" and not args.two_zone:
-        p.error("--zone is a two-zone routing choice; pass --two-zone or drop it")
     # The --knudsen-* options configure ONE member. Under a matrix kernel they
     # would be silent inert controls, which is exactly the class of mistake
     # this campaign refuses at construction rather than discovering in a

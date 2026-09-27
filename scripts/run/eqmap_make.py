@@ -12,14 +12,14 @@ row ``k`` is the neutral fill a discharge would start from had it broken down
 ``t_s[k]`` after the valve opened.  ``scripts/stance/eqmap_slice.py`` cuts a row out of
 it and writes the shaped-initial-fill npz that ``run_m6_point.py
 --nn0-profile-npz`` consumes, so the map's slices reach a run through the
-EXISTING ``neutral_initial_profile`` capability and no other path.
+EXISTING ``initial_neutral_state = "profile"`` capability and no other path.
 
 SCRIPT-ONLY.  Nothing here is solver code and no solver code was changed for
 it: the equilibration is driven through the public
 ``LAPDSim1D.run_neutral_equilibration``, and the 101st cycle is an ordinary
 ``Plasma=False`` inner sim whose neutral initial condition is planted through
-the public ``neutral_initial_profile`` keys -- the same capability the map's
-own slices are delivered by.
+the public ``initial_neutral_state = "profile"`` keys -- the same capability
+the map's own slices are delivered by.
 
 THE FOOT FILL TIME IS AN AXIS, NOT A CONSTANT.  ``--foot-s`` sets how far the
 map extends; it is recorded in the header and every slice states the pre-fill
@@ -40,9 +40,9 @@ Two consistency checks run on every build and are recorded in the header
       influx minus a non-negative pump rate.  This is the A0 budget structure
       with the plasma channels absent.
 
-Usage (production ES1 stance, two-zone, a 10 ms foot axis at 0.25 ms cadence)::
+Usage (production ES1 stance, a 10 ms foot axis at 0.25 ms cadence)::
 
-    python scripts/run/eqmap_make.py --es 1 --nx 240 --two-zone \
+    python scripts/run/eqmap_make.py --es 1 --nx 240 \
         --foot-s 10e-3 --cadence-s 0.25e-3 \
         --out scripts/eqmap_demo_es1_nx240.npz
 
@@ -109,7 +109,7 @@ def stance_header_value(stance):
         return str(path)
 
 
-def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
+def stance_config(stance, es, nx, sgp, extra, extra_flag):
     """Return the (params, flags) the map is built at.
 
     Assembled by the SAME path a campaign run uses -- the NAMED configuration
@@ -129,8 +129,6 @@ def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
 
         params.update(PARAM_OVERRIDES)
         flags.update(FLAG_OVERRIDES)
-        # run_m6_point's own neutral-exchange stance.
-        params["neutral_exchange_model"] = "knudsen"
     if stance is not None:
         named = load_named_configuration_or_exit(stance)
         params.update(named.params)
@@ -139,9 +137,6 @@ def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
         params["nx"] = int(nx)
     if sgp is not None:
         params["S_gp"] = float(sgp)
-    if two_zone:
-        flags["neutral_two_zone"] = True
-        params["neutral_exchange_model"] = "knudsen"
     params.update(extra)
     flags.update(extra_flag)
     return params, flags
@@ -178,7 +173,8 @@ def foot_cycle(params, flags, nn, nn_a, foot_s, cadence_s, map_dt):
     The inner sim is built exactly as ``run_neutral_equilibration`` builds its
     own (plasma off, cathode off, no nested equilibration, no seed cache), with
     two deltas that ARE the instrument: its neutral initial condition is the
-    equilibrated profile planted through ``neutral_initial_profile`` rather than
+    equilibrated profile planted through ``initial_neutral_state = "profile"``
+    rather than
     a uniform scalar, and its per-cycle puff window is the foot fill time
     instead of the stance's ``equilibration_gas_puff_on_s``.
     """
@@ -187,8 +183,6 @@ def foot_cycle(params, flags, nn, nn_a, foot_s, cadence_s, map_dt):
     # LAPDSim1D.run_neutral_equilibration.
     f["Plasma"] = False
     f["cathode_coupling"] = False
-    f["neutral_equilibration"] = False
-    f["launch_plasma_after_equilibration"] = False
     f["use_cached_neutral_seed"] = False
     # The two DVM directed-recycle jets, cleared for the same reason as
     # cathode_coupling above: with no plasma and no cathode solve there is no
@@ -199,8 +193,9 @@ def foot_cycle(params, flags, nn, nn_a, foot_s, cadence_s, map_dt):
     p["neutral_kinetic_dvm_anode_jet"] = False
     # ...and the two deltas that make this the 101st cycle rather than another
     # standard one. The scalar nn0 is superseded for BOTH zones (the solver
-    # refuses an armed flag alongside an explicit scalar), so it is cleared.
-    f["neutral_initial_profile"] = True
+    # refuses the profile route alongside an explicit scalar), so it is
+    # cleared.
+    p["initial_neutral_state"] = "profile"
     p["nn0"] = None
     p["nn0_profile"] = np.asarray(nn, dtype=float).tolist()
     if nn_a is not None:
@@ -217,7 +212,7 @@ def foot_cycle(params, flags, nn, nn_a, foot_s, cadence_s, map_dt):
     if not np.array_equal(sim.state.nn, np.asarray(nn, dtype=float)):
         raise ValueError(
             "the 101st cycle's initial nn is not the equilibrated seed; the "
-            "neutral_initial_profile path did not plant the profile verbatim"
+            "profile route did not plant the profile verbatim"
         )
     if nn_a is not None and not np.array_equal(
         sim.state.nn_a, np.asarray(nn_a, dtype=float)
@@ -367,9 +362,6 @@ def main(argv=None):
              "line")
     ap.add_argument("--nx", type=int, default=None)
     ap.add_argument("--sgp", type=float, default=None, help="override S_gp [sccm]")
-    ap.add_argument("--two-zone", action="store_true",
-                    help="neutral_two_zone: nn is the column density, nn_a the "
-                         "annulus, and the map carries both")
     ap.add_argument("--cycles", type=int, default=None,
                     help="standard equilibration cycles before the 101st "
                          "(default: the stance's neutral_equilibration_cycles)")
@@ -431,13 +423,11 @@ def main(argv=None):
         None if args.es == 0 else args.es,
         args.nx,
         args.sgp,
-        args.two_zone,
         extra,
         extra_flag,
     )
 
-    print(f"# eqmap: equilibrating (es={args.es} nx={params.get('nx')} "
-          f"two_zone={flags.get('neutral_two_zone')})")
+    print(f"# eqmap: equilibrating (es={args.es} nx={params.get('nx')})")
     sim, nn, nn_a, wall, eq_result = equilibrate(params, flags, args.cycles)
     p_eff, f_eff = sim.get_config()
     cycles = int(eq_result.neutral_equilibration_summary.cycles)
@@ -481,8 +471,7 @@ def main(argv=None):
         "es": None if args.es == 0 else int(args.es),
         "nx": int(p_eff["nx"]),
         "cells": int(geometry.cells),
-        "two_zone": bool(f_eff.get("neutral_two_zone", False)),
-        "neutral_exchange_model": p_eff.get("neutral_exchange_model"),
+        "two_zone": True,
         # The build-time overrides, recorded so a consumer can rebuild the
         # SAME stance -- eqmap_slice.py's construction check replays them.
         "stance_extra": extra,
@@ -492,10 +481,9 @@ def main(argv=None):
         # --- the fuelling configuration ---
         "S_gp_sccm": float(p_eff["S_gp"]),
         "gas_puff_valves": int(p_eff.get("gas_puff_valves", 2)),
-        "gas_puff_profile": p_eff.get("gas_puff_profile"),
         "gas_puff_z_cm": p_eff.get("gas_puff_z_cm"),
-        "gas_puff_throw_cm": p_eff.get("gas_puff_throw_cm"),
-        "gas_puff_mode": p_eff.get("gas_puff_mode"),
+        "gas_puff_orifice_id_cm": p_eff.get("gas_puff_orifice_id_cm"),
+        "gas_puff_orifice_length_cm": p_eff.get("gas_puff_orifice_length_cm"),
         "S_pump_L_Lps": p_eff.get("S_pump_L"),
         "S_pump_R_Lps": p_eff.get("S_pump_R"),
         # --- the standard equilibration that produced t=0 ---

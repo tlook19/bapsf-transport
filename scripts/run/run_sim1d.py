@@ -57,11 +57,8 @@ def main(argv=None):
     params, flags, configuration = load_configuration_or_exit(args.config)
     if args.operator_split:
         flags["implicit_heat_conduction"] = True
-    if args.neutral_equilibration:
-        flags["neutral_equilibration"] = True
-    if args.launch_plasma_after_equilibration:
-        flags["neutral_equilibration"] = True
-        flags["launch_plasma_after_equilibration"] = True
+    if args.initial_neutral_state is not None:
+        params["initial_neutral_state"] = args.initial_neutral_state
     if args.neutral_equilibration_cycles is not None:
         params["neutral_equilibration_cycles"] = args.neutral_equilibration_cycles
     if args.neutral_equilibration_dt is not None:
@@ -223,14 +220,15 @@ def _parse_args(argv):
         help="Minimum simulation time between progress updates [s].",
     )
     parser.add_argument(
-        "--neutral-equilibration",
-        action="store_true",
-        help="Run the configured neutral-only equilibration before returning.",
-    )
-    parser.add_argument(
-        "--launch-plasma-after-equilibration",
-        action="store_true",
-        help="Seed plasma run with neutral equilibration final state.",
+        "--initial-neutral-state",
+        choices=("equilibrate", "equilibrate_only", "fill", "profile"),
+        default=None,
+        help=(
+            "Override the configuration's initial_neutral_state: run the "
+            "neutral-only equilibration and seed the plasma run from it "
+            "(equilibrate), run it and return its result (equilibrate_only), "
+            "start from the scalar nn0 (fill), or from nn0_profile (profile)."
+        ),
     )
     parser.add_argument(
         "--neutral-equilibration-cycles",

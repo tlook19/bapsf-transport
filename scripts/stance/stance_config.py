@@ -140,7 +140,8 @@ TABLES = NAMESPACES + ("none_valued", "models")
 SCALARS = ("base", "allow_restated")
 
 #: THE MESH-SIZED PACKAGE. These four params are per-cell arrays sized to the
-#: configuration's OWN mesh, and the two flags below require them. They cannot
+#: configuration's OWN mesh, and the flag and the initial-neutral-state route
+#: below require them. They cannot
 #: travel to another resolution and they are not resampled: the vessel profile
 #: is a staircase whose steps interpolation would smear into a bore the
 #: machine does not have, and the two nn0 profiles are an equilibrated foot
@@ -149,7 +150,8 @@ SCALARS = ("base", "allow_restated")
 #:
 #: A caller that must run a named configuration at ITS OWN resolution -- the
 #: golden gate on its coarse mesh, a corner sweep on twenty cells -- drops the
-#: package WHOLE, with its flags, rather than half-applying it: a prescribed
+#: package WHOLE, with its flag and route, rather than half-applying it: a
+#: prescribed
 #: geometry carrying a default fill is a hybrid corner of nobody's choosing.
 #: What still travels is every mesh-independent key, which is the whole
 #: operating point.
@@ -161,19 +163,38 @@ MESH_SIZED_PARAMS = (
 )
 MESH_SIZED_FLAGS = (
     "prescribed_area_geometry",
-    "neutral_initial_profile",
 )
+#: The initial-neutral-state route the package's two nn0 profiles serve:
+#: ``(selector, value that reads the profiles, the scalar-fill value)``.
+MESH_SIZED_ROUTE = ("initial_neutral_state", "profile", "fill")
+
+
+def without_mesh_sized_route(params):
+    """Return ``params`` with the shaped-fill route moved to the scalar fill.
+
+    A copy; ``params`` itself is not changed. Only the profile value moves --
+    it REQUIRES the per-cell arrays the package drops -- and every other route
+    stands as configured.
+    """
+    key, profile, scalar = MESH_SIZED_ROUTE
+    out = dict(params)
+    if out.get(key) == profile:
+        out[key] = scalar
+    return out
 
 
 def without_mesh_sized_package(params, flags):
     """Return copies of a configuration's delta with the mesh package dropped.
 
-    The params are REMOVED (so the templates' own values stand) and the flags
-    are cleared, because each of those flags REQUIRES the array it reads. The
-    caller supplies the initial neutral fill the dropped profile was carrying.
+    The params are REMOVED (so the templates' own values stand), the flag is
+    cleared and the shaped-fill route moves to the scalar fill, because each of
+    those REQUIRES the arrays it reads. The caller supplies the initial neutral
+    fill the dropped profile was carrying.
     """
     return (
-        {k: v for k, v in params.items() if k not in MESH_SIZED_PARAMS},
+        without_mesh_sized_route(
+            {k: v for k, v in params.items() if k not in MESH_SIZED_PARAMS}
+        ),
         {**flags, **{k: False for k in MESH_SIZED_FLAGS}},
     )
 

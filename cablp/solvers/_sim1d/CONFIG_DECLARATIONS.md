@@ -48,7 +48,7 @@ it tells you the whole decision, and it cannot go stale against a default that
 moves underneath it. A missing member is a refusal, never an inherited value.
 
 **Namespace-free.** `cathode_neutral_jet` is an `input_dict` key and
-`neutral_equilibration` is an `input_flags` key; a block states neither fact.
+`use_cached_neutral_seed` is an `input_flags` key; a block states neither fact.
 The family membership carries the namespace and the resolver files each member
 where it belongs. The driver-side hazard — a key filed into the wrong namespace
 — cannot be expressed in a block at all.
@@ -98,8 +98,6 @@ same event; the four keys they carried that `neutral_closure` does not own
 pairs, inert with those jets off, and are left at their config defaults. That
 subsumption is the overlap rule doing what it is for, not a loss of coverage:
 the selection that owns those keys is the one that states them.
-`neutral_radial_closure` stays UNDECLARABLE there — its selector
-`neutral_momentum_radial` is `"uniform"`, not `"kinetic_two_moment"`.
 
 ## How it resolves
 
@@ -160,34 +158,33 @@ reader's index.
 
 | family | members | selector | notes |
 |---|---|---|---|
-| `neutral_closure` | 14 | `neutral_model = "kinetic_dvm"` | the selection plus the 13 keys it forces |
-| `neutral_radial_closure` | 8 | `neutral_momentum_radial = "kinetic_two_moment"` | plus the two keys that have no reading without it |
-| `beam_tail_closure` | 22 | — | beam deposition, the anomalous channel, the walked tail |
+| `neutral_closure` | 11 | `neutral_model = "kinetic_dvm"` | the selection plus the 10 keys it forces |
+| `beam_tail_closure` | 12 | — | beam deposition, the anomalous channel, the walked tail |
 | `cathode_surface_recycle` | 6 | — | the cathode surface's directed-recycle channel |
 | `anode_surface_recycle` | 5 | — | the anode mesh's channel; `neutral_mesh_accommodation` is a member here |
-| `initial_neutral_state` | 12 | — | three mutually exclusive routes (below) |
+| `initial_neutral_state` | 10 | — | two mutually exclusive routes (below) |
 
 A family with a **selector** may only be declared when that selector is at its
 engaging value: declaring the membership of a family you are not selecting
 would claim a decision this config is not making.
 
-Families **overlap** — `neutral_momentum_radial` is the two-moment selector and
-also a key the DVM selection forces; the jet keys are members of family B and
-of the DVM set that forbids them. Overlap is why two blocks claiming one key is
+Families **overlap** — the jet keys are members of the surface-recycle
+families and of the DVM set that forbids them. Overlap is why two blocks claiming one key is
 refused rather than merged: the two families disagree about which decision owns
 the key, and only the caller can settle it.
 
-### `initial_neutral_state` — three routes, not four
+### `initial_neutral_state` — one selector and the restart route
 
-The routes are `equilibrate`, `profile` and `restart`, and at most one may be
-armed. `use_cached_neutral_seed` is **not** a fourth route: it REQUIRES
-`neutral_equilibration` and its dispatch is a hit/miss branch inside the
-equilibration path, so it is a MODIFIER of `equilibrate`, not an alternative to
-it. Three routes have three pairs, and the code carries exactly three direct
-pairwise refusals. (The 2026-08-23 census recorded four mutually exclusive
-routes and six pairwise exclusions; the code says otherwise, and collapsing the
-four-route reading into one selector would have made `cached_seed` and
-`equilibrate` mutually exclusive — a behaviour change.)
+The key `initial_neutral_state` is itself the selector of how the neutral
+initial condition is built: `"equilibrate"` runs the puff/off accumulation and
+then the plasma run, `"equilibrate_only"` stops after the accumulation,
+`"fill"` starts from the scalar `nn0`, and `"profile"` starts from the shaped
+per-cell `nn0_profile`. Its values are mutually exclusive by construction, so
+the only pairwise refusal left is the selector against `restart_from`, which
+replaces the whole initial condition. `use_cached_neutral_seed` is **not** a
+route: it requires `initial_neutral_state = "equilibrate"` and its dispatch is
+a hit/miss branch inside the equilibration path, so it is a modifier of that
+value.
 
 ## Refusals
 

@@ -23,8 +23,6 @@ from .core.model_declarations import resolve_declaration_blocks
 from .core.model_families import (
     DECLARED_FAMILIES,
     KINETIC_DVM_INCOMPATIBLE_DEFAULTS,
-    KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS,
-    KINETIC_TWO_MOMENT_INTERNAL_MEMBERS,
     MODEL_FAMILIES,
     resolve_model_families,
 )
@@ -48,8 +46,6 @@ __all__ = [
     "ConfigurationLineage",
     "DECLARED_FAMILIES",
     "KINETIC_DVM_INCOMPATIBLE_DEFAULTS",
-    "KINETIC_TWO_MOMENT_INCOMPATIBLE_DEFAULTS",
-    "KINETIC_TWO_MOMENT_INTERNAL_MEMBERS",
     "LAPDSim1D",
     "MODEL_FAMILIES",
     "ProgressPrinter1D",

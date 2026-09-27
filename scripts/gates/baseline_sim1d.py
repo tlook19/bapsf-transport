@@ -87,6 +87,7 @@ from stance_config import (  # noqa: E402
     MESH_SIZED_PARAMS,
     load_configuration,
     load_stance,
+    without_mesh_sized_route,
 )
 
 # --- Baseline config: the stance of record, re-cut to the gate mesh --------
@@ -115,8 +116,8 @@ PRODUCTION_STANCE = "g1atrim"
 #     mesh -- resampling them changes the neutral inventory and the near-source
 #     structure, so it is a new initial condition, not the stance's.
 #
-# The package is therefore dropped WHOLE, with the two flags that require it,
-# rather than half-applied: a prescribed geometry carrying a default fill would
+# The package is therefore dropped WHOLE, with the flag and the shaped-fill
+# route that require it, rather than half-applied: a prescribed geometry carrying a default fill would
 # be a hybrid corner of exactly the kind this re-anchor exists to stop being.
 # Everything that is mesh-independent still travels, which is every scalar
 # operating-point key plus the baffles (whose arrays are physical cm, not
@@ -137,9 +138,9 @@ BASELINE_PARAM_OVERRIDES = {
     #
     "nx": 60,
     # The scalar neutral fill, PINNED. The stance sets nn0 = None because it
-    # arms neutral_initial_profile with a per-cell foot; the re-cut above drops
-    # that package and clears the flag, which leaves the scalar as the fill the
-    # gate actually starts from. Until 2026-08-27 nothing named it, so
+    # selects initial_neutral_state = "profile" with a per-cell foot; the re-cut
+    # above drops that package and moves the route to the scalar fill, which
+    # leaves the scalar as the fill the gate actually starts from. Until 2026-08-27 nothing named it, so
     # resolve_nn0 fell through to the frozen gas-puff lookup table and the gate
     # silently inherited its answer. This IS that answer, frozen as a literal at
     # the table's retirement: the value cablp/vars/_nn_table.lookup_nn0 returned
@@ -170,15 +171,14 @@ BASELINE_PARAM_OVERRIDES = {
     # silently handing --verify a short trajectory to report as a shape
     # mismatch.
     "max_steps_action": "raise",
+    # The shaped initial fill is gone with the mesh-sized package, so the
+    # equilibrated seed fills the machine again -- at the stance's own 27 ms
+    # puff window, which is a scalar and travels. This is the substitute for
+    # the foot, and it is why the gap fills.
+    "initial_neutral_state": "equilibrate",
 }
-# input_flags overrides beyond the stance. The shaped initial fill is gone with
-# the mesh-sized package, and the solver refuses a profile and an equilibration
-# together, so the equilibrated seed fills the machine again -- at the stance's
-# own 27 ms puff window, which is a scalar and travels. This is the substitute
-# for the foot, and it is why the gap fills.
-BASELINE_FLAG_OVERRIDES = {
-    "neutral_equilibration": True,
-}
+# input_flags overrides beyond the stance: none.
+BASELINE_FLAG_OVERRIDES = {}
 # Run controls. dt/operator_split stay at the solver defaults (adaptive dt, the
 # shipped split), and t_end stays dynamic -- the run goes to the current-trigger
 # end time, so THE FIXTURE COVERS THE WHOLE CYCLE: ignition, breakdown, the
@@ -227,6 +227,7 @@ def build_baseline_config(param_overrides=None, flag_overrides=None):
     stance_flags = dict(stance.flags)
     for key in STANCE_MESH_SIZED_PARAMS:
         stance_params.pop(key, None)
+    stance_params = without_mesh_sized_route(stance_params)
     for key in STANCE_MESH_SIZED_FLAGS:
         stance_flags[key] = False
     params.update(stance_params)
@@ -246,9 +247,9 @@ def run_baseline(params, flags):
 
     ``cells`` is the mesh cell count read from the solver's own geometry. It is
     NOT inferred from the width of ``y``: the number of packed fields per cell
-    depends on the neutral closure (5 for the cold single-zone layout, 8 once
-    evolved neutral momentum, the two-zone split and the neutral energy channel
-    are on), so any fixed divisor is wrong for some configuration.
+    depends on the neutral closure (6 for the cold two-zone layout, 8 once
+    evolved neutral momentum and the neutral energy channel are on), so any
+    fixed divisor is wrong for some configuration.
     """
     sim = LAPDSim1D(params, flags)
     sim.start_simulation(**BASELINE_RUN_KWARGS)

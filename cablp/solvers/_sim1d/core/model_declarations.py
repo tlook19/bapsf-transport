@@ -26,7 +26,7 @@ Three properties, and each one is the point of a different half of the ruling:
   delta -- reading it tells you the whole decision, and a member that is
   missing is a refusal, not an inherited value.
 * **Namespace-free.** ``cathode_neutral_jet`` is an ``input_dict`` key and
-  ``neutral_equilibration`` is an ``input_flags`` key, and a block states
+  ``use_cached_neutral_seed`` is an ``input_flags`` key, and a block states
   neither fact: the family's membership carries the namespace, and this module
   files each member where it belongs. The driver-side hazard -- a key filed
   into the wrong namespace, silently inert before 2026-08-14 and a run-time

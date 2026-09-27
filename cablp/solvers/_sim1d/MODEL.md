@@ -960,9 +960,6 @@ floating rather than a driven sheath. No circuit branch owns the electron
 energy there, so the boundary term itself books the floating electron sheath at
 $2T_e$ per collected ion, electron flux equalling ion flux at a floating
 surface; at the cathode that term is owned by the circuit.
-`end_recycle_to_annulus` routes the end wall faces' neutralized flux into that
-cell's annulus, $\partial_tn_n^\text{ann}|_\text{recycle}=\dot N_\text{loss}/V_\text{ann}$,
-as thermal diffuse gas carrying no directed momentum.
 
 ONE FACE FLUX, FOUR ROWS. The end wall face removes the PHYSICAL flux at the
 sheath-edge state it samples — $n_\text{se}=\alpha_\text{se}n$, $u=c_s$ into
@@ -1081,12 +1078,9 @@ baffles re-emit at the wall temperature. The spectrum is entered on the
 velocity grid as $c_\perp\exp(-c_\perp^2/2s^2)$, the azimuthally integrated 2D
 Maxwellian, with one further power of $c_\perp$ from the cosine flux law. At the cylindrical wall a landing splits into an
 accommodated share $\alpha_\text{acc}$ re-emitted on that spectrum and a
-non-accommodated share $1-\alpha_\text{acc}$;
-`neutral_kinetic_dvm_wall_reflection` selects the second's treatment —
-`"specular"` returns it in its incident bin (exact on an axisymmetric grid,
-where a specular reflection off the cylinder reverses only the unresolved
-radial component), `"diffuse_elastic"` on the same cosine shape at the
-temperature carrying the retained share's own incident mean energy per atom.
+non-accommodated share $1-\alpha_\text{acc}$, returned on the same cosine
+shape at the temperature carrying the retained share's own incident mean
+energy per atom.
 **The two end planes take the same accommodation**, their non-accommodated
 share returned $v_\parallel$-mirrored.
 
@@ -1145,18 +1139,14 @@ column flux is untouched.
 $$s_\text{gp}=\dot N_\text{gp}(t)g(z)\chi(v_\parallel,c_\perp)$$
 
 $\dot N_\text{gp}$ the measured inflow waveform — a square with erf rise and
-close — $g$ the axial placement profile, normalized so every distributed form
-conserves the total inflow exactly, and $\chi$ a wall-temperature Maxwellian at
-rest, so injected gas carries no net directed momentum. **The puff is born in
-the ANNULUS cells**, reaching the column through the zone exchange.
-`gas_puff_profile` selects $g$: `"cell"` puts the whole flow in the role-tagged
-cell; `"gaussian"` uses $\exp[-(z-z_0)^2/2\sigma^2]$ weighted by cell length;
-`"cosine_pipe"` uses a Lambertian outlet's first-flight illumination
-$[1+((z-z_0)/d)^2]^{-2}$ at throw $d$; `"orifice"` derives the profile by ray optics
-on a long tube's exit distribution — emit over the pipe-exit disc at the vessel
-wall, weight directions by the transparent-regime long-tube angular intensity,
-fly straight, and record where each ray first reaches the column radius, or its
-perigee where it stays outside.
+close — $g$ the axial placement profile, normalized so it conserves the total
+inflow exactly, and $\chi$ a wall-temperature Maxwellian at rest, so injected
+gas carries no net directed momentum. **The puff is born in the ANNULUS
+cells**, reaching the column through the zone exchange. The profile $g$ comes
+from ray optics on a long tube's exit distribution — emit over the pipe-exit
+disc at the vessel wall, weight directions by the transparent-regime long-tube
+angular intensity, fly straight, and record where each ray first reaches the
+column radius, or its perigee where it stays outside.
 
 **Pumping is a surface, not a volume.** Each end plane absorbs the fraction
 
@@ -1233,20 +1223,19 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `beam_power_deposition` | `physics/cathode.py:beam_ionization_rhs_terms` (beam banks, smoothing, and the ohmic gap booking) |
 | `beam_ionization_cost` | `physics/cathode.py:beam_ionization_rhs_terms` |
 | `beam_excitation_radiation` | `physics/cathode.py:beam_ionization_rhs_terms` |
-| `gas_puff_local_ionization` | `physics/reactions.py:gas_puff_local_ionization_rhs` |
 | `neutral_kinetic_dvm_coupling` | `solver.py:neutral_kinetic_dvm_coupling_rhs` (moments from `physics/kinetic_dvm.py:_book_transfer`) |
 | `parallel_momentum_sink` | `physics/sources.py:parallel_momentum_sink_rhs` |
 | `parallel_momentum_sink_heating` | `physics/sources.py:parallel_momentum_sink_heating_rhs` |
 
-`boundary_absorption` and `surface_loss` are permanently zero terms kept for
-saved-ledger schema stability, as is `recombination_3b_loss` under the ADAS
-coefficients.
+`boundary_absorption`, `surface_loss` and `gas_puff_local_ionization` are
+permanently zero terms kept for saved-ledger schema stability, as is
+`recombination_3b_loss` under the ADAS coefficients.
 
 The model presented here is the equation set the reference configuration
 integrates. A result may carry further terms that are not part of it: those of
-the alternative fluid neutral closure, and the additional terms
-`electron_drift_transport` and `neutral_probe_source`, all available in the
-code and none described by this document.
+the alternative fluid neutral closure, and the additional term
+`electron_drift_transport`, all available in the code and none described by
+this document.
 
 Supporting modules: `cablp/atomic/` (cross sections, ADAS access, empirical
 fits), `cablp/plasma/` (Braginskii conductivities, collision times),

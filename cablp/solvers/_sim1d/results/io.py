@@ -140,9 +140,9 @@ def _check_cell_roles(path, cell_role):
 # this date is missing them. Those files are not migrated: absence means "never
 # persisted", never zero.
 _OPTIONAL_ARRAY_FIELDS = (
-    # Present only when the run evolved them (the neutral_momentum /
-    # neutral_two_zone / neutral_energy flags); readers tolerate their
-    # absence, so the 5-field format is unchanged. With nn_a present, nn is
+    # Present only when the run evolved them (the neutral_momentum and
+    # neutral_energy flags, and the annulus density every run now carries);
+    # readers tolerate their absence, so older 5-field files still load. With nn_a present, nn is
     # the COLUMN density. En / Tn ride the same volume as nn.
     "M_n",
     "u_n",

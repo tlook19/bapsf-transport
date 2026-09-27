@@ -263,19 +263,14 @@ def ion_charge_exchange_rhs(
     ion_mass_g,
     gas_type,
     Tn_fit=0.1,
-    cx=True,
 ):
-    """Return conservative ion charge-exchange energy sources."""
-    zeros = np.zeros_like(state.n, dtype=float)
-    if not cx:
-        return ConservativeState1D(
-            n=zeros,
-            nn=zeros.copy(),
-            M=zeros.copy(),
-            Ee=zeros.copy(),
-            Ei=zeros.copy(),
-        )
+    """Return conservative ion charge-exchange energy sources.
 
+    Not a row of the RHS -- the moment-closed ion-neutral collision operator
+    carries CX cooling -- but the rate the ``ion_charge_exchange`` timestep
+    bound is built from.
+    """
+    zeros = np.zeros_like(state.n, dtype=float)
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     q_cx = (
         Q_cx_He(

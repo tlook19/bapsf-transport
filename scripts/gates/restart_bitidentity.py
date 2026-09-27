@@ -13,11 +13,11 @@ against stage 2's.
 
 Two scenarios, both cheap:
 
-  meanfield  a current-driven discharge on the production stance, no coverage
-  coverage   the clumpy-plasma closure with the ionizing tail walk live, which
-             is what issues the nested walker marches and moves the beam-cross
-             continuation cache -- the cache the d1a null measured at ~1.0
-             relative in l_b at beam turn-on
+  meanfield       a current-driven discharge on the production stance
+  meanfield_beam  the same, split AFTER beam turn-on, so the beam-cross
+                  continuation cache -- the cache the d1a null measured at
+                  ~1.0 relative in l_b at beam turn-on -- is nonzero at the
+                  handoff
 
 Usage:  python scripts/gates/restart_bitidentity.py [--scenario NAME] [--keep-dir DIR]
 """
@@ -74,7 +74,7 @@ def scenario_config(name):
     # Inert for a direct run() (only start_simulation reads it), and cleared so
     # the unsplit and split runs carry byte-identical configs apart from
     # restart_from itself.
-    flags["neutral_equilibration"] = False
+    params["initial_neutral_state"] = "fill"
     if name == "meanfield":
         # CHEAP, and deliberately in the dt-growth-dominated regime: over this
         # window the growth ramp is the active bound on most steps, which is
@@ -94,36 +94,9 @@ def scenario_config(name):
     if name == "meanfield_beam":
         # t_mid sits AFTER beam turn-on so the beam-cross continuation cache is
         # NONZERO at the handoff: before ~2e-4 s it is identically zero and the
-        # member the d1a null identified as order-unity goes untested. Mean
-        # field, so this reaches the single-medium deposition path the coverage
-        # scenario replaces with its two-stream wrapper.
+        # member the d1a null identified as order-unity goes untested.
         params.update({"nx": 24, "dt_save": 1.0e-4})
         return params, flags, 3.0e-4, 5.0e-4
-    if name == "coverage":
-        params.update({
-            "nx": 12,
-            "dt_save": 5.0e-5,
-            "beam_anomalous_model": "quasilinear",
-            "cathode_Ts_base_K": 1998.15,
-            "cathode_cleaning_E_th_eV": None,
-            "coverage_initial_fraction": 0.3,
-        })
-        flags["coverage_closure"] = True
-        # neutral_energy REFUSES coverage_closure at construction (the coverage
-        # deficit partitions nn alone, so one mean En over a concentrated gas
-        # would assert an unstated temperature relation between the covered and
-        # uncovered fractions). It ships ON, so this scenario has to clear it
-        # explicitly or it cannot build at all -- and clearing it means clearing
-        # the hot channel it carries: neutral_hot_internal_wall (also ON by
-        # default) walls that channel's ballistic flight and REQUIRES it, so
-        # dropping one without the other only moves the refusal. The rest of the
-        # hot-channel set (neutral_hot_birth_drift, cathode_jet_hot_carrier,
-        # neutral_knudsen_temperature) already ships at its off values.
-        flags["neutral_energy"] = False
-        flags["neutral_hot_internal_wall"] = False
-        # Beam-live, and f_cov still climbing at the handoff (it saturates at
-        # 1.0 by ~3e-4 s), so both coverage members are moving when exported.
-        return params, flags, 1.5e-4, 2.5e-4
     raise SystemExit(f"unknown scenario {name!r}")
 
 
@@ -193,8 +166,6 @@ NEGATIVE_CONTROLS = {
     "cathode._cathode_x0": ("cathode", "_cathode_x0"),
     "circuit._circuit_I_loop": ("circuit", "_circuit_I_loop"),
     "circuit.V_dis_prev_save_integral": ("circuit", "V_dis_prev_save_integral"),
-    "coverage.f": ("coverage", "f"),
-    "coverage.deficit": ("coverage", "deficit"),
     "run_loop.previous_accepted_dt": ("run_loop", "previous_accepted_dt"),
     "run_loop.t_last_save": ("run_loop", "t_last_save"),
     "run_loop.dt_growth_capped_streak": ("run_loop", "dt_growth_capped_streak"),
@@ -224,7 +195,7 @@ INERT_EXPECTATIONS = {
     ("meanfield", "cathode._cathode_beam_cross"):
         "beam_atten_cross is identically zero until the sheath potential "
         "crosses the ionization threshold (~2e-4 s), so there is nothing to "
-        "perturb in this short window; covered by meanfield_beam and coverage",
+        "perturb in this short window; covered by meanfield_beam",
 }
 
 
@@ -251,9 +222,6 @@ def engagement_census(result, log):
             notes.append("beam TURN-ON inside the window")
         elif active.max() > 0.5:
             notes.append("beam live throughout")
-    if "coverage_fraction" in diagnostics:
-        f_cov = np.asarray(diagnostics["coverage_fraction"], dtype=float)
-        notes.append(f"coverage f moved {f_cov.min():.6f} -> {f_cov.max():.6f}")
     for note in notes:
         log(f"  engaged: {note}")
     return census
@@ -400,7 +368,7 @@ def run_scenario(name, workdir, log, split_at=None, control=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenario", default=None,
-                        choices=("meanfield", "meanfield_beam", "coverage"))
+                        choices=("meanfield", "meanfield_beam"))
     parser.add_argument("--keep-dir", default=None,
                         help="write payloads here instead of a temp dir")
     parser.add_argument("--split-at", type=float, default=None,
@@ -417,7 +385,7 @@ def main(argv=None):
     names = (
         (args.scenario,)
         if args.scenario
-        else ("meanfield", "meanfield_beam", "coverage")
+        else ("meanfield", "meanfield_beam")
     )
 
     lines = []

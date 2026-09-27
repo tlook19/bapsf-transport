@@ -1,6 +1,7 @@
 """Cached neutral-equilibration seed (R5 ES1 tuning pass, 2026-07-26).
 
-The optional neutral pre-equilibration (``neutral_equilibration`` flag) runs a
+The optional neutral pre-equilibration (``initial_neutral_state =
+"equilibrate"``) runs a
 100-cycle puff/off neutral-only accumulation before the plasma launch, and injects
 ONLY the equilibrated neutral density profile into the plasma run's initial state
 (``_apply_neutral_equilibration_result`` seeds ``nn``/``nn_a``; n, M, Ee, Ei, M_n
@@ -104,8 +105,7 @@ INERT_PARAM_KEYS = frozenset({
     # --- atomic-rate / cooling / plasma-physics scales (no plasma during equil) ---
     "atomic_rate_model", "recombination_energy_return",
     "sigma_in_model", "Ti_birth_ionization",
-    "b_ion_neutral_drag", "b_ion_neutral_thermalization",
-    "ion_neutral_drag_model", "D_amb", "D_amb_model", "heat_flux_limiter_f",
+    "b_ion_neutral_drag", "D_amb", "D_amb_model", "heat_flux_limiter_f",
     "b_presheath_length",
     "b_surface_loss", "alpha_isat", "alpha_front", "front_flux_model",
     "adas_low_te_extension",
@@ -117,22 +117,22 @@ INERT_PARAM_KEYS = frozenset({
     # inert; every other neutral knob stays in the hash.
     #
     # Its shaped counterparts nn0_profile / nn0_annulus_profile are
-    # deliberately NOT listed here, and neither is the neutral_initial_profile
-    # flag in INERT_FLAG_KEYS. They are inert for a stronger reason than nn0
-    # is -- the flag REFUSES neutral_equilibration at construction, so an
-    # armed profile can never reach this cache at all -- but the fail-closed
-    # rule above says a key leaves the hash only when it must, and these three
-    # sit at their None/False defaults on every config that can be cached.
-    # They contribute a constant to the signature, which rotates the hash once
-    # (a cold recompute, bit-exact results) and is stable thereafter.
+    # deliberately NOT listed here. They are inert for a stronger reason than
+    # nn0 is -- they are read only under initial_neutral_state='profile', which
+    # never equilibrates, so an armed profile can never reach this cache at all
+    # -- but the fail-closed rule above says a key leaves the hash only when it
+    # must, and these two sit at their None defaults on every config that can
+    # be cached. They contribute a constant to the signature, which rotates the
+    # hash once (a cold recompute, bit-exact results) and is stable thereafter.
     "nn0",
+    # The initial-neutral-state selector triggers the equilibration; it is not
+    # seed content, and every config that can be cached holds 'equilibrate'.
+    "initial_neutral_state",
     # The prescribed per-cell geometry keys (plasma_radius_profile_cm,
     # machine_radius_profile_cm, plasma_area_max_vessel_fraction,
     # neutral_annulus_volume_fraction_min) are deliberately NOT listed here,
-    # and neither is prescribed_area_geometry in INERT_FLAG_KEYS -- unlike
-    # end_recycle_to_annulus below, which IS exempt. That flag changes only two
-    # plasma boundary terms an equilibration never evaluates; these change the
-    # GEOMETRY. The column volume Vp, the vessel volume Vm, the annulus volume
+    # and neither is prescribed_area_geometry in INERT_FLAG_KEYS: these change
+    # the GEOMETRY. The column volume Vp, the vessel volume Vm, the annulus volume
     # V_ann = Vm - Vp, the zone exchange conductance (~ Rp dz) and the
     # free-molecular face conductances (~ the hydraulic radius) are all read by
     # the neutral-only equilibration, whose whole content is where the gas
@@ -158,27 +158,13 @@ INERT_FLAG_KEYS = frozenset({
     # plus the cache-control flags themselves (they select the seed source, not
     # its content).
     "Plasma", "cathode_coupling", "active_plasma_topology",
-    "cx",
     "electron_heat_flux_limit", "heat_conduction", "hyperbolic_energy_consistent",
-    "icool_recomb", "implicit_heat_conduction", "ion_neutral_drag",
-    "ion_neutral_drag_cx_only", "ion_neutral_moment_closure",
-    "ion_neutral_thermalization", "ionization_energy_cost",
+    "icool_recomb", "implicit_heat_conduction", "ionization_energy_cost",
     "raw_stage_validation",
     "debug_checks",
-    # end_recycle_to_annulus changes ONLY the plasma-terminating boundary
-    # term (characteristic_boundary), and an
-    # equilibration cannot reach it. run_neutral_equilibration pins
-    # Plasma=False on its inner sim, and with Plasma off rhs_terms takes the
-    # neutral-only branch, which returns _zero_rhs_state() for that term; the
-    # implicit neutral-only stepper that actually advances that phase
-    # assembles exchange, pump and puff alone and never calls it. No
-    # plasma => no boundary recycle => nothing for the routing to route. That
-    # is what keeps a default-config flag addition from rotating every
-    # cached seed in the database.
-    "end_recycle_to_annulus",
-    # The two end-face energy-booking flags are inert for a STRONGER reason
-    # than end_recycle_to_annulus above: run_neutral_equilibration does not
-    # merely leave them unreached, it CLEARS both on the inner sim's copy of
+    # The two end-face energy-booking flags are inert because
+    # run_neutral_equilibration does not merely leave them unreached, it
+    # CLEARS both on the inner sim's copy of
     # the config (two assignments beside the Plasma=False and
     # cathode_coupling=False lines that open that function), so the
     # equilibration runs with them off no matter what the outer run arms and no
@@ -193,8 +179,7 @@ INERT_FLAG_KEYS = frozenset({
     # every stored seed's signature the moment such a key joins the template,
     # an invalidation with no neutral content behind it.
     "end_wall_sheath_full_debit", "cathode_face_full_debit",
-    # cache-control + equilibration-trigger flags (not seed content)
-    "neutral_equilibration", "launch_plasma_after_equilibration",
+    # the cache-control flag (not seed content)
     "use_cached_neutral_seed",
 })
 
@@ -379,7 +364,7 @@ def fill_rate_meta(params, nn):
     """Fill-rate summary stored with a DB entry (for the browsable table)."""
     nn = np.asarray(nn, dtype=float)
     keys = (
-        "S_gp", "Twin_S_gp", "gas_puff_mode", "gas_puff_profile", "S_pump_L",
+        "S_gp", "Twin_S_gp", "S_pump_L",
         # nn0 is deliberately absent: it is the direct-run fill, not the
         # equilibration's start (which is pinned at 1e8), so recording it here
         # would mislabel the entry's provenance.
