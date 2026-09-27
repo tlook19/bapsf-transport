@@ -92,7 +92,9 @@ SUBCOMMANDS
 
 LAUNCH ROUTE FOR ``run`` AND ``probe``. Both start solver children and poll
 them for hours. Every child stays in the driver's own process group (no new
-session), runs under its own ``timeout`` cap, and writes its stdout and
+session; ``timeout --foreground``, since a plain ``timeout`` moves its
+command into a process group of its own), runs under its own ``timeout``
+cap, and writes its stdout and
 stderr to its own log. The two subcommands are an ORCHESTRATOR launch route:
 the orchestrator starts the driver inside one detached tmux session, which
 owns the driver and every arm it launches. Subagents must not run ``run`` or
@@ -697,7 +699,7 @@ def launch_probe(name, es):
         if f.exists():
             f.unlink()
     inner = (f"cd {shlex.quote(str(REPO))} && CABLP_COMPILED_KERNELS=1 PYTHONPATH={shlex.quote(str(REPO))} "
-             f"PYTHONDONTWRITEBYTECODE=1 timeout {PROBE_TIMEOUT_S} {shlex.quote(str(PY))} scripts/run/run_m6_point.py "
+             f"PYTHONDONTWRITEBYTECODE=1 timeout --foreground {PROBE_TIMEOUT_S} {shlex.quote(str(PY))} scripts/run/run_m6_point.py "
              f"--stance {shlex.quote(str(p['pcfg'].resolve()))} --sgp {sgp_for(name)} --es {es} --two-zone "
              f"--max-steps {PROBE_MAX_STEPS} --extra max_steps_action=stop "
              f"--save-h5 {shlex.quote(str(p['ph5']))} >> {shlex.quote(str(p['plog']))} 2>&1; "
@@ -794,7 +796,7 @@ def launch(name, es):
         if f.exists():
             f.unlink()
     inner = (f"cd {shlex.quote(str(REPO))} && CABLP_COMPILED_KERNELS=1 PYTHONPATH={shlex.quote(str(REPO))} "
-             f"PYTHONDONTWRITEBYTECODE=1 timeout {TIMEOUT_S} {shlex.quote(str(PY))} scripts/run/run_m6_point.py "
+             f"PYTHONDONTWRITEBYTECODE=1 timeout --foreground {TIMEOUT_S} {shlex.quote(str(PY))} scripts/run/run_m6_point.py "
              f"--stance {shlex.quote(str(p['cfg'].resolve()))} --sgp {sgp_for(name)} --es {es} --two-zone "
              f"--max-steps {MAX_STEPS} --save-h5 {shlex.quote(str(p['h5']))} >> {shlex.quote(str(p['log']))} 2>&1; "
              f"echo \"EXIT=$?\" > {shlex.quote(str(p['exit']))}")
