@@ -161,41 +161,23 @@ def validate_r1_configuration_presence(
             DeprecationWarning,
             stacklevel=2,
         )
-    # "neutral" exists on the ION side only: it is the partner of the En
-    # ionization sink, which debits the neutral energy field and has no
-    # electron counterpart to pair with.
-    for name, selectors, allowed in (
-        ("Te_birth_ionization", ("local", "floor"), "'local' or 'floor'"),
-        (
-            "Ti_birth_ionization",
-            ("local", "floor", "neutral"),
-            "'local', 'floor', or 'neutral'",
-        ),
-    ):
-        value = input_dict.get(name)
-        if isinstance(value, str):
-            if value not in set(selectors):
-                raise ValueError(
-                    f"{name} must be {allowed}, or a finite "
-                    f"non-negative numeric eV value (got {value!r})"
-                )
-            continue
+    # "neutral" is the partner of the En ionization sink, which debits the
+    # neutral energy field.
+    ti_birth = input_dict.get("Ti_birth_ionization")
+    if isinstance(ti_birth, str):
+        ti_birth_ok = ti_birth == "neutral"
+    else:
         try:
-            numeric = float(value)
+            ti_birth_numeric = float(ti_birth)
         except (TypeError, ValueError):
-            numeric = np.nan
-        if not np.isfinite(numeric) or numeric < 0.0:
-            raise ValueError(
-                f"{name} must be {allowed}, or a finite "
-                f"non-negative numeric eV value (got {value!r})"
-            )
-    birth_energy_model = str(
-        input_dict.get("ionization_birth_energy_model", "legacy")
-    )
-    if birth_energy_model not in {"legacy", "conservative"}:
+            ti_birth_numeric = np.nan
+        ti_birth_ok = (
+            np.isfinite(ti_birth_numeric) and ti_birth_numeric >= 0.0
+        )
+    if not ti_birth_ok:
         raise ValueError(
-            "ionization_birth_energy_model must be 'legacy' or "
-            f"'conservative' (got {birth_energy_model!r})"
+            "Ti_birth_ionization must be 'neutral', or a finite "
+            f"non-negative numeric eV value (got {ti_birth!r})"
         )
     end_mode = str(input_dict.get("end_mode", "end_wall"))
     if end_mode != "end_wall":
@@ -218,13 +200,6 @@ def validate_r1_configuration_presence(
             "hyperbolic_wave_speed must be 'isothermal' or 'adiabatic' "
             f"(got {hyperbolic_wave_speed!r})"
         )
-    # R4.1 anode-mesh beam interception (audit A15) is the production default
-    # (correct csda physics). Like beam_coulomb_model / beam_anomalous_model it
-    # is a csda control: it perturbs the operator under beam_deposition_model=
-    # "csda" with resolved anode faces, and is inert under beer_lambert (which
-    # never launches the CSDA module) or where no anode faces exist. The
-    # _csda_beam_deposition wiring applies it only when eta>0 and anode faces
-    # are present, so no construction rejection is needed.
     if raw_stage_validation and flags.get("Plasma", True):
         for initial_name, floor_name in (
             ("Te0", "Te_floor"),
@@ -1098,19 +1073,6 @@ def resolve_coverage_config(input_dict, flags, *, geometry, neutral_model):
         raise ValueError(
             "coverage_backfill_time_s (the reservoir->column neutral "
             f"refill time) must be finite and > 0 (got {tau!r})"
-        )
-    if str(
-        input_dict.get("beam_deposition_model", "beer_lambert")
-    ) != "csda":
-        raise ValueError(
-            "coverage_closure requires beam_deposition_model='csda': the "
-            "closure splits the beam by area across the covered and "
-            "reservoir media, and that split is built on the CSDA rays. "
-            "Under 'beer_lambert' there is no second ray to give the "
-            "reservoir, so the whole beam would be routed through the "
-            "channels while the closure's own premise says only f_cov of "
-            "it goes there -- a silently inconsistent model rather than a "
-            "no-op, which is why this refuses instead of degrading"
         )
     if float(input_dict.get("beam_clump_fraction", 0.0)) > 0.0:
         raise ValueError(

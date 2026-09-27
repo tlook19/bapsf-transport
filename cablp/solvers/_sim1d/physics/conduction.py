@@ -296,8 +296,8 @@ def implicit_heat_conduction_step(
     ``C dTe/dt = -K Te + ee_source`` instead of ``C dTe/dt = -K Te``. The ion
     solve is never given one. ``None`` (the default) is the historical path,
     expression for expression. It carries the beam electron-energy deposition
-    when ``beam_deposition_in_heat_substep`` is armed; the term is then
-    removed from the explicit operator, so the source enters here INSTEAD OF
+    under the operator split; the term is then removed from the explicit
+    operator, so the source enters here INSTEAD OF
     there and is not an extra booking. Every scheme integrates a constant
     source exactly over the substep when the conduction operator is inert
     (``K = 0``): the theta methods trivially, and TR-BDF2 because its two

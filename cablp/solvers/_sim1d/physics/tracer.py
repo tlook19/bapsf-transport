@@ -568,8 +568,7 @@ def conducted_current_A(*, n_cm3, Te_eV, geometry, V_dev_V, L_plasma_cm):
     return sigma * area_m2 * field_V_per_m
 
 
-def beam_plasma_thinness(*, n_cm3, Te_eV, geometry, E_beam_eV, launch_cells,
-                         coulomb_model="fast_electron"):
+def beam_plasma_thinness(*, n_cm3, Te_eV, geometry, E_beam_eV, launch_cells):
     """Return the cumulative single-pass beam-energy fraction lost to plasma.
 
     Criterion (b). Along each cathode's ray the primary loses
@@ -595,7 +594,7 @@ def beam_plasma_thinness(*, n_cm3, Te_eV, geometry, E_beam_eV, launch_cells,
     per_cell = np.array(
         [
             coulomb_stopping_eV_per_cm(
-                E_beam_eV, float(n_cm3[i]), float(Te_eV[i]), model=coulomb_model
+                E_beam_eV, float(n_cm3[i]), float(Te_eV[i])
             )
             * dz[i]
             / E_beam_eV

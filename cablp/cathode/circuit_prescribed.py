@@ -517,7 +517,6 @@ def solve_beam_system_prescribed(
     anode_T_e: float | None = None,
     b_beam_excitation: float = 0.0,
     beam_excitation_energy_eV: float = 21.218,
-    beam_excitation_model: str = "2p_scalar",
     phi_c_cap_V: float = 1000.0,
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
@@ -575,6 +574,5 @@ def solve_beam_system_prescribed(
         cathode_index=cathode_index,
         b_beam_excitation=b_beam_excitation,
         beam_excitation_energy_eV=beam_excitation_energy_eV,
-        beam_excitation_model=beam_excitation_model,
         beam_climb_V=beam_climb_V,
     )

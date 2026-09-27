@@ -128,32 +128,11 @@ DEPRECATED_CONTROLS = {
     "ion_neutral_thermalization": DeprecatedControl(
         FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
     ),
-    "beam_anode_interception": DeprecatedControl(
-        FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
-    ),
     "front_flux": DeprecatedControl(
         FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
     ),
     "hyperbolic_wave_speed": DeprecatedControl(
         PARAMS, _FREED_BRANCH, _FREED_BRANCH_FIX, values=("isothermal",),
-    ),
-    "ionization_birth_energy_model": DeprecatedControl(
-        PARAMS, _FREED_BRANCH, _FREED_BRANCH_FIX, values=("legacy",),
-    ),
-    # Value-scoped, and the scope is the point: the key itself is live -- it
-    # carries the conserving birth the campaign now runs. Only the two named
-    # arms deprecate, and they stay runnable because a pre-adoption artifact
-    # cannot be reproduced without them.
-    "Ti_birth_ionization": DeprecatedControl(
-        PARAMS,
-        "it is non-conserving against an evolved En: the En ionization sink "
-        "still gives up (3/2) k Tn per consumed atom while the ion is born at "
-        "an unrelated temperature, and the difference is disclosed by the "
-        "ionization_birth_thermal_deficit rows rather than closed",
-        "select 'neutral' (the default and the conserving partner of the En "
-        "sink); these arms are retained for bit-exact reproduction of "
-        "pre-adoption artifacts",
-        values=("floor", "local"),
     ),
     "b_ion_neutral_drag": DeprecatedControl(
         PARAMS,
@@ -207,9 +186,6 @@ DEPRECATED_CONTROLS = {
         "override is off-stance rather than a supported arm",
         "drop the override and leave the key at its default; move the pair "
         "together if the re-approach itself needs retuning",
-    ),
-    "beam_ionization_birth_timestep_bound": DeprecatedControl(
-        FLAGS, _DEAD_LEVER, _DEAD_LEVER_FIX,
     ),
     # ==== dead levers: the retired puff-waveform family ====================
     "Twin_S_gp_decay_target": DeprecatedControl(

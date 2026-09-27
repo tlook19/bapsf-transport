@@ -364,11 +364,11 @@ FLAG_OVERRIDES = {
 }
 
 
-# WP-D beam product transport. "local" is the
-# production stance and the config.py default, so it is deliberately absent
-# from PARAM_OVERRIDES; "nonlocal" is an A/B arm that must travel with the run
-# it scored. Reported as a delta only -- a production (local) artifact scores
-# byte-identically to its recorded _scores.txt, and a nonlocal one says so.
+# WP-D beam product transport, read off a saved run's params to label
+# HISTORICAL files: the key is retired and current runs no longer carry it.
+# "local" was the production behaviour (and is now the only one); a stored
+# "nonlocal" or "terminal_nonlocal" run says so. Reported as a delta only -- a
+# local artifact scores byte-identically to its recorded _scores.txt.
 BEAM_PRODUCT_TRANSPORT_DEFAULT = "local"
 
 
@@ -390,9 +390,10 @@ def beam_product_transport_note(params):
 
 # --- WP-E QL heating locality (heating_anomalous_transport) ---------------
 # Unlike the WP-D note above, this label is printed ALWAYS rather than as a
-# delta. {local, tail_walk} is a declared BRACKET, not a default plus a
-# variant: the config docstring says outright that "a result must state which
-# one it used", so a scored number is incomplete without its arm. A
+# delta: the transport arm is part of what a scored number means. Saved files
+# may carry arms that are now retired ("tail_walk") together with the retired
+# tail-energy and keying keys; the label reports them as the file records
+# them. A
 # delta-only label also cannot distinguish "this run was local" from "this
 # artifact predates the label", which is exactly the ambiguity the pre-WP-E
 # case below exists to remove.
@@ -412,7 +413,7 @@ def wpe_arm_line(params):
 
     ``heating_anomalous_tail_energy_eV`` is read only when the tail is WALKED
     *and* ``heating_anomalous_tail_energy_keying="fixed"``; it is labelled
-    inert in both of the other cases, matching its config docstring. The
+    inert in both of the other cases, matching the retired key's contract. The
     keying leg matters because the walked arm still prints a plausible-looking
     energy under ``"phi_c"`` keying, where the live birth energy is instead
     ``f*e*phi_c(t)`` -- a reader who took the printed number for the energy the
@@ -4504,44 +4505,6 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
-        "--beam-excitation",
-        default=None,
-        choices=("scalar14", "manifold"),
-        help=(
-            "beam excitation channel for the WP-A A/B "
-            "(A3): scalar14 (production 2p_scalar "
-            "with the historical b=1.4 estimate) or manifold (measured "
-            "Ralchenko singlet sum, b=1.0)"
-        ),
-    )
-    parser.add_argument(
-        "--beam-deposition",
-        default=None,
-        choices=("beer_lambert", "csda", "csda_ql"),
-        help=(
-            "beam deposition model for the WP-B B3 A/B: "
-            "beer_lambert (historical "
-            "single-event absorption), csda (slowing-down module, classical "
-            "fast-electron Coulomb), or csda_ql (csda + quasilinear "
-            "beam-plasma drag)"
-        ),
-    )
-    parser.add_argument(
-        "--beam-product-transport",
-        default=None,
-        choices=("local", "nonlocal", "terminal_nonlocal"),
-        help=(
-            "beam product transport for the WP-D A/B: "
-            "local (production stance and "
-            "config default -- products thermalize where they are born), "
-            "nonlocal (products walk, and the escape ledger is live), or "
-            "terminal_nonlocal (the terminal residual alone walks; the "
-            "along-ray products stay local). Both walking values require the "
-            "CSDA deposition module and raise at "
-            "construction under --beam-deposition beer_lambert"
-        ),
-    )
-    parser.add_argument(
         "--es",
         type=int,
         choices=(1, 2, 3, 4),
@@ -4727,32 +4690,9 @@ def main(argv=None):
             label += f" [stance={named.name}]"
         if args.drag_closure is not None:
             label += f" [drag={args.drag_closure}]"
-        if args.beam_excitation is not None:
-            label += f" [beam_exc={args.beam_excitation}]"
         extra = {}
         if args.tau_afterglow is not None:
             extra["tau_afterglow"] = args.tau_afterglow
-        # A/B instrument for A3: the measured singlet
-        # manifold vs the retired 1.4 estimate. "scalar14" is PARAM_OVERRIDES
-        # as-is; "manifold" swaps the cross-section set and drops b to the
-        # pure-multiplier benchmark value.
-        if args.beam_excitation == "manifold":
-            extra["beam_excitation_model"] = "manifold"
-            extra["b_beam_excitation"] = 1.0
-        if args.beam_deposition is not None:
-            label += f" [dep={args.beam_deposition}]"
-            extra["beam_deposition_model"] = (
-                "csda" if args.beam_deposition.startswith("csda")
-                else "beer_lambert"
-            )
-            if args.beam_deposition == "csda_ql":
-                extra["beam_anomalous_model"] = "quasilinear"
-        # WP-D arm. Lands in `extra`, which run_model applies LAST, so it wins
-        # over PARAM_OVERRIDES; PARAM_OVERRIDES itself never sets the key, so
-        # omitting the flag reproduces the production stance exactly.
-        if args.beam_product_transport is not None:
-            extra["beam_product_transport"] = args.beam_product_transport
-            label += beam_product_transport_note(extra)
         # No BreakdownError handler here: this driver never sets
         # prebreakdown_timeout_action, so it always runs the "switch_open"
         # default, under which a failed breakdown ends as an OPENED SWITCH

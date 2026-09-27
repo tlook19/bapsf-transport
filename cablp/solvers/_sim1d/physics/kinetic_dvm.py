@@ -4167,8 +4167,8 @@ class TransientDVM:
 
         The energy moment is a TOTAL kinetic energy; the fluid ``Ei`` row
         is an internal energy, so the bulk term is removed with the same
-        decomposition the ``ionization_birth_energy_model="conservative"``
-        booking uses, ``d(KE) = u dM - (1/2) m u^2 dN``.
+        decomposition the bulk ionization-birth booking uses,
+        ``d(KE) = u dM - (1/2) m u^2 dN``.
 
         The CX/elastic PAIR is additionally booked on its own
         (``M_transfer_pair``, ``Ei_transfer_pair``) with the per-ion

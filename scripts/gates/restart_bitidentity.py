@@ -103,13 +103,10 @@ def scenario_config(name):
         params.update({
             "nx": 12,
             "dt_save": 5.0e-5,
-            "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
             "cathode_Ts_base_K": 1998.15,
             "cathode_cleaning_E_th_eV": None,
             "coverage_initial_fraction": 0.3,
-            "heating_anomalous_transport": "tail_walk",
-            "heating_anomalous_tail_ionization": "on",
         })
         flags["coverage_closure"] = True
         # neutral_energy REFUSES coverage_closure at construction (the coverage

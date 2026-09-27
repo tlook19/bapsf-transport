@@ -23,7 +23,7 @@
 #         --output x1_local.h5
 #
 # The saved trajectory records the lineage -- this file's name, "g1atrim" as
-# its base, both files' sha256, the delta keys below, and the resolved
+# its base, both files' sha256, the delta key below, and the resolved
 # configuration's identity -- so the arm is identifiable from its artifact
 # alone.
 #
@@ -40,9 +40,3 @@ base = "g1atrim"
 # The selection: bank all quasilinear power in the extraction cell rather than
 # launching tail walkers to carry it out.
 heating_anomalous_transport = "local"
-# REQUIRED by the line above, not a second decision. The tail-ionization
-# channel is carried BY the walkers -- it ionizes along their flight -- so with
-# no walkers launched there is nothing for it to ride. The validator refuses it
-# left "on" under this selection rather than letting it stand as a silent
-# no-op, which is the same rule that forbids any inert control.
-heating_anomalous_tail_ionization = "off"

@@ -1376,7 +1376,6 @@ def solve_beam_system_idriven(
     anode_T_e: float | None = None,
     b_beam_excitation: float = 0.0,
     beam_excitation_energy_eV: float = 21.218,
-    beam_excitation_model: str = "2p_scalar",
     schottky: bool = False,
     bridge: bool = False,
     phi_c_cap_V: float = 1000.0,
@@ -1467,7 +1466,6 @@ def solve_beam_system_idriven(
         cathode_index=cathode_index,
         b_beam_excitation=b_beam_excitation,
         beam_excitation_energy_eV=beam_excitation_energy_eV,
-        beam_excitation_model=beam_excitation_model,
         beam_climb_V=beam_climb_V,
     )
 
@@ -1484,7 +1482,6 @@ def assemble_beam_arrays(
     cathode_index: int = 0,
     b_beam_excitation: float = 0.0,
     beam_excitation_energy_eV: float = 21.218,
-    beam_excitation_model: str = "2p_scalar",
     beam_climb_V: float | None = None,
 ) -> BeamResult:
     """Wrap a solved single-cathode sheath in the per-cell beam arrays.
@@ -1558,7 +1555,6 @@ def assemble_beam_arrays(
             phi_c_0,
             b_beam_excitation,
             gas_type,
-            model=beam_excitation_model,
             threshold_eV=beam_excitation_energy_eV,
         )
 

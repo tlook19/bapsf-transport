@@ -41,11 +41,7 @@ from baseline_sim1d import build_baseline_config
 from compare_sim1d_es1 import FLAG_OVERRIDES, PARAM_OVERRIDES
 from compare_sim1d_es1 import PRODUCTION_NX, PRODUCTION_STANCE
 from stance_config import load_stance
-from run_m6_point import ELECTRON_BIRTH_POLICY as M6_ELECTRON_BIRTH_POLICY
-from run_mechanism_ladder import (
-    ELECTRON_BIRTH_POLICY as LADDER_ELECTRON_BIRTH_POLICY,
-    ES_OPERATING,
-)
+from run_mechanism_ladder import ES_OPERATING
 
 
 SNAPSHOT_PATH = (
@@ -93,9 +89,7 @@ def config_cases():
             "nx": 120,
             "V_bank": ladder_op["V_bank"],
             "cathode_solver_model": "current_driven",
-            "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
-            "Te_birth_ionization": LADDER_ELECTRON_BIRTH_POLICY,
             "cathode_Ts_base_K": ladder_op["Ts_standby_K"],
             "cathode_heat_capacity_J_per_K": 120.0,
             "cathode_conduction_W_per_K": 1500.0,
@@ -112,7 +106,6 @@ def config_cases():
             "nx": PRODUCTION_NX,
             "V_bank": m6_op["V_bank"],
             "cathode_solver_model": "current_driven",
-            "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
             "cathode_Ts_base_K": m6_op["Ts_standby_K"],
             "cathode_heat_capacity_J_per_K": 120.0,
@@ -123,7 +116,6 @@ def config_cases():
             "cathode_phiwf_clean_eV": 2.809,
             "cathode_cleaning_sigma_cm2": 3.5e-16,
             "cathode_cleaning_E_th_eV": 20.0,
-            "Te_birth_ionization": M6_ELECTRON_BIRTH_POLICY,
             "gas_puff_mode": "square",
             # --sgp, which the reference configuration then supersedes: the
             # driver applies the stance over its own switches, so a stanced arm
@@ -170,10 +162,7 @@ def current_snapshots():
         "parameter_count": len(manifest["parameters"]),
         "flag_count": len(manifest["flags"]),
         "cases": {
-            name: {
-                "sha256": config_digest(params, flags),
-                "Te_birth_ionization": params["Te_birth_ionization"],
-            }
+            name: {"sha256": config_digest(params, flags)}
             for name, (params, flags) in config_cases().items()
         },
     }

@@ -372,8 +372,10 @@ def _wpe_arm_line(params):
     same grounds as ``non_ignited_message`` above: this tool stays standalone.
     Keep the two in step.
 
-    {local, tail_walk} is a declared BRACKET, so the arm is printed ALWAYS,
-    not as a delta -- a fingerprint set is incomplete without it, and a
+    The transport arm is printed ALWAYS, not as a delta -- a fingerprint set
+    is incomplete without it -- and it labels HISTORICAL files too, which may
+    carry the retired "tail_walk" arm and the retired tail-energy and keying
+    keys; the label reports them as the file records them. A
     delta-only label cannot tell "this run was local" from "this artifact
     predates the label". Artifacts written before WP-E carry neither key and
     are labelled "pre-WP-E". The tail energy is read only when the tail is

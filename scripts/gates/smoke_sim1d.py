@@ -6,7 +6,7 @@ replaces did.
 
     python scripts/gates/smoke_sim1d.py              # full suite, the gate
     python scripts/gates/smoke_sim1d.py --list       # case names, in order
-    python scripts/gates/smoke_sim1d.py --only cathode-boundary-beer-lambert
+    python scripts/gates/smoke_sim1d.py --only cathode-boundary-beam-terms
     python scripts/gates/smoke_sim1d.py --trace      # log each case name as it starts
 
 There is no pytest dependency and no discovery: ``_CASES`` is an ordered list
@@ -152,7 +152,6 @@ from cablp.solvers._sim1d.physics.cathode import (
     _csda_beam_deposition,
     _gap_clip_is_face_aligned,
     _ray_gap_breakout,
-    beam_absorption_weights,
     beam_gap_ledger_mismatch,
     beam_ionization_rhs_terms,
     beam_launch,
@@ -466,7 +465,6 @@ def _cathode_unit_config():
     cathode-mechanism unit tests (moment closure stays on)."""
     p, f = default_config()
     p.update({
-        "beam_deposition_model": "beer_lambert",
         "beam_anomalous_model": "none",
         # The surface temperature these unit tests run at, held there by the
         # heat capacity below.
@@ -1791,18 +1789,8 @@ def _case_variable_area_well_balancedness(
     assert twin_resolved_geom.cell_role[twin_end_index] == "cathode"
     assert twin_source_index != twin_end_index
 
-    # M4b: the beam launches from the cathode cell and never deposits behind it.
+    # M4b: the beam launches from the cathode cell.
     assert beam_launch(resolved_geom, end=0) == (cathode_face, 1)
-    resolved_beam_weights = beam_absorption_weights(
-        length_cm=resolved_geom.length_cm,
-        l_b_profile=np.full(resolved_geom.cells, 500.0),
-        cathode_index=cathode_face,
-        direction=1,
-    )
-    assert np.allclose(resolved_beam_weights[:cathode_face], 0.0)  # plenum untouched
-    assert resolved_beam_weights[cathode_face] > 0.0
-    assert np.all(resolved_beam_weights >= 0.0)
-    assert resolved_beam_weights.sum() <= 1.0 + 1e-12
 
     # M5: the circuit's anode current is the same Bohm collection the fluid
     # removes, not `2*eta*I_i` scaled off the cathode cell.
@@ -1865,12 +1853,10 @@ def _case_twin_cathode_plateau_multigroup(
     # two prefixes, one fixture apart.
     #
     # The selector's accepted values are stated by the solver's own validator:
-    # "heating_anomalous_transport must be 'local', 'tail_walk' or
-    # 'plateau_multigroup'", and the multi-group arm is the last of those.
+    # "heating_anomalous_transport must be 'local' or 'plateau_multigroup'".
     # Every other dial the armed arm requires is already a config default
-    # (beam_deposition_model="csda", beam_anomalous_model="quasilinear",
-    # heating_anomalous_tail_energy_eV=75.0, keying="phi_c", the phi_c
-    # fraction None) -- the exception is the cathode boundary, which the
+    # (beam_anomalous_model="quasilinear") -- the exception is the cathode
+    # boundary, which the
     # twin's own refusal decides and which is asserted below rather than
     # assumed.
     twin_flags = dict(srcgrid_off_flags)
@@ -2219,27 +2205,23 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
 
 
 # --------------------------------------------------------------------
-# cathode-boundary-beer-lambert
+# cathode-boundary-beam-terms
 # --------------------------------------------------------------------
 @_case(
-    "cathode-boundary-beer-lambert",
+    "cathode-boundary-beam-terms",
     historical_stance=True,
     provides=(
-        "beam_birth_terms", "cathode_bl_params", "cathode_sim",
+        "beam_birth_terms", "cathode_sim",
         "cathode_solve", "split_beam_terms",
     ),
 )
-def _case_cathode_boundary_beer_lambert(cathode_face):
-    # This block exercises the cathode boundary + beam-ionization bookkeeping in
-    # the beer_lambert regime it was written for (excitation off by default);
-    # the CSDA production beam + manifold excitation are covered by the R4
-    # blocks. beer_lambert is a live A/B arm.
+def _case_cathode_boundary_beam_terms(cathode_face):
+    # The cathode boundary + beam-ionization bookkeeping on the CSDA beam.
     params, flags = _base_config()
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     cathode_flags = _cathode_flags()
-    cathode_bl_params = dict(params, beam_deposition_model="beer_lambert")
-    cathode_sim = LAPDSim1D(cathode_bl_params, cathode_flags)
+    cathode_sim = LAPDSim1D(params, cathode_flags)
     cathode_sim._circuit_I_loop = 3000.0
     cathode_solve = cathode_sim.solve_cathode_boundary()
     assert cathode_solve.boundary.enabled
@@ -2359,12 +2341,12 @@ def _case_cathode_boundary_beer_lambert(cathode_face):
         "beam_ionization_cost",
         "beam_excitation_radiation",
     }
-    # Excitation channel is off by default; the term exists but is zero.
-    assert np.allclose(
-        pack_state(split_beam_terms["beam_excitation_radiation"]), 0.0
-    )
+    # beam_ionization_rhs is the birth, power-deposition and cost rows; the
+    # excitation radiation is a fourth row of its own.
     split_beam_sum = np.zeros_like(pack_state(beam_birth_terms))
-    for split_term in split_beam_terms.values():
+    for split_name, split_term in split_beam_terms.items():
+        if split_name == "beam_excitation_radiation":
+            continue
         split_beam_sum = split_beam_sum + pack_state(split_term)
     assert np.allclose(split_beam_sum, pack_state(beam_birth_terms))
     assert np.all(beam_birth_terms.n >= 0.0)
@@ -2381,91 +2363,6 @@ def _case_cathode_boundary_beer_lambert(cathode_face):
         beam_birth_terms.nn,
     )
     assert np.allclose(split_beam_terms["beam_ionization_birth"].Ee, 0.0)
-    return locals()
-
-
-# --------------------------------------------------------------------
-# beam-ionization-birth-dt-bound
-# --------------------------------------------------------------------
-@_case(
-    "beam-ionization-birth-dt-bound",
-    historical_stance=True,
-)
-def _case_beam_ionization_birth_dt_bound(
-    beam_birth_terms, cathode_bl_params, split_beam_terms
-):
-    # --- beam_ionization_birth in the resolved-source dt bound (default off) --
-    # The row is a volumetric plasma source that can drive a cell into a floor
-    # within one step, and it has never been in ANY timestep bound: the bundle
-    # carries only the boundary, anode-collection and cathode-surface rows.
-    # Here the row is demonstrably live (asserted nonzero above).
-    params, flags = _base_config()
-    sim, snapshot = _base_sim()
-    geom = snapshot.geometry
-    cathode_flags = _cathode_flags()
-    assert flags.get("beam_ionization_birth_timestep_bound", False) is False
-    assert default_config()[1]["beam_ionization_birth_timestep_bound"] is False
-    # Both sims built FRESH and identically here: the bundle re-solves the
-    # cathode internally, so a sim whose solve cache has been walked by other
-    # checks is not a like-for-like control.
-    def _beam_bound_sim(bound_on):
-        built = LAPDSim1D(
-            cathode_bl_params,
-            {
-                **cathode_flags,
-                "beam_ionization_birth_timestep_bound": bound_on,
-            },
-        )
-        built._circuit_I_loop = 3000.0
-        return built
-
-    beam_bound_sim = _beam_bound_sim(True)
-    beam_unbound_sim = _beam_bound_sim(False)
-    beam_bound_row = beam_bound_sim.beam_ionization_rhs_terms(
-        state=beam_bound_sim.state,
-        cathode_solve=beam_bound_sim.solve_cathode_boundary(
-            state=beam_bound_sim.state,
-            time=beam_bound_sim._time,
-            update_cache=False,
-        ),
-        time=beam_bound_sim._time,
-    )["beam_ionization_birth"]
-    assert np.any(beam_bound_row.n > 0.0)
-    beam_bundle_off = beam_unbound_sim._plasma_source_timestep_rhs(
-        state=beam_unbound_sim.state, time=beam_unbound_sim._time
-    )
-    beam_bundle_on = beam_bound_sim._plasma_source_timestep_rhs(
-        state=beam_bound_sim.state, time=beam_bound_sim._time
-    )
-    # The WHOLE applied row joins the bundle -- not a sub-fraction of it. A
-    # bound computed from part of a row describes a term the step does not
-    # apply and leaves the remainder unbounded.
-    for beam_field in ("n", "nn", "M", "Ee", "Ei"):
-        assert np.allclose(
-            getattr(beam_bundle_on, beam_field),
-            getattr(beam_bundle_off, beam_field)
-            + getattr(beam_bound_row, beam_field),
-        ), beam_field
-    # OFF the bundle is untouched: bit-identical to a sim that never heard of
-    # the flag.
-    beam_absent_sim = LAPDSim1D(cathode_bl_params, cathode_flags)
-    beam_absent_sim._circuit_I_loop = 3000.0
-    for beam_field in ("n", "nn", "M", "Ee", "Ei"):
-        assert np.array_equal(
-            getattr(
-                beam_absent_sim._plasma_source_timestep_rhs(
-                    state=beam_absent_sim.state,
-                    time=beam_absent_sim._time,
-                ),
-                beam_field,
-            ),
-            getattr(beam_bundle_off, beam_field),
-        ), beam_field
-    # And it can only TIGHTEN the suggested step, never loosen it.
-    assert (
-        beam_bound_sim.suggest_timestep().dt_surface_loss
-        <= beam_unbound_sim.suggest_timestep().dt_surface_loss * (1.0 + 1.0e-12)
-    )
     assert np.all(split_beam_terms["beam_power_deposition"].Ee >= 0.0)
     assert np.any(split_beam_terms["beam_power_deposition"].Ee > 0.0)
     assert np.all(split_beam_terms["beam_ionization_cost"].Ee <= 0.0)
@@ -2487,6 +2384,7 @@ def _case_beam_ionization_birth_dt_bound(
         0.0,
         atol=1e-12 * beam_inventory_scale,
     )
+    return locals()
 
 
 # --------------------------------------------------------------------
@@ -3076,43 +2974,23 @@ def _case_circuit_current_driven_integration():
         validate_cathode_solver_model(m3_params, resolved_cathode_flags)
         == "current_driven"
     )
-    # The manifold excitation channel is consumed by the current-driven
-    # builder too (A2 adoption): same dispatch, per-cell mean radiated
-    # energy filled, cross section wider than the 2^1P-only channel at the
-    # same solve.
+    # The excitation channel is consumed by the current-driven builder: the
+    # 2^1P cross section and its constant radiated energy per event.
     m3_exc_params = dict(m3_params, b_beam_excitation=1.0)
     m3_exc_sim = LAPDSim1D(m3_exc_params, resolved_cathode_flags)
     m3_exc_sim._circuit_I_loop = 800.0
     m3_exc_solve = m3_exc_sim.solve_cathode_boundary(update_cache=False)
-    m3_mfd_params = dict(
-        m3_exc_params, beam_excitation_model="manifold"
-    )
-    m3_mfd_sim = LAPDSim1D(m3_mfd_params, resolved_cathode_flags)
-    m3_mfd_sim._circuit_I_loop = 800.0
-    m3_mfd_solve = m3_mfd_sim.solve_cathode_boundary(update_cache=False)
     m3_launch = int(
-        np.flatnonzero(m3_mfd_solve.beam_result.beam_cross)[0]
+        np.flatnonzero(m3_exc_solve.beam_result.beam_cross)[0]
     )
-    assert (
-        m3_mfd_solve.beam_result.beam_exc_cross[m3_launch]
-        > m3_exc_solve.beam_result.beam_exc_cross[m3_launch]
-        > 0.0
-    )
-    assert (
-        21.5
-        < float(m3_mfd_solve.beam_result.beam_exc_energy_eV[m3_launch])
-        < 22.5
-    )
+    assert m3_exc_solve.beam_result.beam_exc_cross[m3_launch] > 0.0
     assert (
         float(m3_exc_solve.beam_result.beam_exc_energy_eV[m3_launch])
         == 21.218
     )
     # B2: the CSDA deposition rides the current-driven dispatch too (the
     # solver-agnostic interface's second consumer).
-    m3_csda_params = dict(m3_exc_params, beam_deposition_model="csda")
-    m3_csda_sim = LAPDSim1D(m3_csda_params, resolved_cathode_flags)
-    m3_csda_sim._circuit_I_loop = 800.0
-    m3_csda_solve = m3_csda_sim.solve_cathode_boundary(update_cache=False)
+    m3_csda_solve = m3_exc_solve
     assert m3_csda_solve.beam_deposition is not None
     m3_csda_dep = m3_csda_solve.beam_deposition[0]
     assert m3_csda_dep is not None
@@ -3407,9 +3285,9 @@ def _case_beam_excitation_channel(cathode_solve):
     else:
         raise AssertionError("expected ValueError for H beam excitation")
 
-    # The b_beam_excitation knob is a beer_lambert control (inert under csda,
-    # which uses the measured manifold); match the beer_lambert base_beam.
-    exc_params = dict(params, beam_deposition_model="beer_lambert")
+    # The b_beam_excitation knob scales the sheath solve's excitation
+    # channel.
+    exc_params = dict(params)
     exc_params["b_beam_excitation"] = 1.0
     exc_sim = LAPDSim1D(exc_params, cathode_flags)
     exc_sim._circuit_I_loop = 3000.0
@@ -3418,10 +3296,6 @@ def _case_beam_excitation_channel(cathode_solve):
     base_beam = cathode_solve.beam_result
     launch_idx = int(np.flatnonzero(exc_beam.beam_cross)[0])
     assert exc_beam.beam_exc_cross[launch_idx] > 0.0
-    assert (
-        exc_beam.beam_atten_cross[launch_idx]
-        > exc_beam.beam_cross[launch_idx]
-    )
     # Both first solves run from a zeroed sigma_b cache, so the circuit state
     # is identical and the only difference is the attenuation cross section:
     # the inelastic deposition length must be strictly shorter everywhere.
@@ -3438,17 +3312,9 @@ def _case_beam_excitation_channel(cathode_solve):
     assert np.any(exc_rad.Ee < 0.0)
     for field_values in (exc_rad.n, exc_rad.nn, exc_rad.M, exc_rad.Ei):
         assert np.allclose(field_values, 0.0)
-    # The channels split one absorbed flux: radiated events / ionizations =
-    # sigma_exc / sigma_ion, cell by cell.
-    exc_birth = exc_terms["beam_ionization_birth"]
-    birth_mask = exc_birth.n > 0.0
-    E_exc_erg = float(exc_params.get("beam_excitation_energy_eV", 21.218)) * ev_to_erg
-    event_ratio = (-exc_rad.Ee[birth_mask] / E_exc_erg) / exc_birth.n[birth_mask]
-    assert np.allclose(
-        event_ratio,
-        exc_beam.beam_exc_cross[launch_idx] / exc_beam.beam_cross[launch_idx],
-        rtol=1e-10,
-    )
+    # The 2^1P channel reports the constant threshold as its per-event
+    # energy.
+    assert float(exc_beam.beam_exc_energy_eV[launch_idx]) == 21.218
     return locals()
 
 
@@ -3459,11 +3325,8 @@ def _case_beam_excitation_channel(cathode_solve):
     "beam-manifold-excitation-model",
     historical_stance=True,
 )
-def _case_beam_manifold_excitation_model(
-    beam_excitation_cross, exc_beam, exc_params, launch_idx
-):
-    # --- A2: the manifold excitation model (WP-A).
-    cathode_flags = _cathode_flags()
+def _case_beam_manifold_excitation_model(beam_excitation_cross):
+    # --- A2: the manifold excitation channel (WP-A).
     from cablp.cathode.circuit import beam_excitation_channel
     from cablp.atomic.cross_sections import (
         He_beam_excitation_channel as _He_manifold_channel,
@@ -3524,37 +3387,6 @@ def _case_beam_manifold_excitation_model(
     # Above the table span: exact fallback, identical values.
     assert He_beam_excitation_channel_lkup(2500.0) == _He_manifold_channel(2500.0)
 
-    # Solver-level: manifold mode widens the excitation cross section at the
-    # same first-solve phi_c (zeroed sigma_b cache on both rigs) and books
-    # the per-ray energy-weighted mean per event; the split-flux ratio
-    # assertion holds with the manifold values in place of the constants.
-    mfd_params = dict(exc_params)
-    mfd_params["beam_excitation_model"] = "manifold"
-    mfd_sim = LAPDSim1D(mfd_params, cathode_flags)
-    mfd_sim._circuit_I_loop = 3000.0
-    mfd_solve = mfd_sim.solve_cathode_boundary()
-    mfd_beam = mfd_solve.beam_result
-    assert np.isclose(mfd_beam.result.phi_c, exc_beam.result.phi_c)
-    assert (
-        mfd_beam.beam_exc_cross[launch_idx] > exc_beam.beam_exc_cross[launch_idx]
-    )
-    _mf_E_launch = float(mfd_beam.beam_exc_energy_eV[launch_idx])
-    assert 21.5 < _mf_E_launch < 22.5
-    # The 2p_scalar rig reports the constant threshold as its per-event energy.
-    assert float(exc_beam.beam_exc_energy_eV[launch_idx]) == 21.218
-    mfd_terms = mfd_sim.beam_ionization_rhs_terms(cathode_solve=mfd_solve)
-    mfd_rad = mfd_terms["beam_excitation_radiation"]
-    mfd_birth = mfd_terms["beam_ionization_birth"]
-    mfd_mask = mfd_birth.n > 0.0
-    mfd_ratio = (
-        -mfd_rad.Ee[mfd_mask] / (_mf_E_launch * ev_to_erg)
-    ) / mfd_birth.n[mfd_mask]
-    assert np.allclose(
-        mfd_ratio,
-        mfd_beam.beam_exc_cross[launch_idx] / mfd_beam.beam_cross[launch_idx],
-        rtol=1e-10,
-    )
-
 
 # --------------------------------------------------------------------
 # beam-csda-deposition-model
@@ -3569,12 +3401,11 @@ def _case_beam_manifold_excitation_model(
     ),
 )
 def _case_beam_csda_deposition_model(exc_params):
-    # --- B2: the CSDA deposition model wired behind beam_deposition_model.
+    # --- B2: the CSDA deposition module wired into the cathode solve.
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     cathode_flags = _cathode_flags()
     csda_params = dict(exc_params)
-    csda_params["beam_deposition_model"] = "csda"
     csda_sim = LAPDSim1D(csda_params, cathode_flags)
     csda_sim._circuit_I_loop = 3000.0
     csda_solve = csda_sim.solve_cathode_boundary()
@@ -3733,9 +3564,7 @@ def _case_beam_gap_transmission_probe(
         launch=csda_launch,
         direction=csda_dir,
         I_ion_eV=float(csda_sim._I_ion),
-        coulomb_model=str(
-            csda_params.get("beam_coulomb_model", "fast_electron")
-        ),
+        coulomb_model="fast_electron",
         anomalous_model="none",
     )
     csda_unit_T = min(max(float(csda_unit.transmitted_flux), 1.0e-6), 1.0)
@@ -3868,8 +3697,8 @@ def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, exc_params):
     assert "probe_vs_ray" in str(csda_msgs[0].message)
     csda_sim._beam_gap_ledger_warned = False
     # All three views are recorded as cathode diagnostics, defaulted on every
-    # run so a beer_lambert run (and an old file, which has none of the three
-    # datasets) stays readable.
+    # run so a frame with no CSDA ray (and an old file, which has none of the
+    # three datasets) stays readable.
     csda_diag = csda_sim._cathode_diagnostic_snapshot()
     assert csda_diag["source_beam_gap_survival_probe"] == csda_probe
     assert csda_diag["source_beam_gap_survival_ray"] == csda_ray
@@ -3912,9 +3741,7 @@ def _case_beam_probe_skip(
         launch=csda_launch,
         direction=csda_dir,
         I_ion_eV=float(csda_sim._I_ion),
-        coulomb_model=str(
-            csda_params.get("beam_coulomb_model", "fast_electron")
-        ),
+        coulomb_model="fast_electron",
         anomalous_model=str(
             csda_params.get("beam_anomalous_model", "none")
         ),
@@ -3937,7 +3764,6 @@ def _case_beam_probe_skip(
             csda_solve.device_config,
             csda_params,
             float(csda_sim._I_ion),
-            anode_interception=True,
         )
         return _beam, _ledger
 
@@ -4061,942 +3887,28 @@ def _case_beam_probe_skip(
     "beam-anode-mesh-interception",
     historical_stance=True,
 )
-def _case_beam_anode_mesh_interception(
-    csda_Vp, csda_dep, csda_params, csda_power_sum, exc_params
-):
-    # --- R4.1 (audit A15): anode-mesh beam interception is the PRODUCTION DEFAULT
-    # (correct csda physics), so csda_sim above already has it on -- the anode
-    # books energy and it is part of the csda per-ray budget checked earlier.
-    cathode_flags = _cathode_flags()
+def _case_beam_anode_mesh_interception(csda_dep):
+    # --- R4.1 (audit A15): anode-mesh beam interception is unconditional
+    # wherever the geometry resolves an anode face, so csda_sim above already
+    # has it on -- the anode books energy and it is part of the csda per-ray
+    # budget checked earlier.
     assert float(csda_dep.anode_intercepted_erg_s) > 0.0
-    # A/B off: setting the flag False restores the old (over-depositing) csda run,
-    # which deposits strictly MORE power into the plasma and intercepts nothing.
-    noint_flags = dict(cathode_flags)
-    noint_flags["beam_anode_interception"] = False
-    noint_sim = LAPDSim1D(dict(csda_params), noint_flags)
-    noint_sim._circuit_I_loop = 3000.0
-    noint_solve = noint_sim.solve_cathode_boundary()
-    noint_dep = noint_solve.beam_deposition[0]
-    assert float(noint_dep.anode_intercepted_erg_s) == 0.0
-    noint_terms = noint_sim.beam_ionization_rhs_terms(cathode_solve=noint_solve)
-    noint_power_sum = float((noint_terms["beam_power_deposition"].Ee * csda_Vp).sum())
-    assert csda_power_sum < noint_power_sum
-    # csda control: the flag is inert (not an error) under beer_lambert, which
-    # never launches the CSDA module -- exactly like beam_coulomb_model /
-    # beam_anomalous_model. Construction succeeds and there is no CSDA deposition.
-    bl_flags = dict(cathode_flags)
-    bl_flags["beam_anode_interception"] = True
-    bl_sim = LAPDSim1D(dict(exc_params), bl_flags)  # exc_params is beer_lambert
-    bl_sim._circuit_I_loop = 3000.0
-    assert bl_sim.solve_cathode_boundary().beam_deposition is None
 
 
 # --------------------------------------------------------------------
-# beam-product-transport-wpd
+# beam-walked-tail-fixtures
 # --------------------------------------------------------------------
 @_case(
-    "beam-product-transport-wpd",
+    "beam-walked-tail-fixtures",
     historical_stance=True,
-    provides=("wpd_on_dep",),
+    provides=("k7_local_dep", "k7_local_diag", "k7_params"),
 )
-def _case_beam_product_transport_wpd(
-    bl_diag, csda_budget, csda_dep, csda_eta, csda_launch, csda_ledger,
-    csda_params, csda_sigma_eff
-):
-    # --- WP-D through the solver: beam_product_transport routes the CSDA
-    # ray's event products (see the module block for the physics and the
-    # per-ray identity). Unit level only -- the flag's effect on the ignition
-    # timeline is a campaign run, not a smoke scenario.
-    # Misconfiguration is loud at CONSTRUCTION, including the incomplete
-    # configuration where the selection could only be a silent no-op.
-    cathode_flags = _cathode_flags()
-    for wpd_bad in (
-        dict(csda_params, beam_product_transport="bogus"),
-        dict(csda_params, beam_product_transport="nonlocal",
-             beam_deposition_model="beer_lambert"),
-    ):
-        try:
-            LAPDSim1D(wpd_bad, dict(cathode_flags))
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(
-                "expected ValueError for beam_product_transport"
-            )
-    # The default is bit-exact through the solver too: naming "local"
-    # explicitly reproduces the deposition csda_sim already produced.
-    wpd_off_sim = LAPDSim1D(
-        dict(csda_params, beam_product_transport="local"), dict(cathode_flags)
-    )
-    wpd_off_sim._circuit_I_loop = 3000.0
-    wpd_off_dep = wpd_off_sim.solve_cathode_boundary().beam_deposition[0]
-    assert np.array_equal(
-        wpd_off_dep.plasma_heating_erg_s, csda_dep.plasma_heating_erg_s
-    )
-    assert wpd_off_dep.end_loss_low_erg_s == 0.0
-    assert wpd_off_dep.end_loss_high_erg_s == 0.0
-    # On: energy leaves through the ends, the plasma keeps less, and the
-    # per-ray budget still closes with the ledger in it.
-    wpd_on_sim = LAPDSim1D(
-        dict(csda_params, beam_product_transport="nonlocal"),
-        dict(cathode_flags),
-    )
-    wpd_on_sim._circuit_I_loop = 3000.0
-    wpd_on_solve = wpd_on_sim.solve_cathode_boundary()
-    wpd_on_dep = wpd_on_solve.beam_deposition[0]
-    wpd_on_total = (
-        wpd_on_dep.plasma_heating_erg_s.sum()
-        + wpd_on_dep.radiated_erg_s.sum()
-        + wpd_on_dep.ionization_cost_erg_s.sum()
-        + float(wpd_on_dep.anode_intercepted_erg_s)
-        + wpd_on_dep.end_loss_low_erg_s
-        + wpd_on_dep.end_loss_high_erg_s
-    )
-    assert abs(wpd_on_total - csda_budget) / csda_budget < 1e-9
-    assert (
-        wpd_on_dep.end_loss_low_erg_s + wpd_on_dep.end_loss_high_erg_s > 0.0
-    )
-    assert (
-        wpd_on_dep.plasma_heating_erg_s.sum()
-        < csda_dep.plasma_heating_erg_s.sum()
-    )
-    # Energy-only in v1: the particle rows the fluid and circuit read are
-    # untouched.
-    assert np.array_equal(
-        wpd_on_dep.ionization_events, csda_dep.ionization_events
-    )
-    # The gap-transmission PROBE and the item-35 tripwire are primary-flux
-    # instruments and must be blind to product transport: all three ledger
-    # views are unchanged, so sigma_eff and the circuit bypass are too.
-    assert wpd_on_solve.beam_gap_ledger[0] == csda_ledger[0]
-    assert (
-        wpd_on_solve.beam_result.beam_atten_cross[csda_launch]
-        == csda_sigma_eff
-    )
-    assert beam_gap_ledger_mismatch(wpd_on_solve.beam_gap_ledger, csda_eta) is None
-    # The ledger is recorded as cathode diagnostics, zero-defaulted so
-    # beer_lambert runs and pre-WP-D files stay readable.
-    wpd_on_diag = wpd_on_sim._cathode_diagnostic_snapshot()
-    assert wpd_on_diag["source_beam_end_loss_low_W"] == (
-        wpd_on_dep.end_loss_low_erg_s * 1.0e-7
-    )
-    assert wpd_on_diag["source_beam_end_loss_high_W"] == (
-        wpd_on_dep.end_loss_high_erg_s * 1.0e-7
-    )
-    # Single cathode: the ``end_`` WP-D rows are ABSENT, not zero-seeded.
-    assert "end_beam_end_loss_low_W" not in wpd_on_diag
-    for _bl_key in ("low", "high"):
-        assert bl_diag[f"source_beam_end_loss_{_bl_key}_W"] == 0.0
-    return locals()
-
-
-# --------------------------------------------------------------------
-# beam-product-terminal-nonlocal
-# --------------------------------------------------------------------
-@_case(
-    "beam-product-terminal-nonlocal",
-    historical_stance=True,
-)
-def _case_beam_product_terminal_nonlocal(csda_budget, csda_dep, csda_params):
-    # --- WP-D MIDDLE POINT: beam_product_transport="terminal_nonlocal" walks
-    # the TERMINAL residual and nothing else. Every ALONG-RAY product stays
-    # where "local" banks it, so this arm must BE the local arm everywhere
-    # except in the one population that walks.
-    # The incomplete configuration is refused at construction, like the others.
-    cathode_flags = _cathode_flags()
-    try:
-        LAPDSim1D(
-            dict(csda_params, beam_product_transport="terminal_nonlocal",
-                 beam_deposition_model="beer_lambert"),
-            dict(cathode_flags),
-        )
-    except ValueError as _tnl_err:
-        assert "terminal_nonlocal" in str(_tnl_err), _tnl_err
-    else:
-        raise AssertionError(
-            "expected ValueError for beam_product_transport="
-            "'terminal_nonlocal' under beer_lambert"
-        )
-    wpd_tnl_sim = LAPDSim1D(
-        dict(csda_params, beam_product_transport="terminal_nonlocal"),
-        dict(cathode_flags),
-    )
-    wpd_tnl_sim._circuit_I_loop = 3000.0
-    wpd_tnl_dep = wpd_tnl_sim.solve_cathode_boundary().beam_deposition[0]
-    for _tnl_arr in (
-        "heating_secondary_erg_s", "heating_coulomb_erg_s",
-        "heating_anomalous_erg_s", "radiated_erg_s",
-        "ionization_cost_erg_s", "ionization_events", "excitation_events",
-        "E_entry_eV",
-    ):
-        assert np.array_equal(
-            getattr(wpd_tnl_dep, _tnl_arr), getattr(csda_dep, _tnl_arr)
-        ), _tnl_arr
-    # Energy-only here too, and the transmitted primary keeps its own term
-    # instead of joining the ledger -- the second thing that separates this
-    # value from "nonlocal".
-    assert wpd_tnl_dep.transmitted_flux == csda_dep.transmitted_flux
-    assert wpd_tnl_dep.transmitted_energy_eV == csda_dep.transmitted_energy_eV
-    assert wpd_tnl_dep.end_loss_transmitted_erg_s == 0.0
-    wpd_tnl_total = (
-        wpd_tnl_dep.plasma_heating_erg_s.sum()
-        + wpd_tnl_dep.radiated_erg_s.sum()
-        + wpd_tnl_dep.ionization_cost_erg_s.sum()
-        + float(wpd_tnl_dep.anode_intercepted_erg_s)
-        + wpd_tnl_dep.end_loss_low_erg_s
-        + wpd_tnl_dep.end_loss_high_erg_s
-        + wpd_tnl_dep.transmitted_flux
-        * wpd_tnl_dep.transmitted_energy_eV
-        * ev_to_erg
-    )
-    assert abs(wpd_tnl_total - csda_budget) / csda_budget < 1e-9
-
-    # A CONTROLLED ray at the pre-breakdown class this value exists for: gas
-    # dense enough to stop the primary inside the grid, plasma thin enough
-    # that the terminal population walks out of the end instead of
-    # thermalizing. Both are ASSERTED, because without either the comparison
-    # below would be vacuous -- a ray that never stops has no terminal
-    # population to move, and one that thermalizes in its birth cell reproduces
-    # the local banking whatever the selector says.
-    _tnl_cells = 40
-    _tnl_ray = dict(
-        nn=np.full(_tnl_cells, 2.0e14),
-        ne=np.full(_tnl_cells, 4.5e9),
-        Te=np.full(_tnl_cells, 3.0),
-        launch=0,
-        direction=1,
-        dz_cm=np.full(_tnl_cells, 50.0),
-    )
-    _tnl_gamma0 = 1.0e19
-    _tnl_local = _beam_deposition_mod.deposit_beam(
-        150.0, _tnl_gamma0, **_tnl_ray
-    )
-    _tnl_full = _beam_deposition_mod.deposit_beam(
-        150.0, _tnl_gamma0, product_transport="nonlocal", **_tnl_ray
-    )
-    _tnl_mid = _beam_deposition_mod.deposit_beam(
-        150.0, _tnl_gamma0, product_transport="terminal_nonlocal", **_tnl_ray
-    )
-    assert _tnl_local.heating_terminal_erg_s.sum() > 0.0
-    assert _tnl_local.heating_secondary_erg_s.sum() > 0.0
-    assert _tnl_local.transmitted_flux == 0.0
-    # The one population that moves, and the two that do not.
-    assert not np.array_equal(
-        _tnl_mid.heating_terminal_erg_s, _tnl_local.heating_terminal_erg_s
-    )
-    assert np.array_equal(
-        _tnl_mid.heating_secondary_erg_s, _tnl_local.heating_secondary_erg_s
-    )
-    assert np.array_equal(
-        _tnl_mid.heating_coulomb_erg_s, _tnl_local.heating_coulomb_erg_s
-    )
-    assert np.array_equal(
-        _tnl_mid.ionization_events, _tnl_local.ionization_events
-    )
-    # The full closure moves the secondaries as well, which is the difference
-    # the middle point exists to NOT make.
-    assert not np.array_equal(
-        _tnl_full.heating_secondary_erg_s, _tnl_local.heating_secondary_erg_s
-    )
-    # The energy leaves through the ledger, in the primary's own direction...
-    assert _tnl_mid.end_loss_high_erg_s > 0.0
-    assert _tnl_mid.end_loss_low_erg_s == 0.0
-    # ...and the CHARGE behind it is reported separately: this ray's whole
-    # terminal population reached the end, so the escaping flux is the primary
-    # flux itself. Never an energy, and never booked into one.
-    assert _tnl_mid.terminal_escape_flux_per_s == _tnl_gamma0
-    assert _tnl_local.terminal_escape_flux_per_s == 0.0
-    # THE LEDGER CLOSES: launched = along-ray booked + walked-to-ledger +
-    # transmitted, with the transmitted term zero on this absorbed ray.
-    def _tnl_ledger_residual(dep, launched, escape_erg=None):
-        booked = (
-            dep.plasma_heating_erg_s.sum()
-            + dep.radiated_erg_s.sum()
-            + dep.ionization_cost_erg_s.sum()
-            + float(dep.anode_intercepted_erg_s)
-        )
-        escaped = (
-            dep.end_loss_low_erg_s + dep.end_loss_high_erg_s
-            if escape_erg is None else escape_erg
-        )
-        transmitted = (
-            dep.transmitted_flux * dep.transmitted_energy_eV * ev_to_erg
-        )
-        return abs(booked + escaped + transmitted - launched) / launched
-
-    _tnl_launched = 150.0 * _tnl_gamma0 * ev_to_erg
-    assert _tnl_ledger_residual(_tnl_mid, _tnl_launched) < 1e-12
-    # ANTI-VACUITY for that closure: a booking that loses the walked escape --
-    # the exact failure "silently banked local" would produce -- must be caught
-    # by the same expression, not absorbed by its tolerance.
-    assert _tnl_ledger_residual(_tnl_mid, _tnl_launched, escape_erg=0.0) > 1e-3
-    # The walk SELF-LIMITS onto the local rule at plasma density: the same ray
-    # against a dense background thermalizes in place, escapes nothing, and
-    # books the terminal residual back where "local" put it.
-    _tnl_dense = _beam_deposition_mod.deposit_beam(
-        150.0, _tnl_gamma0,
-        product_transport="terminal_nonlocal",
-        **dict(_tnl_ray, ne=np.full(_tnl_cells, 1.0e12)),
-    )
-    assert _tnl_dense.terminal_escape_flux_per_s == 0.0
-    assert _tnl_dense.end_loss_low_erg_s == 0.0
-    assert _tnl_dense.end_loss_high_erg_s == 0.0
-
-    # The COMPILED march must never run this value. Same boolean trap as
-    # ql_relaxation and tested the same way: the kernel takes product transport
-    # as ONE boolean covering both populations, so it can only run "local"
-    # terminal banking or withhold secondaries nothing then walks. Binding a
-    # march that explodes if reached tests the precondition on a pure checkout
-    # too.
-    class _TnlKernelReached(RuntimeError):
-        pass
-
-    class _TnlFakeTables:
-        # Only ``exc_top`` is read before the march is called.
-        exc_top = 1.0e9
-
-    def _tnl_boom(*_args, **_kwargs):
-        raise _TnlKernelReached("the compiled march was offered this ray")
-
-    _tnl_saved = (
-        _beam_deposition_mod._CSDA_MARCH, _beam_deposition_mod._csda_tables
-    )
-    try:
-        _beam_deposition_mod._CSDA_MARCH = _tnl_boom
-        _beam_deposition_mod._csda_tables = lambda: _TnlFakeTables()
-        _beam_deposition_mod.deposit_beam(
-            150.0, _tnl_gamma0, product_transport="terminal_nonlocal",
-            **_tnl_ray
-        )
-        # ANTI-VACUITY: the two values the transcription DOES reproduce reach
-        # the fake march, so the pass above is the precondition working rather
-        # than the kernel being unreachable from here.
-        for _tnl_ok in ("local", "nonlocal"):
-            try:
-                _beam_deposition_mod.deposit_beam(
-                    150.0, _tnl_gamma0, product_transport=_tnl_ok, **_tnl_ray
-                )
-            except _TnlKernelReached:
-                pass
-            else:
-                raise AssertionError(
-                    "the compiled-march precondition test is vacuous for "
-                    f"product_transport={_tnl_ok!r}: the kernel was never "
-                    "offered the ray"
-                )
-    finally:
-        (
-            _beam_deposition_mod._CSDA_MARCH,
-            _beam_deposition_mod._csda_tables,
-        ) = _tnl_saved
-
-
-# --------------------------------------------------------------------
-# beam-anomalous-transport-wpe
-# --------------------------------------------------------------------
-@_case(
-    "beam-anomalous-transport-wpe",
-    historical_stance=True,
-    provides=("wpe_legacy", "wpe_on_dep", "wpe_on_diag", "wpe_removed"),
-)
-def _case_beam_anomalous_transport_wpe(
-    _pskip_Gamma0, _pskip_geom, _pskip_ray_kwargs, bl_diag, csda_budget,
-    csda_dep, csda_derived, csda_eta, csda_launch, csda_ledger,
-    csda_params, csda_res, csda_sigma_eff, csda_state, wpd_on_dep
-):
-    # --- WP-E through the solver: heating_anomalous_transport routes the CSDA
-    # ray's ANOMALOUS (quasilinear) heating onto tail electrons at E_tail (see
-    # the module block for the physics and the conservation identity). Unit
-    # level only -- the flag's effect on the ignition timeline is a campaign
-    # run, not a smoke scenario.
-    # The scenario must actually drive the anomalous channel, or the routing
-    # has nothing to carry and every assertion below is vacuous.
-    cathode_flags = _cathode_flags()
-    assert float(csda_dep.heating_anomalous_erg_s.sum()) > 0.0
-    # K7 REPIN. This block and the K6 block below were written against the tail
-    # closure as WP-E and K6 shipped it: birth at a FIXED rung, free escape at
-    # the cathode face. K7 made both of those selectable and defaulted the
-    # engaged walk to the corrected pair instead, so every arm here names the
-    # legacy values explicitly. That is what keeps these assertions testing the
-    # arithmetic they were written for, bit for bit, rather than silently
-    # re-pointing at the new closure.
-    wpe_legacy = dict(
-        heating_anomalous_tail_energy_keying="fixed",
-        heating_anomalous_tail_cathode_boundary="escape",
-    )
-    # Misconfiguration is loud at CONSTRUCTION, including every incomplete
-    # configuration in which the selection could only be a silent no-op: no
-    # CSDA module to deposit, no anomalous channel to carry, or a tail energy
-    # the walk cannot launch at.
-    for wpe_bad in (
-        dict(csda_params, heating_anomalous_transport="bogus"),
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             beam_deposition_model="beer_lambert"),
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             beam_anomalous_model="none"),
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_energy_eV=0.0),
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_energy_eV=-75.0),
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_energy_eV=float("nan")),
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_energy_eV=float("inf")),
-    ):
-        try:
-            LAPDSim1D(wpe_bad, dict(cathode_flags))
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(
-                "expected ValueError for heating_anomalous_transport"
-            )
-    # A BAD TAIL ENERGY UNDER "local" IS NOT AN ERROR: the key is documented as
-    # read only under tail_walk, so it must stay inert (this pins the "read
-    # ONLY under tail_walk" contract, not just the guard).
-    LAPDSim1D(
-        dict(csda_params, heating_anomalous_tail_energy_eV=-1.0),
-        dict(cathode_flags),
-    )
-    # Default-path bit-exactness sentinel: naming "local" explicitly reproduces
-    # the deposition csda_sim already produced, byte for byte, on every array.
-    wpe_off_sim = LAPDSim1D(
-        dict(csda_params, heating_anomalous_transport="local"),
-        dict(cathode_flags),
-    )
-    wpe_off_sim._circuit_I_loop = 3000.0
-    wpe_off_dep = wpe_off_sim.solve_cathode_boundary().beam_deposition[0]
-    for _wpe_arr in (
-        "plasma_heating_erg_s", "heating_anomalous_erg_s",
-        "heating_coulomb_erg_s", "heating_secondary_erg_s",
-        "heating_terminal_erg_s", "radiated_erg_s",
-        "ionization_cost_erg_s", "ionization_events", "E_entry_eV",
-    ):
-        assert np.array_equal(
-            getattr(wpe_off_dep, _wpe_arr), getattr(csda_dep, _wpe_arr)
-        ), _wpe_arr
-    assert wpe_off_dep.end_loss_tail_low_erg_s == 0.0
-    assert wpe_off_dep.end_loss_tail_high_erg_s == 0.0
-    # On: the QL power is carried away from its birth cells, so the plasma
-    # keeps less of it, and the per-ray budget still closes with the tail
-    # ledger in it.
-    wpe_on_sim = LAPDSim1D(
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk"),
-        dict(cathode_flags),
-    )
-    wpe_on_sim._circuit_I_loop = 3000.0
-    wpe_on_solve = wpe_on_sim.solve_cathode_boundary()
-    wpe_on_dep = wpe_on_solve.beam_deposition[0]
-    wpe_tail_ledger = (
-        float(wpe_on_dep.end_loss_tail_low_erg_s)
-        + float(wpe_on_dep.end_loss_tail_high_erg_s)
-    )
-    wpe_on_total = (
-        wpe_on_dep.plasma_heating_erg_s.sum()
-        + wpe_on_dep.radiated_erg_s.sum()
-        + wpe_on_dep.ionization_cost_erg_s.sum()
-        + float(wpe_on_dep.anode_intercepted_erg_s)
-        + wpe_on_dep.transmitted_flux
-        * wpe_on_dep.transmitted_energy_eV
-        * ev_to_erg
-        + wpe_tail_ledger
-    )
-    assert abs(wpe_on_total - csda_budget) / csda_budget < 1e-9
-    assert wpe_tail_ledger > 0.0
-    assert (
-        wpe_on_dep.plasma_heating_erg_s.sum()
-        < csda_dep.plasma_heating_erg_s.sum()
-    )
-    # THE CONSERVATION IDENTITY, at solver conditions: the anomalous power the
-    # "local" arm banks locally equals what the "tail_walk" arm deposits along
-    # the walks plus what it books to the tail end ledger. This is exact-to-
-    # roundoff and not merely a budget statement, because the ray integration
-    # itself is bit-identical in both modes -- L_anom depends on the beam and
-    # the column, never on where its energy is banked.
-    # The anode mesh is the THIRD destination: a walker the wires intercept
-    # leaves the plasma at the plane, so the identity reads
-    # delivered + culled == launched. The culled bank is a TERM, never a
-    # tolerance -- it is measured here and cross-checked against the anode
-    # row below.
-    wpe_removed = float(csda_dep.heating_anomalous_erg_s.sum())
-    wpe_culled = float(wpe_on_dep.tail_anode_culled_erg_s)
-    wpe_returned = float(wpe_on_dep.tail_anode_returned_erg_s)
-    wpe_delivered = (
-        float(wpe_on_dep.heating_anomalous_erg_s.sum()) + wpe_tail_ledger
-    )
-    assert wpe_culled > 0.0, wpe_culled
-    assert abs(
-        wpe_delivered + wpe_culled - wpe_removed
-    ) / wpe_removed < 1e-12, (wpe_removed, wpe_delivered, wpe_culled)
-    # ... and the anode row carries exactly the NET of it: the local arm walks
-    # no tail, so the whole difference between the two arms' anode rows is the
-    # tail's own landing.
-    assert abs(
-        (float(wpe_on_dep.anode_intercepted_erg_s)
-         - float(csda_dep.anode_intercepted_erg_s))
-        - (wpe_culled - wpe_returned)
-    ) <= 1e-9 * abs(wpe_culled)
-    # The other three heating channels are untouched: only the anomalous bank
-    # moved, so the whole difference in plasma heating IS the tail ledger.
-    for _wpe_arr in (
-        "heating_coulomb_erg_s", "heating_secondary_erg_s",
-        "heating_terminal_erg_s",
-    ):
-        assert np.array_equal(
-            getattr(wpe_on_dep, _wpe_arr), getattr(csda_dep, _wpe_arr)
-        ), _wpe_arr
-    assert abs(
-        (csda_dep.plasma_heating_erg_s.sum()
-         - wpe_on_dep.plasma_heating_erg_s.sum())
-        - (wpe_tail_ledger + wpe_culled)
-    ) / wpe_tail_ledger < 1e-9
-    # Energy-only, exactly like WP-D: the particle rows the fluid and circuit
-    # read are untouched, and the WP-D ledger stays identically zero -- the two
-    # closures switch independently and do not share a ledger.
-    assert np.array_equal(
-        wpe_on_dep.ionization_events, csda_dep.ionization_events
-    )
-    assert wpe_on_dep.end_loss_low_erg_s == 0.0
-    assert wpe_on_dep.end_loss_high_erg_s == 0.0
-    # The gap-transmission PROBE and the item-35 tripwire are primary-flux
-    # instruments and must be blind to heating transport too.
-    assert wpe_on_solve.beam_gap_ledger[0] == csda_ledger[0]
-    assert (
-        wpe_on_solve.beam_result.beam_atten_cross[csda_launch]
-        == csda_sigma_eff
-    )
-    # Hoisted stopping coefficient (cost read 2026-08-02, restructure C): the
-    # adapter now builds the walks' per-cell A once and hands it to every
-    # deposition ray instead of letting each ray rebuild it. Bit-exactness of
-    # the hoist is checked at the SOLVER, against the same ray launched with
-    # the coefficient left to the module -- the pre-change call.
-    _b3_solver_ray = _deposit_beam_ray(
-        csda_res.phi_c, _pskip_Gamma0, dz_cm=_pskip_geom.length_cm,
-        nn=csda_state.nn, ne=csda_state.n, Te=csda_derived.Te,
-        anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
-        anode_eta=csda_eta,
-        # The solver arms the TAIL cull too (it is the model's, not a flag's),
-        # so the comparison ray has to carry the same kwargs or it would be
-        # measuring the cull rather than the hoist.
-        tail_anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
-        tail_anode_eta=csda_eta,
-        anomalous_transport="tail_walk",
-        tail_energy_eV=float(
-            csda_params.get("heating_anomalous_tail_energy_eV", 75.0)
-        ),
-        **_pskip_ray_kwargs,
-    )
-    for _b3_arr in (
-        "plasma_heating_erg_s", "heating_anomalous_erg_s",
-        "heating_coulomb_erg_s", "heating_secondary_erg_s",
-        "heating_terminal_erg_s", "radiated_erg_s",
-        "ionization_cost_erg_s", "ionization_events", "excitation_events",
-        "E_entry_eV",
-    ):
-        assert np.array_equal(
-            getattr(wpe_on_dep, _b3_arr), getattr(_b3_solver_ray, _b3_arr)
-        ), _b3_arr
-    for _b3_sc in (
-        "end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s",
-        "transmitted_flux", "transmitted_energy_eV",
-    ):
-        assert getattr(wpe_on_dep, _b3_sc) == getattr(_b3_solver_ray, _b3_sc)
-    # The tail ledger is recorded as cathode diagnostics, zero-defaulted so
-    # beer_lambert runs and pre-WP-E files stay readable.
-    wpe_on_diag = wpe_on_sim._cathode_diagnostic_snapshot()
-    assert wpe_on_diag["source_beam_end_loss_tail_low_W"] == (
-        wpe_on_dep.end_loss_tail_low_erg_s * 1.0e-7
-    )
-    assert wpe_on_diag["source_beam_end_loss_tail_high_W"] == (
-        wpe_on_dep.end_loss_tail_high_erg_s * 1.0e-7
-    )
-    # Single cathode: the ``end_`` WP-E tail rows are ABSENT, not zero-seeded.
-    assert "end_beam_end_loss_tail_low_W" not in wpe_on_diag
-    for _bl_key in ("low", "high"):
-        assert bl_diag[f"source_beam_end_loss_tail_{_bl_key}_W"] == 0.0
-    # The two closures COMPOSE: with both on, each ledger books its own
-    # population and neither is empty.
-    wpe_both_sim = LAPDSim1D(
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             beam_product_transport="nonlocal"),
-        dict(cathode_flags),
-    )
-    wpe_both_sim._circuit_I_loop = 3000.0
-    wpe_both_dep = wpe_both_sim.solve_cathode_boundary().beam_deposition[0]
-    assert (
-        wpe_both_dep.end_loss_low_erg_s + wpe_both_dep.end_loss_high_erg_s
-        > 0.0
-    )
-    assert (
-        wpe_both_dep.end_loss_tail_low_erg_s
-        + wpe_both_dep.end_loss_tail_high_erg_s
-        > 0.0
-    )
-    # WP-D's own ledger is unchanged by WP-E being on alongside it: the tail
-    # power never lands in the product channels (this is the reason the two
-    # ledgers are siblings rather than one shared pair of fields).
-    assert wpe_both_dep.end_loss_low_erg_s == wpd_on_dep.end_loss_low_erg_s
-    assert wpe_both_dep.end_loss_high_erg_s == wpd_on_dep.end_loss_high_erg_s
-    wpe_both_total = (
-        wpe_both_dep.plasma_heating_erg_s.sum()
-        + wpe_both_dep.radiated_erg_s.sum()
-        + wpe_both_dep.ionization_cost_erg_s.sum()
-        + float(wpe_both_dep.anode_intercepted_erg_s)
-        + wpe_both_dep.end_loss_low_erg_s
-        + wpe_both_dep.end_loss_high_erg_s
-        + wpe_both_dep.end_loss_tail_low_erg_s
-        + wpe_both_dep.end_loss_tail_high_erg_s
-    )
-    assert abs(wpe_both_total - csda_budget) / csda_budget < 1e-9
-    return locals()
-
-
-# --------------------------------------------------------------------
-# beam-tail-ionization-k6
-# --------------------------------------------------------------------
-@_case(
-    "beam-tail-ionization-k6",
-    historical_stance=True,
-    provides=("_k6_ray", "_k6_win", "k6_on_dep"),
-)
-def _case_beam_tail_ionization_k6(
-    _pskip_Gamma0, _pskip_geom, _pskip_ray_kwargs, bl_diag, csda_budget,
-    csda_dep, csda_derived, csda_launch, csda_ledger, csda_params,
-    csda_res, csda_sigma_eff, csda_sim, csda_state, wpe_legacy, wpe_on_dep,
-    wpe_on_diag
-):
-    # --- K6 through the solver: heating_anomalous_tail_ionization lets the QL
-    # tail walkers IONIZE the column gas they cross, turning the energy-only
-    # WP-E walk into a particle channel. Unit level only -- what it does to
-    # the discharge spin-up is a campaign run, not a smoke scenario.
-    # Misconfiguration is loud at CONSTRUCTION, and every refusal here is a
-    # configuration in which the channel could only be a no-op or could only
-    # mis-bank what it carries.
+def _case_beam_walked_tail_fixtures(csda_params):
+    # --- The walked-tail scenario the tail-forward and plateau cases share,
+    # and the cathode-boundary key's own contract.
     #
-    # The EII table edge in this solver's own units, built the way both guards
-    # build it (the module's constant times the solver's I_ion) rather than
-    # written down. This is the exact value the K7c ladder refusal reported
-    # (es1_lad_tw100ion_nx240.log): under phi_c keying at f = 1.0 with phi_c
-    # at the cathode_phi_c_cap_V ceiling, the live E_tail lands here to the
-    # last bit -- so the edge has to be inclusive or the declared f bracket
-    # loses its top rung to float noise.
-    cathode_flags = _cathode_flags()
-    _k7c_edge_eV = _beam_deposition_mod.HE_EII_EPS_TOP * float(csda_sim._I_ion)
-    assert float(csda_sim._I_ion) == 24.58738793623
-    assert _k7c_edge_eV == 1000.0000000000002
-    for k6_bad in (
-        dict(csda_params, heating_anomalous_tail_ionization="bogus"),
-        # No walkers to give the channel to.
-        dict(csda_params, heating_anomalous_tail_ionization="on"),
-        dict(csda_params, heating_anomalous_transport="local",
-             heating_anomalous_tail_ionization="on"),
-        # K7b: the ONLY tail energy still refused is one past the tabulated
-        # He EII cross section, where the lookup clamps to its last node and
-        # the walk would attenuate on an extrapolated sigma. The bar is read
-        # off the table (HE_EII_EPS_TOP * I_ion, ~1000 eV), not written down.
-        # REPINNED 2026-08-06: the 20 eV (sub-threshold) and 300 eV
-        # (above-<W_sec>) cases used to live in this list and are now the two
-        # SPLIT TREATMENTS pinned below -- they construct and run.
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_energy_eV=1500.0,
-             heating_anomalous_tail_ionization="on"),
-        # K7c: the edge is inclusive within HE_EII_EDGE_REL_TOL, and a
-        # GENUINE excess -- here 1e-9 relative, three decades past the
-        # tolerance -- is still refused at construction.
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_energy_eV=_k7c_edge_eV * (1.0 + 1.0e-9),
-             heating_anomalous_tail_ionization="on"),
-    ):
-        try:
-            LAPDSim1D(k6_bad, dict(cathode_flags))
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(
-                "expected ValueError for heating_anomalous_tail_ionization "
-                f"({k6_bad.get('heating_anomalous_tail_ionization')!r}, "
-                f"{k6_bad.get('heating_anomalous_transport')!r}, "
-                f"{k6_bad.get('heating_anomalous_tail_energy_eV')!r})"
-            )
-    # Every registered E_tail arm clears BOTH bars -- the bracket the campaign
-    # reports is usable with the channel on, which is the point of computing
-    # the bars rather than asserting them.
-    for k6_rung in (30.0, 75.0, 150.0):
-        LAPDSim1D(
-            dict(csda_params, **wpe_legacy,
-                 heating_anomalous_transport="tail_walk",
-                 heating_anomalous_tail_energy_eV=k6_rung,
-                 heating_anomalous_tail_ionization="on"),
-            dict(cathode_flags),
-        )
-    # K7c: and the edge itself CONSTRUCTS, at the edge and a few ULPs above
-    # it. At the edge the lookup evaluates the table's last node, which is
-    # that node's own value and not an extrapolation of it, so there is
-    # nothing for the guard to refuse.
-    # (The boundary itself is not pinned either way: reconstructing an excess
-    # of exactly HE_EII_EDGE_REL_TOL is a rounding away from either side of
-    # the comparison, so the cases below sit strictly inside it.)
-    for k7c_ok in (
-        _k7c_edge_eV,
-        _k7c_edge_eV * (1.0 + 1.0e-13),
-        _k7c_edge_eV
-        * (1.0 + 0.5 * _beam_deposition_mod.HE_EII_EDGE_REL_TOL),
-    ):
-        LAPDSim1D(
-            dict(csda_params, **wpe_legacy,
-                 heating_anomalous_transport="tail_walk",
-                 heating_anomalous_tail_energy_eV=k7c_ok,
-                 heating_anomalous_tail_ionization="on"),
-            dict(cathode_flags),
-        )
-    # A tail energy outside the depth-1 band is not an error with the channel
-    # off either: the key is documented as read only under "on", so the
-    # energy-only walk must still accept 300 eV (this pins the contract, not
-    # just the guard).
-    LAPDSim1D(
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_energy_eV=300.0),
-        dict(cathode_flags),
-    )
-    # Default-path bit-exactness sentinel: naming "off" explicitly reproduces
-    # the tail_walk deposition above, byte for byte, on every array and every
-    # scalar -- and the four K6 splits are identically zero, so the off path
-    # cannot have entered the branch.
-    k6_off_sim = LAPDSim1D(
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_ionization="off"),
-        dict(cathode_flags),
-    )
-    k6_off_sim._circuit_I_loop = 3000.0
-    k6_off_solve = k6_off_sim.solve_cathode_boundary()
-    k6_off_dep = k6_off_solve.beam_deposition[0]
-    for _k6_arr in (
-        "plasma_heating_erg_s", "heating_anomalous_erg_s",
-        "heating_coulomb_erg_s", "heating_secondary_erg_s",
-        "heating_terminal_erg_s", "radiated_erg_s",
-        "ionization_cost_erg_s", "ionization_events", "excitation_events",
-        "E_entry_eV",
-    ):
-        assert np.array_equal(
-            getattr(k6_off_dep, _k6_arr), getattr(wpe_on_dep, _k6_arr)
-        ), _k6_arr
-    for _k6_sc in ("end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s",
-                   "transmitted_flux", "transmitted_energy_eV"):
-        assert getattr(k6_off_dep, _k6_sc) == getattr(wpe_on_dep, _k6_sc)
-    for _k6_split in ("ionization_events_tail", "excitation_events_tail",
-                      "ionization_cost_tail_erg_s", "radiated_tail_erg_s"):
-        assert not np.any(getattr(k6_off_dep, _k6_split)), _k6_split
-        assert not np.any(getattr(csda_dep, _k6_split)), _k6_split
-    # On: the walkers now ionize on their way, so the SAME QL power comes back
-    # split across more channels.
-    k6_on_sim = LAPDSim1D(
-        dict(csda_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_ionization="on"),
-        dict(cathode_flags),
-    )
-    k6_on_sim._circuit_I_loop = 3000.0
-    k6_on_solve = k6_on_sim.solve_cathode_boundary()
-    k6_on_dep = k6_on_solve.beam_deposition[0]
-    k6_ledger = (
-        float(k6_on_dep.end_loss_tail_low_erg_s)
-        + float(k6_on_dep.end_loss_tail_high_erg_s)
-    )
-    # The scenario must actually FIRE the channel or every assertion is
-    # vacuous: pairs born, potential invested, light radiated.
-    assert float(k6_on_dep.ionization_events_tail.sum()) > 0.0
-    assert float(k6_on_dep.ionization_cost_tail_erg_s.sum()) > 0.0
-    assert float(k6_on_dep.radiated_tail_erg_s.sum()) > 0.0
-    # THE K6 CLOSURE IDENTITY (E3): every eV launched as tail electrons ends in
-    # exactly one of {bulk heat via thermalization, ionization investment,
-    # secondary-birth heat, radiation, end ledger}. The launched power is what
-    # the "local" arm banked locally -- exact, because the ray integration is
-    # bit-identical in both modes -- and the secondary-birth heat is inside
-    # heating_anomalous with the rest of the walkers' heat.
-    # ... and the sixth destination, the anode mesh: a walker the wires
-    # intercept leaves the plasma at the plane, so the culled bank is a TERM
-    # of the closure and never a tolerance on it.
-    k6_launched = float(csda_dep.heating_anomalous_erg_s.sum())
-    k6_culled = float(k6_on_dep.tail_anode_culled_erg_s)
-    k6_delivered = (
-        float(k6_on_dep.heating_anomalous_erg_s.sum())
-        + float(k6_on_dep.ionization_cost_tail_erg_s.sum())
-        + float(k6_on_dep.radiated_tail_erg_s.sum())
-        + k6_ledger
-    )
-    assert k6_culled > 0.0, k6_culled
-    assert abs(
-        k6_delivered + k6_culled - k6_launched
-    ) / k6_launched < 1e-12, (k6_launched, k6_delivered, k6_culled)
-    # ... and the whole ray still closes, with the tail's cost and radiation
-    # now inside the terms that already carried the primary's.
-    k6_on_total = (
-        k6_on_dep.plasma_heating_erg_s.sum()
-        + k6_on_dep.radiated_erg_s.sum()
-        + k6_on_dep.ionization_cost_erg_s.sum()
-        + float(k6_on_dep.anode_intercepted_erg_s)
-        + k6_on_dep.transmitted_flux * k6_on_dep.transmitted_energy_eV
-        * ev_to_erg
-        + k6_ledger
-    )
-    assert abs(k6_on_total - csda_budget) / csda_budget < 1e-9
-    # THE PARTICLE STATEMENT: every tail ionization event is one pair added to
-    # the shared row, so the difference from the energy-only arm IS the tail
-    # split -- nothing is booked twice and nothing is dropped.
-    k6_extra = k6_on_dep.ionization_events - wpe_on_dep.ionization_events
-    assert np.allclose(
-        k6_extra, k6_on_dep.ionization_events_tail, rtol=1e-12, atol=0.0
-    )
-    for _k6_pair in (
-        ("excitation_events", "excitation_events_tail"),
-        ("ionization_cost_erg_s", "ionization_cost_tail_erg_s"),
-        ("radiated_erg_s", "radiated_tail_erg_s"),
-    ):
-        assert np.allclose(
-            getattr(k6_on_dep, _k6_pair[0])
-            - getattr(wpe_on_dep, _k6_pair[0]),
-            getattr(k6_on_dep, _k6_pair[1]),
-            rtol=1e-12, atol=0.0,
-        ), _k6_pair
-    # THE WALK WINDOW: not one pair is born, and not one erg deposited, in a
-    # cell the RHS mask zeroes. This is the property the window exists for --
-    # without it the -z walkers run on behind the cathode and most of the
-    # channel's product is created and then deleted.
-    k6_dead = ~np.asarray(k6_on_sim._geometry.plasma_active, dtype=bool)
-    assert k6_dead.any(), "scenario has no plasma-dead cells to protect"
-    assert not np.any(k6_on_dep.ionization_events_tail[k6_dead])
-    assert not np.any(k6_on_dep.radiated_tail_erg_s[k6_dead])
-    assert not np.any(
-        k6_on_dep.heating_anomalous_erg_s[k6_dead]
-    ), "tail heat deposited into a plasma-dead cell"
-    # The primary's own three heating splits, the WP-D ledger and the
-    # primary-flux instruments are all untouched: K6 adds to the tail channel
-    # and to nothing else.
-    for _k6_arr in ("heating_coulomb_erg_s", "heating_secondary_erg_s",
-                    "heating_terminal_erg_s"):
-        assert np.array_equal(
-            getattr(k6_on_dep, _k6_arr), getattr(csda_dep, _k6_arr)
-        ), _k6_arr
-    assert k6_on_dep.end_loss_low_erg_s == 0.0
-    assert k6_on_dep.end_loss_high_erg_s == 0.0
-    assert k6_on_solve.beam_gap_ledger[0] == csda_ledger[0]
-    assert (
-        k6_on_solve.beam_result.beam_atten_cross[csda_launch] == csda_sigma_eff
-    )
-    # The tail births reach the FLUID through the beam-ionization birth row --
-    # the same convention, the same momentum and birth-temperature booking, the
-    # same I_ion sink -- so the row grows by exactly the tail's event density.
-    k6_terms = k6_on_sim.beam_ionization_rhs_terms(cathode_solve=k6_on_solve)
-    k6_terms_off = k6_off_sim.beam_ionization_rhs_terms(
-        cathode_solve=k6_off_solve
-    )
-    k6_Vp = k6_on_sim._geometry.plasma_volume_cm3
-    assert np.allclose(
-        k6_terms["beam_ionization_birth"].n
-        - k6_terms_off["beam_ionization_birth"].n,
-        k6_on_dep.ionization_events_tail / k6_Vp,
-        rtol=1e-10, atol=0.0,
-    )
-    assert np.allclose(
-        k6_terms["beam_ionization_cost"].Ee
-        - k6_terms_off["beam_ionization_cost"].Ee,
-        -k6_on_sim._I_ion * ev_to_erg
-        * k6_on_dep.ionization_events_tail / k6_Vp,
-        rtol=1e-10, atol=0.0,
-    )
-    # The tail splits are recorded as cathode diagnostics, zero-defaulted so
-    # beer_lambert runs and pre-K6 files stay readable.
-    k6_diag = k6_on_sim._cathode_diagnostic_snapshot()
-    assert np.array_equal(
-        k6_diag["beam_tail_ionization_events_per_s"],
-        k6_on_dep.ionization_events_tail,
-    )
-    assert np.array_equal(
-        k6_diag["beam_tail_ionization_cost_W"],
-        k6_on_dep.ionization_cost_tail_erg_s * 1.0e-7,
-    )
-    assert np.array_equal(
-        k6_diag["beam_tail_radiated_W"], k6_on_dep.radiated_tail_erg_s * 1.0e-7
-    )
-    for _k6_dg in ("beam_tail_ionization_events_per_s",
-                   "beam_tail_ionization_cost_W", "beam_tail_radiated_W"):
-        assert not np.any(bl_diag[_k6_dg]), _k6_dg
-        assert not np.any(wpe_on_diag[_k6_dg]), _k6_dg
-    # At the MODULE, the walk window has no safe default and says so: an
-    # ionizing walk with no window, an out-of-range window, and a window that
-    # does not contain the cells the QL channel drives are all refusals.
-    _k6_win = tuple(
-        int(i) for i in (np.flatnonzero(~k6_dead)[0], np.flatnonzero(~k6_dead)[-1])
-    )
-    _k6_ray = dict(
-        E0_eV=csda_res.phi_c, Gamma0_per_s=_pskip_Gamma0,
-        dz_cm=_pskip_geom.length_cm, nn=csda_state.nn, ne=csda_state.n,
-        Te=csda_derived.Te, anomalous_transport="tail_walk",
-        tail_energy_eV=75.0, tail_ionization="on", **_pskip_ray_kwargs,
-    )
-    for _k6_win_bad in (None, (-1, 10), (5, 3), (0, _pskip_geom.cells)):
-        try:
-            _deposit_beam_ray(**_k6_ray, tail_walk_window=_k6_win_bad)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(
-                f"expected ValueError for tail_walk_window={_k6_win_bad!r}"
-            )
-    # A window that excludes a driven cell is refused rather than silently
-    # dropping that cell's tail power.
-    try:
-        _deposit_beam_ray(
-            **_k6_ray,
-            tail_walk_window=(_pskip_geom.cells - 1, _pskip_geom.cells - 1),
-        )
-    except ValueError:
-        pass
-    else:
-        raise AssertionError(
-            "expected ValueError for a window excluding a QL-driven cell"
-        )
-    return locals()
-
-
-# --------------------------------------------------------------------
-# beam-sheath-aware-tail-k7
-# --------------------------------------------------------------------
-@_case(
-    "beam-sheath-aware-tail-k7",
-    historical_stance=True,
-    provides=(
-        "k7_ion_dep", "k7_ion_legacy_dep", "k7_local_dep", "k7_on_dep",
-        "k7_params",
-    ),
-)
-def _case_beam_sheath_aware_tail_k7(
-    _pskip_geom, _pskip_ray_kwargs, csda_derived, csda_eta, csda_params,
-    csda_state, wpe_legacy
-):
-    # --- K7 through the solver: the sheath-aware tail closure. The cathode
-    # face REFLECTS walkers below e*phi_c(t) instead of deleting them, and the
-    # birth energy is keyed to the live phi_c instead of a fixed rung. Unit
-    # level only -- what the recovered power does to the discharge is a
-    # campaign run.
-    #
-    # The scenario needs a PRODUCTION-LIKE phi_c: the block above runs against
-    # the 1000 V cap, where 0.25*phi_c = 250 eV sits ABOVE the K6 depth-1 bar
-    # (since K7b that marches under the disclosed truncation rather than
-    # refusing, but it is still not the band the drive actually visits).
-    # Capping the drop at 300 V puts the keyed energy where the drive puts it.
+    # The scenario needs a PRODUCTION-LIKE phi_c: capping the drop at 300 V
+    # puts the plateau's top where the drive puts it.
     cathode_flags = _cathode_flags()
     k7_params = dict(csda_params, cathode_phi_c_cap_V=300.0)
     k7_local_sim = LAPDSim1D(
@@ -5006,56 +3918,37 @@ def _case_beam_sheath_aware_tail_k7(
     k7_local_sim._circuit_I_loop = 3000.0
     k7_local_solve = k7_local_sim.solve_cathode_boundary()
     k7_local_dep = k7_local_solve.beam_deposition[0]
-    k7_phi_c = float(k7_local_solve.beam_result.result.phi_c)
-    k7_launched = float(k7_local_dep.heating_anomalous_erg_s.sum())
-    assert k7_launched > 0.0, "K7 scenario drives no QL power"
-    # The keyed energy must clear both K6 bars or the ionizing arm below would
-    # be testing a refusal instead of a walk.
-    assert (
-        _beam_deposition_mod.HE_E_STOP_EV < 0.25 * k7_phi_c < 221.0
-    ), k7_phi_c
+    k7_local_diag = k7_local_sim._cathode_diagnostic_snapshot()
+    assert float(k7_local_dep.heating_anomalous_erg_s.sum()) > 0.0, (
+        "the scenario drives no QL power"
+    )
+    assert k7_local_dep.end_loss_tail_low_erg_s == 0.0
+    assert k7_local_dep.end_loss_tail_high_erg_s == 0.0
 
-    # (a) PRESENCE GATE. Under "local" the three K7 keys are inert at ANY
-    # value: the corrected closure lives inside the walk and cannot be reached
-    # from a stance that never walks.
-    for k7_inert in (
+    # (a) PRESENCE GATE. Under "local" the cathode-boundary key is inert at
+    # either value: the boundary lives inside the walk and cannot be reached
+    # from a configuration that never walks.
+    k7_inert_sim = LAPDSim1D(
         dict(k7_params, heating_anomalous_tail_cathode_boundary="escape"),
-        dict(k7_params, heating_anomalous_tail_energy_keying="fixed"),
-        dict(k7_params, heating_anomalous_tail_phi_c_fraction=1.0),
+        dict(cathode_flags),
+    )
+    k7_inert_sim._circuit_I_loop = 3000.0
+    k7_inert_dep = k7_inert_sim.solve_cathode_boundary().beam_deposition[0]
+    for _k7_arr in (
+        "plasma_heating_erg_s", "heating_anomalous_erg_s",
+        "radiated_erg_s", "ionization_cost_erg_s", "ionization_events",
     ):
-        k7_inert_sim = LAPDSim1D(k7_inert, dict(cathode_flags))
-        k7_inert_sim._circuit_I_loop = 3000.0
-        k7_inert_dep = k7_inert_sim.solve_cathode_boundary().beam_deposition[0]
-        for _k7_arr in (
-            "plasma_heating_erg_s", "heating_anomalous_erg_s",
-            "radiated_erg_s", "ionization_cost_erg_s", "ionization_events",
-        ):
-            assert np.array_equal(
-                getattr(k7_inert_dep, _k7_arr), getattr(k7_local_dep, _k7_arr)
-            ), _k7_arr
-        assert k7_inert_dep.end_loss_tail_low_erg_s == 0.0
-        assert k7_inert_dep.end_loss_tail_high_erg_s == 0.0
+        assert np.array_equal(
+            getattr(k7_inert_dep, _k7_arr), getattr(k7_local_dep, _k7_arr)
+        ), _k7_arr
 
-    # (b) MISCONFIGURATION is loud at CONSTRUCTION. The f arm is a DECLARED
-    # BRACKET, so a value off it is refused wherever it appears; the rest are
-    # the silent-no-op configurations: a fraction that nothing reads, a rung
-    # that nothing reads, and a twin machine whose two reflecting faces would
-    # trap the walkers with no way out.
+    # (b) MISCONFIGURATION is loud at CONSTRUCTION: an unknown boundary, and
+    # a twin machine whose two reflecting faces would trap the walkers with
+    # no way out.
     for k7_bad_p, k7_bad_f in (
-        (dict(k7_params, heating_anomalous_tail_energy_keying="bogus"),
-         cathode_flags),
         (dict(k7_params, heating_anomalous_tail_cathode_boundary="bogus"),
          cathode_flags),
-        (dict(k7_params, heating_anomalous_tail_phi_c_fraction=0.3),
-         cathode_flags),
-        (dict(k7_params, heating_anomalous_tail_phi_c_fraction=0.0),
-         cathode_flags),
-        (dict(k7_params, heating_anomalous_transport="tail_walk",
-              heating_anomalous_tail_energy_keying="fixed",
-              heating_anomalous_tail_phi_c_fraction=0.25), cathode_flags),
-        (dict(k7_params, heating_anomalous_transport="tail_walk",
-              heating_anomalous_tail_energy_eV=150.0), cathode_flags),
-        (dict(k7_params, heating_anomalous_transport="tail_walk"),
+        (dict(k7_params, heating_anomalous_transport="plateau_multigroup"),
          dict(cathode_flags, TwinCathode=True)),
     ):
         try:
@@ -5064,222 +3957,22 @@ def _case_beam_sheath_aware_tail_k7(
             pass
         else:
             raise AssertionError(
-                "expected ValueError for the K7 selectors "
-                f"({k7_bad_p.get('heating_anomalous_tail_energy_keying')!r}, "
-                f"{k7_bad_p.get('heating_anomalous_tail_cathode_boundary')!r}, "
-                f"{k7_bad_p.get('heating_anomalous_tail_phi_c_fraction')!r}, "
+                "expected ValueError for the cathode-boundary selector "
+                f"({k7_bad_p.get('heating_anomalous_tail_cathode_boundary')!r}, "
                 f"twin={k7_bad_f.get('TwinCathode')})"
             )
-    # Every declared bracket arm constructs, and the legacy pair does too --
-    # the bracket the campaign reports is usable, which is the point of
-    # refusing everything outside it.
-    for k7_f in (0.25, 0.5, 1.0):
-        LAPDSim1D(
-            dict(k7_params, heating_anomalous_transport="tail_walk",
-                 heating_anomalous_tail_phi_c_fraction=k7_f),
-            dict(cathode_flags),
-        )
-
-    # (c) THE LEGACY ARM IS BIT-EXACT. Naming both legacy values reproduces the
-    # module call that has never heard of reflection or keying, byte for byte
-    # -- which is what makes every WP-E and K6 assertion above still an
-    # assertion about the closure it was written for.
-    k7_legacy_sim = LAPDSim1D(
-        dict(k7_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk"),
-        dict(cathode_flags),
-    )
-    k7_legacy_sim._circuit_I_loop = 3000.0
-    k7_legacy_dep = k7_legacy_sim.solve_cathode_boundary().beam_deposition[0]
-    k7_legacy_ray = _deposit_beam_ray(
-        k7_phi_c, k7_local_solve.beam_result.result.I_eth_star / qe_SI,
-        dz_cm=_pskip_geom.length_cm,
-        nn=csda_state.nn, ne=csda_state.n, Te=csda_derived.Te,
-        anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
-        anode_eta=csda_eta,
-        # The solver arms the tail cull unconditionally, so the direct ray
-        # has to be built with it or the comparison would be measuring the
-        # cull rather than the legacy arm's own arithmetic.
-        tail_anode_cross_index=int(_pskip_geom.anode_face_indices[0]),
-        tail_anode_eta=csda_eta,
-        anomalous_transport="tail_walk", tail_energy_eV=75.0,
-        **_pskip_ray_kwargs,
-    )
-    for _k7_arr in (
-        "plasma_heating_erg_s", "heating_anomalous_erg_s", "radiated_erg_s",
-        "ionization_cost_erg_s", "ionization_events", "excitation_events",
-    ):
-        assert np.array_equal(
-            getattr(k7_legacy_dep, _k7_arr), getattr(k7_legacy_ray, _k7_arr)
-        ), _k7_arr
-    for _k7_sc in ("end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s"):
-        assert getattr(k7_legacy_dep, _k7_sc) == getattr(k7_legacy_ray, _k7_sc)
-    assert k7_legacy_dep.end_loss_tail_low_erg_s > 0.0  # the deleted half
-
-    # (d) REFLECTION. The corrected default returns the cathode-end flux to the
-    # column: that ledger is EXACTLY zero (phi_c is above every energy any
-    # walker can arrive with), the conservation identity still closes to
-    # roundoff, and the column keeps materially more of the QL power.
-    k7_on_sim = LAPDSim1D(
-        dict(k7_params, heating_anomalous_transport="tail_walk"),
-        dict(cathode_flags),
-    )
-    k7_on_sim._circuit_I_loop = 3000.0
-    k7_on_dep = k7_on_sim.solve_cathode_boundary().beam_deposition[0]
-    assert k7_on_dep.end_loss_tail_low_erg_s == 0.0
-    k7_on_ledger = (
-        float(k7_on_dep.end_loss_tail_low_erg_s)
-        + float(k7_on_dep.end_loss_tail_high_erg_s)
-    )
-    # The anode mesh takes its share before anything reaches a ledger, so the
-    # culled bank is a TERM of the closure, not a tolerance on it.
-    k7_on_culled = float(k7_on_dep.tail_anode_culled_erg_s)
-    k7_on_delivered = (
-        float(k7_on_dep.heating_anomalous_erg_s.sum()) + k7_on_ledger
-    )
-    assert k7_on_culled > 0.0, k7_on_culled
-    assert abs(
-        k7_on_delivered + k7_on_culled - k7_launched
-    ) / k7_launched < 1e-12, (k7_launched, k7_on_delivered, k7_on_culled)
-    assert (
-        float(k7_on_dep.heating_anomalous_erg_s.sum())
-        > float(k7_legacy_dep.heating_anomalous_erg_s.sum())
-    )
-    # Energy-only, exactly like WP-E: reflection moves where the QL energy
-    # lands and nothing else. The particle rows and the WP-D ledger are
-    # untouched, and so are the primary's own heating splits.
-    assert np.array_equal(
-        k7_on_dep.ionization_events, k7_local_dep.ionization_events
-    )
-    for _k7_arr in ("heating_coulomb_erg_s", "heating_secondary_erg_s",
-                    "heating_terminal_erg_s"):
-        assert np.array_equal(
-            getattr(k7_on_dep, _k7_arr), getattr(k7_local_dep, _k7_arr)
-        ), _k7_arr
-    assert k7_on_dep.end_loss_low_erg_s == 0.0
-    assert k7_on_dep.end_loss_high_erg_s == 0.0
-
-    # (e) phi_c KEYING IS EXACTLY f*phi_c. The keyed arm and a fixed arm named
-    # at that same energy are the same run, byte for byte -- the keying moves
-    # one number and nothing else.
-    for k7_f in (0.25, 0.5):
-        k7_keyed_sim = LAPDSim1D(
-            dict(k7_params, heating_anomalous_transport="tail_walk",
-                 heating_anomalous_tail_cathode_boundary="escape",
-                 heating_anomalous_tail_phi_c_fraction=k7_f),
-            dict(cathode_flags),
-        )
-        k7_keyed_sim._circuit_I_loop = 3000.0
-        k7_keyed_dep = (
-            k7_keyed_sim.solve_cathode_boundary().beam_deposition[0]
-        )
-        k7_fixed_sim = LAPDSim1D(
-            dict(k7_params, **wpe_legacy,
-                 heating_anomalous_transport="tail_walk",
-                 heating_anomalous_tail_energy_eV=k7_f * k7_phi_c),
-            dict(cathode_flags),
-        )
-        k7_fixed_sim._circuit_I_loop = 3000.0
-        k7_fixed_dep = (
-            k7_fixed_sim.solve_cathode_boundary().beam_deposition[0]
-        )
-        assert np.array_equal(
-            k7_keyed_dep.heating_anomalous_erg_s,
-            k7_fixed_dep.heating_anomalous_erg_s,
-        ), k7_f
-        assert (
-            k7_keyed_dep.end_loss_tail_low_erg_s
-            == k7_fixed_dep.end_loss_tail_low_erg_s
-        )
-    # The default fraction IS the 0.25 arm (continuity with the shipped rung).
-    k7_default_sim = LAPDSim1D(
-        dict(k7_params, heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_phi_c_fraction=0.25),
-        dict(cathode_flags),
-    )
-    k7_default_sim._circuit_I_loop = 3000.0
-    assert np.array_equal(
-        k7_default_sim.solve_cathode_boundary()
-        .beam_deposition[0].heating_anomalous_erg_s,
-        k7_on_dep.heating_anomalous_erg_s,
-    )
-
-    # (f) THE IONIZING CHANNEL SURVIVES REFLECTION. The reflected walker keeps
-    # marching and stays eligible to ionize, the K6 closure identity still
-    # closes, the single-booking property still holds (the shared row grows by
-    # exactly the tail split, so nothing is booked twice across the bounce),
-    # and not one pair is born in a cell the RHS mask zeroes.
-    k7_ion_sim = LAPDSim1D(
-        dict(k7_params, heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_ionization="on"),
-        dict(cathode_flags),
-    )
-    k7_ion_sim._circuit_I_loop = 3000.0
-    k7_ion_dep = k7_ion_sim.solve_cathode_boundary().beam_deposition[0]
-    k7_ion_ledger = (
-        float(k7_ion_dep.end_loss_tail_low_erg_s)
-        + float(k7_ion_dep.end_loss_tail_high_erg_s)
-    )
-    assert k7_ion_dep.end_loss_tail_low_erg_s == 0.0
-    assert float(k7_ion_dep.ionization_events_tail.sum()) > 0.0
-    k7_ion_culled = float(k7_ion_dep.tail_anode_culled_erg_s)
-    k7_ion_delivered = (
-        float(k7_ion_dep.heating_anomalous_erg_s.sum())
-        + float(k7_ion_dep.ionization_cost_tail_erg_s.sum())
-        + float(k7_ion_dep.radiated_tail_erg_s.sum())
-        + k7_ion_ledger
-    )
-    assert k7_ion_culled > 0.0, k7_ion_culled
-    assert abs(
-        k7_ion_delivered + k7_ion_culled - k7_launched
-    ) / k7_launched < 1e-12, (k7_launched, k7_ion_delivered, k7_ion_culled)
-    assert np.allclose(
-        k7_ion_dep.ionization_events - k7_on_dep.ionization_events,
-        k7_ion_dep.ionization_events_tail, rtol=1e-12, atol=0.0,
-    )
-    for _k7_pair in (
-        ("excitation_events", "excitation_events_tail"),
-        ("ionization_cost_erg_s", "ionization_cost_tail_erg_s"),
-        ("radiated_erg_s", "radiated_tail_erg_s"),
-    ):
-        assert np.allclose(
-            getattr(k7_ion_dep, _k7_pair[0]) - getattr(k7_on_dep, _k7_pair[0]),
-            getattr(k7_ion_dep, _k7_pair[1]), rtol=1e-12, atol=0.0,
-        ), _k7_pair
-    k7_dead = ~np.asarray(k7_ion_sim._geometry.plasma_active, dtype=bool)
-    assert k7_dead.any(), "scenario has no plasma-dead cells to protect"
-    assert not np.any(k7_ion_dep.ionization_events_tail[k7_dead])
-    assert not np.any(k7_ion_dep.heating_anomalous_erg_s[k7_dead])
-    # The reflected leg is what makes the channel bigger: more of the launched
-    # power is spent in the column, so more pairs are born there.
-    k7_ion_legacy_sim = LAPDSim1D(
-        dict(k7_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_ionization="on"),
-        dict(cathode_flags),
-    )
-    k7_ion_legacy_sim._circuit_I_loop = 3000.0
-    k7_ion_legacy_dep = (
-        k7_ion_legacy_sim.solve_cathode_boundary().beam_deposition[0]
-    )
-    assert (
-        float(k7_ion_dep.ionization_events_tail.sum())
-        > float(k7_ion_legacy_dep.ionization_events_tail.sum())
-    )
     return locals()
 
 
 # --------------------------------------------------------------------
 # tail-forward-* : the walked tail's launch-direction split
 # --------------------------------------------------------------------
-#: The three walked-tail ROUTES the split has to reach, as
-#: ``(label, extra params)`` over ``k7_params`` + ``tail_walk``: the
-#: energy-only walk bounded by the reflecting cathode face, the ionizing CSDA
-#: march, and the unbounded energy-only walk that free-escapes at both ends.
+#: The walked-tail ROUTES the split has to reach, as ``(label, extra
+#: params)`` over ``k7_params`` + ``plateau_multigroup``: the march bounded by
+#: the reflecting cathode face, and the one that free-escapes at both ends.
 _TF_ROUTES = (
-    ("reflect-energy-only", {}),
-    ("reflect-ionizing", {"heating_anomalous_tail_ionization": "on"}),
-    ("escape-plain", {"heating_anomalous_tail_cathode_boundary": "escape"}),
+    ("reflect", {}),
+    ("escape", {"heating_anomalous_tail_cathode_boundary": "escape"}),
 )
 #: Every per-cell row a tail launch can move.
 _TF_ARRAYS = (
@@ -5304,7 +3997,7 @@ def _tf_dep(k7_params, route_extra, forward=None):
     ``forward=None`` leaves the key out of the supplied params entirely, which
     is the arm the default-inert case compares against.
     """
-    tf_p = dict(k7_params, heating_anomalous_transport="tail_walk")
+    tf_p = dict(k7_params, heating_anomalous_transport="plateau_multigroup")
     tf_p.update(route_extra)
     if forward is not None:
         tf_p[_TF_KEY] = forward
@@ -5332,14 +4025,8 @@ def _tf_centroid(row):
 # --------------------------------------------------------------------
 # tail-forward-default-inert
 # --------------------------------------------------------------------
-@_case(
-    "tail-forward-default-inert",
-    historical_stance=True,
-    provides=("tf_launched",),
-)
-def _case_tail_forward_default_inert(
-    k7_ion_dep, k7_local_dep, k7_on_dep, k7_params
-):
+@_case("tail-forward-default-inert", historical_stance=True)
+def _case_tail_forward_default_inert(k7_params):
     # --- The launch-direction split at its symmetric default is INERT, byte
     # for byte, on every route that launches a tail walker. The default path
     # takes the historical branch verbatim (the same 0.5*flux expression, the
@@ -5350,19 +4037,6 @@ def _case_tail_forward_default_inert(
         tf_stated = _tf_dep(k7_params, tf_extra, forward=0.5)
         tf_diff = _tf_identical(tf_absent, tf_stated)
         assert tf_diff is None, (tf_label, tf_diff)
-    # ... and the two arms the K7 block already built are the same runs, which
-    # ties this case's "absent" arms to depositions asserted about above
-    # rather than to fresh ones only this case has seen.
-    assert _tf_identical(_tf_dep(k7_params, {}), k7_on_dep) is None
-    assert _tf_identical(
-        _tf_dep(k7_params, {"heating_anomalous_tail_ionization": "on"}),
-        k7_ion_dep,
-    ) is None
-    # The launched power, for the closure case below: what the "local" arm
-    # banks in the extraction cells is exactly what the walked arms launch,
-    # because the ray integration is bit-identical in both modes.
-    tf_launched = float(k7_local_dep.heating_anomalous_erg_s.sum())
-    assert tf_launched > 0.0, "the scenario drives no QL power to split"
     return locals()
 
 
@@ -5370,51 +4044,16 @@ def _case_tail_forward_default_inert(
 # tail-forward-energy-closure
 # --------------------------------------------------------------------
 @_case("tail-forward-energy-closure", historical_stance=True)
-def _case_tail_forward_energy_closure(k7_params, tf_launched):
-    # --- THE SPLIT MOVES NO POWER. The equivalent tail flux is P_QL / E, so
-    # the two directions' fluxes sum to the same total at any split and
-    # flux * E returns the withheld power to roundoff. Every eV launched still
-    # ends in exactly one of {bulk heat via thermalization, ionization
-    # investment, radiation, the tail end ledger} -- the same closure the
-    # WP-E/K6/K7 blocks assert at the symmetric launch, now at the two
-    # asymmetric arms.
-    for tf_f in (0.75, 1.0):
-        for tf_label, tf_extra in _TF_ROUTES:
-            tf_dep = _tf_dep(k7_params, tf_extra, forward=tf_f)
-            tf_ledger = (
-                float(tf_dep.end_loss_tail_low_erg_s)
-                + float(tf_dep.end_loss_tail_high_erg_s)
-            )
-            tf_culled = float(tf_dep.tail_anode_culled_erg_s)
-            tf_delivered = (
-                float(tf_dep.heating_anomalous_erg_s.sum())
-                + float(tf_dep.ionization_cost_tail_erg_s.sum())
-                + float(tf_dep.radiated_tail_erg_s.sum())
-                + tf_ledger
-            )
-            assert tf_culled > 0.0, (tf_f, tf_label)
-            assert abs(
-                tf_delivered + tf_culled - tf_launched
-            ) / tf_launched < 1e-12, (
-                tf_f, tf_label, tf_launched, tf_delivered, tf_culled
-            )
-    # --- AND ON THE PRODUCTION ROUTE. The three routes above are tail_walk
-    # arms; the reference configuration runs plateau_multigroup, which walks
-    # a SPECTRUM of groups rather than one tail line and launches each group
-    # at the same split. Its closure is stated against its OWN withheld bank
-    # (the groups' launched power), because the multigroup arm withholds a
-    # different bank from the single-line arm -- so this is the split moving
-    # no power on the route the stance actually takes, not a second reading
-    # of the single-line number.
+def _case_tail_forward_energy_closure(k7_params):
+    # --- THE SPLIT MOVES NO POWER. The equivalent tail flux is P / E, so the
+    # two directions' fluxes sum to the same total at any split and flux * E
+    # returns the launched power to roundoff. Every eV the plateau groups
+    # launch still ends in exactly one of {bulk heat via thermalization,
+    # ionization investment, radiation, the tail end ledger, the anode mesh}.
+    # The closure is stated against the groups' own launched power (the
+    # STREAMING share of the bank).
     for tf_f in (0.5, 0.75, 1.0):
-        tf_mg_dep = _tf_dep(
-            k7_params,
-            {
-                "heating_anomalous_transport": "plateau_multigroup",
-                "heating_anomalous_tail_phi_c_fraction": None,
-            },
-            forward=tf_f,
-        )
+        tf_mg_dep = _tf_dep(k7_params, {}, forward=tf_f)
         tf_mg_launched = float(tf_mg_dep.tail_power_erg_s)
         assert tf_mg_launched > 0.0, tf_f
         tf_mg_culled = float(tf_mg_dep.tail_anode_culled_erg_s)
@@ -5439,21 +4078,14 @@ def _case_tail_forward_energy_closure(k7_params, tf_launched):
 # tail-forward-direction
 # --------------------------------------------------------------------
 @_case("tail-forward-direction", historical_stance=True)
-def _case_tail_forward_direction(k7_local_dep, k7_params):
+def _case_tail_forward_direction(k7_params):
     # --- WHERE the power lands is what the split moves. At f = 1.0 nothing
-    # travels -z at all, so on the free-escape route no tail power is
-    # deposited upstream of the lowest QL-driven cell and the cathode-face row
-    # of the tail end ledger is EXACTLY zero -- both non-vacuously, because at
-    # the symmetric launch both are positive.
-    tf_b0 = int(
-        np.flatnonzero(k7_local_dep.heating_anomalous_erg_s > 0.0).min()
-    )
-    assert tf_b0 > 0, "no cell upstream of the driven range to test"
+    # travels -z at all, so on the free-escape route the cathode-face row of
+    # the tail end ledger is EXACTLY zero -- non-vacuously, because at the
+    # symmetric launch it is positive.
     tf_escape = {"heating_anomalous_tail_cathode_boundary": "escape"}
     tf_esc_half = _tf_dep(k7_params, tf_escape, forward=0.5)
     tf_esc_full = _tf_dep(k7_params, tf_escape, forward=1.0)
-    assert float(tf_esc_half.heating_anomalous_erg_s[:tf_b0].sum()) > 0.0
-    assert float(tf_esc_full.heating_anomalous_erg_s[:tf_b0].sum()) == 0.0
     assert float(tf_esc_half.end_loss_tail_low_erg_s) > 0.0
     assert float(tf_esc_full.end_loss_tail_low_erg_s) == 0.0
     # THE CATHODE FACE IS NEVER REACHED. Under "reflect" there is no
@@ -5469,12 +4101,8 @@ def _case_tail_forward_direction(k7_local_dep, k7_params):
     assert _tf_identical(
         _tf_dep(k7_params, {}, forward=0.5), tf_esc_half
     ) is not None
-    # ... and the deposited-power centroid moves toward +z as f rises, on both
-    # the energy-only and the ionizing route.
-    for tf_label, tf_extra in (
-        ("reflect-energy-only", {}),
-        ("reflect-ionizing", {"heating_anomalous_tail_ionization": "on"}),
-    ):
+    # ... and the deposited-power centroid moves toward +z as f rises.
+    for tf_label, tf_extra in (("reflect", {}),):
         tf_centroids = [
             _tf_centroid(
                 _tf_dep(k7_params, tf_extra, forward=tf_f)
@@ -5497,7 +4125,7 @@ def _case_tail_forward_refusals(k7_params):
     # the key. The domain is checked whether or not the walk is engaged (a
     # value off the range is wrong either way); the inert-use refusal is what
     # keeps the key from being a silent no-op under a stance that never walks.
-    tf_walk = dict(k7_params, heating_anomalous_transport="tail_walk")
+    tf_walk = dict(k7_params, heating_anomalous_transport="plateau_multigroup")
     for tf_bad in (
         dict(k7_params, **{_TF_KEY: 1.0}),
         dict(k7_params, **{_TF_KEY: 0.75}),
@@ -5520,20 +4148,10 @@ def _case_tail_forward_refusals(k7_params):
             )
     # The default constructs under a stance that never walks -- the key is
     # inert there, not refused -- and every accepted value constructs under
-    # each of the three walked selections.
+    # the walked selection.
     LAPDSim1D(dict(k7_params, **{_TF_KEY: 0.5}), dict(_cathode_flags()))
-    for tf_sel in (
-        dict(heating_anomalous_transport="tail_walk"),
-        dict(heating_anomalous_transport="plateau_multigroup",
-             heating_anomalous_tail_energy_keying="phi_c"),
-        dict(heating_anomalous_disposal="landau_branched",
-             heating_anomalous_tail_phi_c_fraction=1.0),
-    ):
-        for tf_f in (0.5, 0.75, 1.0):
-            LAPDSim1D(
-                dict(k7_params, **tf_sel, **{_TF_KEY: tf_f}),
-                dict(_cathode_flags()),
-            )
+    for tf_f in (0.5, 0.75, 1.0):
+        LAPDSim1D(dict(tf_walk, **{_TF_KEY: tf_f}), dict(_cathode_flags()))
     return locals()
 
 
@@ -5544,9 +4162,7 @@ def _case_tail_forward_refusals(k7_params):
     "beam-plateau-multigroup",
     historical_stance=True,
 )
-def _case_beam_plateau_multigroup(
-    k7_ion_dep, k7_local_dep, k7_params, wpe_on_diag
-):
+def _case_beam_plateau_multigroup(k7_local_dep, k7_local_diag, k7_params):
     # --- The multi-group plateau closure: the QL bank carries a SPECTRUM,
     # not a line. The single-energy arms are its two heirs taken one at a
     # time (the shipped f = 0.25 line stood in for the WAVE share, f = 1.0
@@ -5555,27 +4171,14 @@ def _case_beam_plateau_multigroup(
     # to the discharge is a campaign run.
     cathode_flags = _cathode_flags()
 
-    # (a) MISCONFIGURATION IS LOUD AT CONSTRUCTION. Every control the derived
-    # spectrum makes INERT is refused rather than ignored, in both namespaces.
+    # (a) MISCONFIGURATION IS LOUD AT CONSTRUCTION, in both namespaces.
     for _mg_bad_p, _mg_bad_f in (
         # an unknown selector string
         (dict(k7_params, heating_anomalous_transport="plateau_multigroups"),
          dict(cathode_flags)),
-        # the f dial: inert, because the spectrum spans the whole band
+        # no anomalous channel: no power for the groups to carry
         (dict(k7_params, heating_anomalous_transport="plateau_multigroup",
-              heating_anomalous_tail_phi_c_fraction=1.0),
-         dict(cathode_flags)),
-        # the fixed rung: inert, because the birth energies are derived
-        (dict(k7_params, heating_anomalous_transport="plateau_multigroup",
-              heating_anomalous_tail_energy_eV=150.0),
-         dict(cathode_flags)),
-        # the keying selector: inert, there is no rung to key
-        (dict(k7_params, heating_anomalous_transport="plateau_multigroup",
-              heating_anomalous_tail_energy_keying="fixed"),
-         dict(cathode_flags)),
-        # two dispositions for one bank
-        (dict(k7_params, heating_anomalous_transport="plateau_multigroup",
-              heating_anomalous_disposal="landau_branched"),
+              beam_anomalous_model="none"),
          dict(cathode_flags)),
         # the reservoir's density FLOOR cannot pose the edge equation
         (dict(k7_params, heating_anomalous_transport="plateau_multigroup"),
@@ -5650,8 +4253,7 @@ def _case_beam_plateau_multigroup(
     _mg_bank = float(k7_local_dep.heating_anomalous_erg_s.sum())
     assert _mg_bank > 0.0, "scenario drives no QL power"
     mg_sim = LAPDSim1D(
-        dict(k7_params, heating_anomalous_transport="plateau_multigroup",
-             heating_anomalous_tail_ionization="on"),
+        dict(k7_params, heating_anomalous_transport="plateau_multigroup"),
         dict(cathode_flags),
     )
     mg_sim._circuit_I_loop = 3000.0
@@ -5709,669 +4311,12 @@ def _case_beam_plateau_multigroup(
         "beam_plateau_wave_power_W", "source_beam_plateau_edge_eV",
         "source_beam_plateau_edge_clamped",
     ):
-        assert _mg_key not in wpe_on_diag, _mg_key
+        assert _mg_key not in k7_local_diag, _mg_key
 
-    # (d) IT IS NEITHER SINGLE-ENERGY ARM, which is the whole point: each end
-    # of the D1 bracket carried one heir of the plateau and deleted the other.
-    # The wave heir puts power back in the EXTRACTION CELL that the f = 0.25
-    # line walks away, while the streaming heir is a strictly interior share
-    # of the bank -- so this closure is neither the f_Landau == 1 corner nor
-    # the f_Landau == 0 one. (How far the streaming groups actually reach is
-    # measured at production state by the build's frozen-ray acceptance
-    # table, not here: this fixture is a cold thin column where every walker
-    # leaves.)
-    _mg_launch = int(np.flatnonzero(
-        np.asarray(mg_sim._geometry.cell_role) == "cathode"
-    )[0])
-    assert (
-        float(mg_dep.heating_anomalous_erg_s[_mg_launch])
-        > float(k7_ion_dep.heating_anomalous_erg_s[_mg_launch])
-    )
+    # (d) The streaming heir is a strictly interior share of the bank: this
+    # closure neither banks all of it locally nor walks all of it.
     assert 0.0 < mg_stream < _mg_bank
     return locals()
-
-
-# --------------------------------------------------------------------
-# beam-tail-band-split-k7b
-# --------------------------------------------------------------------
-@_case(
-    "beam-tail-band-split-k7b",
-    historical_stance=True,
-)
-def _case_beam_tail_band_split_k7b(
-    _k6_ray, _k6_win, _pskip_ray_kwargs, bl_diag, csda_dep, k6_on_dep,
-    k7_ion_dep, k7_ion_legacy_dep, k7_local_dep, k7_on_dep, k7_params,
-    wpe_legacy, wpe_on_diag
-):
-    # --- K7b: the BAND SPLIT. Under phi_c keying E_tail follows the live
-    # cathode drop, so one run visits all three bands; refusing at the two
-    # depth-1 bars (K6's behaviour) made no keyed ionizing arm startable from
-    # cold. Each bar now selects a TREATMENT, and the property that matters is
-    # that the split activates ONLY where the old code refused outright.
-    #
-    # (i) THE CLEAN PROPERTY. In band -- every fixed rung the bracket carries,
-    # and the keyed arm above -- both exposure fields are identically zero, so
-    # nothing that already ran can have taken a new branch.
-    cathode_flags = _cathode_flags()
-    for _k7b_inband in (k7_ion_dep, k7_ion_legacy_dep, k6_on_dep):
-        assert _k7b_inband.tail_power_erg_s > 0.0
-        assert _k7b_inband.tail_sub_threshold_power_erg_s == 0.0
-        assert _k7b_inband.tail_above_bar_power_erg_s == 0.0
-    # ... and the exposure ledger is present but empty on the energy-only walk
-    # and absent entirely without one, which is the presence gate for the two
-    # new diagnostics.
-    assert k7_on_dep.tail_power_erg_s > 0.0
-    assert k7_on_dep.tail_sub_threshold_power_erg_s == 0.0
-    assert k7_on_dep.tail_above_bar_power_erg_s == 0.0
-    assert k7_local_dep.tail_power_erg_s == 0.0
-    assert csda_dep.tail_power_erg_s == 0.0
-
-    # (ii) BELOW THE LOWER BAR the march REVERTS to the energy-only walk. This
-    # is exact physics -- no He inelastic channel is open below the lowest
-    # threshold -- and it is exact arithmetic too: the reverted arm is the
-    # SAME FLOATS the ionization-off arm produces for the same configuration,
-    # on every array and every scalar. Pinned under BOTH tail-end conventions,
-    # because the energy-only walk they revert onto has two different domains
-    # (windowed under reflection, the whole grid under "escape") and the
-    # reversion has to inherit whichever one it would have had.
-    k7b_sub_eV = 0.5 * _beam_deposition_mod.HE_E_STOP_EV
-    for _k7b_end in ({}, dict(wpe_legacy)):
-        k7b_sub_base = dict(
-            k7_params,
-            heating_anomalous_transport="tail_walk",
-            heating_anomalous_tail_energy_keying="fixed",
-            heating_anomalous_tail_energy_eV=k7b_sub_eV,
-        )
-        k7b_sub_base.update(_k7b_end)
-        k7b_sub_off_sim = LAPDSim1D(dict(k7b_sub_base), dict(cathode_flags))
-        k7b_sub_off_sim._circuit_I_loop = 3000.0
-        k7b_sub_off = (
-            k7b_sub_off_sim.solve_cathode_boundary().beam_deposition[0]
-        )
-        k7b_sub_sim = LAPDSim1D(
-            dict(k7b_sub_base, heating_anomalous_tail_ionization="on"),
-            dict(cathode_flags),
-        )
-        k7b_sub_sim._circuit_I_loop = 3000.0
-        k7b_sub_solve = k7b_sub_sim.solve_cathode_boundary()
-        k7b_sub = k7b_sub_solve.beam_deposition[0]
-        for _k7b_arr in (
-            "plasma_heating_erg_s", "heating_anomalous_erg_s",
-            "heating_coulomb_erg_s", "heating_secondary_erg_s",
-            "heating_terminal_erg_s", "radiated_erg_s",
-            "ionization_cost_erg_s", "ionization_events",
-            "excitation_events", "E_entry_eV",
-        ):
-            assert np.array_equal(
-                getattr(k7b_sub, _k7b_arr), getattr(k7b_sub_off, _k7b_arr)
-            ), (_k7b_arr, _k7b_end)
-        for _k7b_sc in ("end_loss_tail_low_erg_s", "end_loss_tail_high_erg_s",
-                        "end_loss_low_erg_s", "end_loss_high_erg_s",
-                        "transmitted_flux", "transmitted_energy_eV",
-                        "tail_power_erg_s"):
-            assert getattr(k7b_sub, _k7b_sc) == getattr(
-                k7b_sub_off, _k7b_sc
-            ), (_k7b_sc, _k7b_end)
-        # NOT a silent no-op: zero ionization, and the reverted power booked.
-        for _k7b_split in ("ionization_events_tail", "excitation_events_tail",
-                           "ionization_cost_tail_erg_s",
-                           "radiated_tail_erg_s"):
-            assert not np.any(getattr(k7b_sub, _k7b_split)), _k7b_split
-        assert k7b_sub.tail_power_erg_s > 0.0
-        assert (
-            k7b_sub.tail_sub_threshold_power_erg_s == k7b_sub.tail_power_erg_s
-        )
-        assert k7b_sub.tail_above_bar_power_erg_s == 0.0
-        assert k7b_sub_off.tail_sub_threshold_power_erg_s == 0.0
-    # The reverted frame reads as fully sub-band in the saved diagnostics.
-    k7b_sub_diag = k7b_sub_sim._cathode_diagnostic_snapshot()
-    assert k7b_sub_diag["beam_tail_sub_threshold_fraction"] == 1.0
-    assert k7b_sub_diag["beam_tail_sub_threshold_power_W"] == (
-        k7b_sub.tail_sub_threshold_power_erg_s * 1.0e-7
-    )
-    assert k7b_sub_diag["beam_tail_above_bar_power_W"] == 0.0
-
-    # (iii) ABOVE THE UPPER BAR the march RUNS, with the depth-1 truncation
-    # kept and its <= 2.0% cascade understatement disclosed rather than
-    # refused. 300 eV was a construction-time refusal before K7b; it is
-    # REPINNED here as an allowed above-bar case.
-    k7b_hi_sim = LAPDSim1D(
-        dict(k7_params, **wpe_legacy,
-             heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_energy_eV=300.0,
-             heating_anomalous_tail_ionization="on"),
-        dict(cathode_flags),
-    )
-    k7b_hi_sim._circuit_I_loop = 3000.0
-    k7b_hi = k7b_hi_sim.solve_cathode_boundary().beam_deposition[0]
-    assert float(k7b_hi.ionization_events_tail.sum()) > 0.0
-    assert float(k7b_hi.radiated_tail_erg_s.sum()) > 0.0
-    assert k7b_hi.tail_above_bar_power_erg_s == k7b_hi.tail_power_erg_s
-    assert k7b_hi.tail_sub_threshold_power_erg_s == 0.0
-    # The channel still closes its own energy branching above the bar -- the
-    # truncation understates the CASCADE, it does not leak energy.
-    k7b_hi_launched = float(k7_local_dep.heating_anomalous_erg_s.sum())
-    k7b_hi_culled = float(k7b_hi.tail_anode_culled_erg_s)
-    k7b_hi_delivered = (
-        float(k7b_hi.heating_anomalous_erg_s.sum())
-        + float(k7b_hi.ionization_cost_tail_erg_s.sum())
-        + float(k7b_hi.radiated_tail_erg_s.sum())
-        + float(k7b_hi.end_loss_tail_low_erg_s)
-        + float(k7b_hi.end_loss_tail_high_erg_s)
-    )
-    assert k7b_hi_culled > 0.0, k7b_hi_culled
-    assert abs(
-        k7b_hi_delivered + k7b_hi_culled - k7b_hi_launched
-    ) / k7b_hi_launched < 1e-12, (
-        k7b_hi_launched, k7b_hi_delivered, k7b_hi_culled
-    )
-    k7b_hi_diag = k7b_hi_sim._cathode_diagnostic_snapshot()
-    assert k7b_hi_diag["beam_tail_above_bar_power_W"] == (
-        k7b_hi.tail_above_bar_power_erg_s * 1.0e-7
-    )
-    assert k7b_hi_diag["beam_tail_sub_threshold_fraction"] == 0.0
-    # Presence gate on the diagnostics: a beer_lambert run and a "local" run
-    # launch no tail power at all, so the fraction is undefined rather than 0.
-    for _k7b_dg in ("beam_tail_power_W", "beam_tail_sub_threshold_power_W",
-                    "beam_tail_above_bar_power_W"):
-        assert bl_diag[_k7b_dg] == 0.0, _k7b_dg
-    assert math.isnan(bl_diag["beam_tail_sub_threshold_fraction"])
-    assert wpe_on_diag["beam_tail_power_W"] > 0.0
-    assert wpe_on_diag["beam_tail_sub_threshold_power_W"] == 0.0
-    assert wpe_on_diag["beam_tail_above_bar_power_W"] == 0.0
-
-    # (iv) THE TABLE EDGE IS STILL A REFUSAL, at the module as well as at
-    # construction: past the tabulated He EII cross section the lookup clamps
-    # to its last node and the walk would attenuate on an extrapolated sigma.
-    try:
-        _deposit_beam_ray(
-            **{**_k6_ray,
-               "tail_energy_eV": 1.5 * _beam_deposition_mod.HE_EII_EPS_TOP
-               * _beam_deposition_mod.HE_I_ION_EV},
-            tail_walk_window=_k6_win,
-        )
-    except ValueError:
-        pass
-    else:
-        raise AssertionError(
-            "expected ValueError for a tail energy past the EII table edge"
-        )
-
-    # (v) BUT THE EDGE ITSELF IS NOT PAST THE EDGE (K7c). The refusal exists
-    # so that nothing marches on an EXTRAPOLATED cross section; AT the edge
-    # the lookup returns the table's last node, which is that node's own
-    # value, so there is nothing to refuse and the guard is inclusive within
-    # HE_EII_EDGE_REL_TOL. The energy below is the ladder's exact failing
-    # value (es1_lad_tw100ion_nx240.log): f = 1.0 keyed to a phi_c sitting at
-    # the capability-limited ceiling puts E_tail on the edge to the last bit,
-    # so a strict ">=" deleted the top rung of the declared f bracket.
-    _k7c_edge_ray_eV = (
-        _beam_deposition_mod.HE_EII_EPS_TOP * _pskip_ray_kwargs["I_ion_eV"]
-    )
-    assert _k7c_edge_ray_eV == 1000.0000000000002, _k7c_edge_ray_eV
-    _k7c_sigma_top = float(np.exp(_beam_deposition_mod._HE_LOG_SIGMA[-1]))
-    for _k7c_E in (
-        _k7c_edge_ray_eV,
-        _k7c_edge_ray_eV * (1.0 + 1.0e-13),
-        _k7c_edge_ray_eV
-        * (1.0 + 0.5 * _beam_deposition_mod.HE_EII_EDGE_REL_TOL),
-    ):
-        # The physics the tolerance rests on: the lookup at this energy IS the
-        # tabulated endpoint, bit for bit. Nothing is extrapolated.
-        assert _beam_deposition_mod.He_EII_cross_lkup(
-            _k7c_E / _pskip_ray_kwargs["I_ion_eV"]
-        ) == _k7c_sigma_top
-        _k7c_dep = _deposit_beam_ray(
-            **{**_k6_ray, "tail_energy_eV": _k7c_E},
-            tail_walk_window=_k6_win,
-        )
-        # It MARCHES, and it marches in the disclosed above-<W_sec> regime
-        # rather than silently.
-        assert float(_k7c_dep.ionization_events_tail.sum()) > 0.0
-        assert float(_k7c_dep.tail_above_bar_power_erg_s) > 0.0
-        assert float(_k7c_dep.tail_sub_threshold_power_erg_s) == 0.0
-    # A GENUINE excess -- 1e-9 relative, three decades past the tolerance --
-    # is still refused, and the message says what it measured.
-    try:
-        _deposit_beam_ray(
-            **{**_k6_ray,
-               "tail_energy_eV": _k7c_edge_ray_eV * (1.0 + 1.0e-9)},
-            tail_walk_window=_k6_win,
-        )
-    except ValueError as _k7c_exc:
-        assert "relative excess" in str(_k7c_exc), str(_k7c_exc)
-    else:
-        raise AssertionError(
-            "expected ValueError for a tail energy 1e-9 past the EII edge"
-        )
-
-
-# --------------------------------------------------------------------
-# beam-ql-power-disposal-pd1
-# --------------------------------------------------------------------
-@_case(
-    "beam-ql-power-disposal-pd1",
-    historical_stance=True,
-)
-def _case_beam_ql_power_disposal_pd1(
-    _pskip_Gamma0, _pskip_geom, _pskip_ray_kwargs, csda_dep, csda_derived,
-    csda_params, csda_res, csda_state, k7_params
-):
-    # --- pd1: BRANCHED DISPOSAL of the extracted QL power. The all-or-nothing
-    # routing above is replaced by a COMPUTED per-cell split between the
-    # nonlocal tail (Landau damping on the resonant electrons) and local bulk
-    # heat (collisional damping of the wave). Unit level only -- what the
-    # branch does to the ignition timeline is a campaign run.
-    #
-    # (b) THE BRANCHING ANCHORS. The formula is the one the pd0 read
-    # cross-checked against the QL-onset memo, and these are that read's own
-    # printed numbers (scripts/pd0_branching.py (at commit 48be9a4, retired
-    # 2026-09-03)). They are asserted BEFORE the
-    # closure is exercised, so a drift in K_m, in the omega_pe coefficient or
-    # in the Bohm-Gross term fails here rather than downstream.
-    #
-    # THE LITERALS ARE K_m-DERIVED AND ROTATE WITH THE K_m NODES. That is the
-    # point of the tripwire, not a defect in it: nu_en = nn*K_m(Te), so an
-    # UNINTENDED drift in the table must fail here, and an INTENDED re-boxing
-    # of the table rotates these numbers in the same reviewed change. Rotated
-    # 2026-08-30 with the three-set re-centring of HE_EN_MT_SIGMA_CM2
-    # ((6.0, 2.1)e-16 -> (6.280, 1.992)e-16, [km-node-boxing-decision]):
-    # nu_en(25 eV) 1.405e6 -> 1.333123e6 (-5.12%) and the four-point branching
-    # table up by +0.0007..+0.0073. Re-derive with scripts/pd0_branching.py.
-    #
-    # The Landau-exponent anchor below is deliberately NOT in that list: it
-    # recovers gamma_L by dividing nu_en back out, so it is K_m-INDEPENDENT by
-    # construction and held at 37.02 across the re-centring (measured drift
-    # 7.1e-15, against its 1e-9 tolerance).
-    cathode_flags = _cathode_flags()
-    _pd1_branch = _beam_deposition_mod.landau_branching_fraction
-    _pd1_stance_nn = np.full(1, 2.0e13)
-    _pd1_stance_E = 177.6
-    # nu_en(25 eV) at the stance neutral density.
-    _pd1_nu_en = 2.0e13 * float(
-        _cross_mod.he_electron_momentum_transfer_rate_cm3_s(25.0)
-    )
-    assert abs(_pd1_nu_en - 1.333123e6) / 1.333123e6 < 1.0e-3, _pd1_nu_en
-    # The Landau exponent at Te 5 is e^-37.0 (the memo's own anchor): recover
-    # it from the shipped function by dividing out the prefactor, which pins
-    # the -3/2 Bohm-Gross term and the (v_phi/v_te)^2 = 2E/Te conversion
-    # together.
-    _pd1_f5 = float(
-        _pd1_branch(np.full(1, 1.0e8), np.full(1, 5.0), _pd1_stance_nn,
-                    _pd1_stance_E)[0]
-    )
-    _pd1_nu_half_5 = 0.5 * 2.0e13 * float(
-        _cross_mod.he_electron_momentum_transfer_rate_cm3_s(5.0)
-    )
-    _pd1_gL5 = _pd1_f5 * _pd1_nu_half_5 / (1.0 - _pd1_f5)
-    _pd1_r2_5 = 2.0 * _pd1_stance_E / 5.0
-    _pd1_expo = -math.log(
-        _pd1_gL5
-        / (
-            math.sqrt(math.pi / 8.0)
-            * _beam_deposition_mod._OMEGA_PE_COEFF
-            * math.sqrt(1.0e8)
-            * _pd1_r2_5 ** 1.5
-        )
-    )
-    assert abs(_pd1_expo - 37.02) < 1.0e-9, _pd1_expo
-    # The stance branching table, to the four decimals pd0 printed.
-    for _pd1_ne, _pd1_want in (
-        (1.0e8, 0.8389), (1.0e9, 0.9427), (1.0e10, 0.9812), (1.0e11, 0.9940),
-    ):
-        _pd1_got = float(
-            _pd1_branch(np.full(1, _pd1_ne), np.full(1, 25.0), _pd1_stance_nn,
-                        _pd1_stance_E)[0]
-        )
-        assert abs(_pd1_got - _pd1_want) < 5.0e-5, (_pd1_ne, _pd1_got)
-    # THE CORNERS ARE CLEAN. Floor-cold, floor-thin, a plasma-free AND
-    # neutral-free cell (the 0/0 the ratio would otherwise form) and an
-    # absurdly cold cell all return finite values in [0, 1], and none of them
-    # raises a numpy RuntimeWarning -- checked with warnings promoted to
-    # errors, because a silently-NaN branching would route power nowhere.
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        _pd1_corner = _pd1_branch(
-            np.array([1.0e8, 0.0, 1.0e12, 0.0, 1.0e10]),
-            np.array([0.1, 25.0, 1.0e-12, 0.0, 25.0]),
-            np.array([2.0e13, 2.0e13, 2.0e13, 0.0, 2.0e13]),
-            200.0,
-        )
-    assert np.all(np.isfinite(_pd1_corner)), _pd1_corner
-    assert np.all(_pd1_corner >= 0.0) and np.all(_pd1_corner <= 1.0), (
-        _pd1_corner
-    )
-    # The cold/thin/empty corners are the COLLISIONAL limit exactly, which is
-    # where the shipped "local" closure puts that power too.
-    assert np.array_equal(_pd1_corner[:4], np.zeros(4)), _pd1_corner
-    assert _pd1_corner[4] > 0.9, _pd1_corner
-
-    # (f) MISCONFIGURATION IS LOUD AT CONSTRUCTION -- every combination in
-    # which the branch could not act, could only be a silent no-op, or would
-    # silently pick an undeclared bracket arm.
-    _pd1_armed = dict(
-        heating_anomalous_disposal="landau_branched",
-        heating_anomalous_tail_phi_c_fraction=1.0,
-    )
-    for _pd1_bad in (
-        # unknown value
-        dict(k7_params, heating_anomalous_disposal="bogus"),
-        # nothing to deposit / nothing to carry
-        dict(k7_params, **_pd1_armed, beam_deposition_model="beer_lambert"),
-        dict(k7_params, **_pd1_armed, beam_anomalous_model="none"),
-        # DOUBLE SPECIFICATION: tail_walk is the f_Landau == 1 corner of the
-        # branch, so naming both states two dispositions for one bank.
-        dict(k7_params, **_pd1_armed,
-             heating_anomalous_transport="tail_walk"),
-        # the fixed rung is an assumed constant the branched closure does not
-        # carry; its birth energy is the live cathode drop
-        dict(k7_params, **_pd1_armed,
-             heating_anomalous_tail_energy_keying="fixed"),
-        # the f arm must be STATED: None would silently select 0.25 while the
-        # registered central arm is 1.0
-        dict(k7_params, heating_anomalous_disposal="landau_branched"),
-        # ...and it is still confined to the declared bracket
-        dict(k7_params, heating_anomalous_disposal="landau_branched",
-             heating_anomalous_tail_phi_c_fraction=0.75),
-    ):
-        try:
-            LAPDSim1D(_pd1_bad, dict(cathode_flags))
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(
-                "expected ValueError for heating_anomalous_disposal="
-                f"{_pd1_bad.get('heating_anomalous_disposal')!r} with "
-                f"transport={_pd1_bad.get('heating_anomalous_transport')!r}, "
-                f"keying={_pd1_bad.get('heating_anomalous_tail_energy_keying')!r}"
-                f", f={_pd1_bad.get('heating_anomalous_tail_phi_c_fraction')!r}"
-            )
-    # The coverage refusal, at BOTH levels: the two-stream march shares one
-    # withholding bank between the media and the reservoir carries the density
-    # FLOOR, so a branching there would be an artifact of the floor convention.
-    _pd1_cov_flags = dict(cathode_flags)
-    _pd1_cov_flags["coverage_closure"] = True
-    try:
-        LAPDSim1D(dict(k7_params, **_pd1_armed), _pd1_cov_flags)
-    except ValueError as _pd1_exc:
-        assert "coverage_closure" in str(_pd1_exc), str(_pd1_exc)
-    else:
-        raise AssertionError(
-            "expected ValueError for landau_branched under coverage_closure"
-        )
-    try:
-        _beam_deposition_mod.deposit_beam_two_stream(
-            csda_res.phi_c, _pskip_Gamma0,
-            f_cov=np.full(_pskip_geom.cells, 0.5),
-            nn_channel=csda_state.nn, ne_channel=csda_state.n,
-            nn_reservoir=csda_state.nn, ne_reservoir=csda_state.n,
-            Te=csda_derived.Te, dz_cm=_pskip_geom.length_cm,
-            anomalous_disposal="landau_branched", tail_energy_eV=75.0,
-            **_pskip_ray_kwargs,
-        )
-    except ValueError as _pd1_exc:
-        assert "two-stream" in str(_pd1_exc), str(_pd1_exc)
-    else:
-        raise AssertionError(
-            "expected ValueError for landau_branched at the two-stream march"
-        )
-    # A bad disposal value under "local" IS NOT the coverage refusal: the
-    # domain check comes first, so a typo reads as a typo.
-    try:
-        _beam_deposition_mod.deposit_beam_two_stream(
-            csda_res.phi_c, _pskip_Gamma0,
-            f_cov=np.full(_pskip_geom.cells, 0.5),
-            nn_channel=csda_state.nn, ne_channel=csda_state.n,
-            nn_reservoir=csda_state.nn, ne_reservoir=csda_state.n,
-            Te=csda_derived.Te, dz_cm=_pskip_geom.length_cm,
-            anomalous_disposal="bogus", **_pskip_ray_kwargs,
-        )
-    except ValueError as _pd1_exc:
-        assert "unknown anomalous_disposal" in str(_pd1_exc), str(_pd1_exc)
-    else:
-        raise AssertionError("expected ValueError for a bad disposal value")
-
-    # (a) FLAG-OFF BIT-EXACTNESS. Naming "local" explicitly reproduces the
-    # deposition the default stance already produced, byte for byte, on every
-    # array and every scalar -- the presence gating means the off path never
-    # even forms the keyword.
-    _pd1_off_sim = LAPDSim1D(
-        dict(csda_params, heating_anomalous_disposal="local"),
-        dict(cathode_flags),
-    )
-    _pd1_off_sim._circuit_I_loop = 3000.0
-    _pd1_off_dep = _pd1_off_sim.solve_cathode_boundary().beam_deposition[0]
-    for _pd1_arr in (
-        "plasma_heating_erg_s", "heating_anomalous_erg_s",
-        "heating_coulomb_erg_s", "heating_secondary_erg_s",
-        "heating_terminal_erg_s", "radiated_erg_s",
-        "ionization_cost_erg_s", "ionization_events", "excitation_events",
-        "E_entry_eV",
-    ):
-        assert np.array_equal(
-            getattr(_pd1_off_dep, _pd1_arr), getattr(csda_dep, _pd1_arr)
-        ), _pd1_arr
-    assert _pd1_off_dep.end_loss_tail_low_erg_s == 0.0
-    assert _pd1_off_dep.end_loss_tail_high_erg_s == 0.0
-    assert _pd1_off_dep.tail_power_erg_s == 0.0
-    # ...and at the MODULE, where the keyword IS formed and named explicitly.
-    _pd1_ray = dict(
-        E0_eV=csda_res.phi_c, Gamma0_per_s=_pskip_Gamma0,
-        dz_cm=_pskip_geom.length_cm, nn=csda_state.nn, ne=csda_state.n,
-        Te=csda_derived.Te, **_pskip_ray_kwargs,
-    )
-    _pd1_mod_local = _deposit_beam_ray(**_pd1_ray)
-    _pd1_mod_named = _deposit_beam_ray(**_pd1_ray, anomalous_disposal="local")
-    for _pd1_arr in (
-        "plasma_heating_erg_s", "heating_anomalous_erg_s",
-        "heating_coulomb_erg_s", "heating_secondary_erg_s",
-        "heating_terminal_erg_s", "radiated_erg_s",
-        "ionization_cost_erg_s", "ionization_events", "excitation_events",
-        "E_entry_eV",
-    ):
-        assert np.array_equal(
-            getattr(_pd1_mod_named, _pd1_arr),
-            getattr(_pd1_mod_local, _pd1_arr),
-        ), _pd1_arr
-
-    # (c) THE FORCED-LIMIT IDENTITIES, at the module over a synthetic column
-    # cold enough / hot enough to drive f_Landau to each corner. The scenario
-    # must actually extract QL power or both limits are vacuous.
-    _pd1_cells = 40
-    _pd1_col = dict(
-        dz_cm=np.full(_pd1_cells, 25.0),
-        nn=np.full(_pd1_cells, 2.0e13),
-        ne=np.full(_pd1_cells, 1.0e10),
-        launch=0, direction=1,
-        anomalous_model="quasilinear", beam_area_cm2=300.0,
-        I_ion_eV=float(I_ion),
-    )
-    _pd1_E0 = 177.6
-    _pd1_G0 = 1.0e19
-    # COLD (Te 0.5 eV): the Landau channel is dead by 140 decades, so the
-    # branch must behave as "local" does -- same anomalous delivery, nothing
-    # launched, nothing at the ends.
-    _pd1_cold_Te = np.full(_pd1_cells, 0.5)
-    assert float(_pd1_branch(
-        _pd1_col["ne"], _pd1_cold_Te, _pd1_col["nn"], _pd1_E0)[0]
-    ) < 1.0e-100
-    _pd1_cold_loc = _deposit_beam_ray(
-        _pd1_E0, _pd1_G0, Te=_pd1_cold_Te, **_pd1_col
-    )
-    _pd1_P_QL_cold = float(_pd1_cold_loc.heating_anomalous_erg_s.sum())
-    assert _pd1_P_QL_cold > 0.0, "cold-limit scenario extracts no QL power"
-    _pd1_cold_br = _deposit_beam_ray(
-        _pd1_E0, _pd1_G0, Te=_pd1_cold_Te, **_pd1_col,
-        anomalous_disposal="landau_branched", tail_energy_eV=_pd1_E0,
-    )
-    _pd1_cold_led = (
-        float(_pd1_cold_br.end_loss_tail_low_erg_s)
-        + float(_pd1_cold_br.end_loss_tail_high_erg_s)
-    )
-    assert _pd1_cold_led / _pd1_P_QL_cold < 1.0e-100, _pd1_cold_led
-    assert (
-        abs(float(_pd1_cold_br.heating_anomalous_erg_s.sum())
-            - _pd1_P_QL_cold) / _pd1_P_QL_cold < 1.0e-14
-    )
-    # Per-cell, not merely in total: the branch is a per-cell statement, so it
-    # must reproduce the birth PROFILE and not just its integral.
-    _pd1_live = _pd1_cold_loc.heating_anomalous_erg_s > 0.0
-    assert float(np.max(np.abs(
-        _pd1_cold_br.heating_anomalous_erg_s[_pd1_live]
-        / _pd1_cold_loc.heating_anomalous_erg_s[_pd1_live] - 1.0
-    ))) < 1.0e-12
-    # HOT (Te 60 eV): f_Landau > 0.99, so essentially all of the extracted
-    # power is launched as walkers rather than banked in its birth cell.
-    _pd1_hot_Te = np.full(_pd1_cells, 60.0)
-    _pd1_f_hot = float(_pd1_branch(
-        _pd1_col["ne"], _pd1_hot_Te, _pd1_col["nn"], _pd1_E0)[0]
-    )
-    assert _pd1_f_hot > 0.99, _pd1_f_hot
-    _pd1_hot_loc = _deposit_beam_ray(
-        _pd1_E0, _pd1_G0, Te=_pd1_hot_Te, **_pd1_col
-    )
-    _pd1_P_QL_hot = float(_pd1_hot_loc.heating_anomalous_erg_s.sum())
-    _pd1_hot_br = _deposit_beam_ray(
-        _pd1_E0, _pd1_G0, Te=_pd1_hot_Te, **_pd1_col,
-        anomalous_disposal="landau_branched", tail_energy_eV=_pd1_E0,
-    )
-    # The LAUNCHED tail power is the branching fraction of P_QL, to roundoff:
-    # the split is applied to a bank the two arms form bit-identically.
-    assert abs(
-        float(_pd1_hot_br.tail_power_erg_s) / _pd1_P_QL_hot - _pd1_f_hot
-    ) < 1.0e-12, (_pd1_hot_br.tail_power_erg_s, _pd1_P_QL_hot, _pd1_f_hot)
-    # ...and "tail_walk" is that same statement at f == 1, which is why the
-    # two selections are refused together.
-    _pd1_hot_tw = _deposit_beam_ray(
-        _pd1_E0, _pd1_G0, Te=_pd1_hot_Te, **_pd1_col,
-        anomalous_transport="tail_walk", tail_energy_eV=_pd1_E0,
-    )
-    assert abs(
-        float(_pd1_hot_tw.tail_power_erg_s) / _pd1_P_QL_hot - 1.0
-    ) < 1.0e-12
-    # The OTHER channels are untouched in both limits: only the anomalous
-    # bank's destination moved, and the closure stays ENERGY-ONLY.
-    for _pd1_arr in (
-        "heating_coulomb_erg_s", "heating_secondary_erg_s",
-        "heating_terminal_erg_s", "radiated_erg_s", "ionization_cost_erg_s",
-        "ionization_events", "excitation_events", "E_entry_eV",
-    ):
-        assert np.array_equal(
-            getattr(_pd1_hot_br, _pd1_arr), getattr(_pd1_hot_loc, _pd1_arr)
-        ), _pd1_arr
-        assert np.array_equal(
-            getattr(_pd1_cold_br, _pd1_arr), getattr(_pd1_cold_loc, _pd1_arr)
-        ), _pd1_arr
-
-    # (d) THE CONSERVATION IDENTITY, extended to the split and asserted at
-    # SOLVER conditions. Every extracted eV ends in exactly one of {local bulk
-    # heat, walked bulk heat, tail ionization investment, tail radiation, the
-    # tail end ledger} -- and because the locally-banked share is booked into
-    # heating_anomalous alongside the walked share, the shipped identity holds
-    # in its shipped FORM. Exact to roundoff rather than a budget statement:
-    # the ray integration is bit-identical in both arms, so the "local" arm's
-    # anomalous bank IS this arm's P_QL.
-    #
-    # THE SCENARIO IS CHOSEN TO LAND IN THE BRANCH'S INTERIOR, and that is a
-    # test-scenario choice rather than a physics one: the k7 stance above
-    # starts at Te0 = 0.21 eV, where the Landau channel is dead by ~90 decades
-    # and the branch is INDISTINGUISHABLE from "local" (correct physics, and
-    # asserted as such in the cold limit above, but vacuous as a test of a
-    # split). Raising the scenario's initial Te to 30 eV -- the regime the
-    # driven cells actually reach, per the pd0 branching read -- puts
-    # f_Landau strictly inside (0, 1) so both shares are live.
-    _pd1_params = dict(k7_params, Te0=30.0)
-    _pd1_base_sim = LAPDSim1D(_pd1_params, dict(cathode_flags))
-    _pd1_base_sim._circuit_I_loop = 3000.0
-    _pd1_base_solve = _pd1_base_sim.solve_cathode_boundary()
-    _pd1_base_dep = _pd1_base_solve.beam_deposition[0]
-    _pd1_P_QL = float(_pd1_base_dep.heating_anomalous_erg_s.sum())
-    assert _pd1_P_QL > 0.0, "pd1 solver scenario drives no QL power"
-    _pd1_on_sim = LAPDSim1D(
-        dict(_pd1_params, **_pd1_armed), dict(cathode_flags)
-    )
-    _pd1_on_sim._circuit_I_loop = 3000.0
-    _pd1_on_solve = _pd1_on_sim.solve_cathode_boundary()
-    _pd1_on_dep = _pd1_on_solve.beam_deposition[0]
-    _pd1_ledger = (
-        float(_pd1_on_dep.end_loss_tail_low_erg_s)
-        + float(_pd1_on_dep.end_loss_tail_high_erg_s)
-    )
-    _pd1_culled = float(_pd1_on_dep.tail_anode_culled_erg_s)
-    _pd1_delivered = (
-        float(_pd1_on_dep.heating_anomalous_erg_s.sum())
-        + float(_pd1_on_dep.ionization_cost_tail_erg_s.sum())
-        + float(_pd1_on_dep.radiated_tail_erg_s.sum())
-        + _pd1_ledger
-    )
-    assert _pd1_culled > 0.0, _pd1_culled
-    assert abs(
-        _pd1_delivered + _pd1_culled - _pd1_P_QL
-    ) / _pd1_P_QL < 1.0e-12, (_pd1_P_QL, _pd1_delivered, _pd1_culled)
-    # ANTI-VACUITY: the branch really SPLIT something. Both shares are a
-    # substantial fraction of P_QL at these conditions, so neither corner is
-    # being tested by accident -- which is the whole content of "branched" as
-    # against the two all-or-nothing values.
-    _pd1_launched = float(_pd1_on_dep.tail_power_erg_s)
-    assert 0.05 < _pd1_launched / _pd1_P_QL < 0.95, (
-        _pd1_launched, _pd1_P_QL
-    )
-    assert _pd1_ledger > 0.0
-    # ...and it is neither of the two corners it interpolates: the branched
-    # arm's anomalous delivery differs from BOTH the local arm's and the
-    # tail-walk arm's by more than roundoff.
-    _pd1_tw_sim = LAPDSim1D(
-        dict(_pd1_params, heating_anomalous_transport="tail_walk",
-             heating_anomalous_tail_phi_c_fraction=1.0),
-        dict(cathode_flags),
-    )
-    _pd1_tw_sim._circuit_I_loop = 3000.0
-    _pd1_tw_dep = _pd1_tw_sim.solve_cathode_boundary().beam_deposition[0]
-    _pd1_tw_ledger = (
-        float(_pd1_tw_dep.end_loss_tail_low_erg_s)
-        + float(_pd1_tw_dep.end_loss_tail_high_erg_s)
-    )
-    assert _pd1_ledger < _pd1_tw_ledger, (_pd1_ledger, _pd1_tw_ledger)
-    assert (
-        _pd1_on_dep.plasma_heating_erg_s.sum()
-        < _pd1_base_dep.plasma_heating_erg_s.sum()
-    )
-    assert (
-        _pd1_on_dep.plasma_heating_erg_s.sum()
-        > _pd1_tw_dep.plasma_heating_erg_s.sum()
-    )
-    # The whole per-ray budget still closes with the tail ledger in it.
-    _pd1_total = (
-        _pd1_on_dep.plasma_heating_erg_s.sum()
-        + _pd1_on_dep.radiated_erg_s.sum()
-        + _pd1_on_dep.ionization_cost_erg_s.sum()
-        + float(_pd1_on_dep.anode_intercepted_erg_s)
-        + _pd1_on_dep.transmitted_flux
-        * _pd1_on_dep.transmitted_energy_eV
-        * ev_to_erg
-        + _pd1_ledger
-    )
-    _pd1_budget = (
-        float(_pd1_on_solve.beam_result.result.I_eth_star)
-        * float(_pd1_on_solve.beam_result.result.phi_c)
-        * 1.0e7
-    )
-    assert abs(_pd1_total - _pd1_budget) / _pd1_budget < 1.0e-9, (
-        _pd1_total, _pd1_budget
-    )
-    # ENERGY-ONLY, exactly like the walk it rides on: the particle rows the
-    # fluid and the circuit read are untouched, and the WP-D ledger stays
-    # identically zero.
-    assert np.array_equal(
-        _pd1_on_dep.ionization_events, _pd1_base_dep.ionization_events
-    )
-    assert _pd1_on_dep.end_loss_low_erg_s == 0.0
-    assert _pd1_on_dep.end_loss_high_erg_s == 0.0
-    print(
-        "pd1 branched disposal: ok (launched tail share "
-        f"{_pd1_launched / _pd1_P_QL:.4f} of P_QL, identity closes to "
-        f"{abs(_pd1_delivered - _pd1_P_QL) / _pd1_P_QL:.1e})"
-    )
 
 
 # --------------------------------------------------------------------
@@ -6380,7 +4325,7 @@ def _case_beam_ql_power_disposal_pd1(
 @_case("anode-tail-cull-crossing-rule", historical_stance=True)
 def _case_anode_tail_cull_crossing_rule(
     _pskip_Gamma0, _pskip_geom, _pskip_ray_kwargs, csda_derived, csda_eta,
-    csda_params, csda_res, csda_state, wpe_on_dep,
+    csda_res, csda_state,
 ):
     """D1 (i)+(ii): WHERE the anode mesh takes its share of the tail.
 
@@ -6403,9 +4348,7 @@ def _case_anode_tail_cull_crossing_rule(
         dz_cm=_pskip_geom.length_cm, nn=csda_state.nn, ne=csda_state.n,
         Te=csda_derived.Te, anode_cross_index=ac_face, anode_eta=ac_eta,
         anomalous_transport="tail_walk",
-        tail_energy_eV=float(
-            csda_params.get("heating_anomalous_tail_energy_eV", 75.0)
-        ),
+        tail_energy_eV=75.0,
         **_pskip_ray_kwargs,
     )
     ac_off = _deposit_beam_ray(
@@ -6415,11 +4358,6 @@ def _case_anode_tail_cull_crossing_rule(
         csda_res.phi_c, _pskip_Gamma0,
         tail_anode_cross_index=ac_face, tail_anode_eta=ac_eta,
         **ac_ray_kwargs,
-    )
-    # The armed ray IS the one the solver ran, so this is a statement about
-    # the live configuration and not about a ray only this case has seen.
-    assert np.array_equal(
-        ac_on.heating_anomalous_erg_s, wpe_on_dep.heating_anomalous_erg_s
     )
     assert float(ac_off.tail_anode_culled_erg_s) == 0.0
     ac_culled = float(ac_on.tail_anode_culled_erg_s)
@@ -7026,39 +4964,17 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
     historical_stance=True,
     provides=("decay_params", "source_rhs"),
 )
-def _case_ionization_birth_energy_model(csda_params, csda_sim, csda_terms):
-    # --- R4.2 (audit A14): ionization_birth_energy_model. Default-off ("legacy")
-    # is the historical booking; "conservative" zeroes the bulk electron
-    # birth energy (no 3Te/2 creation) and adds the ion mixing energy, and the
-    # beam ion birth gains the same mixing energy (its electron Ee is already 0).
+def _case_ionization_birth_energy_model(csda_sim):
+    # --- R4.2 (audit A14): ionization births book the cold-electron
+    # convention -- the bulk electron birth energy is zero (no 3Te/2
+    # creation) -- and the particle rows carry the births.
     params, flags = _base_config()
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     state = snapshot.state
-    cathode_flags = _cathode_flags()
-    cons_params = dict(csda_params)
-    cons_params["ionization_birth_energy_model"] = "conservative"
-    cons_sim = LAPDSim1D(cons_params, cathode_flags)
-    cons_sim._circuit_I_loop = 3000.0
-    cons_solve = cons_sim.solve_cathode_boundary()
-    cons_terms = cons_sim.beam_ionization_rhs_terms(cathode_solve=cons_solve)
-    leg_react = csda_sim.reaction_rhs_terms()["ionization_birth"]
-    cons_react = cons_sim.reaction_rhs_terms()["ionization_birth"]
-    # Bulk electron birth is zeroed; particle & momentum rows are untouched.
+    cons_react = csda_sim.reaction_rhs_terms()["ionization_birth"]
     assert np.all(cons_react.Ee == 0.0)
-    assert np.array_equal(cons_react.n, leg_react.n)
-    assert np.array_equal(cons_react.M, leg_react.M)
-    # Beam ion birth gains the (non-negative) mixing energy over legacy.
-    leg_beam_Ei = csda_terms["beam_ionization_birth"].Ei
-    cons_beam_Ei = cons_terms["beam_ionization_birth"].Ei
-    assert np.all(cons_beam_Ei >= leg_beam_Ei - 1e-30)
-    # Invalid selector rejects at construction.
-    try:
-        LAPDSim1D(dict(csda_params, ionization_birth_energy_model="x"), cathode_flags)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("ionization_birth_energy_model must reject unknown values")
+    assert np.any(cons_react.n > 0.0)
 
     rhs = sim.plasma_flux_rhs(include_front=False)
     # A uniform stationary plasma has no advective divergence -- exactly, on
@@ -15890,24 +13806,10 @@ def _case_cathode_jet_hot_carrier():
     # Q_mix is a squared magnitude summed over births: never negative, and
     # strictly positive wherever the beam deposited anything at all.
     assert hc_led["q_mix_missing_W"] > 0.0
-    # THE STANCE RUNS "conservative" -- it is the shipped default, and
-    # "legacy" is the DEPRECATED arm. The carrier must stay constructible on
-    # it (every registered arm is at the stance), and on that model the
-    # electron side AGREES: the bulk books Ee_birth = 0 exactly as the
-    # carrier does. Pinned so a future refusal cannot silently strand the
-    # arms, and so the agreement is a gate rather than a memory.
-    hc_default_params, _hc_default_flags = default_config()
-    assert (
-        hc_default_params["ionization_birth_energy_model"] == "conservative"
-    )
-    LAPDSim1D(
-        dict(
-            hc_params,
-            cathode_jet_hot_carrier=True,
-            ionization_birth_energy_model="conservative",
-        ),
-        dict(hc_flags),
-    )
+    # The carrier is constructible on the bulk birth convention, on which
+    # the electron side AGREES: the bulk books Ee_birth = 0 exactly as the
+    # carrier does.
+    LAPDSim1D(dict(hc_params, cathode_jet_hot_carrier=True), dict(hc_flags))
 
 
 # --------------------------------------------------------------------
@@ -16588,9 +14490,9 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
                 f"expected unknown-key rejection for {dep_params}/{dep_flags}"
             )
     for birth_name, bad_value in (
-        ("Te_birth_ionization", "bogus"),
+        ("Ti_birth_ionization", "bogus"),
         ("Ti_birth_ionization", -1.0),
-        ("Te_birth_ionization", np.inf),
+        ("Ti_birth_ionization", np.inf),
     ):
         try:
             LAPDSim1D(
@@ -16614,23 +14516,6 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
     assert np.all(
         topo_on.rhs_terms()["ionization_birth"].n[topo_dead] == 0.0
     )
-
-    # Te_birth_ionization (local vs floor) only affects the electron birth
-    # energy under the legacy birth model; it is inert (Ee birth = 0) under the
-    # production "conservative" default, so exercise it on the legacy arm.
-    birth_local = LAPDSim1D(
-        dict(r1a_params, Te_birth_ionization="local",
-             ionization_birth_energy_model="legacy"), r1a_flags
-    )
-    birth_floor = LAPDSim1D(
-        dict(r1a_params, Te_birth_ionization="floor",
-             ionization_birth_energy_model="legacy"), r1a_flags
-    )
-    local_Ee = birth_local.reaction_rhs_terms()["ionization_birth"].Ee
-    floor_Ee = birth_floor.reaction_rhs_terms()["ionization_birth"].Ee
-    assert np.any(local_Ee[birth_local.geometry.plasma_active] != floor_Ee[
-        birth_floor.geometry.plasma_active
-    ])
 
     raw_off = LAPDSim1D(
         r1c_params, dict(r1c_flags, raw_stage_validation=False)
@@ -16708,10 +14593,10 @@ def _case_resolved_config_manifest_r1e():
                 assert json.loads(case_h5.attrs["flags_json"]) == resolved_flags
 
         mismatch_params = dict(case_params)
-        mismatch_params["Te_birth_ionization"] = (
-            "local"
-            if case_params["Te_birth_ionization"] == "floor"
-            else "floor"
+        mismatch_params["Ti_birth_ionization"] = (
+            0.5
+            if case_params["Ti_birth_ionization"] == "neutral"
+            else "neutral"
         )
         try:
             save_result_hdf5(
@@ -17224,23 +15109,24 @@ def _case_compiled_kernel_equivalence():
         assert _ck_module.KERNEL_ID == _ck_expected_kernel_id, (
             _ck_module.KERNEL_ID
         )
-        # TWO scenarios, run through the same child harness:
+        # THREE scenarios, run through the same child harness:
         #
         # * ``meanfield`` -- a short current-driven discharge on the shared
         #   base stated below. The cathode sheath solve (Tier A) runs on every
         #   sample and the CSDA ray fires, so both halves of "tierA+csda" are
         #   on the hot path.
         # * ``coverage`` -- the same question under the clumpy-plasma closure,
-        #   which used to REFUSE the opt-in outright. It no longer does, and
-        #   this is what replaced the refusal. The compiled march is bound only
-        #   inside ``deposit_beam``, the single-medium ray;
-        #   ``deposit_beam_two_stream`` has no compiled branch, so under
-        #   coverage the opt-in reaches exactly the NESTED single-medium walker
-        #   marches plus the tier-A kernels. The scenario therefore turns the
-        #   ionizing tail walk on: that is what issues those nested legs, and
-        #   without it the comparison would be blind to the march entirely.
+        #   which used to REFUSE the opt-in outright. It certifies the tier-A
+        #   sheath-solve kernels under coverage, and nothing of the march: the
+        #   compiled march is bound only inside ``deposit_beam``, the
+        #   single-medium ray, and ``deposit_beam_two_stream`` has no compiled
+        #   branch. Under coverage the single-medium ray is reached only as a
+        #   NESTED walker march, and the one walked tail left
+        #   (``plateau_multigroup``) is refused under coverage, so no nested
+        #   march runs and the compiled march is unreachable here.
+        # * ``initial_profile`` -- the shaped initial neutral fill armed.
         #
-        # LAYOUT (R2a fold-in, 2026-08-20): all four scenarios share ONE base,
+        # LAYOUT (R2a fold-in, 2026-08-20): all three scenarios share ONE base,
         # and it is the pre-R2a 5-field cold-neutral stance -- the child spells
         # _pin_pre_r2a_neutral_stance out itself, since a subprocess cannot
         # import the parent's helper (the TOML block in the
@@ -17297,26 +15183,6 @@ params.update({
 if scenario == "meanfield":
     params["nx"] = 24
     t_end = 2.0e-6
-elif scenario == "landau":
-    # pd1: the branched disposal ARMED. The split is applied post-march to the
-    # withholding bank the compiled CSDA march itself fills, so this is the
-    # scenario that answers "does the branch survive the kernel boundary".
-    # Te0 is raised into the regime where f_Landau is strictly interior --
-    # at the shipped 0.21 eV the branch is numerically the local closure and
-    # the comparison would be blind to it.
-    params.update({
-        "nx": 12,
-        "beam_deposition_model": "csda",
-        "beam_anomalous_model": "quasilinear",
-        "cathode_Ts_base_K": 1998.15,
-        "cathode_cleaning_E_th_eV": None,
-        "cathode_phi_c_cap_V": 300.0,
-        "Te0": 30.0,
-        "heating_anomalous_disposal": "landau_branched",
-        "heating_anomalous_tail_phi_c_fraction": 1.0,
-    })
-    flags["neutral_equilibration"] = False
-    t_end = 1.0e-6
 elif scenario == "initial_profile":
     # sp3: the shaped initial neutral fill ARMED. The array enters the state
     # before any kernel runs, so what this asks is whether an initial
@@ -17325,7 +15191,6 @@ elif scenario == "initial_profile":
     # the two runs disagree everywhere if it does not.
     params.update({
         "nx": 12,
-        "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
         "cathode_Ts_base_K": 1998.15,
         "cathode_cleaning_E_th_eV": None,
@@ -17342,13 +15207,10 @@ elif scenario == "initial_profile":
 else:
     params.update({
         "nx": 12,
-        "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
         "cathode_Ts_base_K": 1998.15,
         "cathode_cleaning_E_th_eV": None,
         "coverage_initial_fraction": 0.3,
-        "heating_anomalous_transport": "tail_walk",
-        "heating_anomalous_tail_ionization": "on",
     })
     flags["coverage_closure"] = True
     flags["neutral_equilibration"] = False
@@ -17383,9 +15245,7 @@ print(json.dumps({
         None if "coverage_fraction" not in diag
         else float(diag["coverage_fraction"][-1])
     ),
-    # pd1 anti-vacuity: the tail end ledger is identically zero unless a
-    # disposal actually withheld and walked power, so a nonzero maximum is
-    # proof the branched closure was live on the path being compared.
+    # The tail end ledger: identically zero unless a walk carried power.
     "tail_ledger_W": float(
         np.max(diag["source_beam_end_loss_tail_low_W"])
         + np.max(diag["source_beam_end_loss_tail_high_W"])
@@ -17400,12 +15260,9 @@ print(json.dumps({
 }))
 '''
         _ck_expected_steps = {
-            "meanfield": 20, "coverage": 10, "landau": 10,
-            "initial_profile": 10,
+            "meanfield": 20, "coverage": 10, "initial_profile": 10,
         }
-        _CK_SCENARIOS = (
-            "meanfield", "coverage", "landau", "initial_profile",
-        )
+        _CK_SCENARIOS = ("meanfield", "coverage", "initial_profile")
         _ck_results = {}
         with tempfile.TemporaryDirectory() as _ck_tmpdir:
             _ck_script = Path(_ck_tmpdir) / "compiled_equivalence_child.py"
@@ -17466,21 +15323,14 @@ print(json.dumps({
                     _ck_scenario, _ck_tag
                 )
                 if _ck_scenario == "coverage":
-                    # The closure was really on, and the nested single-medium
-                    # marches -- the ONLY place the compiled march can be
-                    # reached under coverage -- really ran.
+                    # The closure was really on.
                     assert _ck_res["coverage_fraction"] is not None, (
                         _ck_scenario, _ck_tag
                     )
-                    assert _ck_res["nested_marches"] > 0, (
+                    # No walked tail runs under coverage, so no nested march:
+                    # a non-zero count means a walk was re-enabled here.
+                    assert _ck_res["nested_marches"] == 0, (
                         _ck_scenario, _ck_tag, _ck_res["nested_marches"]
-                    )
-                if _ck_scenario == "landau":
-                    # The branched disposal really withheld and walked power
-                    # on BOTH paths; without this the bit-identity below
-                    # could pass on a run where the branch never fired.
-                    assert _ck_res["tail_ledger_W"] > 0.0, (
-                        _ck_scenario, _ck_tag, _ck_res["tail_ledger_W"]
                     )
                 if _ck_scenario == "initial_profile":
                     # The shaped fill was really the initial condition: a
@@ -17808,11 +15658,10 @@ def _case_coverage_closure_v1():
         coverage_channel_densities,
     )
 
-    def _coverage_config(deposition_model, **cov):
+    def _coverage_config(**cov):
         p, f = default_config()
         p.update({
             "nx": 12,
-            "beam_deposition_model": deposition_model,
             # The surface held: no step's temperature increment survives
             # this heat capacity, and nothing cleans at a zero cross section.
             "cathode_Ts_base_K": 1998.15,
@@ -17820,8 +15669,7 @@ def _case_coverage_closure_v1():
             "cathode_cleaning_sigma_cm2": 0.0,
             "cathode_cleaning_E_th_eV": None,
         })
-        if deposition_model == "csda":
-            p["beam_anomalous_model"] = "quasilinear"
+        p["beam_anomalous_model"] = "quasilinear"
         p.update(cov)
         f = dict(f)
         f["neutral_equilibration"] = False
@@ -17836,9 +15684,9 @@ def _case_coverage_closure_v1():
 
     # (i) CONFIGURATION REFUSALS. Every one is a construction-time ValueError:
     # an incomplete coverage configuration must never reach a cathode solve.
-    _cov_base_p, _cov_base_f = _coverage_config("csda")
+    _cov_base_p, _cov_base_f = _coverage_config()
     _cov_on_f = dict(_cov_base_f, coverage_closure=True)
-    _cov_nx = LAPDSim1D(*_coverage_config("csda")).geometry.cells
+    _cov_nx = LAPDSim1D(*_coverage_config()).geometry.cells
     for bad, needle in (
         ({}, "requires EXACTLY ONE initial condition"),
         # Both spellings of the initial condition at once: they are the same
@@ -17875,26 +15723,6 @@ def _case_coverage_closure_v1():
             assert needle in str(error), (bad, str(error))
         else:
             raise AssertionError(f"coverage_closure accepted {bad!r}")
-    # POSITIVE CONSTRUCTION, the other side of the refusal above: the two walk
-    # closures are ACCEPTED under coverage as of the walk-on-mean ruling. They
-    # used to be construction-time refusals; a build that silently reinstated
-    # either would fail here rather than quietly dropping the walk.
-    for _cov_walk in (
-        {"coverage_initial_fraction": 0.3,
-         "beam_product_transport": "nonlocal"},
-        {"coverage_initial_fraction": 0.3,
-         "heating_anomalous_transport": "tail_walk",
-         "heating_anomalous_tail_energy_keying": "fixed",
-         "heating_anomalous_tail_energy_eV": 75.0},
-        # ...including the IONIZING tail channel (v2.1b): its walkers burn
-        # neutrals, and the burn is attributed by the same decorrelation
-        # partition, so there is nothing left for coverage to refuse.
-        {"coverage_initial_fraction": 0.3,
-         "heating_anomalous_transport": "tail_walk",
-         "heating_anomalous_tail_ionization": "on"},
-    ):
-        _cov_walk_ok_sim = LAPDSim1D(dict(_cov_base_p, **_cov_walk), _cov_on_f)
-        assert _cov_walk_ok_sim._coverage is not None, _cov_walk
     # ... and the reverse direction: coverage parameters set with the flag OFF
     # would be inert, which is exactly the silent no-op the house rules forbid.
     for _cov_off_key, _cov_off_value in (
@@ -17912,22 +15740,10 @@ def _case_coverage_closure_v1():
             raise AssertionError(
                 f"{_cov_off_key} accepted without the coverage_closure flag"
             )
-    # The two-medium split is built on the CSDA rays; under Beer-Lambert the
-    # whole beam would go through the channels while the closure's own premise
-    # says only f_cov of it does -- inconsistent, not merely inert.
-    try:
-        LAPDSim1D(
-            *_coverage_config("beer_lambert", coverage_initial_fraction=0.3)
-        )
-    except ValueError as error:
-        assert "requires beam_deposition_model='csda'" in str(error)
-    else:
-        raise AssertionError("coverage_closure accepted beer_lambert")
     # Clumping is the other beam split over neutral media; their product is a
     # four-ray composition this build does not define.
     try:
         LAPDSim1D(*_coverage_config(
-            "csda",
             coverage_initial_fraction=0.3,
             beam_clump_fraction=0.5,
             beam_clump_enhancement=10.0,
@@ -17938,9 +15754,7 @@ def _case_coverage_closure_v1():
         raise AssertionError("coverage_closure accepted beam clumping")
     # The kinetic neutral arms own the fluid nn rows once engaged, so the
     # covered column could never deplete and the backfill would do nothing.
-    _cov_kin_p, _cov_kin_f = _coverage_config(
-        "csda", coverage_initial_fraction=0.3
-    )
+    _cov_kin_p, _cov_kin_f = _coverage_config(coverage_initial_fraction=0.3)
     _cov_kin_p["neutral_model"] = "kinetic"
     _cov_kin_f["neutral_two_zone"] = True
     try:
@@ -17964,7 +15778,7 @@ def _case_coverage_closure_v1():
     os.environ["CABLP_COMPILED_KERNELS"] = "1"
     try:
         _cov_optin_sim = LAPDSim1D(
-            *_coverage_config("csda", coverage_initial_fraction=0.3)
+            *_coverage_config(coverage_initial_fraction=0.3)
         )
         assert _cov_optin_sim._coverage is not None
     finally:
@@ -17976,40 +15790,38 @@ def _case_coverage_closure_v1():
     # (ii) BIT-EXACT REDUCTION. f_cov0 = 1 with r = 0 pins the coverage at 1
     # for all time; every concentration factor is then multiplication by
     # exactly 1.0 and the covered column is the mean, so the trajectory must
-    # reproduce the flag-off one to the LAST BIT -- compared as raw bytes, on
-    # both deposition arms, with the circuit state included.
-    for _cov_model in ("csda",):
-        _cov_off_sim = LAPDSim1D(*_coverage_config(_cov_model))
-        _cov_one_sim = LAPDSim1D(*_coverage_config(
-            _cov_model,
-            coverage_initial_fraction=1.0,
-            coverage_growth_rate_per_s=0.0,
-        ))
-        assert _cov_off_sim._coverage is None
-        assert _cov_one_sim._coverage is not None
-        for _ in range(6):
-            _cov_off_sim.advance_one_step(dt=2.0e-9)
-            _cov_one_sim.advance_one_step(dt=2.0e-9)
-        assert np.array_equal(
-            _cov_one_sim.coverage_fraction_profile(),
-            np.ones(_cov_one_sim.geometry.cells),
-        )
-        assert (
-            np.asarray(_cov_off_sim._y).tobytes()
-            == np.asarray(_cov_one_sim._y).tobytes()
-        ), f"coverage f_cov=1 is not bit-exact under {_cov_model}"
-        assert float(_cov_off_sim._circuit_I_loop) == float(
-            _cov_one_sim._circuit_I_loop
-        )
-        # With no burn deficit the covered column IS the mean, exactly.
-        assert np.array_equal(
-            _cov_one_sim._coverage_deficit,
-            np.zeros_like(_cov_one_sim._coverage_deficit),
-        )
-        # The closure adds no conservative field and no RHS term: the packed
-        # width and the term ledger are the historical ones.
-        assert _cov_one_sim._y.size == _cov_off_sim._y.size
-        assert set(_cov_one_sim.rhs_terms()) == set(_cov_off_sim.rhs_terms())
+    # reproduce the flag-off one to the LAST BIT -- compared as raw bytes,
+    # with the circuit state included.
+    _cov_off_sim = LAPDSim1D(*_coverage_config())
+    _cov_one_sim = LAPDSim1D(*_coverage_config(
+        coverage_initial_fraction=1.0,
+        coverage_growth_rate_per_s=0.0,
+    ))
+    assert _cov_off_sim._coverage is None
+    assert _cov_one_sim._coverage is not None
+    for _ in range(6):
+        _cov_off_sim.advance_one_step(dt=2.0e-9)
+        _cov_one_sim.advance_one_step(dt=2.0e-9)
+    assert np.array_equal(
+        _cov_one_sim.coverage_fraction_profile(),
+        np.ones(_cov_one_sim.geometry.cells),
+    )
+    assert (
+        np.asarray(_cov_off_sim._y).tobytes()
+        == np.asarray(_cov_one_sim._y).tobytes()
+    ), "coverage f_cov=1 is not bit-exact"
+    assert float(_cov_off_sim._circuit_I_loop) == float(
+        _cov_one_sim._circuit_I_loop
+    )
+    # With no burn deficit the covered column IS the mean, exactly.
+    assert np.array_equal(
+        _cov_one_sim._coverage_deficit,
+        np.zeros_like(_cov_one_sim._coverage_deficit),
+    )
+    # The closure adds no conservative field and no RHS term: the packed
+    # width and the term ledger are the historical ones.
+    assert _cov_one_sim._y.size == _cov_off_sim._y.size
+    assert set(_cov_one_sim.rhs_terms()) == set(_cov_off_sim.rhs_terms())
 
     # (iii) THE CO-INTEGRATED GROWTH LAW. v2's coverage field is driven by the
     # beam ionization it itself shapes, so the v1 closed form is gone and the
@@ -18020,7 +15832,6 @@ def _case_coverage_closure_v1():
     _cov_r = 1390.0
     _cov_f0 = 0.05
     _cov_sim = LAPDSim1D(*_coverage_config(
-        "csda",
         coverage_initial_fraction=_cov_f0,
         coverage_growth_rate_per_s=_cov_r,
     ))
@@ -18059,7 +15870,6 @@ def _case_coverage_closure_v1():
     )
     assert list(_cov_moved) == [2], _cov_moved
     _cov_one_field = LAPDSim1D(*_coverage_config(
-        "csda",
         coverage_initial_fraction=1.0,
         coverage_growth_rate_per_s=_cov_r,
     ))
@@ -18070,7 +15880,6 @@ def _case_coverage_closure_v1():
         _cov_one_field.coverage_fraction_profile(), np.ones(_cov_cells)
     )
     _cov_norate = LAPDSim1D(*_coverage_config(
-        "csda",
         coverage_initial_fraction=0.2,
         coverage_growth_rate_per_s=0.0,
     ))
@@ -18153,7 +15962,6 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
             "nx": nx,
             "V_bank": op["V_bank"],
             "cathode_solver_model": "current_driven",
-            "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
             "cathode_Ts_base_K": op["Ts_standby_K"],
             "cathode_heat_capacity_J_per_K": 120.0,
@@ -18162,7 +15970,6 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
             "cathode_phiwf_clean_eV": 2.809,
             "cathode_cleaning_sigma_cm2": 3.5e-16,
             "cathode_cleaning_E_th_eV": 20.0,
-            "Te_birth_ionization": "floor",
             "gas_puff_mode": "square",
         })
         delta = _cov_tomllib.loads(
@@ -18240,208 +16047,11 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
     _cov_tot_events = float(np.sum(_cov_total_dep[0].ionization_events))
     assert 0.0 < _cov_res_events < _cov_tot_events
 
-    # (iv-b) THE WALK STAGE CONSUMES THE MEAN STATE. Both walk closures are
-    # reachable under coverage, and the whole content of the ruling that made
-    # them reachable is WHICH medium their one post-march walk stage runs on:
-    # the mean plasma state, not the channel view n/f_cov the rays march
-    # through. That is a plumbing property, so it is asserted on the quantity
-    # actually plumbed -- the stopping_coefficient the solver's own cathode
-    # path hands the two-stream march -- captured by wrapping the two module
-    # globals for the duration of ONE cathode solve and restored in a finally.
-    # Nothing is re-derived from the solver's public state: `sim.state` is not
-    # the array the cathode path samples (presheath sampling moves it), so
-    # comparing against it would test the sampler, not the hand-off.
-    from cablp.solvers._sim1d.physics import cathode as _cov_cath_mod
-    from cablp.cathode.beam_deposition import (
-        _coulomb_stopping_coefficient as _cov_stop_coeff,
-    )
-
-    _cov_walk_cells = _cov_split_sim.geometry.cells
-    _cov_walk_sim = LAPDSim1D(*_cov_live_config(24, coverage=(0.05, 0.0), extra={
-        # A z-VARYING profile, so "mean" and "channel view" are different in
-        # every cell and by a different factor -- the positive control below
-        # measures how different, and a flat f_cov could make the inequality
-        # pass for the wrong reason.
-        "coverage_initial_fraction": None,
-        "coverage_initial_profile": np.linspace(
-            0.03, 0.30, _cov_walk_cells
-        ).tolist(),
-        "heating_anomalous_transport": "tail_walk",
-        "beam_product_transport": "nonlocal",
-    }))
-    for _ in range(40):
-        _cov_walk_sim.advance_one_step(dt=2.0e-9)
-    _cov_walk_kw = {}
-    _cov_walk_n = {}
-    _cov_walk_orig_march = _cov_cath_mod.deposit_beam_two_stream
-    _cov_walk_orig_chan = _cov_cath_mod.coverage_channel_densities
-
-    def _cov_walk_spy_march(*args, **kwargs):
-        _cov_walk_kw.update(kwargs)
-        return _cov_walk_orig_march(*args, **kwargs)
-
-    def _cov_walk_spy_chan(state, coverage):
-        # The mean plasma density as the cathode path itself saw it, i.e. the
-        # array the hoisted coefficient is required to be built on.
-        _cov_walk_n["n"] = state.n
-        return _cov_walk_orig_chan(state, coverage)
-
-    _cov_cath_mod.deposit_beam_two_stream = _cov_walk_spy_march
-    _cov_cath_mod.coverage_channel_densities = _cov_walk_spy_chan
-    try:
-        _cov_walk_solve = _cov_walk_sim.solve_cathode_boundary(
-            state=_cov_walk_sim.state
-        )
-    finally:
-        _cov_cath_mod.deposit_beam_two_stream = _cov_walk_orig_march
-        _cov_cath_mod.coverage_channel_densities = _cov_walk_orig_chan
-    # The march really received both closures and a coefficient.
-    assert _cov_walk_kw.get("anomalous_transport") == "tail_walk", _cov_walk_kw
-    assert _cov_walk_kw.get("product_transport") == "nonlocal", _cov_walk_kw
-    _cov_walk_coeff = _cov_walk_kw.get("stopping_coefficient")
-    assert _cov_walk_coeff is not None, "the walk got no stopping coefficient"
-    _cov_walk_model = _cov_walk_kw["coulomb_model"]
-    _cov_walk_Te = _cov_walk_kw["Te"]
-    _cov_walk_mean = _cov_stop_coeff(
-        _cov_walk_n["n"], _cov_walk_Te, _cov_walk_model
-    )
-    _cov_walk_chan = _cov_stop_coeff(
-        _cov_walk_kw["ne_channel"], _cov_walk_Te, _cov_walk_model
-    )
-    # EXACTLY the mean-state coefficient, and NOT the channel view.
-    assert np.array_equal(_cov_walk_coeff, _cov_walk_mean), (
-        "the walk's stopping coefficient is not the mean-state one",
-        float(np.max(np.abs(_cov_walk_coeff / _cov_walk_mean - 1.0))),
-    )
-    assert not np.array_equal(_cov_walk_coeff, _cov_walk_chan)
-    # ...and the two are genuinely far apart here, so the inequality above is
-    # a statement about the closure and not about float noise.
-    assert float(np.max(np.abs(_cov_walk_chan / _cov_walk_mean - 1.0))) > 1.0, (
-        "channel and mean coefficients are too close for this to discriminate"
-    )
-    # LIVENESS, hard: the walk stage actually ran and carried the QL tail.
-    # Withheld power that is never walked would leave every one of these zero.
-    _cov_walk_dep = _cov_walk_solve.beam_deposition[0]
-    assert float(_cov_walk_dep.tail_power_erg_s) > 0.0, (
-        "no anomalous power was withheld: the tail walk is not engaged"
-    )
-    _cov_walk_landed = float(np.sum(_cov_walk_dep.heating_anomalous_erg_s))
-    _cov_walk_escaped = (
-        float(_cov_walk_dep.end_loss_tail_low_erg_s)
-        + float(_cov_walk_dep.end_loss_tail_high_erg_s)
-    )
-    assert _cov_walk_landed > 0.0, "the tail walk deposited nothing"
-    # The walk conserves the withheld power: what it lands, plus what the
-    # anode mesh culls out of it at the plane, plus what escapes the two ends
-    # IS the tail power it launched. The culled bank is a TERM, not a
-    # tolerance.
-    _cov_walk_culled = float(_cov_walk_dep.tail_anode_culled_erg_s)
-    assert _cov_walk_culled > 0.0, _cov_walk_culled
-    assert abs(
-        (_cov_walk_landed + _cov_walk_escaped + _cov_walk_culled)
-        / float(_cov_walk_dep.tail_power_erg_s) - 1.0
-    ) < 1e-12, (_cov_walk_landed, _cov_walk_escaped, _cov_walk_culled)
-    assert np.all(np.isfinite(_cov_walk_dep.plasma_heating_erg_s))
-    assert np.all(np.isfinite(
-        _cov_walk_solve.beam_reservoir_deposition[0].plasma_heating_erg_s
-    ))
-
-    # (iv-c) THE BURN SPLIT (v2.1b). An IONIZING walker also removes neutrals,
-    # and the medium it took them from follows from the same decorrelation
-    # partition: f_cov of its per-cell events debit the covered column and
-    # 1 - f_cov the reservoir. The march expresses that by banking the walker's
-    # events into the two ARMS with those weights, so the ratio is the direct
-    # test. The walker's own rows are separable from the primary's because the
-    # four ``*_tail`` arrays exist for exactly that purpose.
-    _cov_burn_sim2 = LAPDSim1D(*_cov_live_config(24, coverage=(0.05, 0.0), extra={
-        "coverage_initial_fraction": None,
-        "coverage_initial_profile": np.linspace(
-            0.03, 0.30, _cov_walk_cells
-        ).tolist(),
-        "heating_anomalous_transport": "tail_walk",
-        "heating_anomalous_tail_ionization": "on",
-    }))
-    for _ in range(40):
-        _cov_burn_sim2.advance_one_step(dt=2.0e-9)
-    _cov_burn_solve = _cov_burn_sim2.solve_cathode_boundary(
-        state=_cov_burn_sim2.state
-    )
-    _cov_burn_ch = _cov_burn_solve.beam_deposition[0]
-    _cov_burn_res = _cov_burn_solve.beam_reservoir_deposition[0]
-    # ``beam_deposition`` is the SUM of the arms, so the channel arm's own tail
-    # row is the total minus the reservoir's.
-    _cov_burn_tot_tail = np.asarray(
-        _cov_burn_ch.ionization_events_tail, dtype=float
-    )
-    _cov_burn_res_tail = np.asarray(
-        _cov_burn_res.ionization_events_tail, dtype=float
-    )
-    _cov_burn_ch_tail = _cov_burn_tot_tail - _cov_burn_res_tail
-    _cov_burn_f = _cov_burn_sim2.coverage_fraction_profile()
-    _cov_burn_live = _cov_burn_tot_tail > 0.0
-    # LIVENESS: the ionizing walk really burnt, in more than one cell, and at
-    # more than one coverage value -- otherwise the ratio below is one number
-    # and proves nothing about the PARTITION.
-    assert int(np.count_nonzero(_cov_burn_live)) >= 2, (
-        "the ionizing tail walk burnt in fewer than two cells",
-        int(np.count_nonzero(_cov_burn_live)),
-    )
-    assert float(np.ptp(_cov_burn_f[_cov_burn_live])) > 0.0, (
-        "f_cov is constant over the burning cells; the ratio test cannot "
-        "discriminate a partition from a fixed split"
-    )
-    # THE RATIO: reservoir debit over covered debit is (1 - f)/f, per cell.
-    _cov_burn_want = (
-        (1.0 - _cov_burn_f[_cov_burn_live]) / _cov_burn_f[_cov_burn_live]
-    )
-    _cov_burn_got = (
-        _cov_burn_res_tail[_cov_burn_live] / _cov_burn_ch_tail[_cov_burn_live]
-    )
-    assert np.allclose(_cov_burn_got, _cov_burn_want, rtol=1e-12, atol=0.0), (
-        "the walker's burn is not split by the coverage partition",
-        _cov_burn_got[:4], _cov_burn_want[:4],
-    )
-    # ...and the split CONSERVES: the two arms' tail rows sum to the walker's
-    # own event count, i.e. the partition moved events between the media
-    # without creating or destroying any.
-    assert np.allclose(
-        _cov_burn_ch_tail + _cov_burn_res_tail, _cov_burn_tot_tail,
-        rtol=1e-12, atol=0.0,
-    )
-    # The walker's rows are a SUBSET of the shared banks they split, on both
-    # arms -- the events were booked to the parent, not only to the diagnostic.
-    assert np.all(
-        _cov_burn_res_tail <= np.asarray(
-            _cov_burn_res.ionization_events, dtype=float
-        ) * (1.0 + 1e-12)
-    )
-    assert np.all(np.isfinite(_cov_burn_tot_tail))
-    # END TO END: with the ionizing walk live, the closure's own partition
-    # identity still closes and the deficit stays finite and bounded. This is
-    # the independent statement -- it goes through the solver's deficit
-    # machinery rather than through the arm banks the ratio above reads.
-    for _ in range(10):
-        _cov_burn_sim2.advance_one_step(dt=2.0e-9)
-        _cov_b_f = _cov_burn_sim2.coverage_fraction_profile()
-        _cov_b_nn = np.asarray(_cov_burn_sim2.state.nn, dtype=float)
-        _cov_b_col = _cov_burn_sim2._coverage_view(
-            _cov_burn_sim2.state
-        ).nn_channel
-        _cov_b_res = _cov_burn_sim2.coverage_reservoir_density()
-        assert np.max(np.abs(
-            (_cov_b_f * _cov_b_col + (1.0 - _cov_b_f) * _cov_b_res)
-            / _cov_b_nn - 1.0
-        )) < 1e-12
-        assert np.all(np.isfinite(_cov_burn_sim2._coverage_deficit))
-        assert np.all(_cov_b_col > 0.0)
-        assert np.all(_cov_b_res >= 0.0)
-
     # (v) WHOLE-SYSTEM PARTICLE BUDGET. The closure re-partitions neutrals
     # between a covered column and a reservoir; it must not create or destroy
     # one. Three independent statements, on a run whose column genuinely
     # depletes (asserted below, so none of this is vacuous).
     _cov_burn_sim = LAPDSim1D(*_coverage_config(
-        "csda",
         coverage_initial_fraction=0.05,
         coverage_growth_rate_per_s=0.0,
         coverage_backfill_time_s=3.0e-5,
@@ -18522,7 +16132,7 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
         assert np.max(np.abs(_cov_pair) / _cov_scale) < 1e-12, _cov_name
     # And the coverage-on term ledger and packed width are still the shipped
     # ones: the closure adds no particle-carrying row anywhere.
-    _cov_ref_sim = LAPDSim1D(*_coverage_config("csda"))
+    _cov_ref_sim = LAPDSim1D(*_coverage_config())
     assert set(_cov_terms) == set(_cov_ref_sim.rhs_terms())
     assert _cov_burn_sim._y.size == _cov_ref_sim._y.size
     return locals()
@@ -18559,7 +16169,6 @@ def _case_coverage_closure_v2(_cov_ref_sim, _coverage_config, deposit_beam):
     # only property the L3 hook needs.
     _cov_seed = np.linspace(0.02, 0.4, _cov_ref_sim.geometry.cells)
     _cov_seed_sim = LAPDSim1D(*_coverage_config(
-        "csda",
         coverage_initial_profile=_cov_seed.tolist(),
         coverage_growth_rate_per_s=0.0,
     ))
@@ -18573,7 +16182,7 @@ def _case_coverage_closure_v2(_cov_ref_sim, _coverage_config, deposit_beam):
         _cov_seed_sim.coverage_fraction_profile(), _cov_seed
     )
     _cov_scalar_sim = LAPDSim1D(*_coverage_config(
-        "csda", coverage_initial_fraction=0.05,
+        coverage_initial_fraction=0.05,
         coverage_growth_rate_per_s=0.0,
     ))
     assert np.array_equal(
@@ -18766,7 +16375,6 @@ def _case_coverage_closure_v2(_cov_ref_sim, _coverage_config, deposit_beam):
     # statement with a per-cell f, and the mean field it partitions is still
     # bitwise untouched by anything the closure does.
     _cov_z_sim = LAPDSim1D(*_coverage_config(
-        "csda",
         coverage_initial_profile=np.linspace(
             0.03, 0.30, _cov_ref_sim.geometry.cells
         ).tolist(),
@@ -19468,7 +17076,6 @@ def _case_neutral_probe_step_average(
     # identity here.
     _probe_cov_p, _probe_cov_f = _probe_config(**_probe_ok)
     _probe_cov_p.update({
-        "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
         "coverage_initial_fraction": 0.05,
         "coverage_growth_rate_per_s": 0.0,
@@ -20345,18 +17952,6 @@ def _case_tracer_owner_state_criteria(
         )
     )
 
-    # The Beer-Lambert profile has no anomalous channel at all, and the tracer
-    # refuses the combination outright, because a run configured that way reads
-    # as though the correction is doing work when neither the channel nor its
-    # refusal is live.
-    _r2_refuses(
-        "beam_anomalous_model", beam_deposition_model="beer_lambert"
-    )
-    _r2ql_bl_params, _r2ql_bl_flags = _r2_on_config()
-    _r2ql_bl_params["beam_deposition_model"] = "beer_lambert"
-    _r2ql_bl_params["beam_anomalous_model"] = "none"
-    LAPDSim1D(_r2ql_bl_params, _r2ql_bl_flags)
-
 
 # --------------------------------------------------------------------
 # ql-relaxation-onset-gate
@@ -20648,15 +18243,6 @@ def _case_ql_relaxation_solver_refusals(_r2ql_config):
             return
         raise AssertionError(f"LAPDSim1D must refuse {overrides}")
 
-    # This sub-check pins the regime_tracer refusal (solver.py
-    # _configure_regime_tracer), which fires first under this case's
-    # tracer-on configuration; the ql_relaxation / beer_lambert refusal in
-    # _init_beam_transport_refusals is NOT reached here.
-    _qlr_refuses(
-        "beam_anomalous_model='ql_relaxation' together with "
-        "beam_deposition_model='beer_lambert'",
-        beam_deposition_model="beer_lambert",
-    )
     _qlr_refuses(
         "beam_anomalous_model='ql_relaxation' requires ql_relaxation_coeff",
         ql_relaxation_coeff=None,
@@ -20843,7 +18429,6 @@ def _case_shaped_initial_neutral_fill_sp3():
             "tau_breakdown": 0.0,
             "tau_discharge": 1.0,
             "tau_afterglow": 0.0,
-            "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
             # The surface held: no step's temperature increment survives
             # this heat capacity, and nothing cleans at a zero cross section.
@@ -22570,33 +20155,20 @@ def _case_ionization_birth_neutral_temperature():
     _nb_params, _nb_flags = default_config()
     assert _nb_params["Ti_birth_ionization"] == "neutral"
     assert _nb_flags["neutral_energy"] is True
-    # The two non-conserving arms stay SELECTABLE -- a pre-adoption artifact
-    # cannot be reproduced without them -- and they WARN, value-scoped, while
-    # the default does not. The register reads the template, so this is the
-    # scope of the row and not a second copy of the default.
+    # Neither the default nor a numeric arm warns.
     _nb_dep = dict(_nb_params)
     assert deprecation_messages(_nb_dep, _nb_flags) == []
-    for _nb_legacy in ("floor", "local"):
-        _nb_dep["Ti_birth_ionization"] = _nb_legacy
-        _nb_msgs = [
-            _m for _m in deprecation_messages(_nb_dep, _nb_flags)
-            if _m.startswith("Ti_birth_ionization=")
-        ]
-        assert len(_nb_msgs) == 1, (_nb_legacy, _nb_msgs)
-        assert "non-conserving against an evolved En" in _nb_msgs[0]
-        assert "Ti_birth_ionization='neutral'" in _nb_msgs[0]
-    # A numeric arm is outside the row's scope and is silent.
     _nb_dep["Ti_birth_ionization"] = 0.5
     assert not [
         _m for _m in deprecation_messages(_nb_dep, _nb_flags)
         if _m.startswith("Ti_birth_ionization=")
     ]
 
-    # The selector refuses what it does not implement, and "neutral" is an ION
-    # option only: the En ionization sink has no electron partner to pair with.
+    # The selector refuses what it does not implement.
     for _nb_key, _nb_bad in (
         ("Ti_birth_ionization", "wall"),
-        ("Te_birth_ionization", "neutral"),
+        ("Ti_birth_ionization", "floor"),
+        ("Ti_birth_ionization", "local"),
     ):
         try:
             LAPDSim1D(dict(_nb_params, **{_nb_key: _nb_bad}), dict(_nb_flags))
@@ -22619,9 +20191,16 @@ def _case_ionization_birth_neutral_temperature():
         _sim._y[:] = pack_state(_hot)   # .state unpacks a COPY; write it back
         return _sim
 
+    # "floor": a numeric arm AT the ion temperature floor, which parts from
+    # the neutral temperature wherever the gas is hotter than that floor.
     _nb_sims = {}
-    for _nb_birth in ("floor", "neutral"):
-        _nb_sim = _nb_build(_nb_birth)
+    _nb_Ti_floor = None
+    for _nb_birth in ("neutral", "floor"):
+        _nb_sim = _nb_build(
+            "neutral" if _nb_birth == "neutral" else _nb_Ti_floor
+        )
+        if _nb_birth == "neutral":
+            _nb_Ti_floor = float(_nb_sim.floors["Ti"])
         _nb_sims[_nb_birth] = _nb_sim
         _nb_terms = _nb_sim.rhs_terms()
         _nb_state = _nb_sim.state
@@ -22682,7 +20261,7 @@ def _case_ionization_birth_neutral_temperature():
                     np.abs(_nb_rows[_nb_field]) * _nb_Vp <= 1.0e-12 * _nb_scale
                 ), _nb_term_name
             else:
-                # (c) ...and under "floor" it is POSITIVE wherever the gas is
+                # (c) ...and at the floor it is POSITIVE wherever the gas is
                 # hotter than the ion floor: energy leaving the model.
                 assert np.all(_nb_rows[_nb_field][_nb_hot] > 0.0), _nb_term_name
             if _nb_hot.any():
@@ -22743,7 +20322,6 @@ def _case_ionization_birth_neutral_temperature():
             puff_profile=_nb_puff_profile,
             fraction=0.1,
             I_ion=I_ion,
-            ionization_birth_energy_model="conservative",
             Ti_birth_ionization=_birth,
             Tn_K=float(_nb_off_p.get("Tn_K", 300.0)),
         )
@@ -29341,7 +26919,9 @@ def _case_dt_not_bound_by_anode_row():
 @_case("anode-e-sheath-row-reported-not-applied")
 def _case_anode_e_sheath_row_reported_not_applied():
     sim, pair = _anode_sink_sim()
-    assert sim._heat_substep_terms == frozenset({"anode_e_sheath_loss"})
+    assert sim._heat_substep_terms == frozenset(
+        {"anode_e_sheath_loss", "beam_power_deposition"}
+    )
     terms = sim.rhs_terms()
     assert "anode_e_sheath_loss" in terms
     row = np.asarray(terms["anode_e_sheath_loss"].Ee, dtype=float)
@@ -29349,7 +26929,7 @@ def _case_anode_e_sheath_row_reported_not_applied():
     # rhs() is the sum of every OTHER row, bit for bit.
     expected = None
     for name, term in terms.items():
-        if name == "anode_e_sheath_loss":
+        if name in sim._heat_substep_terms:
             continue
         expected = term if expected is None else add_state_rhs(expected, term)
     assert sim.rhs().tobytes() == pack_state(expected).tobytes()
@@ -29492,6 +27072,85 @@ def _case_result_bitdiff_compare_synthetic():
             assert proc.returncode == want, (name, proc.stdout, proc.stderr)
 
 
+# --------------------------------------------------------------------
+# beam-tail-retired-keys-refuse
+# --------------------------------------------------------------------
+@_case("beam-tail-retired-keys-refuse")
+def _case_beam_tail_retired_keys_refuse():
+    # The beam-deposition and hot-tail selectors, flags and parameters removed
+    # with the closures they served. Each is gone from its template, is on the
+    # retired register of ITS OWN namespace, and a configuration naming it --
+    # at any value, the old default included -- is refused at construction
+    # with the key named as RETIRED. A retired name filed in the OTHER
+    # namespace reads as the plain unknown key it is there.
+    from cablp.solvers._sim1d.core.config import (
+        RETIRED_FLAG_KEYS,
+        RETIRED_PARAM_KEYS,
+        input_dict_template_1d,
+        input_flags_template_1d,
+    )
+
+    _rb_params = {
+        "beam_deposition_model": "csda",
+        "beam_coulomb_model": "fast_electron",
+        "beam_excitation_model": "2p_scalar",
+        "beam_product_transport": "local",
+        "heating_anomalous_disposal": "local",
+        "heating_anomalous_tail_energy_keying": "phi_c",
+        "heating_anomalous_tail_energy_eV": 75.0,
+        "heating_anomalous_tail_phi_c_fraction": None,
+        "heating_anomalous_tail_ionization": "on",
+        "ionization_birth_energy_model": "conservative",
+        "Te_birth_ionization": "local",
+    }
+    _rb_flags = {
+        "beam_anode_interception": True,
+        "beam_deposition_in_heat_substep": True,
+        "beam_ionization_birth_timestep_bound": False,
+    }
+    _rb_base_p, _rb_base_f = default_config()
+    for _rb_key, _rb_value in _rb_params.items():
+        assert _rb_key not in input_dict_template_1d, _rb_key
+        assert _rb_key not in input_flags_template_1d, _rb_key
+        assert _rb_key in RETIRED_PARAM_KEYS, _rb_key
+        try:
+            LAPDSim1D(dict(_rb_base_p, **{_rb_key: _rb_value}), _rb_base_f)
+        except ValueError as _rb_exc:
+            assert f"{_rb_key} is RETIRED" in str(_rb_exc), str(_rb_exc)
+        else:
+            raise AssertionError(f"retired params key {_rb_key} ACCEPTED")
+    for _rb_key, _rb_value in _rb_flags.items():
+        assert _rb_key not in input_dict_template_1d, _rb_key
+        assert _rb_key not in input_flags_template_1d, _rb_key
+        assert _rb_key in RETIRED_FLAG_KEYS, _rb_key
+        try:
+            LAPDSim1D(_rb_base_p, dict(_rb_base_f, **{_rb_key: _rb_value}))
+        except ValueError as _rb_exc:
+            assert f"{_rb_key} is RETIRED" in str(_rb_exc), str(_rb_exc)
+        else:
+            raise AssertionError(f"retired flags key {_rb_key} ACCEPTED")
+    # A retired FLAG name in params is a misfiled key, not a retired one.
+    try:
+        LAPDSim1D(dict(_rb_base_p, beam_anode_interception=True), _rb_base_f)
+    except ValueError as _rb_exc:
+        assert "unknown LAPDSim1D configuration keys" in str(_rb_exc)
+        assert "RETIRED" not in str(_rb_exc), str(_rb_exc)
+    else:
+        raise AssertionError("a misfiled retired flag name was ACCEPTED")
+    # The removed selector VALUES of the surviving selectors are refused.
+    for _rb_key, _rb_value in (
+        ("heating_anomalous_transport", "tail_walk"),
+        ("Ti_birth_ionization", "floor"),
+        ("Ti_birth_ionization", "local"),
+    ):
+        try:
+            LAPDSim1D(dict(_rb_base_p, **{_rb_key: _rb_value}), _rb_base_f)
+        except ValueError as _rb_exc:
+            assert _rb_key in str(_rb_exc), str(_rb_exc)
+        else:
+            raise AssertionError(f"{_rb_key}={_rb_value!r} ACCEPTED")
+
+
 # ----------------------------------------------------------------------
 # Registry census, asserted at import.
 #
@@ -29501,7 +27160,7 @@ def _case_result_bitdiff_compare_synthetic():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 183, "historical_stance": 77}
+_CASE_CENSUS = {"total": 177, "historical_stance": 70}
 
 
 def _assert_case_census():

@@ -179,14 +179,8 @@ def reaction_kwargs(input_dict, *, gas_type, I_ion, wind_column_factor):
         "adas_low_te_extension": bool(
             input_dict.get("adas_low_te_extension", False)
         ),
-        "Te_birth_ionization": input_dict.get(
-            "Te_birth_ionization", "local"
-        ),
         "Ti_birth_ionization": input_dict.get(
-            "Ti_birth_ionization", "floor"
-        ),
-        "ionization_birth_energy_model": str(
-            input_dict.get("ionization_birth_energy_model", "legacy")
+            "Ti_birth_ionization", "neutral"
         ),
         "wind_column_factor": wind_column_factor,
         # Only read when Ti_birth_ionization == "neutral": the cold-gas scalar

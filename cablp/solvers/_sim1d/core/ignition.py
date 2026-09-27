@@ -14,10 +14,9 @@ scalars that describe how the discharge is (or is not) building:
   prognosis variable: a discharge that is going to ignite is retaining heat
   even while its density dips.
 * the electron power-balance split -- beam coupled power against conduction,
-  cooling, and the ionization cost, plus the WP-D beam end-loss ledger (which
-  is a real loss channel that never enters an RHS row, so it has to be read
-  from the cathode diagnostics, and is identically zero under
-  ``beam_product_transport='local'``).
+  cooling, and the ionization cost, plus the beam end-loss ledger (a real loss
+  channel that never enters an RHS row, so it has to be read from the cathode
+  diagnostics).
 
 ``IgnitionMonitor`` owns the ring buffer and the trip logic. It is deliberately
 a plain, side-effect-free object over ``(t, N, N_n, Ee_tot)`` tuples so the
@@ -117,12 +116,10 @@ IGNITION_POWER_GROUPS = {
 
 # WP-D / WP-E end ledger keys (cathode diagnostics). Beam energy that leaves
 # the column axially without thermalizing; never booked into any RHS row.
-# The first four are the WP-D event-product ledger (identically zero under
-# beam_product_transport="local"); the last four are the WP-E QL tail ledger
-# (identically zero under heating_anomalous_transport="local"). Both defaults
-# are the off value, so P_beam_end_loss_W is exactly 0.0 on every run that
-# enables neither, and adding the tail terms cannot perturb a WP-D-only run
-# (adding 0.0 is exact).
+# The first four are the WP-D event-product ledger (identically zero: the
+# CSDA ray's products are banked in their birth cell); the last four are the
+# WP-E QL tail ledger (identically zero under
+# heating_anomalous_transport="local"). Adding a zero row is exact.
 IGNITION_BEAM_END_LOSS_KEYS = (
     "source_beam_end_loss_low_W",
     "source_beam_end_loss_high_W",

@@ -20,12 +20,14 @@ the ISA-baseline contraction question this gate exists to answer.
 
 **Leg A -- the SCALAR path, pure vs compiled on two frozen probe arms.** The
 arms are defined in this file (``PROBE_PARAMS``, ``PROBE_FLAGS``, ``EXTRA``,
-``ARMS``); they carry ``beam_deposition_model = "csda"`` and therefore drive
-the compiled march's three cross-section table interpolations:
+``ARMS``); they deposit the beam by the CSDA march with the quasilinear
+channel and a walked, ionizing plateau tail, and therefore drive the compiled
+march's three cross-section table interpolations along the primary and along
+every plateau group:
 
-- ``tw``    -- tail_walk at a fixed 75 eV rung, energy-only, with the fixed
-  keying and escaping cathode boundary pinned;
-- ``twion`` -- the same plus the ionizing tail channel.
+- ``mg``    -- ``heating_anomalous_transport = "plateau_multigroup"`` with the
+  reflecting cathode face;
+- ``mgesc`` -- the same with the free-escaping cathode face.
 
 The probe configuration is FROZEN: every value it stands on is written out in
 this file and moves only when someone edits it, so two checkouts compared by
@@ -169,7 +171,6 @@ PROBE_FLAGS = {
 #: where a key appears in both, this value wins. ``S_gp`` is in sccm.
 EXTRA = {
     "cathode_solver_model": "current_driven",
-    "beam_deposition_model": "csda",
     "beam_anomalous_model": "quasilinear",
     "cathode_heat_capacity_J_per_K": 120.0,
     "cathode_emissivity": 0.7,
@@ -180,7 +181,6 @@ EXTRA = {
     "gas_puff_mode": "square",
     "S_gp": 3000.0,
     "nx": 240,
-    "Te_birth_ionization": "local",
     "tau_afterglow": 0.006,
     "neutral_model": "kinetic_dvm",
     "neutral_kinetic_dvm_cadence_s": 1.0e-5,
@@ -193,34 +193,29 @@ EXTRA = {
 
 #: The two leg-A arms.
 ARMS = {
-    "tw": {"heating_anomalous_transport": "tail_walk"},
-    "twion": {
-        "heating_anomalous_transport": "tail_walk",
-        "heating_anomalous_tail_ionization": "on",
+    "mg": {
+        "heating_anomalous_transport": "plateau_multigroup",
+        "heating_anomalous_tail_cathode_boundary": "reflect",
     },
-}
-
-#: Pinned on every arm, and only where this checkout's configuration
-#: template owns the key.
-LEGACY_PINS = {
-    "heating_anomalous_tail_energy_keying": "fixed",
-    "heating_anomalous_tail_cathode_boundary": "escape",
+    "mgesc": {
+        "heating_anomalous_transport": "plateau_multigroup",
+        "heating_anomalous_tail_cathode_boundary": "escape",
+    },
 }
 # --------------------------------------------------------------------------
 
 
 def build_arm(arm):
-    """Return ``(sim, pinned, identity)`` for one leg-A arm.
+    """Return ``(sim, identity)`` for one leg-A arm.
 
-    ``pinned`` is the subset of ``LEGACY_PINS`` applied; ``identity`` is the
-    :func:`config_identity` of the assembled ``(params, flags)`` pair.
+    ``identity`` is the :func:`config_identity` of the assembled
+    ``(params, flags)`` pair.
     """
     from run_mechanism_ladder import ES_OPERATING
 
     from cablp.solvers._sim1d import (
         LAPDSim1D,
         config_identity,
-        config_manifest,
         default_config,
     )
 
@@ -233,11 +228,8 @@ def build_arm(arm):
     params["V_bank"] = op["V_bank"]
     params["cathode_Ts_base_K"] = op["Ts_standby_K"]
     params.update(EXTRA)
-    known = set(config_manifest()["parameters"])
-    pinned = {k: v for k, v in LEGACY_PINS.items() if k in known}
     params.update(ARMS[arm])
-    params.update(pinned)
-    return LAPDSim1D(params, flags), pinned, config_identity(params, flags)
+    return LAPDSim1D(params, flags), config_identity(params, flags)
 
 
 def state_digest(*arrays):
@@ -253,7 +245,7 @@ def state_digest(*arrays):
 
 def run_arm(arm, steps, report_every):
     """Advance one arm ``steps`` steps, printing state digests periodically."""
-    sim, pinned, identity = build_arm(arm)
+    sim, identity = build_arm(arm)
     print(
         "frozen probe configuration (names no stance; does not track one)\n"
         f"config_identity={identity}"
@@ -262,16 +254,8 @@ def run_arm(arm, steps, report_every):
         f"arm={arm} cells={sim.geometry.cells} dvm={sim._dvm is not None} "
         f"anom_transport="
         f"{sim._input_dict.get('heating_anomalous_transport', 'local')!r} "
-        f"tail_ionization="
-        f"{sim._input_dict.get('heating_anomalous_tail_ionization', 'off')!r} "
-        f"E_tail="
-        f"{sim._input_dict.get('heating_anomalous_tail_energy_eV', 75.0)!r} "
-        f"keying="
-        f"{sim._input_dict.get('heating_anomalous_tail_energy_keying', 'n/a')!r} "
-        f"f_phi_c="
-        f"{sim._input_dict.get('heating_anomalous_tail_phi_c_fraction', 'n/a')!r}"
-        f"\nlegacy pins applied: "
-        f"{pinned if pinned else '(none -- shipped-closure arm)'}"
+        f"cathode_boundary="
+        f"{sim._input_dict.get('heating_anomalous_tail_cathode_boundary')!r}"
     )
     for step in range(1, steps + 1):
         sim.advance_one_step()
@@ -453,7 +437,7 @@ def array_leg(outdir):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--arms", nargs="+", choices=sorted(ARMS),
-                   default=["tw", "twion"])
+                   default=["mg", "mgesc"])
     p.add_argument("--steps", type=int, default=400)
     p.add_argument("--report-every", type=int, default=25)
     p.add_argument("--outdir", type=Path, default=None,

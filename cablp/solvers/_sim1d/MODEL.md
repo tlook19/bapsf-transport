@@ -454,8 +454,7 @@ POTENTIAL and keeps that name. The $n^2$ term is He<sup>+</sup> LINE radiation
 (`plt2`), not recombination radiation; the recombination-radiation class
 `prb1` is added to it only under `icool_recomb`.
 
-Birth moments on the fluid path follow `ionization_birth_energy_model`. Under
-`"conservative"` the new electron is born cold — zero $E_e$ birth energy, so
+On the fluid path the new electron is born cold — zero $E_e$ birth energy, so
 $T_e$ falls by dilution as $n$ rises — and the ion mass-loading mixing energy
 is booked explicitly as
 $Q_\text{mix}=\tfrac12m_i(u_i-u_n^\text{col})^2\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)$
@@ -466,11 +465,11 @@ total energy closes on the consumed neutral's,
 
 $$dE_i+dK=\left[\tfrac32T_{i,\text{birth}}+\tfrac12m_i\left(u_n^\text{col}\right)^2\right]\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right).$$
 
-**On the kinetic path this bookkeeping is not a selector at all.** The ionized
+**On the kinetic path the ionized atoms carry this bookkeeping themselves.** The ionized
 atoms are removed from the distribution itself, so they carry their own
 moments — the column gas's drift $u_n^\text{col}$ and temperature $T_n^\text{col}$ — and the coupling
 term below books exactly $\left(\tfrac32kT_n^\text{col}+\tfrac12m_i(u_i-u_n^\text{col})^2\right)\left(S_\text{ion}^\text{bulk}+S_\text{ion}^\text{beam}\right)$
-onto $E_i$, again on both channels together. `Ti_birth_ionization` and `Te_birth_ionization` govern the fluid
+onto $E_i$, again on both channels together. `Ti_birth_ionization` governs the fluid
 path; the `ionization_birth_thermal_deficit_*_W_cm3` diagnostics report what a fluid
 birth temperature other than the gas temperature would leave unbooked.
 
@@ -575,20 +574,21 @@ the annulus, falling back to the column where a cell has no annulus.
 ### Beam deposition
 
 Primaries are launched at the cathode with flux
-$\Gamma_0=I_\text{eth}^\star/e$ and birth energy $e\phi_c$.
-`beam_deposition_model = "beer_lambert"` attenuates the flux along the ray on
-the local absorption length $l_b$. `"csda"` instead SLOWS each primary while
-carrying its flux unattenuated — the march removes energy from the beam, never
-primaries from it:
+$\Gamma_0=I_\text{eth}^\star/e$ and birth energy $e\phi_c$. The CSDA march
+SLOWS each primary while carrying its flux unattenuated — it removes energy
+from the beam, never primaries from it:
 
 $$\frac{dE}{dz}=-L_\text{tot}(E),\qquad \Gamma=\Gamma_0\ \text{along the whole ray}$$
 
 $$L_\text{tot}=\underbrace{n_n^\text{col}\sigma_\text{ion}I_\text{ion}}_\text{potential}+\underbrace{n_n^\text{col}\sigma_\text{ion}\langle W_\text{sec}\rangle}_\text{secondaries}+\underbrace{n_n^\text{col}\sigma_\text{exc}E_\text{rad}}_\text{excitation}+L_\text{coul}+L_\text{anom}$$
 
 $\sigma_\text{ion}$ the He electron-impact ionization cross section,
-$\langle W_\text{sec}\rangle$ the mean secondary energy, and
-$\sigma_\text{exc}E_\text{rad}$ the excitation-manifold channel, which carries
-the `b_beam_excitation` scale. The `beam_power_deposition` term a cell banks is
+$\langle W_\text{sec}\rangle$ the mean secondary energy, $\sigma_\text{exc}E_\text{rad}$
+the measured singlet excitation-manifold channel, and
+$L_\text{coul}=2\pi e^4n_e\ln\Lambda/E$ the fast-electron stopping power. Both
+products of each event — the mean secondary energy per ionization and the
+primary's terminal sub-threshold residual — are banked in the cell where the
+event happened. The `beam_power_deposition` term a cell banks is
 GROSS — heating, radiation and ionization cost together — and two further terms
 take the last two back out of the electron energy: `beam_ionization_cost`
 removes $I_\text{ion}S_\text{ion}^\text{beam}$ and `beam_excitation_radiation` removes
@@ -624,31 +624,23 @@ cells by Spitzer weights $\propto\Delta z/\sigma_\parallel(T_e,n)$ built from
 the same conductivity the gap resistance uses. Both live inside the
 `beam_power_deposition` term.
 
-The selectors below choose among equations for the two remaining stopping terms
-and for where the anomalous bank is deposited; all are CSDA controls, inert
-under `"beer_lambert"`.
+The selectors below choose the anomalous stopping term and where the anomalous
+bank is deposited.
 
 | selector | value | equation selected |
 |---|---|---|
-| `beam_coulomb_model` | `"fast_electron"` | $L_\text{coul}=2\pi e^4n_e\ln\Lambda/E$, the CSDA electron–electron stopping power |
-| | `"legacy_tau_ei"` | $L_\text{coul}=E/(v(E)\tau_{ei}(T_e,n_e))$ on the thermal collision time |
 | `beam_anomalous_model` | `"none"` | $L_\text{anom}\equiv0$ |
 | | `"quasilinear"` | $L_\text{anom}=E/l_{QL}$, $l_{QL}=(n_e/n_b)(v_b/\omega_{pe})\ln(n_e/n_b)$, $n_b=\Gamma/(Av_b)$; the length is taken infinite for $n_b\ge n_e/10$, outside the weak-beam domain |
 | | `"ql_relaxation"` | $L_\text{anom}=f_\text{ext}E/L_\text{rel}$, $L_\text{rel}=c(n_e/n_b)v_b/\omega_{pe}$, trapped fraction $f_\text{ext}=C_\text{trap}\min(n_b/2n_e,1)^{1/3}$, gated per cell on $0.687\omega_{pe}\min(n_b/n_e,1)^{1/3}>\nu_{en}/2$ with $\omega_{pe}>\nu_{en}$ |
 | `heating_anomalous_transport` | `"local"` | the anomalous bank heats the cell that drove it |
-| | `"tail_walk"` | the bank is withheld and launched $50/50$ along $\pm B$ as fast-tail electrons, walked on the Coulomb-slowing kinematics until thermalized at $\tfrac32T_e$ or lost to an end |
-| | `"plateau_multigroup"` | a solved plateau edge $E_1$ splits the bank into a wave/bulk share $(E_b-E_1)/2E_b$ deposited locally and a streaming share $(E_b+E_1)/2E_b$ divided into $N$ equal-power, $E^2$-uniform-edge groups walked at their own midpoint energies ($E_b=e\phi_c$) |
+| | `"plateau_multigroup"` | a solved plateau edge $E_1$ splits the bank into a wave/bulk share $(E_b-E_1)/2E_b$ deposited locally and a streaming share $(E_b+E_1)/2E_b$ divided into $N$ equal-power, $E^2$-uniform-edge groups launched along $\pm B$ at their own midpoint energies ($E_b=e\phi_c$) and walked on the Coulomb-slowing kinematics until thermalized at $\tfrac32T_e$ or lost to an end |
 | `heating_anomalous_tail_forward_fraction` | $f\in[0.5,1]$ | the share of every walked tail launch sent along $+z$ (the beam's direction), the rest along $-z$; $f=0.5$ is the symmetric launch above and $f=1$ launches no $-z$ walker at all, with the launched power $\Gamma E$ unchanged either way |
-| `beam_product_transport` | `"local"` | BOTH product populations — the mean secondary energy per ionization and the primary's terminal sub-threshold residual — are banked in the cell where the event happened |
-| | `"nonlocal"` | BOTH walk along $B$ from their birth cell on the same mini-CSDA Coulomb integral the primary uses; secondaries split $50/50$ into $\pm z$ half-weight walks, the terminal residual keeps the primary's direction |
-| | `"terminal_nonlocal"` | ONLY the terminal residual walks; every along-ray product stays banked in its birth cell |
 
 $E_1$ is solved per extraction from the launch cell's own Maxwellian against the
 emitted flux, $f_\text{M}(v_1)=mj_b/((E_b-E_1)\text{erg})$, and clamped at
 $E_\text{stop}$ when the edge the equation asks for falls inside the bulk.
-**The walkers are not passive.** Under the walking selectors they IONIZE the gas
-they cross (`heating_anomalous_tail_ionization`), adding their own birth term,
-and their treatment at the cathode face is a selector of its own
+**The walkers are not passive.** They IONIZE the gas they cross, adding their
+own birth term, and their treatment at the cathode face is a selector of its own
 (`heating_anomalous_tail_cathode_boundary`) — reflecting them back into the
 column rather than absorbing them.
 

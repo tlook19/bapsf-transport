@@ -100,12 +100,10 @@ INERT_PARAM_KEYS = frozenset({
     "cathode_prescribed_start_s",
     # --- beam deposition / excitation (no plasma/beam during equil) ---
     "beam_anomalous_model", "ql_relaxation_coeff",
-    "beam_coulomb_model", "beam_deposition_model",
-    "beam_excitation_energy_eV", "beam_excitation_model", "b_beam_excitation",
+    "beam_excitation_energy_eV", "b_beam_excitation",
     # --- atomic-rate / cooling / plasma-physics scales (no plasma during equil) ---
     "atomic_rate_model", "recombination_energy_return",
-    "sigma_in_model", "ionization_birth_energy_model",
-    "Te_birth_ionization", "Ti_birth_ionization",
+    "sigma_in_model", "Ti_birth_ionization",
     "b_ion_neutral_drag", "b_ion_neutral_thermalization",
     "ion_neutral_drag_model", "D_amb", "D_amb_model", "heat_flux_limiter_f",
     "b_presheath_length",
@@ -160,7 +158,7 @@ INERT_FLAG_KEYS = frozenset({
     # plus the cache-control flags themselves (they select the seed source, not
     # its content).
     "Plasma", "cathode_coupling", "active_plasma_topology",
-    "beam_anode_interception", "cx",
+    "cx",
     "electron_heat_flux_limit", "heat_conduction", "hyperbolic_energy_consistent",
     "icool_recomb", "implicit_heat_conduction", "ion_neutral_drag",
     "ion_neutral_drag_cx_only", "ion_neutral_moment_closure",
