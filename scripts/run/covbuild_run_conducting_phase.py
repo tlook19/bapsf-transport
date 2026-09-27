@@ -68,7 +68,6 @@ def build_config(nx, coverage=None, extra=None, configuration=None):
         "nx": nx,
         "V_bank": op["V_bank"],
         "cathode_solver_model": "current_driven",
-        "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
         "cathode_emission_profile": "gaussian",
         "cathode_warming_model": "power_balance",
@@ -80,7 +79,6 @@ def build_config(nx, coverage=None, extra=None, configuration=None):
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
         "cathode_cleaning_E_th_eV": 20.0,
-        "Te_birth_ionization": "floor",
         "gas_puff_mode": "square",
         "cathode_sample_smoothing": "presheath",
     })

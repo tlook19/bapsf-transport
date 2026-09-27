@@ -130,7 +130,6 @@ from .physics.kinetic_neutrals import (
     _inflow as _kinetic_inflow,
 )
 from .physics.cathode import (
-    BEAM_DEPOSITION_MODELS,
     BEAM_GAP_LEDGER_POWER_ATOL,
     END_SHEATH_CATHODE_ROWS,
     CoverageView1D,
@@ -253,11 +252,7 @@ from .results.restart import (
     REFUSED_NEUTRAL_MODELS as RESTART_REFUSED_NEUTRAL_MODELS,
 )
 from cablp.atomic.adas import he_rate_temperature_range_eV, he_rates
-from cablp.cathode.beam_deposition import (
-    ANOMALOUS_MODELS,
-    HE_EII_EDGE_REL_TOL,
-    HE_EII_EPS_TOP,
-)
+from cablp.cathode.beam_deposition import ANOMALOUS_MODELS
 from cablp.atomic.cross_sections import charge_ex_react
 from cablp.cathode.kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.constants import (
@@ -417,8 +412,8 @@ END_SHEATH_DEBIT_ROWS = END_SHEATH_END_WALL_ROWS + END_SHEATH_CATHODE_ROWS
 
 
 #: Name of the RHS row carrying the beam's electron-energy deposition. Bound
-#: to a constant because ``beam_deposition_in_heat_substep`` has to name the
-#: same row in two places -- the one it removes from the explicit sum and the
+#: to a constant because the operator split has to name the same row in two
+#: places -- the one it removes from the explicit sum and the
 #: one it hands to the heat substep -- and a typo in either would be a silent
 #: energy leak rather than an error.
 BEAM_POWER_DEPOSITION_TERM = "beam_power_deposition"
@@ -1181,9 +1176,6 @@ class LAPDSim1D:
         )
         self._hyperbolic_energy_consistent = bool(
             self._flags.get("hyperbolic_energy_consistent")
-        )
-        self._beam_anode_interception = bool(
-            self._flags.get("beam_anode_interception")
         )
         # R4.3 / audit A7+A8: the moment-closed reduced ion-neutral collision
         # operator (Phelps He+/He). Presence-gated -- when on it replaces the
@@ -1983,33 +1975,6 @@ class LAPDSim1D:
                 "before reading it, so an unimplemented name would otherwise "
                 "run to completion silently."
             )
-        # beam_deposition_model, the FIFTH hoist of this class (2026-08-30).
-        # Its failure mode is worse than late: there is no per-call check at
-        # all. Every read in the solver and in physics/cathode.py is an
-        # EQUALITY TEST against 'csda' with a beer_lambert fallback, so a
-        # misspelled name is not refused anywhere -- it silently selects
-        # beer_lambert and runs the whole discharge under a deposition closure
-        # the caller did not ask for, with no line of output saying so.
-        # 'cdsa' constructs and runs at base commit ca444dd; that is the
-        # negative control, and declm_block_gate.py carries the recipe.
-        _deposition_model = self._input_dict.get(
-            "beam_deposition_model"
-        )
-        if _deposition_model not in BEAM_DEPOSITION_MODELS:
-            raise ValueError(
-                "beam_deposition_model must be one of "
-                f"{sorted(BEAM_DEPOSITION_MODELS)} (got "
-                f"{_deposition_model!r}). Every read of this key is an "
-                "equality test against 'csda' with a 'beer_lambert' "
-                "fallback, so an unrecognised name is not refused at the "
-                "dispatch: it selects beer_lambert and runs to completion "
-                "silently under a closure nobody selected."
-            )
-        # Presence gate for the beam_ionization_birth timestep bound. Reading
-        # it once here keeps the off path out of the branch entirely.
-        self._beam_ionization_birth_timestep_bound = bool(
-            self._flags.get("beam_ionization_birth_timestep_bound")
-        )
         # Global dt-refinement instrument. Validated here so a factor that
         # would loosen the step (>1) or stop the run dead (0, negative) is
         # refused before any compute, and read once so the unarmed run's
@@ -2148,31 +2113,14 @@ class LAPDSim1D:
                     "does not supply " + "; ".join(missing) + "."
                 )
         self._cathode_face_full_debit = _cathode_face_full_debit
-        # Beam electron-energy deposition re-homed into the implicit heat
-        # substep. A real bool for the same reason as the two flags above: the
-        # flag MOVES a ~10^5 W source between operators, and an int or a string
-        # there would read like a value.
-        _beam_deposition_in_heat_substep = self._flags.get(
-            "beam_deposition_in_heat_substep"
-        )
-        if not isinstance(_beam_deposition_in_heat_substep, bool):
-            raise ValueError(
-                "beam_deposition_in_heat_substep must be a bool (got "
-                f"{_beam_deposition_in_heat_substep!r})"
-            )
-        if _beam_deposition_in_heat_substep and not bool(
+        # The beam's electron-energy deposition rides the implicit heat
+        # substep whenever there IS one: all heat conduction lives in B, so
+        # inside operator A the deposition cell would have no operator opposing
+        # the beam over the whole explicit step. With the split off there is no
+        # B and the row stays in operator A.
+        self._beam_deposition_in_heat_substep = bool(
             self._flags.get("implicit_heat_conduction")
-        ):
-            raise ValueError(
-                "beam_deposition_in_heat_substep requires "
-                "implicit_heat_conduction (got implicit_heat_conduction="
-                f"{self._flags.get('implicit_heat_conduction')!r}): the "
-                "flag re-homes the beam electron-energy source from the "
-                "explicit operator A into the implicit heat substep B, and "
-                "with the split off there is no B to host it -- the source "
-                "would leave A with nowhere to land"
-            )
-        self._beam_deposition_in_heat_substep = _beam_deposition_in_heat_substep
+        )
         # The ANODE electron-sheath debit rides the implicit substep whenever
         # there IS one. It is not a configuration choice: the row is exactly
         # linear in Te at a frozen circuit solve and is the one member of the
@@ -2186,7 +2134,7 @@ class LAPDSim1D:
         # substep applies them instead. ``rhs_terms`` still reports every one
         # of them at the same power; only which operator applies them moves.
         _heat_substep_terms = []
-        if _beam_deposition_in_heat_substep:
+        if self._beam_deposition_in_heat_substep:
             _heat_substep_terms.append(BEAM_POWER_DEPOSITION_TERM)
         if self._electrode_sink_in_heat_substep:
             _heat_substep_terms.append(ANODE_E_SHEATH_TERM)
@@ -2819,31 +2767,9 @@ class LAPDSim1D:
                 "beam_deposition_smoothing_cm must be >= 0 (got "
                 f"{self._input_dict.get('beam_deposition_smoothing_cm')})"
             )
-        # WP-D non-local beam-product transport. String selector; the module
-        # validates it too, but a bad value must fail at CONSTRUCTION rather
-        # than on the first cathode solve. Selecting "nonlocal" under
-        # beer_lambert is an INCOMPLETE configuration -- that path never
-        # launches the CSDA module, so the requested physics could not act --
-        # and raises rather than silently doing nothing.
-        _bpt = str(self._input_dict.get("beam_product_transport"))
-        if _bpt not in ("local", "nonlocal", "terminal_nonlocal"):
-            raise ValueError(
-                "beam_product_transport must be 'local', 'nonlocal' or "
-                f"'terminal_nonlocal' (got {_bpt!r})"
-            )
-        if _bpt != "local" and str(
-            self._input_dict.get("beam_deposition_model")
-        ) != "csda":
-            raise ValueError(
-                f"beam_product_transport={_bpt!r} requires "
-                "beam_deposition_model='csda' (the products it transports "
-                "are the CSDA ray's; under beer_lambert it would be a "
-                "silent no-op)"
-            )
-        # The anomalous closure family. Same discipline: the module validates
-        # too, but a bad selector must fail at CONSTRUCTION rather than on the
-        # first cathode solve, and selecting a closure the deposition path
-        # never launches is an INCOMPLETE configuration, not a no-op.
+        # The anomalous closure family. The module validates too, but a bad
+        # selector must fail at CONSTRUCTION rather than on the first cathode
+        # solve.
         _bam = str(self._input_dict.get("beam_anomalous_model"))
         if _bam not in ANOMALOUS_MODELS:
             raise ValueError(
@@ -2851,16 +2777,6 @@ class LAPDSim1D:
                 f"{sorted(ANOMALOUS_MODELS)} (got {_bam!r})"
             )
         if _bam == "ql_relaxation":
-            if str(
-                self._input_dict.get("beam_deposition_model")
-            ) != "csda":
-                raise ValueError(
-                    "beam_anomalous_model='ql_relaxation' requires "
-                    "beam_deposition_model='csda': the anomalous channel "
-                    "exists only on the CSDA rays, so under beer_lambert the "
-                    "closure could not act and the run would read as though "
-                    "the middle leg were live when nothing is booked"
-                )
             _qlrc = self._input_dict.get("ql_relaxation_coeff")
             if _qlrc is None:
                 raise ValueError(
@@ -2877,69 +2793,18 @@ class LAPDSim1D:
                     "ql_relaxation_coeff must be finite and > 0 (got "
                     f"{self._input_dict.get('ql_relaxation_coeff')})"
                 )
-        # WP-E QL heating locality. Same discipline as WP-D above: the module
-        # validates too, but a misconfiguration must fail at CONSTRUCTION, and
-        # every combination in which the walk machinery could not act is an
-        # INCOMPLETE configuration rather than a silent no-op. The walk needs
-        # (a) the CSDA module to be the thing depositing, and (b) an anomalous
-        # channel actually producing the power it carries.
+        # QL heating locality. Same discipline: the module validates too, but
+        # a misconfiguration must fail at CONSTRUCTION, and a walk with no
+        # anomalous power to carry is an INCOMPLETE configuration rather than
+        # a silent no-op.
         _hat = str(self._input_dict.get("heating_anomalous_transport"))
-        if _hat not in ("local", "tail_walk", "plateau_multigroup"):
+        if _hat not in ("local", "plateau_multigroup"):
             raise ValueError(
-                "heating_anomalous_transport must be 'local', 'tail_walk' or "
+                "heating_anomalous_transport must be 'local' or "
                 f"'plateau_multigroup' (got {_hat!r})"
             )
-        _multigroup = _hat == "plateau_multigroup"
-        if _multigroup:
-            # The multi-group plateau DERIVES its birth spectrum from the
-            # extraction (the plateau edge solved on the launch cell's own
-            # Maxwellian, then N equal-power groups up to e*phi_c), so the
-            # single-line closure's three birth-energy controls are inert
-            # under it. Inert is exactly what this repo refuses to be silent
-            # about: each is rejected here, at construction, rather than
-            # accepted and ignored. Their DEFAULTS are accepted, so an armed
-            # stance states the selector; a block-form stance also states the
-            # inert dials at their defaults, which the guard accepts.
-            if self._input_dict.get(
-                "heating_anomalous_tail_phi_c_fraction"
-            ) is not None:
-                raise ValueError(
-                    "heating_anomalous_tail_phi_c_fraction was supplied with "
-                    "heating_anomalous_transport='plateau_multigroup', where "
-                    "the birth spectrum runs from the derived plateau edge "
-                    "E_1 up to e*phi_c and the f dial is inert (the shipped "
-                    "f=0.25 line was the WAVE share's stand-in and f=1.0 the "
-                    "streaming share's; this closure carries both). Drop the "
-                    "fraction, or select heating_anomalous_transport="
-                    "'tail_walk' to launch at one keyed energy"
-                )
-            if float(
-                self._input_dict.get(
-                    "heating_anomalous_tail_energy_eV"
-                )
-            ) != 75.0:
-                raise ValueError(
-                    "heating_anomalous_tail_energy_eV="
-                    f"{self._input_dict.get('heating_anomalous_tail_energy_eV')}"
-                    " was supplied with heating_anomalous_transport="
-                    "'plateau_multigroup', where the birth energies are the "
-                    "derived group midpoints and the fixed rung is inert; "
-                    "drop it, or select heating_anomalous_tail_energy_keying="
-                    "'fixed' under heating_anomalous_transport='tail_walk'"
-                )
-            if str(
-                self._input_dict.get(
-                    "heating_anomalous_tail_energy_keying"
-                )
-            ) != "phi_c":
-                raise ValueError(
-                    "heating_anomalous_tail_energy_keying was supplied with "
-                    "heating_anomalous_transport='plateau_multigroup', which "
-                    "keys the spectrum's TOP to the live e*phi_c and its "
-                    "BOTTOM to the solved plateau edge; there is no rung to "
-                    "select and the keying selector is inert. Drop it, or "
-                    "select heating_anomalous_transport='tail_walk'"
-                )
+        _tail_walking = _hat == "plateau_multigroup"
+        if _tail_walking:
             if bool(self._flags.get("coverage_closure")):
                 raise ValueError(
                     "heating_anomalous_transport='plateau_multigroup' does "
@@ -2951,90 +2816,18 @@ class LAPDSim1D:
                     "convention rather than a measurement of the plasma. The "
                     "coverage arms are deferred until that stance is designed"
                 )
-        # pd1 branched disposal. It fills and consumes the SAME withholding
-        # bank the tail walk does -- it only scales it per cell between the
-        # march and the walk -- so every requirement the walk states applies to
-        # it verbatim, and the two selectors are checked together below rather
-        # than in parallel blocks that could drift apart.
-        _disposal = str(
-            self._input_dict.get("heating_anomalous_disposal")
-        )
-        if _disposal not in ("local", "landau_branched"):
-            raise ValueError(
-                "heating_anomalous_disposal must be 'local' or "
-                f"'landau_branched' (got {_disposal!r})"
-            )
-        _branch = _disposal == "landau_branched"
-        if _branch and _hat != "local":
-            raise ValueError(
-                "heating_anomalous_disposal='landau_branched' cannot be "
-                f"combined with heating_anomalous_transport={_hat!r}: the "
-                "branch already decides what share of each cell's extracted "
-                "power is walked, and 'tail_walk' is its f_Landau == 1 "
-                "corner, so naming both states two dispositions for one bank. "
-                "Select the branch with heating_anomalous_transport='local'"
-            )
-        if _branch and bool(self._flags.get("coverage_closure")):
-            raise ValueError(
-                "heating_anomalous_disposal='landau_branched' does not "
-                "support coverage_closure: the two-stream march shares ONE "
-                "withholding bank between the channel and reservoir arms, so "
-                "the reservoir's extracted power cannot be branched on the "
-                "reservoir's own state -- and the reservoir carries "
-                "ne = the density FLOOR against the mean-field Te, so any "
-                "branching there would be an artifact of the floor convention "
-                "rather than a measurement of the plasma. The coverage arms "
-                "are deferred until that stance is designed"
-            )
-        _tail_walking = _hat in ("tail_walk", "plateau_multigroup") or _branch
-        if _tail_walking:
-            _sel = (
-                "heating_anomalous_disposal='landau_branched'" if _branch
-                else f"heating_anomalous_transport={_hat!r}"
-            )
-            if str(
-                self._input_dict.get("beam_deposition_model")
-            ) != "csda":
+            if _bam == "none":
                 raise ValueError(
-                    f"{_sel} requires "
-                    "beam_deposition_model='csda' (the anomalous heating it "
-                    "transports is the CSDA ray's; under beer_lambert it "
-                    "would be a silent no-op)"
-                )
-            if str(
-                self._input_dict.get("beam_anomalous_model")
-            ) == "none":
-                raise ValueError(
-                    f"{_sel} requires an "
-                    "active anomalous channel "
+                    "heating_anomalous_transport='plateau_multigroup' "
+                    "requires an active anomalous channel "
                     "(beam_anomalous_model='quasilinear'); with no anomalous "
                     "drag there is no power to carry and the setting would "
                     "be a silent no-op"
                 )
-            _tail_eV = float(
-                self._input_dict.get("heating_anomalous_tail_energy_eV")
-            )
-            if not math.isfinite(_tail_eV) or _tail_eV <= 0.0:
-                raise ValueError(
-                    "heating_anomalous_tail_energy_eV must be finite and > 0 "
-                    f"(got {self._input_dict.get('heating_anomalous_tail_energy_eV')})"
-                )
-        # K7 sheath-aware tail closure: birth-energy keying and the cathode
-        # boundary. The two string domains are checked unconditionally (a typo
-        # is a typo whether or not the walk is engaged); everything that
-        # depends on the walk being engaged is checked inside the tail_walk
-        # branch below, so both keys keep the "inert under 'local'" contract
-        # their siblings have.
-        _keying = str(
-            self._input_dict.get(
-                "heating_anomalous_tail_energy_keying"
-            )
-        )
-        if _keying not in ("phi_c", "fixed"):
-            raise ValueError(
-                "heating_anomalous_tail_energy_keying must be 'phi_c' or "
-                f"'fixed' (got {_keying!r})"
-            )
+        # The cathode boundary of the walk. The string domain is checked
+        # unconditionally (a typo is a typo whether or not the walk is
+        # engaged); everything that depends on the walk being engaged is
+        # checked inside the walked-tail branch below.
         _cath_bnd = str(
             self._input_dict.get(
                 "heating_anomalous_tail_cathode_boundary"
@@ -3066,71 +2859,10 @@ class LAPDSim1D:
                 "heating_anomalous_tail_forward_fraction="
                 f"{_fwd_frac!r} was supplied with no walked tail to launch: "
                 "it is read only under "
-                "heating_anomalous_transport='tail_walk', "
-                "heating_anomalous_transport='plateau_multigroup' or "
-                "heating_anomalous_disposal='landau_branched' (without them "
+                "heating_anomalous_transport='plateau_multigroup' (without it "
                 "the setting would be a silent no-op)"
             )
-        # f is a DECLARED BRACKET, never a fitted number, so a value off the
-        # bracket is refused everywhere rather than only where it is read.
-        _phi_frac = self._input_dict.get(
-            "heating_anomalous_tail_phi_c_fraction"
-        )
-        if _phi_frac is not None and float(_phi_frac) not in (0.25, 0.5, 1.0):
-            raise ValueError(
-                "heating_anomalous_tail_phi_c_fraction must be one of the "
-                "declared bracket arms 0.25, 0.5 or 1.0 (got "
-                f"{_phi_frac!r}); it is a bracket the campaign reports across, "
-                "not a value to fit"
-            )
-        if _branch:
-            # The registered branched closure keys the birth energy to the LIVE
-            # cathode drop. The fixed rung is an ASSUMED constant (75 eV) that
-            # this closure's zero-new-constants statement does not cover, so it
-            # is refused here rather than silently admitted.
-            if _keying != "phi_c":
-                raise ValueError(
-                    "heating_anomalous_disposal='landau_branched' requires "
-                    "heating_anomalous_tail_energy_keying='phi_c' (got "
-                    f"{_keying!r}): the branched closure's birth energy is the "
-                    "live cathode drop e*phi_c(t), and the fixed rung is an "
-                    "assumed constant it does not carry"
-                )
-            # f is a DECLARED BRACKET. Under the branch there is no shipped
-            # arm to fall back on -- the registered central arm is f = 1.0 and
-            # the default None would silently select 0.25 -- so the arm must be
-            # stated rather than defaulted.
-            if _phi_frac is None:
-                raise ValueError(
-                    "heating_anomalous_disposal='landau_branched' requires "
-                    "heating_anomalous_tail_phi_c_fraction to be stated "
-                    "explicitly (one of the declared bracket arms 0.25, 0.5 "
-                    "or 1.0); leaving it None would silently select 0.25 "
-                    "while the registered central arm is 1.0"
-                )
         if _tail_walking:
-            if _keying == "fixed":
-                if _phi_frac is not None:
-                    raise ValueError(
-                        "heating_anomalous_tail_phi_c_fraction was supplied "
-                        "with heating_anomalous_tail_energy_keying='fixed', "
-                        "where the tail energy is the constant "
-                        "heating_anomalous_tail_energy_eV and the fraction "
-                        "would do nothing; select keying='phi_c' or drop the "
-                        "fraction"
-                    )
-            elif _tail_eV != 75.0:
-                # The rung key is inert under phi_c keying, and the ONE way to
-                # get that wrong is to select a bracket rung and have it
-                # quietly ignored.
-                raise ValueError(
-                    "heating_anomalous_tail_energy_eV="
-                    f"{_tail_eV} was supplied with "
-                    "heating_anomalous_tail_energy_keying='phi_c', where the "
-                    "tail energy is f*e*phi_c(t) and the fixed rung is inert; "
-                    "select keying='fixed' to use the rung, or set the arm "
-                    "through heating_anomalous_tail_phi_c_fraction"
-                )
             if _cath_bnd == "reflect" and bool(
                 self._flags.get("TwinCathode")
             ):
@@ -3147,74 +2879,14 @@ class LAPDSim1D:
                 # than reflecting walkers off an arbitrary window edge on the
                 # first cathode solve.
                 tail_reflect_face(self._geometry, end=0)
-        # K6 tail ionization. Same discipline again, and the same reason to
-        # duplicate the module's own guard here: a misconfiguration must fail
-        # before the first cathode solve, not hours into a run.
-        # Since K7b the two depth-1 bars no longer refuse -- they select a
-        # treatment per ray (revert below E_stop, march with the measured
-        # <= 2.0% understatement above the <W_sec> crossing), so there is
-        # nothing for construction to reject there and the exposure is
-        # reported in the tail diagnostics instead. The ONE surviving refusal
-        # is the EII table edge, and it is the module's own constant evaluated
-        # on this solver's I_ion rather than restated, so the two cannot
-        # drift apart. Under K7 phi_c keying the LIVE E_tail is f*phi_c(t),
-        # which no construction-time check can see; the check below then binds
-        # only the (inert) fixed rung and the module's own copy of it,
-        # evaluated on the live value at every solve, is what actually holds
-        # the walk inside the tabulated cross section. That runtime copy is
-        # REACHED: f = 1.0 with phi_c at cathode_phi_c_cap_V puts E_tail on
-        # the edge to the last bit. Hence K7c -- the edge is inclusive within
-        # HE_EII_EDGE_REL_TOL (the module owns both the constant and the
-        # comparison; here it is imported, not restated).
-        _tion = str(
-            self._input_dict.get("heating_anomalous_tail_ionization")
-        )
-        if _tion not in ("off", "on"):
-            raise ValueError(
-                "heating_anomalous_tail_ionization must be 'off' or 'on' "
-                f"(got {_tion!r})"
-            )
-        if _tion == "on":
-            if not _tail_walking:
-                raise ValueError(
-                    "heating_anomalous_tail_ionization='on' requires walkers "
-                    "to give the channel to: "
-                    "heating_anomalous_transport='tail_walk', "
-                    "heating_anomalous_transport='plateau_multigroup' or "
-                    "heating_anomalous_disposal='landau_branched' (without "
-                    "them the setting would be a silent no-op). "
-                    "heating_anomalous_transport accepts 'local', "
-                    "'tail_walk' or 'plateau_multigroup'; "
-                    "heating_anomalous_disposal accepts 'local' "
-                    "or 'landau_branched'; heating_anomalous_tail_ionization "
-                    f"accepts 'off' or 'on' (got {_hat!r}, {_disposal!r} and "
-                    f"{_tion!r})"
-                )
-            _E_table_top = HE_EII_EPS_TOP * float(self._I_ion)
-            _edge_excess = (_tail_eV - _E_table_top) / _E_table_top
-            if _edge_excess > HE_EII_EDGE_REL_TOL:
-                raise ValueError(
-                    "heating_anomalous_tail_ionization='on' marches the "
-                    "walkers on the tabulated He EII cross section, which "
-                    f"ends at {_E_table_top:.2f} eV; at "
-                    f"heating_anomalous_tail_energy_eV={_tail_eV} eV the "
-                    "lookup would clamp to its last node and the walk would "
-                    "attenuate on an extrapolated cross section. This is "
-                    "refused, not approximated (relative excess "
-                    f"{_edge_excess:.3e}, tolerated "
-                    f"{HE_EII_EDGE_REL_TOL:.1e})"
-                )
         # --- A2a: the anode-mesh cull of the QL tail, and its rider --------
         # Duplicated from the deposition module's own guards for the standing
         # reason: a misconfiguration must fail at construction, not on the
         # first cathode solve. The module keeps its copies -- it is called
         # directly by instruments that never build a solver.
-        # The cull itself is unconditional wherever the mesh is resolved and
-        # the closure walks a tail; only the reversed-walker RIDER is a
-        # configuration choice, and it is what the guards below police.
-        _tail_cull = _tail_walking and bool(
-            self._flags.get("beam_anode_interception")
-        )
+        # The cull itself is unconditional wherever the closure walks a tail;
+        # only the reversed-walker RIDER is a configuration choice, and it is
+        # what the guards below police.
         _R_e = float(
             self._input_dict.get("beam_tail_anode_reflected_particles")
         )
@@ -3235,27 +2907,14 @@ class LAPDSim1D:
                 "energy a returned walker carries in units of the energy it "
                 "arrived with, and that cannot exceed one"
             )
-        if (_R_e > 0.0 or _eta_E > 0.0) and not _tail_cull:
+        if (_R_e > 0.0 or _eta_E > 0.0) and not _tail_walking:
             raise ValueError(
                 "beam_tail_anode_reflected_particles/"
                 "beam_tail_anode_reflected_energy ride on the anode tail "
-                "cull, which fires only where the mesh is resolved "
-                "(beam_anode_interception) AND the closure walks a tail "
-                "(heating_anomalous_transport='tail_walk' or "
-                "'plateau_multigroup', or "
-                "heating_anomalous_disposal='landau_branched'); with neither "
-                "there is nothing intercepted and the pair would be a silent "
-                "no-op"
-            )
-        if _R_e > 0.0 and _tion != "on":
-            raise ValueError(
-                "the reversed-walker rider "
-                "(beam_tail_anode_reflected_particles > 0) requires "
-                "heating_anomalous_tail_ionization='on': the energy-only "
-                "closed-form tail walk carries a whole cell sequence in one "
-                "telescoping integral and has no per-walker launch to "
-                "reverse. The cull itself composes with either walk; only the "
-                "return does not, and it is refused rather than approximated"
+                "cull, which fires only where the closure walks a tail "
+                "(heating_anomalous_transport='plateau_multigroup'); without "
+                "one there is nothing intercepted and the pair would be a "
+                "silent no-op"
             )
         _fc = float(self._input_dict.get("beam_clump_fraction"))
         if not 0.0 <= _fc < 1.0:
@@ -3765,26 +3424,6 @@ class LAPDSim1D:
                 "serialise a distribution function either. R2 is fluid-arms "
                 "only and does not extend DVM support; accepted: "
                 f"{sorted(set(('moment',)) )} and any other moment closure"
-            )
-        anomalous_model = str(
-            self._input_dict.get("beam_anomalous_model")
-        )
-        deposition_model = str(
-            self._input_dict.get("beam_deposition_model")
-        )
-        if anomalous_model != "none" and deposition_model != "csda":
-            raise ValueError(
-                f"regime_tracer refuses beam_anomalous_model="
-                f"{anomalous_model!r} together with beam_deposition_model="
-                f"{deposition_model!r}: the anomalous channel exists only on "
-                "the CSDA deposition rays, so under any other deposition model "
-                "no quasilinear power is booked at all and the tracer's "
-                "passive-cell refusal of it has nothing to refuse. A run "
-                "configured this way reads as though the corrected booking is "
-                "doing work when neither the channel nor its refusal is live. "
-                "Accepted: beam_deposition_model='csda' with any "
-                "beam_anomalous_model, or beam_anomalous_model='none' with any "
-                "deposition model"
             )
         if self._input_dict.get("restart_from") is not None:
             raise ValueError(
@@ -4348,9 +3987,6 @@ class LAPDSim1D:
                 geometry=geometry,
                 E_beam_eV=prepared["E_beam_eV"],
                 launch_cells=self._tracer_launch_cells(),
-                coulomb_model=str(
-                    self._input_dict.get("beam_coulomb_model")
-                ),
             ) / criteria["thinness"],
             # An empty cell (nn == 0) has no neutrals left to burn, so its
             # depletion is total and the ratio is inf -- the cell activates.
@@ -5121,9 +4757,8 @@ class LAPDSim1D:
         behaviour exactly.
 
         Rows the implicit heat substep applies are LEFT OUT of this sum --
-        ``anode_e_sheath_loss`` whenever the operator split is in force, and
-        ``beam_power_deposition`` additionally under
-        ``beam_deposition_in_heat_substep``. Each is still built and still
+        ``anode_e_sheath_loss`` and ``beam_power_deposition`` whenever the
+        operator split is in force. Each is still built and still
         REPORTED by :meth:`rhs_terms` at the same power; only which operator
         applies it moves (:meth:`operator_split_step`). With the split off
         the set is empty and every row enters the sum as it always did.
@@ -6048,18 +5683,17 @@ class LAPDSim1D:
         if operator_split is None:
             operator_split = self._flags.get("implicit_heat_conduction")
         if self._beam_deposition_in_heat_substep and not operator_split:
-            # Construction already refuses the flag without
-            # implicit_heat_conduction, so the only way here is a caller
-            # passing operator_split=False explicitly (run/advance_one_step).
-            # Silently stepping would drop the beam deposition entirely: the
-            # flag has already removed it from the explicit sum and there is no
-            # substep to receive it.
+            # The only way here is a caller passing operator_split=False
+            # explicitly (run/advance_one_step) with implicit_heat_conduction
+            # on. Silently stepping would drop the beam deposition entirely:
+            # rhs() has already removed it from the explicit sum and there is
+            # no substep to receive it.
             raise ValueError(
-                "beam_deposition_in_heat_substep is armed but this step was "
-                "asked for operator_split=False: the beam electron-energy "
-                "source has been removed from the explicit operator and lives "
-                "in the implicit heat substep, so a non-split step would "
-                "deposit no beam power at all"
+                "implicit_heat_conduction is on but this step was asked for "
+                "operator_split=False: the beam electron-energy source has "
+                "been removed from the explicit operator and lives in the "
+                "implicit heat substep, so a non-split step would deposit no "
+                "beam power at all"
             )
         if self._electrode_sink_in_heat_substep and not operator_split:
             # Same hazard, same refusal: with implicit_heat_conduction on,
@@ -7910,8 +7544,8 @@ class LAPDSim1D:
             and it takes the row out of A's timestep bundle.
 
         ``beam_power_deposition``
-            Under ``beam_deposition_in_heat_substep`` only: B receives it as
-            a source held constant over each substep
+            Always: B receives it as a source held constant over each
+            substep
             (:meth:`beam_deposition_ee_source`). The beam's particle births,
             ionization cost and excitation radiation stay in A.
 
@@ -9164,22 +8798,6 @@ class LAPDSim1D:
             # does not apply would hold dt down for nothing. Its accuracy
             # bound is the separate ``electrode_sink_rate`` candidate.
             rhs = add_state_rhs(rhs, _electrode_terms.anode_rhs)
-        if self._beam_ionization_birth_timestep_bound:
-            # The WHOLE applied row, per the applied-row convention: a bound
-            # computed from a fraction of a row describes a term the step does
-            # not apply, and leaves the remainder unbounded -- the same
-            # wrong-operator class as reading the wrong boundary operator
-            # above. beam_ionization_birth is a volumetric plasma source that
-            # can drive a cell into a floor within one step and has never been
-            # in any bound.
-            rhs = add_state_rhs(
-                rhs,
-                self.beam_ionization_rhs_terms(
-                    state=state,
-                    cathode_solve=cathode_solve,
-                    time=time,
-                )["beam_ionization_birth"],
-            )
         if self._dvm_rows_superseded():
             rhs = add_state_rhs(rhs, self._dvm_booked_transfer_rhs())
         return rhs
@@ -10341,8 +9959,8 @@ class LAPDSim1D:
     ):
         """Return the beam ``Ee`` deposition row [erg cm^-3 s^-1] at a state.
 
-        The source the implicit heat substep integrates when
-        ``beam_deposition_in_heat_substep`` is armed, and the exact row
+        The source the implicit heat substep integrates whenever the operator
+        split is in force, and the exact row
         :meth:`rhs` then leaves out of operator A's sum. It is built from the
         SAME beam path :meth:`rhs_terms` uses and carries the same two gates:
         the phase gate (no plasma, or neutral prebreakdown, means no beam --
@@ -12859,28 +12477,26 @@ class LAPDSim1D:
             "beam_heat_secondary_W": np.zeros(cells, dtype=float),
             "beam_heat_terminal_W": np.zeros(cells, dtype=float),
             # K6: the QL tail walkers' own share of the three shared banks
-            # they write into under
-            # ``heating_anomalous_tail_ionization="on"`` -- the pairs they
-            # birth [1/s], the potential they invest and the line power they
-            # radiate [W]. Diagnostic splits, not extra sources: the events
-            # are already inside ``beam_ionization_birth`` and the energies
-            # inside the cost and radiation sinks. Identically zero under the
-            # default ``"off"``, so every run to date reads zero; runs saved
-            # before 2026-08-06 lack the datasets and readers must default
-            # them. With ``beam_heat_anomalous_W`` (which under ``"on"``
-            # carries the walkers' whole heat delivery) and the tail end
-            # ledger, these close the tail channel's branching from a saved
-            # file alone.
+            # they write into -- the pairs they birth [1/s], the potential
+            # they invest and the line power they radiate [W]. Diagnostic
+            # splits, not extra sources: the events are already inside
+            # ``beam_ionization_birth`` and the energies inside the cost and
+            # radiation sinks. Identically zero unless the tail is walked
+            # (``heating_anomalous_transport="plateau_multigroup"``); runs
+            # saved before 2026-08-06 lack the datasets and readers must
+            # default them. With ``beam_heat_anomalous_W`` (which carries the
+            # walkers' whole heat delivery) and the tail end ledger, these
+            # close the tail channel's branching from a saved file alone.
             "beam_tail_ionization_events_per_s": np.zeros(cells, dtype=float),
             "beam_tail_ionization_cost_W": np.zeros(cells, dtype=float),
             "beam_tail_radiated_W": np.zeros(cells, dtype=float),
-            # K7b band exposure [W], summed over the active rays. Under phi_c
-            # keying E_tail follows the live cathode drop, so one run visits
-            # all three bands: below the lowest inelastic threshold the
-            # ionizing march REVERTS to the energy-only walk (exact -- no
-            # channel is open there), above the <W_sec> crossing it runs under
-            # the measured <= 2.0% depth-1 understatement, and in between
-            # nothing is out of band. These say which, per frame, so the foot
+            # K7b band exposure [W], summed over the active rays. The group
+            # energies follow the live cathode drop, so one run visits all
+            # three bands: below the lowest inelastic threshold the ionizing
+            # march REVERTS to the energy-only walk (exact -- no channel is
+            # open there), above the <W_sec> crossing it runs under the
+            # measured <= 2.0% depth-1 understatement, and in between nothing
+            # is out of band. These say which, per frame, so the foot
             # reversion and the above-bar exposure are readable from a saved
             # trajectory instead of having to be inferred from phi_c.
             # ``_power_W`` are the tail power in each regime and
@@ -13002,45 +12618,30 @@ class LAPDSim1D:
             diag[f"{prefix}_beam_anode_intercepted_W"] = 0.0
             diag[f"{prefix}_beam_transmitted_W"] = 0.0
             diag[f"{prefix}_beam_transmitted_flux_per_s"] = 0.0
-            # WP-D end ledger [W]: beam energy that LEAVES the column through
-            # each axial end -- product walks that escape without
-            # thermalizing, plus the transmitted primary's Gamma_t*E_t (which
-            # the module has computed since B1 and nothing ever banked). This
-            # is a loss channel, not a heating one: it is never added to
-            # plasma_heating_erg_s and never enters an RHS row. Identically
-            # zero under beam_product_transport="local" (the default), so on
-            # every run to date these read 0.0; runs saved before 2026-07-28
-            # lack the datasets entirely and readers must default them.
+            # WP-D end ledger [W]: the deposition module's product-walk end
+            # ledger. The CSDA ray's event products are banked in their birth
+            # cell, so nothing walks and these read 0.0 on every run; runs
+            # saved before 2026-07-28 lack the datasets entirely and readers
+            # must default them.
             diag[f"{prefix}_beam_end_loss_low_W"] = 0.0
             diag[f"{prefix}_beam_end_loss_high_W"] = 0.0
             # WP-E tail end ledger [W]: QL heating that leaves the column as
             # fast tail electrons through each axial end without thermalizing.
-            # A SIBLING of the WP-D pair above, kept separate so the product
-            # ledger keeps its measured meaning while the two closures switch
-            # independently. Same status: a loss channel, never in an RHS row.
+            # A SIBLING of the WP-D pair above, kept separate so each ledger
+            # keeps its own meaning. A loss channel, never in an RHS row.
             # Identically zero under heating_anomalous_transport="local" (the
-            # default), so on every run to date these read 0.0; runs saved
-            # before 2026-08-02 lack the datasets and readers must default.
+            # default); runs saved before 2026-08-02 lack the datasets and
+            # readers must default.
             #
             # THE TOTAL TAIL ESCAPE IS THE SUM OF ALL FOUR ROWS (both prefixes,
             # both faces) -- that is the quantity the per-ray identity
             #   P_QL = heating_anomalous + ionization_cost_tail + radiated_tail
             #          + end_loss_tail_low + end_loss_tail_high
-            # complements, and the ONLY form that is correct for every keying.
-            # The high row alone is the total only while the low row is zero,
-            # which is a property of the KEYING and not an invariant of the
-            # closure: under heating_anomalous_tail_energy_keying="phi_c" a
-            # walker is born at E_tail = f*e*phi_c with f <= 1 against a
-            # cathode-face reflection threshold of e*phi_c and only ever loses
-            # energy, so it can never reach that face at or above the threshold
-            # and the low row is exactly 0.0; under "fixed" the rung is
-            # decoupled from phi_c, and on any frame whose drive sits below the
-            # rung the sheath no longer repels the walkers and the low row
-            # fills. Measured: covdisc_fixed (75 eV rung) books up to 0.486 of
-            # the launched tail power through the low row on the 43 frames
-            # where phi_c fell to 44.6-71.7 V, while the identity itself still
-            # closes to 8.1e-16 on every frame. A reader that names only the
-            # high row understates the escape there by that much.
+            # complements, and the ONLY form that is correct for every
+            # cathode-face convention. Under the reflecting face every group
+            # is born below the reflection threshold e*phi_c and only ever
+            # loses energy, so the low row is exactly 0.0 there; under
+            # "escape" the low row fills.
             diag[f"{prefix}_beam_end_loss_tail_low_W"] = 0.0
             diag[f"{prefix}_beam_end_loss_tail_high_W"] = 0.0
             # Item-35 gap-survival ledger: three views of the fraction of the
@@ -13089,9 +12690,9 @@ class LAPDSim1D:
             # -- because both leave the solve in
             # ``regime = "capability_limited"``, which is exactly the tag
             # the module's own escape invariant keys on. Read it with any
-            # ``phi_c``-derived quantity (notably ``E_tail`` under
-            # ``heating_anomalous_tail_energy_keying = "phi_c"``): on a
-            # flagged frame that quantity is riding a numerical regime
+            # ``phi_c``-derived quantity (notably the top of the multi-group
+            # plateau spectrum): on a flagged frame that quantity is riding a
+            # numerical regime
             # guard, not a device-sustained drop. Diagnostic only -- it is
             # derived from the regime string the solve already returns, so
             # nothing here is recomputed and no exported value moves. Runs

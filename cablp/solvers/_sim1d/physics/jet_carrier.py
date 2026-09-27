@@ -140,20 +140,15 @@ through a sum, because a compensated double-book closes a sum identity.
 THE BIRTH-CONVENTION DEBT, NAMED AND MEASURED. This term books the whole
 ``E_fast`` on ``Ei`` and the whole ``m v_fast`` on ``M``, and it books
 ``Ee -= I_ion`` with NO ``(3/2) k Te`` birth credit for the freed electron.
-Read against the shipped and stance value ``ionization_birth_energy_model =
-"conservative"`` (``"legacy"`` is the DEPRECATED arm, not the stance), that
-lands as follows:
+Read against the bulk birth convention (the cold-electron booking with the
+ion mass-loading mixing energy), that lands as follows:
 
-* The ELECTRON side AGREES. ``"conservative"`` books ``Ee_birth = 0`` for the
-  bulk -- the new electron carries no thermal energy and ``Te`` falls by
-  dilution -- which is exactly what this term does. ``Te_birth_ionization``
-  selects WHICH ``Te`` a credit would sample and is inert on ``Ee`` under this
-  model, so it does not put the two channels at odds.
-  ``electron_birth_convention_W`` reports the size a disagreement WOULD have
-  (``(3/2) k Te`` per beam ionization) so the agreement is checkable rather
-  than asserted, and so an arm that deliberately ran the deprecated
-  ``"legacy"`` bulk could read its own mismatch straight off the ledger.
-* The ION side does NOT agree, and this is the live debt. ``"conservative"``
+* The ELECTRON side AGREES. The bulk books ``Ee_birth = 0`` -- the new
+  electron carries no thermal energy and ``Te`` falls by dilution -- which is
+  exactly what this term does. ``electron_birth_convention_W`` reports the
+  size a disagreement WOULD have (``(3/2) k Te`` per beam ionization) so the
+  agreement is checkable rather than asserted.
+* The ION side does NOT agree, and this is the live debt. The bulk
   reconciles the bulk-kinetic cross term by booking an explicit mass-loading
   mixing energy ``(1/2) m (u_i - u_birth)^2 S_ion`` onto ``Ei``. The beam's
   own births arrive at ``u_birth = v_fast``, not at the cold gas's drift, and
@@ -582,10 +577,9 @@ def cathode_jet_carrier_rhs(
     u_dM_partner = float(np.sum(u_n * partner_Mn))
     # The electron-birth convention, made a number rather than a memory. This
     # term books only the binding cost on Ee and gives the freed electron NO
-    # (3/2) k Te birth credit -- which is what the stance's own
-    # "conservative" bulk model does too, so the two AGREE. The number is
-    # reported anyway: it is the size a disagreement would have, and it is
-    # what a deliberately-deprecated "legacy" bulk arm would be mismatched by.
+    # (3/2) k Te birth credit -- which is what the bulk birth convention does
+    # too, so the two AGREE. The number is reported anyway: it is the size a
+    # disagreement would have.
     Te = np.asarray(derived.Te, dtype=float)
     electron_birth_gap = float(np.sum(1.5 * dep_ion * Te * ev_to_erg))
     diagnostics = {

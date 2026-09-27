@@ -9,11 +9,9 @@
 # kinds of table.
 #
 # ``[input_dict]`` and ``[input_flags]`` are the DELTA from ``default_config()``:
-# every key in them differs from its config default, except cathode_emission_
-# profile and Te_birth_ionization (resolved accretion) and Ti_birth_
-# ionization (a class-1 declaration), which equal the default and are stated
-# explicitly because run_m6_point.py's own driver defaults do not, or because
-# the selection is physics-bearing.
+# every key in them differs from its config default, except Ti_birth_
+# ionization (a class-1 declaration), which equals the default and is stated
+# explicitly because the selection is physics-bearing.
 #
 # ``[models.<family>]`` blocks are INVENTORIES, not deltas: each states one
 # model family's COMPLETE membership, every member written regardless of value,
@@ -395,8 +393,7 @@ neutral_kinetic_dvm_anode_jet = true
 neutral_jet_arm_current_A = 50.0
 neutral_jet_disarm_current_A = 25.0
 
-# IONIZATION BIRTH TEMPERATURES. Neither key belongs to a declared family.
-Te_birth_ionization = "local"
+# IONIZATION BIRTH TEMPERATURE. The key belongs to no declared family.
 # Class-1 declaration: physics-bearing, so it is stated here even though it
 # equals the config default. The ion is born at the local neutral temperature,
 # the conserving partner of the En ionization sink.
@@ -442,16 +439,6 @@ max_steps_action = "stop"
 # booking is conditional on the kinetic neutral closure (kinetic_dvm).
 end_wall_sheath_full_debit = true
 
-# OPERATOR HOME OF THE BEAM'S ELECTRON-ENERGY DEPOSITION. Armed 2026-08-25. The
-# beam_power_deposition Ee row leaves the explicit operator A and is applied by
-# the implicit heat substep B, held constant over each substep and solved with
-# the tridiagonal conduction operator. Nothing else about the beam moves: the
-# ionization births, the ionization cost and the excitation radiation are
-# reaction-channel terms and stay in A. This is the class-1 fix for the staged
-# Te bias -- depositing beam power explicitly and then conducting it implicitly
-# let the deposition cell run hot across the substep boundary.
-beam_deposition_in_heat_substep = true
-
 # NEUTRAL CLOSURE. The three closure flags this stance turns -- neutral
 # momentum, neutral energy and the hot internal wall, all config defaults ON
 # since the R2a fold-in -- are members of the neutral_closure family and are
@@ -489,18 +476,15 @@ neutral_baffles = true
 
 [models.beam_tail_closure]
 
-# The deposition, Coulomb and anomalous-channel selectors, the walked tail's
-# conventions and the clump pair are all config defaults; they are written here
+# The anomalous-channel selector, the walked tail's conventions and the clump
+# pair are all config defaults; they are written here
 # because a block is an inventory of the whole closure, not a delta against
 # defaults that may move. The heat-flux limiter is NOT a member of this family
 # and is not named here: both the electron_heat_flux_limit flag and its
 # coefficient heat_flux_limiter_f are config defaults (the flag folded at R2a,
 # the coefficient at R2b).
-beam_deposition_model = "csda"
-beam_coulomb_model = "fast_electron"
 beam_anomalous_model = "quasilinear"
 ql_relaxation_coeff = 30.0
-beam_product_transport = "local"
 
 # ANOMALOUS-HEATING TRANSPORT. Adopted 2026-08-25 (tail_walk ->
 # plateau_multigroup): the quasilinear plateau is carried as a SPECTRUM rather
@@ -508,19 +492,8 @@ beam_product_transport = "local"
 # the two single-line arms are its two heirs taken one at a time. Nothing is
 # fitted -- the wave/bulk and streaming shares, the group edges and the group
 # weights all follow from the flat plateau and the state-solved plateau edge
-# E_1 -- which is why the tail-energy dial, the fixed rung and the keying
-# selector are INERT under it and are refused at construction rather than
-# ignored. Their DEFAULTS are accepted, which is why the block states each of
-# them at its default rather than at a value this closure would refuse.
+# E_1. The walked streaming groups ionize and excite the column gas they cross.
 heating_anomalous_transport = "plateau_multigroup"
-heating_anomalous_disposal = "local"
-heating_anomalous_tail_energy_eV = 75.0
-
-# Tail ionization rides the selector unchanged: it is one of the tail_walk
-# conventions plateau_multigroup inherits, and it applies to the walked
-# streaming groups exactly as it applied to the single tail line.
-heating_anomalous_tail_ionization = "on"
-heating_anomalous_tail_energy_keying = "phi_c"
 heating_anomalous_tail_cathode_boundary = "reflect"
 # The launch split of the walked groups: half each way along B, which
 # is what an isotropic quasilinear plateau launches. Stated because the
@@ -532,13 +505,7 @@ beam_clump_fraction = 0.0
 beam_clump_enhancement = 1.0
 beam_deposition_smoothing_cm = 50.0
 b_beam_excitation = 1.4
-beam_excitation_model = "2p_scalar"
 beam_excitation_energy_eV = 21.218
-beam_anode_interception = true
-
-# The f dial is undeclared: plateau_multigroup runs the birth spectrum from the
-# derived plateau edge E_1 up to e*phi_c, and a stated fraction is refused.
-none_valued = ["heating_anomalous_tail_phi_c_fraction"]
 
 
 [models.neutral_closure]

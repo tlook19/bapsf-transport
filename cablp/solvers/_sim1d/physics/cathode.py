@@ -180,8 +180,8 @@ class CathodeSolve1D:
     x0_next: float | None
     x0_twin_next: float | None
     metadata: dict
-    # Per-end CSDA deposition results ({0: primary, -1: twin}), present only
-    # under beam_deposition_model = "csda"; None keys mean no active beam.
+    # Per-end CSDA deposition results ({0: primary, -1: twin}), present
+    # whenever the solve ran; None keys mean no active beam.
     beam_deposition: dict | None = None
     # Per-end ``(probe, ray, circuit, ceiling)`` gap survival for the item-35
     # ledger tripwire; keyed only for ends with an active CSDA ray. The first
@@ -496,20 +496,6 @@ def validate_cathode_solver_model(input_dict, input_flags):
     return model
 
 
-def cathode_beam_deposition_is_csda(input_dict):
-    """Whether this configuration deposits the beam with the CSDA march.
-
-    The ONE equality test against ``beam_deposition_model``, read by the
-    deposition dispatch, which launches the march under it and the
-    Beer-Lambert profile otherwise. The selector is an EQUALITY test with a
-    Beer-Lambert fallback rather than a membership one, so any value that is
-    not exactly ``"csda"`` selects Beer-Lambert.
-    """
-    return str(
-        input_dict.get("beam_deposition_model", "beer_lambert")
-    ) == "csda"
-
-
 def idriven_result_evaluator(
     state,
     floors,
@@ -754,16 +740,6 @@ def advance_circuit_current_driven(
     return I_new, V_cap_new, V_dis_step
 
 
-#: The beam-deposition closures this module dispatches on. EXPORTED because the
-#: solver checks the same domain at construction, and a domain stated twice is
-#: a domain that drifts. The dispatch below is an equality test against 'csda'
-#: with a beer_lambert fallback, so it CANNOT refuse a name outside this set --
-#: an unrecognised value simply selects beer_lambert and runs a whole discharge
-#: under a closure nobody asked for. That is what the construction-time check in
-#: solver.py exists to catch; this tuple is the domain it reads.
-BEAM_DEPOSITION_MODELS = ("beer_lambert", "csda")
-
-
 def solve_cathode_boundary(
     state,
     floors,
@@ -902,9 +878,6 @@ def solve_cathode_boundary(
             beam_excitation_energy_eV=float(
                 input_dict.get("beam_excitation_energy_eV", 21.218)
             ),
-            beam_excitation_model=str(
-                input_dict.get("beam_excitation_model", "2p_scalar")
-            ),
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
             tail_anode_current_A=float(tail_anode_current_prev_A),
         )
@@ -948,38 +921,26 @@ def solve_cathode_boundary(
             beam_excitation_energy_eV=float(
                 input_dict.get("beam_excitation_energy_eV", 21.218)
             ),
-            beam_excitation_model=str(
-                input_dict.get("beam_excitation_model", "2p_scalar")
-            ),
             schottky=True,
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
             tail_anode_current_A=float(tail_anode_current_prev_A),
         )
-    beam_deposition = None
-    beam_gap_ledger = None
-    beam_reservoir_deposition = None
-    beam_plateau_edge = None
-    if cathode_beam_deposition_is_csda(input_dict):
-        (
-            beam_deposition,
-            beam_gap_ledger,
-            beam_reservoir_deposition,
-            beam_plateau_edge,
-        ) = _csda_beam_deposition(
-            beam_result=beam_result,
-            state=state,
-            derived=derived,
-            geometry=geometry,
-            device_config=device_config,
-            input_dict=input_dict,
-            I_ion=I_ion,
-            twin=boundary.twin_cathode,
-            anode_interception=bool(
-                input_flags.get("beam_anode_interception", False)
-            ),
-            coverage=coverage,
-            input_flags=input_flags,
-        )
+    (
+        beam_deposition,
+        beam_gap_ledger,
+        beam_reservoir_deposition,
+        beam_plateau_edge,
+    ) = _csda_beam_deposition(
+        beam_result=beam_result,
+        state=state,
+        derived=derived,
+        geometry=geometry,
+        device_config=device_config,
+        input_dict=input_dict,
+        I_ion=I_ion,
+        twin=boundary.twin_cathode,
+        coverage=coverage,
+    )
     # A2a: what the anode actually COLLECTED from the tail this solve --
     # the culled walkers less the ones the rider sent back, converted from a
     # walker flux to a current. Summed over the ends with an active ray,
@@ -1194,9 +1155,7 @@ def _csda_beam_deposition(
     input_dict,
     I_ion,
     twin=False,
-    anode_interception=False,
     coverage=None,
-    input_flags=None,
 ):
     """Run the CSDA module for each active cathode ray (B2 wiring).
 
@@ -1273,24 +1232,21 @@ def _csda_beam_deposition(
     its own: the neutrals it burns are the reservoir's, and the closure's
     deficit equation needs that debit separately from the channel's.
 
-    ``anode_interception`` (R4.1, audit A15): when set, the mesh solid fraction
-    ``device_config.eta`` of the beam surviving the gap is intercepted at the
-    anode-face crossing (``deposit_beam(anode_cross_index=..., anode_eta=...)``),
-    so the fluid stops depositing the ~164 kW long-mfp beam the circuit already
-    books as never entering the plasma. The gap-transmission probe is
-    unaffected (it measures gap survival, which feeds the circuit bypass).
+    Anode-mesh interception (R4.1, audit A15): wherever the geometry resolves
+    an anode face and ``device_config.eta > 0``, the mesh solid fraction
+    ``eta`` of the beam surviving the gap is intercepted at the anode-face
+    crossing (``deposit_beam(anode_cross_index=..., anode_eta=...)``), so the
+    fluid does not deposit the long-mfp beam the circuit books as never
+    entering the plasma. The gap-transmission probe is unaffected (it measures
+    gap survival, which feeds the circuit bypass).
 
-    ``beam_product_transport`` (WP-D), ``heating_anomalous_transport`` (WP-E),
-    ``heating_anomalous_tail_ionization`` (K6) and
-    ``heating_anomalous_disposal`` (pd1) are threaded to the
-    DEPOSITION rays only, and only when they are
-    not their default ``"local"`` / ``"off"``. The probe rays keep the
-    historical argument
-    list: they are transmission instruments whose single output is the ratio
-    of transmitted to launched PRIMARY flux, which no closure here can change
-    (the walks move deposited energy and, under K6, add SECONDARY events --
-    never the primary's own flux),
-    so walking their products or tails would be pure cost. For the same reason
+    ``heating_anomalous_transport="plateau_multigroup"`` (WP-E, with the K6
+    ionizing walkers) is threaded to the DEPOSITION rays only. The probe rays
+    keep the historical argument list: they are transmission instruments
+    whose single output is the ratio of transmitted to launched PRIMARY flux,
+    which no closure here can change (the walks move deposited energy and add
+    SECONDARY events -- never the primary's own flux), so walking their tails
+    would be pure cost. For the same reason
     ``_ray_gap_breakout`` and the item-35 tripwire are unaffected -- both read
     ``transmitted_flux`` and ``E_entry_eV``, which are primary-flux
     quantities the walks never touch.
@@ -1299,8 +1255,8 @@ def _csda_beam_deposition(
     whose one post-march walk stage runs on the MEAN plasma state: the hoisted
     ``stopping_coefficient`` is built on the mean ``n`` rather than on the
     channel view the rays march through, and without a coverage view those are
-    the same array. Under ``heating_anomalous_tail_ionization="on"`` the
-    walkers are marched rather than integrated in closed form, so the mean
+    the same array. Ionizing walkers are marched rather than integrated in
+    closed form, so the mean
     medium itself (``nn_mean``, ``ne_mean``) goes with them, and their per-cell
     ionization is attributed between the covered column and the reservoir by
     the same decorrelation partition -- which the two-stream march expresses by
@@ -1309,22 +1265,21 @@ def _csda_beam_deposition(
     the split with no extra plumbing.
 
     """
-    coulomb_model = str(input_dict.get("beam_coulomb_model", "fast_electron"))
     anomalous_model = str(input_dict.get("beam_anomalous_model", "none"))
+    # The multi-group plateau closure is the one walked tail. It derives its
+    # birth spectrum, and the per-ray loop solves the plateau edge for it.
+    multigroup = str(
+        input_dict.get("heating_anomalous_transport", "local")
+    ) == "plateau_multigroup"
     # A2a. Read here, threaded onto the DEPOSITION rays only (below): the
     # gap-transmission probes report a primary-flux ratio and never walk a
     # tail, so culling one there would be work with no output. The solver
     # validated the trio at construction.
-    _flags = {} if input_flags is None else input_flags
     # The tail cull is not a choice: a mesh that is opaque to the streaming
     # primary is opaque to the QL tail walkers too, so it is armed wherever
     # the primary's interception is AND the closure actually walks a tail.
     # With no walked tail there are no walkers to cull.
-    tail_interception = str(
-        input_dict.get("heating_anomalous_transport", "local")
-    ) in ("tail_walk", "plateau_multigroup") or str(
-        input_dict.get("heating_anomalous_disposal", "local")
-    ) == "landau_branched"
+    tail_interception = multigroup
     tail_R_e = float(
         input_dict.get("beam_tail_anode_reflected_particles", 0.0)
     )
@@ -1362,48 +1317,20 @@ def _csda_beam_deposition(
                 "reservoir medium (ne_reservoir/nn_reservoir); the beam's "
                 "uncovered share would have nowhere to go"
             )
-    # WP-D product transport and WP-E QL heating locality. Presence-gated:
-    # only the DEPOSITION rays get the keywords, and only when they are not
-    # their defaults, so the off path enters deposit_beam with the identical
-    # argument list it always had. The gap-transmission PROBE rays below
-    # deliberately never receive them -- they are transmission instruments
-    # whose only output is a primary-flux ratio, so walking their products or
-    # tails would be wasted work and would not change the number they report.
+    # QL heating locality. Presence-gated: only the DEPOSITION rays get the
+    # keywords, and only when the tail is walked, so the "local" path enters
+    # deposit_beam with the identical argument list it always had. The
+    # gap-transmission PROBE rays below deliberately never receive them --
+    # they are transmission instruments whose only output is a primary-flux
+    # ratio, so walking their tails would be wasted work and would not change
+    # the number they report.
     transport_kwargs = {}
-    product_transport = str(input_dict.get("beam_product_transport", "local"))
-    if product_transport != "local":
-        transport_kwargs["product_transport"] = product_transport
-    anomalous_transport = str(
-        input_dict.get("heating_anomalous_transport", "local")
-    )
-    # The multi-group plateau closure derives its birth spectrum, so the
-    # single-line keying block below does not run for it and the per-ray loop
-    # solves the plateau edge instead. The solver refused the inert keying
-    # keys at construction, so nothing here has to decide what to do with one.
-    multigroup = anomalous_transport == "plateau_multigroup"
-    # pd1 branched disposal. It walks the Landau share of the same bank the
-    # tail walk walks whole, so it engages the SAME tail machinery below and
-    # the block's condition is "is the tail walked at all", not "is transport
-    # tail_walk". With both selectors at their defaults nothing is added to
-    # ``transport_kwargs`` and the rays pass the identical dict object they
-    # always did, which is what keeps the off path bit-exact.
-    anomalous_disposal = str(
-        input_dict.get("heating_anomalous_disposal", "local")
-    )
-    if anomalous_disposal != "local":
-        transport_kwargs["anomalous_disposal"] = anomalous_disposal
-    # K7: whether the tail birth energy is keyed to the live phi_c, and
-    # whether the cathode face reflects. Both are per-RAY quantities (phi_c is
-    # the ray's own accelerating drop and the reflecting face is its own
-    # cathode's), so they are resolved in the loop below; here we only decide
-    # whether the loop has to do anything at all, which keeps the legacy arms
-    # on the identical dict object and therefore bit-exact.
-    tail_keying = "fixed"
-    tail_phi_fraction = 0.0
+    # Whether the cathode face reflects. A per-RAY quantity (the reflecting
+    # face is its own cathode's and the threshold its own phi_c), so it is
+    # resolved in the loop below.
     tail_reflect = False
-    if anomalous_transport != "local" or anomalous_disposal != "local":
-        if anomalous_transport != "local":
-            transport_kwargs["anomalous_transport"] = anomalous_transport
+    if multigroup:
+        transport_kwargs["anomalous_transport"] = "plateau_multigroup"
         # The launch-direction split, passed only when it is not the symmetric
         # default, so a symmetric arm enters deposit_beam with the argument
         # list it had before this key existed.
@@ -1412,59 +1339,26 @@ def _csda_beam_deposition(
         )
         if tail_forward_fraction != 0.5:
             transport_kwargs["tail_forward_fraction"] = tail_forward_fraction
-        # Read ONLY when the tail is walked (the keys are inert otherwise, by
-        # design); the solver validated them at construction time.
-        if not multigroup:
-            tail_keying = str(
-                input_dict.get(
-                    "heating_anomalous_tail_energy_keying", "phi_c"
-                )
-            )
-            if tail_keying == "fixed":
-                transport_kwargs["tail_energy_eV"] = float(
-                    input_dict.get("heating_anomalous_tail_energy_eV", 75.0)
-                )
-            else:
-                _phi_frac = input_dict.get(
-                    "heating_anomalous_tail_phi_c_fraction", None
-                )
-                tail_phi_fraction = (
-                    0.25 if _phi_frac is None else float(_phi_frac)
-                )
-        # K6: presence-gated inside the tail_walk branch, because the module
-        # refuses the combination the solver has already refused at
-        # construction. Passed only when ON, so a tail_walk run without it
-        # enters deposit_beam with the argument list it had before K6.
-        tail_ionization = str(
-            input_dict.get("heating_anomalous_tail_ionization", "off")
-        )
-        if tail_ionization != "off":
-            transport_kwargs["tail_ionization"] = tail_ionization
-            # The walk window the module refuses to default (see its
-            # docstring): the maximal contiguous PLASMA-ACTIVE run, which in
-            # resolved geometry starts at the cathode cell -- so the cathode
-            # disc and the obstruction/plenum behind it are a wall to a tail
-            # electron, and no pair is born into a row the RHS mask zeroes.
-            # Derived from ``geometry.plasma_active`` rather than from the
-            # cathode roles, because "the cells whose plasma rows the solver
-            # integrates" is exactly the property that matters here, and it is
-            # the same array the mask itself is built from.
-            transport_kwargs["tail_walk_window"] = _plasma_active_window(
-                geometry
-            )
+        # K6: the walkers ionize and excite the column gas they cross.
+        transport_kwargs["tail_ionization"] = "on"
+        # The walk window the module refuses to default (see its docstring):
+        # the maximal contiguous PLASMA-ACTIVE run, which in resolved geometry
+        # starts at the cathode cell -- so the cathode disc and the
+        # obstruction/plenum behind it are a wall to a tail electron, and no
+        # pair is born into a row the RHS mask zeroes. Derived from
+        # ``geometry.plasma_active`` rather than from the cathode roles,
+        # because "the cells whose plasma rows the solver integrates" is
+        # exactly the property that matters here, and it is the same array the
+        # mask itself is built from.
+        transport_kwargs["tail_walk_window"] = _plasma_active_window(geometry)
         if str(
             input_dict.get(
                 "heating_anomalous_tail_cathode_boundary", "reflect"
             )
         ) != "escape":
-            # The cathode reflects, so the walk needs the window whether or not
-            # the ionizing channel is on: the reflecting face is one of the
-            # window's faces, and under "escape" the energy-only walk has no
-            # face there at all (it runs the whole grid).
+            # The cathode reflects: the reflecting face is one of the walk
+            # window's faces.
             tail_reflect = True
-            transport_kwargs["tail_walk_window"] = _plasma_active_window(
-                geometry
-            )
     if transport_kwargs:
         # Hoisted stopping coefficient (cost read 2026-08-02, restructure C).
         # The walks' per-cell A in dE/dx = A W**p is a 262-iteration Python
@@ -1487,7 +1381,7 @@ def _csda_beam_deposition(
         # keeps every walk arm without coverage bit-exact.
         transport_kwargs["stopping_coefficient"] = (
             _coulomb_stopping_coefficient(
-                state.n, derived.Te, coulomb_model
+                state.n, derived.Te, "fast_electron"
             )
         )
     # Fractional-coverage beam-neutral closure (default off/uniform, bit-exact):
@@ -1512,9 +1406,9 @@ def _csda_beam_deposition(
         result = beam_result.result if end == 0 else beam_result.result_twin
         # The energy THIS ray carries into the column: the solved net cathode
         # drop ``result.phi_c``. One local carries it to the deposition ray,
-        # the gap probe, the tail keying and the sigma_eff inversion alike, so
-        # the ray and the instruments that measure it cannot be launched at
-        # two different energies.
+        # the gap probe, the plateau spectrum and the sigma_eff inversion
+        # alike, so the ray and the instruments that measure it cannot be
+        # launched at two different energies.
         phi_c_ray = None if result is None else result.phi_c
         if result is None or phi_c_ray <= I_ion:
             deposition[end] = None
@@ -1525,12 +1419,12 @@ def _csda_beam_deposition(
         Gamma0 = beam_launched_current_A(result) / qe_SI
         # K7, per ray: phi_c is THIS cathode's accelerating drop -- the same
         # quantity the ray is launched at and the same one the sheath repels
-        # returning electrons with -- so both the keyed birth energy and the
-        # reflection threshold come from it. Left as the shared dict when
-        # neither correction is engaged, so the legacy arms pass the identical
-        # object they always did.
+        # returning electrons with -- so the top of the plateau spectrum and
+        # the reflection threshold both come from it. Left as the shared dict
+        # when the tail is not walked, so the "local" path passes the
+        # identical object it always did.
         ray_transport = transport_kwargs
-        if tail_keying != "fixed" or tail_reflect or multigroup:
+        if multigroup:
             ray_transport = dict(transport_kwargs)
             if multigroup:
                 # THE PLATEAU EDGE, solved once per EXTRACTION (this ray's own
@@ -1551,10 +1445,6 @@ def _csda_beam_deposition(
                 )
                 ray_transport["plateau_edge_eV"] = _E1
                 plateau_edge[end] = (_E1, _clamp)
-            if tail_keying != "fixed":
-                ray_transport["tail_energy_eV"] = (
-                    tail_phi_fraction * float(phi_c_ray)
-                )
             if tail_reflect:
                 ray_transport["tail_reflect_face"] = tail_reflect_face(
                     geometry, end=end
@@ -1569,7 +1459,6 @@ def _csda_beam_deposition(
             launch=launch,
             direction=direction,
             I_ion_eV=float(I_ion),
-            coulomb_model=coulomb_model,
             anomalous_model=anomalous_model,
         )
         if anomalous_model != "none":
@@ -1581,7 +1470,7 @@ def _csda_beam_deposition(
         if anomalous_model == "ql_relaxation":
             ray_kwargs["ql_relaxation_coeff"] = ql_relaxation_coeff
         interception_kwargs = {}
-        if anode_interception and eta > 0.0 and anode_faces.size > 0:
+        if eta > 0.0 and anode_faces.size > 0:
             # The ray crosses the anode face between cell ``f-1`` and cell ``f``;
             # the first cell on the far (column) side along the ray is the
             # cross cell (``f`` when heading +z, ``f-1`` when heading -z).
@@ -1631,7 +1520,6 @@ def _csda_beam_deposition(
                 launch=launch,
                 direction=direction,
                 I_ion_eV=float(I_ion),
-                coulomb_model=coulomb_model,
                 anomalous_model=anomalous_model,
             )
             if anomalous_model != "none":
@@ -2443,51 +2331,6 @@ def beam_launch(geometry, end=0):
     return int(cathode_cells[-1]), -1
 
 
-def beam_absorption_weights(length_cm, l_b_profile, cathode_index, direction=None):
-    """Return Beer-Lambert absorbed beam fractions for one cathode.
-
-    The beam is launched from ``cathode_index`` and traverses away from it.
-    ``direction`` is +1 for a beam heading toward increasing z and -1 for the
-    other way; it is inferred for the legacy end cells. Cells *behind* the launch
-    point get zero weight -- in resolved geometry those are the plenum and the
-    obstruction, which the beam never enters.
-    """
-    length_cm = np.asarray(length_cm, dtype=float)
-    l_b_profile = np.asarray(l_b_profile, dtype=float)
-    cells = length_cm.size
-    if l_b_profile.shape != (cells,):
-        raise ValueError(
-            f"l_b_profile must have shape ({cells},), got {l_b_profile.shape}"
-        )
-    launch = int(cathode_index) % cells
-    if direction is None:
-        if launch == 0:
-            direction = 1
-        elif launch == cells - 1:
-            direction = -1
-        else:
-            raise ValueError(
-                "direction is required when the beam is not launched from an "
-                f"end cell (got cathode_index={cathode_index})"
-            )
-    if direction > 0:
-        order = np.arange(launch, cells)
-    else:
-        order = np.arange(launch, -1, -1)
-
-    l_b_ordered = l_b_profile[order]
-    dx_ordered = length_cm[order]
-    safe_l_b = np.where(l_b_ordered > 0.0, l_b_ordered, np.inf)
-    tau = np.cumsum(dx_ordered / safe_l_b)
-    tau_in = np.concatenate([[0.0], tau[:-1]])
-    exp_neg_tau_in = np.exp(-tau_in)
-    absorbed_ordered = exp_neg_tau_in * (1.0 - np.exp(-dx_ordered / safe_l_b))
-
-    weights = np.zeros(cells, dtype=float)
-    weights[order] = absorbed_ordered
-    return weights
-
-
 def beam_ionization_rhs(
     state,
     floors,
@@ -2568,7 +2411,6 @@ def beam_ionization_rhs_terms(
         return _zero_beam_terms(zeros)
 
     beam_derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    E_exc = float(input_dict.get("beam_excitation_energy_eV", 21.218))
     (
         S_beam,
         S_exc,
@@ -2582,7 +2424,6 @@ def beam_ionization_rhs_terms(
         boundary=boundary,
         Te=beam_derived.Te,
         n=np.maximum(state.n, floors["n"]),
-        exc_energy_fallback_eV=E_exc,
         smoothing_cm=float(input_dict.get("beam_deposition_smoothing_cm", 0.0)),
         coverage=coverage,
     )
@@ -2629,18 +2470,9 @@ def beam_ionization_rhs_terms(
     beam_Ei = beam_Ei + 0.5 * ion_mass_g * (
         beam_derived.u - u_birth
     ) ** 2 * S_beam
-    exc_model = str(input_dict.get("beam_excitation_model", "2p_scalar"))
-    csda_active = getattr(cathode_solve, "beam_deposition", None) is not None
-    if exc_model == "2p_scalar" and not csda_active:
-        # Historical booking: the constant per-event energy factored out of
-        # the summed event profile — kept byte-for-byte.
-        exc_Ee = -E_exc * ev_to_erg * S_exc
-    else:
-        # Manifold booking: each ray radiates its own energy-weighted mean
-        # per event, set by that cathode's phi_c at solve time; the CSDA
-        # module's radiated bank uses the same channel per E(z), so it
-        # always books through this path.
-        exc_Ee = -ev_to_erg * S_exc_E
+    # Each ray radiates its own energy per event: the CSDA module's radiated
+    # bank books the measured singlet manifold per E(z).
+    exc_Ee = -ev_to_erg * S_exc_E
     side_channel = {}
     if S_beam_res is not None:
         # The reservoir arm's own neutral debit, on exactly the conversion the
@@ -2902,13 +2734,12 @@ def beam_anomalous_power_density(
     width is read from ``input_dict`` for the same reason.
 
     Zero whenever there is no anomalous power to speak of: the booking is off,
-    no cathode solve, no CSDA deposition (the Beer-Lambert profile has no
-    anomalous channel at all), ``beam_anomalous_model="none"`` (where
+    no cathode solve, no CSDA deposition, ``beam_anomalous_model="none"`` (where
     ``heating_anomalous_erg_s`` is identically zero by construction), or
     ``"ql_relaxation"`` with its onset gate closed in every cell.
 
-    Under ``heating_anomalous_transport="tail_walk"`` this is the WALKED
-    profile -- where the tail electrons actually deposited -- which is the
+    Under ``heating_anomalous_transport="plateau_multigroup"`` this is the
+    WALKED profile -- where the tail electrons actually deposited -- which is the
     profile the booking used, so the two stay in step.
 
     The ohmic gap booking is deliberately NOT included: it is the circuit's
@@ -2955,7 +2786,6 @@ def _beam_ionization_sources(
     boundary,
     Te=None,
     n=None,
-    exc_energy_fallback_eV=21.218,
     smoothing_cm=0.0,
     coverage=None,
 ):
@@ -2991,7 +2821,7 @@ def _beam_ionization_sources(
         raise ValueError(
             f"beam_deposition_smoothing_cm must be >= 0 (got {smoothing_cm})"
         )
-    if deposition is not None and not (smoothing_cm > 0.0):
+    if not (smoothing_cm > 0.0):
         # CSDA path (B2), historical UNSMOOTHED branch (bit-exact): the module
         # already integrated each ray; convert its per-cell totals to densities.
         # ``beam_power_deposition`` carries the whole per-cell beam energy
@@ -3020,107 +2850,44 @@ def _beam_ionization_sources(
                 ohmic_weights * solver_result.P_ohmic * 1.0e7 / Vp[gap]
             )
         return S_beam, S_exc, S_exc_E, beam_power_density, S_beam_res
-    if deposition is not None:
-        # CSDA path with conservative deposition smoothing (default-off; the
-        # branch above is bit-exact when smoothing is 0). The beam deposition
-        # densities are smoothed over a fixed physical width BEFORE the ohmic
-        # gap booking is added, so only the beam-range deposition is spread and
-        # the totals are conserved (this removes the mesh-scale sheath kick
-        # where the beam range crosses a cell boundary).
-        Vp = geometry.plasma_volume_cm3
-        beam_dep_power = zeros.copy()
-        ohmic_power = zeros.copy()
-        for end, dep in deposition.items():
-            if dep is None:
-                continue
-            S_beam += dep.ionization_events / Vp
-            S_exc += dep.excitation_events / Vp
-            S_exc_E += dep.radiated_erg_s / Vp / ev_to_erg
-            beam_dep_power += (
-                dep.plasma_heating_erg_s
-                + dep.radiated_erg_s
-                + dep.ionization_cost_erg_s
-            ) / Vp
-            solver_result = (
-                beam_result.result if end == 0 else beam_result.result_twin
-            )
-            gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
-            ohmic_weights = _ohmic_gap_weights(geometry, gap, Te, n)
-            ohmic_power[gap] += (
-                ohmic_weights * solver_result.P_ohmic * 1.0e7 / Vp[gap]
-            )
-        W = _beam_smoothing_matrix(geometry, smoothing_cm)
-        S_beam = _smooth_beam_density(W, S_beam, Vp)
-        S_exc = _smooth_beam_density(W, S_exc, Vp)
-        S_exc_E = _smooth_beam_density(W, S_exc_E, Vp)
-        beam_dep_power = _smooth_beam_density(W, beam_dep_power, Vp)
-        beam_power_density = beam_dep_power + ohmic_power
-        if S_beam_res is not None:
-            # Same conservative kernel the total gets, so the split stays a
-            # split: the smoothed arms still sum to the smoothed total.
-            S_beam_res = _smooth_beam_density(W, S_beam_res, Vp)
-        return S_beam, S_exc, S_exc_E, beam_power_density, S_beam_res
-
-    def _exc_energy_at(launch_index):
-        # Per-ray radiated energy per event [eV]: the solve's per-cell value
-        # when the builder provides it, else the legacy constant.
-        energies = beam_result.beam_exc_energy_eV
-        if energies is None:
-            return exc_energy_fallback_eV
-        return float(energies[launch_index])
-
-    source_profile = _beam_ionization_profile(
-        state=state,
-        geometry=geometry,
-        beam_result=beam_result,
-        end=0,
-    )
-    S_beam += source_profile
-    exc_profile = _beam_event_profile(
-        state=state,
-        geometry=geometry,
-        beam_result=beam_result,
-        event_cross=beam_result.beam_exc_cross,
-        end=0,
-    )
-    S_exc += exc_profile
-    S_exc_E += exc_profile * _exc_energy_at(beam_launch(geometry, end=0)[0])
-    beam_power_density += _beam_power_deposition_density(
-        geometry=geometry,
-        beam_result=beam_result,
-        solver_result=beam_result.result,
-        end=0,
-        Te=Te,
-        n=n,
-    )
-    if boundary.twin_cathode and beam_result.result_twin is not None:
-        twin_profile = _beam_ionization_profile(
-            state=state,
-            geometry=geometry,
-            beam_result=beam_result,
-            end=-1,
+    # CSDA path with conservative deposition smoothing (default-off; the
+    # branch above is bit-exact when smoothing is 0). The beam deposition
+    # densities are smoothed over a fixed physical width BEFORE the ohmic
+    # gap booking is added, so only the beam-range deposition is spread and
+    # the totals are conserved (this removes the mesh-scale sheath kick
+    # where the beam range crosses a cell boundary).
+    Vp = geometry.plasma_volume_cm3
+    beam_dep_power = zeros.copy()
+    ohmic_power = zeros.copy()
+    for end, dep in deposition.items():
+        if dep is None:
+            continue
+        S_beam += dep.ionization_events / Vp
+        S_exc += dep.excitation_events / Vp
+        S_exc_E += dep.radiated_erg_s / Vp / ev_to_erg
+        beam_dep_power += (
+            dep.plasma_heating_erg_s
+            + dep.radiated_erg_s
+            + dep.ionization_cost_erg_s
+        ) / Vp
+        solver_result = (
+            beam_result.result if end == 0 else beam_result.result_twin
         )
-        S_beam += twin_profile
-        exc_profile_twin = _beam_event_profile(
-            state=state,
-            geometry=geometry,
-            beam_result=beam_result,
-            event_cross=beam_result.beam_exc_cross,
-            end=-1,
+        gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
+        ohmic_weights = _ohmic_gap_weights(geometry, gap, Te, n)
+        ohmic_power[gap] += (
+            ohmic_weights * solver_result.P_ohmic * 1.0e7 / Vp[gap]
         )
-        S_exc += exc_profile_twin
-        S_exc_E += exc_profile_twin * _exc_energy_at(
-            beam_launch(geometry, end=-1)[0]
-        )
-        beam_power_density += _beam_power_deposition_density(
-            geometry=geometry,
-            beam_result=beam_result,
-            solver_result=beam_result.result_twin,
-            end=-1,
-            Te=Te,
-            n=n,
-        )
-
+    W = _beam_smoothing_matrix(geometry, smoothing_cm)
+    S_beam = _smooth_beam_density(W, S_beam, Vp)
+    S_exc = _smooth_beam_density(W, S_exc, Vp)
+    S_exc_E = _smooth_beam_density(W, S_exc_E, Vp)
+    beam_dep_power = _smooth_beam_density(W, beam_dep_power, Vp)
+    beam_power_density = beam_dep_power + ohmic_power
+    if S_beam_res is not None:
+        # Same conservative kernel the total gets, so the split stays a
+        # split: the smoothed arms still sum to the smoothed total.
+        S_beam_res = _smooth_beam_density(W, S_beam_res, Vp)
     return S_beam, S_exc, S_exc_E, beam_power_density, S_beam_res
 
 
@@ -3411,100 +3178,6 @@ def cathode_emission_sheath_power_W(result, T_s_K):
         (phi_c_plus - max(phi_c, 0.0)) * I_em,
         -phi_c_plus * I_ec,
     )
-
-
-def _beam_event_profile(state, geometry, beam_result, event_cross, end=0):
-    """Per-cell rate density of one beam collision channel [cm^-3 s^-1].
-
-    The beam attenuates along the Beer-Lambert profile set by the *total*
-    inelastic mean free path (``l_b_profile``); ``l_b * sigma_event * nn`` is
-    the fraction of absorbed primaries whose event is this channel, so the
-    channels split the same absorbed flux rather than each attenuating
-    independently.
-
-    This is the Beer-Lambert arm, which the coverage closure refuses at
-    construction (it splits the CSDA rays across two media and has no
-    counterpart here), so nothing below is coverage-aware.
-    """
-    launch, direction = beam_launch(geometry, end=end)
-    cross = event_cross[launch]
-    if cross == 0.0 or beam_result.beam_cross[launch] == 0.0:
-        return np.zeros(geometry.cells, dtype=float)
-    l_b_profile = (
-        beam_result.l_b_profile if end == 0 else beam_result.l_b_profile_twin
-    )
-    p_event = l_b_profile * cross * state.nn
-    weights = beam_absorption_weights(
-        length_cm=geometry.length_cm,
-        l_b_profile=l_b_profile,
-        cathode_index=launch,
-        direction=direction,
-    )
-    return (
-        weights
-        * p_event
-        * beam_result.n_beam[launch]
-        * beam_result.v_beam[launch]
-        / geometry.length_cm
-    )
-
-
-def _beam_ionization_profile(state, geometry, beam_result, end=0):
-    return _beam_event_profile(
-        state=state,
-        geometry=geometry,
-        beam_result=beam_result,
-        event_cross=beam_result.beam_cross,
-        end=end,
-    )
-
-
-def _beam_power_deposition_density(
-    geometry,
-    beam_result,
-    solver_result,
-    end=0,
-    Te=None,
-    n=None,
-):
-    """Return the beam/ohmic power deposition density [erg cm^-3 s^-1].
-
-    ``P_prim`` is carried into the column by the primary beam and so deposits
-    along the Beer-Lambert absorption profile.
-
-    ``P_ohmic = I^2 R_p`` is dissipated in the plasma *between* the cathode and
-    the anode, so it is spread over the cathode-anode gap rather than piled into
-    one boundary cell. The discharge current density is essentially uniform along
-    the gap, so the power per unit length follows the local Spitzer resistivity,
-    ``eta_sp ~ Te^-3/2``: dissipation concentrates wherever the gap is coldest.
-    Legacy geometry has no resolved gap, so the whole of ``P_ohmic`` still lands
-    on the single source/end cell exactly as before.
-    """
-    launch, direction = beam_launch(geometry, end=end)
-    beam_cross = beam_result.beam_cross[launch]
-    if beam_cross == 0.0:
-        return np.zeros(geometry.cells, dtype=float)
-    l_b_profile = (
-        beam_result.l_b_profile if end == 0 else beam_result.l_b_profile_twin
-    )
-    weights = beam_absorption_weights(
-        length_cm=geometry.length_cm,
-        l_b_profile=l_b_profile,
-        cathode_index=launch,
-        direction=direction,
-    )
-    density = (
-        weights * solver_result.P_prim * 1.0e7 / geometry.plasma_volume_cm3
-    )
-    gap = np.asarray(gap_cell_indices(geometry, end=end), dtype=int)
-    ohmic_weights = _ohmic_gap_weights(geometry, gap, Te, n)
-    density[gap] += (
-        ohmic_weights
-        * solver_result.P_ohmic
-        * 1.0e7
-        / geometry.plasma_volume_cm3[gap]
-    )
-    return density
 
 
 def _ohmic_gap_weights(geometry, gap, Te, n=None):
