@@ -8,12 +8,10 @@
       "Ti_birth_ionization",
       "anode_jet_energy_convention",
       "anode_neutral_jet",
-      "b_beam_excitation",
       "beam_anomalous_model",
       "beam_clump_enhancement",
       "beam_clump_fraction",
       "beam_deposition_smoothing_cm",
-      "beam_excitation_energy_eV",
       "beam_tail_anode_reflected_energy",
       "beam_tail_anode_reflected_particles",
       "cathode_conduction_W_per_K",
@@ -62,9 +60,9 @@
       "use_cached_neutral_seed"
     ],
     "file_sha256": [
-      "32dbfbf86a93097dcfe381ae22c3ebe4573376b247f004879bcb9e8d8965b112"
+      "81e8558a7350ea79575c5fab3163c0e8635279faec92403329b698b1ffc83509"
     ],
-    "identity": "b6bf286752cb40484410237a05dcf41eb85abf1c2938a29ed9f995004ec28727",
+    "identity": "39a939ed70c0f9072aad61cc17f0604f1978aaa88c24b46c5a5d325f2bb7cc46",
     "name": "g1atrim"
   },
   "description": "Golden baseline at the stance of record, re-cut to the gate mesh: default_config() plus the committed stance file scripts/stances/g1atrim.toml, minus that stance's mesh-sized package, plus the run-shape overrides in baseline_sim1d.BASELINE_PARAM_OVERRIDES (nx=60).",
@@ -73,7 +71,6 @@
     "Plasma": true,
     "TwinCathode": false,
     "cathode_coupling": true,
-    "cathode_face_full_debit": false,
     "debug_checks": false,
     "heat_conduction": true,
     "implicit_heat_conduction": true,
@@ -120,7 +117,6 @@
     "anode_jet_energy_convention": null,
     "anode_neutral_jet": false,
     "anode_radius_cm": null,
-    "b_beam_excitation": 1.4,
     "b_ion_neutral_drag": 1.0,
     "b_presheath_length": 1.0,
     "b_surface_loss": 1.0,
@@ -128,7 +124,6 @@
     "beam_clump_enhancement": 1.0,
     "beam_clump_fraction": 0.0,
     "beam_deposition_smoothing_cm": 50.0,
-    "beam_excitation_energy_eV": 21.218,
     "beam_tail_anode_reflected_energy": 0.0,
     "beam_tail_anode_reflected_particles": 0.0,
     "cathode_Ts_base_K": 1910.0,
@@ -270,23 +265,23 @@
     "u0": 0.0
   },
   "result_format": "sim1d packed conservative trajectory y[saves, fields*cells]",
-  "saves": 2622,
+  "saves": 2623,
   "summary": {
-    "Te_max": 26.100909612953256,
+    "Te_max": 26.621118119323683,
     "Te_min": 0.1,
-    "Ti_max": 5.855208384205912,
+    "Ti_max": 5.8624078637341634,
     "Ti_min": 0.02585,
-    "final_time": 0.026208966963583102,
+    "final_time": 0.026213785154045127,
     "finite": true,
-    "n_max": 34956802993246.79,
-    "n_min": 525728557.21244675,
-    "neutral_inventory_relative_drift": 1.017863296280197,
-    "nn_max": 127309426587447.47,
-    "nn_min": 455424546696.08923,
-    "plasma_inventory_relative_drift": 5417.418835953638,
-    "samples": 2622,
-    "steps": 40010,
-    "thermal_energy_relative_drift": 4968.948786630946,
-    "total_particle_inventory_relative_drift": 1.1150839675303295
+    "n_max": 35018665070404.344,
+    "n_min": 515935928.5961508,
+    "neutral_inventory_relative_drift": 1.0180970146280262,
+    "nn_max": 127207069257526.14,
+    "nn_min": 453976437360.7305,
+    "plasma_inventory_relative_drift": 5416.533175255982,
+    "samples": 2623,
+    "steps": 42259,
+    "thermal_energy_relative_drift": 4971.317529400883,
+    "total_particle_inventory_relative_drift": 1.1153017846828421
   }
 }
