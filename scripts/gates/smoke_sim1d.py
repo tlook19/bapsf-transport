@@ -15109,23 +15109,24 @@ def _case_compiled_kernel_equivalence():
         assert _ck_module.KERNEL_ID == _ck_expected_kernel_id, (
             _ck_module.KERNEL_ID
         )
-        # TWO scenarios, run through the same child harness:
+        # THREE scenarios, run through the same child harness:
         #
         # * ``meanfield`` -- a short current-driven discharge on the shared
         #   base stated below. The cathode sheath solve (Tier A) runs on every
         #   sample and the CSDA ray fires, so both halves of "tierA+csda" are
         #   on the hot path.
         # * ``coverage`` -- the same question under the clumpy-plasma closure,
-        #   which used to REFUSE the opt-in outright. It no longer does, and
-        #   this is what replaced the refusal. The compiled march is bound only
-        #   inside ``deposit_beam``, the single-medium ray;
-        #   ``deposit_beam_two_stream`` has no compiled branch, so under
-        #   coverage the opt-in reaches exactly the NESTED single-medium walker
-        #   marches plus the tier-A kernels. The scenario therefore turns the
-        #   ionizing tail walk on: that is what issues those nested legs, and
-        #   without it the comparison would be blind to the march entirely.
+        #   which used to REFUSE the opt-in outright. It certifies the tier-A
+        #   sheath-solve kernels under coverage, and nothing of the march: the
+        #   compiled march is bound only inside ``deposit_beam``, the
+        #   single-medium ray, and ``deposit_beam_two_stream`` has no compiled
+        #   branch. Under coverage the single-medium ray is reached only as a
+        #   NESTED walker march, and the one walked tail left
+        #   (``plateau_multigroup``) is refused under coverage, so no nested
+        #   march runs and the compiled march is unreachable here.
+        # * ``initial_profile`` -- the shaped initial neutral fill armed.
         #
-        # LAYOUT (R2a fold-in, 2026-08-20): all four scenarios share ONE base,
+        # LAYOUT (R2a fold-in, 2026-08-20): all three scenarios share ONE base,
         # and it is the pre-R2a 5-field cold-neutral stance -- the child spells
         # _pin_pre_r2a_neutral_stance out itself, since a subprocess cannot
         # import the parent's helper (the TOML block in the
@@ -15325,6 +15326,11 @@ print(json.dumps({
                     # The closure was really on.
                     assert _ck_res["coverage_fraction"] is not None, (
                         _ck_scenario, _ck_tag
+                    )
+                    # No walked tail runs under coverage, so no nested march:
+                    # a non-zero count means a walk was re-enabled here.
+                    assert _ck_res["nested_marches"] == 0, (
+                        _ck_scenario, _ck_tag, _ck_res["nested_marches"]
                     )
                 if _ck_scenario == "initial_profile":
                     # The shaped fill was really the initial condition: a
@@ -15772,8 +15778,7 @@ def _case_coverage_closure_v1():
     os.environ["CABLP_COMPILED_KERNELS"] = "1"
     try:
         _cov_optin_sim = LAPDSim1D(
-            *_coverage_config(
-        coverage_initial_fraction=0.3)
+            *_coverage_config(coverage_initial_fraction=0.3)
         )
         assert _cov_optin_sim._coverage is not None
     finally:
@@ -15785,39 +15790,38 @@ def _case_coverage_closure_v1():
     # (ii) BIT-EXACT REDUCTION. f_cov0 = 1 with r = 0 pins the coverage at 1
     # for all time; every concentration factor is then multiplication by
     # exactly 1.0 and the covered column is the mean, so the trajectory must
-    # reproduce the flag-off one to the LAST BIT -- compared as raw bytes, on
+    # reproduce the flag-off one to the LAST BIT -- compared as raw bytes,
     # with the circuit state included.
-    for _cov_model in ("csda",):
-        _cov_off_sim = LAPDSim1D(*_coverage_config())
-        _cov_one_sim = LAPDSim1D(*_coverage_config(
-            coverage_initial_fraction=1.0,
-            coverage_growth_rate_per_s=0.0,
-        ))
-        assert _cov_off_sim._coverage is None
-        assert _cov_one_sim._coverage is not None
-        for _ in range(6):
-            _cov_off_sim.advance_one_step(dt=2.0e-9)
-            _cov_one_sim.advance_one_step(dt=2.0e-9)
-        assert np.array_equal(
-            _cov_one_sim.coverage_fraction_profile(),
-            np.ones(_cov_one_sim.geometry.cells),
-        )
-        assert (
-            np.asarray(_cov_off_sim._y).tobytes()
-            == np.asarray(_cov_one_sim._y).tobytes()
-        ), f"coverage f_cov=1 is not bit-exact under {_cov_model}"
-        assert float(_cov_off_sim._circuit_I_loop) == float(
-            _cov_one_sim._circuit_I_loop
-        )
-        # With no burn deficit the covered column IS the mean, exactly.
-        assert np.array_equal(
-            _cov_one_sim._coverage_deficit,
-            np.zeros_like(_cov_one_sim._coverage_deficit),
-        )
-        # The closure adds no conservative field and no RHS term: the packed
-        # width and the term ledger are the historical ones.
-        assert _cov_one_sim._y.size == _cov_off_sim._y.size
-        assert set(_cov_one_sim.rhs_terms()) == set(_cov_off_sim.rhs_terms())
+    _cov_off_sim = LAPDSim1D(*_coverage_config())
+    _cov_one_sim = LAPDSim1D(*_coverage_config(
+        coverage_initial_fraction=1.0,
+        coverage_growth_rate_per_s=0.0,
+    ))
+    assert _cov_off_sim._coverage is None
+    assert _cov_one_sim._coverage is not None
+    for _ in range(6):
+        _cov_off_sim.advance_one_step(dt=2.0e-9)
+        _cov_one_sim.advance_one_step(dt=2.0e-9)
+    assert np.array_equal(
+        _cov_one_sim.coverage_fraction_profile(),
+        np.ones(_cov_one_sim.geometry.cells),
+    )
+    assert (
+        np.asarray(_cov_off_sim._y).tobytes()
+        == np.asarray(_cov_one_sim._y).tobytes()
+    ), "coverage f_cov=1 is not bit-exact"
+    assert float(_cov_off_sim._circuit_I_loop) == float(
+        _cov_one_sim._circuit_I_loop
+    )
+    # With no burn deficit the covered column IS the mean, exactly.
+    assert np.array_equal(
+        _cov_one_sim._coverage_deficit,
+        np.zeros_like(_cov_one_sim._coverage_deficit),
+    )
+    # The closure adds no conservative field and no RHS term: the packed
+    # width and the term ledger are the historical ones.
+    assert _cov_one_sim._y.size == _cov_off_sim._y.size
+    assert set(_cov_one_sim.rhs_terms()) == set(_cov_off_sim.rhs_terms())
 
     # (iii) THE CO-INTEGRATED GROWTH LAW. v2's coverage field is driven by the
     # beam ionization it itself shapes, so the v1 closed form is gone and the
@@ -16371,7 +16375,7 @@ def _case_coverage_closure_v2(_cov_ref_sim, _coverage_config, deposit_beam):
     # statement with a per-cell f, and the mean field it partitions is still
     # bitwise untouched by anything the closure does.
     _cov_z_sim = LAPDSim1D(*_coverage_config(
-            coverage_initial_profile=np.linspace(
+        coverage_initial_profile=np.linspace(
             0.03, 0.30, _cov_ref_sim.geometry.cells
         ).tolist(),
         coverage_growth_rate_per_s=1390.0,
@@ -21882,85 +21886,6 @@ def _case_circuit_cathode_retired_keys_refuse():
 
 
 # --------------------------------------------------------------------
-# beam-tail-retired-keys-refuse
-# --------------------------------------------------------------------
-@_case("beam-tail-retired-keys-refuse")
-def _case_beam_tail_retired_keys_refuse():
-    # The beam-deposition and hot-tail selectors, flags and parameters removed
-    # with the closures they served. Each is gone from its template, is on the
-    # retired register of ITS OWN namespace, and a configuration naming it --
-    # at any value, the old default included -- is refused at construction
-    # with the key named as RETIRED. A retired name filed in the OTHER
-    # namespace reads as the plain unknown key it is there.
-    from cablp.solvers._sim1d.core.config import (
-        RETIRED_FLAG_KEYS,
-        RETIRED_PARAM_KEYS,
-        input_dict_template_1d,
-        input_flags_template_1d,
-    )
-
-    _rb_params = {
-        "beam_deposition_model": "csda",
-        "beam_coulomb_model": "fast_electron",
-        "beam_excitation_model": "2p_scalar",
-        "beam_product_transport": "local",
-        "heating_anomalous_disposal": "local",
-        "heating_anomalous_tail_energy_keying": "phi_c",
-        "heating_anomalous_tail_energy_eV": 75.0,
-        "heating_anomalous_tail_phi_c_fraction": None,
-        "heating_anomalous_tail_ionization": "on",
-        "ionization_birth_energy_model": "conservative",
-        "Te_birth_ionization": "local",
-    }
-    _rb_flags = {
-        "beam_anode_interception": True,
-        "beam_deposition_in_heat_substep": True,
-        "beam_ionization_birth_timestep_bound": False,
-    }
-    _rb_base_p, _rb_base_f = default_config()
-    for _rb_key, _rb_value in _rb_params.items():
-        assert _rb_key not in input_dict_template_1d, _rb_key
-        assert _rb_key not in input_flags_template_1d, _rb_key
-        assert _rb_key in RETIRED_PARAM_KEYS, _rb_key
-        try:
-            LAPDSim1D(dict(_rb_base_p, **{_rb_key: _rb_value}), _rb_base_f)
-        except ValueError as _rb_exc:
-            assert f"{_rb_key} is RETIRED" in str(_rb_exc), str(_rb_exc)
-        else:
-            raise AssertionError(f"retired params key {_rb_key} ACCEPTED")
-    for _rb_key, _rb_value in _rb_flags.items():
-        assert _rb_key not in input_dict_template_1d, _rb_key
-        assert _rb_key not in input_flags_template_1d, _rb_key
-        assert _rb_key in RETIRED_FLAG_KEYS, _rb_key
-        try:
-            LAPDSim1D(_rb_base_p, dict(_rb_base_f, **{_rb_key: _rb_value}))
-        except ValueError as _rb_exc:
-            assert f"{_rb_key} is RETIRED" in str(_rb_exc), str(_rb_exc)
-        else:
-            raise AssertionError(f"retired flags key {_rb_key} ACCEPTED")
-    # A retired FLAG name in params is a misfiled key, not a retired one.
-    try:
-        LAPDSim1D(dict(_rb_base_p, beam_anode_interception=True), _rb_base_f)
-    except ValueError as _rb_exc:
-        assert "unknown LAPDSim1D configuration keys" in str(_rb_exc)
-        assert "RETIRED" not in str(_rb_exc), str(_rb_exc)
-    else:
-        raise AssertionError("a misfiled retired flag name was ACCEPTED")
-    # The removed selector VALUES of the surviving selectors are refused.
-    for _rb_key, _rb_value in (
-        ("heating_anomalous_transport", "tail_walk"),
-        ("Ti_birth_ionization", "floor"),
-        ("Ti_birth_ionization", "local"),
-    ):
-        try:
-            LAPDSim1D(dict(_rb_base_p, **{_rb_key: _rb_value}), _rb_base_f)
-        except ValueError as _rb_exc:
-            assert _rb_key in str(_rb_exc), str(_rb_exc)
-        else:
-            raise AssertionError(f"{_rb_key}={_rb_value!r} ACCEPTED")
-
-
-# --------------------------------------------------------------------
 # ts-retirement-successor-key
 # --------------------------------------------------------------------
 @_case("ts-retirement-successor-key", historical_stance=True)
@@ -27142,6 +27067,85 @@ def _case_result_bitdiff_compare_synthetic():
                 capture_output=True, text=True,
             )
             assert proc.returncode == want, (name, proc.stdout, proc.stderr)
+
+
+# --------------------------------------------------------------------
+# beam-tail-retired-keys-refuse
+# --------------------------------------------------------------------
+@_case("beam-tail-retired-keys-refuse")
+def _case_beam_tail_retired_keys_refuse():
+    # The beam-deposition and hot-tail selectors, flags and parameters removed
+    # with the closures they served. Each is gone from its template, is on the
+    # retired register of ITS OWN namespace, and a configuration naming it --
+    # at any value, the old default included -- is refused at construction
+    # with the key named as RETIRED. A retired name filed in the OTHER
+    # namespace reads as the plain unknown key it is there.
+    from cablp.solvers._sim1d.core.config import (
+        RETIRED_FLAG_KEYS,
+        RETIRED_PARAM_KEYS,
+        input_dict_template_1d,
+        input_flags_template_1d,
+    )
+
+    _rb_params = {
+        "beam_deposition_model": "csda",
+        "beam_coulomb_model": "fast_electron",
+        "beam_excitation_model": "2p_scalar",
+        "beam_product_transport": "local",
+        "heating_anomalous_disposal": "local",
+        "heating_anomalous_tail_energy_keying": "phi_c",
+        "heating_anomalous_tail_energy_eV": 75.0,
+        "heating_anomalous_tail_phi_c_fraction": None,
+        "heating_anomalous_tail_ionization": "on",
+        "ionization_birth_energy_model": "conservative",
+        "Te_birth_ionization": "local",
+    }
+    _rb_flags = {
+        "beam_anode_interception": True,
+        "beam_deposition_in_heat_substep": True,
+        "beam_ionization_birth_timestep_bound": False,
+    }
+    _rb_base_p, _rb_base_f = default_config()
+    for _rb_key, _rb_value in _rb_params.items():
+        assert _rb_key not in input_dict_template_1d, _rb_key
+        assert _rb_key not in input_flags_template_1d, _rb_key
+        assert _rb_key in RETIRED_PARAM_KEYS, _rb_key
+        try:
+            LAPDSim1D(dict(_rb_base_p, **{_rb_key: _rb_value}), _rb_base_f)
+        except ValueError as _rb_exc:
+            assert f"{_rb_key} is RETIRED" in str(_rb_exc), str(_rb_exc)
+        else:
+            raise AssertionError(f"retired params key {_rb_key} ACCEPTED")
+    for _rb_key, _rb_value in _rb_flags.items():
+        assert _rb_key not in input_dict_template_1d, _rb_key
+        assert _rb_key not in input_flags_template_1d, _rb_key
+        assert _rb_key in RETIRED_FLAG_KEYS, _rb_key
+        try:
+            LAPDSim1D(_rb_base_p, dict(_rb_base_f, **{_rb_key: _rb_value}))
+        except ValueError as _rb_exc:
+            assert f"{_rb_key} is RETIRED" in str(_rb_exc), str(_rb_exc)
+        else:
+            raise AssertionError(f"retired flags key {_rb_key} ACCEPTED")
+    # A retired FLAG name in params is a misfiled key, not a retired one.
+    try:
+        LAPDSim1D(dict(_rb_base_p, beam_anode_interception=True), _rb_base_f)
+    except ValueError as _rb_exc:
+        assert "unknown LAPDSim1D configuration keys" in str(_rb_exc)
+        assert "RETIRED" not in str(_rb_exc), str(_rb_exc)
+    else:
+        raise AssertionError("a misfiled retired flag name was ACCEPTED")
+    # The removed selector VALUES of the surviving selectors are refused.
+    for _rb_key, _rb_value in (
+        ("heating_anomalous_transport", "tail_walk"),
+        ("Ti_birth_ionization", "floor"),
+        ("Ti_birth_ionization", "local"),
+    ):
+        try:
+            LAPDSim1D(dict(_rb_base_p, **{_rb_key: _rb_value}), _rb_base_f)
+        except ValueError as _rb_exc:
+            assert _rb_key in str(_rb_exc), str(_rb_exc)
+        else:
+            raise AssertionError(f"{_rb_key}={_rb_value!r} ACCEPTED")
 
 
 # ----------------------------------------------------------------------

@@ -364,11 +364,11 @@ FLAG_OVERRIDES = {
 }
 
 
-# WP-D beam product transport. "local" is the
-# production stance and the config.py default, so it is deliberately absent
-# from PARAM_OVERRIDES; "nonlocal" is an A/B arm that must travel with the run
-# it scored. Reported as a delta only -- a production (local) artifact scores
-# byte-identically to its recorded _scores.txt, and a nonlocal one says so.
+# WP-D beam product transport, read off a saved run's params to label
+# HISTORICAL files: the key is retired and current runs no longer carry it.
+# "local" was the production behaviour (and is now the only one); a stored
+# "nonlocal" or "terminal_nonlocal" run says so. Reported as a delta only -- a
+# local artifact scores byte-identically to its recorded _scores.txt.
 BEAM_PRODUCT_TRANSPORT_DEFAULT = "local"
 
 
@@ -390,9 +390,10 @@ def beam_product_transport_note(params):
 
 # --- WP-E QL heating locality (heating_anomalous_transport) ---------------
 # Unlike the WP-D note above, this label is printed ALWAYS rather than as a
-# delta. {local, tail_walk} is a declared BRACKET, not a default plus a
-# variant: the config docstring says outright that "a result must state which
-# one it used", so a scored number is incomplete without its arm. A
+# delta: the transport arm is part of what a scored number means. Saved files
+# may carry arms that are now retired ("tail_walk") together with the retired
+# tail-energy and keying keys; the label reports them as the file records
+# them. A
 # delta-only label also cannot distinguish "this run was local" from "this
 # artifact predates the label", which is exactly the ambiguity the pre-WP-E
 # case below exists to remove.
@@ -412,7 +413,7 @@ def wpe_arm_line(params):
 
     ``heating_anomalous_tail_energy_eV`` is read only when the tail is WALKED
     *and* ``heating_anomalous_tail_energy_keying="fixed"``; it is labelled
-    inert in both of the other cases, matching its config docstring. The
+    inert in both of the other cases, matching the retired key's contract. The
     keying leg matters because the walked arm still prints a plausible-looking
     energy under ``"phi_c"`` keying, where the live birth energy is instead
     ``f*e*phi_c(t)`` -- a reader who took the printed number for the energy the
