@@ -142,9 +142,10 @@ def geometry_defaults():
     Lm:
         Total machine length represented by the 1D mesh [cm].
     nx:
-        Number of resolved column cells between anode and end wall. Under the
-        ``source_fixed_grid`` flag it counts only the *far* column cells,
-        between the source region end and the end wall.
+        Number of resolved column cells. On the single-cathode layout it
+        counts only the *far* column cells, between the fixed source region's
+        end and the end wall; on the ``TwinCathode`` layout, the uniform
+        column cells between the two anode faces.
     Rm:
         Default neutral/machine radius [cm].
     Rp:
@@ -178,24 +179,13 @@ def geometry_defaults():
     Rsup:
         Effective blockage radius of plenum support rods [cm]. ``0`` => none;
         reduces plenum neutral volume only. Consumed in M2.
-    end_expansion_cells:
-        Number of cells resolving the end-wall/end expansion when the
-        ``end_expansion_geometry`` flag is enabled. ``None`` when off.
-    end_expansion_machine_radius_cm:
-        Vessel/neutral radius [cm] throughout the expanded end region.
-        Requires ``end_expansion_geometry``.
-    end_expansion_plasma_radius_cm:
-        Terminal plasma flux-tube radius [cm] at the end wall. The plasma
-        cross-sectional area expands smoothly across the end region from
-        ``Rp`` to this value. Setting it equal to ``Rp`` gives the
-        vessel-only arm. Requires ``end_expansion_geometry``.
     plasma_radius_profile_cm:
         PER-CELL effective plasma flux-tube radius [cm]: a sequence with one
         entry per MESH cell (``geometry.cells`` -- the plenum, gap, column and
         end cells, not just the ``nx`` column cells), every entry finite and
-        ``> 0``. Read ONLY under the ``prescribed_area_geometry`` flag, and
-        REQUIRED by it; with the flag off it must be ``None`` or construction
-        raises.
+        ``> 0``, or ``None`` for the uniform ``pi Rp^2`` column. Its presence
+        is what arms the prescribed per-cell geometry and the quasi-1D
+        flux-tube terms that come with it.
 
         It replaces the uniform scalar ``Rp`` cell by cell, so the plasma
         cross-section is ``pi r(z)^2``, the cell volume ``pi r(z)^2 dz``, and
@@ -204,7 +194,7 @@ def geometry_defaults():
         holding ``Rp`` in every cell is therefore bit-identical to no profile
         at all.
 
-        The quantity the flag prescribes is the AREA ``A(z)`` (the flux-tube
+        The quantity the profile prescribes is the AREA ``A(z)`` (the flux-tube
         variable, ``A B = const``); the radius ``sqrt(A/pi)`` is how it is
         supplied, because that parameterization is what makes the constant
         profile exact rather than exact-to-a-rounding. Any conversion from a
@@ -215,19 +205,17 @@ def geometry_defaults():
         ``pi r^2 <= `` the local vessel open area, since the column zone
         cannot be larger than the chamber holding it (the two-zone annulus
         volume ``V_ann = Vm - Vp`` would go negative and be clipped to zero
-        silently). REFUSES ``end_expansion_geometry``: both prescribe the
-        end-block flux-tube area and there is no composition rule.
+        silently).
     machine_radius_profile_cm:
         PER-CELL vessel/neutral radius [cm], the same per-mesh-cell form and
         the same finiteness/positivity rules as ``plasma_radius_profile_cm``.
-        Read ONLY under the ``prescribed_area_geometry`` flag, where it is
-        OPTIONAL: omitted, every cell keeps the scalar ``Rm`` exactly as
-        before. It replaces that scalar cell by cell, setting the neutral open
-        area ``pi Rm(z)^2``, the neutral cell volume, and the hydraulic radius
-        that sets the free-molecular face conductance -- so a vessel whose
-        bore STEPS partway along a cell block is expressible, which a single
-        ``Rm`` (or ``end_expansion_machine_radius_cm``, one value over the
-        whole terminal block) is not.
+        Read ONLY with ``plasma_radius_profile_cm`` supplied (without it,
+        construction raises), where it is OPTIONAL: omitted, every cell keeps
+        the scalar ``Rm``. It replaces that scalar cell by cell, setting the
+        neutral open area ``pi Rm(z)^2``, the neutral cell volume, and the
+        hydraulic radius that sets the free-molecular face conductance -- so a
+        vessel whose bore STEPS partway along a cell block is expressible,
+        which a single ``Rm`` is not.
 
         Composes with the annular-duct and support-rod reductions rather than
         overriding them: an obstruction cell keeps its open area
@@ -238,7 +226,8 @@ def geometry_defaults():
     plasma_area_max_vessel_fraction:
         Optional ceiling on the prescribed plasma area as a fraction of the
         local vessel open area, in ``(0, 1]``. ``None`` (the default) applies
-        no ceiling. Read ONLY under the ``prescribed_area_geometry`` flag.
+        no ceiling. Read ONLY with ``plasma_radius_profile_cm`` supplied
+        (without it, construction raises).
 
         When set, each cell's plasma area is clipped to
         ``fraction * A_vessel(z)``. This is a DECLARED regularization, not a
@@ -267,8 +256,9 @@ def geometry_defaults():
         the collapse it exists to catch.
     neutral_baffle_positions_cm:
         Axial positions [cm] of optional thin annular baffles, measured from
-        the cathode surface. A scalar or sequence is accepted. Requires the
-        default-off ``neutral_baffles`` flag and matching clear radii.
+        the cathode surface. A scalar or sequence is accepted, or ``None``
+        for no baffles. Supplied together with matching clear radii (one
+        without the other raises); their presence is what places the baffles.
     neutral_baffle_clear_radii_cm:
         Clear aperture radii [cm] for ``neutral_baffle_positions_cm``. Each
         aperture must leave the local plasma channel fully open and lie inside
@@ -277,13 +267,14 @@ def geometry_defaults():
         End of the fixed-cell-size source region [cm, measured from the cathode
         surface]; the region runs from the anode face at ``cathode_anode_gap_cm``
         to here and must lie strictly between the anode face and the end wall
-        block (``Lm - end_wall_length_cm``). ``None`` when off. Requires the
-        ``source_fixed_grid`` flag, and is required by it.
+        block (``Lm - end_wall_length_cm``). Required on the single-cathode
+        layout, whose mesh always carries the fixed source region; must be
+        ``None`` under ``TwinCathode``, whose uniform column does not read it.
     source_region_dz_cm:
         Cell size [cm] inside that source region, held fixed independently of
         ``nx``; the region length minus the anode gap must be an integer
-        multiple of it (1e-9 relative tolerance). ``None`` when off. Requires
-        the ``source_fixed_grid`` flag, and is required by it.
+        multiple of it (1e-9 relative tolerance). Required on the
+        single-cathode layout; must be ``None`` under ``TwinCathode``.
     """
     return {
         "Lm": 2117.8,
@@ -297,14 +288,10 @@ def geometry_defaults():
         "Rcs": 0.0,
         "Lcs": 0.0,
         "Rsup": 0.0,
-        "end_expansion_cells": None,
-        "end_expansion_machine_radius_cm": None,
-        "end_expansion_plasma_radius_cm": None,
         # Prescribed per-cell flux-tube and vessel radii, plus the optional
-        # area ceiling (prescribed_area_geometry flag). All None on every
-        # shipped configuration: a per-cell geometry has no default shape to
-        # inherit, and the flag's whole content is what the caller computed
-        # outside.
+        # area ceiling, armed by the plasma profile's presence. All None in
+        # the template: a per-cell geometry has no default shape to inherit,
+        # and its whole content is what the caller computed outside.
         "plasma_radius_profile_cm": None,
         "machine_radius_profile_cm": None,
         "plasma_area_max_vessel_fraction": None,
@@ -2815,10 +2802,13 @@ input_flags_template_1d = {
     "Plasma": True,
     # Two-cathode layout: a cathode at BOTH ends, both plasma-terminating faces
     # mirrored, and the end-side puff Twin_S_gp carrying the second source.
-    # Three construction-time refusals, each where the twin geometry leaves a
+    # Its mesh is its own uniform column of nx cells between the two anode
+    # faces: the single-cathode fixed source region is not mirrored onto a
+    # twin end, so source_region_length_cm and source_region_dz_cm must be None
+    # under it. It has no end wall, so the end wall sheath debit is absent.
+    # Two construction-time refusals, each where the twin geometry leaves a
     # single-valued quantity undefined: cathode_solver_model='current_driven';
-    # source_fixed_grid (the fixed source region is not mirrored onto a twin
-    # end); and heating_anomalous_tail_cathode_boundary='reflect' (both walls of
+    # and heating_anomalous_tail_cathode_boundary='reflect' (both walls of
     # the walk window would be reflecting cathodes, trapping the walkers, and the
     # walk has no termination convention for that). A structural restart key.
     "TwinCathode": False,
@@ -2838,43 +2828,6 @@ input_flags_template_1d = {
     # The resolved typed-segment geometry is the only geometry. Retained as a
     # stale-config guard; False raises at construction.
     "resolved_boundaries": True,
-    # End-vessel / magnetic-flare geometry. Presence gated in core.geometry:
-    # all three end_expansion_* parameters are required when on and forbidden
-    # when off. Bit-exact off.
-    "end_expansion_geometry": False,
-    # Prescribed per-cell geometry: the plasma flux-tube area A(z), supplied
-    # as the radius vector plasma_radius_profile_cm (sqrt(A/pi)), and
-    # optionally the vessel bore as machine_radius_profile_cm. They replace
-    # the uniform scalars Rp and Rm cell by cell, so the cell volumes, the
-    # face areas, the neutral conductances and the two-zone annulus volume
-    # V_ann = Vm - Vp all follow the profiles; the quasi-1D
-    # flux_tube_geometry momentum source (the well-balanced p dA/dz mirror
-    # force paired with the area-weighted pressure flux) and the
-    # area-consistent d(Au)/dz pressure work in both energy equations come on
-    # with it. It exists because the built-in end_expansion_geometry flare is
-    # a half-cosine with zero slope at BOTH ends (which no solved convex B(z)
-    # has) applied against ONE vessel radius over the whole terminal block
-    # (which a stepped bore is not); the profiles are computed offline from
-    # the field and the machine drawing and passed in.
-    # Presence gated in core.geometry in both directions (the plasma profile
-    # is required when on and every profile key is forbidden when off) and
-    # REFUSED together with end_expansion_geometry -- two prescriptions of the
-    # same area with no composition rule. Default OFF and bit-exact off; a
-    # constant plasma profile at Rp with no vessel profile is bit-identical to
-    # it being off.
-    "prescribed_area_geometry": False,
-    # Thin annular apertures. Positions and clear radii are required together
-    # when on and forbidden when off; the plasma channel stays open.
-    "neutral_baffles": False,
-    # Fixed-cell-size source region, so a mesh refinement study is not
-    # self-confounding: the column between the anode face and
-    # source_region_length_cm is meshed at exactly source_region_dz_cm
-    # regardless of nx, which then refines only the far column, and the puff
-    # role follows gas_puff_z_cm instead of the first column cell. Presence
-    # gated in core.geometry in both directions (both parameters required when
-    # on, forbidden when off) and incompatible with TwinCathode. Structurally
-    # bit-exact when off.
-    "source_fixed_grid": True,
     # Axial (Spitzer-Harm) electron and ion heat conduction: the RHS term, its
     # parabolic timestep bound, and the conductivity of the implicit substep.
     # OFF returns a zero conduction RHS and withdraws the bound (it returns
@@ -3058,21 +3011,20 @@ input_flags_template_1d = {
     # anything else (0/1, a string) raises ValueError at construction.
     # Bit-exact when off.
     "rates_at_accepted_state": False,
-    # END-FACE SHEATH ELECTRON-ENERGY BOOKING -- TWO INDEPENDENT default-OFF
-    # keys, one per axial end. The anode flag above applied to the machine's
-    # two AXIAL ends, where the same thermal-only routing leaves the same
-    # energy unbooked. The two ends are separate faces carrying separate
-    # fluxes in separate regimes -- the end wall row is live in every phase,
-    # the cathode fall row is identically zero until a virtual cathode forms
-    # -- and nothing couples them except the column, so each end is armed on
-    # its own: either key, both, or neither. Every row either key adds is
-    # ELECTRON ENERGY ONLY ([erg cm^-3 s^-1] on the plasma cell volume,
-    # positive = into the electron store) and is PRESENCE-GATED on its own
-    # key: unarmed, that key's rows do not exist at all and the saved term
-    # structure is what it was before the closure.
+    # END-FACE SHEATH ELECTRON-ENERGY BOOKING, one closure per axial end. The
+    # two ends are separate faces carrying separate fluxes in separate
+    # regimes -- the end wall row is live in every phase, the cathode fall
+    # row is identically zero until a virtual cathode forms -- and nothing
+    # couples them except the column, so each end is armed on its own. Every
+    # row either end adds is ELECTRON ENERGY ONLY ([erg cm^-3 s^-1] on the
+    # plasma cell volume, positive = into the electron store) and is
+    # PRESENCE-GATED: unarmed, its rows do not exist at all.
     #
-    # END WALL -- ``end_wall_sheath_full_debit`` arms ONE row,
-    # ``end_wall_e_sheath_climb``, negative. The end wall is a
+    # END WALL -- no key. ONE row, ``end_wall_e_sheath_climb``, negative,
+    # armed by the GEOMETRY: present exactly when the mesh carries a
+    # plasma-absorbing face whose live cell has the end wall role, and absent
+    # otherwise (the TwinCathode layout ends in a second cathode and has
+    # none). It does NOT require the cathode circuit solve. The end wall is a
     # floating exhaust with no circuit branch, so the fall its collected
     # electrons climb comes out of the plasma electron store and is handed to
     # the ions, which deposit it on the surface. The row is
@@ -3101,13 +3053,6 @@ input_flags_template_1d = {
     # reading outside the bracket is not, and the smoke suite asserts the
     # bracket rather than a value.
     #
-    # WHAT IT RAISES. Must be a real bool. Arming it refuses at construction
-    # unless the configuration supplies a plasma-absorbing face of the
-    # END WALL role -- the face whose collected electrons are charged the
-    # sheath fall. It does NOT require the cathode circuit solve: this row is
-    # a boundary-operator quantity, computed on the very flux that operator
-    # books, and is honest with or without a circuit. Bit-exact when off.
-    "end_wall_sheath_full_debit": False,
     # CATHODE -- ``cathode_face_full_debit`` arms THREE rows at the emitting
     # face, kept apart because they are three different physical channels
     # with two different signs:
@@ -3575,6 +3520,21 @@ RETIRED_PARAM_KEYS = {
         "nothing: the pulse, decay and double_erf puff waveforms it "
         "served are removed; the gas puff is the square valve pulse"
     ),
+    # The built-in end-expansion flare, deleted with its flag. A variable
+    # area is the prescribed per-cell geometry.
+    "end_expansion_cells": (
+        "nothing: the end-expansion flare is removed; a variable-area end "
+        "block is expressed by plasma_radius_profile_cm and "
+        "machine_radius_profile_cm"
+    ),
+    "end_expansion_machine_radius_cm": (
+        "nothing: the end-expansion flare is removed; a stepped vessel bore "
+        "is expressed by machine_radius_profile_cm"
+    ),
+    "end_expansion_plasma_radius_cm": (
+        "nothing: the end-expansion flare is removed; a flaring flux tube "
+        "is expressed by plasma_radius_profile_cm"
+    ),
 }
 
 
@@ -3585,15 +3545,13 @@ RETIRED_PARAM_KEYS = {
 RETIRED_FLAG_KEYS = {
     # The end-wall rename; see RETIRED_PARAM_KEYS above.
     "collector_sheath_full_debit": (
-        "end_wall_sheath_full_debit, the same sheath-climb row at the same "
-        "face under the face's own name"
+        "nothing: the end wall's sheath-climb row is armed wherever the "
+        "geometry has an end wall face, unconditionally"
     ),
     "end_sheath_full_debit": (
-        "end_wall_sheath_full_debit and cathode_face_full_debit, the two "
-        "independent end-face keys it was split into -- the first arms the "
-        "end wall's sheath-climb row, the second the emitting cathode "
-        "face's three rows, and a configuration that armed the merged key "
-        "arms BOTH"
+        "cathode_face_full_debit for the emitting cathode face's three "
+        "rows; the end wall's sheath-climb row is armed wherever the "
+        "geometry has an end wall face, unconditionally"
     ),
     "beam_tail_anode_interception": (
         "nothing: the QL tail walkers are culled at the anode mesh wherever "
@@ -3721,12 +3679,36 @@ RETIRED_FLAG_KEYS = {
         "zones, unconditionally"
     ),
     "neutral_kinetic_dvm_baffles": (
-        "nothing: the kinetic_dvm arm applies the neutral_baffles "
-        "geometry to its annulus whenever that flag is on"
+        "nothing: the kinetic_dvm arm applies the neutral baffle "
+        "geometry to its annulus wherever the geometry carries baffles"
     ),
     "neutral_prebreakdown": (
         "tau_neutral_prebreakdown: the phase runs whenever its duration "
         "is positive"
+    ),
+    # The geometry flags. The deleted one names nothing; the adopted ones
+    # name what now arms the behaviour.
+    "end_expansion_geometry": (
+        "nothing: the end-expansion flare is removed; a variable-area "
+        "machine is plasma_radius_profile_cm (with machine_radius_profile_cm "
+        "for the vessel)"
+    ),
+    "prescribed_area_geometry": (
+        "nothing: the prescribed per-cell geometry is armed by the presence "
+        "of plasma_radius_profile_cm"
+    ),
+    "neutral_baffles": (
+        "nothing: the baffles are placed by the presence of "
+        "neutral_baffle_positions_cm and neutral_baffle_clear_radii_cm"
+    ),
+    "end_wall_sheath_full_debit": (
+        "nothing: the end wall's sheath-climb row is armed wherever the "
+        "geometry has an end wall face, unconditionally"
+    ),
+    "source_fixed_grid": (
+        "nothing: the single-cathode mesh always carries the fixed source "
+        "region (source_region_length_cm, source_region_dz_cm); the "
+        "TwinCathode mesh is its own uniform column"
     ),
 }
 

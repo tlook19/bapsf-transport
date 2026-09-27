@@ -29,10 +29,9 @@
 # WHAT IT DOES NOT CHANGE. No particle, momentum or ion-energy booking moves;
 # the three rows are electron energy only. The beam deposition row is
 # untouched (it already carries the net-phi_c energy of the emitted
-# electrons). The far end face is untouched -- that is
-# `end_wall_sheath_full_debit`, a separate key, which the reference arms and
-# this file inherits armed, so both sides of the A/B carry it and it is not
-# part of the difference. The circuit and the load ledger are untouched: the
+# electrons). The far end face is untouched -- its sheath debit is armed by
+# the geometry's end wall face, so both sides of the A/B carry it and it is
+# not part of the difference. The circuit and the load ledger are untouched: the
 # potentials those electrons ride are field energy the loop and the electrode
 # ions already book.
 #

@@ -360,21 +360,20 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
 }
 
 
-#: The RHS row ``end_wall_sheath_full_debit`` adds: the sheath fall the
-#: end wall's collected electrons climbed. A one-tuple rather than a bare
-#: name so the two end-face keys are read the same way wherever their rows
-#: are seeded, filled or tabulated.
+#: The end wall's sheath-debit row: the sheath fall the end wall's collected
+#: electrons climbed, present wherever the geometry has an end wall face. A
+#: one-tuple rather than a bare name so the two end faces' rows are read the
+#: same way wherever they are seeded, filled or tabulated.
 END_SHEATH_END_WALL_ROWS = ("end_wall_e_sheath_climb",)
 
 
-#: Every row the two end-face keys can add, in the order they are built:
-#: the end wall's, then the emitting cathode face's three in the order
+#: Every end-face sheath-debit row, in the order they are built: the end
+#: wall's, then the emitting cathode face's three in the order
 #: :func:`~.physics.cathode.cathode_emission_sheath_power_W` returns them.
-#: PRESENCE-GATED PER KEY -- this tuple is the union, not a group that arms
-#: together. With neither key armed none of them exists, so an unarmed run's
-#: saved term structure -- the golden included -- is what it was before the
-#: closure existed; with one key armed only that key's rows exist. Every
-#: reader defaults their absence.
+#: PRESENCE-GATED PER END -- this tuple is the union, not a group that arms
+#: together. The end wall row exists wherever the geometry has an end wall
+#: face, the cathode rows wherever ``cathode_face_full_debit`` is armed.
+#: Every reader defaults their absence.
 END_SHEATH_DEBIT_ROWS = END_SHEATH_END_WALL_ROWS + END_SHEATH_CATHODE_ROWS
 
 
@@ -1118,13 +1117,12 @@ class LAPDSim1D:
         self._geometry = build_geometry(self._input_dict, self._flags)
         # Whether the plasma flux tube has a varying cross-section, and so
         # whether the quasi-1D p*dA/dz momentum source that pairs with the
-        # area-weighted pressure flux must be built. The two ways to configure
-        # one refuse each other at geometry construction (core.geometry), so
-        # this is an either/or, and it is False on every uniform-column
-        # configuration -- including the golden, which pins both flags off.
-        self._variable_area_geometry = bool(
-            self._flags.get("end_expansion_geometry")
-        ) or bool(self._flags.get("prescribed_area_geometry"))
+        # area-weighted pressure flux must be built. Presence-gated on the
+        # prescribed plasma profile, the one way to configure a variable area
+        # (core.geometry); False on every uniform-column configuration.
+        self._variable_area_geometry = (
+            self._input_dict.get("plasma_radius_profile_cm") is not None
+        )
         self._active_plasma_topology = bool(
             self._flags.get("active_plasma_topology")
         )
@@ -1844,28 +1842,16 @@ class LAPDSim1D:
                         f"{_A_c_cm2!r} cm^2 (R_cath = "
                         f"{float(self._input_dict['R_cath'])!r} cm)."
                     )
-        _end_wall_sheath_full_debit = self._flags.get(
-            "end_wall_sheath_full_debit"
+        # The end wall sheath debit is armed by presence on ROLE: exactly when
+        # the geometry carries a plasma-absorbing face whose live cell has the
+        # end wall role, the face whose collected electrons are charged the
+        # sheath fall. A geometry without one (the TwinCathode layout) has no
+        # such face and the row is simply absent. The cathode circuit solve is
+        # deliberately NOT required: this row rides the boundary operator's
+        # own flux and is honest without a circuit.
+        self._end_wall_sheath_full_debit = bool(
+            absorbing_live_cells_by_role(self._geometry).get("end_wall")
         )
-        if not isinstance(_end_wall_sheath_full_debit, bool):
-            raise ValueError(
-                "end_wall_sheath_full_debit must be a bool (got "
-                f"{_end_wall_sheath_full_debit!r})"
-            )
-        if _end_wall_sheath_full_debit and not absorbing_live_cells_by_role(
-            self._geometry
-        ).get("end_wall"):
-            # A face the mesh does not carry would book nothing at all -- an
-            # unarmed run that reads like an armed one. The cathode circuit
-            # solve is deliberately NOT required here: this row rides the
-            # boundary operator's own flux and is honest without a circuit.
-            raise ValueError(
-                "end_wall_sheath_full_debit cannot arm: this configuration "
-                "does not supply an end-wall-role plasma-absorbing face, "
-                "which is the face whose collected electrons are charged the "
-                "sheath fall."
-            )
-        self._end_wall_sheath_full_debit = _end_wall_sheath_full_debit
         _cathode_face_full_debit = self._flags.get("cathode_face_full_debit")
         if not isinstance(_cathode_face_full_debit, bool):
             raise ValueError(
@@ -3652,14 +3638,14 @@ class LAPDSim1D:
                 )
         self._dvm_end_wall_jet = end_wall_jet
         # B6: the thin annular baffles act on the KINETIC annulus wherever the
-        # geometry carries them (the neutral_baffles flag with its two arrays),
-        # ABSENT rather than present at a neutral setting otherwise, exactly
-        # as the two jets are. The geometry has already validated and mapped
-        # them onto faces, and has already refused a clear radius below the
-        # local column radius and a baffle array supplied without its flag.
+        # geometry carries them (their two arrays supplied), ABSENT rather
+        # than present at a neutral setting otherwise, exactly as the two jets
+        # are. The geometry has already validated and mapped them onto faces,
+        # and has already refused a clear radius below the local column
+        # radius and one array supplied without the other.
         baffle_faces = ()
         baffle_radii = ()
-        if bool(self._flags.get("neutral_baffles")):
+        if self._geometry.neutral_baffle_face_indices.size:
             baffle_faces = np.asarray(
                 self._geometry.neutral_baffle_face_indices, dtype=int
             )
@@ -7064,20 +7050,15 @@ class LAPDSim1D:
         # control flags are inert to the seed signature, so clearing this here
         # cannot change the stored entry's key or content.
         flags["use_cached_neutral_seed"] = False
-        # The two end-face sheath keys, cleared for the SAME reason as
-        # cathode_coupling above and read the same way: they book the emitting
-        # face's currents and the collected electrons' sheath fall, and this
-        # pre-solve has no plasma reaching either end face and no cathode
-        # solve to read a current from, so both are inert here. Left armed,
-        # the cathode key's construction guard -- which requires exactly the
-        # cathode solve the line above has just switched off -- refuses the
-        # INNER sim, a guard firing on a state where the thing it protects
-        # cannot happen. Clearing them changes no configuration that
-        # constructed before: every config the cathode key touches is one that
-        # raised, and the end wall key only ever seeded zero rows on a
-        # Plasma=False pre-solve, so the equilibrated seed, its cache
-        # signature and every existing trajectory are bit-identical.
-        flags["end_wall_sheath_full_debit"] = False
+        # The cathode end-face sheath key, cleared for the SAME reason as
+        # cathode_coupling above: it books the emitting face's currents, and
+        # this pre-solve has no cathode solve to read a current from, so it is
+        # inert here. Left armed, its construction guard -- which requires
+        # exactly the cathode solve the line above has just switched off --
+        # refuses the INNER sim, a guard firing on a state where the thing it
+        # protects cannot happen. The end wall's sheath row has no key: it is
+        # armed by the geometry's end wall face in the inner sim as in the
+        # outer one, and on a Plasma=False pre-solve it seeds zero rows.
         flags["cathode_face_full_debit"] = False
         # The two DVM directed-recycle jets, cleared for the SAME reason as
         # cathode_coupling above: this pre-solve has no plasma and no cathode
@@ -8218,8 +8199,8 @@ class LAPDSim1D:
         ``carrier_out`` is the directed hot surface carrier's launch channel;
         ``None`` is the historical call and is unchanged bit for bit.
 
-        ``end_wall_climb_out`` is the ``end_wall_sheath_full_debit`` key's
-        end wall channel: given a dict, the operator writes the end wall
+        ``end_wall_climb_out`` is the end wall sheath debit's channel: given
+        a dict, the operator writes the end wall
         faces' sheath-fall electron row into it under ``"Ee"`` for the caller
         to book as its own named term. ``None`` -- the default and every
         diagnostic caller -- computes nothing.
@@ -8505,12 +8486,12 @@ class LAPDSim1D:
         )
 
     def _end_sheath_debit_terms(self, end_wall_climb_row, cathode_solve):
-        """Return the end-face sheath rows the two keys arm, per key.
+        """Return the end-face sheath rows armed on this machine, per end.
 
-        Keyed by :data:`END_SHEATH_END_WALL_ROWS` when
-        ``end_wall_sheath_full_debit`` is armed and by
-        :data:`END_SHEATH_CATHODE_ROWS` when ``cathode_face_full_debit`` is;
-        an unarmed key contributes NO key at all, so the caller's term dict
+        Keyed by :data:`END_SHEATH_END_WALL_ROWS` when the geometry has an
+        end wall face and by
+        :data:`END_SHEATH_CATHODE_ROWS` when ``cathode_face_full_debit`` is
+        armed; an unarmed end contributes NO key at all, so the caller's term dict
         carries exactly the rows the configuration asked for. Every row is
         ELECTRON ENERGY ONLY (``n``, ``nn``, ``M`` and ``Ei`` are exactly
         zero), because the particle, momentum and ion-thermal bookings at both
@@ -10728,8 +10709,8 @@ class LAPDSim1D:
         whether any beam survives downstream.
 
         ``end_wall_e_sheath_climb`` IS PART OF THE SURFACE LOAD and is summed
-        here on the same convention, whenever ``end_wall_sheath_full_debit``
-        put it in the ledger. That row takes the sheath fall out of the plasma
+        here on the same convention, whenever the end wall face put it in
+        the ledger. That row takes the sheath fall out of the plasma
         ELECTRON store and hands it to the ions, which carry it to the plate:
         it is a removal from the plasma exactly as the boundary rows are, so
         the same negation turns it into surface power and the plate reads the

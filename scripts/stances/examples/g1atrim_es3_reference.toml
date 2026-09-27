@@ -122,7 +122,6 @@ use_cached_neutral_seed = false
 #                         run at the 27 ms puff window declared above> \
 #         --extra gas_puff_profile=orifice gas_puff_orifice_id_cm=3.95 \
 #                 gas_puff_orifice_length_cm=22.0 \
-#         --extra-flag prescribed_area_geometry=true neutral_baffles=true \
 #         --extra-npz plasma_radius_profile_cm=<geometry>:plasma_radius_profile_cm \
 #                     machine_radius_profile_cm=<geometry>:machine_radius_profile_cm \
 #                     neutral_baffle_positions_cm=<geometry>:neutral_baffle_positions_cm \

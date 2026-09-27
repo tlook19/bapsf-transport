@@ -83,7 +83,6 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
     if _dir not in _sys.path:
         _sys.path.insert(0, _dir)
 from stance_config import (  # noqa: E402
-    MESH_SIZED_FLAGS,
     MESH_SIZED_PARAMS,
     load_configuration,
     load_stance,
@@ -116,8 +115,8 @@ PRODUCTION_STANCE = "g1atrim"
 #     mesh -- resampling them changes the neutral inventory and the near-source
 #     structure, so it is a new initial condition, not the stance's.
 #
-# The package is therefore dropped WHOLE, with the flag and the shaped-fill
-# route that require it, rather than half-applied: a prescribed geometry carrying a default fill would
+# The package is therefore dropped WHOLE, with the shaped-fill route that
+# requires it, rather than half-applied: a prescribed geometry carrying a default fill would
 # be a hybrid corner of exactly the kind this re-anchor exists to stop being.
 # Everything that is mesh-independent still travels, which is every scalar
 # operating-point key plus the baffles (whose arrays are physical cm, not
@@ -128,7 +127,6 @@ PRODUCTION_STANCE = "g1atrim"
 # must run a named configuration at its own resolution drop the SAME package.
 # These names are kept because this file's callers and its record use them.
 STANCE_MESH_SIZED_PARAMS = MESH_SIZED_PARAMS
-STANCE_MESH_SIZED_FLAGS = MESH_SIZED_FLAGS
 
 BASELINE_PARAM_OVERRIDES = {
     # Axial resolution -- the one run-shape pin. The campaign runs 268 far-column
@@ -228,8 +226,6 @@ def build_baseline_config(param_overrides=None, flag_overrides=None):
     for key in STANCE_MESH_SIZED_PARAMS:
         stance_params.pop(key, None)
     stance_params = without_mesh_sized_route(stance_params)
-    for key in STANCE_MESH_SIZED_FLAGS:
-        stance_flags[key] = False
     params.update(stance_params)
     flags.update(stance_flags)
 
