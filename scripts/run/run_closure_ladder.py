@@ -86,9 +86,17 @@ SUBCOMMANDS
 
 ``run``
     Launches every registered, unblocked arm, at most ``--lanes`` live
-    ``run_m6_point`` processes at a time counted machine-wide; resumable.
-    Each arm writes ``<arm>.cmd`` / ``.start`` / ``.exit`` / ``.pid`` beside
-    its h5 and log.
+    solver processes at a time counted machine-wide (``live_solvers``);
+    resumable. Each arm writes ``<arm>.cmd`` / ``.start`` / ``.exit`` /
+    ``.pid`` beside its h5 and log.
+
+LAUNCH ROUTE FOR ``run`` AND ``probe``. Both start solver children and poll
+them for hours. Every child stays in the driver's own process group (no new
+session), runs under its own ``timeout`` cap, and writes its stdout and
+stderr to its own log. The two subcommands are an ORCHESTRATOR launch route:
+the orchestrator starts the driver inside one detached tmux session, which
+owns the driver and every arm it launches. Subagents must not run ``run`` or
+``probe``.
 
 ``score``
     Runs the scorer over each finished arm twice (default window and
@@ -143,7 +151,7 @@ TAB_DIR = None
 COMPARE_BASE_DIR = None
 COMPARE_FEET_DIR = None
 
-PY = Path.home() / "miniforge3/envs/fenicsx-env/bin/python"
+PY = Path(sys.executable)
 MAX_STEPS = 300000
 PROBE_MAX_STEPS = 2500
 PROBE_T0 = 5.0e-4
@@ -217,9 +225,10 @@ def _configure(args):
                     "such a file).")
         BASE_NAME, BASE_STANCE = _resolve_stance(args.stance, REPO)
     ART = Path(args.root).resolve()
-    if ART == REPO or REPO in ART.parents:
-        _refuse(f"--root {ART} lies inside the checkout {REPO}; the ladder tree holds run artifacts "
-                f"and belongs outside the repository")
+    for checkout in (REPO, THIS_CHECKOUT):
+        if ART == checkout or checkout in ART.parents:
+            _refuse(f"--root {ART} lies inside the checkout {checkout}; the ladder tree holds run "
+                    f"artifacts and belongs outside the repository")
     EXAMPLES = REPO / "scripts/stances/examples"
     CFG_DIR = ART / "configs"
     RUN_DIR = ART / "runs"
@@ -275,26 +284,26 @@ def foot_args(es: int, end: str):
     return list(FOOT_ENDS[end])
 
 
-# Kinetic band: (arm, key, value, fill end, note). The fill-end arms carry no scalar key:
+# Kinetic band: (arm, key, value, fill end). The fill-end arms carry no scalar key:
 # their delta IS the rebuilt fill block.
 KIN_ARMS = [
-    ("ref",        None,                                   None,   "ref",    "reference: the measured-drive arm at the base configuration"),
-    ("tailfwd",    "heating_anomalous_tail_forward_fraction", 1.0, "ref",    "walked QL tail launched 100 % along +z (the beam direction); 0.5 = the reference"),
-    ("f_lo",       "heat_flux_limiter_f",                  0.32,   "ref",    "flux-limit fraction, bracket [0.32, 1.5]"),
-    ("f_hi",       "heat_flux_limiter_f",                  1.5,    "ref",    "flux-limit fraction, bracket [0.32, 1.5]"),
-    ("sgp_lo",     "S_gp",                                 8650.0, "ref",    "puff level, systematic envelope -4.0 %"),
-    ("sgp_hi",     "S_gp",                                 9497.0, "ref",    "puff level, systematic envelope +5.4 %"),
-    ("acc_lo",     "neutral_kinetic_dvm_accommodation",    0.35,   "ref",    "thermal accommodation, bracket [0.35, 0.46]"),
-    ("acc_hi",     "neutral_kinetic_dvm_accommodation",    0.46,   "ref",    "thermal accommodation, bracket [0.35, 0.46]"),
-    ("pump_lo",    ("S_pump_L", "S_pump_R"),               2750.0, "ref",    "end pump speed, bracket [2750, 3300] L/s"),
-    ("pump_hi",    ("S_pump_L", "S_pump_R"),               3300.0, "ref",    "end pump speed, bracket [2750, 3300] L/s"),
-    ("beta_lo",    "neutral_kinetic_dvm_jet_launch_width", 0.085,  "ref",    "DVM jet launch width, bracket [0.085, 0.19]"),
-    ("beta_hi",    "neutral_kinetic_dvm_jet_launch_width", 0.19,   "ref",    "DVM jet launch width, bracket [0.085, 0.19]"),
-    ("foot_lo",    None,                                   None,   "lo",     "foot duration, registered - the lead's shot sd (fill rows rebuilt)"),
-    ("foot_hi",    None,                                   None,   "hi",     "foot duration, registered + the lead's shot sd (fill rows rebuilt)"),
-    ("kfill_slow", None,                                   None,   "kslow",  "fill kernel, Knudsen member 'slow' (kappa 0.45) at the registered foot"),
-    ("kfill_fast", None,                                   None,   "kfast",  "fill kernel, Knudsen member 'fast' (kappa 0.90) at the registered foot"),
-    ("gap_closed", None,                                   None,   "gapoff", "fill kernel, gap coupling OFF at the reference kappa and the registered foot"),
+    ("ref",        None,                                   None,   "ref"),
+    ("tailfwd",    "heating_anomalous_tail_forward_fraction", 1.0, "ref"),
+    ("f_lo",       "heat_flux_limiter_f",                  0.32,   "ref"),
+    ("f_hi",       "heat_flux_limiter_f",                  1.5,    "ref"),
+    ("sgp_lo",     "S_gp",                                 8650.0, "ref"),
+    ("sgp_hi",     "S_gp",                                 9497.0, "ref"),
+    ("acc_lo",     "neutral_kinetic_dvm_accommodation",    0.35,   "ref"),
+    ("acc_hi",     "neutral_kinetic_dvm_accommodation",    0.46,   "ref"),
+    ("pump_lo",    ("S_pump_L", "S_pump_R"),               2750.0, "ref"),
+    ("pump_hi",    ("S_pump_L", "S_pump_R"),               3300.0, "ref"),
+    ("beta_lo",    "neutral_kinetic_dvm_jet_launch_width", 0.085,  "ref"),
+    ("beta_hi",    "neutral_kinetic_dvm_jet_launch_width", 0.19,   "ref"),
+    ("foot_lo",    None,                                   None,   "lo"),
+    ("foot_hi",    None,                                   None,   "hi"),
+    ("kfill_slow", None,                                   None,   "kslow"),
+    ("kfill_fast", None,                                   None,   "kfast"),
+    ("gap_closed", None,                                   None,   "gapoff"),
 ]
 # Fluid closures: their deltas over the base (the committed fluid comparator's, + the DVM put-aways).
 CLOSURE_DELTAS = {
@@ -328,7 +337,7 @@ FLUID_BANDS = {
 def arm_table():
     """Every arm as (name, closure|None, {key: value} flat deltas, fill end)."""
     out = []
-    for name, key, val, end, _ in KIN_ARMS:
+    for name, key, val, end in KIN_ARMS:
         keys = key if isinstance(key, tuple) else ((key,) if key else ())
         out.append((name, None, {k: val for k in keys}, end))
     for closure in CLOSURE_DELTAS:
@@ -691,11 +700,12 @@ def launch_probe(name, es):
              f"PYTHONDONTWRITEBYTECODE=1 timeout {PROBE_TIMEOUT_S} {shlex.quote(str(PY))} scripts/run/run_m6_point.py "
              f"--stance {shlex.quote(str(p['pcfg'].resolve()))} --sgp {sgp_for(name)} --es {es} --two-zone "
              f"--max-steps {PROBE_MAX_STEPS} --extra max_steps_action=stop "
-             f"--save-h5 {shlex.quote(str(p['ph5']))} > {shlex.quote(str(p['plog']))} 2>&1; "
+             f"--save-h5 {shlex.quote(str(p['ph5']))} >> {shlex.quote(str(p['plog']))} 2>&1; "
              f"echo \"EXIT=$?\" > {shlex.quote(str(p['pexit']))}")
     p["pcmd"].write_text("#!/bin/bash\n# ladder t0 probe, generated " + dt.datetime.now().isoformat(timespec="seconds") + "\n" + inner + "\n")
     p["pstart"].write_text(dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
-    proc = subprocess.Popen(["bash", str(p["pcmd"])], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(p["plog"], "ab") as log:
+        proc = subprocess.Popen(["bash", str(p["pcmd"])], stdout=log, stderr=subprocess.STDOUT)
     p["ppid"].write_text(f"{proc.pid}\n")
     return proc
 
@@ -786,18 +796,57 @@ def launch(name, es):
     inner = (f"cd {shlex.quote(str(REPO))} && CABLP_COMPILED_KERNELS=1 PYTHONPATH={shlex.quote(str(REPO))} "
              f"PYTHONDONTWRITEBYTECODE=1 timeout {TIMEOUT_S} {shlex.quote(str(PY))} scripts/run/run_m6_point.py "
              f"--stance {shlex.quote(str(p['cfg'].resolve()))} --sgp {sgp_for(name)} --es {es} --two-zone "
-             f"--max-steps {MAX_STEPS} --save-h5 {shlex.quote(str(p['h5']))} > {shlex.quote(str(p['log']))} 2>&1; "
+             f"--max-steps {MAX_STEPS} --save-h5 {shlex.quote(str(p['h5']))} >> {shlex.quote(str(p['log']))} 2>&1; "
              f"echo \"EXIT=$?\" > {shlex.quote(str(p['exit']))}")
     p["cmd"].write_text("#!/bin/bash\n# ladder arm, generated " + dt.datetime.now().isoformat(timespec="seconds") + "\n" + inner + "\n")
     p["start"].write_text(dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
-    proc = subprocess.Popen(["bash", str(p["cmd"])], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(p["log"], "ab") as log:
+        proc = subprocess.Popen(["bash", str(p["cmd"])], stdout=log, stderr=subprocess.STDOUT)
     p["pid"].write_text(f"{proc.pid}\n")
     return proc
 
 
+#: The solver processes the lane cap covers: a python command line naming one
+#: of these entry points or the solver class.
+SOLVER_RE = re.compile(r"python.*(run_m6_point|run_sim1d|baseline_sim1d|golden_digest_gate|smoke_sim1d|"
+                       r"verify_sim1d|audit_sim1d|_census|probe_|LAPDSim1D)")
+
+
+def _own_tree():
+    """This process and every ancestor, so a count never matches its own caller chain."""
+    tree, pid = set(), os.getpid()
+    while pid > 1:
+        tree.add(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            break
+        pid = int(stat.rsplit(")", 1)[1].split()[1])
+    return tree
+
+
 def live_solvers():
-    r = subprocess.run(["pgrep", "-fc", r"^\S*/bin/python scripts/run/run_m6_poin[t]\.py"], capture_output=True, text=True)
-    return int(r.stdout.strip() or 0)
+    """Count live solver processes machine-wide, excluding this process's own ancestor chain.
+
+    A process counts when its command line matches ``SOLVER_RE`` and its
+    ``argv[0]`` is a python interpreter, so a ``timeout`` or shell wrapper
+    whose arguments name a solver is not counted beside the solver itself.
+    """
+    own = _own_tree()
+    n = 0
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit() or int(d.name) in own:
+            continue
+        try:
+            argv = (d / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        argv = [a.decode(errors="replace") for a in argv if a]
+        if not argv or "python" not in Path(argv[0]).name:
+            continue
+        if SOLVER_RE.search(" ".join(argv)):
+            n += 1
+    return n
 
 
 def cmd_run(args):
