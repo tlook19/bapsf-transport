@@ -101,7 +101,7 @@ into four kinds: read-only audits/censuses of a saved run or build
 `regime_r2_overlap_gate.py`); one fixed-point/underflow fence
 (`r3fma_underflow_fence.py`); and one-build acceptance instruments not named
 `verify_sim1d_*.py` (`k2_dvm_exchange_acceptance.py`,
-`k2_dvm_exchange_measure.py`,
+`k2_dvm_exchange_measure.py`, `k7cbuild_frozen_bitexact.py`,
 `verify_beam_deposition.py`, `verify_hbd_momentum.py`,
 `verify_phase3_source_capture.py`,
 `verify_fill_spreading.py` — the initial fill's spreading members. The
