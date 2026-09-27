@@ -89,7 +89,6 @@ def reaction_rhs(
     atomic_rate_model="janev",
     adas_low_te_extension=False,
     Ti_birth_ionization="neutral",
-    wind_column_factor=None,
     Tn_K=300.0,
 ):
     """Return conservative source terms for local bulk plasma reactions."""
@@ -103,7 +102,6 @@ def reaction_rhs(
         atomic_rate_model=atomic_rate_model,
         adas_low_te_extension=adas_low_te_extension,
         Ti_birth_ionization=Ti_birth_ionization,
-        wind_column_factor=wind_column_factor,
         Tn_K=Tn_K,
     )
     ionization = terms["ionization_birth"]
@@ -128,7 +126,6 @@ def reaction_rhs_terms(
     atomic_rate_model="janev",
     adas_low_te_extension=False,
     Ti_birth_ionization="neutral",
-    wind_column_factor=None,
     Tn_K=300.0,
 ):
     """Return ionization and recombination conservative source terms."""
@@ -174,15 +171,11 @@ def reaction_rhs_terms(
     # momentum between the species: an ionized neutral is born drifting at
     # u_n (fixing the historical zero-drift birth), and a recombined ion
     # hands its momentum to the wind. Both close M*Vp + M_n*Vm exactly
-    # through the same (Vp/Vm) conversion the particles use. Ionization only
-    # ever consumes *column* gas, so the two-zone closure's column factor
-    # (when given) scales the sampled wind up from the chamber mean.
+    # through the same (Vp/Vm) conversion the particles use.
     if state.M_n is not None:
         u_n = neutral_wind_velocity(
             state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
         )
-        if wind_column_factor is not None:
-            u_n = wind_column_factor * u_n
         M_birth = ion_mass_g * u_n * S_ion
         M_n_birth = -M_birth * momentum_ratio
         u_birth = u_n

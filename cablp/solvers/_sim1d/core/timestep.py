@@ -687,15 +687,13 @@ def neutral_energy_timestep(
         / nn
         * neutral_energy_volume_ratio(state, geometry)
     )
-    wall_rate = neutral_energy_kwargs["wall_rate_1_s"]
-    if wall_rate is None:
-        vbar_n = np.sqrt(
-            8.0
-            * float(neutral_energy_kwargs["Tn_fit"])
-            * ev_to_erg
-            / (np.pi * ion_mass_g)
-        )
-        wall_rate = vbar_n / np.asarray(geometry.Rm_cm, dtype=float)
+    vbar_n = np.sqrt(
+        8.0
+        * float(neutral_energy_kwargs["Tn_fit"])
+        * ev_to_erg
+        / (np.pi * ion_mass_g)
+    )
+    wall_rate = vbar_n / np.asarray(geometry.Rm_cm, dtype=float)
     rate = rate + abs(
         float(neutral_energy_kwargs["alpha_E"])
     ) * np.asarray(wall_rate, dtype=float)

@@ -163,9 +163,7 @@ PROBE_PARAMS = {
     "C_R": 8.76,
     "beam_deposition_smoothing_cm": 50.0,
 }
-PROBE_FLAGS = {
-    "ion_neutral_drag_cx_only": False,
-}
+PROBE_FLAGS = {}
 
 #: Applied over ``PROBE_PARAMS`` (and over the ES1 operating point below);
 #: where a key appears in both, this value wins. ``S_gp`` is in sccm.

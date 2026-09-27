@@ -27,7 +27,7 @@ Usage:
         --stance scripts/stances/examples/g1atrim_fluid_comparator.toml \
         --sgp 9010 --save-h5 out.h5
     python scripts/run/run_m6_point.py --es 1 --no-stance --sgp 9010 \
-        --close-lag 2e-3 --save-h5 out.h5 [--mn] [--L 8.1e-6] [--extra k=v ...]
+        --close-lag 2e-3 --save-h5 out.h5 [--L 8.1e-6] [--extra k=v ...]
 """
 
 import argparse
@@ -158,7 +158,6 @@ def main(argv=None):
                         "defer to the shared production config "
                         "(compare_sim1d_es1.PARAM_OVERRIDES)")
     p.add_argument("--c-th", type=float, default=120.0)
-    p.add_argument("--mn", action="store_true")
     p.add_argument("--two-zone", action="store_true",
                    help="neutral_two_zone particle channel "
                         "-- nn becomes the column "
@@ -264,14 +263,6 @@ def main(argv=None):
     flags_extra = {}
     if args.two_zone:
         flags_extra["neutral_two_zone"] = True
-    if args.mn:
-        extra.update({
-            "ion_neutral_drag_model": "constant",
-            "b_ion_neutral_drag": 1.0,
-            "neutral_momentum_radial": "two_zone",
-            "neutral_mesh_accommodation": True,
-        })
-        flags_extra["neutral_momentum"] = True
     # The rung values AS THE RUNG SET THEM, snapshotted before any stance or
     # command-line layer can touch them. Read from ``extra`` rather than from
     # ``op`` again so there is exactly one place the rung reaches this driver.

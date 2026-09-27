@@ -24,8 +24,8 @@ Two classes of row exist:
   sets, which are scheduled for removal.
 * **value-scoped** (``values=(...)``) -- only the listed values are deprecated
   and the rest of the key stays fully supported. Used where a selector keeps
-  live arms, e.g. ``neutral_model``: ``"kinetic"`` deprecates while
-  ``"kinetic_dvm"`` does not.
+  live arms, e.g. ``hyperbolic_wave_speed``: ``"isothermal"`` deprecates
+  while ``"adiabatic"`` does not.
 
 Controls that already have their own louder guard are deliberately ABSENT.
 ``front_flux_model``, ``D_amb_model`` and ``D_amb`` are
@@ -125,9 +125,6 @@ DEPRECATED_CONTROLS = {
     "hyperbolic_energy_consistent": DeprecatedControl(
         FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
     ),
-    "ion_neutral_thermalization": DeprecatedControl(
-        FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
-    ),
     "front_flux": DeprecatedControl(
         FLAGS, _FREED_BRANCH, _FREED_BRANCH_FIX,
     ),
@@ -140,12 +137,6 @@ DEPRECATED_CONTROLS = {
         "Phelps operator replaced, and " + _FREED_BRANCH,
         _FREED_BRANCH_FIX,
     ),
-    "b_ion_neutral_thermalization": DeprecatedControl(
-        PARAMS,
-        "it scales the legacy ion-neutral thermalization term, which the "
-        "moment-closed Phelps operator replaced, and " + _FREED_BRANCH,
-        _FREED_BRANCH_FIX,
-    ),
     "gas_puff_profile": DeprecatedControl(
         PARAMS,
         "the historical single-cell puff deposits the whole fuelling rate in "
@@ -154,24 +145,8 @@ DEPRECATED_CONTROLS = {
         _FREED_BRANCH_FIX,
         values=("cell",),
     ),
-    # ==== the kinetic neutral engine (selector-scoped) =====================
-    # Scoped to the SELECTOR and its solver-side relaxation coupling. The
-    # kinetic_neutrals module itself is NOT deprecated: it is the shared
-    # library behind the kn2zone instrument and behind neutral_model=
-    # "kinetic_dvm", which stays fully supported.
-    "neutral_model": DeprecatedControl(
-        PARAMS,
-        "the relaxation-coupled kinetic neutral engine is superseded as an "
-        "instrument by neutral_model='kinetic_dvm' and is quoted in no live "
-        "claim",
-        "select 'moment' (production) or 'kinetic_dvm' (the kinetic "
-        "instrument); the module behind this selector stays as the shared "
-        "kinetic library and is not affected",
-        values=("kinetic",),
-    ),
     # ==== dead levers: cathode ============================================
     "anode_radius_cm": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "coverage_backfill_time_s": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: timestep control ===================================
     "neutral_dt_fraction": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # NOT a dead lever any more: ``dt_growth_recovery_patience`` ships armed,
@@ -214,12 +189,6 @@ DEPRECATED_CONTROLS = {
     # DELETED from the configuration surface (2026-08-28); supplying one now
     # raises the unknown-key ValueError rather than warning.
     "alpha_front": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    # ==== dead levers: neutral probe source ===============================
-    "neutral_probe_profile": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
-    "neutral_probe_waveform_table": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
-    "neutral_probe_zone": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
     # ==== dead levers: the regime-tracer passivity constants ===============
     # The half of the tracer_* family nothing configures; the activation and
     # overlap keys ARE exercised and are absent from this table.

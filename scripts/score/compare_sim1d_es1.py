@@ -352,9 +352,6 @@ PARAM_OVERRIDES = {
     # source artifacts ran at the config default 5.
 }
 FLAG_OVERRIDES = {
-    # R5 stance flip: the legacy ion-neutral thermalization arm is subsumed by
-    # the Phelps moment operator (config.py default); no longer set here.
-    "ion_neutral_drag_cx_only": False,
     # NB end_expansion_geometry is NOT set here any more: the G1 measured
     # geometry replaced the built-in flare with per-cell prescribed radii, and
     # the solver refuses the two together. It comes with the stance.
@@ -577,33 +574,10 @@ def run_model(
     # A/B instrument for the drag-closure gate (M4):
     # swap the drag closure without touching the rest of the production
     # config. "constant" is PARAM_OVERRIDES as-is (the calibrated 0.5);
-    # "slip" is the entrainment closure; "neutral_momentum" evolves M_n with
-    # the honest b = 1 (the field replaces the compensation constant).
-    if drag_closure == "slip":
-        params["ion_neutral_drag_model"] = "slip"
+    # "neutral_momentum" evolves M_n with the honest b = 1 (the field replaces
+    # the compensation constant).
+    if drag_closure == "neutral_momentum":
         params["b_ion_neutral_drag"] = 1.0
-        # The slip closure IS the evolved M_n equation's local steady state, so
-        # the solver refuses the pair. Since the R2a fold-in made
-        # neutral_momentum a config default, this arm has to switch the field
-        # off explicitly to be the closure arm it names -- and with it
-        # everything the solver presence-gates on M_n: the neutral energy
-        # channel and its hot internal wall, and the cathode jet (M_n momentum
-        # physics), whose debit and total_reflected convention in turn require
-        # the jet. This arm is the whole pre-M_n closure stack, not one key.
-        flags["neutral_momentum"] = False
-        flags["neutral_energy"] = False
-        flags["neutral_hot_internal_wall"] = False
-        params["cathode_neutral_jet"] = False
-        params["cathode_jet_surface_debit"] = False
-        params["cathode_jet_energy_convention"] = "legacy"
-    elif drag_closure == "neutral_momentum":
-        params["ion_neutral_drag_model"] = "constant"
-        params["b_ion_neutral_drag"] = 1.0
-        flags["neutral_momentum"] = True
-    elif drag_closure == "neutral_momentum_two_zone":
-        params["ion_neutral_drag_model"] = "constant"
-        params["b_ion_neutral_drag"] = 1.0
-        params["neutral_momentum_radial"] = "two_zone"
         flags["neutral_momentum"] = True
     elif drag_closure not in (None, "constant"):
         raise ValueError(f"unknown drag_closure {drag_closure!r}")
@@ -4493,15 +4467,12 @@ def main(argv=None):
         default=None,
         choices=(
             "constant",
-            "slip",
             "neutral_momentum",
-            "neutral_momentum_two_zone",
         ),
         help=(
             "swap the ion-neutral drag closure for the gate-#2 A/B: "
-            "constant (production 0.5), slip (entrainment closure, b=1), "
-            "neutral_momentum (evolved M_n wind, b=1), or "
-            "neutral_momentum_two_zone (M_n wind + two-zone radial closure)"
+            "constant (production 0.5) or neutral_momentum (evolved M_n "
+            "wind, b=1)"
         ),
     )
     parser.add_argument(

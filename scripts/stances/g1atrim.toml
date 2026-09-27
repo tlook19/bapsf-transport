@@ -22,7 +22,7 @@
 # neutral_closure became DECLARABLE at the kinetic stance event (2026-09-02).
 # A family with a selector may only be declared when that selector is at its
 # engaging value, and this stance now runs neutral_model = "kinetic_dvm".
-# Its fourteen members INCLUDE the four cathode-jet keys and the three
+# Its eleven members INCLUDE the four cathode-jet keys and the three
 # anode-jet keys that the cathode_surface_recycle and anode_surface_recycle
 # blocks used to declare, and two blocks may not claim one key -- so those two
 # blocks are GONE from this file and the neutral_closure block below states
@@ -33,8 +33,6 @@
 # DVM jets read their own neutral_kinetic_dvm_{cathode,anode}_jet_R_N/_R_E
 # pairs, which are the same numbers and are also config defaults.
 #
-# neutral_radial_closure stays UNDECLARABLE: its selector
-# neutral_momentum_radial is "uniform", not the engaging "kinetic_two_moment".
 # See cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md for the form, its resolver
 # and its refusals.
 #
@@ -514,7 +512,7 @@ beam_excitation_energy_eV = 21.218
 # the transient discrete-velocity model: a distribution f(z, v_z, v_perp) on
 # the column and the annulus, advanced on its own clock, rather than by the
 # two-moment fluid this stance ran until now. The selection is the first row;
-# the other thirteen keys are what it FORCES, and they are written here at
+# the other ten keys are what it FORCES, and they are written here at
 # those required values rather than left to be resolved one refusal at a time.
 #
 # Everything below the selection says the same thing twice over: the DVM state
@@ -525,19 +523,14 @@ beam_excitation_energy_eV = 21.218
 #     moment of f;
 #   * neutral_energy books the frictional half of the collisional exchange
 #     against u - u_n, which has no meaning without that fluid wind, and the
-#     hot internal wall and the hot birth drift are presence gates standing on
-#     the hot channel neutral_energy creates;
-#   * neutral_momentum_radial closes the RADIAL profile of the evolved wind,
-#     so "uniform" is the only reading left;
+#     hot internal wall is a presence gate standing on the hot channel
+#     neutral_energy creates;
 #   * the four cathode-jet keys and the two anode-jet keys are M_n momentum
 #     physics for the same reason. The recycle channels themselves are NOT
 #     given up: the DVM's own cathode and anode jets carry them, armed in
 #     [input_dict] above, and cathode_jet_energy_convention drops to "legacy"
 #     because "total_reflected" rescales the FLUID jet's launch energy and
-#     requires that fluid jet to exist;
-#   * neutral_knudsen_temperature = "local" would scale the Knudsen
-#     conductances by an evolved per-cell Tn, which only exists under
-#     neutral_energy.
+#     requires that fluid jet to exist.
 #
 # The block therefore SUPERSEDES this file's former cathode_surface_recycle and
 # anode_surface_recycle blocks: it claims seven of their eleven keys, and two
@@ -548,9 +541,6 @@ neutral_model = "kinetic_dvm"
 neutral_momentum = false
 neutral_energy = false
 neutral_hot_internal_wall = false
-neutral_hot_birth_drift = false
-neutral_momentum_radial = "uniform"
-neutral_knudsen_temperature = "frozen"
 cathode_neutral_jet = false
 cathode_jet_surface_debit = false
 cathode_jet_energy_convention = "legacy"

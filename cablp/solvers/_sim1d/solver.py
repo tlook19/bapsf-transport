@@ -12,8 +12,6 @@ from scipy.linalg import solve_banded
 
 from .core.config import (
     ConfigurationLineage,
-    coverage_closure_defaults,
-    neutral_probe_source_defaults,
     default_config,
     input_dict_template_1d,
     load_config,
@@ -73,12 +71,10 @@ from .core.validation import (
     refuse_dvm_anode_jet_without_cathode_coupling,
     refuse_dvm_cathode_jet_without_cathode_coupling,
     refuse_te_floor_above_adas_table_edge,
-    resolve_coverage_config,
     resolve_electron_drift_transport_config,
     resolve_energy_exchange_rate_fraction,
     resolve_jet_arming_criterion,
     resolve_neutral_jet_config,
-    resolve_neutral_probe_config,
     resolve_parallel_momentum_sink,
     validate_equilibration_gas_puff_on,
     validate_gas_puff_config,
@@ -120,19 +116,9 @@ from .physics.kinetic_dvm import (
     launch_band_velocity_extent_cm_s,
     thermal_sonic_velocity_extent_cm_s,
 )
-from .physics.kinetic_neutrals import (
-    EV as _KIN_EV,
-    KB as _KIN_KB,
-    M_HE as _KIN_M_HE,
-    KN2ZoneJump,
-    KineticEngineFast,
-    VGrid as _KineticVGrid,
-    _inflow as _kinetic_inflow,
-)
 from .physics.cathode import (
     BEAM_GAP_LEDGER_POWER_ATOL,
     END_SHEATH_CATHODE_ROWS,
-    CoverageView1D,
     cathode_emission_sheath_power_W,
     beam_anomalous_power_density,
     beam_gap_ledger_mismatch,
@@ -167,7 +153,6 @@ from .physics.flux import (
 )
 from .physics.neutrals import (
     GAS_PUFF_DIAGNOSTIC_FIELDS,
-    NEUTRAL_PROBE_WAVEFORMS,
     gas_puff_rate_profile,
     _effective_pump_speed,
     neutral_exchange_coefficients,
@@ -175,11 +160,6 @@ from .physics.neutrals import (
     neutral_exchange_two_zone_rhs,
     neutral_fluid_flux_rhs,
     neutral_initial_profile_values,
-    neutral_probe_profile_weights,
-    neutral_probe_source_rhs,
-    neutral_probe_waveform_mean,
-    neutral_probe_waveform_table,
-    neutral_probe_waveform_value,
     neutral_source_sink_rhs,
     neutral_wind_advection_rhs,
     neutral_zone_exchange_conductance,
@@ -204,7 +184,6 @@ from .physics.hot_neutrals import (
 from .physics.jet_carrier import cathode_jet_carrier_rhs
 from .physics.sources import (
     CATHODE_JET_ENERGY_CONVENTIONS,
-    ION_NEUTRAL_DRAG_MODELS,
     add_state_rhs,
     anode_collection_rhs,
     cathode_jet_backscatter_speed,
@@ -219,16 +198,13 @@ from .physics.sources import (
     neutral_energy_transfer_row,
     ion_neutral_drag_rhs,
     ion_neutral_frictional_heating_rhs,
-    ion_neutral_thermalization_rhs,
     parallel_momentum_sink_rhs,
     parallel_momentum_sink_heating_rhs,
     neutral_energy_wall_rhs,
     neutral_momentum_wall_rhs,
-    neutral_momentum_two_zone_rhs,
     IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS,
     IONIZATION_BIRTH_DEFICIT_SITES,
     neutral_temperature_eV,
-    neutral_wind_two_zone_factors,
     neutral_wind_velocity,
     flux_tube_geometry_rhs,
     hyperbolic_energy_correction_rhs,
@@ -251,9 +227,8 @@ from .physics.tracer import (
 from .results.restart import (
     REFUSED_NEUTRAL_MODELS as RESTART_REFUSED_NEUTRAL_MODELS,
 )
-from cablp.atomic.adas import he_rate_temperature_range_eV, he_rates
+from cablp.atomic.adas import he_rate_temperature_range_eV
 from cablp.cathode.beam_deposition import ANOMALOUS_MODELS
-from cablp.atomic.cross_sections import charge_ex_react
 from cablp.cathode.kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.constants import (
     I_ion,
@@ -346,7 +321,6 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "cathode_e_emitted_fall": "none",
     "cathode_e_collected_climb": "none",
     "surface_loss": "wall",
-    "neutral_probe_source": "wall",
     # --- recombination: born at the ion temperature ----------------------
     # ROUTING NOTE. These neutrals are Ti-class and so are physically hot, but
     # they stay in the COLD channel deliberately. The operator hands the
@@ -384,7 +358,6 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "parallel_momentum_sink": "none",
     "parallel_momentum_sink_heating": "none",
     "neutral_momentum_wall": "none",
-    "neutral_momentum_radial": "none",
     "beam_power_deposition": "none",
     "beam_ionization_cost": "none",
     "beam_excitation_radiation": "none",
@@ -616,12 +589,9 @@ class StepAttempt1D:
     cathode_jet_energy_booking: np.ndarray | None = None
     anode_jet_energy_booking: np.ndarray | None = None
     end_wall_jet_energy_booking: np.ndarray | None = None
-    coverage_burn: np.ndarray | None = None
-    coverage_reservoir_burn: np.ndarray | None = None
-    coverage_w: np.ndarray | None = None
     # Regime-R2 tracer coefficients frozen at this attempt's step start, or
     # None whenever the tracer is not engaged. Carried on the attempt for the
-    # same reason the coverage and DVM accumulators are: a rejected attempt
+    # same reason the DVM accumulators are: a rejected attempt
     # must move neither the Picard cache nor the passive/active boundary.
     tracer: dict | None = None
     # This attempt's anode electron-sheath book: the circuit's charge and the
@@ -1093,8 +1063,6 @@ class LAPDSim1D:
             neutral_energy=self._neutral_energy,
             neutral_energy_alpha=self._neutral_energy_alpha,
             neutral_energy_wall_Tn_eV=self._neutral_energy_wall_Tn_eV,
-            neutral_energy_wall_rate=self._neutral_energy_wall_rate,
-            wind_column_factor=self._wind_column_factor,
         )
         self._init_hot_neutral_channel_and_jets()
         self._init_atomic_package_refusals()
@@ -1255,16 +1223,6 @@ class LAPDSim1D:
                 ),
             )
         self._neutral_momentum = bool(self._flags.get("neutral_momentum"))
-        if (
-            self._neutral_momentum
-            and self._input_dict.get("ion_neutral_drag_model")
-            == "slip"
-        ):
-            raise ValueError(
-                "neutral_momentum is mutually exclusive with "
-                "ion_neutral_drag_model='slip': the slip closure is the "
-                "evolved M_n equation's own local steady state"
-            )
         self._neutral_two_zone = bool(self._flags.get("neutral_two_zone"))
         if self._neutral_two_zone:
             if (
@@ -1308,9 +1266,9 @@ class LAPDSim1D:
         self._neutral_model = str(
             self._input_dict.get("neutral_model")
         )
-        if self._neutral_model not in ("moment", "kinetic", "kinetic_dvm"):
+        if self._neutral_model not in ("moment", "kinetic_dvm"):
             raise ValueError(
-                "neutral_model must be 'moment', 'kinetic' or 'kinetic_dvm' "
+                "neutral_model must be 'moment' or 'kinetic_dvm' "
                 f"(got {self._neutral_model!r})"
             )
         # Live cells against the plasma-terminating surfaces, by role: where the
@@ -1318,83 +1276,6 @@ class LAPDSim1D:
         # wall-return channels must be read and deposited. Run-constant
         # topology, resolved once (see absorbing_live_cells_by_role).
         self._recycle_cells = absorbing_live_cells_by_role(self._geometry)
-        self._end_recycle_to_annulus = bool(
-            self._flags.get("end_recycle_to_annulus")
-        )
-        if self._end_recycle_to_annulus:
-            if not self._neutral_two_zone:
-                raise ValueError(
-                    "end_recycle_to_annulus requires the neutral_two_zone "
-                    "flag: the routed stream is deposited into the annulus "
-                    "row nn_a, which only the two-zone closure builds"
-                )
-            routed_cells = self._recycle_cells.get("end_wall", ())
-            V_ann = self._zone_volumes[1]
-            dead = [
-                int(cell)
-                for cell in routed_cells
-                if float(V_ann[int(cell)]) <= 0.0
-            ]
-            if dead:
-                raise ValueError(
-                    "end_recycle_to_annulus would route the end wall recycle "
-                    f"into cells with no annulus volume (V_ann = 0): {dead}. "
-                    "The destination zone must exist wherever the routing "
-                    "deposits, so a geometry whose plasma fills the vessel at "
-                    "the end wall face is refused rather than silently "
-                    "destroying the routed stream"
-                )
-            if self._neutral_model != "moment":
-                raise ValueError(
-                    "end_recycle_to_annulus is incompatible with "
-                    f"neutral_model={self._neutral_model!r}: a kinetic "
-                    "neutral model sources its end wall wall-return channel "
-                    "from the boundary term's COLUMN nn row alone, while this "
-                    "flag moves that face's whole stream onto the annulus "
-                    "nn_a row and leaves the column row exactly zero, so the "
-                    "routed atoms would be counted by nothing and the "
-                    "end wall recycle would be lost. Accepted: "
-                    "neutral_model='moment'"
-                )
-        if self._neutral_model == "kinetic":
-            if not self._neutral_two_zone:
-                raise ValueError(
-                    "neutral_model='kinetic' rides on the two-zone state: "
-                    "set the neutral_two_zone flag"
-                )
-            # K4a bookkeeping: targets and
-            # per-cell relaxation times are produced by refresh-cadence
-            # kinetic solves at step ACCEPTANCE (never inside trial RHS
-            # evaluations); before the first refresh the moment terms
-            # carry the neutrals (the pre-breakdown fill stays moment).
-            self._kinetic = SimpleNamespace(
-                engine=None,
-                target_col=None,
-                target_ann=None,
-                tau_col=None,
-                tau_ann=None,
-                responses=None,       # per-channel unit-rate G_k (K4a-t)
-                shapes=None,          # frozen channel shapes at refresh
-                nu_ref=None,          # absorption field at last refresh
-                grid=None,            # frozen shared velocity grid
-                next_refresh_s=0.0,
-                next_update_s=0.0,
-                refresh_s=float(
-                    self._input_dict.get("neutral_kinetic_refresh_s")
-                ),
-                refresh_tol=float(
-                    self._input_dict.get("neutral_kinetic_refresh_tol")
-                ),
-                update_s=1.0e-5,
-                nvz=int(self._input_dict.get("neutral_kinetic_nvz")),
-                nvp=int(self._input_dict.get("neutral_kinetic_nvp")),
-            )
-            if self._kinetic.refresh_s <= 0.0:
-                raise ValueError(
-                    "neutral_kinetic_refresh_s must be positive"
-                )
-        else:
-            self._kinetic = None
         self._dvm = None
         self._dvm_cadence_s = 0.0
         self._dvm_engaged = False
@@ -1909,21 +1790,21 @@ class LAPDSim1D:
                     "the base factor could never accelerate anything"
                 )
         self._dt_growth_recovery_factor = _growth_recovery_value
-        # THE FOUR RUN-TIME-FIRST GUARDS, HOISTED (with the
-        # declaration-block migration, 2026-08-30). Each of these four
-        # domains was checked for the first time only once a run was already
-        # moving -- dt_growth_factor at the top of run(), the two scheme
-        # selectors on every split step and every heat substep, the drag model
-        # inside an RHS term. Every one reads self._input_dict and nothing
-        # else, so none of them needed run state to be checked; they were
-        # simply never asked at construction. Checking them here is this
-        # phase's whole point (see the docstring): a misconfigured guard must
-        # not be discovered hours into the run it exists to catch.
+        # THE RUN-TIME-FIRST GUARDS, HOISTED (with the declaration-block
+        # migration, 2026-08-30). Each of these three domains was checked for
+        # the first time only once a run was already moving --
+        # dt_growth_factor at the top of run(), the two scheme selectors on
+        # every split step and every heat substep. Every one reads
+        # self._input_dict and nothing else, so none of them needed run state
+        # to be checked; they were simply never asked at construction.
+        # Checking them here is this phase's whole point (see the docstring): a
+        # misconfigured guard must not be discovered hours into the run it
+        # exists to catch.
         #
-        # The per-call checks are DELIBERATELY LEFT IN PLACE, all four of them.
-        # They are the authority on what each domain means, two of them stand
-        # in modules that instruments call without a solver at all
-        # (conduction.py, sources.py), and both scheme selectors are also
+        # The per-call checks are DELIBERATELY LEFT IN PLACE. They are the
+        # authority on what each domain means, the heat scheme's stands in a
+        # module that instruments call without a solver at all
+        # (conduction.py), and both scheme selectors are also
         # reachable through an explicit per-call argument that never passes
         # through the config. These hoists add a construction-time refusal;
         # they replace nothing.
@@ -1956,24 +1837,6 @@ class LAPDSim1D:
         validate_implicit_heat_scheme(
             self._input_dict.get("implicit_heat_scheme")
         )
-        # ion_neutral_drag_model. This is the one of the four that was not
-        # merely late but UNREACHABLE on the shipped stance: the moment closure
-        # returns a zero RHS before the drag term is ever evaluated, so a
-        # typo'd model name was accepted at construction, ignored for the whole
-        # run, and would have surfaced only on the day somebody turned the
-        # closure off. The construction-time mutual-exclusion check against
-        # neutral_momentum that already exists reads the key's VALUE without
-        # checking that the value is one the solver implements.
-        _drag_model = self._input_dict.get("ion_neutral_drag_model")
-        if _drag_model not in ION_NEUTRAL_DRAG_MODELS:
-            raise ValueError(
-                "ion_neutral_drag_model must be one of "
-                f"{sorted(ION_NEUTRAL_DRAG_MODELS)} (got {_drag_model!r}). "
-                "It is checked here rather than at first use because under "
-                "the shipped ion_neutral_moment_closure the drag term returns "
-                "before reading it, so an unimplemented name would otherwise "
-                "run to completion silently."
-            )
         # Global dt-refinement instrument. Validated here so a factor that
         # would loosen the step (>1) or stop the run dead (0, negative) is
         # refused before any compute, and read once so the unarmed run's
@@ -2180,94 +2043,16 @@ class LAPDSim1D:
     def _init_neutral_momentum_and_energy(self):
         """Arm the evolved neutral wind and its optional energy field.
 
-        The radial closure, the neutral_energy field and its two hot-birth
-        modifiers, the wall accommodation, the Knudsen temperature arm, and
-        the two-zone wind factors -- each gated on the flag that gives it
-        something to act on, so no selector here can be silently inert.
+        The neutral_energy field, its hot internal wall and the wall
+        accommodation -- each gated on the flag that gives it something to
+        act on, so no selector here can be silently inert.
         """
-        self._neutral_momentum_radial = str(
-            self._input_dict.get("neutral_momentum_radial")
-        )
-        if self._neutral_momentum_radial not in (
-            "uniform",
-            "two_zone",
-            "kinetic_two_moment",
-        ):
-            raise ValueError(
-                "neutral_momentum_radial must be 'uniform', 'two_zone', "
-                "or 'kinetic_two_moment' "
-                f"(got {self._neutral_momentum_radial!r})"
-            )
-        if (
-            self._neutral_momentum_radial in ("two_zone", "kinetic_two_moment")
-            and not self._neutral_momentum
-        ):
-            raise ValueError(
-                f"neutral_momentum_radial={self._neutral_momentum_radial!r} "
-                "requires the "
-                "neutral_momentum flag: it closes the radial profile of the "
-                "evolved wind"
-            )
-        self._neutral_two_momentum = (
-            self._neutral_momentum_radial == "kinetic_two_moment"
-        )
-        if self._neutral_two_momentum and not self._neutral_two_zone:
-            raise ValueError(
-                "neutral_momentum_radial='kinetic_two_moment' requires "
-                "neutral_two_zone"
-            )
-        # Wall-branch momentum partition (default off, bit-exact off). The
-        # cross section is presence-gated in BOTH directions so an armed flag
-        # can never fall back on a defaulted number and a stray cross section
-        # can never be silently inert.
-        self._neutral_wall_momentum_partition = bool(
-            self._flags.get("neutral_wall_momentum_partition")
-        )
-        _wall_sigma = self._input_dict.get(
-            "neutral_wall_partition_sigma_hehe_cm2"
-        )
-        if self._neutral_wall_momentum_partition:
-            if not self._neutral_two_momentum:
-                raise ValueError(
-                    "the neutral_wall_momentum_partition flag requires "
-                    "neutral_momentum_radial='kinetic_two_moment': it "
-                    "partitions the wall branch of the two-zone momentum "
-                    "operator, and no other radial closure carries an annulus "
-                    "momentum row for that branch to act on. Accepted: "
-                    "neutral_wall_momentum_partition with "
-                    "neutral_momentum_radial='kinetic_two_moment'"
-                )
-            if _wall_sigma is None:
-                raise ValueError(
-                    "the neutral_wall_momentum_partition flag requires "
-                    "neutral_wall_partition_sigma_hehe_cm2: the He-He elastic "
-                    "cross section sets the mean free path the survival "
-                    "weight is built from and has no default, because no "
-                    "literature-boxed value is carried in the solver"
-                )
-            _wall_sigma = float(_wall_sigma)
-            if not np.isfinite(_wall_sigma) or _wall_sigma <= 0.0:
-                raise ValueError(
-                    "neutral_wall_partition_sigma_hehe_cm2 must be finite and "
-                    f"strictly positive [cm^2]; got {_wall_sigma!r}"
-                )
-            self._neutral_wall_partition_sigma = _wall_sigma
-        else:
-            if _wall_sigma is not None:
-                raise ValueError(
-                    "neutral_wall_partition_sigma_hehe_cm2 is read only under "
-                    "the neutral_wall_momentum_partition flag; setting it "
-                    f"with the flag off (got {_wall_sigma!r}) would be an "
-                    "inert control. Accepted: set both, or neither"
-                )
-            self._neutral_wall_partition_sigma = None
         # Evolved neutral thermal energy (default ON; bit-exact when off). The
         # field only means anything alongside the moment-closed collision
         # operator (which is what reads and feeds it) and an evolved wind
         # (which is what the frictional half is booked against), and there is
-        # no consistent reading of it under a coverage deficit or a kinetic
-        # neutral model -- so each of those is refused here rather than
-        # silently resolved.
+        # no consistent reading of it under a kinetic neutral model -- so that
+        # is refused here rather than silently resolved.
         self._neutral_energy = bool(self._flags.get("neutral_energy"))
         if self._neutral_energy:
             if not self._ion_neutral_moment_closure:
@@ -2288,16 +2073,6 @@ class LAPDSim1D:
                     "meaning without an evolved neutral wind. Accepted: "
                     "ion_neutral_moment_closure with neutral_momentum"
                 )
-            if bool(self._flags.get("coverage_closure")):
-                raise ValueError(
-                    "the neutral_energy flag is incompatible with "
-                    "coverage_closure: the coverage deficit partitions nn "
-                    "alone, so a single mean En spread over a concentrated "
-                    "gas would assert a temperature relation between the "
-                    "covered and uncovered fractions that nothing in the "
-                    "model states. Accepted: neutral_energy without "
-                    "coverage_closure"
-                )
             if self._neutral_model != "moment":
                 raise ValueError(
                     "the neutral_energy flag is incompatible with "
@@ -2306,35 +2081,9 @@ class LAPDSim1D:
                     "moment of f, so an evolved En field would be a second, "
                     "unowned copy. Accepted: neutral_model='moment'"
                 )
-            if self._neutral_two_momentum:
-                raise ValueError(
-                    "the neutral_energy flag is incompatible with "
-                    "neutral_momentum_radial='kinetic_two_moment': that "
-                    "reduction gives the annulus its own momentum row while "
-                    "nothing gives it an energy row, so the single cold fluid "
-                    "the mini-flux transports would be split across two "
-                    "momenta and one energy. Accepted: neutral_energy with "
-                    "neutral_momentum_radial in ('uniform', 'two_zone')"
-                )
-        # Directed hot births (default off, bit-exact off). The drift it puts
-        # into the flight kinematics is the hot channel's own launch velocity,
-        # so the flag is meaningless without the channel that launches.
-        self._neutral_hot_birth_drift = bool(
-            self._flags.get("neutral_hot_birth_drift")
-        )
-        if self._neutral_hot_birth_drift and not self._neutral_energy:
-            raise ValueError(
-                "the neutral_hot_birth_drift flag requires neutral_energy: it "
-                "directs the CX-born HOT channel's birth kinematics, and "
-                "without neutral_energy there is no hot channel -- no "
-                "ballistic kernel is built and the flag would be silently "
-                "inert. Accepted: neutral_hot_birth_drift with "
-                "neutral_energy=True, or neutral_hot_birth_drift=False"
-            )
         # Internal walls for the ballistic flight (default ON; bit-exact when off).
-        # Same dependency as the drift flag, for the same reason: it changes
-        # where the hot channel's flights stop, and without the channel there
-        # is no flight to stop.
+        # It changes where the hot channel's flights stop, and without the
+        # channel there is no flight to stop.
         self._neutral_hot_internal_wall = bool(
             self._flags.get("neutral_hot_internal_wall")
         )
@@ -2357,63 +2106,13 @@ class LAPDSim1D:
                 "accommodation coefficient alpha_E) must be in [0, 1] (got "
                 f"{self._neutral_energy_alpha})"
             )
-        # Thermal transpiration: which temperature the Knudsen conductances
-        # read. The v1-primary freezes them at Tn_K; the disclosed arm scales
-        # them by sqrt(Tn_local/Tn_K), which only exists where a per-cell Tn
-        # does.
-        self._neutral_knudsen_temperature = str(
-            self._input_dict.get("neutral_knudsen_temperature")
-        )
-        if self._neutral_knudsen_temperature not in ("frozen", "local"):
-            raise ValueError(
-                "neutral_knudsen_temperature must be 'frozen' or 'local' "
-                f"(got {self._neutral_knudsen_temperature!r})"
-            )
-        if (
-            self._neutral_knudsen_temperature == "local"
-            and not self._neutral_energy
-        ):
-            raise ValueError(
-                "neutral_knudsen_temperature='local' (the thermal-"
-                "transpiration arm) requires the neutral_energy flag: the "
-                "scaling reads the evolved per-cell Tn, and without the En "
-                "field there is only the config scalar Tn_K, against which "
-                "the scale factor is identically 1. Accepted: "
-                "neutral_knudsen_temperature='frozen', or 'local' with "
-                "neutral_energy"
-            )
-        # Geometry and Tn_fit are fixed for the run, so the two-zone factors
-        # are computed once here; None selects the uniform (legacy) closure
-        # in every consumer.
-        if self._neutral_momentum_radial == "two_zone":
-            (
-                self._wind_column_factor,
-                self._wind_wall_rate,
-            ) = neutral_wind_two_zone_factors(
-                geometry=self._geometry,
-                Tn_eV=float(self._input_dict.get("Tn_fit")),
-                ion_mass_g=self._ion_mass_g,
-            )
-        else:
-            self._wind_column_factor = None
-            self._wind_wall_rate = None
-        # The ENERGY channel's wall-visit rate is the same free-molecular
-        # geometry evaluated at the wall's own temperature rather than the
-        # momentum closure's 0.1 eV Tn_fit: the gas that trades energy with a
-        # surface is the near-wall gas, which the v1 cut holds at T_wall. The
-        # two-zone factors are linear in vbar, so this is the same closure with
-        # the right speed in it, not a different one.
+        # The ENERGY channel's wall-visit rate is the free-molecular geometry
+        # evaluated at the wall's own temperature rather than the momentum
+        # closure's 0.1 eV Tn_fit: the gas that trades energy with a surface is
+        # the near-wall gas, which the v1 cut holds at T_wall.
         self._neutral_energy_wall_Tn_eV = (
             NEUTRAL_ENERGY_FLOOR_T_K * kb_cgs / ev_to_erg
         )
-        if self._neutral_energy and self._neutral_momentum_radial == "two_zone":
-            _, self._neutral_energy_wall_rate = neutral_wind_two_zone_factors(
-                geometry=self._geometry,
-                Tn_eV=self._neutral_energy_wall_Tn_eV,
-                ion_mass_g=self._ion_mass_g,
-            )
-        else:
-            self._neutral_energy_wall_rate = None
 
     def _init_hot_neutral_channel_and_jets(self):
         """Build the ballistic flight kernels and resolve the recycle jets."""
@@ -2804,17 +2503,6 @@ class LAPDSim1D:
             )
         _tail_walking = _hat == "plateau_multigroup"
         if _tail_walking:
-            if bool(self._flags.get("coverage_closure")):
-                raise ValueError(
-                    "heating_anomalous_transport='plateau_multigroup' does "
-                    "not support coverage_closure: the two-stream march "
-                    "shares ONE withholding bank between the channel and "
-                    "reservoir arms and the reservoir carries the density "
-                    "FLOOR against the mean-field Te, so the plateau edge "
-                    "solved there would be an artifact of the floor "
-                    "convention rather than a measurement of the plasma. The "
-                    "coverage arms are deferred until that stance is designed"
-                )
             if _bam == "none":
                 raise ValueError(
                     "heating_anomalous_transport='plateau_multigroup' "
@@ -2947,32 +2635,7 @@ class LAPDSim1D:
             )
 
     def _init_area_closures(self):
-        """Validate and arm the coverage, probe, sink and drift closures."""
-        # Clumpy-plasma coverage closure v1 (default off, bit-exact off).
-        _cov = resolve_coverage_config(
-            self._input_dict,
-            self._flags,
-            geometry=self._geometry,
-            neutral_model=self._neutral_model,
-        )
-        self._coverage = _cov.coverage
-        self._coverage_r = _cov.r
-        self._coverage_tau_s = _cov.tau_s
-        self._coverage_f = _cov.f
-        self._coverage_deficit = _cov.deficit
-        self._coverage_burn_accum = _cov.burn_accum
-        self._coverage_burn_weight = _cov.burn_weight
-        self._coverage_w_accum = _cov.w_accum
-        self._coverage_reservoir_debit = _cov.reservoir_debit
-        self._coverage_reservoir_burn_accum = _cov.reservoir_burn_accum
-        # Ad-hoc probe neutral source (default off, bit-exact off).
-        self._probe = resolve_neutral_probe_config(
-            self._input_dict,
-            self._flags,
-            geometry=self._geometry,
-            neutral_model=self._neutral_model,
-            neutral_two_zone=self._neutral_two_zone,
-        )
+        """Validate and arm the sink and drift closures."""
         # Imposed parallel momentum sink -- a RESPONSE-MAP instrument with no
         # physical owner (default off, bit-exact off). ``None`` when unarmed
         # IS the presence gate: neither of its two rows is emitted and the
@@ -3040,331 +2703,6 @@ class LAPDSim1D:
         self._load_restart_if_configured()
         if self._flags.get("debug_checks"):
             assert_finite_state(self._state, self._derived)
-
-    #: RHS terms whose neutral row is a COVERED-ONLY debit or return: their
-    #: rate is proportional to a plasma or beam density, so the reaction can
-    #: only happen where the plasma is. Their summed ``nn`` rows drive the
-    #: covered column's depletion. Terms that act uniformly across the
-    #: cross-section (the gas puff, the pump, neutral transport and the
-    #: zone/kinetic exchanges) and terms that transfer no particles (the
-    #: ion-neutral collision operators) are deliberately absent.
-    #:
-    #: Two of the ABSENT terms do carry a neutral row that a plasma density
-    #: sets, and are named here so their absence reads as a decision rather
-    #: than an oversight:
-    #:
-    #: * ``characteristic_boundary`` -- the plasma leaving through the end
-    #:   sheath returns as neutrals from the WALL, re-emitted diffusely over
-    #:   the whole end face. Those neutrals are not channel-born and do not
-    #:   land preferentially inside the patches the plasma left through, so
-    #:   crediting them to the covered column would enrich it on a surface
-    #:   process that has no azimuthal structure.
-    #: * ``anode_collection`` -- the same statement at the anode mesh: ions
-    #:   collected on a solid surface come back as diffuse surface re-emission
-    #:   across the cross-section, not into the channel they arrived in.
-    COVERAGE_BURN_TERMS = (
-        "ionization_birth",
-        "beam_ionization_birth",
-        "recombination_rad_loss",
-        "recombination_3b_loss",
-        "gas_puff_local_ionization",
-    )
-
-    def coverage_fraction_profile(self):
-        """Return the per-cell covered fraction ``f_cov(z)``, in ``(0, 1]``.
-
-        All ones whenever the closure is off, so a caller needs no branch.
-
-        This is accepted-step STATE, not a function of time: v2's growth law
-        ``df_cov(z)/dt = r0*w(z,t)*f_cov*(1-f_cov)`` is driven by the beam
-        ionization that the coverage itself shapes, so the closed form v1 could
-        evaluate at any stage time no longer exists (v1's own documentation
-        said a feedback v2 would have to co-integrate). The field is advanced
-        once per ACCEPTED step from a driver accumulated across the SSPRK2
-        stages -- the discipline the neutral deficit already uses -- and is
-        therefore frozen within a step's stages and unmoved by a rejected
-        attempt. See :meth:`_advance_coverage_fraction`.
-
-        The array is a copy, so a caller cannot reach into the solver's state.
-        """
-        if self._coverage is None:
-            return np.ones(self._geometry.cells, dtype=float)
-        return self._coverage_f.copy()
-
-    def coverage_fraction(self):
-        """Return the volume-weighted COLUMN MEAN of ``f_cov(z)``.
-
-        ``1.0`` whenever the closure is off. This is the scalar summary of the
-        z-resolved field -- the single number v1 carried -- and is what the
-        saved ``coverage_fraction`` diagnostic reports. Nothing in the physics
-        reads it: every consumer takes the per-cell profile.
-        """
-        if self._coverage is None:
-            return 1.0
-        volume = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
-        return float(np.sum(self._coverage_f * volume) / np.sum(volume))
-
-    def _coverage_view(self, state, time=None):
-        """Return the ``CoverageView1D`` the beam subsystem propagates in.
-
-        ``None`` when the closure is off, which is what keeps every consumer
-        on its historical argument list and the off path bit-exact. ``time`` is
-        accepted and ignored: the coverage field is accepted-step state under
-        v2, not a function of the stage clock (see
-        :meth:`coverage_fraction_profile`).
-        """
-        if self._coverage is None:
-            return None
-        nn = np.asarray(state.nn, dtype=float)
-        nn_channel = np.maximum(nn - self._coverage_deficit, self._floors["nn"])
-        f_cov = self._coverage_f
-        nn_reservoir = None
-        ne_reservoir = None
-        if np.any(f_cov < 1.0):
-            # The other medium the beam is split across. Its neutral density
-            # is the implicit reservoir's; its PLASMA density is the model's
-            # own "no plasma" representation, the density floor, because the
-            # closure's premise is that plasma lives in the covered fraction.
-            # The floor rather than a literal zero because that is what every
-            # other plasma-free cell in this solver carries, so the stopping
-            # coefficients are evaluated on a state the model already
-            # produces rather than on an untested singular one.
-            #
-            # Cells at f_cov == 1 have no uncovered region and the expression
-            # is 0/0 there, so they carry the mean itself -- the value the
-            # partition identity gives in the limit. Their reservoir arm is
-            # launched with zero area and zero flux and never reads it.
-            nn_reservoir = self._coverage_reservoir_from(nn, nn_channel, f_cov)
-            ne_reservoir = np.full_like(nn, self._floors["n"])
-        return CoverageView1D(
-            f_cov=f_cov.copy(),
-            nn_channel=nn_channel,
-            nn_reservoir=nn_reservoir,
-            ne_reservoir=ne_reservoir,
-        )
-
-    @staticmethod
-    def _coverage_reservoir_from(nn, nn_channel, f_cov):
-        """Return ``nn_r`` from the mean, the covered column and ``f_cov(z)``.
-
-        From ``nn = f*nn_c + (1-f)*nn_r`` this is ``nn + f*D/(1-f)`` with
-        ``D = nn - nn_c``. Cells at ``f == 1`` have no uncovered region at all
-        and take the mean, which is the limit of the partition identity there.
-        """
-        uncovered = 1.0 - f_cov
-        return np.where(
-            uncovered > 0.0,
-            nn + f_cov * (nn - nn_channel) / np.where(
-                uncovered > 0.0, uncovered, 1.0
-            ),
-            nn,
-        )
-
-    def coverage_reservoir_density(self, state=None):
-        """Return the uncovered reservoir's neutral density [cm^-3], per cell.
-
-        Diagnostic only: the reservoir is represented IMPLICITLY, as the
-        complement of the covered column inside the conserved mean field, so
-        nothing integrates this. From ``nn = f*nn_c + (1-f)*nn_r`` it is
-        ``nn + f*D/(1-f)`` with ``D = nn - nn_c`` the carried deficit. Where
-        ``f_cov = 1`` there is no uncovered region and the mean itself is
-        returned for that cell.
-        """
-        state = self.state if state is None else state
-        nn = np.asarray(state.nn, dtype=float)
-        if self._coverage is None:
-            return nn.copy()
-        nn_channel = np.maximum(nn - self._coverage_deficit, self._floors["nn"])
-        return self._coverage_reservoir_from(nn, nn_channel, self._coverage_f)
-
-    def coverage_growth_driver(self, terms):
-        """Return ``w(z)``, the normalized beam-ionization growth driver.
-
-        ``w`` is the LOCAL beam ionization rate divided by its own
-        VOLUME-WEIGHTED COLUMN MEAN,
-
-            w_i = S_i / (sum_j S_j V_j / sum_j V_j),
-
-        with ``S`` the per-cell beam ion birth density [cm^-3 s^-1] -- the
-        ``n`` row of ``beam_ionization_birth``, already carrying the
-        active-plasma mask -- and ``V`` the plasma cell volumes. Both sums run
-        over the PLASMA-ACTIVE cells: those are the cells whose plasma rows the
-        solver integrates, the only ones where ``S`` can be nonzero and the
-        only ones where a covered fraction means anything. Including the
-        plasma-dead plenum volume in the denominator would dilute ``w``
-        everywhere by a geometry ratio that has nothing to do with the beam.
-
-        So normalized, ``<w>_V = 1`` identically over that window, which is the
-        whole point: the rescaling is parameter-free and leaves
-        ``coverage_growth_rate_per_s`` meaning exactly what it meant in v1, the
-        column-mean growth rate. It redistributes growth in z without changing
-        how much growth there is on average.
-
-        DEGENERATE CASE, handled explicitly rather than by a guard on the
-        divisor: when the beam deposits no ionization anywhere -- no cathode
-        solve this evaluation, no emission, or a ray that stops in the gap --
-        the mean is zero, ``w`` is 0/0, and the answer is ``w == 0`` in every
-        cell, i.e. no growth. That is the physical statement (nothing is
-        breaking the column down, so no patch spreads), not a numerical
-        fallback. A non-finite mean is treated the same way.
-        """
-        term = terms.get("beam_ionization_birth")
-        cells = self._geometry.cells
-        if term is None:
-            return np.zeros(cells, dtype=float)
-        rate = np.asarray(term.n, dtype=float)
-        volume = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
-        window = (
-            np.asarray(self._geometry.plasma_active, dtype=bool)
-            if self._active_plasma_topology
-            else np.ones(cells, dtype=bool)
-        )
-        weight = np.where(window, volume, 0.0)
-        total_volume = float(np.sum(weight))
-        mean = (
-            float(np.sum(rate * weight)) / total_volume
-            if total_volume > 0.0
-            else 0.0
-        )
-        if not math.isfinite(mean) or mean <= 0.0:
-            return np.zeros(cells, dtype=float)
-        return np.where(window, rate / mean, 0.0)
-
-    def _advance_coverage_fraction(self, dt, w_accum):
-        """Advance ``f_cov(z)`` over one accepted step (coverage v2).
-
-        The law is the logistic ``df/dt = r0*w*f*(1-f)`` with ``w`` the
-        stage-accumulated growth driver: ``w_accum`` carries
-        ``sum_stages (dt/2) * w_stage``, so ``w_bar = w_accum/dt`` is the
-        step's stage-averaged driver on exactly the equal SSPRK2 stage weights
-        the neutral-deficit burn uses. Holding it fixed over the step makes the
-        logistic exactly integrable,
-
-            f' = 1 / (1 + (1/f - 1) * exp(-r0 * w_bar * dt)),
-
-        which is unconditionally positive, cannot leave ``(0, 1]`` at any dt,
-        and reduces to ``f`` identically wherever ``w_bar`` or ``r0`` is zero
-        and to exactly ``1.0`` wherever ``f`` is already 1 (the ``1/f - 1``
-        factor is then exactly 0.0).
-
-        Called only from the accept path, so a rejected attempt leaves the
-        field untouched and a re-tried step re-derives its own driver.
-        """
-        if self._coverage_r == 0.0 or w_accum is None:
-            return
-        dt = float(dt)
-        if dt <= 0.0:
-            return
-        w_bar = np.asarray(w_accum, dtype=float) / dt
-        f = self._coverage_f
-        growth = np.exp(-self._coverage_r * w_bar * dt)
-        self._coverage_f = np.clip(
-            1.0 / (1.0 + (1.0 / f - 1.0) * growth), None, 1.0
-        )
-
-    def _accumulate_coverage_burn(self, terms):
-        """Tally this RHS stage's share of the step's covered-only neutral debit.
-
-        Mirrors the DVM ionization booking: the weight is set once per attempt
-        by :meth:`_attempt_step`, both explicit paths book the plasma rows
-        through exactly one ``ssprk2_step`` at the full step dt, and SSPRK2
-        weights its two stages equally at ``dt/2``. Nothing accumulates
-        outside an attempt, and a rejected attempt's tally dies with it.
-
-        The coverage field's own growth driver rides the SAME accumulator
-        discipline and the same stage weight, which is what makes ``f_cov``
-        co-integrated with the state rather than bolted on after it.
-        """
-        if self._coverage_burn_accum is None:
-            return
-        self._coverage_w_accum += (
-            self._coverage_burn_weight * self.coverage_growth_driver(terms)
-        )
-        total = None
-        for name in self.COVERAGE_BURN_TERMS:
-            term = terms.get(name)
-            if term is None:
-                continue
-            row = np.asarray(term.nn, dtype=float)
-            total = row if total is None else total + row
-        reservoir = self._coverage_reservoir_debit
-        if reservoir is not None:
-            # The beam's neutral row above is the SUM over both media. Only
-            # the channel arm's share burnt covered gas, so the reservoir
-            # arm's debit is subtracted out here and tallied separately: it
-            # lowers the mean without lowering the covered column, which moves
-            # the deficit the other way (see _advance_coverage_deficit).
-            reservoir = np.asarray(reservoir, dtype=float)
-            if total is not None:
-                total = total - reservoir
-            self._coverage_reservoir_burn_accum += (
-                self._coverage_burn_weight * reservoir
-            )
-        if total is not None:
-            self._coverage_burn_accum += self._coverage_burn_weight * total
-
-    def _advance_coverage_deficit(self, dt, burn, reservoir_burn=None):
-        """Advance the covered column's neutral deficit over one accepted step.
-
-        The covered column absorbs the COVERED-ONLY neutral debit ``B_cov``
-        but holds only the fraction ``f_cov`` of the cell's volume, so its
-        local density falls ``1/f_cov`` times as fast as the mean's. The beam's
-        reservoir arm (v1.1) debits ``B_res`` from the OTHER medium, lowering
-        the mean while leaving the covered column alone, which moves the
-        deficit the opposite way. With ``D = nn - nn_c``::
-
-            dD/dt = -B_cov*(1 - f)/f + B_res - D/tau_backfill
-
-        (both debits are negative on a burn, so the first term is positive --
-        channels deplete -- and the second is negative). This is the whole
-        azimuthal exchange: the reservoir/column relaxation ``f(1-f)(nn_r -
-        nn_c)/tau`` reduces ALGEBRAICALLY to ``(nn - nn_c)/tau``, so no
-        reservoir density is ever formed and the ``f -> 1`` limit is regular
-        rather than a 0/0. The mean field is not touched at any point, so the
-        total particle inventory is conserved IDENTICALLY -- this is a
-        re-partition of what the mean already holds.
-
-        Integrated with the exact integrating factor for a source held
-        constant over the step, which is unconditionally positive and stable
-        at any dt/tau.
-        """
-        dt = float(dt)
-        # Per-cell under v2: the covered fraction varies along the column, so
-        # every factor below that carried the scalar f now carries the local
-        # one. The algebra is unchanged and elementwise.
-        f = self._coverage_f
-        # Debit is negative on a burn; the deficit grows when neutrals leave.
-        # ``None`` is a step that evaluated no plasma RHS at all (the
-        # neutral-only pre-drive path), i.e. zero debit -- the reservoir then
-        # simply relaxes whatever deficit is outstanding.
-        if burn is None:
-            source = np.zeros(self._geometry.cells, dtype=float)
-        else:
-            source = -np.asarray(burn, dtype=float) / dt * (1.0 - f) / f
-        if reservoir_burn is not None:
-            # The reservoir arm's debit enters at weight ONE, not (1-f)/f: it
-            # is removed from the mean and from the reservoir, never from the
-            # covered column, so it closes the gap between them.
-            source = source + np.asarray(reservoir_burn, dtype=float) / dt
-        decay = math.exp(-dt / self._coverage_tau_s)
-        deficit = self._coverage_deficit * decay + source * self._coverage_tau_s * (
-            1.0 - decay
-        )
-        # The deficit is SIGNED. It is positive where the plasma burns column
-        # gas faster than the reservoir refills it, and negative where the
-        # covered region is a net neutral SOURCE -- a recombining cold column
-        # returns neutrals into the covered fraction alone, enriching it above
-        # the mean, which is the same physics with the sign reversed and is
-        # not clipped away.
-        #
-        # The bounds are the two positivity conditions on the partition:
-        # nn_c = nn - D >= 0 and nn_r = nn + f*D/(1-f) >= 0. Both are
-        # re-partitions of the conserved mean, so hitting either creates and
-        # destroys nothing; the lower bound closes onto 0 as f -> 1, where
-        # there is no reservoir left to donate from.
-        nn = np.maximum(np.asarray(self.state.nn, dtype=float), 0.0)
-        floor = -(1.0 - f) / f * nn
-        self._coverage_deficit = np.clip(deficit, floor, nn)
 
     # ------------------------------------------------------------------
     # Regime-R2 pre-breakdown passive-tracer bridge (default off).
@@ -3646,8 +2984,8 @@ class LAPDSim1D:
 
         One object, passed to ``beam_ionization_rhs_terms`` and to
         ``beam_anomalous_power_density`` alike, so the row and the anomalous
-        share it is asked to give back cannot be built from different flags,
-        a different coverage view or a different smoothing width.
+        share it is asked to give back cannot be built from different flags
+        or a different smoothing width.
         """
         return {
             "state": state,
@@ -3707,7 +3045,6 @@ class LAPDSim1D:
         beam_kwargs = self._tracer_beam_kwargs(state, cathode_solve, time)
         terms = beam_ionization_rhs_terms(
             I_ion=self._I_ion,
-            coverage=self._coverage_view(state, time),
             **beam_kwargs,
         )
         S = np.asarray(terms["beam_ionization_birth"].n, dtype=float)
@@ -4104,7 +3441,7 @@ class LAPDSim1D:
             self._geometry.cells,
             neutral_momentum=self._neutral_momentum,
             neutral_two_zone=self._neutral_two_zone,
-            neutral_annulus_momentum=self._neutral_two_momentum,
+            neutral_annulus_momentum=False,
             neutral_energy=self._neutral_energy,
         )
 
@@ -4742,18 +4079,8 @@ class LAPDSim1D:
             time=self._time,
         )
 
-    def rhs(
-        self, y=None, include_heat_conduction=True, time=None,
-        step_window=None,
-    ):
+    def rhs(self, y=None, include_heat_conduction=True, time=None):
         """Return the packed explicit RHS for the current scaffold physics.
-
-        ``step_window`` is the ``(t0, dt)`` interval an integrator is stepping
-        over, passed through to the terms that integrate their own explicit
-        time dependence exactly over it. Only the probe source reads it; every
-        other term is evaluated pointwise at ``time`` as before, so omitting it
-        (the default, and what every diagnostic caller does) is the historical
-        behaviour exactly.
 
         Rows the implicit heat substep applies are LEFT OUT of this sum --
         ``anode_e_sheath_loss`` and ``beam_power_deposition`` whenever the
@@ -4767,7 +4094,6 @@ class LAPDSim1D:
             y=y,
             include_heat_conduction=include_heat_conduction,
             time=time,
-            step_window=step_window,
         )
         if self._heat_substep_terms:
             for name, term in terms.items():
@@ -4779,56 +4105,26 @@ class LAPDSim1D:
                 state_rhs = add_state_rhs(state_rhs, term)
         self._accumulate_dvm_ion_booking(terms)
         self._accumulate_dvm_source_booking()
-        self._accumulate_coverage_burn(terms)
         # With optional fields on, the packed RHS must always match the
         # state vector's width, even when no term touched them (pads zeros).
         return pack_state(
             state_rhs,
             neutral_momentum=True if self._neutral_momentum else None,
             neutral_two_zone=True if self._neutral_two_zone else None,
-            neutral_annulus_momentum=(
-                True if self._neutral_two_momentum else None
-            ),
             neutral_energy=True if self._neutral_energy else None,
         )
 
     def _explicit_stage_rhs(self, dt, include_heat_conduction=True):
-        """Return the SSPRK2 stage RHS callable for a step of width ``dt``.
-
-        With no probe source this is exactly the historical
-        ``self.rhs(y, stage_time)`` -- the presence gate extends to the CALL
-        SIGNATURE, so nothing that wraps, replaces or subclasses ``rhs`` sees
-        an argument that did not exist before, and the off path's stage calls
-        are unchanged down to their keywords.
-
-        With a probe armed, the step window rides along so the term can
-        integrate its own explicit time dependence exactly over it. It is
-        passed as an ARGUMENT rather than armed on the solver: it is an input
-        to the RHS, and threading it makes it structurally impossible for a
-        rejected attempt's ``dt`` to be read by the attempt that replaces it.
-        """
+        """Return the SSPRK2 stage RHS callable for a step of width ``dt``."""
         extra = (
             {} if include_heat_conduction
             else {"include_heat_conduction": False}
         )
-        if self._probe is not None:
-            extra["step_window"] = (self._time, dt)
         return lambda yy, tt: self.rhs(yy, time=tt, **extra)
 
-    def rhs_terms(
-        self, y=None, include_heat_conduction=True, time=None,
-        step_window=None,
-    ):
-        """Return named conservative RHS contributions for diagnostics.
-
-        ``step_window`` (see :meth:`rhs`) is read only by the probe source.
-        """
-        # The coverage closure's reservoir-arm debit belongs to THIS
-        # evaluation's beam solve and nothing else. Cleared first so a branch
-        # that never reaches the beam terms (the neutral-only pre-drive, or
-        # Plasma off) cannot leave the accumulator reading a stale solve.
-        self._coverage_reservoir_debit = None
-        # Likewise the engaged DVM arm's boundary-inflow rows: they belong to
+    def rhs_terms(self, y=None, include_heat_conduction=True, time=None):
+        """Return named conservative RHS contributions for diagnostics."""
+        # The engaged DVM arm's boundary-inflow rows belong to
         # THIS evaluation's terms, and a branch that never reaches the strip
         # must not leave the counted handshake reading an older set. The
         # cathode jet's incident-energy row is the same statement about the
@@ -4866,24 +4162,13 @@ class LAPDSim1D:
                 energy_wall_terms["cathode_jet_hot_carrier"] = (
                     self._zero_rhs_state()
                 )
-        # The ad-hoc probe source exists only under its own flag, so the term
-        # ledger (and the saved rhs_terms structure) is unchanged when the flag
-        # is off. Present in BOTH branches below and identically zero in the
-        # neutral-only one: while the solver is on the implicit neutral-only
-        # stepper (Plasma off, or the neutral_prebreakdown phase) the step is a
-        # backward-Euler neutral matrix that this term deliberately does not
-        # enter, so the probe cannot fuel a pre-shot fill or a cached
-        # equilibration seed. Recording the zero rather than dropping the key
-        # keeps the saved structure stable across the phase change and makes
-        # the gate readable instead of inferable.
         # The imposed momentum sink and its frictional heating, present only
-        # when the response-map instrument is armed. Like the probe above they
-        # appear in BOTH branches below and are identically zero in the
+        # when the response-map instrument is armed. They appear in BOTH
+        # branches below and are identically zero in the
         # neutral-only one: with no plasma solve there is no parallel momentum
         # to damp, and recording the zeros rather than dropping the keys keeps
         # the saved term structure stable across the phase change.
         momentum_sink_terms = {}
-        probe_terms = {}
         geometry_terms = {}
         if self._variable_area_geometry:
             geometry_terms["flux_tube_geometry"] = (
@@ -4896,16 +4181,10 @@ class LAPDSim1D:
             time=time,
         ):
             kinetic_terms = {}
-            if self._kinetic is not None:
-                kinetic_terms["neutral_kinetic_relaxation"] = (
-                    self.neutral_kinetic_relaxation_rhs(state)
-                )
             if self._dvm is not None:
                 kinetic_terms["neutral_kinetic_dvm_coupling"] = (
                     self.neutral_kinetic_dvm_coupling_rhs()
                 )
-            if self._probe is not None:
-                probe_terms["neutral_probe_source"] = self._zero_rhs_state()
             if self._momentum_sink is not None:
                 momentum_sink_terms["parallel_momentum_sink"] = (
                     self._zero_rhs_state()
@@ -4938,8 +4217,7 @@ class LAPDSim1D:
                 )
             terms = {
                 **zone_terms,
-                **probe_terms,
-                **momentum_sink_terms,
+                    **momentum_sink_terms,
                 **energy_wall_terms,
                 **geometry_terms,
                 **kinetic_terms,
@@ -5017,30 +4295,6 @@ class LAPDSim1D:
             cathode_solve=cathode_solve,
             time=time,
         )
-        # Side channel, not a term: the reservoir arm's neutral debit. It is
-        # read out here and deliberately NOT placed in the ledger below, so
-        # the RHS sum and the saved term structure are untouched by it.
-        #
-        # It must carry the SAME plasma-topology mask the beam term it was
-        # split out of will get, or the two stop being a split: the accumulator
-        # subtracts this from the (masked) beam row, so an unmasked debit would
-        # leave a spurious positive residue on every plasma-dead cell -- the
-        # plenum and the obstruction behind the cathode, where no birth is
-        # applied at all.
-        _reservoir_debit = beam_terms.get("coverage_reservoir_nn_debit")
-        if _reservoir_debit is not None and self._active_plasma_topology:
-            _reservoir_debit = np.where(
-                np.asarray(self._geometry.plasma_active, dtype=bool),
-                np.asarray(_reservoir_debit, dtype=float),
-                0.0,
-            )
-        self._coverage_reservoir_debit = _reservoir_debit
-        if self._probe is not None:
-            probe_terms["neutral_probe_source"] = self.neutral_probe_source_rhs(
-                state=state,
-                time=time,
-                step_window=step_window,
-            )
         if self._momentum_sink is not None:
             momentum_sink_terms["parallel_momentum_sink"] = (
                 self.parallel_momentum_sink_rhs(state=state)
@@ -5112,7 +4366,6 @@ class LAPDSim1D:
             hyperbolic_dissipation = self._zero_rhs_state()
         terms = {
             **zone_terms,
-            **probe_terms,
             **momentum_sink_terms,
             **geometry_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
@@ -5165,23 +4418,13 @@ class LAPDSim1D:
             "ion_neutral_frictional_heating": (
                 self.ion_neutral_frictional_heating_rhs(state=state)
             ),
-            "ion_neutral_thermalization": (
-                self.ion_neutral_thermalization_rhs(state=state)
-            ),
+            # A permanently zero row, kept for saved-ledger schema stability.
+            "ion_neutral_thermalization": self._zero_rhs_state(),
             "ion_neutral_collision": (
                 self.ion_neutral_collision_rhs(state=state)
             ),
             "neutral_momentum_wall": self.neutral_momentum_wall_rhs(state=state),
             **energy_wall_terms,
-            **(
-                {
-                    "neutral_momentum_radial": (
-                        self.neutral_momentum_two_zone_rhs(state=state)
-                    )
-                }
-                if self._neutral_two_momentum
-                else {}
-            ),
             "neutral_wind_advection": self.neutral_wind_advection_rhs(state=state),
             "surface_loss": self._zero_rhs_state(),
             "anode_collection": self.anode_collection_rhs(
@@ -5272,20 +4515,6 @@ class LAPDSim1D:
                     ),
                     cathode_solve=cathode_solve,
                 )
-            )
-        if self._kinetic is not None:
-            # K4a supersession: once targets exist, every term's neutral
-            # rows are carried by the kinetic relaxation instead (plasma
-            # rows keep their exact forms). The relaxation key is present
-            # from the start (zeros before the first refresh) so the saved
-            # rhs_terms structure is stable across the run.
-            if self._kinetic.target_col is not None and state.nn_a is not None:
-                terms = {
-                    name: self._strip_neutral_rows(term)
-                    for name, term in terms.items()
-                }
-            terms["neutral_kinetic_relaxation"] = (
-                self.neutral_kinetic_relaxation_rhs(state)
             )
         if self._dvm is not None:
             # K2a supersession: once the arm engages it owns every neutral
@@ -5476,10 +4705,6 @@ class LAPDSim1D:
             "neutral_wind_advection",
             "neutral_exchange",
             "neutral_sources",
-            "neutral_kinetic_relaxation",
-            # The probe is a neutral source like the puff: gas arrives where
-            # the caller put it, whether or not the plasma reaches that cell.
-            "neutral_probe_source",
         }
         return {
             name: (
@@ -5537,7 +4762,7 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             neutral_momentum=self._neutral_momentum,
             neutral_two_zone=self._neutral_two_zone,
-            neutral_annulus_momentum=self._neutral_two_momentum,
+            neutral_annulus_momentum=False,
             neutral_energy=self._neutral_energy,
         )
         if not self._tracer_engaged:
@@ -5742,23 +4967,6 @@ class LAPDSim1D:
                     self._geometry.cells, dtype=float
                 )
 
-        if self._coverage is not None:
-            # Arm the covered-only neutral-debit tally AND the coverage field's
-            # growth driver for THIS attempt only, on the same SSPRK2 stage
-            # weighting the DVM booking above uses. Both are dropped in the
-            # ``finally`` below and carried on the attempt, so a rejected step
-            # advances neither.
-            self._coverage_burn_accum = np.zeros(
-                self._geometry.cells, dtype=float
-            )
-            self._coverage_reservoir_burn_accum = np.zeros(
-                self._geometry.cells, dtype=float
-            )
-            self._coverage_w_accum = np.zeros(
-                self._geometry.cells, dtype=float
-            )
-            self._coverage_burn_weight = 0.5 * dt
-
         # R2 tracer: freeze this attempt's affine coefficients at the STEP
         # START, before any stage runs. Nothing is committed here -- the
         # coefficients ride on the attempt and only ``_tracer_apply`` installs
@@ -5769,7 +4977,7 @@ class LAPDSim1D:
         attempt_tracer = self._tracer_prepare(dt)
 
         # Arm the anode electron-sheath book for THIS attempt only, on the
-        # same discipline the DVM and coverage accumulators use: the heat
+        # same discipline the DVM accumulators use: the heat
         # substeps add into it, the ``finally`` below drops it, and only
         # ``_accept_step_attempt`` commits it.
         if self._electrode_sink_in_heat_substep and operator_split:
@@ -5856,15 +5064,6 @@ class LAPDSim1D:
                 self._dvm_end_wall_jet_energy_stage_accum
             )
             self._dvm_end_wall_jet_energy_stage_accum = None
-            attempt_coverage_burn = self._coverage_burn_accum
-            attempt_coverage_reservoir_burn = (
-                self._coverage_reservoir_burn_accum
-            )
-            attempt_coverage_w = self._coverage_w_accum
-            self._coverage_burn_accum = None
-            self._coverage_reservoir_burn_accum = None
-            self._coverage_w_accum = None
-            self._coverage_burn_weight = 0.0
             attempt_electrode_sink = self._anode_e_sheath_attempt
             self._anode_e_sheath_attempt = None
         return StepAttempt1D(
@@ -5882,9 +5081,6 @@ class LAPDSim1D:
             end_wall_jet_energy_booking=(
                 attempt_end_wall_jet_energy_booking
             ),
-            coverage_burn=attempt_coverage_burn,
-            coverage_reservoir_burn=attempt_coverage_reservoir_burn,
-            coverage_w=attempt_coverage_w,
             tracer=attempt_tracer,
             electrode_sink_booking=attempt_electrode_sink,
         )
@@ -6574,59 +5770,9 @@ class LAPDSim1D:
         # the end-of-step one. Accepted steps only, and before every consumer
         # below reads the state.
         self._tracer_apply(getattr(attempt, "tracer", None))
-        # Coverage closure: re-partition the accepted state's neutrals between
-        # the burnt covered column and the reservoir. Accepted steps only, and
-        # only ever the auxiliary deficit -- the conserved mean field above is
-        # never touched by this.
-        if self._coverage is not None:
-            # The coverage FIELD first: the deficit equation's (1-f)/f weights
-            # and its positivity floor are the end-of-step partition's, exactly
-            # as v1's were (v1 read the closed form after the clock had already
-            # been advanced).
-            self._advance_coverage_fraction(
-                attempt.dt, getattr(attempt, "coverage_w", None)
-            )
-            self._advance_coverage_deficit(
-                attempt.dt,
-                getattr(attempt, "coverage_burn", None),
-                getattr(attempt, "coverage_reservoir_burn", None),
-            )
         # Electrode sample smoothing: fold the newly accepted state into the
         # supply-average EMA before any accepted-state consumer reads it.
         self._update_sample_smoothing(attempt.dt)
-        # K4a refresh: kinetic target solves run
-        # only at ACCEPTED states -- deterministic across step retries --
-        # and only once the plasma phase is live (the pre-breakdown fill
-        # stays moment).
-        if (
-            self._kinetic is not None
-            and self._flags.get("Plasma")
-            and not self._neutral_prebreakdown_active()
-        ):
-            kin = self._kinetic
-            if kin.responses is None or self._time >= kin.next_refresh_s:
-                self._kinetic_refresh(self._time)
-            elif self._time >= kin.next_update_s:
-                # cheap continuous update; escalate to a full refresh when
-                # the absorption field has moved past the tolerance (the
-                # response functions' only staleness channel)
-                state = self.state
-                derived = self.derived
-                nu_ion, nu_cx = self._kinetic_absorption_fields(
-                    state, derived
-                )
-                scale = np.maximum(np.abs(kin.nu_ref), 1e2)
-                if float(
-                    np.max(np.abs(nu_ion - kin.nu_ref) / scale)
-                ) > kin.refresh_tol:
-                    self._kinetic_refresh(self._time)
-                else:
-                    self._kinetic_update_targets(
-                        self._time,
-                        state=state,
-                        derived=derived,
-                        nu_pair=(nu_ion, nu_cx),
-                    )
         # K2a: the transient DVM advances on its own neutral clock, at
         # ACCEPTED states only -- never inside a trial RHS or a step retry,
         # so a rejected attempt cannot touch the distribution.
@@ -7220,12 +6366,6 @@ class LAPDSim1D:
                 [float(s.joint) for s in monitor._samples], dtype=float
             ),
         }
-        coverage = {}
-        if self._coverage is not None:
-            coverage["f"] = np.asarray(self._coverage_f, dtype=float).copy()
-            coverage["deficit"] = np.asarray(
-                self._coverage_deficit, dtype=float
-            ).copy()
         ledgers = dict(self._floor_ledger)
         ledgers.update(
             {
@@ -7266,7 +6406,6 @@ class LAPDSim1D:
             "compiled_kernels": str(KERNEL_PROVENANCE),
             "cathode": cathode,
             "circuit": circuit,
-            "coverage": coverage,
             "triggers": triggers,
             "ignition": ignition,
             "ledgers": ledgers,
@@ -7435,13 +6574,6 @@ class LAPDSim1D:
             )
         ]
         monitor._stalled = bool(ignition["stalled"])
-        if self._coverage is not None:
-            self._coverage_f = np.asarray(
-                payload["coverage"]["f"], dtype=float
-            ).copy()
-            self._coverage_deficit = np.asarray(
-                payload["coverage"]["deficit"], dtype=float
-            ).copy()
         ledgers = payload["ledgers"]
         for name in self._floor_ledger:
             self._floor_ledger[name] = float(ledgers[name])
@@ -8981,19 +8113,6 @@ class LAPDSim1D:
         gas_event = self._gas_puff_event_time()
         if gas_event is not None:
             boundaries.append(gas_event)
-        # A square probe waveform has two hard edges and nothing smooths them,
-        # so they are captured the same way the puff's are: land a step
-        # boundary on each, and no accepted step straddles one.
-        #
-        # This is NOT what makes the delivered inventory exact -- the stages
-        # consume the waveform's exact step average, so the inventory is right
-        # whether or not a step straddles an edge, on any lattice. What the
-        # capture buys is the applied RATE: a step that straddles an edge
-        # applies a partial-window average across its whole width, which
-        # smears the edge in the plasma's RESPONSE (never in the delivered
-        # total). Landing on the edges keeps the applied waveform the square
-        # that was asked for, and it costs nothing.
-        boundaries.extend(self._neutral_probe_event_times())
         for boundary in sorted(boundaries):
             if in_run_window(boundary):
                 return float(boundary)
@@ -9300,16 +8419,6 @@ class LAPDSim1D:
             "energy_convention": self._anode_jet_energy_convention,
         }
 
-    def _end_recycle_annulus_volume(self):
-        """Return the annulus volume the end recycle routes into, or ``None``.
-
-        ``None`` whenever ``end_recycle_to_annulus`` is off, which is what
-        keeps the boundary terms on their historical column-return path.
-        """
-        if not self._end_recycle_to_annulus:
-            return None
-        return self._zone_volumes[1]
-
     def cathode_jet_hot_carrier_rhs(
         self,
         state,
@@ -9403,9 +8512,6 @@ class LAPDSim1D:
             ),
             gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
-            end_recycle_annulus_volume_cm3=(
-                self._end_recycle_annulus_volume()
-            ),
             cathode_carrier_out=carrier_out,
             end_wall_sheath_climb_out=end_wall_climb_out,
         )
@@ -9440,9 +8546,7 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._geometry,
-            wind_column_factor=self._wind_column_factor,
             **self._ion_neutral_drag_kwargs(),
-            **self._slip_closure_kwargs(),
         )
 
     def neutral_momentum_wall_rhs(self, y=None, state=None):
@@ -9455,7 +8559,6 @@ class LAPDSim1D:
             ion_mass_g=self._ion_mass_g,
             Rm_cm=self._geometry.Rm_cm,
             Tn_fit=float(self._input_dict.get("Tn_fit")),
-            wall_rate_1_s=self._wind_wall_rate,
         )
 
     def neutral_energy_wall_rhs(self, y=None, state=None):
@@ -9480,20 +8583,6 @@ class LAPDSim1D:
             Rm_cm=self._geometry.Rm_cm,
             alpha_E=self._neutral_energy_alpha,
             Tn_fit=self._neutral_energy_wall_Tn_eV,
-            wall_rate_1_s=self._neutral_energy_wall_rate,
-        )
-
-    def neutral_momentum_two_zone_rhs(self, y=None, state=None):
-        """Return kinetic-derived column/annulus momentum coupling."""
-        if state is None:
-            state = self.state if y is None else self._unpack(y)
-        return neutral_momentum_two_zone_rhs(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            geometry=self._geometry,
-            Tn_K=float(self._input_dict.get("Tn_K")),
-            sigma_hehe_cm2=self._neutral_wall_partition_sigma,
         )
 
     def neutral_wind_advection_rhs(self, y=None, state=None):
@@ -9536,7 +8625,6 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._geometry,
-            wind_column_factor=self._wind_column_factor,
             **self._collision_operator_kwargs(),
         )
 
@@ -9547,9 +8635,8 @@ class LAPDSim1D:
         reaction term is using on this same evaluation, threaded in so the
         in-flight and bulk channels cannot disagree about the rate. The
         per-cell diagnostics (``nn_hot``, ``f_hot``, ``tau_hot``) land on
-        ``self._hot_channel_diagnostics`` as a side channel, exactly as the
-        coverage reservoir debit does -- they are a reading of the term, not a
-        row of it.
+        ``self._hot_channel_diagnostics`` as a side channel -- they are a
+        reading of the term, not a row of it.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
@@ -9567,8 +8654,6 @@ class LAPDSim1D:
                 if ionization_rate is None
                 else ionization_rate
             ),
-            wind_column_factor=self._wind_column_factor,
-            birth_drift=self._neutral_hot_birth_drift,
             internal_wall=self._neutral_hot_internal_wall,
             **self._collision_operator_kwargs(),
         )
@@ -9586,10 +8671,8 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            wind_column_factor=self._wind_column_factor,
             geometry=self._geometry,
             **self._ion_neutral_drag_kwargs(),
-            **self._slip_closure_kwargs(),
         )
 
     def parallel_momentum_sink_rhs(self, y=None, state=None):
@@ -9619,27 +8702,6 @@ class LAPDSim1D:
             cells=self._momentum_sink.cells,
         )
 
-    def ion_neutral_thermalization_rhs(self, y=None, state=None):
-        """Return the elastic ion-neutral thermal-equilibration energy source."""
-        if state is None:
-            state = self.state if y is None else self._unpack(y)
-        if self._ion_neutral_moment_closure:
-            # Replaced by the moment-closed ion_neutral_collision term.
-            return self._zero_rhs_state()
-        if not self._flags.get("ion_neutral_thermalization"):
-            return self._zero_rhs_state()
-        b_thermalization = self._input_dict.get("b_ion_neutral_thermalization")
-        return ion_neutral_thermalization_rhs(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            Tn_fit=float(self._input_dict.get("Tn_fit")),
-            b_ion_neutral_thermalization=(
-                None if b_thermalization is None else float(b_thermalization)
-            ),
-            **self._ion_neutral_drag_kwargs(),
-        )
-
     def ion_neutral_collision_rhs(self, y=None, state=None):
         """Return the R4.3 moment-closed reduced ion-neutral collision operator.
 
@@ -9658,7 +8720,6 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._geometry,
-            wind_column_factor=self._wind_column_factor,
             **self._collision_operator_kwargs(),
         )
 
@@ -9857,7 +8918,6 @@ class LAPDSim1D:
             input_flags=cathode_flags,
             I_ion=self._I_ion,
             cathode_solve=cathode_solve,
-            coverage=self._coverage_view(state, time),
         )
 
     def beam_ionization_rhs_terms(
@@ -9886,7 +8946,6 @@ class LAPDSim1D:
             input_flags=cathode_flags,
             I_ion=self._I_ion,
             cathode_solve=cathode_solve,
-            coverage=self._coverage_view(state, time),
         )
 
     def electrode_ee_sink_rate(
@@ -10004,7 +9063,6 @@ class LAPDSim1D:
         input_flags,
         floating,
         phi_wf_override_eV,
-        coverage,
     ):
         """Return the read-only cathode solve memo's key.
 
@@ -10035,7 +9093,6 @@ class LAPDSim1D:
             # before and one after the hand-off -- are different solves.
             _memo_key_part(self._circuit_V_dis_prescribed),
             _memo_key_part(self._prescribed_active),
-            _memo_key_part(coverage),
         )
 
     def solve_cathode_boundary(
@@ -10059,7 +9116,6 @@ class LAPDSim1D:
             floating=bool(floating),
         )
         phi_wf_override_eV = self._cathode_phi_wf_eff()
-        coverage = self._coverage_view(state, time)
         # READ-ONLY solve memo (R3 [cathode-accepted-solve-unify]). Several
         # consumers solve at the SAME resolved inputs within one accepted step
         # -- the shared converged accepted-state solve, the dt bound's bundle
@@ -10077,7 +9133,7 @@ class LAPDSim1D:
         # this passes and that can move within a run joins for the same reason:
         # the warm start (x0/x0_twin), the surface state (T_s, phi_wf),
         # the circuit (I_loop), the phase-derived flags and
-        # ``floating``, and the coverage view. The remaining arguments
+        # ``floating``. The remaining arguments
         # (``floors``, ``ion_mass_g``, ``mu``, ``geometry``, ``input_dict``,
         # ``I_ion``, ``gas_type``) are assigned once in __init__ and never
         # mutated, so they cannot separate two calls in one run. A miss on any
@@ -10090,7 +9146,6 @@ class LAPDSim1D:
                 input_flags=input_flags,
                 floating=floating,
                 phi_wf_override_eV=phi_wf_override_eV,
-                coverage=coverage,
             )
             memo = self._cathode_solve_memo
             if memo is not None and memo[0] == memo_key:
@@ -10113,7 +9168,6 @@ class LAPDSim1D:
             T_s_override_K=self._cathode_Ts_K,
             phi_wf_override_eV=phi_wf_override_eV,
             circuit_I_loop_A=self._circuit_I_loop,
-            coverage=coverage,
             prescribed_drive=self._prescribed_drive_point(),
         )
         if memo_key is not None:
@@ -10300,48 +9354,13 @@ class LAPDSim1D:
                 column_coeff_cm3_s=column_coeff,
                 annulus_coeff_cm3_s=annulus_coeff,
                 floors=self._floors,
-                temperature_scale=self._transpiration_face_scale(state),
             )
         return neutral_exchange_rhs(
             state=state,
             geometry=self._geometry,
             exchange_coeff_cm3_s=self.neutral_exchange_coefficients(),
             floors=self._floors,
-            temperature_scale=self._transpiration_face_scale(state),
         )
-
-    def _transpiration_temperature_ratio(self, state):
-        """Return the per-cell ``Tn_local / Tn_K`` the transpiration arm reads.
-
-        ``None`` on the frozen (v1-primary) closure, which is what leaves every
-        conductance at its construction-time value.
-        """
-        if self._neutral_knudsen_temperature != "local" or state.En is None:
-            return None
-        Tn_ref = float(self._input_dict.get("Tn_K")) * kb_cgs / ev_to_erg
-        Tn = neutral_temperature_eV(
-            state, floors=self._floors, Tn_eV=Tn_ref
-        )
-        return np.maximum(Tn, 0.0) / Tn_ref
-
-    def _transpiration_face_scale(self, state):
-        """Return the internal-face conductance scale, or ``None`` when frozen.
-
-        A conductance is proportional to the thermal speed, so the scale is the
-        square root of the temperature ratio, taken on the face average of the
-        two adjacent cells.
-        """
-        ratio = self._transpiration_temperature_ratio(state)
-        if ratio is None:
-            return None
-        return np.sqrt(0.5 * (ratio[:-1] + ratio[1:]))
-
-    def _transpiration_cell_scale(self, state):
-        """Return the radial (per-cell) conductance scale, or ``None``."""
-        ratio = self._transpiration_temperature_ratio(state)
-        if ratio is None:
-            return None
-        return np.sqrt(ratio)
 
     def neutral_zone_exchange_rhs(self, y=None, state=None):
         """Return the conservative column/annulus free-molecular exchange."""
@@ -10352,7 +9371,6 @@ class LAPDSim1D:
             geometry=self._geometry,
             conductance_cm3_s=self._zone_exchange_cm3_s,
             floors=self._floors,
-            temperature_scale=self._transpiration_cell_scale(state),
         )
 
     def neutral_exchange_coefficients(self):
@@ -10377,83 +9395,6 @@ class LAPDSim1D:
             geometry=self._geometry,
             **self._neutral_source_kwargs(time=time),
         )
-
-    def neutral_probe_waveform_value(self, time=None):
-        """Return the probe source's INSTANTANEOUS ``w(t)``, or 0.0 when off.
-
-        ``time`` defaults to the solver clock. Zero with the flag off, so a
-        caller needs no branch. This is the diagnostic read; what an
-        integration step consumes is
-        :meth:`neutral_probe_waveform_mean` over the step it is taking.
-        """
-        if self._probe is None:
-            return 0.0
-        return neutral_probe_waveform_value(
-            self._time if time is None else time,
-            self._probe.waveform,
-            t_on_s=self._probe.t_on_s,
-            t_off_s=self._probe.t_off_s,
-            table=self._probe.table,
-        )
-
-    def neutral_probe_waveform_mean(self, t0, dt):
-        """Return the probe waveform's exact average over ``[t0, t0 + dt]``.
-
-        Zero with the flag off. This is the quantity the integration stages
-        consume; ``sum_k dt_k * mean(t_k, dt_k)`` over a run's accepted steps
-        is the waveform's exact integral, whatever the step lattice.
-        """
-        if self._probe is None:
-            return 0.0
-        return neutral_probe_waveform_mean(
-            t0,
-            dt,
-            self._probe.waveform,
-            t_on_s=self._probe.t_on_s,
-            t_off_s=self._probe.t_off_s,
-            table=self._probe.table,
-            table_cumulative=self._probe.table_cumulative,
-        )
-
-    def neutral_probe_source_rhs(
-        self, y=None, state=None, time=None, step_window=None
-    ):
-        """Return the ad-hoc probe neutral source term (zeros when off).
-
-        ``step_window`` is the ``(t0, dt)`` interval the caller is integrating
-        over. Given, the term carries the waveform's EXACT AVERAGE across it,
-        which is what makes the delivered inventory the stated hypothesis
-        rather than the trapezoid rule's reading of it (see
-        ``physics.neutrals.neutral_probe_waveform_mean``). Omitted -- every
-        diagnostic read -- the term carries the instantaneous rate at ``time``,
-        which is the same quantity for a window of zero width.
-        """
-        if self._probe is None:
-            return self._zero_rhs_state()
-        if state is None:
-            state = self.state if y is None else self._unpack(y)
-        if step_window is None:
-            waveform_value = self.neutral_probe_waveform_value(time=time)
-        else:
-            waveform_value = self.neutral_probe_waveform_mean(*step_window)
-        return neutral_probe_source_rhs(
-            state=state,
-            geometry=self._geometry,
-            amplitude_cm3_s=self._probe.amplitude_cm3_s,
-            weights=self._probe.weights,
-            waveform_value=waveform_value,
-            zone=self._probe.zone,
-        )
-
-    def neutral_probe_profile(self):
-        """Return the probe source's normalized axial weights ``p(z)`` [1].
-
-        ``None`` whenever the instrument is off. The array is a copy, so a
-        caller cannot reach into solver state.
-        """
-        if self._probe is None:
-            return None
-        return np.asarray(self._probe.weights, dtype=float).copy()
 
     def gas_puff_local_ionization_rhs(self, y=None, state=None, time=None):
         """Return the fresh-puff clump local-ionization source (default off)."""
@@ -11042,28 +9983,6 @@ class LAPDSim1D:
         decay = float(np.exp(-(phase_elapsed - tau_after_breakdown) / tau_decay))
         return decay * S_gp, decay * Twin_S_gp
 
-    def _neutral_probe_event_times(self):
-        """Return the probe waveform's hard edges [s], on the absolute clock.
-
-        These sharpen the applied rate, not the delivered inventory, which is
-        exact on any lattice -- see the note at the caller.
-
-        Empty with the instrument off, and for ``"const"``, which never
-        changes. A ``"square"`` contributes both its edges. A ``"table"``
-        contributes the two ends of its tabulated span, where ``w`` drops to
-        zero outside: it is piecewise linear and continuous WITHIN the span,
-        so its interior nodes need no capture, but each end is a jump whenever
-        the caller tabulated a non-zero ``w`` there.
-        """
-        if self._probe is None:
-            return []
-        if self._probe.waveform == "square":
-            return [float(self._probe.t_on_s), float(self._probe.t_off_s)]
-        if self._probe.waveform == "table":
-            nodes = np.asarray(self._probe.table, dtype=float)
-            return [float(nodes[0, 0]), float(nodes[-1, 0])]
-        return []
-
     def _gas_puff_event_time(self):
         if not (
             self._flags.get("Plasma")
@@ -11422,10 +10341,6 @@ class LAPDSim1D:
 
     def _ion_neutral_drag_kwargs(self):
         return dict(self._options.ion_neutral_drag)
-
-    def _slip_closure_kwargs(self):
-        """Extra kwargs for the drag/frictional-heating slip closure."""
-        return dict(self._options.slip_closure)
 
     def _electron_cooling_kwargs(self):
         return dict(self._options.electron_cooling)
@@ -12500,31 +11415,6 @@ class LAPDSim1D:
             "beam_tail_above_bar_power_W": 0.0,
             "beam_tail_sub_threshold_fraction": np.nan,
         }
-        if self._coverage is not None:
-            # Clumpy-plasma coverage closure: PRESENCE-GATED so the saved
-            # diagnostic structure of every mean-field run -- the golden
-            # included -- is byte-identical to before the closure existed.
-            # The scalar summary keeps its name and its meaning as "the
-            # coverage of the column", now as the volume-weighted mean of the
-            # z-resolved field; the profile itself is saved beside it so the
-            # axial structure the closure exists to carry is readable from a
-            # saved trajectory rather than only from a live solver.
-            diag["coverage_fraction"] = float(self.coverage_fraction())
-            diag["coverage_fraction_profile"] = self._coverage_f.copy()
-            diag["coverage_fraction_min"] = float(np.min(self._coverage_f))
-            diag["coverage_fraction_max"] = float(np.max(self._coverage_f))
-            diag["coverage_nn_deficit_max"] = float(
-                np.max(self._coverage_deficit)
-            )
-            diag["coverage_nn_column_min"] = float(
-                np.min(
-                    np.maximum(
-                        np.asarray(self.state.nn, dtype=float)
-                        - self._coverage_deficit,
-                        self._floors["nn"],
-                    )
-                )
-            )
         if self._electron_drift is not None:
             # The drift operator's named rows, PRESENCE-GATED so an unarmed
             # run's saved diagnostic structure -- the golden included -- is
@@ -12933,12 +11823,10 @@ class LAPDSim1D:
         }
 
     def _kinetic_channel_rates(self, state, derived, time):
-        """Return the current source-channel rates and shapes (K4a-t).
+        """Return the current source-channel rates and shapes.
 
-        Cheap (pure numpy on the live fields); called every target update
-        so the kinetic targets track source transients continuously --
-        the recycle channels collapse WITH the plasma, which is what
-        removes the afterglow flood.
+        Cheap (pure numpy on the live fields); read at every transient-arm
+        tick, so the recycle channels collapse WITH the plasma.
 
         The wall-return channels are read from the boundary term that is
         ACTUALLY removing the plasma -- the characteristic ghost-cell flux --
@@ -12985,193 +11873,6 @@ class LAPDSim1D:
             "rec": rec_cells,
             "anode": an_gain,
         }
-
-    def _kinetic_absorption_fields(self, state, derived):
-        n_safe = np.maximum(state.n, 1e6)
-        Te_safe = np.maximum(derived.Te, 0.2)
-        rates = he_rates(n_safe, Te_safe, ("scd",))
-        nu_ion = state.n * rates["scd"]
-        nu_cx = state.n * charge_ex_react(
-            np.maximum(derived.Ti, 0.05), "He"
-        )
-        return np.asarray(nu_ion, dtype=float), np.asarray(nu_cx, dtype=float)
-
-    def _kinetic_refresh(self, time):
-        """Recompute the per-channel unit-rate responses (K4a-t).
-
-        One engine solve per source channel (the kinetic steady solve is
-        LINEAR in the sources at frozen plasma), so between refreshes the
-        targets are formed as sum(rate_k * G_k) with the LIVE rates. The
-        channel shapes (puff profile, recombination profile, anode split)
-        are frozen here and rescaled by magnitude in between.
-        """
-        state = self.state
-        derived = self.derived
-        geometry = self._geometry
-        kin = self._kinetic
-        nu_ion, nu_cx = self._kinetic_absorption_fields(state, derived)
-        # The cathode-end wall temperature the TPMC background launches its
-        # cosine half-flux at. This is the CONFIGURED standby, not the
-        # evolving power_balance surface: the frozen background is rebuilt
-        # per call from configuration alone, and that is unchanged here. The
-        # ``T_s`` key below is the background dictionary's own name for the
-        # quantity -- the physical symbol shared with kn2zone/mc_neutrals --
-        # and is not the retired configuration key.
-        T_s = float(self._input_dict.get("cathode_Ts_base_K"))
-        anode_faces = np.asarray(
-            getattr(geometry, "anode_face_indices", ()), dtype=int
-        )
-        bg = {
-            "z_edges": np.concatenate(
-                ([0.0], np.cumsum(geometry.length_cm))
-            ),
-            "Rp": np.asarray(geometry.Rp_cm, dtype=float),
-            "Rm": np.asarray(geometry.Rm_cm, dtype=float),
-            "nu_ion": nu_ion,
-            "nu_cx": nu_cx,
-            "Ti": np.asarray(derived.Ti, dtype=float),
-            "u": np.asarray(derived.u, dtype=float),
-            "T_s": T_s,
-            "S_pump_L": float(self._input_dict.get("S_pump_L")),
-            "S_pump_R": float(self._input_dict.get("S_pump_R")),
-            "eta": float(self._input_dict.get("eta")),
-            "mesh_edge": int(anode_faces[0]) if anode_faces.size else -999,
-            "sources": {},
-        }
-        if getattr(kin, "grid", None) is None:
-            # freeze one generous shared grid for the whole run: the
-            # compiled kernels bind to it, and it must hold any discharge
-            # state (10 eV CX tails + 2e6 cm/s drifts)
-            Ti_cap = max(float(np.max(derived.Ti)), 10.0)
-            u_cap = max(float(np.max(np.abs(derived.u))), 2.0e6)
-            vmax = 4.0 * np.sqrt(Ti_cap * _KIN_EV / _KIN_M_HE) + 1.5 * u_cap
-            v_fine = 0.25 * np.sqrt(_KIN_KB * 300.0 / _KIN_M_HE)
-            kin.grid = _KineticVGrid(vmax, vmax, kin.nvz, kin.nvp, v_fine)
-        jump = KN2ZoneJump(
-            bg, nvz=kin.nvz, nvp=kin.nvp, verbose=False, max_gen=600,
-            grid=kin.grid,
-        )
-        if kin.engine is None:
-            kin.engine = KineticEngineFast(jump)
-        else:
-            kin.engine.j = jump
-        g = jump.g
-        nz = jump.nz
-        rates_now = self._kinetic_channel_rates(state, derived, time)
-        zero_Sc = np.zeros((nz, g.nvz, g.nvp))
-        zero_in = np.zeros((g.nvz, g.nvp))
-        zero_wall = np.zeros(nz)
-
-        def shape_of(cells):
-            total = float(np.sum(cells))
-            if total <= 0:
-                return None, 0.0
-            return np.asarray(cells, dtype=float) / total, total
-
-        puff_shape, _ = shape_of(rates_now["puff"])
-        rec_shape, _ = shape_of(rates_now["rec"])
-        anode_shape, _ = shape_of(rates_now["anode"])
-        responses = {}
-        shapes = {"puff": puff_shape, "rec": rec_shape, "anode": anode_shape}
-        for name in ("cath", "coll", "puff", "rec", "anode"):
-            Sc = zero_Sc.copy()
-            Fc_in_L = zero_in
-            Fc_in_R = zero_in
-            wall0 = zero_wall.copy()
-            if name == "cath":
-                Fc_in_L = _kinetic_inflow(
-                    1.0, g.half_flux_spectrum(T_s, +1), jump.A_col[0], g
-                )
-            elif name == "coll":
-                Fc_in_R = _kinetic_inflow(
-                    1.0, g.half_flux_spectrum(300.0, -1), jump.A_col[-1], g
-                )
-            elif name == "puff":
-                if puff_shape is None:
-                    continue
-                wall0 = puff_shape.copy()
-            elif name == "rec":
-                if rec_shape is None:
-                    continue
-                for i in np.flatnonzero(rec_shape > 0):
-                    Sc[i] = Sc[i] + (
-                        rec_shape[i] / jump.V_col[i]
-                    ) * jump.M_cx[i]
-            elif name == "anode":
-                if anode_shape is None or not anode_faces.size:
-                    continue
-                for i in np.flatnonzero(anode_shape > 0):
-                    sign = -1 if i < bg["mesh_edge"] else +1
-                    Sc[i] = Sc[i] + (
-                        anode_shape[i] / jump.V_col[i]
-                    ) * g.half_flux_spectrum(300.0, sign)
-            res = kin.engine.solve(Sc, Fc_in_L, Fc_in_R, wall0)
-            responses[name] = {
-                "col": res["nn_col"],
-                "ann": res["nn_ann"],
-                "arr": res["ann_arrival"],
-            }
-        kin.responses = responses
-        kin.shapes = shapes
-        kin.nu_ref = nu_ion
-        kin.next_refresh_s = float(time) + kin.refresh_s
-        self._kinetic_update_targets(time, state=state, derived=derived,
-                                     rates=rates_now, nu_pair=(nu_ion, nu_cx))
-
-    def _kinetic_update_targets(self, time, state=None, derived=None,
-                                rates=None, nu_pair=None):
-        """Combine the unit responses with the LIVE channel rates (K4a-t)."""
-        kin = self._kinetic
-        if kin.responses is None:
-            return
-        if state is None:
-            state = self.state
-        if derived is None:
-            derived = self.derived
-        if rates is None:
-            rates = self._kinetic_channel_rates(state, derived, time)
-        if nu_pair is None:
-            nu_pair = self._kinetic_absorption_fields(state, derived)
-        nu_ion, nu_cx = nu_pair
-        V_col, V_ann = self._zone_volumes
-        scalars = {
-            "cath": rates["cath"],
-            "coll": rates["coll"],
-            "puff": float(np.sum(rates["puff"])),
-            "rec": float(np.sum(rates["rec"])),
-            "anode": float(np.sum(rates["anode"])),
-        }
-        target_col = np.zeros(self._geometry.cells)
-        target_ann = np.zeros(self._geometry.cells)
-        arr = np.zeros(self._geometry.cells)
-        for name, resp in kin.responses.items():
-            s = scalars.get(name, 0.0)
-            if s <= 0:
-                continue
-            target_col = target_col + s * resp["col"]
-            target_ann = target_ann + s * resp["ann"]
-            arr = arr + s * resp["arr"]
-        kin.target_col = np.maximum(target_col, self._floors["nn"])
-        kin.target_ann = np.maximum(target_ann, self._floors["nn"])
-        # vbar carries m_He_cgs -- the mass this arm's OWN operators are built
-        # on (KN2Zone/KN2ZoneJump: kinetic_neutrals.py M_HE, the velocity grid,
-        # the wall spectra, the end sticking). The escape rate below is the
-        # column's free-streaming loss for the very population the engine
-        # marches, so it must be that population's thermal speed; the integer
-        # mass number 4 x m_p is a less accurate value of the same quantity,
-        # not an alternative convention.
-        vbar = np.sqrt(8.0 * kb_cgs * 300.0 / (np.pi * m_He_cgs))
-        esc = vbar / (
-            2.0 * np.maximum(np.asarray(self._geometry.Rp_cm), 1e-6)
-        )
-        kin.tau_col = np.clip(
-            1.0 / np.maximum(nu_ion + nu_cx + esc, 1e-6), 1e-5, 0.1
-        )
-        inv_ann = kin.target_ann * np.maximum(V_ann, 1e-6)
-        kin.tau_ann = np.clip(
-            inv_ann / np.maximum(arr, 1e-30), 1e-4, 0.05
-        )
-        kin.next_update_s = float(time) + kin.update_s
 
     # ------------------------------------------------------------ K2a DVM
     #
@@ -14489,47 +13190,6 @@ class LAPDSim1D:
             )
         return np.maximum(nu, 0.0)
 
-    @staticmethod
-    def _strip_neutral_rows(term):
-        """Return the term with its nn / nn_a rows zeroed (K4a supersession).
-
-        The plasma-side rows keep their exact forms -- the neutral rows are
-        carried by the kinetic relaxation instead. M_n rows pass through
-        (the wind stays a moment field in K4a).
-        """
-        zeros = np.zeros_like(np.asarray(term.nn, dtype=float))
-        return ConservativeState1D(
-            n=term.n,
-            nn=zeros,
-            M=term.M,
-            Ee=term.Ee,
-            Ei=term.Ei,
-            M_n=term.M_n,
-            nn_a=None if term.nn_a is None else zeros.copy(),
-            M_n_a=term.M_n_a,
-        )
-
-    def neutral_kinetic_relaxation_rhs(self, state):
-        """Return the K4a relaxation term: (nn* - nn)/tau per zone."""
-        kin = self._kinetic
-        zeros = np.zeros(self._geometry.cells, dtype=float)
-        if kin is None or kin.target_col is None or state.nn_a is None:
-            return ConservativeState1D(
-                n=zeros,
-                nn=zeros.copy(),
-                M=zeros.copy(),
-                Ee=zeros.copy(),
-                Ei=zeros.copy(),
-            )
-        return ConservativeState1D(
-            n=zeros,
-            nn=(kin.target_col - state.nn) / kin.tau_col,
-            M=zeros.copy(),
-            Ee=zeros.copy(),
-            Ei=zeros.copy(),
-            nn_a=(kin.target_ann - state.nn_a) / kin.tau_ann,
-        )
-
     def _zero_rhs_state(self):
         """Return the run's ONE all-zero conservative RHS bundle.
 
@@ -14726,7 +13386,6 @@ class LAPDSim1D:
                     else self._nn0_annulus_profile.copy()
                 )
             ),
-            un_a=np.zeros(cells) if self._neutral_two_momentum else None,
             # Pre-plasma the gas IS at the wall temperature, so this initial
             # condition is exact rather than a convention.
             Tn_K=(

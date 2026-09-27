@@ -225,31 +225,6 @@ def main(argv=None):
     p.add_argument("--E-th", type=float, default=None,
                    help="desorption threshold [eV] (M5a' Bohdansky yield "
                         "factor; omit for the energy-independent limit)")
-    p.add_argument("--mn", action="store_true",
-                   help="evolved neutral momentum closure for the jet "
-                        "campaign: neutral_momentum + two-zone radial + "
-                        "honest b=1 drag + mesh momentum accommodation "
-                        "(ALL arms of the jet A/B carry this, reference "
-                        "included, so the A/B isolates the jet)")
-    p.add_argument("--jet", choices=("cathode", "both"), default=None,
-                   help="directed recycle jets "
-                        "at literature-boxed (R_N, R_E); requires --mn")
-    p.add_argument("--cjet-RN", type=float, default=None,
-                   help="cathode jet particle reflection coefficient "
-                        "(default the mid box 0.5)")
-    p.add_argument("--cjet-RE", type=float, default=None,
-                   help="cathode jet energy reflection coefficient "
-                        "(default the mid box 0.2)")
-    p.add_argument("--ajet-RN", type=float, default=None,
-                   help="anode jet particle reflection coefficient "
-                        "(default the He->Mo class 0.5)")
-    p.add_argument("--ajet-RE", type=float, default=None,
-                   help="anode jet energy reflection coefficient "
-                        "(default the He->Mo class 0.25)")
-    p.add_argument("--jet-debit", action="store_true",
-                   help="sensitivity arm: debit the cathode surface's ion "
-                        "heating by the reflected-energy fraction "
-                        "((1-R_E)*P_i into power_balance)")
     p.add_argument("--square", action="store_true",
                    help="measured square valve waveform (M6): erf rise at "
                         "circuit-on, flat S_gp for the drive, erf close + "
@@ -301,32 +276,6 @@ def main(argv=None):
         extra["cathode_cleaning_E_th_eV"] = args.E_th
 
     flags_extra = {}
-    if args.jet and not args.mn:
-        raise SystemExit("--jet requires --mn (the jet is an M_n source)")
-    if args.jet_debit and args.jet is None:
-        raise SystemExit("--jet-debit requires --jet")
-    if args.mn:
-        extra.update({
-            "ion_neutral_drag_model": "constant",
-            "b_ion_neutral_drag": 1.0,
-            "neutral_momentum_radial": "two_zone",
-            "neutral_mesh_accommodation": True,
-        })
-        flags_extra["neutral_momentum"] = True
-    if args.jet:
-        extra["cathode_neutral_jet"] = True
-        if args.cjet_RN is not None:
-            extra["cathode_jet_R_N"] = args.cjet_RN
-        if args.cjet_RE is not None:
-            extra["cathode_jet_R_E"] = args.cjet_RE
-        if args.jet == "both":
-            extra["anode_neutral_jet"] = True
-            if args.ajet_RN is not None:
-                extra["anode_jet_R_N"] = args.ajet_RN
-            if args.ajet_RE is not None:
-                extra["anode_jet_R_E"] = args.ajet_RE
-        if args.jet_debit:
-            extra["cathode_jet_surface_debit"] = True
     if args.rec_return:
         extra["recombination_energy_return"] = True
     if args.square:

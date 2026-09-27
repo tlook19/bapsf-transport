@@ -104,8 +104,7 @@ INERT_PARAM_KEYS = frozenset({
     # --- atomic-rate / cooling / plasma-physics scales (no plasma during equil) ---
     "atomic_rate_model", "recombination_energy_return",
     "sigma_in_model", "Ti_birth_ionization",
-    "b_ion_neutral_drag", "b_ion_neutral_thermalization",
-    "ion_neutral_drag_model", "D_amb", "D_amb_model", "heat_flux_limiter_f",
+    "b_ion_neutral_drag", "D_amb", "D_amb_model", "heat_flux_limiter_f",
     "b_presheath_length",
     "b_surface_loss", "alpha_isat", "alpha_front", "front_flux_model",
     "adas_low_te_extension",
@@ -129,10 +128,8 @@ INERT_PARAM_KEYS = frozenset({
     # The prescribed per-cell geometry keys (plasma_radius_profile_cm,
     # machine_radius_profile_cm, plasma_area_max_vessel_fraction,
     # neutral_annulus_volume_fraction_min) are deliberately NOT listed here,
-    # and neither is prescribed_area_geometry in INERT_FLAG_KEYS -- unlike
-    # end_recycle_to_annulus below, which IS exempt. That flag changes only two
-    # plasma boundary terms an equilibration never evaluates; these change the
-    # GEOMETRY. The column volume Vp, the vessel volume Vm, the annulus volume
+    # and neither is prescribed_area_geometry in INERT_FLAG_KEYS: these change
+    # the GEOMETRY. The column volume Vp, the vessel volume Vm, the annulus volume
     # V_ann = Vm - Vp, the zone exchange conductance (~ Rp dz) and the
     # free-molecular face conductances (~ the hydraulic radius) are all read by
     # the neutral-only equilibration, whose whole content is where the gas
@@ -161,24 +158,12 @@ INERT_FLAG_KEYS = frozenset({
     "cx",
     "electron_heat_flux_limit", "heat_conduction", "hyperbolic_energy_consistent",
     "icool_recomb", "implicit_heat_conduction", "ion_neutral_drag",
-    "ion_neutral_drag_cx_only", "ion_neutral_moment_closure",
-    "ion_neutral_thermalization", "ionization_energy_cost",
+    "ion_neutral_moment_closure", "ionization_energy_cost",
     "raw_stage_validation",
     "debug_checks",
-    # end_recycle_to_annulus changes ONLY the plasma-terminating boundary
-    # term (characteristic_boundary), and an
-    # equilibration cannot reach it. run_neutral_equilibration pins
-    # Plasma=False on its inner sim, and with Plasma off rhs_terms takes the
-    # neutral-only branch, which returns _zero_rhs_state() for that term; the
-    # implicit neutral-only stepper that actually advances that phase
-    # assembles exchange, pump and puff alone and never calls it. No
-    # plasma => no boundary recycle => nothing for the routing to route. That
-    # is what keeps a default-config flag addition from rotating every
-    # cached seed in the database.
-    "end_recycle_to_annulus",
-    # The two end-face energy-booking flags are inert for a STRONGER reason
-    # than end_recycle_to_annulus above: run_neutral_equilibration does not
-    # merely leave them unreached, it CLEARS both on the inner sim's copy of
+    # The two end-face energy-booking flags are inert because
+    # run_neutral_equilibration does not merely leave them unreached, it
+    # CLEARS both on the inner sim's copy of
     # the config (two assignments beside the Plasma=False and
     # cathode_coupling=False lines that open that function), so the
     # equilibration runs with them off no matter what the outer run arms and no

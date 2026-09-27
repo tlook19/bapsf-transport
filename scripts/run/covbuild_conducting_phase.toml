@@ -13,15 +13,6 @@
 # the shared driver dicts happened to hold. Loading it through
 # `LAPDSim1D.load_config` would resolve it against the bare config defaults and
 # would NOT be a machine anyone runs.
-#
-# It is NOT a derived configuration (base = ...). It cannot be one today: the
-# reference configuration runs heating_anomalous_transport =
-# "plateau_multigroup", which the solver refuses together with the coverage
-# closure this instrument's A/B arm arms (solver.py, "the coverage arms are
-# deferred until that stance is designed"). Naming the base here would make the
-# --coverage arm unrunnable; naming it on the command line lets the window run
-# stand on the reference while the coverage arm names the configuration it can
-# actually use.
 
 [params]
 # The seed proper, moved to the phase start. The shipped ne0 = 1e9 is a seed

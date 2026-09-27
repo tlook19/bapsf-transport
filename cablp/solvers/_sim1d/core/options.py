@@ -70,18 +70,6 @@ def ion_neutral_drag_kwargs(input_dict, flags, *, gas_type):
             if drag_enabled
             else 0.0
         ),
-        "cx_only": bool(flags.get("ion_neutral_drag_cx_only", False)),
-    }
-
-
-def slip_closure_kwargs(input_dict, *, geometry):
-    """Extra kwargs for the drag/frictional-heating slip closure."""
-    return {
-        "drag_model": str(
-            input_dict.get("ion_neutral_drag_model", "constant")
-        ),
-        "Rm_cm": geometry.Rm_cm,
-        "Tn_fit": float(input_dict.get("Tn_fit", 0.1)),
     }
 
 
@@ -141,7 +129,6 @@ def neutral_energy_timestep_kwargs(
     neutral_energy,
     neutral_energy_alpha,
     neutral_energy_wall_Tn_eV,
-    neutral_energy_wall_rate,
 ):
     """Return the bundle the En relaxation bound reads, or None.
 
@@ -165,11 +152,10 @@ def neutral_energy_timestep_kwargs(
         ),
         "alpha_E": neutral_energy_alpha,
         "Tn_fit": neutral_energy_wall_Tn_eV,
-        "wall_rate_1_s": neutral_energy_wall_rate,
     }
 
 
-def reaction_kwargs(input_dict, *, gas_type, I_ion, wind_column_factor):
+def reaction_kwargs(input_dict, *, gas_type, I_ion):
     return {
         "gas_type": gas_type,
         "I_ion": I_ion,
@@ -182,7 +168,6 @@ def reaction_kwargs(input_dict, *, gas_type, I_ion, wind_column_factor):
         "Ti_birth_ionization": input_dict.get(
             "Ti_birth_ionization", "neutral"
         ),
-        "wind_column_factor": wind_column_factor,
         # Only read when Ti_birth_ionization == "neutral": the cold-gas scalar
         # the birth temperature falls back to with no evolved En field.
         "Tn_K": float(input_dict.get("Tn_K", 300.0)),
@@ -197,7 +182,6 @@ class SolverOptions:
     energy_exchange: dict
     surface_loss: dict
     ion_neutral_drag: dict
-    slip_closure: dict
     electron_cooling: dict
     ion_charge_exchange: dict
     heat_conduction: dict
@@ -218,8 +202,6 @@ def build_solver_options(
     neutral_energy,
     neutral_energy_alpha,
     neutral_energy_wall_Tn_eV,
-    neutral_energy_wall_rate,
-    wind_column_factor,
 ):
     """Resolve every run-constant subsystem bundle in one pass.
 
@@ -240,7 +222,6 @@ def build_solver_options(
         ion_neutral_drag=ion_neutral_drag_kwargs(
             input_dict, flags, gas_type=gas_type
         ),
-        slip_closure=slip_closure_kwargs(input_dict, geometry=geometry),
         electron_cooling=electron_cooling_kwargs(
             input_dict, flags, gas_type=gas_type, I_ion=I_ion
         ),
@@ -261,12 +242,10 @@ def build_solver_options(
             neutral_energy=neutral_energy,
             neutral_energy_alpha=neutral_energy_alpha,
             neutral_energy_wall_Tn_eV=neutral_energy_wall_Tn_eV,
-            neutral_energy_wall_rate=neutral_energy_wall_rate,
         ),
         reaction=reaction_kwargs(
             input_dict,
             gas_type=gas_type,
             I_ion=I_ion,
-            wind_column_factor=wind_column_factor,
         ),
     )

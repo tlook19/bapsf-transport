@@ -222,7 +222,6 @@ def _legacy_terms(sim, st):
     return {
         "drag": sim.ion_neutral_drag_rhs(state=st),
         "frictional_heating": sim.ion_neutral_frictional_heating_rhs(state=st),
-        "thermalization": sim.ion_neutral_thermalization_rhs(state=st),
         "charge_exchange": sim.ion_charge_exchange_rhs(state=st),
     }
 

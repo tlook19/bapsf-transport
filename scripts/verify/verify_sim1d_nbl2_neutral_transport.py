@@ -50,17 +50,8 @@ Gates:
       and every term declared 'none' really does leave nn alone
   W3  WALL RATE: the energy channel's wall-visit rate is built from the 300 K
       thermal speed, not the momentum closure's 0.1 eV Tn_fit
-  T1  TRANSPIRATION ARM: 'local' at a uniform Tn = Tn_K reproduces 'frozen' to
-      the bit, and separates from it once Tn varies
-  G6  RESOLVER DOWNGRADE: the two-momentum reduction no longer REFUSES the
-      neutral-energy package -- 40c519c made neutral_energy a shipped default,
-      and 2f3638a made a model selection resolve a member left at its config
-      default instead of raising on it -- so the gate pins the downgrade:
-      construction succeeds and the resolved arm reports _neutral_energy False
-      with _neutral_two_momentum True
-  G7, G8 construction guards: the jet without the surface debit, and a bad or
-      unusable transpiration selector, each raise a loud ValueError naming what
-      is accepted; the happy paths construct
+  G7  construction guard: the jet without the surface debit raises a loud
+      ValueError naming what is accepted; the happy path constructs
 
 Usage:
     PYTHONPATH=<checkout>/cablp python scripts/verify/verify_sim1d_nbl2_neutral_transport.py
@@ -660,41 +651,6 @@ def gate_w3():
     )
 
 
-def gate_t1():
-    frozen = make_sim(neutral_knudsen_temperature="frozen")
-    local = make_sim(neutral_knudsen_temperature="local")
-    # The arm scales a conductance, so it can only show up where a density
-    # gradient is driving a current: a uniform-nn state has no flow to scale.
-    cells = frozen._geometry.cells
-    nn = 1.0e13 * (1.0 + 0.4 * np.cos(np.linspace(0.0, 5.0, cells)))
-    # Uniform Tn == Tn_K: the scale is exactly 1, so the two must agree bitwise.
-    flat = make_state(frozen, u_i=0.0, u_n=0.0, Ti=2.0, Tn_K=TN_K, nn=nn)
-    a = np.asarray(frozen.neutral_exchange_rhs(state=flat).nn)
-    b = np.asarray(local.neutral_exchange_rhs(state=flat).nn)
-    # Not bit-for-bit: Tn is RECONSTRUCTED from En, so sqrt(Tn/Tn_K) lands an
-    # ulp off unity even when the gas is exactly at Tn_K, and the exchange row
-    # is a DIFFERENCE of face rates, which amplifies that. The crisp identity
-    # is on the scale factor itself; the row is quoted as corroboration.
-    scale = local._transpiration_face_scale(flat)
-    scale_err = float(np.max(np.abs(scale - 1.0)))
-    live_flat = np.abs(a) > 0.0
-    identity = float(np.max(np.abs(b[live_flat] / a[live_flat] - 1.0)))
-    same = scale_err < 1e-15 and identity < 1e-12
-    # Non-uniform Tn: the arm must actually separate.
-    ramp = np.asarray(flat.En) * np.linspace(1.0, 25.0, cells)
-    hot = make_state(frozen, u_i=0.0, u_n=0.0, Ti=2.0, nn=nn, En_shape=ramp)
-    c = np.asarray(frozen.neutral_exchange_rhs(state=hot).nn)
-    d = np.asarray(local.neutral_exchange_rhs(state=hot).nn)
-    live = np.abs(c) > 0.0
-    separation = float(np.max(np.abs(d[live] / c[live] - 1.0)))
-    ok = same and separation > 1e-2 and bool(np.any(live))
-    return "T1 transpiration: identity at uniform Tn, separates when it varies", ok, (
-        f"uniform-Tn scale factor departs from 1 by {scale_err:.2e}; the "
-        f"exchange row agrees to {identity:.2e}  max relative separation on a "
-        f"25x Tn ramp = {separation:.3f}"
-    )
-
-
 def _guard(label, expect_fragment, **overrides):
     try:
         make_sim(**overrides)
@@ -702,42 +658,6 @@ def _guard(label, expect_fragment, **overrides):
         text = str(exc)
         return label, expect_fragment in text, f"raised: {text[:104]}"
     return label, False, "no ValueError raised"
-
-
-def gate_g6():
-    """Pin the RESOLVER's downgrade, which replaced this gate's old refusal.
-
-    40c519c flipped ``neutral_energy`` ON in the shipped defaults, so the
-    two-moment reduction's incompatibility with the neutral-energy package is
-    now with a member sitting AT ITS CONFIG DEFAULT, not with an explicit
-    caller choice.
-
-    2f3638a made a model selection OWN its member keys: a member left at its
-    config default is resolved to the value the selection requires instead of
-    raising, and only an EXPLICITLY set member still raises.
-
-    Together those make this configuration construct rather than refuse, so
-    the gate certifies what the resolver documents it does -- the arm comes
-    back with the neutral-energy package off and the two-momentum closure on,
-    which is the state the earlier ValueError stood for.
-    """
-    label = (
-        "G6 resolver: neutral_energy at its default downgrades under the "
-        "two-momentum reduction"
-    )
-    try:
-        sim = make_sim(
-            neutral_two_zone=True,
-            neutral_momentum_radial="kinetic_two_moment",
-        )
-    except ValueError as exc:
-        return label, False, f"construction REFUSED: {exc}"
-    ok = sim._neutral_energy is False and sim._neutral_two_momentum is True
-    return label, ok, (
-        f"constructs=True  resolved _neutral_energy={sim._neutral_energy} "
-        f"(expect False)  _neutral_two_momentum={sim._neutral_two_momentum} "
-        f"(expect True)"
-    )
 
 
 def gate_g7():
@@ -762,33 +682,14 @@ def gate_g7():
     return label, ok and happy, f"{detail} | {happy_detail}"
 
 
-def gate_g8():
-    label, ok, detail = _guard(
-        "G8 guard: a bad or unusable transpiration selector raises",
-        "must be 'frozen' or 'local'",
-        neutral_knudsen_temperature="sqrt",
-    )
-    # neutral_hot_internal_wall is a shipped default (True) whose own
-    # neutral_energy guard fires FIRST, masking the selector guard this
-    # sub-gate is for; clear it so the transpiration refusal is what is read.
-    label2, ok2, detail2 = _guard(
-        "local without neutral_energy",
-        "requires the neutral_energy flag",
-        neutral_energy=False,
-        neutral_hot_internal_wall=False,
-        neutral_knudsen_temperature="local",
-    )
-    return label, ok and ok2, f"{detail} | {label2}: {detail2[:96]}"
-
-
 def main():
     gates = [
         gate_k1, gate_k2,
         gate_x1, gate_x2, gate_x2_two_zone, gate_x3, gate_x3_two_zone,
         gate_x4, gate_x5,
         gate_a1, gate_a2, gate_a3, gate_a4, gate_e1,
-        gate_s1, gate_s2, gate_w3, gate_t1,
-        gate_g6, gate_g7, gate_g8,
+        gate_s1, gate_s2, gate_w3,
+        gate_g7,
     ]
     all_ok = True
     print("NBL pass-2 gate suite (decoupled two-channel neutral transport)")

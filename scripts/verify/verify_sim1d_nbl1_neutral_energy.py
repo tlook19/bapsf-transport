@@ -35,15 +35,13 @@ Gates:
       FLOORED nn and leaves an above-floor En untouched
   P1  presence-off: with the flag off no state carries En, every term's En row
       is absent, and the packed width is the historical one
-  G1..G3, G5 construction guards: missing moment closure, missing neutral
-      momentum, coverage_closure, and alpha_E outside [0, 1] each raise a loud
-      ValueError naming what is accepted; the happy path constructs and packs
-      En last
-  G4  MIXED: neutral_model='kinetic' still REFUSES neutral_energy, but
-      'kinetic_dvm' now DOWNGRADES it -- 40c519c made neutral_energy a shipped
-      default, and 2f3638a made a model selection resolve a member left at its
-      config default instead of raising on it -- so the DVM arm is pinned by
-      the state it constructs into (neutral_energy off, no En field)
+  G1, G2, G5 construction guards: missing moment closure, missing neutral
+      momentum, and alpha_E outside [0, 1] each raise a loud ValueError naming
+      what is accepted; the happy path constructs and packs En last
+  G4  RESOLVER DOWNGRADE: 'kinetic_dvm' resolves neutral_energy off -- a model
+      selection resolves a member left at its config default instead of
+      raising on it -- so the DVM arm is pinned by the state it constructs into
+      (neutral_energy off, no En field)
 
 Usage:
     PYTHONPATH=<checkout>/cablp python scripts/verify/verify_sim1d_nbl1_neutral_energy.py
@@ -438,19 +436,8 @@ def gate_g2():
     )
 
 
-def gate_g3():
-    return _guard(
-        "G3 guard: neutral_energy with coverage_closure raises",
-        "incompatible with coverage_closure",
-        coverage_closure=True,
-    )
-
-
 def gate_g4():
-    """One arm still REFUSES, the other is now a resolver DOWNGRADE.
-
-    ``neutral_model='kinetic'`` is not a model family the resolver owns, so
-    its incompatibility guard is reached and still raises.
+    """The DVM arm is a resolver DOWNGRADE of neutral_energy.
 
     ``neutral_model='kinetic_dvm'`` IS a family. 40c519c flipped
     ``neutral_energy`` ON in the shipped defaults, so this arm's conflict is
@@ -461,12 +448,6 @@ def gate_g4():
     it constructs INTO -- the neutral-energy package off and no En field --
     which is what the earlier ValueError stood for.
     """
-    label, ok, detail = _guard(
-        "neutral_model='kinetic'",
-        "incompatible with",
-        neutral_model="kinetic",
-        neutral_two_zone=True,
-    )
     try:
         dvm = make_sim(neutral_model="kinetic_dvm", neutral_two_zone=True)
     except ValueError as exc:
@@ -480,9 +461,8 @@ def gate_g4():
             f"(expect False)  packed fields={packed}"
         )
     return (
-        "G4: neutral_energy refuses neutral_model='kinetic' and is downgraded "
-        "by 'kinetic_dvm'"
-    ), (ok and ok2), f"{label}: {detail} | neutral_model='kinetic_dvm': {detail2}"
+        "G4: neutral_energy is downgraded by neutral_model='kinetic_dvm'"
+    ), ok2, f"neutral_model='kinetic_dvm': {detail2}"
 
 
 def gate_g5():
@@ -507,7 +487,7 @@ def main():
     gates = [
         gate_c1, gate_c1_two_zone, gate_c2, gate_c3, gate_c4,
         gate_w1, gate_w2, gate_f1, gate_p1,
-        gate_g1, gate_g2, gate_g3, gate_g4, gate_g5,
+        gate_g1, gate_g2, gate_g4, gate_g5,
     ]
     all_ok = True
     print("NBL pass-1 neutral-energy gate suite (En field core)")
