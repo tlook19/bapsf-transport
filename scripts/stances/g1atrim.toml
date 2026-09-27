@@ -484,8 +484,6 @@ beam_tail_anode_reflected_energy = 0.0
 beam_clump_fraction = 0.0
 beam_clump_enhancement = 1.0
 beam_deposition_smoothing_cm = 50.0
-b_beam_excitation = 1.4
-beam_excitation_energy_eV = 21.218
 
 
 [models.neutral_closure]

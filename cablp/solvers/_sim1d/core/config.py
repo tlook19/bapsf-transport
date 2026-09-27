@@ -1595,20 +1595,6 @@ def cathode_defaults():
         multi-group plateau spectrum) sees it.
         This cap is a domain guard on the atomic data and holds in every
         regime.
-    b_beam_excitation:
-        Scale on the neutral-excitation cross section added to the primary
-        beam's inelastic channels in the cathode sheath solve. ``0``
-        (default) is ionization-only attenuation. Nonzero adds beam-driven
-        neutral excitation, whose ~21-22 eV per event radiates away promptly
-        as He I light and whose cross section shortens the beam's inelastic
-        deposition length. It scales the 2^1P cross section alone, so ``1.0``
-        books that channel and a larger value stands in for the rest of the
-        singlet manifold. Triplet/metastable excitation is exchange-driven
-        and collapses above ~50 eV, so it is deliberately absent. He-only.
-    beam_excitation_energy_eV:
-        Threshold and radiated energy per beam excitation event [eV] (the
-        2^1P excitation energy) in the cathode sheath solve's excitation
-        channel.
     beam_anomalous_model:
         Anomalous (beam-plasma instability) drag for the CSDA deposition
         module (``cathode/beam_deposition.deposit_beam``). A declared closure
@@ -2029,8 +2015,6 @@ def cathode_defaults():
         "beam_clump_fraction": 0.0,
         "beam_clump_enhancement": 1.0,
         "beam_deposition_smoothing_cm": 0.0,
-        "b_beam_excitation": 0.0,
-        "beam_excitation_energy_eV": 21.218,
         # --- cathode surface power balance ---
         "cathode_Ts_base_K": 1910.0,
         "cathode_heat_capacity_J_per_K": 120.0,
@@ -2923,9 +2907,21 @@ RETIRED_PARAM_KEYS = {
         "('fast_electron'), unconditionally"
     ),
     "beam_excitation_model": (
-        "nothing: the sheath solve's beam excitation channel is the 2^1P "
-        "cross section scaled by b_beam_excitation ('2p_scalar'), "
-        "unconditionally"
+        "nothing: the sheath solve carries no beam excitation channel; the "
+        "cathode-anode gap attenuation it feeds back is the effective cross "
+        "section inverted from the CSDA deposition march, and the march "
+        "books the beam's excitation of the gas"
+    ),
+    "b_beam_excitation": (
+        "nothing: the sheath solve carries no beam excitation channel; the "
+        "cathode-anode gap attenuation it feeds back is the effective cross "
+        "section inverted from the CSDA deposition march, and the march "
+        "books the beam's excitation of the gas"
+    ),
+    "beam_excitation_energy_eV": (
+        "nothing: the sheath solve carries no beam excitation channel, and "
+        "the CSDA deposition march reads each excitation's radiated energy "
+        "from the helium singlet manifold"
     ),
     "beam_product_transport": (
         "nothing: the CSDA ray's event products are banked in their birth "

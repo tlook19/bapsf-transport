@@ -202,8 +202,7 @@ NEUTRAL_CLOSURE_MEMBERS = ((PARAMS, "neutral_model"),) + tuple(
 #: Family K -- beam deposition, the anomalous (quasilinear) channel, and the
 #: walked tail: the anomalous closure, the walked-tail selector and its
 #: launch, cathode-face and anode-rider conventions, the clump pair, the
-#: deposition smoothing and the sheath solve's excitation pair, all coupled by
-#: the same guard block. Declaring the whole membership at once is what a
+#: deposition smoothing, all coupled by the same guard block. Declaring the whole membership at once is what a
 #: declaration block is for: change one key and the guards would otherwise
 #: refuse one at a time.
 BEAM_TAIL_CLOSURE_MEMBERS = (
@@ -217,8 +216,6 @@ BEAM_TAIL_CLOSURE_MEMBERS = (
     (PARAMS, "beam_clump_fraction"),
     (PARAMS, "beam_clump_enhancement"),
     (PARAMS, "beam_deposition_smoothing_cm"),
-    (PARAMS, "b_beam_excitation"),
-    (PARAMS, "beam_excitation_energy_eV"),
 )
 
 #: Family B, cathode half -- the cathode surface's directed-recycle channel.

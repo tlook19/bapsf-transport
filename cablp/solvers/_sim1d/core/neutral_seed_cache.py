@@ -101,7 +101,6 @@ INERT_PARAM_KEYS = frozenset({
     "cathode_prescribed_start_s",
     # --- beam deposition / excitation (no plasma/beam during equil) ---
     "beam_anomalous_model", "ql_relaxation_coeff",
-    "beam_excitation_energy_eV", "b_beam_excitation",
     # --- atomic-rate / cooling / plasma-physics scales (no plasma during equil) ---
     "recombination_energy_return",
     "Ti_birth_ionization",

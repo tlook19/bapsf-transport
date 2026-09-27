@@ -50,7 +50,6 @@ _CASE_ORDER = (
     "cathode-clamp-census",
     "circuit-current-driven-integration",
     "cathode-power-balance-under-current-drive",
-    "beam-excitation-channel",
     "beam-manifold-excitation-model",
     "beam-csda-deposition-model",
     "beam-gap-transmission-probe",
@@ -197,6 +196,7 @@ _CASE_ORDER = (
     "result-bitdiff-compare-synthetic",
     "beam-tail-retired-keys-refuse",
     "neutral-retired-keys-refuse",
+    "beam-l-b-profile-at-fed-back-cross",
 )
 
 

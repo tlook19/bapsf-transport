@@ -420,8 +420,7 @@ solver.
 recombination at the tabulated density, so the whole recombination loss is the
 quadratic term above and the cubic channel is identically zero; the
 `recombination_3b_loss` term a result carries reads zero throughout. The
-BULK coefficients carry no scale factor; the beam excitation channel is the one
-exception and carries `b_beam_excitation`. Each result records an
+coefficients carry no scale factor. Each result records an
 `atomic_rate_domain` ledger of where the run sampled below the tabulated $T_e$
 edge. Below that edge the lookup clamps the log-$T_e$ (and log-$n_e$)
 interpolation coordinate to the grid boundary rather than extrapolating, so

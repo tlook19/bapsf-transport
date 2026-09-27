@@ -85,7 +85,6 @@ from cablp.cathode.circuit_common import (
     PlasmaState,
     SolverResult,
     annular_emission_state,
-    beam_excitation_channel,
     beam_launched_current_A,
     c_log_ei,
     compute_beam_bypass_fraction,
@@ -831,8 +830,6 @@ def solve_beam_system_idriven(
     cathode_index: int = 0,
     anode_current_A: float | None = None,
     anode_T_e: float | None = None,
-    b_beam_excitation: float = 0.0,
-    beam_excitation_energy_eV: float = 21.218,
     schottky: bool = False,
     phi_c_cap_V: float = 1000.0,
     alpha_sheath: float | None = None,
@@ -874,8 +871,6 @@ def solve_beam_system_idriven(
         plasma_cross=plasma_cross,
         I_ion=I_ion,
         cathode_index=cathode_index,
-        b_beam_excitation=b_beam_excitation,
-        beam_excitation_energy_eV=beam_excitation_energy_eV,
     )
 
 
@@ -888,8 +883,6 @@ def assemble_beam_arrays(
     plasma_cross: np.ndarray,
     I_ion: float,
     cathode_index: int = 0,
-    b_beam_excitation: float = 0.0,
-    beam_excitation_energy_eV: float = 21.218,
 ) -> BeamResult:
     """Wrap a solved single-cathode sheath in the per-cell beam arrays.
 
@@ -909,8 +902,6 @@ def assemble_beam_arrays(
     v_beam = np.zeros(cells)
     n_beam = np.zeros(cells)
     beam_cross = np.zeros(cells)
-    beam_exc_cross = np.zeros(cells)
-    beam_exc_energy = np.zeros(cells)
 
     phi_c_0 = result.phi_c
     if phi_c_0 > I_ion:
@@ -950,16 +941,11 @@ def assemble_beam_arrays(
                 "cathode_phi_c_cap_V to the table top or below"
             )
         beam_cross[cathode_index] = He_EII_cross_lkup(_beam_eps)
-        (
-            beam_exc_cross[cathode_index],
-            beam_exc_energy[cathode_index],
-        ) = beam_excitation_channel(
-            phi_c_0,
-            b_beam_excitation,
-            threshold_eV=beam_excitation_energy_eV,
-        )
 
-    beam_atten_cross = beam_cross + beam_exc_cross
+    # A separate array: the caller overwrites its launch cell with the
+    # effective attenuation cross section it feeds back to the next solve,
+    # and ``beam_cross`` must keep the ionization cross section.
+    beam_atten_cross = beam_cross.copy()
     n_beam_ion = n_beam * beam_cross * v_beam
     A_ion_beam = n_beam_ion * nn
 
@@ -971,32 +957,19 @@ def assemble_beam_arrays(
             l_b[cathode_index] * beam_cross[cathode_index] * nn[cathode_index]
         )
 
-    # The Beer-Lambert column profile is at the launch potential ``phi_c_0``,
-    # so the deposition length and the beam it attenuates cannot be launched
-    # at two different energies.
-    l_b_profile = np.zeros(cells)
-    if beam_cross[cathode_index] != 0.0:
-        for j in range(cells):
-            l_b_profile[j] = compute_l_b(
-                phi_c_0, Te[j], ne[j], nn[j],
-                beam_atten_cross[cathode_index],
-            )
-
     return BeamResult(
         result=result,
         result_twin=None,
         v_beam=v_beam,
         n_beam=n_beam,
         beam_cross=beam_cross,
-        beam_exc_cross=beam_exc_cross,
         beam_atten_cross=beam_atten_cross,
         n_beam_ion=n_beam_ion,
         A_ion_beam=A_ion_beam,
         l_b=l_b,
         p_beam=p_beam,
-        l_b_profile=l_b_profile,
+        l_b_profile=np.zeros(cells),
         l_b_profile_twin=np.zeros(cells),
         x0_next=result.phi_c_plus,
         x0_twin_next=None,
-        beam_exc_energy_eV=beam_exc_energy,
     )

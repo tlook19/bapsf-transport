@@ -31,7 +31,6 @@ from typing import Literal
 
 import numpy as np
 
-from cablp.atomic.cross_sections import He_beam_excitation_channel
 from cablp.cathode.kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 from cablp.atomic.coefficients import b_11s_21p
 from cablp.constants import E_21p as _E_21p_eV, Ry_eV as _Ry_eV, atm_cross_cgs as _atm_cross_cgs
@@ -389,26 +388,23 @@ class BeamResult:
     v_beam          : beam electron velocity [cm/s]
     n_beam          : beam electron density [cm⁻³]
     beam_cross      : EII cross section at beam energy [cm²]
-    beam_exc_cross  : neutral-excitation cross section at beam energy [cm²]
-                      (zero unless b_beam_excitation is set)
-    beam_atten_cross: total inelastic attenuation cross section
-                      = beam_cross + beam_exc_cross [cm²]; feed this back as
-                      ``beam_cross_prev`` so the sheath solve's MFP sees both
-                      channels
+    beam_atten_cross: attenuation cross section fed back to the next sheath
+                      solve as ``beam_cross_prev`` [cm²]; assembled equal to
+                      ``beam_cross``, and the Sim1D cathode solve overwrites
+                      its launch cell with the effective cross section
+                      inverted from the CSDA gap transmission
     n_beam_ion      : n_beam * beam_cross * v_beam  [s⁻¹]
     A_ion_beam      : n_beam_ion * nn  [cm⁻³ s⁻¹]
     l_b             : beam mean free path per cathode cell [cm]; 0 elsewhere
     p_beam          : neutral ionization probability = l_b * beam_cross * nn [dimensionless]
-    l_b_profile     : per-cell MFP for the primary beam [cm]; zeros if beam_cross[0]==0
+    l_b_profile     : per-cell MFP for the primary beam [cm], at the launch
+                      cell's ``beam_atten_cross``; assembled as zeros and
+                      filled by the Sim1D cathode solve once it has written
+                      the attenuation cross section it feeds back
     l_b_profile_twin: per-cell MFP for the twin beam [cm]; zeros if no twin or beam_cross[-1]==0
     x0_next         : the solved ``phi_c_plus`` [V], exported as a cathode
                       diagnostic; the current-driven solve takes no warm start
     x0_twin_next    : the twin's counterpart, or None
-    beam_exc_energy_eV: radiated energy per excitation event [eV] at the
-                      cathode cells (constant threshold under "2p_scalar",
-                      energy-weighted manifold mean under "manifold"), or
-                      None from a builder that predates the manifold model
-                      (consumers fall back to ``beam_excitation_energy_eV``)
     """
 
     result: SolverResult
@@ -416,7 +412,6 @@ class BeamResult:
     v_beam: np.ndarray
     n_beam: np.ndarray
     beam_cross: np.ndarray
-    beam_exc_cross: np.ndarray
     beam_atten_cross: np.ndarray
     n_beam_ion: np.ndarray
     A_ion_beam: np.ndarray
@@ -426,7 +421,6 @@ class BeamResult:
     l_b_profile_twin: np.ndarray
     x0_next: float
     x0_twin_next: float | None
-    beam_exc_energy_eV: np.ndarray | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -516,9 +510,9 @@ _E21P_EV = float(_E_21p_eV)
 def _he_2p_excitation_cross_cm2(eps: float) -> float:
     """Float port of ``He_EIE_cross_DA(eps, b_11s_21p)`` [cm^2].
 
-    The mpmath original costs ~20 us per scalar call and sits in the per-step
-    cathode solve; this is the same dipole-allowed formula in plain floats
-    (agreement asserted to 1e-12 in the smoke test).
+    The mpmath original costs ~20 us per scalar call; this is the same
+    dipole-allowed formula in plain floats (agreement asserted to 1e-12 in
+    the smoke test).
     """
     a = b_11s_21p
     factor1 = _ATM_CROSS_CGS * _RY_EV / (eps * _E21P_EV)
@@ -527,65 +521,6 @@ def _he_2p_excitation_cross_cm2(eps: float) -> float:
     )
     factor3 = (eps + 1.0) / (eps + a[5])
     return factor1 * factor2 * factor3
-
-
-def beam_excitation_cross(
-    phi_c_eV: float,
-    b_beam_excitation: float,
-    threshold_eV: float = 21.218,
-) -> float:
-    """Neutral-excitation cross section [cm^2] for the primary beam.
-
-    The 1^1S -> 2^1P dipole-allowed cross section at the beam energy, scaled
-    by ``b_beam_excitation``. 2^1P is the dominant singlet channel at beam
-    energies (60-180 eV); the rest of the singlet manifold (2^1S, 3^1P, ...)
-    adds roughly another 30-50%, which the scale factor is meant to absorb
-    (``~1.4`` approximates the full manifold, ``1.0`` is 2^1P alone). Triplet
-    (metastable) excitation is exchange-driven and collapses above ~50 eV, so
-    it is deliberately not modeled. ``b_beam_excitation = 0`` (default)
-    disables the channel entirely and reproduces the historical beam.
-    """
-    if b_beam_excitation == 0.0 or phi_c_eV <= threshold_eV:
-        return 0.0
-    return float(b_beam_excitation) * _he_2p_excitation_cross_cm2(
-        phi_c_eV / threshold_eV
-    )
-
-
-def beam_excitation_channel(
-    phi_c_eV: float,
-    b_beam_excitation: float,
-    model: str = "2p_scalar",
-    threshold_eV: float = 21.218,
-) -> tuple[float, float]:
-    """Beam excitation channel: ``(sigma_cm2, E_rad_eV_per_event)``.
-
-    ``model = "2p_scalar"`` (historical): sigma from
-    ``beam_excitation_cross`` (b x the 2^1P cross section) and the constant
-    ``threshold_eV`` radiated per event — the pre-manifold booking, byte-for-
-    byte. ``model = "manifold"``: the measured Ralchenko singlet manifold sum
-    (``He_beam_excitation_channel``: fitted n <= 4 levels + Eq. (5) tail)
-    with the energy-weighted mean radiated energy; ``b_beam_excitation``
-    survives as a pure sensitivity multiplier on the cross section (benchmark
-    value 1.0), and ``threshold_eV`` is ignored — thresholds live in the
-    manifold registry.
-    """
-    if model == "2p_scalar":
-        return (
-            beam_excitation_cross(
-                phi_c_eV, b_beam_excitation, threshold_eV=threshold_eV
-            ),
-            threshold_eV,
-        )
-    if model == "manifold":
-        if b_beam_excitation == 0.0:
-            return 0.0, 0.0
-        sigma, E_rad = He_beam_excitation_channel(phi_c_eV)
-        return float(b_beam_excitation) * sigma, E_rad
-    raise ValueError(
-        f"unknown beam_excitation_model {model!r}; "
-        "expected '2p_scalar' or 'manifold'"
-    )
 
 
 def j_eth_crit(psi: float, J_i: float, mu: float) -> float:

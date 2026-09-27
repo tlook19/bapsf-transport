@@ -75,103 +75,27 @@ def _qlr_config(**overrides):
 
 
 # --------------------------------------------------------------------
-# beam-excitation-channel
-# --------------------------------------------------------------------
-@_case(
-    "beam-excitation-channel",
-    historical_stance=True,
-    provides=(
-        "beam_excitation_cross", "exc_beam", "exc_params", "launch_idx",
-    ),
-)
-def _case_beam_excitation_channel(cathode_solve):
-    # --- Beam excitation channel (b_beam_excitation, default 0 = historical).
-    params, flags = _base_config()
-    cathode_flags = _cathode_flags()
-    from cablp.cathode.circuit_common import beam_excitation_cross
-
-    sigma_exc_100 = beam_excitation_cross(100.0, 1.0)
-    assert 5.0e-18 < sigma_exc_100 < 2.0e-17
-    assert beam_excitation_cross(100.0, 0.0) == 0.0
-    assert beam_excitation_cross(10.0, 1.0) == 0.0  # below threshold
-
-    # The b_beam_excitation knob scales the sheath solve's excitation
-    # channel.
-    exc_params = dict(params)
-    exc_params["b_beam_excitation"] = 1.0
-    exc_sim = LAPDSim1D(exc_params, cathode_flags)
-    exc_sim._circuit_I_loop = 3000.0
-    exc_solve = exc_sim.solve_cathode_boundary()
-    exc_beam = exc_solve.beam_result
-    base_beam = cathode_solve.beam_result
-    launch_idx = int(np.flatnonzero(exc_beam.beam_cross)[0])
-    assert exc_beam.beam_exc_cross[launch_idx] > 0.0
-    # Both first solves run from a zeroed sigma_b cache, so the circuit state
-    # is identical and the only difference is the attenuation cross section:
-    # the inelastic deposition length must be strictly shorter everywhere.
-    assert np.isclose(
-        exc_solve.beam_result.result.phi_c, base_beam.result.phi_c
-    )
-    positive = base_beam.l_b_profile > 0.0
-    assert np.all(
-        exc_beam.l_b_profile[positive] < base_beam.l_b_profile[positive]
-    )
-    exc_terms = exc_sim.beam_ionization_rhs_terms(cathode_solve=exc_solve)
-    exc_rad = exc_terms["beam_excitation_radiation"]
-    assert np.all(exc_rad.Ee <= 0.0)
-    assert np.any(exc_rad.Ee < 0.0)
-    for field_values in (exc_rad.n, exc_rad.nn, exc_rad.M, exc_rad.Ei):
-        assert np.allclose(field_values, 0.0)
-    # The 2^1P channel reports the constant threshold as its per-event
-    # energy.
-    assert float(exc_beam.beam_exc_energy_eV[launch_idx]) == 21.218
-    return locals()
-
-
-# --------------------------------------------------------------------
 # beam-manifold-excitation-model
 # --------------------------------------------------------------------
 @_case(
     "beam-manifold-excitation-model",
     historical_stance=True,
 )
-def _case_beam_manifold_excitation_model(beam_excitation_cross):
-    # --- A2: the manifold excitation channel (WP-A).
-    from cablp.cathode.circuit_common import beam_excitation_channel
+def _case_beam_manifold_excitation_model():
+    # --- A2: the manifold excitation channel the CSDA march books (WP-A).
     from cablp.atomic.cross_sections import (
         He_beam_excitation_channel as _He_manifold_channel,
     )
+    from cablp.cathode.circuit_common import _he_2p_excitation_cross_cm2
 
-    # Dispatch: the scalar path reproduces the historical function
-    # byte-for-byte; the manifold path matches the _cross helper with
-    # b_beam_excitation as a pure multiplier on the cross section only.
-    assert beam_excitation_channel(100.0, 1.4) == (
-        beam_excitation_cross(100.0, 1.4),
-        21.218,
-    )
-    _mf_sigma, _mf_E = beam_excitation_channel(100.0, 1.0, model="manifold")
-    assert (_mf_sigma, _mf_E) == _He_manifold_channel(100.0)
-    _mf_sigma_h, _mf_E_h = beam_excitation_channel(
-        100.0, 0.5, model="manifold"
-    )
-    assert np.isclose(_mf_sigma_h, 0.5 * _mf_sigma) and _mf_E_h == _mf_E
-    assert beam_excitation_channel(100.0, 0.0, model="manifold") == (0.0, 0.0)
+    _mf_sigma, _mf_E = _He_manifold_channel(100.0)
     # Below the lowest manifold threshold (2^1S, 20.6158 eV).
-    assert beam_excitation_channel(15.0, 1.0, model="manifold") == (0.0, 0.0)
-    # The measured manifold vs the historical 2^1P channel at 100 eV
+    assert _He_manifold_channel(15.0) == (0.0, 0.0)
+    # The measured manifold vs the 2^1P channel alone at 100 eV
     # (measure_beam_manifold.py, 2026-07-20): 1.67x the events, mean
-    # radiated energy 21.98 eV — within the retired estimate's 1.4 +- 0.4.
-    assert 1.55 < _mf_sigma / beam_excitation_cross(100.0, 1.0) < 1.80
+    # radiated energy 21.98 eV.
+    assert 1.55 < _mf_sigma / _he_2p_excitation_cross_cm2(100.0 / 21.218) < 1.80
     assert 21.5 < _mf_E < 22.5
-    for bad_call in (
-        lambda: beam_excitation_channel(100.0, 1.0, model="bogus"),
-    ):
-        try:
-            bad_call()
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("expected ValueError from excitation channel")
 
     # Lookup-table front end (deposit_beam's hot path, 2026-07-21): exact
     # at the table nodes by construction; between nodes the interp error
@@ -209,12 +133,12 @@ def _case_beam_manifold_excitation_model(beam_excitation_cross):
         "csda_sim", "csda_solve", "csda_terms",
     ),
 )
-def _case_beam_csda_deposition_model(exc_params):
+def _case_beam_csda_deposition_model():
     # --- B2: the CSDA deposition module wired into the cathode solve.
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     cathode_flags = _cathode_flags()
-    csda_params = dict(exc_params)
+    csda_params = dict(_base_config()[0])
     csda_sim = LAPDSim1D(csda_params, cathode_flags)
     csda_sim._circuit_I_loop = 3000.0
     csda_solve = csda_sim.solve_cathode_boundary()
@@ -402,7 +326,7 @@ def _case_beam_gap_transmission_probe(
     historical_stance=True,
     provides=("bl_diag", "csda_eta", "csda_ledger"),
 )
-def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, exc_params):
+def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, csda_params):
     # --- Item 35 ledger tripwire: probe, deposition ray and circuit are three
     # views of the SAME gap crossing, and nothing else in the model notices
     # when they disagree (each side is internally consistent). On a healthy
@@ -517,7 +441,7 @@ def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, exc_params):
     # ``TwinCathode``; the armed side is asserted at the twin fixture.
     assert "end_beam_gap_survival_ray" not in csda_diag
     bl_diag = LAPDSim1D(
-        dict(exc_params), dict(cathode_flags)
+        dict(csda_params), dict(cathode_flags)
     )._cathode_diagnostic_snapshot()
     for _bl_key in ("probe", "ray", "circuit"):
         assert np.isnan(bl_diag[f"source_beam_gap_survival_{_bl_key}"])
@@ -3268,6 +3192,8 @@ def _case_beam_tail_retired_keys_refuse():
         "heating_anomalous_tail_ionization": "on",
         "ionization_birth_energy_model": "conservative",
         "Te_birth_ionization": "local",
+        "b_beam_excitation": 1.4,
+        "beam_excitation_energy_eV": 21.218,
     }
     _rb_flags = {
         "beam_anode_interception": True,
@@ -3315,3 +3241,46 @@ def _case_beam_tail_retired_keys_refuse():
             assert _rb_key in str(_rb_exc), str(_rb_exc)
         else:
             raise AssertionError(f"{_rb_key}={_rb_value!r} ACCEPTED")
+
+
+# --------------------------------------------------------------------
+# beam-l-b-profile-at-fed-back-cross
+# --------------------------------------------------------------------
+@_case("beam-l-b-profile-at-fed-back-cross", historical_stance=True)
+def _case_beam_l_b_profile_at_fed_back_cross(
+    csda_sim, csda_solve, csda_launch, csda_sigma_eff
+):
+    # The saved l_b_profile is the primary beam's per-cell mean free path at
+    # the attenuation cross section the solve FEEDS BACK -- the launch cell's
+    # beam_atten_cross after the CSDA gap-transmission inversion overwrote
+    # it -- not at the ionization cross section the beam assembly started
+    # from. Same function, same inputs, so the comparison is exact.
+    from cablp.cathode.circuit_common import compute_l_b
+    from cablp.solvers._sim1d.core.state import derive_state
+
+    _lp_beam = csda_solve.beam_result
+    assert float(_lp_beam.beam_atten_cross[csda_launch]) == csda_sigma_eff
+    _lp_state = csda_sim._smoothed_sample_state(csda_sim.state)
+    _lp_derived = derive_state(
+        _lp_state, floors=csda_sim.floors, ion_mass_g=csda_sim.ion_mass_g
+    )
+    _lp_phi_c = _lp_beam.result.phi_c
+
+    def _lp_profile(sigma):
+        return np.array([
+            compute_l_b(
+                _lp_phi_c, _lp_derived.Te[j], _lp_state.n[j],
+                _lp_state.nn[j], sigma,
+            )
+            for j in range(csda_sim.geometry.cells)
+        ])
+
+    _lp_expected = _lp_profile(_lp_beam.beam_atten_cross[csda_launch])
+    assert np.all(_lp_expected > 0.0)
+    assert _lp_beam.l_b_profile.tobytes() == _lp_expected.tobytes()
+    # NEGATIVE CONTROL: at this state the inversion moved the cross section,
+    # so the profile at the pre-overwrite (ionization) cross section is a
+    # different array -- the check above can fail.
+    _lp_pre = _lp_profile(_lp_beam.beam_cross[csda_launch])
+    assert _lp_beam.beam_cross[csda_launch] != csda_sigma_eff
+    assert _lp_pre.tobytes() != _lp_expected.tobytes()

@@ -1218,23 +1218,11 @@ def _case_circuit_current_driven_integration():
         validate_cathode_solver_model(m3_params, resolved_cathode_flags)
         == "current_driven"
     )
-    # The excitation channel is consumed by the current-driven builder: the
-    # 2^1P cross section and its constant radiated energy per event.
-    m3_exc_params = dict(m3_params, b_beam_excitation=1.0)
-    m3_exc_sim = LAPDSim1D(m3_exc_params, resolved_cathode_flags)
-    m3_exc_sim._circuit_I_loop = 800.0
-    m3_exc_solve = m3_exc_sim.solve_cathode_boundary(update_cache=False)
-    m3_launch = int(
-        np.flatnonzero(m3_exc_solve.beam_result.beam_cross)[0]
-    )
-    assert m3_exc_solve.beam_result.beam_exc_cross[m3_launch] > 0.0
-    assert (
-        float(m3_exc_solve.beam_result.beam_exc_energy_eV[m3_launch])
-        == 21.218
-    )
     # B2: the CSDA deposition rides the current-driven dispatch too (the
     # solver-agnostic interface's second consumer).
-    m3_csda_solve = m3_exc_solve
+    m3_csda_sim = LAPDSim1D(dict(m3_params), resolved_cathode_flags)
+    m3_csda_sim._circuit_I_loop = 800.0
+    m3_csda_solve = m3_csda_sim.solve_cathode_boundary(update_cache=False)
     assert m3_csda_solve.beam_deposition is not None
     m3_csda_dep = m3_csda_solve.beam_deposition[0]
     assert m3_csda_dep is not None
