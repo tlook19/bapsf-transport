@@ -34,9 +34,8 @@ STRUCTURAL_FLAG_KEYS = (
     "TwinCathode",
     "cathode_coupling",
     "neutral_momentum",
-    "neutral_two_zone",
     # En is a packed row, so the layout check already refuses a mismatch; the
-    # flag is listed for the same reason the two above are, so the refusal
+    # flag is listed for the same reason the one above is, so the refusal
     # names the closure that changed rather than only its width.
     "neutral_energy",
 )

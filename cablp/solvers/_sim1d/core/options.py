@@ -33,17 +33,12 @@ def collision_operator_kwargs(input_dict, flags, *, gas_type):
     channel must all read ONE gas, ONE reference neutral temperature, and
     ONE drag scale, or their split stops being a split.
     """
-    drag_enabled = bool(flags.get("ion_neutral_drag", True))
     return {
         "gas_type": gas_type,
         "Tn_eV": float(input_dict.get("Tn_K", 300.0))
         * kb_cgs
         / ev_to_erg,
-        "b_ion_neutral_drag": (
-            float(input_dict.get("b_ion_neutral_drag", 1.0))
-            if drag_enabled
-            else 0.0
-        ),
+        "b_ion_neutral_drag": float(input_dict.get("b_ion_neutral_drag", 1.0)),
     }
 
 
@@ -62,14 +57,9 @@ def surface_loss_kwargs(input_dict):
 
 
 def ion_neutral_drag_kwargs(input_dict, flags, *, gas_type):
-    drag_enabled = bool(flags.get("ion_neutral_drag", True))
     return {
         "gas_type": gas_type,
-        "b_ion_neutral_drag": (
-            float(input_dict.get("b_ion_neutral_drag", 1.0))
-            if drag_enabled
-            else 0.0
-        ),
+        "b_ion_neutral_drag": float(input_dict.get("b_ion_neutral_drag", 1.0)),
     }
 
 
@@ -101,7 +91,6 @@ def ion_charge_exchange_kwargs(input_dict, flags, *, gas_type):
     return {
         "gas_type": gas_type,
         "Tn_fit": float(input_dict.get("Tn_fit", 0.1)),
-        "cx": bool(flags.get("cx", True)),
     }
 
 
@@ -139,17 +128,12 @@ def neutral_energy_timestep_kwargs(
     """
     if not neutral_energy:
         return None
-    drag_enabled = bool(flags.get("ion_neutral_drag", True))
     return {
         "gas_type": gas_type,
         "Tn_eV": float(input_dict.get("Tn_K", 300.0))
         * kb_cgs
         / ev_to_erg,
-        "b_ion_neutral_drag": (
-            float(input_dict.get("b_ion_neutral_drag", 1.0))
-            if drag_enabled
-            else 0.0
-        ),
+        "b_ion_neutral_drag": float(input_dict.get("b_ion_neutral_drag", 1.0)),
         "alpha_E": neutral_energy_alpha,
         "Tn_fit": neutral_energy_wall_Tn_eV,
     }

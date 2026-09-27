@@ -168,7 +168,6 @@ CLEAN_PARAMS = {
 CLEAN_FLAGS = {
     "Plasma": True,
     "implicit_heat_conduction": True,
-    "neutral_prebreakdown": False,
     # The cathode solve caches a continuation guess across steps, which would
     # make a run depend on its own step history.
     "cathode_coupling": False,

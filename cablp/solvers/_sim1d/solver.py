@@ -92,7 +92,6 @@ from .physics.conduction import (
 )
 from .physics.kinetic_dvm import (
     ANNULUS_FLIGHT_MODELS as KINETIC_DVM_ANNULUS_FLIGHT_MODELS,
-    ELASTIC_MODELS as KINETIC_DVM_ELASTIC_MODELS,
     EXCHANGE_MODELS as KINETIC_DVM_EXCHANGE_MODELS,
     GRID_TI_CAP_EV,
     LEDGER_ENERGY_BIRTH_CHANNELS as KINETIC_DVM_ENERGY_BIRTH_CHANNELS,
@@ -102,7 +101,6 @@ from .physics.kinetic_dvm import (
     LEDGER_SAVED_FRAME_KEYS as KINETIC_DVM_SAVED_FRAME_KEYS,
     NEUTRAL_MOMENT_SAVED_FRAME_KEYS as KINETIC_DVM_NEUTRAL_MOMENT_KEYS,
     TRANSFER_HOLDS as KINETIC_DVM_TRANSFER_HOLDS,
-    WALL_REFLECTION_MODELS as KINETIC_DVM_WALL_REFLECTION_MODELS,
     TransientDVM,
     # The engine's own jet-spec validators, applied by the solver BEFORE the
     # launch band is formed. The band divides R_E by R_N, so a spec that
@@ -145,7 +143,6 @@ from .physics.energy import (
     electron_cooling_rhs,
     electron_cooling_rhs_terms,
     electron_ion_exchange_rhs,
-    ion_charge_exchange_rhs,
 )
 from .physics.flux import (
     ion_sound_speed,
@@ -157,7 +154,6 @@ from .physics.neutrals import (
     gas_puff_rate_profile,
     _effective_pump_speed,
     neutral_exchange_coefficients,
-    neutral_exchange_rhs,
     neutral_exchange_two_zone_rhs,
     neutral_fluid_flux_rhs,
     neutral_initial_profile_values,
@@ -171,7 +167,6 @@ from .physics.neutrals import (
     two_zone_knudsen_coefficients,
 )
 from .physics.reactions import (
-    gas_puff_local_ionization_rhs as _gas_puff_local_ionization_rhs,
     reaction_rhs,
     reaction_rhs_terms,
     _birth_temperature,
@@ -197,8 +192,6 @@ from .physics.sources import (
     ionization_birth_neutral_temperature_eV,
     neutral_cx_channel_rhs,
     neutral_energy_transfer_row,
-    ion_neutral_drag_rhs,
-    ion_neutral_frictional_heating_rhs,
     parallel_momentum_sink_rhs,
     parallel_momentum_sink_heating_rhs,
     neutral_energy_wall_rhs,
@@ -1033,7 +1026,6 @@ class LAPDSim1D:
             self._input_dict,
             self._flags,
             geometry=self._geometry,
-            ion_neutral_moment_closure=self._ion_neutral_moment_closure,
             hyperbolic_wave_speed=self._hyperbolic_wave_speed,
             raw_stage_validation=self._raw_stage_validation,
         )
@@ -1146,15 +1138,13 @@ class LAPDSim1D:
             self._flags.get("hyperbolic_energy_consistent")
         )
         # R4.3 / audit A7+A8: the moment-closed reduced ion-neutral collision
-        # operator (Phelps He+/He). Presence-gated -- when on it replaces the
-        # four legacy ion-neutral terms; when off it is a strict no-op. He-only.
-        self._ion_neutral_moment_closure = bool(
-            self._flags.get("ion_neutral_moment_closure")
-        )
-        if self._ion_neutral_moment_closure and self._gas_type != "He":
+        # operator (Phelps He+/He) carries the ion-neutral drag, frictional
+        # heating, thermalization and CX cooling as ONE term. He-only.
+        if self._gas_type != "He":
             raise ValueError(
-                "ion_neutral_moment_closure uses the Phelps He+/He cross "
-                f"sections and requires gas_type='He' (got {self._gas_type!r})"
+                "the moment-closed ion-neutral collision operator uses the "
+                "Phelps He+/He cross sections and requires gas_type='He' "
+                f"(got {self._gas_type!r})"
             )
         # The presheath sigma_in model shares the He-only Phelps cross
         # section. Its two legacy arms ("constant", "cx_derived") were the
@@ -1203,19 +1193,11 @@ class LAPDSim1D:
             raise ValueError(
                 f"R_mesh_ohm (anode-mesh resistance) must be >= 0 (got {_R_mesh})"
             )
-        exchange_model = str(
-            self._input_dict.get("neutral_exchange_model")
-        )
-        if exchange_model not in ("constant", "knudsen"):
-            raise ValueError(
-                "neutral_exchange_model must be 'constant' or 'knudsen' "
-                f"(got {exchange_model!r})"
-            )
         validate_phase_config(
             self._phase_transition_mode(), self._prebreakdown_timeout_action()
         )
         validate_gas_puff_config(self._input_dict)
-        if str(self._input_dict.get("gas_puff_profile")) == "orifice":
+        if bool(self._input_dict.get("gas_puff_enabled")):
             # Derive the row ONCE, here, for the refusals that need the mesh:
             # a port off the grid and a column that is not inside the vessel
             # wall are configuration errors, and they must not first surface
@@ -1225,7 +1207,6 @@ class LAPDSim1D:
                 self._geometry,
                 1.0,
                 float(self._input_dict.get("gas_puff_valves")),
-                profile="orifice",
                 z_cm=self._input_dict.get("gas_puff_z_cm"),
                 orifice_id_cm=self._input_dict.get("gas_puff_orifice_id_cm"),
                 orifice_length_cm=self._input_dict.get(
@@ -1233,39 +1214,25 @@ class LAPDSim1D:
                 ),
             )
         self._neutral_momentum = bool(self._flags.get("neutral_momentum"))
-        self._neutral_two_zone = bool(self._flags.get("neutral_two_zone"))
-        if self._neutral_two_zone:
-            if (
-                str(self._input_dict.get("neutral_exchange_model"))
-                != "knudsen"
-            ):
-                raise ValueError(
-                    "neutral_two_zone requires neutral_exchange_model="
-                    "'knudsen': the per-zone conductances have no "
-                    "constant counterpart"
-                )
-            # Geometry and Tn are fixed for the run: the zone volumes, the
-            # radial exchange conductance, and the per-zone axial Knudsen
-            # conductances are computed once here.
-            self._zone_volumes = neutral_zone_volumes(self._geometry)
-            self._check_annulus_not_collapsed()
-            self._zone_exchange_cm3_s = neutral_zone_exchange_conductance(
-                geometry=self._geometry,
-                Tn_K=float(self._input_dict.get("Tn_K")),
-                mu_neutral=self._mu_neutral,
-            )
-            self._zone_axial_coeffs = two_zone_knudsen_coefficients(
-                geometry=self._geometry,
-                Tn_K=float(self._input_dict.get("Tn_K")),
-                mu_neutral=self._mu_neutral,
-                clausing_scale=float(
-                    self._input_dict.get("neutral_clausing_scale")
-                ),
-            )
-        else:
-            self._zone_volumes = None
-            self._zone_exchange_cm3_s = None
-            self._zone_axial_coeffs = None
+        # The neutral gas is carried in two zones, the plasma COLUMN (nn) and
+        # the ANNULUS (nn_a). Geometry and Tn are fixed for the run: the zone
+        # volumes, the radial exchange conductance, and the per-zone axial
+        # Knudsen conductances are computed once here.
+        self._zone_volumes = neutral_zone_volumes(self._geometry)
+        self._check_annulus_not_collapsed()
+        self._zone_exchange_cm3_s = neutral_zone_exchange_conductance(
+            geometry=self._geometry,
+            Tn_K=float(self._input_dict.get("Tn_K")),
+            mu_neutral=self._mu_neutral,
+        )
+        self._zone_axial_coeffs = two_zone_knudsen_coefficients(
+            geometry=self._geometry,
+            Tn_K=float(self._input_dict.get("Tn_K")),
+            mu_neutral=self._mu_neutral,
+            clausing_scale=float(
+                self._input_dict.get("neutral_clausing_scale")
+            ),
+        )
         # Assembled two-zone backward-Euler matrices, keyed on the exact bits
         # of dt and the pump state -- everything else the assembly reads is one
         # of the run constants above. See _two_zone_implicit_matrix.
@@ -1409,47 +1376,7 @@ class LAPDSim1D:
                     "of the transient DVM's annulus zone and has no meaning "
                     f"under neutral_model={self._neutral_model!r}. Accepted: "
                     "'rates' anywhere, or 'bounded_chord' with "
-                    "neutral_model='kinetic_dvm' and the neutral_two_zone "
-                    f"flag (got {flights!r})"
-                )
-            # Same statement for the cylindrical wall's reflection spectrum:
-            # it selects what the transient DVM returns its non-accommodated
-            # wall share on, and no other neutral model has such a share.
-            #
-            # The value accepted off-arm is the SHIPPED TEMPLATE DEFAULT,
-            # read from the template itself. Off-arm the key has no meaning
-            # under ANY of its values, so what the guard actually refuses is
-            # a CONFIGURED choice sitting where it can do nothing -- and the
-            # only value that is not a configured choice is the one that
-            # arrives unasked. Spelling that as a position in
-            # KINETIC_DVM_WALL_REFLECTION_MODELS coupled the guard to a tuple
-            # ORDERING that merely happened to coincide with the default, and
-            # the coincidence broke the moment the default moved (the
-            # diffuse_elastic adoption, 2026-08-30): every moment-model build,
-            # the golden included, refused at construction. Reading the
-            # template keeps the guard correct through any future flip.
-            inert = str(
-                input_dict_template_1d["neutral_kinetic_dvm_wall_reflection"]
-            )
-            reflection = str(
-                self._input_dict.get(
-                    "neutral_kinetic_dvm_wall_reflection"
-                )
-            )
-            if reflection != inert:
-                configured = " / ".join(
-                    repr(m)
-                    for m in KINETIC_DVM_WALL_REFLECTION_MODELS
-                    if m != inert
-                )
-                raise ValueError(
-                    "neutral_kinetic_dvm_wall_reflection selects the "
-                    "spectrum the transient DVM returns its non-accommodated "
-                    "cylindrical-wall share on and has no meaning under "
-                    f"neutral_model={self._neutral_model!r}. Accepted: "
-                    f"{inert!r} (the shipped default) anywhere, or "
-                    f"{configured} with neutral_model='kinetic_dvm' and "
-                    f"the neutral_two_zone flag (got {reflection!r})"
+                    f"neutral_model='kinetic_dvm' (got {flights!r})"
                 )
             # Same statement for the transfer hold: it selects how the
             # plasma integrates the DVM's tick-booked coupling term, and
@@ -1481,8 +1408,7 @@ class LAPDSim1D:
                     "meaning under "
                     f"neutral_model={self._neutral_model!r}, which carries no "
                     "such counted stream. Accepted: leave it off, or set it "
-                    "with neutral_model='kinetic_dvm' and the "
-                    "neutral_two_zone flag"
+                    "with neutral_model='kinetic_dvm'"
                 )
             for _key in (
                 "neutral_kinetic_dvm_cathode_jet_R_N",
@@ -1514,8 +1440,7 @@ class LAPDSim1D:
                     "meaning under "
                     f"neutral_model={self._neutral_model!r}, which carries no "
                     "such counted stream. Accepted: leave it off, or set it "
-                    "with neutral_model='kinetic_dvm' and the "
-                    "neutral_two_zone flag"
+                    "with neutral_model='kinetic_dvm'"
                 )
             for _key in (
                 "neutral_kinetic_dvm_anode_jet_R_N",
@@ -1546,8 +1471,7 @@ class LAPDSim1D:
                     "share and a thermal remainder, and has no meaning under "
                     f"neutral_model={self._neutral_model!r}, which carries no "
                     "such counted stream. Accepted: leave it off, or set it "
-                    "with neutral_model='kinetic_dvm' and the "
-                    "neutral_two_zone flag"
+                    "with neutral_model='kinetic_dvm'"
                 )
             for _key in (
                 "neutral_kinetic_dvm_end_wall_jet_R_N",
@@ -1582,24 +1506,8 @@ class LAPDSim1D:
                     "meaning under "
                     f"neutral_model={self._neutral_model!r}, which launches "
                     "no such spectrum. Accepted: leave it unset, or set it "
-                    "with neutral_model='kinetic_dvm', the neutral_two_zone "
-                    f"flag and at least one armed jet (got {_width!r})"
-                )
-            # B6: the same statement for the baffle interception. It makes the
-            # geometry's thin annular baffles act on the transient DVM's
-            # ANNULUS, and no other neutral model carries such an annulus for
-            # them to act on -- the fluid's own baffles ride neutral_baffles,
-            # which is a different flag and is untouched here.
-            if bool(self._flags.get("neutral_kinetic_dvm_baffles")):
-                raise ValueError(
-                    "neutral_kinetic_dvm_baffles makes the geometry's thin "
-                    "annular baffles intercept the transient DVM's annulus "
-                    "flux, and has no meaning under "
-                    f"neutral_model={self._neutral_model!r}, which carries no "
-                    "such annulus. The FLUID baffles are the separate "
-                    "neutral_baffles flag and are unaffected. Accepted: leave "
-                    "it off, or set it with neutral_model='kinetic_dvm', the "
-                    "neutral_two_zone flag and neutral_baffles"
+                    "with neutral_model='kinetic_dvm' and at least one armed "
+                    f"jet (got {_width!r})"
                 )
 
     def _init_numerical_guards(self):
@@ -2058,30 +1966,20 @@ class LAPDSim1D:
         act on, so no selector here can be silently inert.
         """
         # Evolved neutral thermal energy (default ON; bit-exact when off). The
-        # field only means anything alongside the moment-closed collision
-        # operator (which is what reads and feeds it) and an evolved wind
-        # (which is what the frictional half is booked against), and there is
-        # no consistent reading of it under a kinetic neutral model -- so that
-        # is refused here rather than silently resolved.
+        # field is read and fed by the moment-closed collision operator and
+        # only means anything alongside an evolved wind (which is what the
+        # frictional half is booked against), and there is no consistent
+        # reading of it under a kinetic neutral model -- so each of those is
+        # refused here rather than silently resolved.
         self._neutral_energy = bool(self._flags.get("neutral_energy"))
         if self._neutral_energy:
-            if not self._ion_neutral_moment_closure:
-                raise ValueError(
-                    "the neutral_energy flag requires "
-                    "ion_neutral_moment_closure: the moment-closed collision "
-                    "operator is the only term that reads the per-cell Tn and "
-                    "books the neutral side of the exchange into En, so "
-                    "without it the field would be evolved by nothing but the "
-                    "wall sink. Accepted: ion_neutral_moment_closure with "
-                    "neutral_momentum"
-                )
             if not self._neutral_momentum:
                 raise ValueError(
                     "the neutral_energy flag requires neutral_momentum: the "
                     "frictional half of the collisional energy is booked "
                     "against the relative velocity u - u_n, which has no "
                     "meaning without an evolved neutral wind. Accepted: "
-                    "ion_neutral_moment_closure with neutral_momentum"
+                    "neutral_energy with neutral_momentum"
                 )
             if self._neutral_model != "moment":
                 raise ValueError(
@@ -2622,16 +2520,6 @@ class LAPDSim1D:
             raise ValueError(
                 "beam_clump_enhancement must be >= 1 (got "
                 f"{self._input_dict.get('beam_clump_enhancement')})"
-            )
-        _fli = float(self._input_dict.get("gas_puff_local_ionization_fraction"))
-        if not 0.0 <= _fli < 1.0:
-            raise ValueError(
-                f"gas_puff_local_ionization_fraction must be in [0, 1) (got {_fli})"
-            )
-        if _fli > 0.0 and self._flags.get("neutral_two_zone"):
-            raise ValueError(
-                "gas_puff_local_ionization_fraction is not supported with "
-                "neutral_two_zone (annulus puff routing); disable one"
             )
         _fgp = float(self._input_dict.get("gas_puff_delivery_fraction"))
         if not np.isfinite(_fgp) or not 0.0 < _fgp <= 1.0:
@@ -3450,7 +3338,7 @@ class LAPDSim1D:
             y,
             self._geometry.cells,
             neutral_momentum=self._neutral_momentum,
-            neutral_two_zone=self._neutral_two_zone,
+            neutral_two_zone=True,
             neutral_annulus_momentum=False,
             neutral_energy=self._neutral_energy,
         )
@@ -3484,35 +3372,19 @@ class LAPDSim1D:
         preference: those combinations raise here rather than silently
         letting one of the two win.
         """
-        if not self._neutral_two_zone:
-            raise ValueError(
-                "neutral_model='kinetic_dvm' carries column AND annulus "
-                "distributions and stores their moments in nn / nn_a: set "
-                "the neutral_two_zone flag"
-            )
         if self._neutral_momentum:
             raise ValueError(
                 "neutral_model='kinetic_dvm' is incompatible with the "
                 "neutral_momentum flag: the kinetic state already carries "
                 "the neutral momentum as the first moment of f, so an "
                 "evolved M_n field would be a second, unowned copy. "
-                "Accepted: neutral_two_zone alone"
+                "Accepted: neutral_momentum off"
             )
         if self._gas_type != "He":
             raise ValueError(
                 "neutral_model='kinetic_dvm' is wired for gas_type='He' "
                 "only (the Phelps He+/He cross sections and the helium "
                 f"velocity grid); got {self._gas_type!r}"
-            )
-        if float(
-            self._input_dict.get("gas_puff_local_ionization_fraction")
-        ) > 0.0:
-            raise ValueError(
-                "neutral_model='kinetic_dvm' is incompatible with "
-                "gas_puff_local_ionization_fraction > 0: that channel "
-                "removes puff neutrals on the fluid book, which the "
-                "kinetic particle ledger would not see. Accepted: "
-                "gas_puff_local_ionization_fraction = 0"
             )
         cadence = float(
             self._input_dict.get("neutral_kinetic_dvm_cadence_s")
@@ -3530,24 +3402,12 @@ class LAPDSim1D:
                 "neutral_kinetic_dvm_accommodation is a surface property in "
                 f"[0, 1] (got {accommodation})"
             )
-        reflection = str(
-            self._input_dict.get(
-                "neutral_kinetic_dvm_wall_reflection"
-            )
-        )
-        if reflection not in KINETIC_DVM_WALL_REFLECTION_MODELS:
-            raise ValueError(
-                "neutral_kinetic_dvm_wall_reflection must be one of "
-                f"{KINETIC_DVM_WALL_REFLECTION_MODELS} (got {reflection!r})"
-            )
-        elastic = str(
-            self._input_dict.get("neutral_kinetic_dvm_elastic")
-        )
-        if elastic not in KINETIC_DVM_ELASTIC_MODELS:
-            raise ValueError(
-                "neutral_kinetic_dvm_elastic must be one of "
-                f"{KINETIC_DVM_ELASTIC_MODELS} (got {elastic!r})"
-            )
+        # The cylindrical wall's non-accommodated share returns on the
+        # diffuse-elastic spectrum (the engine's "diffuse_elastic"), and the
+        # polarization-elastic channel is the Phelps isotropic one
+        # ("phelps_iso").
+        reflection = "diffuse_elastic"
+        elastic = "phelps_iso"
         exchange = str(
             self._input_dict.get("neutral_kinetic_dvm_exchange")
         )
@@ -3602,14 +3462,7 @@ class LAPDSim1D:
                 self._geometry,
                 1.0,
                 float(self._input_dict.get("gas_puff_valves")),
-                profile=str(self._input_dict.get("gas_puff_profile")),
                 z_cm=self._input_dict.get("gas_puff_z_cm"),
-                sigma_cm=float(
-                    self._input_dict.get("gas_puff_sigma_cm")
-                ),
-                throw_cm=float(
-                    self._input_dict.get("gas_puff_throw_cm")
-                ),
                 orifice_id_cm=self._input_dict.get(
                     "gas_puff_orifice_id_cm"
                 ),
@@ -3636,9 +3489,9 @@ class LAPDSim1D:
                     f"{starved.size} puff cell(s) carry V_ann = 0 "
                     f"(Rm == Rp there): {named}{more}. Those cells would "
                     "swallow their share of the fueling while the particle "
-                    "ledger still booked it as a birth. Accepted: a "
-                    "gas_puff_profile whose support lies in cells with "
-                    "Rm > Rp, or gas_puff_enabled = False"
+                    "ledger still booked it as a birth. Accepted: a puff "
+                    "port whose row lies in cells with Rm > Rp, or "
+                    "gas_puff_enabled = False"
                 )
         # B5: the cathode-side energetic recycle. Default off, and the whole
         # channel is absent (the engine takes ``cathode_jet=None``) rather
@@ -3798,41 +3651,21 @@ class LAPDSim1D:
                     "channel with neutral_kinetic_dvm_end_wall_jet = True"
                 )
         self._dvm_end_wall_jet = end_wall_jet
-        # B6: the thin annular baffles, default off and ABSENT rather than
-        # present at a neutral setting, exactly as the two jets are. The
-        # geometry has already validated and mapped them onto faces (and has
-        # already refused a clear radius below the local column radius, and a
-        # baffle array supplied without its flag); what this flag decides is
-        # whether the KINETIC annulus sees them at all. The two refusals below
-        # are the two ways a config can ask for that and mean nothing by it.
+        # B6: the thin annular baffles act on the KINETIC annulus wherever the
+        # geometry carries them (the neutral_baffles flag with its two arrays),
+        # ABSENT rather than present at a neutral setting otherwise, exactly
+        # as the two jets are. The geometry has already validated and mapped
+        # them onto faces, and has already refused a clear radius below the
+        # local column radius and a baffle array supplied without its flag.
         baffle_faces = ()
         baffle_radii = ()
-        if bool(self._flags.get("neutral_kinetic_dvm_baffles")):
-            if not bool(self._flags.get("neutral_baffles")):
-                raise ValueError(
-                    "neutral_kinetic_dvm_baffles makes the geometry's thin "
-                    "annular baffles act on the kinetic annulus, and this "
-                    "geometry has none: the fluid neutral_baffles flag is "
-                    "off, so neutral_baffle_positions_cm and "
-                    "neutral_baffle_clear_radii_cm are forbidden and unset. "
-                    "Accepted: arm neutral_baffles with both arrays, or leave "
-                    "neutral_kinetic_dvm_baffles off"
-                )
+        if bool(self._flags.get("neutral_baffles")):
             baffle_faces = np.asarray(
                 self._geometry.neutral_baffle_face_indices, dtype=int
             )
             baffle_radii = np.asarray(
                 self._geometry.neutral_baffle_clear_radius_cm, dtype=float
             )
-            if baffle_faces.size == 0:
-                raise ValueError(
-                    "neutral_kinetic_dvm_baffles is armed but the resolved "
-                    "geometry carries no baffle faces, so the channel would "
-                    "be silently inert. Accepted: neutral_baffles with a "
-                    "non-empty neutral_baffle_positions_cm and "
-                    "neutral_baffle_clear_radii_cm, or "
-                    "neutral_kinetic_dvm_baffles off"
-                )
         (
             vmax_cm_s,
             cathode_band_eV,
@@ -4120,7 +3953,7 @@ class LAPDSim1D:
         return pack_state(
             state_rhs,
             neutral_momentum=True if self._neutral_momentum else None,
-            neutral_two_zone=True if self._neutral_two_zone else None,
+            neutral_two_zone=True,
             neutral_energy=True if self._neutral_energy else None,
         )
 
@@ -4144,15 +3977,11 @@ class LAPDSim1D:
         self._dvm_anode_jet_incident_row = None
         self._dvm_end_wall_jet_incident_row = None
         state = self.state if y is None else self._unpack(y)
-        # The zone-exchange term exists only in two-zone runs, so the term
-        # ledger (and the saved rhs_terms structure) is unchanged when the
-        # flag is off. It is pure free-molecular mixing, so it runs in the
+        # The zone exchange is pure free-molecular mixing, so it runs in the
         # neutral-only phases too.
-        zone_terms = {}
-        if self._neutral_two_zone:
-            zone_terms["neutral_zone_exchange"] = self.neutral_zone_exchange_rhs(
-                state=state
-            )
+        zone_terms = {
+            "neutral_zone_exchange": self.neutral_zone_exchange_rhs(state=state)
+        }
         # The neutral-energy wall sink exists only under its own flag, so the
         # term ledger (and the saved rhs_terms structure) is unchanged when
         # the flag is off. Present in BOTH branches below and identically zero
@@ -4423,12 +4252,12 @@ class LAPDSim1D:
             "electron_neutral_cooling": electron_cooling_terms[
                 "electron_neutral_cooling"
             ],
-            "ion_charge_exchange": self.ion_charge_exchange_rhs(state=state),
-            "ion_neutral_drag": self.ion_neutral_drag_rhs(state=state),
-            "ion_neutral_frictional_heating": (
-                self.ion_neutral_frictional_heating_rhs(state=state)
-            ),
-            # A permanently zero row, kept for saved-ledger schema stability.
+            # The four ion-neutral channels the moment-closed collision
+            # operator carries as one term: permanently zero rows, kept for
+            # saved-ledger schema stability.
+            "ion_charge_exchange": self._zero_rhs_state(),
+            "ion_neutral_drag": self._zero_rhs_state(),
+            "ion_neutral_frictional_heating": self._zero_rhs_state(),
             "ion_neutral_thermalization": self._zero_rhs_state(),
             "ion_neutral_collision": (
                 self.ion_neutral_collision_rhs(state=state)
@@ -4469,10 +4298,9 @@ class LAPDSim1D:
                 state=state,
                 time=time,
             ),
-            "gas_puff_local_ionization": self.gas_puff_local_ionization_rhs(
-                state=state,
-                time=time,
-            ),
+            # Permanent zero row: the in-place puff ionization channel is
+            # removed; the row stays for the saved-term schema.
+            "gas_puff_local_ionization": self._zero_rhs_state(),
             "ionization_birth": reaction_terms["ionization_birth"],
             "beam_ionization_birth": beam_terms["beam_ionization_birth"],
             "beam_power_deposition": beam_terms["beam_power_deposition"],
@@ -4771,7 +4599,7 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             neutral_momentum=self._neutral_momentum,
-            neutral_two_zone=self._neutral_two_zone,
+            neutral_two_zone=True,
             neutral_annulus_momentum=False,
             neutral_energy=self._neutral_energy,
         )
@@ -5103,107 +4931,11 @@ class LAPDSim1D:
             state = self.state
         if time is None:
             time = self._time
-        if self._neutral_two_zone and state.nn_a is not None:
-            return self._implicit_neutral_step_two_zone(
-                dt=dt,
-                state=state,
-                time=time,
-                apply_density_floor=apply_density_floor,
-            )
-        geometry = self._geometry
-        source_kwargs = self._neutral_source_kwargs(time=time)
-        # The system is TRIDIAGONAL: an axial face writes (i, i), (i, i+1),
-        # (i+1, i+1) and (i+1, i) and nothing else, and the pump writes the
-        # diagonal, so the only entries that ever exist lie on three bands.
-        # Held in LAPACK banded storage ``ab[u + i - j, j] == a[i, j]`` with
-        # (l, u) = (1, 1): assembly and solve are O(N), and the identity is
-        # the middle band rather than an N x N array of zeros.
-        ab = np.zeros((3, geometry.cells), dtype=float)
-        ab[1, :] = 1.0
-        rhs = np.asarray(state.nn, dtype=float).copy()
-
-        coeff = np.asarray(self.neutral_exchange_coefficients(), dtype=float)
-        for face, conductance in enumerate(coeff):
-            left = face
-            right = face + 1
-            left_rate = float(conductance) / float(geometry.neutral_volume_cm3[left])
-            right_rate = float(conductance) / float(
-                geometry.neutral_volume_cm3[right]
-            )
-            ab[1, left] += dt * left_rate
-            ab[0, right] -= dt * left_rate
-            ab[1, right] += dt * right_rate
-            ab[2, left] -= dt * right_rate
-
-        # Anchored by role, matching neutrals.neutral_source_sink_rhs: these two
-        # paths must stay consistent or the neutral-equilibration path desyncs
-        # from the explicit one.
-        puff_index, puff_twin_index = puff_cell_indices(geometry)
-        pump_left_index, pump_right_index = pump_cell_indices(geometry)
-
-        if source_kwargs["pump_enabled"]:
-            elbow = source_kwargs["pump_elbow_conductance_lps"]
-            ab[1, pump_left_index] += dt * pump_rate(
-                _effective_pump_speed(
-                    source_kwargs["S_pump_L"],
-                    elbow if is_plenum_cell(geometry, pump_left_index) else None,
-                ),
-                geometry.neutral_volume_cm3[pump_left_index],
-            )
-            ab[1, pump_right_index] += dt * pump_rate(
-                _effective_pump_speed(
-                    source_kwargs["S_pump_R"],
-                    elbow if is_plenum_cell(geometry, pump_right_index) else None,
-                ),
-                geometry.neutral_volume_cm3[pump_right_index],
-            )
-
-        if source_kwargs["gas_puff_enabled"]:
-            rhs += dt * gas_puff_rate_profile(
-                geometry,
-                source_kwargs["S_gp"],
-                source_kwargs["gas_puff_valves"],
-                profile=source_kwargs["gas_puff_profile"],
-                z_cm=source_kwargs["gas_puff_z_cm"],
-                sigma_cm=source_kwargs["gas_puff_sigma_cm"],
-                throw_cm=source_kwargs["gas_puff_throw_cm"],
-                orifice_id_cm=source_kwargs["gas_puff_orifice_id_cm"],
-                orifice_length_cm=source_kwargs["gas_puff_orifice_length_cm"],
-                end=0,
-                delivery_fraction=source_kwargs["gas_puff_delivery_fraction"],
-            )
-            if source_kwargs["twin_cathode"]:
-                rhs += dt * gas_puff_rate_profile(
-                    geometry,
-                    source_kwargs["Twin_S_gp"],
-                    source_kwargs["gas_puff_valves"],
-                    profile=source_kwargs["gas_puff_profile"],
-                    z_cm=source_kwargs["gas_puff_z_cm"],
-                    sigma_cm=source_kwargs["gas_puff_sigma_cm"],
-                    throw_cm=source_kwargs["gas_puff_throw_cm"],
-                    orifice_id_cm=source_kwargs["gas_puff_orifice_id_cm"],
-                    orifice_length_cm=source_kwargs["gas_puff_orifice_length_cm"],
-                    end=-1,
-                    delivery_fraction=source_kwargs["gas_puff_delivery_fraction"],
-                )
-
-        nn_next = solve_banded((1, 1), ab, rhs)
-        # M_n and En pass through untouched: this step runs pre-plasma, where
-        # there is no drag to drive a wind and no plasma to heat the gas.
-        return ConservativeState1D(
-            n=state.n.copy(),
-            nn=(
-                np.maximum(nn_next, self._floors["nn"])
-                if apply_density_floor
-                else nn_next
-            ),
-            M=state.M.copy(),
-            Ee=state.Ee.copy(),
-            Ei=state.Ei.copy(),
-            M_n=None if state.M_n is None else state.M_n.copy(),
-            nn_a=None if state.nn_a is None else state.nn_a.copy(),
-            M_n_a=None if state.M_n_a is None else state.M_n_a.copy(),
-            En=None if state.En is None else state.En.copy(),
+        return self._implicit_neutral_step_two_zone(
+            dt=dt,
+            state=state,
+            time=time,
+            apply_density_floor=apply_density_floor,
         )
 
     def _two_zone_implicit_matrix(self, dt, source_kwargs):
@@ -5364,10 +5096,7 @@ class LAPDSim1D:
                     geometry,
                     sccm,
                     source_kwargs["gas_puff_valves"],
-                    profile=source_kwargs["gas_puff_profile"],
                     z_cm=source_kwargs["gas_puff_z_cm"],
-                    sigma_cm=source_kwargs["gas_puff_sigma_cm"],
-                    throw_cm=source_kwargs["gas_puff_throw_cm"],
                     orifice_id_cm=source_kwargs["gas_puff_orifice_id_cm"],
                     orifice_length_cm=source_kwargs["gas_puff_orifice_length_cm"],
                     end=end,
@@ -7942,10 +7671,7 @@ class LAPDSim1D:
         return self._phase_switches(phase)
 
     def _neutral_prebreakdown_duration(self):
-        if not (
-            self._flags.get("Plasma")
-            and self._flags.get("neutral_prebreakdown")
-        ):
+        if not self._flags.get("Plasma"):
             return 0.0
         return max(float(self._input_dict.get("tau_neutral_prebreakdown")), 0.0)
 
@@ -8117,9 +7843,6 @@ class LAPDSim1D:
                     main_start + tau_discharge + tau_afterglow,
                 ]
             )
-        gas_event = self._gas_puff_event_time()
-        if gas_event is not None:
-            boundaries.append(gas_event)
         for boundary in sorted(boundaries):
             if in_run_window(boundary):
                 return float(boundary)
@@ -8541,21 +8264,6 @@ class LAPDSim1D:
             anode_jet=self._anode_jet_spec(cathode_solve),
         )
 
-    def ion_neutral_drag_rhs(self, y=None, state=None):
-        """Return the conservative ion-neutral drag momentum exchange."""
-        if state is None:
-            state = self.state if y is None else self._unpack(y)
-        if self._ion_neutral_moment_closure:
-            # Replaced by the moment-closed ion_neutral_collision term.
-            return self._zero_rhs_state()
-        return ion_neutral_drag_rhs(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            geometry=self._geometry,
-            **self._ion_neutral_drag_kwargs(),
-        )
-
     def neutral_momentum_wall_rhs(self, y=None, state=None):
         """Return the neutral-wind wall-accommodation momentum sink."""
         if state is None:
@@ -8667,21 +8375,6 @@ class LAPDSim1D:
         self._hot_channel_diagnostics = diagnostics
         return rhs
 
-    def ion_neutral_frictional_heating_rhs(self, y=None, state=None):
-        """Return the elastic ion-neutral frictional-heating energy source."""
-        if state is None:
-            state = self.state if y is None else self._unpack(y)
-        if self._ion_neutral_moment_closure:
-            # Replaced by the moment-closed ion_neutral_collision term.
-            return self._zero_rhs_state()
-        return ion_neutral_frictional_heating_rhs(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            geometry=self._geometry,
-            **self._ion_neutral_drag_kwargs(),
-        )
-
     def parallel_momentum_sink_rhs(self, y=None, state=None):
         """Return the imposed parallel momentum sink's ``M`` row.
 
@@ -8712,16 +8405,12 @@ class LAPDSim1D:
     def ion_neutral_collision_rhs(self, y=None, state=None):
         """Return the R4.3 moment-closed reduced ion-neutral collision operator.
 
-        Active only under the ``ion_neutral_moment_closure`` flag; a strict no-op
-        otherwise (the four legacy ion-neutral terms carry the physics then). A8:
-        the single cold-gas neutral temperature is ``Tn_K`` (300 K feed/wall),
-        converted to eV, used for both ``(Tn-Ti)`` and ``T_eff=(Ti+Tn)/2`` -- the
-        legacy ``Tn_fit`` is not consulted on this path.
+        A8: the single cold-gas neutral temperature is ``Tn_K`` (300 K
+        feed/wall), converted to eV, used for both ``(Tn-Ti)`` and
+        ``T_eff=(Ti+Tn)/2`` -- ``Tn_fit`` is not consulted on this path.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
-        if not self._ion_neutral_moment_closure:
-            return self._zero_rhs_state()
         return ion_neutral_collision_rhs(
             state=state,
             floors=self._floors,
@@ -8766,21 +8455,6 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             **self._electron_cooling_kwargs(),
-        )
-
-    def ion_charge_exchange_rhs(self, y=None, state=None):
-        """Return conservative ion charge-exchange cooling sources."""
-        if state is None:
-            state = self.state if y is None else self._unpack(y)
-        if self._ion_neutral_moment_closure:
-            # CX cooling is folded into the moment-closed ion_neutral_collision
-            # term (its (3/2) n nu_mt (Tn-Ti) thermal channel).
-            return self._zero_rhs_state()
-        return ion_charge_exchange_rhs(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            **self._ion_charge_exchange_kwargs(),
         )
 
     def heat_conduction_rhs(self, y=None, state=None):
@@ -9346,26 +9020,18 @@ class LAPDSim1D:
     def neutral_exchange_rhs(self, y=None, state=None):
         """Return conservative pairwise neutral-exchange sources.
 
-        In two-zone mode the axial exchange runs per zone on the
-        precomputed column/annulus Knudsen conductances; the radial
-        column/annulus mixing is the separate named
-        ``neutral_zone_exchange`` term.
+        The axial exchange runs per zone on the precomputed column/annulus
+        Knudsen conductances; the radial column/annulus mixing is the separate
+        named ``neutral_zone_exchange`` term.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
-        if self._neutral_two_zone and state.nn_a is not None:
-            column_coeff, annulus_coeff = self._zone_axial_coeffs
-            return neutral_exchange_two_zone_rhs(
-                state=state,
-                geometry=self._geometry,
-                column_coeff_cm3_s=column_coeff,
-                annulus_coeff_cm3_s=annulus_coeff,
-                floors=self._floors,
-            )
-        return neutral_exchange_rhs(
+        column_coeff, annulus_coeff = self._zone_axial_coeffs
+        return neutral_exchange_two_zone_rhs(
             state=state,
             geometry=self._geometry,
-            exchange_coeff_cm3_s=self.neutral_exchange_coefficients(),
+            column_coeff_cm3_s=column_coeff,
+            annulus_coeff_cm3_s=annulus_coeff,
             floors=self._floors,
         )
 
@@ -9384,10 +9050,6 @@ class LAPDSim1D:
         """Return internal-face neutral exchange coefficients [cm^3/s]."""
         return neutral_exchange_coefficients(
             geometry=self._geometry,
-            model=self._input_dict.get("neutral_exchange_model"),
-            constant_coeff_cm3_s=float(
-                self._input_dict.get("neutral_exchange_coeff_cm3_s")
-            ),
             Tn_K=float(self._input_dict.get("Tn_K")),
             mu_neutral=self._mu_neutral,
             clausing_scale=float(self._input_dict.get("neutral_clausing_scale")),
@@ -9401,47 +9063,6 @@ class LAPDSim1D:
             state=state,
             geometry=self._geometry,
             **self._neutral_source_kwargs(time=time),
-        )
-
-    def gas_puff_local_ionization_rhs(self, y=None, state=None, time=None):
-        """Return the fresh-puff clump local-ionization source (default off)."""
-        if state is None:
-            state = self.state if y is None else self._unpack(y)
-        f = float(self._input_dict.get("gas_puff_local_ionization_fraction"))
-        if f <= 0.0:
-            return self._zero_rhs_state()
-        nk = self._neutral_source_kwargs(time=time)
-        if not nk["gas_puff_enabled"]:
-            return self._zero_rhs_state()
-        puff = gas_puff_rate_profile(
-            self._geometry, nk["S_gp"], nk["gas_puff_valves"],
-            profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
-            sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
-            orifice_id_cm=nk["gas_puff_orifice_id_cm"],
-            orifice_length_cm=nk["gas_puff_orifice_length_cm"],
-            end=0, delivery_fraction=nk["gas_puff_delivery_fraction"],
-        )
-        if nk["twin_cathode"]:
-            puff = puff + gas_puff_rate_profile(
-                self._geometry, nk["Twin_S_gp"], nk["gas_puff_valves"],
-                profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
-                sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
-                orifice_id_cm=nk["gas_puff_orifice_id_cm"],
-                orifice_length_cm=nk["gas_puff_orifice_length_cm"],
-                end=-1, delivery_fraction=nk["gas_puff_delivery_fraction"],
-            )
-        return _gas_puff_local_ionization_rhs(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            geometry=self._geometry,
-            puff_profile=puff,
-            fraction=f,
-            I_ion=self._I_ion,
-            Ti_birth_ionization=self._input_dict.get(
-                "Ti_birth_ionization"
-            ),
-            Tn_K=float(self._input_dict.get("Tn_K")),
         )
 
     def reaction_rhs(self, y=None, state=None):
@@ -9727,16 +9348,7 @@ class LAPDSim1D:
             "pump_elbow_conductance_lps": self._input_dict.get(
                 "pump_elbow_conductance_lps"
             ),
-            "gas_puff_profile": str(
-                self._input_dict.get("gas_puff_profile")
-            ),
             "gas_puff_z_cm": self._input_dict.get("gas_puff_z_cm"),
-            "gas_puff_sigma_cm": float(
-                self._input_dict.get("gas_puff_sigma_cm")
-            ),
-            "gas_puff_throw_cm": float(
-                self._input_dict.get("gas_puff_throw_cm")
-            ),
             "gas_puff_orifice_id_cm": self._input_dict.get(
                 "gas_puff_orifice_id_cm"
             ),
@@ -9861,158 +9473,55 @@ class LAPDSim1D:
     def _effective_gas_puff_sccm(self, time=None):
         if time is None:
             time = self._time
-        phase, phase_elapsed = self._phase_info(time)
         S_gp = float(self._input_dict.get("S_gp"))
         Twin_S_gp = float(self._input_dict.get("Twin_S_gp"))
         if not self._flags.get("Plasma"):
             return S_gp, Twin_S_gp
-        mode = self._input_dict.get("gas_puff_mode")
-        if mode == "square":
-            # Measured valve behaviour: the piezo is driven
-            # by a SQUARE voltage pulse fired by the SAME trigger that closes
-            # the cathode circuit, held for the discharge duration. The
-            # supply side is hydraulically stiff (1/4" line at 45 PSI has
-            # ~1e6-sccm-class conductance and ~270 shots of stored inventory,
-            # so no sag can develop at ~6e3 sccm delivery; the downstream
-            # 10 cm stub is at chamber vacuum, so no burst either) -- the
-            # delivery is therefore FLAT at S_gp, with erf rise/close set by
-            # the piezo opening + entry transit (~0.5-1 ms, boxed by
-            # hardware, not fit). Rise anchors on circuit-on (the end of the
-            # neutral-prebreakdown phase = the model's trigger instant);
-            # close anchors on drive end + the same lag, and its tail runs
-            # into the afterglow (a real valve keeps delivering while it
-            # closes). No prebreakdown full-rate flow: breakdown rides the
-            # inter-shot residual fill, as in the machine.
-            rise_center = float(
-                self._input_dict.get("gas_puff_rise_center_s")
-            )
-            rise_width = float(
-                self._input_dict.get("gas_puff_rise_width_s")
-            )
-            close_lag = float(
-                self._input_dict.get("gas_puff_close_lag_s")
-            )
-            t_on = self._plasma_phase_time_origin() + rise_center
-            rise = 0.5 * (1.0 + math.erf((float(time) - t_on) / rise_width))
-            tau_discharge = max(
-                float(self._input_dict.get("tau_discharge")), 0.0
-            )
-            if self._phase_transition_mode() == "current":
-                main_start = self._t_breakdown_trigger
-            else:
-                main_start = (
-                    self._plasma_phase_time_origin()
-                    + max(float(self._input_dict.get("tau_prebreakdown")), 0.0)
-                    + max(float(self._input_dict.get("tau_breakdown")), 0.0)
-                )
-            fall = 0.0
-            if main_start is not None:
-                t_close = float(main_start) + tau_discharge + close_lag
-                fall = 0.5 * (
-                    1.0 + math.erf((float(time) - t_close) / rise_width)
-                )
-            envelope = max(rise - fall, 0.0)
-            return S_gp * envelope, Twin_S_gp * envelope
-        if mode == "double_erf":
-            # Valve-like waveform: an erf rise 0 -> S_gp and an erf drop
-            # S_gp -> S_gp_decay_target, both on the *scheduled*
-            # main-discharge clock so the rise can sit at negative times
-            # (a real valve opens before breakdown). Smooth everywhere, so
-            # no event capture is needed. The other modes' full-rate
-            # prebreakdown behaviour is replaced by the waveform itself.
-            if phase not in {
-                "neutral_prebreakdown",
-                "pre_breakdown",
-                "breakdown",
-                "main_discharge",
-            }:
-                return 0.0, 0.0
-            plasma_origin = self._plasma_phase_time_origin()
+        # Measured valve behaviour: the piezo is driven
+        # by a SQUARE voltage pulse fired by the SAME trigger that closes
+        # the cathode circuit, held for the discharge duration. The
+        # supply side is hydraulically stiff (1/4" line at 45 PSI has
+        # ~1e6-sccm-class conductance and ~270 shots of stored inventory,
+        # so no sag can develop at ~6e3 sccm delivery; the downstream
+        # 10 cm stub is at chamber vacuum, so no burst either) -- the
+        # delivery is therefore FLAT at S_gp, with erf rise/close set by
+        # the piezo opening + entry transit (~0.5-1 ms, boxed by
+        # hardware, not fit). Rise anchors on circuit-on (the end of the
+        # neutral-prebreakdown phase = the model's trigger instant);
+        # close anchors on drive end + the same lag, and its tail runs
+        # into the afterglow (a real valve keeps delivering while it
+        # closes). No prebreakdown full-rate flow: breakdown rides the
+        # inter-shot residual fill, as in the machine.
+        rise_center = float(
+            self._input_dict.get("gas_puff_rise_center_s")
+        )
+        rise_width = float(
+            self._input_dict.get("gas_puff_rise_width_s")
+        )
+        close_lag = float(
+            self._input_dict.get("gas_puff_close_lag_s")
+        )
+        t_on = self._plasma_phase_time_origin() + rise_center
+        rise = 0.5 * (1.0 + math.erf((float(time) - t_on) / rise_width))
+        tau_discharge = max(
+            float(self._input_dict.get("tau_discharge")), 0.0
+        )
+        if self._phase_transition_mode() == "current":
+            main_start = self._t_breakdown_trigger
+        else:
             main_start = (
-                plasma_origin
+                self._plasma_phase_time_origin()
                 + max(float(self._input_dict.get("tau_prebreakdown")), 0.0)
                 + max(float(self._input_dict.get("tau_breakdown")), 0.0)
             )
-            t_rel = float(time) - main_start
-            rise = 0.5 * (
-                1.0
-                + math.erf(
-                    (t_rel - float(self._input_dict.get("tau_gp_rise_center")))
-                    / float(self._input_dict.get("tau_gp_rise_width"))
-                )
+        fall = 0.0
+        if main_start is not None:
+            t_close = float(main_start) + tau_discharge + close_lag
+            fall = 0.5 * (
+                1.0 + math.erf((float(time) - t_close) / rise_width)
             )
-            drop = 0.5 * (
-                1.0
-                + math.erf(
-                    (t_rel - float(self._input_dict.get("tau_gp_drop_center")))
-                    / float(self._input_dict.get("tau_gp_drop_width"))
-                )
-            )
-            target = float(self._input_dict.get("S_gp_decay_target"))
-            twin_target = float(self._input_dict.get("Twin_S_gp_decay_target"))
-            return (
-                max(S_gp * rise - (S_gp - target) * drop, 0.0),
-                max(Twin_S_gp * rise - (Twin_S_gp - twin_target) * drop, 0.0),
-            )
-        if phase == "neutral_prebreakdown":
-            return S_gp, Twin_S_gp
-        if phase in {"pre_breakdown", "breakdown"}:
-            return S_gp, Twin_S_gp
-        if phase != "main_discharge":
-            return 0.0, 0.0
-
-        if mode == "pulse_decay_to_level":
-            pulse_duration = float(self._input_dict.get("tau_gp_pulse_duration"))
-            if phase_elapsed <= pulse_duration:
-                return S_gp, Twin_S_gp
-            decay_elapsed = phase_elapsed - pulse_duration
-            tau_decay = float(self._input_dict.get("tau_gp_decay_duration"))
-            decay = float(np.exp(-decay_elapsed / tau_decay))
-            target = float(self._input_dict.get("S_gp_decay_target"))
-            twin_target = float(self._input_dict.get("Twin_S_gp_decay_target"))
-            return (
-                target + (S_gp - target) * decay,
-                twin_target + (Twin_S_gp - twin_target) * decay,
-            )
-
-        tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown")
-        if tau_after_breakdown is None:
-            return S_gp, Twin_S_gp
-        tau_after_breakdown = float(tau_after_breakdown)
-        if phase_elapsed <= tau_after_breakdown:
-            return S_gp, Twin_S_gp
-        tau_discharge = max(float(self._input_dict.get("tau_discharge")), 0.0)
-        tau_decay = (tau_discharge - tau_after_breakdown) * float(
-            self._input_dict.get("tau_gp_decay_factor")
-        )
-        if tau_decay <= 0.0:
-            return S_gp, Twin_S_gp
-        decay = float(np.exp(-(phase_elapsed - tau_after_breakdown) / tau_decay))
-        return decay * S_gp, decay * Twin_S_gp
-
-    def _gas_puff_event_time(self):
-        if not (
-            self._flags.get("Plasma")
-            and bool(self._input_dict.get("gas_puff_enabled"))
-        ):
-            return None
-        main_start = self._main_discharge_start_time()
-        if main_start is None:
-            return None
-        tau_discharge = max(float(self._input_dict.get("tau_discharge")), 0.0)
-        mode = self._input_dict.get("gas_puff_mode")
-        if mode == "pulse_decay_to_level":
-            event = main_start + float(
-                self._input_dict.get("tau_gp_pulse_duration")
-            )
-        else:
-            tau_after_breakdown = self._input_dict.get("tau_gp_after_breakdown")
-            if tau_after_breakdown is None:
-                return None
-            event = main_start + float(tau_after_breakdown)
-        if event >= main_start + tau_discharge:
-            return None
-        return event
+        envelope = max(rise - fall, 0.0)
+        return S_gp * envelope, Twin_S_gp * envelope
 
     def _cathode_total_current_A(self, cathode_solve=None):
         """Return the cathode solve's total current [A], 0.0 when absent.
@@ -10532,8 +10041,7 @@ class LAPDSim1D:
             return {name: 0.0 for name in GAS_PUFF_DIAGNOSTIC_FIELDS}
         puff = gas_puff_rate_profile(
             self._geometry, nk["S_gp"], nk["gas_puff_valves"],
-            profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
-            sigma_cm=nk["gas_puff_sigma_cm"], throw_cm=nk["gas_puff_throw_cm"],
+            z_cm=nk["gas_puff_z_cm"],
             orifice_id_cm=nk["gas_puff_orifice_id_cm"],
             orifice_length_cm=nk["gas_puff_orifice_length_cm"],
             end=0, delivery_fraction=nk["gas_puff_delivery_fraction"],
@@ -10541,9 +10049,7 @@ class LAPDSim1D:
         if twin:
             puff = puff + gas_puff_rate_profile(
                 self._geometry, nk["Twin_S_gp"], nk["gas_puff_valves"],
-                profile=nk["gas_puff_profile"], z_cm=nk["gas_puff_z_cm"],
-                sigma_cm=nk["gas_puff_sigma_cm"],
-                throw_cm=nk["gas_puff_throw_cm"],
+                z_cm=nk["gas_puff_z_cm"],
                 orifice_id_cm=nk["gas_puff_orifice_id_cm"],
                 orifice_length_cm=nk["gas_puff_orifice_length_cm"],
                 end=-1, delivery_fraction=nk["gas_puff_delivery_fraction"],
@@ -11202,10 +10708,7 @@ class LAPDSim1D:
                     # The square valve keeps delivering through its erf
                     # closing tail after the drive ends (~ms); the waveform
                     # envelope, not the phase switch, closes the flow.
-                    or (
-                        phase == "afterglow"
-                        and self._input_dict.get("gas_puff_mode") == "square"
-                    )
+                    or phase == "afterglow"
                 )
             ),
             "floating": phase == "afterglow",
@@ -11863,10 +11366,7 @@ class LAPDSim1D:
                 geometry,
                 src_kwargs["S_gp"],
                 src_kwargs["gas_puff_valves"],
-                profile=src_kwargs["gas_puff_profile"],
                 z_cm=src_kwargs["gas_puff_z_cm"],
-                sigma_cm=src_kwargs["gas_puff_sigma_cm"],
-                throw_cm=src_kwargs["gas_puff_throw_cm"],
                 orifice_id_cm=src_kwargs["gas_puff_orifice_id_cm"],
                 orifice_length_cm=src_kwargs["gas_puff_orifice_length_cm"],
                 delivery_fraction=src_kwargs["gas_puff_delivery_fraction"],
@@ -13310,14 +12810,6 @@ class LAPDSim1D:
             self._nn0_profile = None
             self._nn0_annulus_profile = None
             return
-        if annulus is not None and not self._neutral_two_zone:
-            raise ValueError(
-                "nn0_annulus_profile requires the neutral_two_zone flag: "
-                "without that closure there is one chamber-mean neutral "
-                "field and no annulus density for the profile to initialize. "
-                "Set neutral_two_zone, or fold the annulus inventory into "
-                "nn0_profile"
-            )
         if column is None:
             raise ValueError(
                 "initial_neutral_state='profile' requires nn0_profile (a "
@@ -13378,13 +12870,9 @@ class LAPDSim1D:
             # value inertly. A shaped run may address the annulus separately,
             # in which case its own profile stands in for that convention.
             nn_a=(
-                None
-                if not self._neutral_two_zone
-                else (
-                    nn0.copy()
-                    if self._nn0_annulus_profile is None
-                    else self._nn0_annulus_profile.copy()
-                )
+                nn0.copy()
+                if self._nn0_annulus_profile is None
+                else self._nn0_annulus_profile.copy()
             ),
             # Pre-plasma the gas IS at the wall temperature, so this initial
             # condition is exact rather than a convention.

@@ -85,7 +85,6 @@ def validate_r1_configuration_presence(
     flags,
     *,
     geometry,
-    ion_neutral_moment_closure,
     hyperbolic_wave_speed,
     raw_stage_validation,
 ):
@@ -120,27 +119,6 @@ def validate_r1_configuration_presence(
     # R5 stance flip (2026-07-25) deprecations. These paths remain runnable
     # (A/B arms + tag reproducibility) but are superseded by the repaired
     # production baseline; a non-default/active use warns.
-    if not ion_neutral_moment_closure:
-        warnings.warn(
-            "the legacy ion-neutral drag/CX/thermalization path "
-            "(ion_neutral_moment_closure=False, with b_ion_neutral_drag and "
-            "the Tn_fit collision temperature) is DEPRECATED: the Phelps "
-            "moment-closed operator (ion_neutral_moment_closure) is the "
-            "production drag baseline. Still runnable as an A/B arm; the "
-            "results it once reproduced are not reproducible from this "
-            "repository, their anchor having been retired.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-    _gp_mode = str(input_dict.get("gas_puff_mode", "square"))
-    if _gp_mode in ("pulse_decay_to_level", "decay_after_breakdown", "double_erf"):
-        warnings.warn(
-            f"gas_puff_mode={_gp_mode!r} is DEPRECATED (the measured "
-            "waveform is 'square'); retained runnable only for the frozen "
-            "waveform-comparison figures.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
     _deprecated_selectors = {
         "D_amb_model": (str(input_dict.get("D_amb_model", "cs_dz")), "cs_dz"),
     }
@@ -345,133 +323,40 @@ def validate_phase_config(mode, action):
 
 
 def validate_gas_puff_config(input_dict):
-    # Accepted-values gate for the axial shape selector. The same set is
-    # checked inside physics.neutrals.gas_puff_rate_profile, which is where a
-    # misspelling used to first surface -- at the FIRST RHS evaluation, long
-    # after construction. Both checks stay: this one is the construction-time
-    # refusal, the other is the defence in depth for direct callers of the
-    # shared implementation.
-    profile = input_dict.get("gas_puff_profile", "cell")
-    if profile not in ("cell", "gaussian", "cosine_pipe", "orifice"):
-        raise ValueError(
-            "gas_puff_profile must be 'cell', 'gaussian', 'cosine_pipe', or "
-            f"'orifice' (got {profile!r})"
-        )
-    mode = input_dict.get("gas_puff_mode", "decay_after_breakdown")
-    if mode not in {
-        "decay_after_breakdown",
-        "pulse_decay_to_level",
-        "double_erf",
-        "square",
-    }:
-        raise ValueError(
-            "gas_puff_mode must be 'decay_after_breakdown', "
-            "'pulse_decay_to_level', 'double_erf', or 'square' "
-            f"(got {mode!r})"
-        )
-    if mode == "square":
-        for key in ("gas_puff_rise_width_s",):
-            width = float(input_dict.get(key, 5.0e-4))
-            if width <= 0.0:
-                raise ValueError(f"{key} must be positive (got {width})")
-        for key in ("gas_puff_rise_center_s", "gas_puff_close_lag_s"):
-            value = float(input_dict.get(key, 5.0e-4))
-            if value < 0.0:
-                raise ValueError(f"{key} must be >= 0 (got {value})")
-    if mode == "double_erf":
-        for key in ("tau_gp_rise_width", "tau_gp_drop_width"):
-            width = float(input_dict.get(key, 1e-3))
-            if width <= 0.0:
-                raise ValueError(f"{key} must be positive (got {width})")
-    tau_after_breakdown = input_dict.get("tau_gp_after_breakdown", None)
-    if tau_after_breakdown is not None and float(tau_after_breakdown) < 0.0:
-        raise ValueError(
-            "tau_gp_after_breakdown must be >= 0 s, or None to keep S_gp "
-            f"steady (got {tau_after_breakdown})"
-        )
-    tau_decay_factor = float(input_dict.get("tau_gp_decay_factor", 1.0))
-    if tau_decay_factor <= 0.0:
-        raise ValueError(
-            f"tau_gp_decay_factor must be > 0 (got {tau_decay_factor})"
-        )
-    tau_pulse_duration = float(input_dict.get("tau_gp_pulse_duration", 0.0))
-    if tau_pulse_duration < 0.0:
-        raise ValueError(
-            f"tau_gp_pulse_duration must be >= 0 (got {tau_pulse_duration})"
-        )
-    tau_decay_duration = float(input_dict.get("tau_gp_decay_duration", 1e-3))
-    if tau_decay_duration <= 0.0:
-        raise ValueError(
-            f"tau_gp_decay_duration must be > 0 (got {tau_decay_duration})"
-        )
-    validate_gas_puff_orifice_config(input_dict)
-
-
-def validate_gas_puff_orifice_config(input_dict):
-    """Presence-gate the two feed-pipe keys against ``gas_puff_profile``.
-
-    They belong to ``gas_puff_profile = "orifice"`` and to nothing else, so
-    both directions raise: set without the profile they would be silently
-    inert, and missing with it there is no aperture to derive a row from.
-    Also refuses an aspect ratio the long-tube angular law has no branch for,
-    and a shut valve, where the derivation would place no flow while still
-    reporting itself as the injection geometry.
+    """Refuse square-waveform edge timings and feed-pipe dimensions the puff
+    cannot use: a non-positive edge width, a negative opening center or
+    closing lag, and a feed pipe whose bore or length is not finite and
+    positive or whose aspect ratio the long-tube angular law has no branch
+    for.
 
     The refusals that need the MESH -- a port off the grid, a plasma column
     that is not inside the vessel wall -- are raised by the row derivation
     itself, which the solver runs once at construction for that reason.
     """
-    profile = input_dict.get("gas_puff_profile", "cell")
-    keys = ("gas_puff_orifice_id_cm", "gas_puff_orifice_length_cm")
-    values = {key: input_dict.get(key) for key in keys}
-    for key, value in values.items():
-        if value is not None and profile != "orifice":
-            raise ValueError(
-                f"{key} belongs to gas_puff_profile='orifice' and is inert "
-                f"under {profile!r}; drop it or change the profile"
-            )
-        if value is None and profile == "orifice":
-            raise ValueError(
-                f"gas_puff_profile='orifice' requires {key}: the tube-beamed "
-                "row is derived from the feed pipe's own bore and length, and "
-                "there is no default aperture to fall back on"
-            )
-    if profile != "orifice":
-        return
-    bore = float(values["gas_puff_orifice_id_cm"])
-    length = float(values["gas_puff_orifice_length_cm"])
-    for key, value in (
-        ("gas_puff_orifice_id_cm", bore),
-        ("gas_puff_orifice_length_cm", length),
-    ):
-        if not math.isfinite(value) or value <= 0.0:
+    for key in ("gas_puff_rise_width_s",):
+        width = float(input_dict.get(key, 5.0e-4))
+        if width <= 0.0:
+            raise ValueError(f"{key} must be positive (got {width})")
+    for key in ("gas_puff_rise_center_s", "gas_puff_close_lag_s"):
+        value = float(input_dict.get(key, 5.0e-4))
+        if value < 0.0:
+            raise ValueError(f"{key} must be >= 0 (got {value})")
+    pipe = {}
+    for key in ("gas_puff_orifice_id_cm", "gas_puff_orifice_length_cm"):
+        value = input_dict.get(key)
+        if value is None or not math.isfinite(float(value)) or float(value) <= 0.0:
             raise ValueError(
                 f"{key} must be finite and positive (got {value})"
             )
+        pipe[key] = float(value)
+    bore = pipe["gas_puff_orifice_id_cm"]
+    length = pipe["gas_puff_orifice_length_cm"]
     if length / bore < 4.0 / 3.0:
         raise ValueError(
             "gas_puff_orifice_length_cm / gas_puff_orifice_id_cm must be "
             f">= 4/3 (got {length} / {bore} = {length / bore}): the beaming "
             "law is a LONG-tube result whose end-effect prescription inverts "
             "below that ratio, and it has no short-tube branch"
-        )
-    if not bool(input_dict.get("gas_puff_enabled", True)):
-        raise ValueError(
-            "gas_puff_profile='orifice' derives the injection geometry of a "
-            "puff that gas_puff_enabled=False never delivers; enable the puff "
-            "or choose a profile that is not a derivation"
-        )
-    flow = (
-        float(input_dict.get("S_gp", 0.0))
-        * float(input_dict.get("gas_puff_valves", 2))
-        * float(input_dict.get("gas_puff_delivery_fraction", 1.0))
-    )
-    if flow <= 0.0:
-        raise ValueError(
-            "gas_puff_profile='orifice' was configured but the puff delivers "
-            f"no flow (S_gp x gas_puff_valves x gas_puff_delivery_fraction = "
-            f"{flow}): there is nothing to place, and a derived row over a "
-            "shut valve would report a geometry it never applies"
         )
 
 

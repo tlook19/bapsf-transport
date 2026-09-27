@@ -74,7 +74,6 @@ def build_config(nx, tracer_on, extra=None):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
-    params["neutral_exchange_model"] = "knudsen"
     params.update(
         {
             "nx": nx,

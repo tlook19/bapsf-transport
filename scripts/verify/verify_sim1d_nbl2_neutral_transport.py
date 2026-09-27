@@ -107,7 +107,6 @@ CLEAN_PARAMS = {
 }
 CLEAN_FLAGS = {
     "Plasma": True, "implicit_heat_conduction": True,
-    "neutral_prebreakdown": False,
     "cathode_coupling": False, "debug_checks": False,
 }
 
@@ -116,16 +115,14 @@ TN_EV = TN_K * kb_cgs / ev_to_erg
 WALL_EV = NEUTRAL_ENERGY_FLOOR_T_K * kb_cgs / ev_to_erg
 
 
-def make_sim(neutral_energy=True, two_zone=False, **overrides):
+def make_sim(neutral_energy=True, **overrides):
     params, flags = default_config()
     params.update(CLEAN_PARAMS)
     params["nx"] = 60
     params["gas_type"] = "He"
     params["Tn_K"] = TN_K
     flags.update(CLEAN_FLAGS)
-    flags["ion_neutral_moment_closure"] = True
     flags["neutral_momentum"] = True
-    flags["neutral_two_zone"] = bool(two_zone)
     flags["neutral_energy"] = bool(neutral_energy)
     for key, value in overrides.items():
         if key in flags:
@@ -135,8 +132,7 @@ def make_sim(neutral_energy=True, two_zone=False, **overrides):
     return LAPDSim1D(params, flags)
 
 
-def make_state(sim, u_i, u_n, Ti=2.0, Tn_K=TN_K, En_shape=None, nn=None,
-               two_zone=False):
+def make_state(sim, u_i, u_n, Ti=2.0, Tn_K=TN_K, En_shape=None, nn=None):
     cells = sim._geometry.cells
     if nn is None:
         nn = np.full(cells, 1.0e13)
@@ -149,7 +145,7 @@ def make_state(sim, u_i, u_n, Ti=2.0, Tn_K=TN_K, En_shape=None, nn=None,
         Ti=np.full(cells, float(Ti)) if np.isscalar(Ti) else np.asarray(Ti),
         ion_mass_g=sim._ion_mass_g,
         un=np.full(cells, float(u_n)),
-        nn_a=nn.copy() if two_zone else None,
+        nn_a=nn.copy(),
         Tn_K=Tn_K,
     )
     if En_shape is not None:
@@ -175,12 +171,12 @@ def _channels(sim, state, ionization_rate=None):
     kwargs = sim._collision_operator_kwargs()
     coll = ion_neutral_collision_rhs(
         state=state, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
-        geometry=sim._geometry, wind_column_factor=sim._wind_column_factor,
+        geometry=sim._geometry,
         **kwargs,
     )
     cx = neutral_cx_channel_rhs(
         state=state, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
-        geometry=sim._geometry, wind_column_factor=sim._wind_column_factor,
+        geometry=sim._geometry,
         **kwargs,
     )
     rate = (
@@ -189,8 +185,7 @@ def _channels(sim, state, ionization_rate=None):
     hot, diagnostics = neutral_hot_channel_rhs(
         state=state, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
         geometry=sim._geometry, kernels=sim._hot_neutral_kernels,
-        I_ion=sim._I_ion, ionization_rate_per_neutral=rate,
-        wind_column_factor=sim._wind_column_factor, **kwargs,
+        I_ion=sim._I_ion, ionization_rate_per_neutral=rate, **kwargs,
     )
     return coll, cx, hot, diagnostics
 
@@ -288,9 +283,9 @@ def _ionization_rate(sim, state):
     return 1.0e3 * np.ones_like(np.asarray(state.nn, dtype=float))
 
 
-def gate_x2(two_zone=False):
-    sim = make_sim(two_zone=two_zone)
-    st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0, two_zone=two_zone)
+def gate_x2():
+    sim = make_sim()
+    st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0)
     rate = _ionization_rate(sim, st)
     coll, cx, hot, diag = _channels(sim, st, rate)
     Vp, V_En = _volumes(sim, st)
@@ -318,46 +313,31 @@ def gate_x2(two_zone=False):
     scale = max(abs(dissipated), abs(wall_loss), 1e-300)
     rel = abs(residual) / scale
     ok = rel < 1e-11 and abs(dissipated) > 0.0 and wall_loss > 0.0
-    label = "two-zone" if two_zone else "single-zone"
     return (
-        f"X2 three-way energy closure dEi*Vp + dEn*V_En == P_diss - L_wall "
-        f"({label})",
+        "X2 three-way energy closure dEi*Vp + dEn*V_En == P_diss - L_wall",
         ok,
         f"rel residual = {rel:.2e}  P_diss = {dissipated:.6e} erg/s  "
         f"L_wall = {wall_loss:.6e} erg/s",
     )
 
 
-def gate_x2_two_zone():
-    return gate_x2(two_zone=True)
-
-
-def gate_x3(two_zone=False):
-    sim = make_sim(two_zone=two_zone)
-    st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0, two_zone=two_zone)
+def gate_x3():
+    sim = make_sim()
+    st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0)
     coll, cx, hot, _diag = _channels(sim, st, _ionization_rate(sim, st))
     Vp, V_En = _volumes(sim, st)
     V_ann = np.asarray(sim._geometry.neutral_volume_cm3, dtype=float) - Vp
     cold = float(np.sum(np.asarray(cx.nn) * V_En))
-    landed = (
-        float(np.sum(np.asarray(hot.nn_a) * V_ann))
-        if two_zone
-        else float(np.sum(np.asarray(hot.nn) * V_En))
-    )
+    landed = float(np.sum(np.asarray(hot.nn_a) * V_ann))
     plasma = float(np.sum(np.asarray(hot.n) * Vp))
     total = cold + landed + plasma
     scale = max(abs(cold), 1e-300)
     rel = abs(total) / scale
     ok = rel < 1e-12 and abs(cold) > 0.0 and landed > 0.0 and plasma > 0.0
-    label = "two-zone" if two_zone else "single-zone"
-    return f"X3 whole-system particle closure ({label})", ok, (
+    return "X3 whole-system particle closure", ok, (
         f"eroded = {cold:.6e} /s  landed = {landed:.6e} /s  "
         f"ionized = {plasma:.6e} /s  rel residual = {rel:.2e}"
     )
-
-
-def gate_x3_two_zone():
-    return gate_x3(two_zone=True)
 
 
 def gate_x4():
@@ -370,7 +350,6 @@ def gate_x4():
         state=st, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
         geometry=sim._geometry, ionization_rate_per_neutral=_ionization_rate(sim, st),
         residence=sim._hot_neutral_kernels[1],
-        wind_column_factor=sim._wind_column_factor,
         **sim._collision_operator_kwargs(),
     )
     wall_momentum = float(np.sum(rates["wall"] * rates["p_hot"] * Vp))
@@ -478,8 +457,10 @@ def gate_a3():
         state=st, floors=sim._floors, ion_mass_g=sim._ion_mass_g,
         geometry=sim._geometry,
     )
-    V = np.asarray(sim._geometry.neutral_volume_cm3, dtype=float)
-    A = np.asarray(sim._geometry.neutral_face_area_cm2, dtype=float)
+    # nn and En live on the COLUMN books (the two-zone split is
+    # unconditional): the plasma-column volume and face areas.
+    V = np.asarray(sim._geometry.plasma_volume_cm3, dtype=float)
+    A = np.asarray(sim._geometry.plasma_face_area_cm2, dtype=float)
     dn = float(np.sum(np.asarray(term.nn) * V))
     dE = float(np.sum(np.asarray(term.En) * V))
     scale_n = float(np.sum(np.abs(np.asarray(term.nn)) * V))
@@ -594,8 +575,19 @@ def gate_s1():
             return np.inf
         return float(np.max(np.abs(a - b) / np.maximum(np.abs(b), 1e-300)))
 
-    puff_rel = _rel(En_row[source], nn_row[source] * wall)
-    puff_ok = bool(np.any(source)) and puff_rel < 1e-14
+    # The puff feeds the ANNULUS, which carries no energy field, so it books
+    # no En at all: the column En row is the pump's alone. Where the puff
+    # does land in the column (a cell with no annulus) it arrives at the wall
+    # energy per particle.
+    annulus_fed = bool(np.any(np.asarray(term.nn_a) > 0.0))
+    puff_rel = (
+        _rel(En_row[source], nn_row[source] * wall) if np.any(source) else 0.0
+    )
+    puff_ok = (
+        annulus_fed
+        and bool(np.all(En_row[~sink & ~source] == 0.0))
+        and puff_rel < 1e-14
+    )
     pump_rel = _rel(En_row[sink], nn_row[sink] * per_particle[sink])
     pump_ok = bool(np.any(sink)) and pump_rel < 1e-14
     # Ionization: the ledger's booking must debit the local per-particle energy.
@@ -685,7 +677,7 @@ def gate_g7():
 def main():
     gates = [
         gate_k1, gate_k2,
-        gate_x1, gate_x2, gate_x2_two_zone, gate_x3, gate_x3_two_zone,
+        gate_x1, gate_x2, gate_x3,
         gate_x4, gate_x5,
         gate_a1, gate_a2, gate_a3, gate_a4, gate_e1,
         gate_s1, gate_s2, gate_w3,

@@ -70,7 +70,6 @@ def build_config(nx, extra=None, configuration=None):
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
         "cathode_cleaning_E_th_eV": 20.0,
-        "gas_puff_mode": "square",
         "cathode_sample_smoothing": "presheath",
     })
     lineage = None

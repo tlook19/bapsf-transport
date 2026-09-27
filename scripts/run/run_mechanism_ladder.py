@@ -225,10 +225,6 @@ def main(argv=None):
     p.add_argument("--E-th", type=float, default=None,
                    help="desorption threshold [eV] (M5a' Bohdansky yield "
                         "factor; omit for the energy-independent limit)")
-    p.add_argument("--square", action="store_true",
-                   help="measured square valve waveform (M6): erf rise at "
-                        "circuit-on, flat S_gp for the drive, erf close + "
-                        "afterglow tail; replaces pulse_decay_to_level")
     p.add_argument("--sgp", type=float, default=None,
                    help="gas puff level [sccm/valve] (the M6 single "
                         "calibration knob; default keeps PARAM_OVERRIDES)")
@@ -278,8 +274,6 @@ def main(argv=None):
     flags_extra = {}
     if args.rec_return:
         extra["recombination_energy_return"] = True
-    if args.square:
-        extra["gas_puff_mode"] = "square"
     if args.sgp is not None:
         extra["S_gp"] = args.sgp
 

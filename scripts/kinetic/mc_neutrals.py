@@ -284,10 +284,10 @@ def assert_end_recycle_routed_live(ba, ba_ann, path, window_ms):
 
 
 def _square_puff_envelope(times, params, flags, t_breakdown_trigger):
-    """Return the ``gas_puff_mode="square"`` envelope [1] at ``times`` [s].
+    """Return the square puff envelope [1] at ``times`` [s].
 
-    A transcription of the solver's own envelope (the ``"square"`` branch of
-    ``LAPDSim1D._effective_gas_puff_sccm``): an erf opening edge anchored on
+    A transcription of the solver's own envelope
+    (``LAPDSim1D._effective_gas_puff_sccm``): an erf opening edge anchored on
     the end of the neutral-prebreakdown phase plus ``gas_puff_rise_center_s``,
     an erf closing edge anchored on the main-discharge start plus
     ``tau_discharge`` and ``gas_puff_close_lag_s``, both built with the one
@@ -300,7 +300,9 @@ def _square_puff_envelope(times, params, flags, t_breakdown_trigger):
     having if it reproduces the applied waveform bit for bit.
     """
     origin = 0.0
-    if flags.get("Plasma", True) and flags.get("neutral_prebreakdown", False):
+    # An artifact written after the prebreakdown flag was adopted carries no
+    # flag: its phase runs whenever the duration is positive.
+    if flags.get("Plasma", True) and flags.get("neutral_prebreakdown", True):
         origin = max(float(params.get("tau_neutral_prebreakdown", 0.0)), 0.0)
     width = float(params.get("gas_puff_rise_width_s", 5.0e-4))
     t_on = origin + float(params.get("gas_puff_rise_center_s", 5.0e-4))
@@ -343,7 +345,8 @@ def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_ful
 
     Raises ``ValueError`` -- loudly, rather than returning a number nobody can
     check -- on any configuration outside the certified one: a non-``square``
-    waveform, a phase-transition mode whose main-discharge start is not the
+    waveform or a non-``orifice`` puff shape (both recorded by artifacts
+    written before those were unconditional), a phase-transition mode whose main-discharge start is not the
     saved trigger, a geometry that does not rebuild, or a missing trigger.
     """
     mode = str(params.get("gas_puff_mode", "square"))
@@ -354,6 +357,15 @@ def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_ful
             "the puff is absent from the neutral ledger and only the config "
             "can supply it; the config derivation implemented here covers the "
             "'square' waveform alone. Refusing to guess a rate."
+        )
+    shape = str(params.get("gas_puff_profile", "orifice"))
+    if shape != "orifice":
+        raise ValueError(
+            f"UNRECOVERABLE two-zone puff: gas_puff_profile={shape!r}.\n"
+            "  The artifact saved no rhs_terms/neutral_sources/nn_a row, and "
+            "this checkout builds only the orifice puff row, so the saved "
+            "shape cannot be rebuilt. Score the artifact at the anchor tag it "
+            "was produced on."
         )
     transition = str(params.get("phase_transition_mode", "current"))
     if transition != "current":
@@ -382,10 +394,7 @@ def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_ful
         geometry,
         params.get("S_gp", 0.0),
         params.get("gas_puff_valves", 2),
-        profile=str(params.get("gas_puff_profile", "cell")),
         z_cm=params.get("gas_puff_z_cm"),
-        sigma_cm=float(params.get("gas_puff_sigma_cm", 50.0)),
-        throw_cm=float(params.get("gas_puff_throw_cm", 100.0)),
         orifice_id_cm=params.get("gas_puff_orifice_id_cm"),
         orifice_length_cm=params.get("gas_puff_orifice_length_cm"),
         end=0,
@@ -396,10 +405,7 @@ def two_zone_puff_row_from_config(f, params, flags, times, mask, Vm_full, Va_ful
             geometry,
             params.get("Twin_S_gp", 0.0),
             params.get("gas_puff_valves", 2),
-            profile=str(params.get("gas_puff_profile", "cell")),
             z_cm=params.get("gas_puff_z_cm"),
-            sigma_cm=float(params.get("gas_puff_sigma_cm", 50.0)),
-            throw_cm=float(params.get("gas_puff_throw_cm", 100.0)),
             orifice_id_cm=params.get("gas_puff_orifice_id_cm"),
             orifice_length_cm=params.get("gas_puff_orifice_length_cm"),
             end=-1,

@@ -271,20 +271,9 @@ PARAM_OVERRIDES = {
     # delivered fuel) and NOT the golden, which pins the key back to None.
     "equilibration_gas_puff_on_s": _STANCE["equilibration_gas_puff_on_s"],
     "S_gp": _STANCE["S_gp"],
-    # S_gp_decay_target is no longer mirrored from the stance: the stance
-    # dropped it (2026-08-21) because it is read only by the retired
-    # pulse/decay/double_erf puff waveforms and the stance runs "square", so
-    # it was inert and trajectory-invariant. The config default now applies,
-    # equally inertly.
-    "tau_gp_pulse_duration": 1e-3,
-    "tau_gp_decay_duration": 5e-3,
-    # Ion-neutral closure: R5 STANCE FLIP (2026-07-25) -- the ad-hoc constant
-    # drag / cx_derived stance (b=0.5, constant, cx_derived, thermalization) is
-    # RETIRED in favour of the R4.3 Phelps moment operator
-    # (ion_neutral_moment_closure, now the config.py production default;
-    # first-principles drag+CX+thermal, no knob). The legacy drag keys are
-    # DEPRECATED and no longer set here, nor in the golden, which has run the
-    # shipped moment-closure defaults since the R2b re-anchor.
+    # Ion-neutral closure: the Phelps moment-closed operator is unconditional
+    # (first-principles drag+CX+thermal, no knob), so no ion-neutral key is
+    # set here.
     # ADAS GCR rates (see cablp/atomic/data/adas/README.md): effective ionization/
     # recombination and radiation-only cooling, consistent with the separate
     # ionization-cost term. The rate channels carry no scale factor: the b_*
@@ -555,7 +544,6 @@ PRODUCTION_NX = 240
 
 def run_model(
     nx=PRODUCTION_NX,
-    exchange_model="knudsen",
     extra=None,
     drag_closure=None,
     flags_extra=None,
@@ -568,7 +556,6 @@ def run_model(
     flags.update(FLAG_OVERRIDES)
     if flags_extra:
         flags.update(flags_extra)
-    params["neutral_exchange_model"] = exchange_model
     if nx is not None:
         params["nx"] = nx
     # A/B instrument for the drag-closure gate (M4):
@@ -4433,9 +4420,6 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--nx", type=int, default=PRODUCTION_NX)
     parser.add_argument(
-        "--exchange-model", default="knudsen", choices=("knudsen", "constant")
-    )
-    parser.add_argument(
         "--tau-afterglow",
         type=float,
         default=None,
@@ -4651,7 +4635,7 @@ def main(argv=None):
         # nonlocal run must not be scored under a production-stance label.
         label += beam_product_transport_note(getattr(result, "params", None))
     else:
-        label = f"resolved ({args.exchange_model}, nx={args.nx or 'default'})"
+        label = f"resolved (nx={args.nx or 'default'})"
         # The named configuration, applied over this file's shared package,
         # where the campaign drivers apply theirs.
         configuration = None
@@ -4683,7 +4667,6 @@ def main(argv=None):
             flags_extra = None
         result, geometry, params, flags = run_model(
             nx=args.nx,
-            exchange_model=args.exchange_model,
             extra=extra,
             flags_extra=flags_extra,
             drag_closure=args.drag_closure,

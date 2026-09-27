@@ -247,9 +247,9 @@ def run_baseline(params, flags):
 
     ``cells`` is the mesh cell count read from the solver's own geometry. It is
     NOT inferred from the width of ``y``: the number of packed fields per cell
-    depends on the neutral closure (5 for the cold single-zone layout, 8 once
-    evolved neutral momentum, the two-zone split and the neutral energy channel
-    are on), so any fixed divisor is wrong for some configuration.
+    depends on the neutral closure (6 for the cold two-zone layout, 8 once
+    evolved neutral momentum and the neutral energy channel are on), so any
+    fixed divisor is wrong for some configuration.
     """
     sim = LAPDSim1D(params, flags)
     sim.start_simulation(**BASELINE_RUN_KWARGS)

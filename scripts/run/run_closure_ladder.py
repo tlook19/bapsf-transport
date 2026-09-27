@@ -311,15 +311,14 @@ KIN_ARMS = [
 CLOSURE_DELTAS = {
     "diffusive": {
         "dict": {"neutral_model": "moment", "neutral_kinetic_dvm_cathode_jet": False, "neutral_kinetic_dvm_anode_jet": False},
-        "flags": {"neutral_kinetic_dvm_baffles": False},
+        "flags": {},
         "none": ["neutral_kinetic_dvm_jet_launch_width"],
     },
     "moment": {
         "dict": {"neutral_model": "moment", "cathode_neutral_jet": True, "cathode_jet_surface_debit": True,
                  "cathode_jet_energy_convention": "total_reflected",
                  "neutral_kinetic_dvm_cathode_jet": False, "neutral_kinetic_dvm_anode_jet": False},
-        "flags": {"neutral_momentum": True, "neutral_energy": True, "neutral_hot_internal_wall": True,
-                  "neutral_kinetic_dvm_baffles": False},
+        "flags": {"neutral_momentum": True, "neutral_energy": True, "neutral_hot_internal_wall": True},
         "none": ["neutral_kinetic_dvm_jet_launch_width"],
     },
 }
@@ -500,9 +499,9 @@ def cmd_feet(args):
     for es in args.es:
         for end in FEET_ENDS_USED:
             out = foot_npz(es, end)
-            argv = [PY, "scripts/stance/sp3_build_nn0.py", "--es", es, "--nx", 268, "--sgp", 9010, "--two-zone",
+            argv = [PY, "scripts/stance/sp3_build_nn0.py", "--es", es, "--nx", 268, "--sgp", 9010,
                     "--base-from-h5", h5] + foot_args(es, end) + \
-                   ["--extra", "gas_puff_profile=orifice", "gas_puff_orifice_id_cm=3.95", "gas_puff_orifice_length_cm=22.0",
+                   ["--extra", "gas_puff_orifice_id_cm=3.95", "gas_puff_orifice_length_cm=22.0",
                     "--extra-npz"] + [f"{k}={g}:{k}" for k in
                                       ("plasma_radius_profile_cm", "machine_radius_profile_cm", "neutral_baffle_positions_cm", "neutral_baffle_clear_radii_cm")] + \
                    ["--extra-flag", "prescribed_area_geometry=true", "neutral_baffles=true", "--out", out]
@@ -637,7 +636,7 @@ def preflight(name, closure, deltas, es, carries_fill, t0):
     argv = [PY, "scripts/gates/preflight_diffcfg.py", "--stance", BASE_NAME]
     for x in expects(base, closure, deltas, es, t0):
         argv += ["--expect", x]
-    argv += ["m6", "--", "--es", es, "--stance", p["cfg"].resolve(), "--sgp", sgp_for(name), "--two-zone", "--save-h5", "/dev/null"]
+    argv += ["m6", "--", "--es", es, "--stance", p["cfg"].resolve(), "--sgp", sgp_for(name), "--save-h5", "/dev/null"]
     r = run_wt(argv, p["pre"])
     out = p["pre"].read_text()
     unexpected = set(re.findall(r"^\s*!!\s+\S+\s+(\S+?):", out, re.M))
@@ -700,7 +699,7 @@ def launch_probe(name, es):
             f.unlink()
     inner = (f"cd {shlex.quote(str(REPO))} && CABLP_COMPILED_KERNELS=1 PYTHONPATH={shlex.quote(str(REPO))} "
              f"PYTHONDONTWRITEBYTECODE=1 timeout --foreground {PROBE_TIMEOUT_S} {shlex.quote(str(PY))} scripts/run/run_m6_point.py "
-             f"--stance {shlex.quote(str(p['pcfg'].resolve()))} --sgp {sgp_for(name)} --es {es} --two-zone "
+             f"--stance {shlex.quote(str(p['pcfg'].resolve()))} --sgp {sgp_for(name)} --es {es} "
              f"--max-steps {PROBE_MAX_STEPS} --extra max_steps_action=stop "
              f"--save-h5 {shlex.quote(str(p['ph5']))} >> {shlex.quote(str(p['plog']))} 2>&1; "
              f"echo \"EXIT=$?\" > {shlex.quote(str(p['pexit']))}")
@@ -797,7 +796,7 @@ def launch(name, es):
             f.unlink()
     inner = (f"cd {shlex.quote(str(REPO))} && CABLP_COMPILED_KERNELS=1 PYTHONPATH={shlex.quote(str(REPO))} "
              f"PYTHONDONTWRITEBYTECODE=1 timeout --foreground {TIMEOUT_S} {shlex.quote(str(PY))} scripts/run/run_m6_point.py "
-             f"--stance {shlex.quote(str(p['cfg'].resolve()))} --sgp {sgp_for(name)} --es {es} --two-zone "
+             f"--stance {shlex.quote(str(p['cfg'].resolve()))} --sgp {sgp_for(name)} --es {es} "
              f"--max-steps {MAX_STEPS} --save-h5 {shlex.quote(str(p['h5']))} >> {shlex.quote(str(p['log']))} 2>&1; "
              f"echo \"EXIT=$?\" > {shlex.quote(str(p['exit']))}")
     p["cmd"].write_text("#!/bin/bash\n# ladder arm, generated " + dt.datetime.now().isoformat(timespec="seconds") + "\n" + inner + "\n")

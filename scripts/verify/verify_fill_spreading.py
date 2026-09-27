@@ -92,12 +92,6 @@ neither the default run nor the smoke suite depends on it:
     geometry, does not reproduce the fixture and is not meant to: the two
     inputs are named separately so that neither leg can be run on the other's
     machine by accident.
-``--tpmc-record FILE``
-    G6 TPMC RECORD GATE. Scores candidate members against a banked
-    test-particle Monte Carlo record of the same puff on the same geometry, by
-    the total-variation distance of the normalized inventory profile and by
-    ``z90``. The pre-registered bins are :data:`TPMC_BINS`; the legacy top-hat
-    is scored on the same instrument and must miss EVERY one of them.
 ``--tpmc-production FILE --tpmc-production-geometry-npz FILE``
     G7 TPMC PRODUCTION COMPARISON. Scores the REGISTERED members -- the
     reference, the two ends of its bracket and the instrument-match member --
@@ -241,20 +235,6 @@ GRID_CONVERGENCE_REL = 0.01
 SUBSTEP_CONVERGENCE_REL = 0.005
 #: The two meshes the G5 mesh leg compares, as ``nx`` [1].
 GRID_CONVERGENCE_NX = (268, 536)
-
-#: G6 pre-registered bins, keyed by the member as this script names it. Each
-#: entry is ``(max total-variation distance, min z90 ratio, max z90 ratio)``
-#: against the record, applying at every reported time.
-TPMC_BINS = {
-    "knudsen kappa=2/3": (0.09, 1.00, 1.12),
-    "knudsen kappa=0.5": (0.06, 0.95, 1.05),
-}
-#: G6: the member that must MISS every bin above -- all of them, not one.
-TPMC_NEGATIVE_MEMBER = "legacy ballistic top-hat"
-#: G6 report times [s]. Both are exact samples of the record's own grid.
-TPMC_REPORT_TIMES_S = (4.5e-3, 7.0e-3)
-#: G6: the geometry file the record was produced on, found beside the record.
-TPMC_GEOMETRY_NAME = "eqmap_demo_es1_nx240.npz"
 
 #: G7: the ES rung whose configuration the production test-particle run was
 #: made on, and therefore the one the comparison builds its geometry from. The
@@ -420,22 +400,12 @@ def _lobe(geometry, params, dt_s):
         geometry,
         params["S_gp"],
         params["gas_puff_valves"],
-        profile=params["gas_puff_profile"],
         z_cm=params["gas_puff_z_cm"],
-        sigma_cm=params["gas_puff_sigma_cm"],
-        throw_cm=params["gas_puff_throw_cm"],
         orifice_id_cm=params["gas_puff_orifice_id_cm"],
         orifice_length_cm=params["gas_puff_orifice_length_cm"],
         end=0,
     )
     return rate * np.asarray(geometry.neutral_volume_cm3, dtype=float) * float(dt_s)
-
-
-def _quantile_z(z_cm, inventory, fraction):
-    """Return the z below which ``fraction`` of the inventory sits [cm]."""
-    inventory = np.asarray(inventory, dtype=float)
-    cumulative = np.cumsum(inventory) / float(inventory.sum())
-    return float(np.interp(fraction, cumulative, np.asarray(z_cm, dtype=float)))
 
 
 def _total_variation(first, second):
@@ -702,7 +672,7 @@ def gate_convergence(vbar_cm_s):
     # at the same operating point, which resolves at any nx.
     rows = []
     for nx in GRID_CONVERGENCE_NX:
-        params, flags = sp3.stance_config(1, nx, 9010.0, True)
+        params, flags = sp3.stance_config(1, nx, 9010.0)
         geometry = LAPDSim1D(dict(params), dict(flags)).geometry
         rows.append(
             _solve_for(geometry, params, sp3.KNUDSEN_SUBSTEPS_DEFAULT,
@@ -773,7 +743,7 @@ def _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, kernel, dt_foot_s=None):
         "neutral_baffle_positions_cm", "neutral_baffle_clear_radii_cm",
     )]
     args = SimpleNamespace(
-        es=int(es), nx=int(nx), sgp=float(sgp), two_zone=True, zone="chamber",
+        es=int(es), nx=int(nx), sgp=float(sgp), zone="chamber",
         base_from_h5=str(base_h5),
         dt_foot_s=(sp3.registered_foot_s(int(es)) if dt_foot_s is None
                    else float(dt_foot_s)),
@@ -783,7 +753,7 @@ def _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, kernel, dt_foot_s=None):
         knudsen_gap_coupling=sp3.KNUDSEN_GAP_COUPLING_REGISTERED,
         knudsen_source_convention=sp3.KNUDSEN_SOURCE_CONVENTIONS[0],
         sigma_hehe_cm2=sp3.SIGMA_HE_HE_CM2, mfp_cm=None, tn_k=None,
-        extra=["gas_puff_profile=orifice", "gas_puff_orifice_id_cm=3.95",
+        extra=["gas_puff_orifice_id_cm=3.95",
                "gas_puff_orifice_length_cm=22.0"],
         extra_flag=["prescribed_area_geometry=true", "neutral_baffles=true"],
         extra_npz=[
@@ -904,174 +874,6 @@ def gate_legacy_rows(rows_path, base_h5, es, nx, sgp, geometry_npz,
 
 
 # ----------------------------------------------------------------------
-# G6 -- the banked test-particle record
-# ----------------------------------------------------------------------
-def gate_tpmc(record_paths, geometry_path, vbar_cm_s):
-    """Return ``(ok, lines)`` for the record comparison."""
-    with np.load(geometry_path, allow_pickle=True) as data:
-        map_z = np.asarray(data["z_cm"], dtype=float)
-        map_length = np.asarray(data["length_cm"], dtype=float)
-        map_volume = np.asarray(data["neutral_volume_cm3"], dtype=float)
-        map_roles = np.asarray(data["cell_role"], dtype=object)
-        import json
-        provenance = json.loads(str(data["provenance"]))
-    mesh = SimpleNamespace(
-        cells=int(map_z.size), z_cm=map_z, length_cm=map_length,
-        cell_role=map_roles, neutral_volume_cm3=map_volume,
-        neutral_face_area_cm2=_face_open_from_areas(map_volume / map_length),
-    )
-    active = sp3.knudsen_active_mask(map_roles, False)
-    rate = gas_puff_rate_profile(
-        mesh,
-        provenance["S_gp_sccm"],
-        provenance["gas_puff_valves"],
-        profile=provenance["gas_puff_profile"],
-        z_cm=provenance["gas_puff_z_cm"],
-        throw_cm=provenance["gas_puff_throw_cm"],
-        end=0,
-    )
-    # THE ACTIVE SET THE BINS WERE REGISTERED AGAINST. The record's own domain
-    # starts at the cathode cell and includes the gap, so a comparison run on
-    # the operator's DEFAULT active set is scoring a model that places no gas
-    # at all in a region where the record places a sixth of it. That deficit
-    # is a fixed shape difference no diffusivity can absorb -- it is measured
-    # and reported below as ``gap-closed``, alongside the share of the record
-    # it accounts for -- so the bins are decided on the gap-coupled set, which
-    # is the comparison they describe. Note the geometry file carries no mesh
-    # transparency, so the gap is coupled here through an unthrottled face;
-    # the resulting gap fill is reported, not gated.
-    records = []
-    for path in record_paths:
-        with np.load(path, allow_pickle=True) as data:
-            records.append((
-                Path(path).name,
-                np.asarray(data["z"], dtype=float),
-                np.asarray(data["report_times_s"], dtype=float),
-                np.asarray(data["nn_mean_t"], dtype=float),
-            ))
-    lines = [
-        f"  geometry {Path(geometry_path).name}: {mesh.cells} cells, puff "
-        f"{provenance['gas_puff_profile']} at z="
-        f"{provenance['gas_puff_z_cm']:g} cm, throw "
-        f"{provenance['gas_puff_throw_cm']:g} cm, "
-        f"{provenance['S_gp_sccm']:g} sccm x "
-        f"{provenance['gas_puff_valves']} valves",
-        f"  records: " + ", ".join(name for name, _, _, _ in records),
-    ]
-    coupled = sp3.knudsen_active_mask(map_roles, True)
-    ok = True
-    for duration in TPMC_REPORT_TIMES_S:
-        deposit = rate * map_volume * duration
-        members = {}
-        disclosed = {}
-        for label, kappa in (("knudsen kappa=2/3", sp3.KNUDSEN_KAPPA_REFERENCE),
-                             ("knudsen kappa=0.5", 0.5)):
-            members[label], _ = sp3.knudsen_spread(
-                mesh.z_cm, mesh.length_cm, mesh.neutral_volume_cm3,
-                mesh.neutral_face_area_cm2, coupled, deposit,
-                duration, vbar_cm_s, kappa=kappa,
-            )
-            disclosed[label], _ = sp3.knudsen_spread(
-                mesh.z_cm, mesh.length_cm, mesh.neutral_volume_cm3,
-                mesh.neutral_face_area_cm2, active, deposit,
-                duration, vbar_cm_s, kappa=kappa,
-            )
-        members[TPMC_NEGATIVE_MEMBER] = (
-            sp3.spread_matrix(mesh, "ballistic", vbar_cm_s * duration)
-            @ deposit
-        )
-        for name, record_z, times, profiles in records:
-            sample = int(np.argmin(np.abs(times - duration)))
-            if abs(float(times[sample]) - duration) > 1.0e-9:
-                raise ValueError(
-                    f"{name} carries no sample at t = {duration:g} s; it "
-                    f"reports {times.tolist()}"
-                )
-            common = np.array(
-                [int(np.argmin(np.abs(map_z - value))) for value in record_z],
-                dtype=int,
-            )
-            if np.max(np.abs(map_z[common] - record_z)) > 1.0e-9:
-                raise ValueError(
-                    f"{name}'s z axis does not sit on the geometry's cells"
-                )
-            reference = profiles[sample] * map_volume[common]
-            reference_z90 = _quantile_z(record_z, reference, 0.9)
-            # THE DISCLOSURE: the same members on the DEFAULT active set, with
-            # the share of the record that sits in the region they leave
-            # empty. Reported, never gated.
-            behind = map_z[common] < float(np.min(map_z[active]))
-            record_behind = float(
-                reference[behind].sum() / reference.sum()
-            )
-            for label, accumulated in disclosed.items():
-                candidate = accumulated[common]
-                lines.append(
-                    f"       (disclosed, not gated) t={duration * 1e3:g} ms "
-                    f"{name} {label} on the DEFAULT gap-closed active set: "
-                    f"TV {_total_variation(candidate, reference):.4f}, z90 "
-                    f"{_quantile_z(record_z, candidate, 0.9):.1f} cm; the "
-                    f"record puts {record_behind:.4f} of its inventory behind "
-                    f"the mesh, where that set puts "
-                    f"{float(candidate[behind].sum() / candidate.sum()):.4f}"
-                )
-            gap_share = float(
-                members["knudsen kappa=2/3"][common][behind].sum()
-                / members["knudsen kappa=2/3"][common].sum()
-            )
-            lines.append(
-                f"       (disclosed, not gated) t={duration * 1e3:g} ms "
-                f"{name}: gap-coupled kappa=2/3 puts {gap_share:.4f} of its "
-                f"inventory behind the mesh against the record's "
-                f"{record_behind:.4f}, through an unthrottled face"
-            )
-            for label, accumulated in members.items():
-                candidate = accumulated[common]
-                distance = _total_variation(candidate, reference)
-                z90 = _quantile_z(record_z, candidate, 0.9)
-                ratio = z90 / reference_z90
-                bins = TPMC_BINS.get(label)
-                if bins is None:
-                    # THE NEGATIVE CONTROL, held to the bar G7 holds its own
-                    # to: it must miss EVERY bin it is scored against, not
-                    # merely one of them. Satisfying one member's bin means
-                    # the control scores like that member on the instrument
-                    # that is supposed to separate them, and a control that
-                    # is only required to miss one bin would pass anyway on
-                    # the strength of the others.
-                    satisfied = [
-                        member
-                        for member, (limit, low, high) in TPMC_BINS.items()
-                        if distance <= limit and low <= ratio <= high
-                    ]
-                    good = not satisfied
-                    verdict = (
-                        f"misses all {len(TPMC_BINS)} bins"
-                        if good
-                        else "SATISFIES " + ", ".join(sorted(satisfied))
-                    )
-                    ok = ok and good
-                    lines.append(
-                        f"  [{'ok' if good else 'FAIL'}] t={duration * 1e3:g} "
-                        f"ms {name} {label}: TV {distance:.4f}, z90 "
-                        f"{z90:.1f} cm = {ratio:.4f} x record "
-                        f"{reference_z90:.1f} cm -- {verdict} (it must miss "
-                        f"every one)"
-                    )
-                    continue
-                limit, low, high = bins
-                good = distance <= limit and low <= ratio <= high
-                ok = ok and good
-                lines.append(
-                    f"  [{'ok' if good else 'FAIL'}] t={duration * 1e3:g} ms "
-                    f"{name} {label}: TV {distance:.4f} (bar {limit:g}), z90 "
-                    f"{z90:.1f} cm = {ratio:.4f} x record {reference_z90:.1f} "
-                    f"cm (bin [{low:g}, {high:g}])"
-                )
-    return ok, lines
-
-
-# ----------------------------------------------------------------------
 # G7 -- the production-geometry test-particle comparison
 # ----------------------------------------------------------------------
 def _production_geometry(geometry_npz, es, nx, sgp):
@@ -1089,11 +891,11 @@ def _production_geometry(geometry_npz, es, nx, sgp):
         )
     ])
     values.update(sp3.parse_extra_overrides(
-        ["gas_puff_profile=orifice", "gas_puff_orifice_id_cm=3.95",
+        ["gas_puff_orifice_id_cm=3.95",
          "gas_puff_orifice_length_cm=22.0"], "--extra",
     ))
     params, flags = sp3.stance_config(
-        int(es), int(nx), float(sgp), True,
+        int(es), int(nx), float(sgp),
         extra_params=values,
         extra_flags=sp3.parse_extra_overrides(
             ["prescribed_area_geometry=true", "neutral_baffles=true"],
@@ -1498,16 +1300,6 @@ def main(argv=None):
     parser.add_argument("--legacy-nx", type=int, default=268)
     parser.add_argument("--legacy-sgp", type=float, default=9010.0)
     parser.add_argument(
-        "--tpmc-record", type=Path, action="append", default=None,
-        help="G6: a banked test-particle record to score against; repeat for "
-             "several seeds",
-    )
-    parser.add_argument(
-        "--tpmc-geometry", type=Path, default=None,
-        help=f"G6: the geometry the record was produced on (default: "
-             f"{TPMC_GEOMETRY_NAME} beside the first record)",
-    )
-    parser.add_argument(
         "--tpmc-production", type=Path, default=None,
         help="G7: a reduced test-particle record of the same puff on the "
              "PRODUCTION geometry, carrying its per-seed inventory profiles "
@@ -1552,21 +1344,6 @@ def main(argv=None):
         )
         results.insert(0, ("G0 row bit-identity (G0a registered, G0b legacy, "
                            "G0c the other two rungs)", ok, lines))
-
-    if args.tpmc_record:
-        geometry = args.tpmc_geometry
-        if geometry is None:
-            geometry = args.tpmc_record[0].parent / TPMC_GEOMETRY_NAME
-        if not Path(geometry).exists():
-            parser.error(
-                f"the record's geometry {geometry} does not exist; name it "
-                "with --tpmc-geometry"
-            )
-        ok, lines = gate_tpmc(
-            args.tpmc_record, geometry,
-            sp3.mean_speed_cm_s(GATE_TN_K, m_He_cgs),
-        )
-        results.append(("G6 TPMC record gate", ok, lines))
 
     if args.tpmc_production is not None:
         if args.tpmc_production_geometry_npz is None:

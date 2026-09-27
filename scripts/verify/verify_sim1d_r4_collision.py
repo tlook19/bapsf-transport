@@ -1,8 +1,7 @@
 """R4.3 ion-neutral moment-closure gate suite (audit A7/A8).
 
 Pre-registered analytic identities for the moment-closed reduced ion-neutral
-collision operator ``ion_neutral_collision_rhs`` (flag ``ion_neutral_moment_closure``,
-default ON). It replaces the drag + frictional-heating + elastic-thermalization +
+collision operator ``ion_neutral_collision_rhs`` (unconditional). It replaces the drag + frictional-heating + elastic-thermalization +
 CX-cooling quartet with ONE equal-mass (He+/He) Braginskii momentum-transfer
 operator built from the Phelps isotropic + backscatter rate coefficients:
 
@@ -25,12 +24,9 @@ Gates:
   T1  thermal-only limit: at u == u_n == 0, dM == 0, no friction, and
       dEi == 1.5 n nu_mt (Tn - Ti) with nu_mt = nn(k_b + 0.5 k_iso) -- the CX
       thermal coefficient is 1.5 K_cx, not the legacy 2.5 K_cx double-count
-  P1  presence-off: the moment-closure term is a strict zero and the four legacy
-      ion-neutral terms are live (nonzero) when the flag is off
-  P2  presence-on/perturbation: the moment-closure term perturbs (M, Ei nonzero)
-      and the four legacy ion-neutral terms are all exactly zero when the flag is on
-  G1  construction guard: ion_neutral_moment_closure with a non-He gas raises
-      loudly at construction
+  P2  perturbation: the moment-closure term perturbs (M, Ei nonzero) and the
+      four legacy ion-neutral rows are all exactly zero
+  G1  construction guard: a non-He gas raises loudly at construction
 
 Usage:
     python scripts/verify/verify_sim1d_r4_collision.py
@@ -71,7 +67,6 @@ CLEAN_PARAMS = {
 }
 CLEAN_FLAGS = {
     "Plasma": True, "implicit_heat_conduction": True,
-    "neutral_prebreakdown": False,
     "cathode_coupling": False, "debug_checks": False,
 }
 
@@ -79,14 +74,13 @@ TN_K = 300.0
 TN_EV = TN_K * kb_cgs / ev_to_erg  # single cold-gas neutral temperature (A8)
 
 
-def make_sim(moment=False, neutral_momentum=False, gas_type="He"):
+def make_sim(neutral_momentum=False, gas_type="He"):
     params, flags = default_config()
     params.update(CLEAN_PARAMS)
     params["nx"] = 60
     params["gas_type"] = gas_type
     params["Tn_K"] = TN_K
     flags.update(CLEAN_FLAGS)
-    flags["ion_neutral_moment_closure"] = bool(moment)
     flags["neutral_momentum"] = bool(neutral_momentum)
     return LAPDSim1D(params, flags)
 
@@ -158,7 +152,7 @@ def gate_d1():
 
 
 def gate_m1():
-    sim = make_sim(moment=True, neutral_momentum=True)
+    sim = make_sim(neutral_momentum=True)
     st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0)
     term = sim.ion_neutral_collision_rhs(state=st)
     Vp = np.asarray(sim._geometry.plasma_volume_cm3, dtype=float)
@@ -178,7 +172,7 @@ def gate_e1():
     # and the Ei row is pure frictional heating. Call the sources operator with an
     # explicit Tn_eV to avoid the solver's fixed 300 K (which the Ti floor would
     # keep from matching Ti).
-    sim = make_sim(moment=True)
+    sim = make_sim()
     Ti_eV = 2.0
     st = make_state(sim, u_i=4.0e5, u_n=0.0, Ti=Ti_eV)
     der = derive_state(st, floors=sim._floors, ion_mass_g=sim._ion_mass_g)
@@ -199,7 +193,7 @@ def gate_e1():
 
 def gate_t1():
     # u == u_n == 0 => dM == 0, no friction, pure thermal at 3/2 nu_mt.
-    sim = make_sim(moment=True)
+    sim = make_sim()
     st = make_state(sim, u_i=0.0, u_n=0.0, Ti=2.0)
     term = sim.ion_neutral_collision_rhs(state=st)
     der = derive_state(st, floors=sim._floors, ion_mass_g=sim._ion_mass_g)
@@ -218,12 +212,12 @@ def gate_t1():
     )
 
 
-def _legacy_terms(sim, st):
-    return {
-        "drag": sim.ion_neutral_drag_rhs(state=st),
-        "frictional_heating": sim.ion_neutral_frictional_heating_rhs(state=st),
-        "charge_exchange": sim.ion_charge_exchange_rhs(state=st),
-    }
+LEGACY_ROWS = (
+    "ion_neutral_drag",
+    "ion_neutral_frictional_heating",
+    "ion_neutral_thermalization",
+    "ion_charge_exchange",
+)
 
 
 def _all_zero(term):
@@ -233,49 +227,35 @@ def _all_zero(term):
     )
 
 
-def gate_p1():
-    sim = make_sim(moment=False)
-    st = make_state(sim, u_i=3.0e5, u_n=0.0, Ti=2.0)
-    coll = sim.ion_neutral_collision_rhs(state=st)
-    legacy = _legacy_terms(sim, st)
-    act = _active(sim)
-    coll_zero = _all_zero(coll)
-    drag_live = np.any(legacy["drag"].M[act] != 0.0)
-    ok = coll_zero and drag_live
-    return "P1 flag off: collision term == 0, legacy drag live", ok, (
-        f"collision all-zero={coll_zero}  legacy drag nonzero={drag_live}"
-    )
-
-
 def gate_p2():
-    sim = make_sim(moment=True)
+    sim = make_sim()
     st = make_state(sim, u_i=3.0e5, u_n=0.0, Ti=2.0)
     coll = sim.ion_neutral_collision_rhs(state=st)
-    legacy = _legacy_terms(sim, st)
+    terms = sim.rhs_terms()
     act = _active(sim)
     coll_perturbs = np.any(coll.M[act] != 0.0) and np.any(coll.Ei[act] != 0.0)
-    legacy_zeroed = all(_all_zero(t) for t in legacy.values())
+    legacy_zeroed = all(_all_zero(terms[row]) for row in LEGACY_ROWS)
     ok = coll_perturbs and legacy_zeroed
-    return "P2 flag on: collision perturbs, four legacy terms == 0", ok, (
+    return "P2 collision perturbs, four legacy rows == 0", ok, (
         f"collision perturbs={coll_perturbs}  legacy all-zero={legacy_zeroed}"
     )
 
 
 def gate_g1():
     try:
-        make_sim(moment=True, gas_type="H")
+        make_sim(gas_type="H")
     except ValueError as exc:
         ok = "gas_type='He'" in str(exc) or "Phelps" in str(exc)
-        return "G1 construction guard: non-He + moment closure raises", ok, (
+        return "G1 construction guard: non-He raises", ok, (
             f"raised: {str(exc)[:70]}"
         )
-    return "G1 construction guard: non-He + moment closure raises", False, (
+    return "G1 construction guard: non-He raises", False, (
         "no ValueError raised"
     )
 
 
 def main():
-    gates = [gate_d1, gate_m1, gate_e1, gate_t1, gate_p1, gate_p2, gate_g1]
+    gates = [gate_d1, gate_m1, gate_e1, gate_t1, gate_p2, gate_g1]
     all_ok = True
     print("R4.3 ion-neutral moment-closure gate suite (A7/A8)")
     print("=" * 72)

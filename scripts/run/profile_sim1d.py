@@ -426,7 +426,7 @@ def _git_commit():
         return None
 
 
-def _run_production(nx, tau_afterglow, exchange_model, t_end, extra_pairs,
+def _run_production(nx, tau_afterglow, t_end, extra_pairs,
                     stance=None):
     extra = {"tau_afterglow": tau_afterglow}
     configuration = None
@@ -437,7 +437,6 @@ def _run_production(nx, tau_afterglow, exchange_model, t_end, extra_pairs,
     extra.update(parse_extra_overrides(extra_pairs, "--extra"))
     return run_model(
         nx=nx,
-        exchange_model=exchange_model,
         extra=extra,
         t_end=t_end,
         configuration=configuration,
@@ -499,7 +498,6 @@ def main(argv=None):
     parser.add_argument(
         "--tau-afterglow", type=float, default=None,
         help="afterglow budget [s]; default the named configuration's own")
-    parser.add_argument("--exchange-model", default="knudsen")
     parser.add_argument(
         "--t-end",
         type=float,
@@ -561,7 +559,7 @@ def main(argv=None):
 
     print(f"profile_sim1d: mode={args.mode} label={label}", flush=True)
     print(
-        f"config: nx={args.nx} exchange={args.exchange_model} "
+        f"config: nx={args.nx} "
         f"tau_afterglow={args.tau_afterglow} t_end={args.t_end} "
         f"extra={list(args.extra)}",
         flush=True,
@@ -595,7 +593,6 @@ def main(argv=None):
             result, geometry, params, flags = _run_production(
                 args.nx,
                 args.tau_afterglow,
-                args.exchange_model,
                 args.t_end,
                 args.extra,
                 stance=args.stance,
@@ -663,7 +660,6 @@ def main(argv=None):
         "machine": platform.machine(),
         "config": {
             "nx": args.nx,
-            "exchange_model": args.exchange_model,
             "tau_afterglow": args.tau_afterglow,
             "t_end": args.t_end,
             "extra": list(args.extra),

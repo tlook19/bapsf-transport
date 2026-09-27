@@ -107,11 +107,6 @@ neutral_momentum = true
 # creates.
 neutral_energy = true
 neutral_hot_internal_wall = true
-# The kinetic baffle flag makes the geometry's thin annular baffles intercept
-# the DVM's ANNULUS flux, and there is no such annulus under this selection.
-# The fluid baffles are the separate neutral_baffles flag, which the reference
-# arms and this file inherits untouched.
-neutral_kinetic_dvm_baffles = false
 
 
 [none_valued]

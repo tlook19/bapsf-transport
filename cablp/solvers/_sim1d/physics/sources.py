@@ -3,7 +3,6 @@ import math
 import numpy as np
 
 from cablp.atomic.cross_sections import (
-    charge_ex_react,
     phelps_cx_rate_cm3_s,
     phelps_momentum_transfer_rate_cm3_s,
 )
@@ -1319,24 +1318,6 @@ def ion_neutral_collision_frequency(
     )
 
 
-def ion_neutral_cx_frequency(nn, Ti, gas_type):
-    """Return the resonant charge-exchange collision frequency [s^-1].
-
-    ``nu_cx = nn * <sigma v>_cx(Ti)`` using the same rate table as the ``Q_cx``
-    energy term.
-    """
-    return np.asarray(nn, dtype=float) * charge_ex_react(Ti, gas_type)
-
-
-def ion_neutral_momentum_frequency(nn, Ti, ion_mass_g, gas_type):
-    """Return the total ion-neutral momentum-transfer frequency ``nu_in`` [s^-1]."""
-    return ion_neutral_collision_frequency(
-        nn=nn,
-        Ti=Ti,
-        gas_type=gas_type,
-    )
-
-
 def neutral_wind_velocity(state, floors, ion_mass_g, geometry=None):
     """Return the neutral drift ``u_n = M_n / (m * nn)`` [cm/s], or zeros.
 
@@ -1366,90 +1347,6 @@ def neutral_wind_velocity(state, floors, ion_mass_g, geometry=None):
         nn = (nn * V_col + np.asarray(state.nn_a, dtype=float) * V_ann) / Vm
     nn_safe = np.maximum(nn, floors["nn"])
     return np.asarray(state.M_n, dtype=float) / (ion_mass_g * nn_safe)
-
-
-def ion_neutral_drag_rhs(
-    state,
-    floors,
-    ion_mass_g,
-    gas_type,
-    b_ion_neutral_drag=1.0,
-    geometry=None,
-):
-    """Return the conservative ion-neutral drag momentum exchange.
-
-    The drag force density is ``-m_i * nu(Ti) * n * (u - u_n)`` [g cm^-2 s^-2],
-    a friction on the plasma flow from collisions with the neutral background,
-    with ``nu`` the total momentum-transfer rate.
-
-    Without an evolved neutral momentum the neutral flow is closed by the
-    constant ``b_ion_neutral_drag`` (asserting ``u_n = (1 - b)*u``
-    everywhere). When the state carries ``M_n`` (the ``neutral_momentum``
-    flag) there is no closure at all: ``u_n = M_n / (m nn)`` is the chamber-
-    mean wind, the plasma sink is ``-m nu n (u - u_n)``, and the same
-    momentum lands in ``M_n`` through the ``(Vp/Vm)`` volume conversion --
-    conserved between species exactly like particles. That mode requires
-    ``geometry``.
-    """
-    zeros = np.zeros_like(state.n, dtype=float)
-    if b_ion_neutral_drag == 0.0:
-        return ConservativeState1D(
-            n=zeros,
-            nn=zeros.copy(),
-            M=zeros.copy(),
-            Ee=zeros.copy(),
-            Ei=zeros.copy(),
-        )
-    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    nu = ion_neutral_momentum_frequency(
-        nn=state.nn,
-        Ti=derived.Ti,
-        ion_mass_g=ion_mass_g,
-        gas_type=gas_type,
-    )
-    if state.M_n is not None:
-        if geometry is None:
-            raise ValueError(
-                "drag with an evolved M_n requires geometry for the "
-                "plasma/neutral volume conversion"
-            )
-        u_n = neutral_wind_velocity(
-            state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
-        )
-        drag = (
-            -float(b_ion_neutral_drag)
-            * ion_mass_g
-            * nu
-            * state.n
-            * (derived.u - u_n)
-        )
-        return ConservativeState1D(
-            n=zeros,
-            nn=zeros.copy(),
-            M=drag,
-            Ee=zeros.copy(),
-            Ei=zeros.copy(),
-            # In the kinetic-derived two-momentum mode M_n lives on the
-            # plasma/column volume, so no Vp/Vm conversion is needed.
-            M_n=(
-                -drag
-                if state.M_n_a is not None
-                else -drag * geometry.volume_ratio
-            ),
-            M_n_a=(
-                np.zeros_like(state.M_n_a)
-                if state.M_n_a is not None
-                else None
-            ),
-        )
-    drag = -float(b_ion_neutral_drag) * ion_mass_g * nu * state.n * derived.u
-    return ConservativeState1D(
-        n=zeros,
-        nn=zeros.copy(),
-        M=drag,
-        Ee=zeros.copy(),
-        Ei=zeros.copy(),
-    )
 
 
 def parallel_momentum_sink_rhs(state, rate_s, cells):
@@ -1490,10 +1387,9 @@ def parallel_momentum_sink_heating_rhs(state, floors, ion_mass_g, rate_s, cells)
     sink destroys the flow's directed kinetic energy, since with ``n`` held
     fixed ``d((1/2) m_i n u^2)/dt = u dM/dt = -nu_add m_i n u^2``.
 
-    The FULL dissipated drift energy is booked here, not half. The boxed
-    ion-neutral drag books half (:func:`ion_neutral_frictional_heating_rhs`)
-    because its other half leaves with a neutral population that exists and
-    has its own equations; this term has no partner species at all, so a half
+    The FULL dissipated drift energy is booked here, not half. An ion-neutral
+    drag books half of it on the ions because its other half leaves with a
+    neutral population that exists and has its own equations; this term has no partner species at all, so a half
     booking would be an unowned energy leak rather than a convention. The
     convention it mirrors is ``hyperbolic_dissipation_heating``, which
     likewise deposits the whole of a destroyed kinetic energy into ``Ei``.
@@ -1511,83 +1407,6 @@ def parallel_momentum_sink_heating_rhs(state, floors, ion_mass_g, rate_s, cells)
         M=zeros.copy(),
         Ee=zeros.copy(),
         Ei=q,
-    )
-
-
-def ion_neutral_elastic_frequency(nn, Ti, ion_mass_g, gas_type):
-    """Return the elastic (non-CX) ion-neutral momentum-transfer frequency [s^-1].
-
-    ``nu_el = max(nu_in - nu_cx, 0)`` where ``nu_in`` is the total (``sigma_in``)
-    momentum-transfer rate and ``nu_cx = nn * <sigma v>_cx`` is the resonant
-    charge-exchange rate shared with the ``Q_cx`` energy term.
-    """
-    nu_in = ion_neutral_collision_frequency(
-        nn=nn,
-        Ti=Ti,
-        gas_type=gas_type,
-    )
-    nu_cx = ion_neutral_cx_frequency(nn=nn, Ti=Ti, gas_type=gas_type)
-    return np.maximum(nu_in - nu_cx, 0.0)
-
-
-def ion_neutral_frictional_heating_rhs(
-    state,
-    floors,
-    ion_mass_g,
-    gas_type,
-    b_ion_neutral_drag=1.0,
-    geometry=None,
-):
-    """Return the conservative ion frictional-heating energy source.
-
-    Elastic ion-neutral collisions thermalize the flow's directed energy; for
-    equal masses half of the dissipated drift energy heats the ions, giving the
-    ``Ei`` source ``+(1/2) m_i * nu_el(Ti) * n * (u - u_n)^2`` [erg cm^-3 s^-1].
-    The charge-exchange fraction carries its energy off with the fast neutral
-    and is excluded via ``nu_el = nu_in - nu_cx``.
-
-    With an evolved ``M_n`` on the state the relative velocity is ``u - u_n``;
-    without one it is ``u``. Either way only the ion half of the dissipated
-    drift energy is booked; the neutral half has no energy equation to land
-    in and is dropped.
-    """
-    zeros = np.zeros_like(state.n, dtype=float)
-    if b_ion_neutral_drag == 0.0:
-        return ConservativeState1D(
-            n=zeros,
-            nn=zeros.copy(),
-            M=zeros.copy(),
-            Ee=zeros.copy(),
-            Ei=zeros.copy(),
-        )
-    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    nu_el = ion_neutral_elastic_frequency(
-        nn=state.nn,
-        Ti=derived.Ti,
-        ion_mass_g=ion_mass_g,
-        gas_type=gas_type,
-    )
-    if state.M_n is not None:
-        u_n = neutral_wind_velocity(
-            state, floors=floors, ion_mass_g=ion_mass_g, geometry=geometry
-        )
-        u_rel = derived.u - u_n
-    else:
-        u_rel = derived.u
-    q_fric = (
-        0.5
-        * float(b_ion_neutral_drag)
-        * ion_mass_g
-        * nu_el
-        * state.n
-        * u_rel**2
-    )
-    return ConservativeState1D(
-        n=zeros,
-        nn=zeros.copy(),
-        M=zeros.copy(),
-        Ee=zeros.copy(),
-        Ei=q_fric,
     )
 
 

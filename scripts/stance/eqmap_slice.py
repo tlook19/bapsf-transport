@@ -9,7 +9,7 @@ shaped-initial-fill npz that the EXISTING ``initial_neutral_state =
     python scripts/stance/eqmap_slice.py --map scripts/eqmap_demo_es1_nx240.npz \
         --prefill-s 4.5e-3 --out scripts/eqmap_nn0_es1_t4p5ms.npz
 
-    python scripts/run/run_m6_point.py --es 1 --nx 240 --two-zone \
+    python scripts/run/run_m6_point.py --es 1 --nx 240 \
         --nn0-profile-npz scripts/eqmap_nn0_es1_t4p5ms.npz \
         --sgp 9010 --save-h5 scripts/somerun.h5
 
@@ -234,7 +234,6 @@ def selfcheck(out_path, header):
         header.get("es"),
         header.get("nx"),
         header.get("S_gp_sccm"),
-        bool(header.get("two_zone", False)),
         dict(header.get("stance_extra") or {}),
         dict(header.get("stance_extra_flag") or {}),
     )
@@ -365,10 +364,7 @@ def main(argv=None):
         "column_mean_cm3": float(nn_slice.mean()),
         "annulus_min_cm3": None if nn_a_slice is None else float(nn_a_slice.min()),
         "annulus_max_cm3": None if nn_a_slice is None else float(nn_a_slice.max()),
-        "run_with": (
-            "run_m6_point.py --nn0-profile-npz <this file>"
-            + (" --two-zone" if nn_a_slice is not None else "")
-        ),
+        "run_with": "run_m6_point.py --nn0-profile-npz <this file>",
     }
 
     payload = {

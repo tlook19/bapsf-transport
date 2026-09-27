@@ -158,10 +158,8 @@ INERT_FLAG_KEYS = frozenset({
     # plus the cache-control flags themselves (they select the seed source, not
     # its content).
     "Plasma", "cathode_coupling", "active_plasma_topology",
-    "cx",
     "electron_heat_flux_limit", "heat_conduction", "hyperbolic_energy_consistent",
-    "icool_recomb", "implicit_heat_conduction", "ion_neutral_drag",
-    "ion_neutral_moment_closure", "ionization_energy_cost",
+    "icool_recomb", "implicit_heat_conduction", "ionization_energy_cost",
     "raw_stage_validation",
     "debug_checks",
     # The two end-face energy-booking flags are inert because
@@ -366,7 +364,7 @@ def fill_rate_meta(params, nn):
     """Fill-rate summary stored with a DB entry (for the browsable table)."""
     nn = np.asarray(nn, dtype=float)
     keys = (
-        "S_gp", "Twin_S_gp", "gas_puff_mode", "gas_puff_profile", "S_pump_L",
+        "S_gp", "Twin_S_gp", "S_pump_L",
         # nn0 is deliberately absent: it is the direct-run fill, not the
         # equilibration's start (which is pinned at 1e8), so recording it here
         # would mislabel the entry's provenance.

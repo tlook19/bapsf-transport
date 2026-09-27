@@ -1,8 +1,7 @@
 """K2a transient-DVM coupling-integrity gate suite (E3 + limit cases).
 
 Pre-registered gates for the in-solver transient deterministic velocity-grid
-neutral arm, ``neutral_model = "kinetic_dvm"`` (default off, gated on
-``neutral_two_zone``). The E3 list is the coupling-integrity block of the
+neutral arm, ``neutral_model = "kinetic_dvm"`` (default off). The E3 list is the coupling-integrity block of the
 neutral-architecture evaluation package; the L gates are the limit cases the
 operator can be held to exactly or tightly.
 
@@ -134,12 +133,12 @@ Gates:
       controls: perturbing the accommodated share off the pinned offset, and
       solving the re-emission temperature against the continuum <E> = 2kT
       instead of the discrete moment
-  WR2 the wall-reflection selector in-solver: it reaches the engine, moves
-      the state, and both ledgers keep closing over several production-arm
-      ticks; at alpha = 1 the two values are bit-identical, in-solver and
-      on the bare engine under both annulus treatments. Dropping the
-      selector on the way to the engine -- the silent-inert defect -- is the
-      negative control
+  WR2 the wall return in-solver: the solver's diffuse-elastic mode reaches
+      the engine, moves the state against the specular mode, and both
+      ledgers keep closing over several production-arm ticks; at alpha = 1
+      the two modes are bit-identical, in-solver and on the bare engine
+      under both annulus treatments. Dropping the mode on the way to the
+      engine -- the silent-inert defect -- is the negative control
   WR3 the diffuse-elastic wall return, every channel armed: its count is
       (1 - alpha) times the landings exactly, its energy (1 - alpha) times
       the incident wall energy exactly as DISCRETE moments, and its net v_z
@@ -376,7 +375,6 @@ def arm_config(**overrides):
     d, fl = default_config()
     d = dict(d)
     fl = dict(fl)
-    fl["neutral_two_zone"] = True
     # The kinetic-compatible base. Applied BEFORE ``overrides`` below, so a
     # caller -- in particular a refusal gate in REFUSALS -- can still arm any
     # of these back on top and get the refusal it is there to test.
@@ -385,17 +383,6 @@ def arm_config(**overrides):
     d["neutral_model"] = "kinetic_dvm"
     d["neutral_kinetic_dvm_cadence_s"] = CADENCE_S
     d["neutral_kinetic_dvm_exchange"] = EXCHANGE_MODEL
-    # DECLARED ARM, not an inherited default (declared 2026-08-30, when the
-    # package default moved to 'diffuse_elastic'). Every pinned number in
-    # this suite that touches a cylindrical-wall return was measured with the
-    # non-accommodated share placed in its INCIDENT bin, so the suite names
-    # that arm at its one shared construction site rather than inheriting
-    # whatever the package ships. Before this line 26 of the suite's 27 build
-    # sites took the default implicitly; the flip would have moved all of
-    # them silently. The WR gates override it per-arm and so still exercise
-    # BOTH values -- which is the point: the arm under test is chosen by the
-    # gate, never by the package.
-    d["neutral_kinetic_dvm_wall_reflection"] = "specular"
     for key, value in overrides.items():
         if key in fl or key.startswith("flag:"):
             fl[key.removeprefix("flag:")] = value
@@ -404,9 +391,23 @@ def arm_config(**overrides):
     return d, fl
 
 
-def make_sim(**overrides):
+def make_sim(dvm_wall_reflection="specular", **overrides):
+    """Build an ON arm and set the engine's cylindrical-wall return.
+
+    DECLARED ARM, not the solver's own value. Every pinned number in this
+    suite that touches a cylindrical-wall return was measured with the
+    non-accommodated share placed in its INCIDENT bin (the engine's
+    ``"specular"`` mode), while the solver builds the engine on the
+    energy-matched ``"diffuse_elastic"`` return unconditionally. The suite
+    therefore sets the engine's mode on the built engine, which reads it at
+    every tick and at no construction step. ``None`` leaves the solver's own
+    value in place, which is how the WR gates exercise both modes.
+    """
     d, fl = arm_config(**overrides)
-    return LAPDSim1D(input_dict=d, input_flags=fl)
+    sim = LAPDSim1D(input_dict=d, input_flags=fl)
+    if dvm_wall_reflection is not None and sim._dvm is not None:
+        sim._dvm.wall_reflection = str(dvm_wall_reflection)
+    return sim
 
 
 def advance_one_step(sim, operator_split=None):
@@ -866,9 +867,7 @@ STANCE_GEOMETRY_PARAMS = (
 #: makes the per-cell radii the geometry; ``neutral_baffles`` is what makes the
 #: baffle arrays live. They travel as part of the MACHINE rather than as a
 #: kinetic input: since B6 the DVM march does read the baffle faces, but only
-#: when its own default-off ``neutral_kinetic_dvm_baffles`` flag arms them on
-#: top of these, so this package alone still describes the machine and nothing
-#: kinetic (the BF gates arm the kinetic flag explicitly).
+#: under the DVM arm, where it applies the same baffles to its annulus.
 STANCE_GEOMETRY_FLAGS = ("prescribed_area_geometry", "neutral_baffles")
 
 
@@ -1781,21 +1780,11 @@ def gate_p1():
     terms = ref.rhs_terms()
     no_arm_term = not any("dvm" in name for name in terms)
     no_arm = ref._dvm is None
-    # Bit-exactness of the off path against a build with the two-zone state
-    # on but the arm still off -- the nearest neighbour configuration.
-    fl2 = dict(fl)
-    fl2["neutral_two_zone"] = True
-    alt = LAPDSim1D(input_dict=dict(d), input_flags=fl2)
-    for _ in range(20):
-        advance_one_step(alt)
-    alt_clean = alt._dvm is None and not any(
-        "dvm" in name for name in alt.rhs_terms()
-    )
-    ok = no_arm and no_arm_term and alt_clean
+    ok = no_arm and no_arm_term
     return (
-        "P1 default off: no arm, no arm term, in either neutral stance",
+        "P1 default off: no arm, no arm term",
         ok,
-        f"shipped build arm={ref._dvm}; two-zone build clean={alt_clean}; "
+        f"shipped build arm={ref._dvm}; "
         f"{len(terms)} terms, none named for the arm",
     )
 
@@ -2293,12 +2282,6 @@ def gate_d5():
 
 
 REFUSALS = (
-    (
-        "G1 two-zone required",
-        dict(),
-        "neutral_two_zone",
-        lambda d, fl: (fl.__setitem__("neutral_two_zone", False), None)[1],
-    ),
     # The single-key refusal this gate used to arm -- ``neutral_momentum``
     # set back to True on the cleared base -- is unreachable BY CONSTRUCTION
     # since the model-preset resolver landed: the flag is a MEMBER of the
@@ -2344,24 +2327,6 @@ REFUSALS = (
         )[1],
     ),
     (
-        "G6 unknown elastic model refused",
-        dict(),
-        "neutral_kinetic_dvm_elastic",
-        lambda d, fl: (
-            d.__setitem__("neutral_kinetic_dvm_elastic", "bilinear"),
-            None,
-        )[1],
-    ),
-    (
-        "G8 puff local ionization refused",
-        dict(),
-        "gas_puff_local_ionization_fraction",
-        lambda d, fl: (
-            d.__setitem__("gas_puff_local_ionization_fraction", 0.2),
-            None,
-        )[1],
-    ),
-    (
         "G10 odd v_z bin count refused",
         dict(),
         "nvz",
@@ -2394,66 +2359,6 @@ REFUSALS = (
                 "neutral_kinetic_dvm_annulus_flights", "bounded_chord"
             ),
             d.__setitem__("neutral_model", "moment"),
-            # Passes today only because the annulus guard is checked before
-            # the wall-reflection one; dropped here so the gate tests its own
-            # subject rather than a guard ORDERING.
-            off_arm(d),
-        )[2],
-    ),
-    (
-        "G14 bounded-chord annulus without the two-zone flag refused",
-        dict(),
-        "neutral_two_zone",
-        lambda d, fl: (
-            d.__setitem__(
-                "neutral_kinetic_dvm_annulus_flights", "bounded_chord"
-            ),
-            fl.__setitem__("neutral_two_zone", False),
-            None,
-        )[2],
-    ),
-    (
-        "G16 unknown wall-reflection spectrum refused",
-        dict(),
-        "neutral_kinetic_dvm_wall_reflection",
-        lambda d, fl: (
-            d.__setitem__(
-                "neutral_kinetic_dvm_wall_reflection", "diffuse"
-            ),
-            None,
-        )[1],
-    ),
-    # G17/G18 MIRRORED 2026-08-30, at the flip of the package default from
-    # 'specular' to 'diffuse_elastic'. Both gates assert that the selector's
-    # NON-DEFAULT arm is refused where it cannot act -- off the DVM arm (G17)
-    # and without the two-zone flag (G18). Which literal instantiates "the
-    # non-default arm" is decided by the default, so a default flip MUST
-    # carry these two literals with it: the statements are unchanged in
-    # intent and in cardinality, and mirroring them is the necessary
-    # companion of the flip, not a weakening. Left unmirrored, G17 asserts a
-    # refusal that the flip makes impossible (measured: no refusal raised).
-    (
-        "G17 specular wall reflection without the DVM arm refused",
-        dict(),
-        "neutral_kinetic_dvm_wall_reflection",
-        lambda d, fl: (
-            d.__setitem__(
-                "neutral_kinetic_dvm_wall_reflection", "specular"
-            ),
-            d.__setitem__("neutral_model", "moment"),
-            None,
-        )[2],
-    ),
-    (
-        "G18 specular wall reflection without the two-zone flag "
-        "refused",
-        dict(),
-        "neutral_two_zone",
-        lambda d, fl: (
-            d.__setitem__(
-                "neutral_kinetic_dvm_wall_reflection", "specular"
-            ),
-            fl.__setitem__("neutral_two_zone", False),
             None,
         )[2],
     ),
@@ -2464,7 +2369,7 @@ REFUSALS = (
         lambda d, fl: (
             d.__setitem__("neutral_kinetic_dvm_cathode_jet", True),
             d.__setitem__("neutral_model", "moment"),
-            off_arm(d),
+            None,
         )[2],
     ),
     (
@@ -2474,7 +2379,7 @@ REFUSALS = (
         lambda d, fl: (
             d.__setitem__("neutral_kinetic_dvm_cathode_jet_R_N", 0.5),
             d.__setitem__("neutral_model", "moment"),
-            off_arm(d),
+            None,
         )[2],
     ),
     (
@@ -2522,7 +2427,7 @@ REFUSALS = (
         lambda d, fl: (
             d.__setitem__("neutral_kinetic_dvm_anode_jet", True),
             d.__setitem__("neutral_model", "moment"),
-            off_arm(d),
+            None,
         )[2],
     ),
     (
@@ -2532,7 +2437,7 @@ REFUSALS = (
         lambda d, fl: (
             d.__setitem__("neutral_kinetic_dvm_anode_jet_R_N", 0.5),
             d.__setitem__("neutral_model", "moment"),
-            off_arm(d),
+            None,
         )[2],
     ),
     (
@@ -2572,53 +2477,12 @@ REFUSALS = (
     # and fires before the kinetic arm is built, so it is made as its own gate
     # that states BOTH owners -- see gate_bf_g32.
     (
-        "G30 DVM baffle interception without the DVM arm refused",
-        dict(),
-        "neutral_kinetic_dvm_baffles",
-        lambda d, fl: (
-            fl.__setitem__("neutral_kinetic_dvm_baffles", True),
-            d.__setitem__("neutral_model", "moment"),
-            off_arm(d),
-        )[2],
-    ),
-    (
-        "G31 DVM baffle interception without the fluid baffles refused",
-        dict(),
-        "neutral_baffles",
-        lambda d, fl: (
-            fl.__setitem__("neutral_kinetic_dvm_baffles", True),
-            None,
-        )[1],
-    ),
-    (
         "G15 gas puff into a cell with no annulus refused",
         dict(),
         "V_ann",
         lambda d, fl: (d.__setitem__("Rm", d["Rp"]), None)[1],
     ),
 )
-
-
-def off_arm(d):
-    """Drop the suite's declared wall-reflection arm; return ``None``.
-
-    ``arm_config`` DECLARES ``wall_reflection = "specular"`` so the suite's
-    pinned numbers name their arm instead of inheriting a default. Off the DVM
-    arm that declaration is meaningless -- there is no wall share to place --
-    and since the package default moved to ``"diffuse_elastic"`` the solver's
-    off-arm inertness guard REFUSES a declared ``"specular"`` there, by
-    design. A gate that leaves the arm to test something else would therefore
-    trip that guard before reaching its own subject: measured, G19 and G20
-    raised the wall-reflection message instead of their own.
-
-    So an off-arm gate drops the key and lets it resolve to whatever the
-    package ships, which is the inert value by construction. Written as a
-    helper rather than a literal so no gate hard-codes which value is
-    currently the default -- the coupling that broke the guard in the first
-    place.
-    """
-    d.pop("neutral_kinetic_dvm_wall_reflection", None)
-    return None
 
 
 def make_refusal_gate(label, offender, mutate):
@@ -3397,8 +3261,8 @@ def gate_b3():
 #: only holds on the registered triple cannot pass.
 WR_ALPHAS = (0.35, 0.40, 0.46, 0.7307)
 
-#: [WR] The two values of ``neutral_kinetic_dvm_wall_reflection``, shipped
-#: default first.
+#: [WR] The engine's two cylindrical-wall return modes (``wall_reflection``);
+#: the solver builds the second.
 WR_MODES = ("specular", "diffuse_elastic")
 
 #: [WR1] The net wall energy exchange as a fraction of the incident wall
@@ -3506,8 +3370,7 @@ def gate_wr1():
 
     STATEMENT 1 of the B3 three (the closed-box synthetic case). A uniform
     gas at the wall temperature in a sealed tube, at four accommodation
-    coefficients and under BOTH values of
-    ``neutral_kinetic_dvm_wall_reflection``.
+    coefficients and under BOTH engine ``wall_reflection`` modes.
 
     WHAT THE PIN IS. A wall facing a gas already at its own temperature
     exchanges no net energy in the continuum, and that zero-net statement was
@@ -3729,22 +3592,25 @@ def gate_wr1():
 
 
 def gate_wr2():
-    """The selector is READ in-solver, and degenerates at full accommodation.
+    """The solver's wall return REACHES the engine, and degenerates at alpha=1.
 
-    STATEMENT 2 of the B3 three. On the engaged production arm the two
-    values must reach the ENGINE (a selector the solver validates and then
-    drops is the silent-inert trap this repo refuses) and must actually move
-    the kinetic state, while both ledgers keep closing over several ticks.
+    STATEMENT 2 of the B3 three. On the engaged production arm the solver's
+    own ``"diffuse_elastic"`` mode must reach the ENGINE (a value the solver
+    states and then drops is the silent-inert trap this repo refuses) and
+    must actually move the kinetic state against the ``"specular"`` mode the
+    suite sets on the built engine, while both ledgers keep closing over
+    several ticks.
     The complementary half is the degeneracy the pair has by construction:
     at ``alpha = 1`` there is no non-accommodated share to place, so the two
     values must produce BIT-IDENTICAL distributions -- checked here both
     in-solver and, on the standalone engine, under both annulus treatments,
     since the jump arm places the same array as a wall launch.
 
-    NEGATIVE CONTROL, owned by this statement: drop the selector on the way
-    to the engine -- the un-threaded-config defect -- and the in-solver
-    trajectories become identical at an interior alpha, so "the arm is read"
-    fails here while every ledger statement above still passes.
+    NEGATIVE CONTROL, owned by this statement: drop the mode on the way to
+    the engine -- the un-threaded-config defect, under which the engine keeps
+    its own ``"specular"`` default -- and the in-solver trajectories become
+    identical at an interior alpha, so "the mode is read" fails here while
+    every ledger statement above still passes.
     """
     keys = dict(
         neutral_kinetic_dvm_nvz=16,
@@ -3754,7 +3620,12 @@ def gate_wr2():
     )
 
     def run(mode, alpha=None, ticks=3):
-        over = dict(keys, neutral_kinetic_dvm_wall_reflection=mode)
+        # "diffuse_elastic" is the solver's own value, so that arm is built
+        # without touching the engine: it is what proves the value reaches it.
+        over = dict(
+            keys,
+            dvm_wall_reflection=(None if mode == "diffuse_elastic" else mode),
+        )
         if alpha is not None:
             over["neutral_kinetic_dvm_accommodation"] = alpha
         sim = make_sim(**over)
@@ -3801,7 +3672,7 @@ def gate_wr2():
             states[0][0], states[1][0]
         ) and np.array_equal(states[0][1], states[1][1])
 
-    # NEGATIVE CONTROL: the selector never reaches the engine.
+    # NEGATIVE CONTROL: the solver's mode never reaches the engine.
     build = TransientDVM.__init__
 
     def dropped(self, **kwargs):
@@ -3826,7 +3697,7 @@ def gate_wr2():
         and control_fails
     )
     return (
-        "WR2 in-solver: the wall-reflection selector reaches the engine, "
+        "WR2 in-solver: the solver's wall return reaches the engine, "
         "moves the state, and degenerates bit-exactly at alpha = 1",
         ok,
         f"3 ticks per arm on the production machine at alpha=0.40: engine "
@@ -3836,7 +3707,7 @@ def gate_wr2():
         f"alpha=1 degeneracy: in-solver bit-identical ({degenerate}); bare "
         f"engine bit-identical under annulus_flights='rates' "
         f"({bare['rates']}) and 'bounded_chord' ({bare['bounded_chord']})\n"
-        f"        NEGATIVE CONTROL (selector dropped on the way to the "
+        f"        NEGATIVE CONTROL (mode dropped on the way to the "
         f"engine): the two arms' distributions become identical "
         f"({control_fails}) -- the silent-inert defect, caught only here",
     )
@@ -7519,7 +7390,8 @@ def gate_bf3():
     """BF3 in-solver: the baffle books where it should and closes both ledgers.
 
     The stance baffle armed on the ENGAGED production arm
-    (``engaged_production_sim`` + ``neutral_kinetic_dvm_baffles``), ticked, and
+    (``engaged_production_sim``, whose geometry arms ``neutral_baffles``),
+    ticked, and
     read three ways:
 
     * PLACEMENT -- the per-cell baffle counts are non-zero ONLY on the two
@@ -7551,9 +7423,7 @@ def gate_bf3():
       required present, finite and non-vacuous -- the half the mirror box
       cannot make.
     """
-    sim = engaged_production_sim(
-        **{"flag:neutral_kinetic_dvm_baffles": True}
-    )
+    sim = engaged_production_sim()
     ledgers = run_until_updates(sim, 3)
     geom = sim.geometry
     face = int(np.asarray(geom.neutral_baffle_face_indices, dtype=int)[0])
@@ -7672,15 +7542,14 @@ def gate_bf_g32():
     Two statements, because the refusal has two owners and only one of them is
     new. In the SOLVER route ``core.geometry._neutral_baffle_spec`` already
     demands ``Rp <= R_clear < Rm`` at every baffle face and raises before the
-    kinetic arm is built at all, so the kinetic flag INHERITS that refusal
-    rather than repeating it -- the gate arms the flag and quotes the message
+    kinetic arm is built at all, so the kinetic arm INHERITS that refusal
+    rather than repeating it -- the gate builds the arm and quotes the message
     it actually gets, so a future relaxation of the geometry guard surfaces
     here. In the ENGINE route (a ``TransientDVM`` built directly, as the
     fixtures above do) nothing stands in front, and the engine's own refusal is
     all that is between a caller and an annulus silently sealed shut.
     """
     d, fl = arm_config(**PRODUCTION_GEOMETRY_KEYS)
-    fl["neutral_kinetic_dvm_baffles"] = True
     d["neutral_baffle_clear_radii_cm"] = [1.0]
     solver_msg = ""
     try:

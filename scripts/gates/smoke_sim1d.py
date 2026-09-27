@@ -53,7 +53,7 @@ Consequences of running a subset, stated rather than hidden:
 DEPRECATION-WARNING SUPPRESSION (and its limits)
 ------------------------------------------------
 Two helpers pin a deliberately legacy stance: ``_pin_pre_r2a_neutral_stance``
-(the pre-R2a 5-field cold-neutral layout) and ``_pin_operator_algebra_stance``
+(the pre-R2a 6-field cold-neutral layout) and ``_pin_operator_algebra_stance``
 (the historical all-cells operator algebra). Every key they touch is listed in
 ``_HISTORICAL_PIN_KEYS``. Cases registered with ``historical_stance=True`` run
 inside ``_historical_pin_warnings()``, which ignores DeprecationWarnings whose
@@ -217,7 +217,6 @@ from cablp.solvers._sim1d.core.timestep import (
     suggest_timestep,
 )
 from cablp.solvers._sim1d.physics.reactions import (
-    gas_puff_local_ionization_rhs,
     particle_inventory_rate,
     reaction_rates,
     reaction_rhs_terms,
@@ -231,10 +230,6 @@ from cablp.solvers._sim1d.physics.sources import (
     neutral_energy_volume_ratio,
     neutral_temperature_eV,
     ion_neutral_collision_frequency,
-    ion_neutral_cx_frequency,
-    ion_neutral_drag_rhs,
-    ion_neutral_elastic_frequency,
-    ion_neutral_frictional_heating_rhs,
     neutral_momentum_wall_rhs,
     neutral_wind_velocity,
     velocity_divergence,
@@ -257,12 +252,12 @@ from cablp.constants import (
 
 # R2a fold-in (2026-08-20): the neutral closure family and the cathode neutral
 # jet became config DEFAULTS. Many blocks below were written against the older
-# 5-field single-zone cold-neutral stance -- they hand-pack (n, nn, M, Ee, Ei)
-# state vectors, read nn as THE neutral density, weigh it by the chamber volume,
-# or check a refusal that a second default-on conflict would now pre-empt. This
-# scoped helper puts one (params, flags) pair back on that stance so those
-# blocks run as written; the closure family and the jet keep their own blocks,
-# which build their own configs and exercise the shipped defaults.
+# cold-neutral stance -- they hand-pack cold state vectors or check a refusal
+# that a second default-on conflict would now pre-empt. This scoped helper puts
+# one (params, flags) pair back on that stance so those blocks run as written;
+# the closure family and the jet keep their own blocks, which build their own
+# configs and exercise the shipped defaults. The two-zone split is
+# unconditional, so the cold layout is the 6-field (n, nn, M, Ee, Ei, nn_a).
 #
 # The three jet keys travel with neutral_momentum: the jet is M_n momentum
 # physics and requires the flag, the surface debit requires the jet, and the
@@ -283,10 +278,25 @@ def _cov_blank_rhs_term(cells, n_row):
     )
 
 
+def _zone_particle_rate(rhs, geometry):
+    """Return the plasma-plus-neutral particle rate [1/s] on the two-zone books.
+
+    ``n`` is booked on the plasma volume, ``nn`` on the COLUMN volume and
+    ``nn_a`` (when the term carries one) on the annulus volume.
+    """
+    V_col, V_ann = neutral_zone_volumes(geometry)
+    terms = (
+        np.asarray(rhs.n, dtype=float) * geometry.plasma_volume_cm3
+        + np.asarray(rhs.nn, dtype=float) * V_col
+    )
+    if getattr(rhs, "nn_a", None) is not None:
+        terms = terms + np.asarray(rhs.nn_a, dtype=float) * V_ann
+    return math.fsum(terms.tolist())
+
+
 def _pin_pre_r2a_neutral_stance(params, flags):
-    """Pin the pre-R2a 5-field cold-neutral stance in place; return the pair."""
+    """Pin the pre-R2a 6-field cold-neutral stance in place; return the pair."""
     flags["neutral_momentum"] = False
-    flags["neutral_two_zone"] = False
     flags["neutral_energy"] = False
     flags["neutral_hot_internal_wall"] = False
     params["cathode_neutral_jet"] = False
@@ -298,16 +308,12 @@ def _pin_pre_r2a_neutral_stance(params, flags):
 # The long-standing operator algebra isolates the historical all-cells path;
 # dedicated R1/R2/R3/R4 cases exercise the repaired live defaults. This helper
 # holds the pins that used to sit inline at the top of main(): the R2/R3
-# boundary+flux repairs off, the historical single-cell puff, the scheduled
-# phase machine, and the pre-R2a cold-neutral layout the hand-packed
-# (n, nn, M, Ee, Ei) state vectors below assume. Moment closure stays on -- the
-# drag is orthogonal, so the production baseline stays warning-free.
+# boundary+flux repairs off, the scheduled phase machine, and the pre-R2a
+# cold-neutral layout the hand-packed (n, nn, M, Ee, Ei, nn_a) state vectors
+# below assume. The puff is the shipped square valve pulse on the orifice row.
 def _pin_operator_algebra_stance(params, flags):
     """Pin the historical operator-algebra stance in place; return the pair."""
     params["phase_transition_mode"] = "scheduled"
-    params["gas_puff_mode"] = "decay_after_breakdown"
-    params["gas_puff_profile"] = "cell"  # historical single-cell puff
-    flags["neutral_prebreakdown"] = False
     flags["cathode_coupling"] = False
     flags["implicit_heat_conduction"] = False
     flags["active_plasma_topology"] = False
@@ -328,7 +334,6 @@ def _pin_operator_algebra_stance(params, flags):
 _HISTORICAL_PIN_KEYS = (
     # _pin_pre_r2a_neutral_stance
     "neutral_momentum",
-    "neutral_two_zone",
     "neutral_energy",
     "neutral_hot_internal_wall",
     "cathode_neutral_jet",
@@ -336,9 +341,6 @@ _HISTORICAL_PIN_KEYS = (
     "cathode_jet_energy_convention",
     # _pin_operator_algebra_stance
     "phase_transition_mode",
-    "gas_puff_mode",
-    "gas_puff_profile",
-    "neutral_prebreakdown",
     "cathode_coupling",
     "implicit_heat_conduction",
     "active_plasma_topology",
@@ -424,7 +426,6 @@ def _resolved_cathode_flags():
     _, resolved_flags = _resolved_config()
     resolved_cathode_flags = dict(resolved_flags)
     resolved_cathode_flags["cathode_coupling"] = True
-    resolved_cathode_flags["neutral_prebreakdown"] = False
     return resolved_cathode_flags
 
 
@@ -437,11 +438,10 @@ def _resolved_cathode_flags():
 # heat capacity large enough that no step's temperature increment survives
 # the addition (T_s stays at cathode_Ts_base_K to the bit), and a zero
 # cleaning cross section with a clean floor chosen so the fully covered
-# effective work function is phi_wf exactly. It keeps
-# ion_neutral_moment_closure ON -- the ion-neutral drag is irrelevant to
-# cathode emission/coverage, so the production baseline stays warning-free
-# and the INERT-on-production params stay inert. Dedicated production cathode
-# tests do NOT use this and exercise the real defaults.
+# effective work function is phi_wf exactly. The ion-neutral drag is
+# irrelevant to cathode emission/coverage, so the INERT-on-production params
+# stay inert. Dedicated production cathode tests do NOT use this and exercise
+# the real defaults.
 def _tracking_electrode_sample(sim):
     """Make ``sim``'s electrode sample follow its accepted state.
 
@@ -480,10 +480,8 @@ def _cathode_unit_config():
         "hyperbolic_energy_consistent": False,
         "front_flux": True,
     })
-    # These unit tests are about the cathode and the fluid, and several of them
-    # arm the jet themselves on the legacy drag arm (ion_neutral_moment_closure
-    # off), which neutral_energy refuses; keep the simple cold-neutral stance
-    # the helper's name promises.
+    # These unit tests are about the cathode and the fluid; keep the simple
+    # cold-neutral stance the helper's name promises.
     return _pin_pre_r2a_neutral_stance(p, f)
 
 
@@ -743,16 +741,14 @@ def _case_shipped_defaults_and_base_geometry():
     assert LAPDSim1D(params, flags).ion_mass_g == 6.6464790809e-24
     assert params["cycles"] == 1
     assert params["phase_transition_mode"] == "current"
-    assert params["gas_puff_mode"] == "square"
     # No pre-drive window: the machine fires one global trigger, so the bank
     # connects as the puff starts and neutrals never accumulate with the drive
     # withheld (2026-08-03; see timing_defaults). Asserted EXACTLY, not as
-    # ">= 0", so a reintroduced pre-phase fails here. The flag stays on and
-    # gates the machinery -- the duration alone opts back in, which is what the
-    # dedicated neutral_prebreakdown block below does (it pins its own
-    # tau_neutral_prebreakdown, so that feature test does not read this default).
+    # ">= 0", so a reintroduced pre-phase fails here. The duration alone opts
+    # back in, which is what the dedicated neutral_prebreakdown block below
+    # does (it pins its own tau_neutral_prebreakdown, so that feature test does
+    # not read this default).
     assert params["tau_neutral_prebreakdown"] == 0.0
-    assert flags["neutral_prebreakdown"]
     # Everything below runs on the historical operator-algebra stance, which
     # the shared fixture pins (the quiescent-zero and operator-algebra
     # invariants hold only there).
@@ -825,37 +821,12 @@ def _case_shipped_defaults_and_base_geometry():
 
     _sel = _construction_error({"cathode_solver_model": "zzz"}, {})
     assert "cathode_solver_model" in _sel and "current_driven" in _sel, _sel
-    _sel = _construction_error({"neutral_exchange_model": "zzz"}, {})
-    assert "neutral_exchange_model" in _sel, _sel
-    assert "constant" in _sel and "knudsen" in _sel, _sel
     # resolved_boundaries is a BOOLEAN flag, read through bool(): a garbage
     # string is truthy and passes, so False is its only invalid value and the
     # one the guard exists for (a stale config still asking for the retired
     # geometry). Probed with False for that reason, not with 'zzz'.
     _sel = _construction_error({}, {"resolved_boundaries": False})
     assert "resolved_boundaries" in _sel and "True" in _sel, _sel
-
-    # The else-raise inside physics.neutrals is DOUBLE-GUARDED: the solver
-    # rejects a bad neutral_exchange_model at construction (just above), so
-    # this branch is unreachable through LAPDSim1D and is exercised on the
-    # helper directly instead.
-    try:
-        neutral_exchange_coefficients(
-            geometry=resolved_geom,
-            model="zzz",
-            constant_coeff_cm3_s=resolved_params["neutral_exchange_coeff_cm3_s"],
-            Tn_K=resolved_params["Tn_K"],
-            mu_neutral=4.0,
-            clausing_scale=resolved_params["neutral_clausing_scale"],
-        )
-    except ValueError as exc:
-        _sel = str(exc)
-        assert "neutral_exchange_model" in _sel, _sel
-        assert "constant" in _sel and "knudsen" in _sel, _sel
-    else:
-        raise AssertionError(
-            "neutral_exchange_coefficients accepted an unknown model"
-        )
 
     # Cathode and anode are *surfaces*: the cathode surface
     # is the origin and the anode sits one gap downstream. Lm is measured from the
@@ -988,17 +959,13 @@ def _case_shipped_defaults_and_base_geometry():
 
     base_single = neutral_exchange_coefficients(
         geometry=resolved_geom,
-        model="knudsen",
-        constant_coeff_cm3_s=resolved_params["neutral_exchange_coeff_cm3_s"],
-        Tn_K=resolved_params["Tn_K"],
+                Tn_K=resolved_params["Tn_K"],
         mu_neutral=4.0,
         clausing_scale=resolved_params["neutral_clausing_scale"],
     )
     baffle_single = neutral_exchange_coefficients(
         geometry=baffle_geom,
-        model="knudsen",
-        constant_coeff_cm3_s=baffle_params["neutral_exchange_coeff_cm3_s"],
-        Tn_K=baffle_params["Tn_K"],
+                Tn_K=baffle_params["Tn_K"],
         mu_neutral=4.0,
         clausing_scale=baffle_params["neutral_clausing_scale"],
     )
@@ -1333,7 +1300,6 @@ def _case_source_fixed_grid():
         {
             "end_expansion_geometry": True,
             "cathode_coupling": False,
-            "neutral_prebreakdown": False,
             "implicit_heat_conduction": False,
         }
     )
@@ -1619,9 +1585,7 @@ def _case_variable_area_well_balancedness(
     )
     obstruction_coeff = neutral_exchange_coefficients(
         geometry=obstruction_geom,
-        model="knudsen",
-        constant_coeff_cm3_s=obstruction_params["neutral_exchange_coeff_cm3_s"],
-        Tn_K=obstruction_params["Tn_K"],
+                Tn_K=obstruction_params["Tn_K"],
         mu_neutral=4,
         clausing_scale=obstruction_params["neutral_clausing_scale"],
     )
@@ -1808,6 +1772,7 @@ def _case_variable_area_well_balancedness(
         Te=m5_Te,
         Ti=np.full(m5_geom.cells, 1.0),
         ion_mass_g=m5_sim.ion_mass_g,
+        nn_a=np.full(m5_geom.cells, 1.0e13),
     )
     m5_sim._set_state_vector(pack_state(m5_state))
     m5_sim._init_sample_smoothing()
@@ -1960,9 +1925,7 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
         mid = knudsen_geom.cells // 2
         coeff = neutral_exchange_coefficients(
             geometry=knudsen_geom,
-            model="knudsen",
-            constant_coeff_cm3_s=knudsen_params["neutral_exchange_coeff_cm3_s"],
-            Tn_K=knudsen_params["Tn_K"],
+                        Tn_K=knudsen_params["Tn_K"],
             mu_neutral=4,
             clausing_scale=1.0,
         )
@@ -2010,17 +1973,6 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     assert np.all(np.isfinite(neutral_coeff))
     assert np.all(neutral_coeff >= 0.0)
     assert np.any(neutral_coeff > 0.0)
-
-    constant_coeff = neutral_exchange_coefficients(
-        geometry=geom,
-        model="constant",
-        constant_coeff_cm3_s=params["neutral_exchange_coeff_cm3_s"],
-        Tn_K=params["Tn_K"],
-        mu_neutral=4,
-        clausing_scale=params["neutral_clausing_scale"],
-    )
-    assert constant_coeff.shape == (geom.cells - 1,)
-    assert np.allclose(constant_coeff, params["neutral_exchange_coeff_cm3_s"])
 
     dt_default = sim.suggest_timestep()
     assert np.isfinite(dt_default.dt)
@@ -2142,10 +2094,9 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     neutral_phase_params = dict(params)
     neutral_phase_params["tau_discharge"] = 2.0e-10
     neutral_phase_params["tau_cycle"] = 5.0e-10
-    # This block checks the temporal puff SCHEDULE (on/off per phase); pin the
-    # single-cell axial profile so the puff-cell amount is the full puff_rate
-    # (the production default cosine_pipe distributes it -- tested separately).
-    neutral_phase_params["gas_puff_profile"] = "cell"
+    # This block checks the temporal puff SCHEDULE (on/off per phase): the
+    # on-minus-off source, summed over both zones in particles per second, is
+    # the whole unshaped puff row.
     neutral_phase_sim = LAPDSim1D(neutral_phase_params, neutral_phase_flags)
     assert neutral_phase_sim.phase_at_time(0.0) == "equilibrium_puff"
     assert neutral_phase_sim.phase_at_time(3.0e-10) == "equilibrium_off"
@@ -2158,26 +2109,38 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     neutral_off_source = neutral_phase_sim.neutral_source_sink_rhs(time=3.0e-10)
     neutral_geom = neutral_phase_sim.get_initial_snapshot().geometry
     neutral_puff_cell, _ = puff_cell_indices(neutral_geom)
-    assert neutral_puff_source.nn[neutral_puff_cell] > neutral_off_source.nn[neutral_puff_cell]
-    assert np.isclose(
-        neutral_puff_source.nn[neutral_puff_cell]
-        - neutral_off_source.nn[neutral_puff_cell],
-        puff_rate(
+    neutral_Vc, neutral_Va = neutral_zone_volumes(neutral_geom)
+    neutral_puff_particles = (
+        (neutral_puff_source.nn - neutral_off_source.nn) * neutral_Vc
+        + (neutral_puff_source.nn_a - neutral_off_source.nn_a) * neutral_Va
+    )
+    assert neutral_puff_particles[neutral_puff_cell] > 0.0
+    assert np.allclose(
+        neutral_puff_particles,
+        gas_puff_rate_profile(
+            neutral_geom,
             neutral_phase_params["S_gp"],
             neutral_phase_params["gas_puff_valves"],
-            neutral_geom.neutral_volume_cm3[neutral_puff_cell],
-        ),
+            z_cm=neutral_phase_params["gas_puff_z_cm"],
+            orifice_id_cm=neutral_phase_params["gas_puff_orifice_id_cm"],
+            orifice_length_cm=neutral_phase_params["gas_puff_orifice_length_cm"],
+        )
+        * np.asarray(neutral_geom.neutral_volume_cm3, dtype=float),
+        rtol=1e-12,
+        atol=0.0,
     )
     assert sim.phase_switches_at_time(0.0) == {
         "cathode_enabled": False,
         "gas_puff_enabled": True,
         "floating": False,
     }
+    # The square valve keeps delivering through its closing tail, so the
+    # afterglow leaves the puff switch open; the envelope closes the flow.
     assert sim.phase_switches_at_time(
         params["tau_prebreakdown"] + params["tau_discharge"]
     ) == {
         "cathode_enabled": False,
-        "gas_puff_enabled": False,
+        "gas_puff_enabled": True,
         "floating": True,
     }
     assert neutral_phase_sim.phase_switches_at_time(0.0) == {
@@ -2333,12 +2296,23 @@ def _case_cathode_boundary_beam_terms(cathode_face):
     }
     # beam_ionization_rhs is the birth, power-deposition and cost rows; the
     # excitation radiation is a fourth row of its own.
-    split_beam_sum = np.zeros_like(pack_state(beam_birth_terms))
+    # Compared row by row on the five base fields; the split rows also carry
+    # the annulus row the two-zone state packs, which the beam never touches
+    # (it ionizes column gas), so it must be identically zero there.
+    for split_field in STATE_NAMES_1D:
+        split_beam_sum = np.zeros_like(
+            np.asarray(getattr(beam_birth_terms, split_field), dtype=float)
+        )
+        for split_name, split_term in split_beam_terms.items():
+            if split_name == "beam_excitation_radiation":
+                continue
+            split_beam_sum = split_beam_sum + getattr(split_term, split_field)
+        assert np.allclose(
+            split_beam_sum, getattr(beam_birth_terms, split_field)
+        ), split_field
     for split_name, split_term in split_beam_terms.items():
-        if split_name == "beam_excitation_radiation":
-            continue
-        split_beam_sum = split_beam_sum + pack_state(split_term)
-    assert np.allclose(split_beam_sum, pack_state(beam_birth_terms))
+        if getattr(split_term, "nn_a", None) is not None:
+            assert np.all(np.asarray(split_term.nn_a) == 0.0), split_name
     assert np.all(beam_birth_terms.n >= 0.0)
     assert np.any(beam_birth_terms.n > 0.0)
     assert np.all(beam_birth_terms.nn <= 0.0)
@@ -2365,12 +2339,19 @@ def _case_cathode_boundary_beam_terms(cathode_face):
         assert np.allclose(zero_particle_term.nn, 0.0)
         assert np.allclose(zero_particle_term.M, 0.0)
         assert np.allclose(zero_particle_term.Ei, 0.0)
+    # Under the two-zone split nn is the COLUMN density, booked on V_col.
+    beam_Vc, _beam_Va = neutral_zone_volumes(geom)
     beam_inventory_scale = np.sum(
         np.abs(beam_birth_terms.n * geom.plasma_volume_cm3)
-        + np.abs(beam_birth_terms.nn * geom.neutral_volume_cm3)
+        + np.abs(beam_birth_terms.nn * beam_Vc)
     )
     assert np.isclose(
-        particle_inventory_rate(beam_birth_terms, geom),
+        math.fsum(
+            (
+                beam_birth_terms.n * geom.plasma_volume_cm3
+                + beam_birth_terms.nn * beam_Vc
+            ).tolist()
+        ),
         0.0,
         atol=1e-12 * beam_inventory_scale,
     )
@@ -2912,7 +2893,7 @@ def _case_circuit_current_driven_integration():
         }
     )
     m3_cathode_flags = dict(
-        m3_cu_flags, cathode_coupling=True, neutral_prebreakdown=False,
+        m3_cu_flags, cathode_coupling=True,
     )
     m3_sim = LAPDSim1D(m3_params, m3_cathode_flags)
     m3_sim._circuit_I_loop = 800.0
@@ -3112,7 +3093,7 @@ def _case_cathode_power_balance_under_current_drive(
         cathode_cleaning_sigma_cm2=1.0e-16,
     )
     sf_flags = dict(
-        sf_cu_flags, cathode_coupling=True, neutral_prebreakdown=False,
+        sf_cu_flags, cathode_coupling=True,
     )
     sf_calls = []
     _sf_orig = _solver_mod.idriven_result_evaluator
@@ -4937,7 +4918,7 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
 @_case(
     "ionization-birth-energy-model",
     historical_stance=True,
-    provides=("decay_params", "source_rhs"),
+    provides=("short_phase_params", "source_rhs"),
 )
 def _case_ionization_birth_energy_model(csda_sim):
     # --- R4.2 (audit A14): ionization births book the cold-electron
@@ -5006,35 +4987,46 @@ def _case_ionization_birth_energy_model(csda_sim):
         assert np.allclose(values, 0.0, atol=1e-20)
     source_rhs = sim.neutral_source_sink_rhs()
     source_puff, _ = puff_cell_indices(geom)
-    assert source_rhs.nn[source_puff] > 0.0
+    # The puff is the orifice row scaled by the square envelope at the
+    # evaluation time, booked in particles across the two zones (it feeds
+    # the annulus wherever there is one).
+    source_Vc, source_Va = neutral_zone_volumes(geom)
+
+    def _source_particles(term):
+        return term.nn * source_Vc + term.nn_a * source_Va
+
+    def _puff_particles(time):
+        return gas_puff_rate_profile(
+            geom,
+            sim._effective_gas_puff_sccm(time=time)[0],
+            params["gas_puff_valves"],
+            z_cm=params["gas_puff_z_cm"],
+            orifice_id_cm=params["gas_puff_orifice_id_cm"],
+            orifice_length_cm=params["gas_puff_orifice_length_cm"],
+        ) * np.asarray(geom.neutral_volume_cm3, dtype=float)
+
+    source_particles = _source_particles(source_rhs)
+    assert source_particles[source_puff] > 0.0
     assert source_rhs.nn[0] < 0.0
     assert source_rhs.nn[-1] < 0.0
     assert np.isclose(
-        source_rhs.nn[source_puff],
-        puff_rate(
-            params["S_gp"],
-            params["gas_puff_valves"],
-            geom.neutral_volume_cm3[source_puff],
-        ),
+        source_particles[source_puff], _puff_particles(0.0)[source_puff]
     )
     assert np.isclose(
         source_rhs.nn[-1],
         -pump_rate(params["S_pump_R"], geom.neutral_volume_cm3[-1]) * state.nn[-1],
     )
-    afterglow_source = sim.neutral_source_sink_rhs(
-        time=params["tau_prebreakdown"] + params["tau_discharge"]
-    )
+    afterglow_time = params["tau_prebreakdown"] + params["tau_discharge"]
+    afterglow_source = sim.neutral_source_sink_rhs(time=afterglow_time)
     assert np.isclose(
         afterglow_source.nn[0],
         -pump_rate(params["S_pump_L"], geom.neutral_volume_cm3[0]) * state.nn[0],
     )
     assert np.isclose(
-        source_rhs.nn[source_puff] - afterglow_source.nn[source_puff],
-        puff_rate(
-            params["S_gp"],
-            params["gas_puff_valves"],
-            geom.neutral_volume_cm3[source_puff],
-        ),
+        source_particles[source_puff]
+        - _source_particles(afterglow_source)[source_puff],
+        _puff_particles(0.0)[source_puff]
+        - _puff_particles(afterglow_time)[source_puff],
     )
     assert np.isclose(afterglow_source.nn[-1], source_rhs.nn[-1])
     afterglow_source_terms = sim.rhs_terms(
@@ -5050,7 +5042,8 @@ def _case_ionization_birth_energy_model(csda_sim):
     )
     assert afterglow_dt_diag.phase == "afterglow"
     assert afterglow_dt_diag.phase_cathode_enabled == 0.0
-    assert afterglow_dt_diag.phase_gas_puff_enabled == 0.0
+    # The square valve's closing tail keeps the afterglow puff switch open.
+    assert afterglow_dt_diag.phase_gas_puff_enabled == 1.0
     assert afterglow_dt_diag.phase_floating == 1.0
     assert np.allclose(
         afterglow_source_terms["neutral_sources"].nn,
@@ -5060,84 +5053,13 @@ def _case_ionization_birth_energy_model(csda_sim):
     assert (
         afterglow_dt_diag.dt_neutral_sources >= sim.suggest_timestep().dt_neutral_sources
     )
-    decay_params = dict(params)
-    decay_params["gas_puff_mode"] = "decay_after_breakdown"
-    decay_params["pump_enabled"] = False
-    decay_params["tau_prebreakdown"] = 1.0e-10
-    decay_params["tau_discharge"] = 4.0e-10
-    decay_params["tau_afterglow"] = 1.0e-10
-    decay_params["tau_gp_after_breakdown"] = 1.0e-10
-    decay_params["tau_gp_decay_factor"] = 1.0
-    decay_sim = LAPDSim1D(decay_params, flags)
-    decay_geom = decay_sim.get_initial_snapshot().geometry
-    decay_puff, _ = puff_cell_indices(decay_geom)
-    decay_main_start = decay_params["tau_prebreakdown"]
-    decay_event = decay_main_start + decay_params["tau_gp_after_breakdown"]
-    assert np.isclose(
-        decay_sim.next_phase_boundary_after(decay_main_start),
-        decay_event,
-    )
-    decay_on = decay_sim.neutral_source_sink_rhs(time=decay_event)
-    assert np.isclose(
-        decay_on.nn[decay_puff],
-        puff_rate(
-            decay_params["S_gp"],
-            decay_params["gas_puff_valves"],
-            decay_geom.neutral_volume_cm3[decay_puff],
-        ),
-    )
-    decay_time = decay_main_start + 2.0e-10
-    decay_tau = (
-        decay_params["tau_discharge"] - decay_params["tau_gp_after_breakdown"]
-    ) * decay_params["tau_gp_decay_factor"]
-    decay_factor = np.exp(-(decay_time - decay_event) / decay_tau)
-    decay_rhs = decay_sim.neutral_source_sink_rhs(time=decay_time)
-    assert np.isclose(
-        decay_rhs.nn[decay_puff],
-        puff_rate(
-            decay_params["S_gp"] * decay_factor,
-            decay_params["gas_puff_valves"],
-            decay_geom.neutral_volume_cm3[decay_puff],
-        ),
-    )
-
-    pulse_params = dict(decay_params)
-    pulse_params["gas_puff_mode"] = "pulse_decay_to_level"
-    pulse_params["S_gp_decay_target"] = 1000.0
-    pulse_params["tau_gp_pulse_duration"] = 1.0e-10
-    pulse_params["tau_gp_decay_duration"] = 2.0e-10
-    pulse_sim = LAPDSim1D(pulse_params, flags)
-    pulse_geom = pulse_sim.get_initial_snapshot().geometry
-    pulse_puff, _ = puff_cell_indices(pulse_geom)
-    pulse_event = pulse_params["tau_prebreakdown"] + pulse_params["tau_gp_pulse_duration"]
-    assert np.isclose(
-        pulse_sim.next_phase_boundary_after(pulse_params["tau_prebreakdown"]),
-        pulse_event,
-    )
-    pulse_on = pulse_sim.neutral_source_sink_rhs(time=pulse_event)
-    assert np.isclose(
-        pulse_on.nn[pulse_puff],
-        puff_rate(
-            pulse_params["S_gp"],
-            pulse_params["gas_puff_valves"],
-            pulse_geom.neutral_volume_cm3[pulse_puff],
-        ),
-    )
-    pulse_time = pulse_event + 1.0e-10
-    pulse_decay = np.exp(-(pulse_time - pulse_event) / pulse_params["tau_gp_decay_duration"])
-    pulse_s_gp = (
-        pulse_params["S_gp_decay_target"]
-        + (pulse_params["S_gp"] - pulse_params["S_gp_decay_target"]) * pulse_decay
-    )
-    pulse_rhs = pulse_sim.neutral_source_sink_rhs(time=pulse_time)
-    assert np.isclose(
-        pulse_rhs.nn[pulse_puff],
-        puff_rate(
-            pulse_s_gp,
-            pulse_params["gas_puff_valves"],
-            pulse_geom.neutral_volume_cm3[pulse_puff],
-        ),
-    )
+    # A short scheduled phase set with the pump off, reused by the gas-puff
+    # diagnostics case.
+    short_phase_params = dict(params)
+    short_phase_params["pump_enabled"] = False
+    short_phase_params["tau_prebreakdown"] = 1.0e-10
+    short_phase_params["tau_discharge"] = 4.0e-10
+    short_phase_params["tau_afterglow"] = 1.0e-10
     return locals()
 
 
@@ -5150,12 +5072,12 @@ def _case_ionization_birth_energy_model(csda_sim):
     provides=("hot_ion_cx_state", "nn_ramp_state", "ramp_state"),
 )
 def _case_gas_puff_diagnostics_and_fluid_operators(
-    _warnings, decay_params, dt_default, source_rhs
+    _warnings, short_phase_params, dt_default, source_rhs
 ):
     # --- saved effective S_gp(t) waveform (gas_puff_diagnostics) ------------
     # The recorded waveform must be the APPLIED one, not the configured level:
-    # decay_after_breakdown shapes it down through the main discharge and the
-    # phase gate shuts it off in the afterglow. The puff is not isolated here:
+    # the square envelope shapes it and the phase gate shuts it off in the
+    # afterglow. The puff is not isolated here:
     # the inventory closure below is a FULL budget over every booked nn row, so
     # the fixture runs the anode at its natural eta rather than arranging the
     # channel quiet.
@@ -5163,9 +5085,18 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     state = snapshot.state
-    puffdiag_params = dict(decay_params)
+    puffdiag_params = dict(short_phase_params)
     puffdiag_params["dt_save"] = 0.0
-    puffdiag_params["tau_afterglow"] = 3.0e-10
+    # The square valve's closing tail keeps the puff switch open through the
+    # afterglow, so the window must reach post_afterglow for the gate to shut
+    # inside it.
+    puffdiag_params["tau_afterglow"] = 1.0e-10
+    # The square edges at fixture scale: the hardware timings are ~0.5 ms,
+    # which on this ns window would leave the valve all but shut and the puff
+    # far below the channels it is meant to dominate.
+    puffdiag_params["gas_puff_rise_center_s"] = 0.0
+    puffdiag_params["gas_puff_rise_width_s"] = 1.0e-10
+    puffdiag_params["gas_puff_close_lag_s"] = 0.0
     puffdiag_params["pump_enabled"] = False
     # nn0 well below the delivered fuel, so the inventory difference below is
     # not swamped by float64 cancellation against a large standing fill.
@@ -5196,14 +5127,17 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     assert np.all(puffdiag["Twin_S_gp_sccm"] == 0.0)
     # The recorded rate IS the applied puff row: with pumping off the
     # neutral_sources term carries nothing else.
-    puffdiag_vol = np.asarray(
-        puffdiag_geom.neutral_volume_cm3, dtype=float
-    )
-    puffdiag_row = (
-        np.asarray(
-            puffdiag_result.rhs_terms["neutral_sources"]["nn"], dtype=float
-        )
-        @ puffdiag_vol
+    # Two-zone books: nn on the column volume, nn_a on the annulus volume.
+    puffdiag_Vc, puffdiag_Va = neutral_zone_volumes(puffdiag_geom)
+
+    def _puffdiag_particles(fields):
+        total = np.asarray(fields["nn"], dtype=float) @ puffdiag_Vc
+        if "nn_a" in fields:
+            total = total + np.asarray(fields["nn_a"], dtype=float) @ puffdiag_Va
+        return total
+
+    puffdiag_row = _puffdiag_particles(
+        puffdiag_result.rhs_terms["neutral_sources"]
     )
     assert np.allclose(
         puffdiag_row, puffdiag["puff_particles_per_s"], rtol=1e-12, atol=0.0
@@ -5228,13 +5162,16 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     # only demonstrate sensitivity to the three rows that carry weight.
     puffdiag_booked = {
         _term_name: np.trapezoid(
-            np.asarray(_term_fields["nn"], dtype=float) @ puffdiag_vol,
+            _puffdiag_particles(_term_fields),
             puffdiag_result.time,
         )
         for _term_name, _term_fields in puffdiag_result.rhs_terms.items()
         if "nn" in _term_fields
     }
-    puffdiag_N_n = np.asarray(puffdiag_result.nn, dtype=float) @ puffdiag_vol
+    puffdiag_N_n = (
+        np.asarray(puffdiag_result.nn, dtype=float) @ puffdiag_Vc
+        + np.asarray(puffdiag_result.nn_a, dtype=float) @ puffdiag_Va
+    )
     puffdiag_dN_n = puffdiag_N_n[-1] - puffdiag_N_n[0]
     puffdiag_budget = sum(puffdiag_booked.values())
     # SSPRK2 on the state-INDEPENDENT puff row is the explicit trapezoid, so
@@ -5304,13 +5241,14 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         reaction_rhs.Ei,
     ):
         assert np.all(np.isfinite(values))
+    reaction_Vc, _reaction_Va = neutral_zone_volumes(geom)
     reaction_inventory_scale = np.sum(
         np.abs(reaction_rhs.n * geom.plasma_volume_cm3)
-        + np.abs(reaction_rhs.nn * geom.neutral_volume_cm3)
+        + np.abs(reaction_rhs.nn * reaction_Vc)
     )
     reaction_inventory_tol = 1e-12 * reaction_inventory_scale
     assert np.isclose(
-        particle_inventory_rate(reaction_rhs, geom),
+        _zone_particle_rate(reaction_rhs, geom),
         0.0,
         atol=reaction_inventory_tol,
     )
@@ -5325,7 +5263,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         for field_name in STATE_NAMES_1D:
             assert np.all(np.isfinite(getattr(term, field_name)))
         assert np.isclose(
-            particle_inventory_rate(term, geom),
+            _zone_particle_rate(term, geom),
             0.0,
             atol=reaction_inventory_tol,
         )
@@ -5334,6 +5272,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     recomb_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
+        nn_a=state.nn_a,
         u=np.full(geom.cells, 1.0e5),
         Te=np.full(geom.cells, 1.0),
         Ti=np.full(geom.cells, 1.0),
@@ -5353,6 +5292,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     ramp_state = conservative_from_primitives(
         n=density_ramp,
         nn=state.nn,
+        nn_a=state.nn_a,
         u=np.zeros(geom.cells),
         Te=np.full(geom.cells, params["Te0"]),
         Ti=np.full(geom.cells, params["Ti0"]),
@@ -5390,6 +5330,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     nn_ramp_state = conservative_from_primitives(
         n=state.n,
         nn=np.linspace(2.0, 1.0, geom.cells) * state.nn[0],
+        nn_a=np.linspace(2.0, 1.0, geom.cells) * state.nn[0],
         u=np.zeros(geom.cells),
         Te=np.full(geom.cells, params["Te0"]),
         Ti=np.full(geom.cells, params["Ti0"]),
@@ -5398,10 +5339,13 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     nn_ramp_rhs = sim.neutral_exchange_rhs(state=nn_ramp_state)
     assert nn_ramp_rhs.nn[0] < 0.0
     assert nn_ramp_rhs.nn[-1] > 0.0
-    inventory_terms = nn_ramp_rhs.nn * geom.neutral_volume_cm3
+    nn_ramp_Vc, nn_ramp_Va = neutral_zone_volumes(geom)
+    inventory_terms = np.concatenate(
+        [nn_ramp_rhs.nn * nn_ramp_Vc, nn_ramp_rhs.nn_a * nn_ramp_Va]
+    )
     inventory_tol = 1e-12 * np.sum(np.abs(inventory_terms))
     assert np.isclose(
-        neutral_inventory_rate(nn_ramp_rhs, geom), 0.0, atol=inventory_tol
+        _zone_particle_rate(nn_ramp_rhs, geom), 0.0, atol=inventory_tol
     )
     assert np.allclose(nn_ramp_rhs.n, 0.0)
     assert np.allclose(nn_ramp_rhs.M, 0.0)
@@ -5415,6 +5359,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     expanding_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
+        nn_a=state.nn_a,
         u=np.linspace(-1.0e4, 1.0e4, geom.cells),
         Te=np.full(geom.cells, params["Te0"]),
         Ti=np.full(geom.cells, params["Ti0"]),
@@ -5431,6 +5376,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     compressing_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
+        nn_a=state.nn_a,
         u=np.linspace(1.0e4, -1.0e4, geom.cells),
         Te=np.full(geom.cells, params["Te0"]),
         Ti=np.full(geom.cells, params["Ti0"]),
@@ -5447,6 +5393,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     hot_e_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
+        nn_a=state.nn_a,
         u=np.zeros(geom.cells),
         Te=np.full(geom.cells, 2.0),
         Ti=np.full(geom.cells, 0.5),
@@ -5462,6 +5409,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     hot_i_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
+        nn_a=state.nn_a,
         u=np.zeros(geom.cells),
         Te=np.full(geom.cells, 0.5),
         Ti=np.full(geom.cells, 2.0),
@@ -5475,6 +5423,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     equal_temp_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
+        nn_a=state.nn_a,
         u=np.zeros(geom.cells),
         Te=np.full(geom.cells, 0.5),
         Ti=np.full(geom.cells, 0.5),
@@ -5486,6 +5435,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     cooling_state = conservative_from_primitives(
         n=np.full(geom.cells, 1.0e12),
         nn=np.full(geom.cells, 1.0e12),
+        nn_a=np.full(geom.cells, 1.0e12),
         u=np.zeros(geom.cells),
         Te=np.full(geom.cells, 10.0),
         Ti=np.full(geom.cells, 1.0),
@@ -5540,30 +5490,40 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     hot_ion_cx_state = conservative_from_primitives(
         n=np.full(geom.cells, 1.0e12),
         nn=np.full(geom.cells, 1.0e12),
+        nn_a=np.full(geom.cells, 1.0e12),
         u=np.zeros(geom.cells),
         Te=np.full(geom.cells, 1.0),
         Ti=np.full(geom.cells, 10.0),
         ion_mass_g=sim.ion_mass_g,
     )
-    # The standalone legacy CX cooling term is a DEPRECATED A/B arm (folded into
-    # the Phelps ion_neutral_moment_closure operator on the production default).
-    # Exercise it explicitly with the moment operator off; the legacy-drag
-    # DeprecationWarning is expected there and asserted.
-    with _warnings.catch_warnings(record=True) as _cx_w:
-        _warnings.simplefilter("always")
-        cx_legacy_sim = LAPDSim1D(
-            params, dict(flags, ion_neutral_moment_closure=False)
-        )
-    assert any(
-        issubclass(w.category, DeprecationWarning) for w in _cx_w
-    ), "legacy ion-neutral path must warn"
-    hot_ion_cx = cx_legacy_sim.ion_charge_exchange_rhs(state=hot_ion_cx_state)
+    # The standalone CX cooling function is no longer a saved term (the
+    # moment-closed collision operator carries CX cooling); it still sizes
+    # the ion charge-exchange timestep bound, so its sign and its bound are
+    # checked here.
+    hot_ion_cx = ion_charge_exchange_rhs(
+        state=hot_ion_cx_state,
+        floors=sim.floors,
+        ion_mass_g=sim.ion_mass_g,
+        gas_type=params["gas_type"],
+        Tn_fit=params["Tn_fit"],
+    )
     assert np.all(hot_ion_cx.Ei < 0.0)
     assert np.allclose(hot_ion_cx.n, 0.0)
     assert np.allclose(hot_ion_cx.nn, 0.0)
     assert np.allclose(hot_ion_cx.M, 0.0)
     assert np.allclose(hot_ion_cx.Ee, 0.0)
-    hot_ion_cx_dt = cx_legacy_sim.suggest_timestep(y=pack_state(hot_ion_cx_state))
+    hot_ion_cx_dt = sim.suggest_timestep(
+        y=pack_state(
+            ConservativeState1D(
+                n=hot_ion_cx_state.n,
+                nn=hot_ion_cx_state.nn,
+                M=hot_ion_cx_state.M,
+                Ee=hot_ion_cx_state.Ee,
+                Ei=hot_ion_cx_state.Ei,
+                nn_a=hot_ion_cx_state.nn.copy(),
+            )
+        )
+    )
     assert np.isfinite(hot_ion_cx_dt.dt_ion_charge_exchange)
 
     warm_neutral_cx = ion_charge_exchange_rhs(
@@ -5572,19 +5532,8 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         ion_mass_g=sim.ion_mass_g,
         gas_type=params["gas_type"],
         Tn_fit=20.0,
-        cx=True,
     )
     assert np.all(warm_neutral_cx.Ei > 0.0)
-
-    disabled_cx = ion_charge_exchange_rhs(
-        state=hot_ion_cx_state,
-        floors=sim.floors,
-        ion_mass_g=sim.ion_mass_g,
-        gas_type=params["gas_type"],
-        Tn_fit=params["Tn_fit"],
-        cx=False,
-    )
-    assert np.allclose(disabled_cx.Ei, 0.0)
     return locals()
 
 
@@ -5607,6 +5556,7 @@ def _case_energy_exchange_rate_bound():
     stiff_state = conservative_from_primitives(
         n=np.full(geom.cells, 8.0e12),
         nn=exchange_rate_snapshot.state.nn,
+        nn_a=exchange_rate_snapshot.state.nn,
         u=np.zeros(geom.cells),
         Te=np.full(geom.cells, 0.11),
         Ti=np.full(geom.cells, 0.11),
@@ -5717,7 +5667,6 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
             ion_mass_g=sim.ion_mass_g,
             gas_type="Ar",
             Tn_fit=params["Tn_fit"],
-            cx=True,
         )
     except ValueError as exc:
         assert "unsupported gas_type" in str(exc)
@@ -5727,6 +5676,7 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
     heat_state = conservative_from_primitives(
         n=np.full(geom.cells, 1.0e12),
         nn=state.nn,
+        nn_a=state.nn_a,
         u=np.zeros(geom.cells),
         Te=np.linspace(2.0, 1.0, geom.cells),
         Ti=np.linspace(1.5, 0.5, geom.cells),
@@ -5755,7 +5705,7 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         0.0,
         atol=heat_ion_energy_tol,
     )
-    heat_dt = sim.suggest_timestep(y=pack_state(heat_state))
+    heat_dt = sim.suggest_timestep(y=pack_state(heat_state, neutral_two_zone=True))
     assert np.isfinite(heat_dt.dt_heat_conduction)
     heat_derived = derive_state(heat_state, sim.floors, sim.ion_mass_g)
 
@@ -5808,12 +5758,15 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
     assert np.allclose(disabled_implicit.Ee, heat_state.Ee)
     assert np.allclose(disabled_implicit.Ei, heat_state.Ei)
 
-    nonheat_rhs = sim.rhs(pack_state(heat_state), include_heat_conduction=False)
-    full_rhs = sim.rhs(pack_state(heat_state), include_heat_conduction=True)
-    heat_rhs_y = pack_state(heat_rhs)
+    nonheat_rhs = sim.rhs(pack_state(heat_state, neutral_two_zone=True), include_heat_conduction=False)
+    full_rhs = sim.rhs(pack_state(heat_state, neutral_two_zone=True), include_heat_conduction=True)
+    heat_rhs_y = pack_state(heat_rhs, neutral_two_zone=True)
     assert np.allclose(full_rhs - nonheat_rhs, heat_rhs_y)
-    rhs_terms = sim.rhs_terms(pack_state(heat_state), include_heat_conduction=True)
+    rhs_terms = sim.rhs_terms(pack_state(heat_state, neutral_two_zone=True), include_heat_conduction=True)
     expected_rhs_terms = {
+        # The column/annulus zone exchange: the two-zone split is
+        # unconditional, so its term is always present.
+        "neutral_zone_exchange",
         "plasma_advective_flux",
         "plasma_front_flux",
         "boundary_absorption",
@@ -5858,32 +5811,32 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
     for term in rhs_terms.values():
         for field_name in STATE_NAMES_1D:
             assert np.all(np.isfinite(getattr(term, field_name)))
-        term_sum = term_sum + pack_state(term)
+        term_sum = term_sum + pack_state(term, neutral_two_zone=True)
     assert np.allclose(term_sum, full_rhs)
     nonheat_terms = sim.rhs_terms(
-        pack_state(heat_state),
+        pack_state(heat_state, neutral_two_zone=True),
         include_heat_conduction=False,
     )
-    assert np.allclose(pack_state(nonheat_terms["heat_conduction"]), 0.0)
+    assert np.allclose(pack_state(nonheat_terms["heat_conduction"], neutral_two_zone=True), 0.0)
     assert np.allclose(
-        pack_state(rhs_terms["heat_conduction"]),
+        pack_state(rhs_terms["heat_conduction"], neutral_two_zone=True),
         full_rhs - nonheat_rhs,
     )
     # The electrode electron sheath pair: with no cathode solve BOTH rows are
     # zero, and the anode row is energy-only (Ee) in every configuration.
-    assert np.allclose(pack_state(rhs_terms["cathode_surface_loss"]), 0.0)
-    assert np.allclose(pack_state(rhs_terms["anode_e_sheath_loss"]), 0.0)
+    assert np.allclose(pack_state(rhs_terms["cathode_surface_loss"], neutral_two_zone=True), 0.0)
+    assert np.allclose(pack_state(rhs_terms["anode_e_sheath_loss"], neutral_two_zone=True), 0.0)
     for _zero_field in ("n", "nn", "M", "Ei"):
         assert np.allclose(
             getattr(rhs_terms["anode_e_sheath_loss"], _zero_field), 0.0
         )
-    assert np.allclose(pack_state(rhs_terms["beam_ionization_birth"]), 0.0)
-    assert np.allclose(pack_state(rhs_terms["beam_power_deposition"]), 0.0)
-    assert np.allclose(pack_state(rhs_terms["beam_ionization_cost"]), 0.0)
+    assert np.allclose(pack_state(rhs_terms["beam_ionization_birth"], neutral_two_zone=True), 0.0)
+    assert np.allclose(pack_state(rhs_terms["beam_power_deposition"], neutral_two_zone=True), 0.0)
+    assert np.allclose(pack_state(rhs_terms["beam_ionization_cost"], neutral_two_zone=True), 0.0)
 
     split_dt = min(1.0e-10, 0.1 * heat_dt.dt_heat_conduction)
     manual_explicit_y = ssprk2_step(
-        y0=pack_state(heat_state),
+        y0=pack_state(heat_state, neutral_two_zone=True),
         dt=split_dt,
         rhs_func=lambda yy: sim.rhs(yy, include_heat_conduction=False),
         floor_func=sim.floor_state_vector,
@@ -5892,12 +5845,12 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
         dt=split_dt,
         y=manual_explicit_y,
     )
-    manual_split_y = sim.floor_state_vector(pack_state(manual_heat_state))
-    split_y = sim.operator_split_step(y=pack_state(heat_state), dt=split_dt)
+    manual_split_y = sim.floor_state_vector(pack_state(manual_heat_state, neutral_two_zone=True))
+    split_y = sim.operator_split_step(y=pack_state(heat_state, neutral_two_zone=True), dt=split_dt)
     assert np.allclose(split_y, manual_split_y)
 
     no_heat_bound_dt = sim.suggest_timestep(
-        y=pack_state(heat_state),
+        y=pack_state(heat_state, neutral_two_zone=True),
         include_heat_conduction=False,
     )
     assert np.isinf(no_heat_bound_dt.dt_heat_conduction)
@@ -5906,12 +5859,13 @@ def _case_helium_only_reaction_rates(dt_default, hot_ion_cx_state):
     fast_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
+        nn_a=state.nn_a,
         u=np.full(geom.cells, 1.0e7),
         Te=np.full(geom.cells, params["Te0"]),
         Ti=np.full(geom.cells, params["Ti0"]),
         ion_mass_g=sim.ion_mass_g,
     )
-    fast_dt = sim.suggest_timestep(y=pack_state(fast_state))
+    fast_dt = sim.suggest_timestep(y=pack_state(fast_state, neutral_two_zone=True))
     assert fast_dt.dt_plasma_cfl < dt_default.dt_plasma_cfl
 
     no_source_params = dict(params)
@@ -6068,7 +6022,10 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     # ABSENT here, not NaN. Only the twin solve fills it, so on a single
     # cathode it was a second copy of the block that never carried a number.
     assert "end_regime" not in run_result.cathode_diagnostics
-    saved_term_sum = np.zeros_like(run_result.y)
+    # Summed over the five base rows; the packed y also carries nn_a.
+    saved_term_sum = np.zeros(
+        (run_result.y.shape[0], len(STATE_NAMES_1D) * geom.cells)
+    )
     for term_name in expected_rhs_terms:
         term_fields = run_result.rhs_terms[term_name]
         for field_name in STATE_NAMES_1D:
@@ -7120,7 +7077,13 @@ def _case_cathode_power_balance_warming(
     assert not np.any((_cathode_Ee != 0.0) & (_anode_Ee != 0.0))
     assert np.abs(_anode_Ee).max() > 0.0
     assert np.abs(_cathode_Ee).max() > 0.0
-    cathode_saved_sum = np.zeros_like(cathode_run_result.y)
+    # Summed over the five base rows; the packed y also carries nn_a.
+    cathode_saved_sum = np.zeros(
+        (
+            cathode_run_result.y.shape[0],
+            len(STATE_NAMES_1D) * np.asarray(cathode_run_result.nn).shape[1],
+        )
+    )
     for term_name in expected_rhs_terms:
         term_fields = cathode_run_result.rhs_terms[term_name]
         assert np.allclose(
@@ -7673,6 +7636,12 @@ def _case_breakdown_retry_near_vacuum(
     sim, snapshot = _base_sim()
     geom = snapshot.geometry
     retry_params["nn0"] = 1.0e9
+    # The puff feeds the ANNULUS (the two-zone split is unconditional) and the
+    # limiter reads the COLUMN, which fills only through the zone exchange: a
+    # 1 us step moves it by 3.8e-2, the retried 0.5 us half by 9.8e-3 and the
+    # second half by 2.8e-2. The threshold sits between them, so the first
+    # step retries once and the second is accepted as it stands.
+    retry_params["max_neutral_step_fraction"] = 0.033
     retry_sim = LAPDSim1D(retry_params, retry_flags)
     retry_result = retry_sim.run(t_end=1.0e-6)
     assert retry_result.steps >= 2
@@ -8052,7 +8021,6 @@ def _case_breakdown_retry_near_vacuum(
     neutral_prebreakdown_params["gas_puff_enabled"] = True
     neutral_prebreakdown_params["tau_neutral_prebreakdown"] = 2.0e-10
     neutral_prebreakdown_flags = dict(current_phase_flags)
-    neutral_prebreakdown_flags["neutral_prebreakdown"] = True
     neutral_prebreakdown_sim = LAPDSim1D(
         neutral_prebreakdown_params,
         neutral_prebreakdown_flags,
@@ -9199,14 +9167,12 @@ def _case_equilibration_puff_width(
 @_case(
     "ion-neutral-closure-knobs",
     provides=(
-        "drag_const", "drag_kwargs", "heat_const", "knob_Rm",
-        "knob_floors", "knob_mass", "knob_n", "knob_state",
+        "knob_Rm", "knob_floors", "knob_mass", "knob_n", "knob_state",
     ),
 )
 def _case_ion_neutral_closure_knobs():
-    # --- Ion-neutral closure knobs: the legacy constant-closure drag and
-    # frictional heating on a three-cell reference state, handed to the
-    # neutral-momentum cases below.
+    # --- Ion-neutral closure knobs: a three-cell reference state, handed to
+    # the neutral-momentum cases below.
     knob_mass = 4.0 * m_p_cgs
     knob_floors = {"n": 1e6, "nn": 1e8, "Te": 0.1, "Ti": 0.1}
     knob_n = np.array([1e10, 1e12, 1e13])
@@ -9219,15 +9185,6 @@ def _case_ion_neutral_closure_knobs():
         ion_mass_g=knob_mass,
     )
     knob_Rm = np.full(3, 50.0)
-
-    drag_kwargs = dict(
-        state=knob_state,
-        floors=knob_floors,
-        ion_mass_g=knob_mass,
-        gas_type="He",
-    )
-    drag_const = ion_neutral_drag_rhs(**drag_kwargs)
-    heat_const = ion_neutral_frictional_heating_rhs(**drag_kwargs)
     return locals()
 
 
@@ -9358,20 +9315,18 @@ def _case_two_zone_neutral_state_foundations(
     "neutral-momentum-sources",
     historical_stance=True,
     provides=(
-        "build_geometry", "mn_drag_kwargs", "mn_flags", "mn_geom",
-        "mn_nu_ni", "mn_plasma_flags", "mn_plasma_params",
+        "build_geometry", "mn_flags", "mn_geom",
+        "mn_plasma_flags", "mn_plasma_params",
         "mn_plasma_sim", "mn_reactions", "mn_state", "mn_u", "mn_vbar",
     ),
 )
 def _case_neutral_momentum_sources(
-    drag_const, drag_kwargs, expected_rhs_terms, heat_const, knob_Rm,
+    expected_rhs_terms, knob_Rm,
     knob_floors, knob_mass, knob_n, knob_state, run_params
 ):
-    # --- Neutral-momentum sources (M2): with M_n on
-    # the state, the drag and the reactions become species-conserving momentum
-    # exchanges, the wall and pump are the only named sinks, and the local
-    # steady state of drag-vs-wall reproduces the entrainment balance (with
-    # its entrainment scaled by Vp/Vm, since M_n is the chamber-mean wind).
+    # --- Neutral-momentum sources (M2): with M_n on the state, the
+    # reactions become species-conserving momentum exchanges and the wall and
+    # pump are the only named sinks.
     params, flags = _base_config()
     mn_geom = SimpleNamespace(
         plasma_volume_cm3=np.array([450.0, 900.0, 1800.0]) * 1.0e3,
@@ -9397,61 +9352,6 @@ def _case_neutral_momentum_sources(
     )
     assert np.all(
         neutral_wind_velocity(knob_state, knob_floors, knob_mass) == 0.0
-    )
-
-    mn_drag_kwargs = dict(drag_kwargs, state=mn_state, geometry=mn_geom)
-    mn_drag = ion_neutral_drag_rhs(**mn_drag_kwargs)
-    # The exchange closes: what the plasma channel loses, the neutral channel
-    # gains, through the (Vp/Vm) volume conversion (to rounding: the float
-    # round-trip (Vp/Vm)*Vm is one ulp off Vp).
-    assert np.allclose(
-        mn_drag.M * mn_geom.plasma_volume_cm3,
-        -mn_drag.M_n * mn_geom.neutral_volume_cm3,
-        rtol=1e-12,
-    )
-    # The ion-side force is the constant-model drag on the relative velocity:
-    # u_n = 0.3*u everywhere makes it exactly 0.7x the u-based drag.
-    assert np.allclose(mn_drag.M, 0.7 * drag_const.M, rtol=1e-12)
-    # A zero wind reproduces the constant model bit-exactly on the ion side.
-    mn_state_rest = conservative_from_primitives(
-        n=knob_n,
-        nn=np.full(3, 1e13),
-        u=knob_u,
-        Te=np.array([6.0, 5.0, 3.0]),
-        Ti=np.array([1.0, 1.0, 2.0]),
-        ion_mass_g=knob_mass,
-        un=np.zeros(3),
-    )
-    assert np.all(
-        ion_neutral_drag_rhs(
-            **dict(drag_kwargs, state=mn_state_rest, geometry=mn_geom)
-        ).M
-        == drag_const.M
-    )
-    # geometry is required for the volume conversion.
-    for mn_bad in (
-        {"geometry": None},
-    ):
-        try:
-            ion_neutral_drag_rhs(**dict(drag_kwargs, state=mn_state), **mn_bad)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f"expected ValueError for {mn_bad}")
-    # Frictional heating dissipates the relative velocity quadratically:
-    # 0.7^2 = 0.49x the u-based heating, and bit-exact at zero wind.
-    assert np.allclose(
-        ion_neutral_frictional_heating_rhs(
-            **dict(drag_kwargs, state=mn_state)
-        ).Ei,
-        0.49 * heat_const.Ei,
-        rtol=1e-12,
-    )
-    assert np.all(
-        ion_neutral_frictional_heating_rhs(
-            **dict(drag_kwargs, state=mn_state_rest)
-        ).Ei
-        == heat_const.Ei
     )
 
     # Wall sink: -M_n / tau_wall on the momentum field only; inert without M_n.
@@ -9520,40 +9420,6 @@ def _case_neutral_momentum_sources(
         I_ion=I_ion,
     )["ionization_birth"].M_n is None
 
-    # Local steady state of drag reception vs. the wall sink IS the
-    # entrainment balance u_n/u = E/(1 + E), with the entrainment scaled by
-    # the chamber-mean factor Vp/Vm.
-    mn_relax = np.zeros(3)
-    mn_dt = 1.0e-5
-    for _ in range(3000):
-        mn_st = ConservativeState1D(
-            n=mn_state.n,
-            nn=mn_state.nn,
-            M=mn_state.M,
-            Ee=mn_state.Ee,
-            Ei=mn_state.Ei,
-            M_n=mn_relax,
-        )
-        mn_relax = mn_relax + mn_dt * (
-            ion_neutral_drag_rhs(
-                **dict(drag_kwargs, state=mn_st, geometry=mn_geom)
-            ).M_n
-            + neutral_momentum_wall_rhs(
-                state=mn_st,
-                floors=knob_floors,
-                ion_mass_g=knob_mass,
-                Rm_cm=knob_Rm,
-            ).M_n
-        )
-    mn_un_ss = mn_relax / (knob_mass * mn_state.nn)
-    mn_Ti = derive_state(mn_state, knob_floors, knob_mass).Ti
-    mn_nu_ni = ion_neutral_collision_frequency(
-        nn=mn_state.n,
-        Ti=mn_Ti,
-        gas_type="He",
-    )
-    mn_E = mn_geom.volume_ratio * mn_nu_ni * knob_Rm / mn_vbar
-    assert np.allclose(mn_un_ss / mn_u, mn_E / (1.0 + mn_E), rtol=1e-5)
     # Pump sink: the wind leaves with the gas at the pump cells, so the
     # pumped momentum fraction matches the pumped particle fraction there.
     from cablp.solvers._sim1d.core.geometry import build_geometry
@@ -9600,6 +9466,8 @@ def _case_neutral_momentum_sources(
             S_pump_R=500.0,
             gas_puff_enabled=True,
             pump_enabled=False,
+            gas_puff_orifice_id_cm=3.95,
+            gas_puff_orifice_length_cm=22.0,
         ).M_n
         == 0.0
     )
@@ -9609,20 +9477,16 @@ def _case_neutral_momentum_sources(
     # u_n trajectories.
     mn_flags = dict(flags)
     mn_flags["neutral_momentum"] = True
-    # The evolved neutral wind (M_n) is driven through the legacy ion_neutral
-    # drag term, which the Phelps moment operator (production default) gates off.
-    # This M_n block is a DEPRECATED A/B path (the M_n-on-Phelps rewiring is the
-    # deferred neutral ladder), so run it with the moment operator off -- the
-    # legacy-drag DeprecationWarning is expected.
-    mn_flags["ion_neutral_moment_closure"] = False
+    # The evolved neutral wind (M_n) is driven by the moment-closed
+    # ion-neutral collision operator's neutral mirror row.
     mn_run_params = dict(run_params)
     mn_sim = LAPDSim1D(mn_run_params, mn_flags)
     assert mn_sim.state.M_n is not None
     mn_cells = mn_sim.geometry.cells
-    assert mn_sim.get_initial_snapshot().y.size == 6 * mn_cells
+    assert mn_sim.get_initial_snapshot().y.size == 7 * mn_cells
     mn_rhs_terms = mn_sim.rhs_terms()
     assert set(mn_rhs_terms) == expected_rhs_terms
-    assert mn_sim.rhs().size == 6 * mn_cells
+    assert mn_sim.rhs().size == 7 * mn_cells
     mn_result = mn_sim.run(t_end=3.0e-10, dt=1.0e-10)
     assert mn_result.M_n.shape == (4, mn_cells)
     assert mn_result.u_n.shape == (4, mn_cells)
@@ -9634,19 +9498,18 @@ def _case_neutral_momentum_sources(
         assert np.allclose(mn_loaded.M_n, mn_result.M_n)
         assert np.allclose(mn_loaded.u_n, mn_result.u_n)
 
-    # Plasma-phase end-to-end: with a flowing plasma the drag pumps the wind
-    # up from zero through the full step machinery (explicit substep,
-    # implicit heat with the 6-field state, floors, step acceptance).
+    # Plasma-phase end-to-end: with a flowing plasma the collision operator
+    # pumps the wind up from zero through the full step machinery (explicit
+    # substep, implicit heat with the 7-field state, floors, step acceptance).
     mn_plasma_flags = dict(mn_flags)
-    mn_plasma_flags["neutral_prebreakdown"] = False
     mn_plasma_params = dict(params)
     mn_plasma_params["initial_neutral_state"] = "fill"
     mn_plasma_params["u0"] = 5.0e4
     mn_plasma_sim = LAPDSim1D(mn_plasma_params, mn_plasma_flags)
     mn_plasma_terms = mn_plasma_sim.rhs_terms()
-    assert mn_plasma_terms["ion_neutral_drag"].M_n is not None
-    assert np.any(mn_plasma_terms["ion_neutral_drag"].M_n != 0.0)
-    assert mn_plasma_sim.rhs().size == 6 * mn_plasma_sim.geometry.cells
+    assert mn_plasma_terms["ion_neutral_collision"].M_n is not None
+    assert np.any(mn_plasma_terms["ion_neutral_collision"].M_n != 0.0)
+    assert mn_plasma_sim.rhs().size == 7 * mn_plasma_sim.geometry.cells
     for _ in range(5):
         mn_plasma_sim.advance_one_step(dt=1.0e-9)
     mn_plasma_state = mn_plasma_sim.state
@@ -9677,24 +9540,10 @@ def _case_neutral_two_zone_particle_channel(mn_plasma_flags, mn_plasma_params):
     # The solver carries the split (nn, nn_a)
     # state, runs per-zone axial Knudsen exchange plus the radial
     # column/annulus conductance, and both close inventory exactly with
-    # detailed balance at equal densities. The flag requires the knudsen
-    # exchange model.
+    # detailed balance at equal densities.
     p2z_params = dict(mn_plasma_params)
-    p2z_params["neutral_exchange_model"] = "knudsen"
     p2z_flags = dict(mn_plasma_flags)
     p2z_flags["neutral_momentum"] = False
-    p2z_flags["neutral_two_zone"] = True
-    try:
-        LAPDSim1D(
-            dict(mn_plasma_params, neutral_exchange_model="constant"),
-            p2z_flags,
-        )
-    except ValueError:
-        pass
-    else:
-        raise AssertionError(
-            "expected ValueError: neutral_two_zone without knudsen exchange"
-        )
     p2z_sim = LAPDSim1D(p2z_params, p2z_flags)
     p2z_state = p2z_sim.state
     assert p2z_state.nn_a is not None and p2z_state.M_n is None
@@ -9806,10 +9655,9 @@ def _case_neutral_two_zone_particle_channel(mn_plasma_flags, mn_plasma_params):
                     p2z_eq_sim.geometry,
                     p2z_src["S_gp"],
                     p2z_src["gas_puff_valves"],
-                    profile=p2z_src["gas_puff_profile"],
                     z_cm=p2z_src["gas_puff_z_cm"],
-                    sigma_cm=p2z_src["gas_puff_sigma_cm"],
-                    throw_cm=p2z_src["gas_puff_throw_cm"],
+                    orifice_id_cm=p2z_src["gas_puff_orifice_id_cm"],
+                    orifice_length_cm=p2z_src["gas_puff_orifice_length_cm"],
                 )
                 * p2z_eq_sim.geometry.neutral_volume_cm3
             )
@@ -9866,12 +9714,10 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
     kd_params["neutral_kinetic_dvm_nvz"] = 16
     kd_params["neutral_kinetic_dvm_nvp"] = 6
     kd_flags = dict(p2z_flags)
-    kd_flags["neutral_prebreakdown"] = False
     kd_params["initial_neutral_state"] = "fill"
 
     # Every refusal, and the offender it must name.
     for kd_bad_params, kd_bad_flags, kd_offender in (
-        (kd_params, dict(kd_flags, neutral_two_zone=False), "neutral_two_zone"),
         # Arming ``neutral_momentum`` back on is no longer a refusal and
         # cannot be one: the flag is a MEMBER of the
         # ``neutral_model='kinetic_dvm'`` family and True is its config
@@ -9897,19 +9743,9 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
             "neutral_kinetic_dvm_accommodation",
         ),
         (
-            dict(kd_params, neutral_kinetic_dvm_elastic="bilinear"),
-            kd_flags,
-            "neutral_kinetic_dvm_elastic",
-        ),
-        (
             dict(kd_params, neutral_kinetic_dvm_nvz=17),
             kd_flags,
             "nvz",
-        ),
-        (
-            dict(kd_params, gas_puff_local_ionization_fraction=0.3),
-            kd_flags,
-            "gas_puff_local_ionization_fraction",
         ),
         (
             dict(kd_params, neutral_kinetic_dvm_annulus_flights="chord"),
@@ -9924,14 +9760,6 @@ def _case_transient_dvm_neutrals_k2a(p2z_flags, p2z_params, p2z_sim):
             ),
             kd_flags,
             "neutral_kinetic_dvm_annulus_flights",
-        ),
-        (
-            dict(
-                kd_params,
-                neutral_kinetic_dvm_annulus_flights="bounded_chord",
-            ),
-            dict(kd_flags, neutral_two_zone=False),
-            "neutral_two_zone",
         ),
     ):
         try:
@@ -10641,120 +10469,6 @@ def _case_neutral_wind_advection(
 
 
 # --------------------------------------------------------------------
-# gas-puff-axial-profile
-# --------------------------------------------------------------------
-@_case(
-    "gas-puff-axial-profile",
-    provides=("build_geometry",),
-)
-def _case_gas_puff_axial_profile():
-    # --- Gas-puff axial profile (gas_puff_profile): one shared implementation
-    # behind both puff sites; "cell" is bit-exact legacy, "gaussian" conserves
-    # the same total inflow over the main chamber.
-    from cablp.solvers._sim1d.core.geometry import build_geometry
-
-    puff_params, puff_flags = default_config()
-    puff_flags["resolved_boundaries"] = True
-    puff_geom = build_geometry(puff_params, puff_flags)
-    from cablp.solvers._sim1d.core.geometry import puff_cell_indices as _pci
-
-    puff_idx, _ = _pci(puff_geom)
-    cell_rate = gas_puff_rate_profile(puff_geom, 3000.0, 2)
-    assert cell_rate[puff_idx] == puff_rate(
-        3000.0, 2.0, puff_geom.neutral_volume_cm3[puff_idx]
-    )
-    assert np.count_nonzero(cell_rate) == 1
-    # Deliberately a LITERAL, not the imported constant: this line is the
-    # tripwire that fires if SCCM_TO_PARTICLES_PER_S is changed without
-    # the three-class migration being redone. Restated at the 2026-08-21
-    # 0 C -> meter (20 C / 1013 mbar) changeover.
-    total_in = 4.171431e17 * 3000.0 * 2.0
-    for z0, sigma in ((None, 30.0), (600.0, 200.0), (1900.0, 100.0)):
-        gauss_rate = gas_puff_rate_profile(
-            puff_geom, 3000.0, 2, profile="gaussian", z_cm=z0, sigma_cm=sigma
-        )
-        assert np.all(gauss_rate >= 0.0)
-        # exact inflow conservation
-        assert np.isclose(
-            np.sum(gauss_rate * puff_geom.neutral_volume_cm3),
-            total_in,
-            rtol=1e-12,
-        )
-        # nothing lands behind the cathode or in the gap/end wall
-        roles = np.asarray(puff_geom.cell_role)
-        forbidden = np.isin(
-            roles, ("plenum", "obstruction", "cathode", "gap", "end_wall")
-        )
-        assert np.all(gauss_rate[forbidden] == 0.0)
-    # narrow profile centred on the puff cell concentrates there
-    narrow = gas_puff_rate_profile(
-        puff_geom, 3000.0, 2, profile="gaussian", z_cm=None, sigma_cm=1.0
-    )
-    assert narrow[puff_idx] == narrow.max()
-    # cosine_pipe: the physical Lambertian-outlet lobe. Conserves inflow,
-    # peaks at its centre, and carries the heavier-than-Gaussian tails the
-    # [1 + ((z-z0)/d)^2]^-2 pattern implies.
-    pipe = gas_puff_rate_profile(
-        puff_geom, 3000.0, 2, profile="cosine_pipe", z_cm=60.0, throw_cm=100.0
-    )
-    assert np.isclose(
-        np.sum(pipe * puff_geom.neutral_volume_cm3), total_in, rtol=1e-12
-    )
-    z_centers = np.asarray(puff_geom.z_cm, dtype=float)
-    interior = pipe > 0.0
-    assert np.isclose(
-        z_centers[np.argmax(pipe)], 60.0, atol=puff_geom.length_cm.max()
-    )
-    # lobe shape check at one probe cell: weight ratio matches the formula
-    probe = np.flatnonzero(interior)[np.argmin(np.abs(z_centers[interior] - 260.0))]
-    peak_cell = int(np.argmax(pipe))
-    expected = (
-        (1.0 + ((z_centers[probe] - 60.0) / 100.0) ** 2) ** -2
-        / (1.0 + ((z_centers[peak_cell] - 60.0) / 100.0) ** 2) ** -2
-    )
-    measured = (pipe[probe] * puff_geom.neutral_volume_cm3[probe] / puff_geom.length_cm[probe]) / (
-        pipe[peak_cell] * puff_geom.neutral_volume_cm3[peak_cell] / puff_geom.length_cm[peak_cell]
-    )
-    assert np.isclose(measured, expected, rtol=1e-12)
-    try:
-        gas_puff_rate_profile(puff_geom, 3000.0, 2, profile="nonsense")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for unknown gas_puff_profile")
-    # ...and the SAME accepted-values set is refused at CONSTRUCTION, so a
-    # misspelled profile cannot reach the first RHS (where the check above
-    # was historically the first thing to see it).
-    from cablp.solvers._sim1d.core.validation import (
-        validate_gas_puff_config as _validate_gas_puff_config,
-    )
-
-    for accepted in (
-        {"gas_puff_profile": "cell"},
-        {"gas_puff_profile": "gaussian"},
-        {"gas_puff_profile": "cosine_pipe"},
-        {
-            "gas_puff_profile": "orifice",
-            "gas_puff_orifice_id_cm": 3.95,
-            "gas_puff_orifice_length_cm": 22.0,
-        },
-    ):
-        # every value the shared implementation accepts still passes the
-        # construction-time gate: it must not narrow the set
-        _validate_gas_puff_config(dict(puff_params, **accepted))
-    try:
-        LAPDSim1D(dict(puff_params, gas_puff_profile="tube"), dict(puff_flags))
-    except ValueError as exc:
-        assert "gas_puff_profile" in str(exc)
-        assert "'tube'" in str(exc)
-    else:
-        raise AssertionError(
-            "expected ValueError at construction for gas_puff_profile='tube'"
-        )
-    return locals()
-
-
-# --------------------------------------------------------------------
 # gas-puff-orifice-profile
 # --------------------------------------------------------------------
 @_case(
@@ -10762,7 +10476,7 @@ def _case_gas_puff_axial_profile():
     provides=("build_geometry",),
 )
 def _case_gas_puff_orifice_profile():
-    # --- Tube-beamed injection row (gas_puff_profile="orifice"): the SAME row
+    # --- Tube-beamed injection row (the puff's axial shape): the SAME row
     # the kinetic instruments launch, read by the fluid solver as its
     # deposition profile. Three things are owned here: the row the shared
     # implementation returns is bit-for-bit the row scripts/stance/puff_orifice.py
@@ -10782,7 +10496,6 @@ def _case_gas_puff_orifice_profile():
         orf_geom,
         3000.0,
         2,
-        profile="orifice",
         z_cm=orf_z,
         orifice_id_cm=ORF_ID,
         orifice_length_cm=ORF_LEN,
@@ -10819,7 +10532,6 @@ def _case_gas_puff_orifice_profile():
         orf_geom,
         3000.0,
         2,
-        profile="orifice",
         z_cm=orf_z,
         orifice_id_cm=ORF_ID,
         orifice_length_cm=ORF_LEN,
@@ -10836,32 +10548,22 @@ def _case_gas_puff_orifice_profile():
         raise AssertionError(f"expected ValueError at construction: {label}")
 
     orf_armed = {
-        "gas_puff_profile": "orifice",
         "gas_puff_orifice_id_cm": ORF_ID,
         "gas_puff_orifice_length_cm": ORF_LEN,
     }
-    # presence gating, BOTH directions
-    _orf_refused("id set off the orifice profile", gas_puff_orifice_id_cm=ORF_ID)
-    _orf_refused(
-        "length set off the orifice profile", gas_puff_orifice_length_cm=ORF_LEN
-    )
     _orf_refused(
         "orifice without the bore",
-        gas_puff_profile="orifice",
-        gas_puff_orifice_length_cm=ORF_LEN,
+        **dict(orf_armed, gas_puff_orifice_id_cm=None),
     )
     _orf_refused(
         "orifice without the length",
-        gas_puff_profile="orifice",
-        gas_puff_orifice_id_cm=ORF_ID,
+        **dict(orf_armed, gas_puff_orifice_length_cm=None),
     )
     _orf_refused("non-positive bore", **dict(orf_armed, gas_puff_orifice_id_cm=-1.0))
     _orf_refused(
         "aspect ratio below 4/3",
         **dict(orf_armed, gas_puff_orifice_length_cm=4.0),
     )
-    _orf_refused("shut valve", **dict(orf_armed, S_gp=0.0))
-    _orf_refused("puff disabled", **dict(orf_armed, gas_puff_enabled=False))
     _orf_refused("port off the grid", **dict(orf_armed, gas_puff_z_cm=99999.0))
     # the derivation's own refusals, exercised directly: on this stance the
     # config gate above fires first, so these are the backstop and their
@@ -10907,82 +10609,7 @@ def _case_gas_puff_orifice_profile():
     orf_nk = orf_sim._neutral_source_kwargs(time=0.0)
     assert orf_nk["gas_puff_orifice_id_cm"] == ORF_ID
     assert orf_nk["gas_puff_orifice_length_cm"] == ORF_LEN
-    assert orf_nk["gas_puff_profile"] == "orifice"
     return locals()
-
-
-# --------------------------------------------------------------------
-# gas-puff-double-erf-waveform
-# --------------------------------------------------------------------
-@_case("gas-puff-double-erf-waveform")
-def _case_gas_puff_double_erf_waveform():
-    # --- Double-erf puff waveform (gas_puff_mode="double_erf"): valve-like
-    # erf rise 0 -> S_gp, plateau, erf drop S_gp -> S_gp_decay_target, on
-    # the scheduled main-discharge clock (rise before breakdown). Both puff
-    # sites share the value via _effective_gas_puff_sccm.
-    derf_params, derf_flags = default_config()
-    derf_flags["neutral_prebreakdown"] = False
-    derf_params["initial_neutral_state"] = "fill"
-    derf_params.update(
-        {
-            # scheduled phases so the afterglow assert sees the valve close
-            # (the waveform's clock is the scheduled main-discharge start
-            # either way)
-            "phase_transition_mode": "scheduled",
-            "gas_puff_mode": "double_erf",
-            "S_gp": 4000.0,
-            "S_gp_decay_target": 1500.0,
-            "Twin_S_gp": 1000.0,
-            "Twin_S_gp_decay_target": 250.0,
-            "tau_prebreakdown": 2.0e-3,
-            "tau_breakdown": 1.0e-3,
-            "tau_discharge": 20.0e-3,
-            "tau_gp_rise_center": -2.0e-3,
-            "tau_gp_rise_width": 0.3e-3,
-            "tau_gp_drop_center": 2.0e-3,
-            "tau_gp_drop_width": 0.5e-3,
-        }
-    )
-    derf_sim = LAPDSim1D(derf_params, derf_flags)
-    # well before the rise: essentially closed
-    assert derf_sim._effective_gas_puff_sccm(time=0.0)[0] < 0.01 * 4000.0
-    # rise center (t_rel = -2 ms, during pre_breakdown): half the plateau
-    derf_half = derf_sim._effective_gas_puff_sccm(time=1.0e-3)
-    assert np.isclose(derf_half[0], 2000.0, rtol=1e-3)
-    assert np.isclose(derf_half[1], 500.0, rtol=1e-3)
-    # plateau (main-discharge start)
-    assert np.isclose(
-        derf_sim._effective_gas_puff_sccm(time=3.0e-3)[0], 4000.0, rtol=1e-3
-    )
-    # drop center: plateau minus half the level difference
-    derf_mid = derf_sim._effective_gas_puff_sccm(time=5.0e-3)
-    assert np.isclose(derf_mid[0], 4000.0 - 0.5 * 2500.0, rtol=1e-3)
-    assert np.isclose(derf_mid[1], 1000.0 - 0.5 * 750.0, rtol=1e-3)
-    # held second level deep in the discharge
-    assert np.isclose(
-        derf_sim._effective_gas_puff_sccm(time=8.0e-3)[0], 1500.0, rtol=1e-3
-    )
-    # afterglow: valve closed
-    assert derf_sim._effective_gas_puff_sccm(time=24.5e-3) == (0.0, 0.0)
-    # monotone through each transition (to the other erf's far-tail scale,
-    # ~1e-5 sccm where the transitions' tails overlap)
-    derf_rise_ts = np.linspace(0.0, 3.0e-3, 40)
-    derf_rise_v = [derf_sim._effective_gas_puff_sccm(time=t)[0] for t in derf_rise_ts]
-    assert np.all(np.diff(derf_rise_v) >= -1e-3)
-    derf_drop_ts = np.linspace(3.5e-3, 8.0e-3, 40)
-    derf_drop_v = [derf_sim._effective_gas_puff_sccm(time=t)[0] for t in derf_drop_ts]
-    assert np.all(np.diff(derf_drop_v) <= 1e-3)
-    for derf_bad in (
-        {"gas_puff_mode": "triple_erf"},
-        {"gas_puff_mode": "double_erf", "tau_gp_rise_width": 0.0},
-        {"gas_puff_mode": "double_erf", "tau_gp_drop_width": -1.0},
-    ):
-        try:
-            LAPDSim1D(dict(derf_params, **derf_bad), derf_flags)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f"expected ValueError for {derf_bad}")
 
 
 # --------------------------------------------------------------------
@@ -11044,12 +10671,6 @@ def _case_sigma_in_phelps(knob_floors, knob_mass, knob_state):
             ),
             rtol=0.0,
         )
-        # The elastic remainder stays the total minus resonant CX.
-        nu_cx = ion_neutral_cx_frequency(nn=1e13, Ti=Ti_probe, gas_type="He")
-        nu_el = ion_neutral_elastic_frequency(
-            nn=1e13, Ti=Ti_probe, ion_mass_g=knob_mass, gas_type="He"
-        )
-        assert np.isclose(nu_el, max(nu_in - nu_cx, 0.0), rtol=1e-12)
     # gas_type is no longer optional -- there is no gas-independent arm left.
     try:
         ion_neutral_collision_frequency(nn=1e13, Ti=1.0)
@@ -12209,13 +11830,11 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     # accommodates the wind momentum its wires intercept. Validation fails
     # fast; magnitudes must reproduce the step-1 scoping arithmetic exactly
     # from each term's own rebirthed flux (particle/momentum consistency).
-    # Directed recycle jets ride on the evolved M_n (legacy-drag path); run on
-    # the simple stance with the moment operator off (jet_params derive from the
-    # simple m3_params). The legacy-drag DeprecationWarning is expected.
+    # Directed recycle jets ride on the evolved M_n; run on the simple stance
+    # (jet_params derive from the simple m3_params).
     resolved_cathode_flags = _resolved_cathode_flags()
     jet_flags = dict(m3_cathode_flags)
     jet_flags["neutral_momentum"] = True
-    jet_flags["ion_neutral_moment_closure"] = False
     for jet_bad_params, jet_bad_flags in (
         # M_n physics without the neutral_momentum flag
         (dict(m3_params, cathode_neutral_jet=True), resolved_cathode_flags),
@@ -12288,7 +11907,10 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         * ev_to_erg / jet_m
     )
     jet_vmix = jet_RN * jet_vback + (1.0 - jet_RN) * jet_veff
-    jet_flux = jet_ba.nn[jet_cath] * jet_geom.neutral_volume_cm3[jet_cath]
+    # nn is the COLUMN density (booked on V_col); M_n is the chamber-mean
+    # wind (booked on the chamber volume).
+    jet_Vc, _jet_Va = neutral_zone_volumes(jet_geom)
+    jet_flux = jet_ba.nn[jet_cath] * jet_Vc[jet_cath]
     assert np.isclose(
         jet_ba.M_n[jet_cath] * jet_geom.neutral_volume_cm3[jet_cath],
         jet_m * jet_vmix * jet_flux,
@@ -12465,9 +12087,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     # cathode solve debits R_E * P_cathode_i, whose ion flux is the solve's
     # own Bohm current and whose per-ion energy is (phi_c + Te/2), while the
     # jet rides the fluid boundary term's recycle flux at (phi_c + Ti).
-    jet_en_flags = dict(
-        jet_flags, neutral_energy=True, ion_neutral_moment_closure=True
-    )
+    jet_en_flags = dict(jet_flags, neutral_energy=True)
     jet_en_ref = None
     for jet_conv, jet_conv_share in (
         ("legacy", jet_RN),
@@ -13007,8 +12627,8 @@ def _case_square_gas_puff_waveform(m3_params):
     # erf close after drive end with a tail into the afterglow.
     resolved_cathode_flags = _resolved_cathode_flags()
     for sq_bad in (
-        {"gas_puff_mode": "square", "gas_puff_rise_width_s": 0.0},
-        {"gas_puff_mode": "square", "gas_puff_close_lag_s": -1e-3},
+        {"gas_puff_rise_width_s": 0.0},
+        {"gas_puff_close_lag_s": -1e-3},
     ):
         try:
             LAPDSim1D(dict(m3_params, **sq_bad), resolved_cathode_flags)
@@ -13016,9 +12636,7 @@ def _case_square_gas_puff_waveform(m3_params):
             pass
         else:
             raise AssertionError(f"expected ValueError for {sq_bad}")
-    sq_sim = LAPDSim1D(
-        dict(m3_params, gas_puff_mode="square"), resolved_cathode_flags
-    )
+    sq_sim = LAPDSim1D(dict(m3_params), resolved_cathode_flags)
     sq_t0 = sq_sim._plasma_phase_time_origin()
     sq_Sgp = float(sq_sim._input_dict["S_gp"])
     # Before circuit-on the envelope is (nearly) closed; well after the rise
@@ -13044,13 +12662,8 @@ def _case_square_gas_puff_waveform(m3_params):
     )[0]
     assert 0.3 * sq_Sgp < sq_mid_close < 0.7 * sq_Sgp
     assert sq_sim._effective_gas_puff_sccm(time=sq_end + 4e-3)[0] < 1e-3 * sq_Sgp
-    # The afterglow phase switch stays open for the square tail only; a
-    # non-square (deprecated) mode leaves the afterglow puff off.
+    # The afterglow phase switch stays open for the square tail.
     assert sq_sim._phase_switches("afterglow")["gas_puff_enabled"]
-    assert not LAPDSim1D(
-        dict(m3_params, gas_puff_mode="decay_after_breakdown"),
-        resolved_cathode_flags,
-    )._phase_switches("afterglow")["gas_puff_enabled"]
 
 
 # --------------------------------------------------------------------
@@ -13149,7 +12762,6 @@ def _case_electrode_sample_smoothing(m3_params):
         {
             "active_plasma_topology": True,
             "cathode_coupling": False,
-            "neutral_prebreakdown": False,
             # This block and the R1b/R1c blocks built on it step with
             # ``operator_split=False`` on purpose -- they are about the
             # explicit operator's own rows and rejection machinery. The
@@ -13242,17 +12854,12 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
     # five-, six- and seven-row layouts. Two-zone density inventory uses
     # V_col=V_p and V_ann=V_m-V_p.
     r1b_layouts = (
-        ("five", {}, {}),
-        ("six", {}, {"neutral_momentum": True}),
-        (
-            "seven",
-            {},
-            {"neutral_momentum": True, "neutral_two_zone": True},
-        ),
+        ("six", {}, {}),
+        ("seven", {}, {"neutral_momentum": True}),
     )
     with tempfile.TemporaryDirectory() as r1b_tmp:
         for expected_rows, (label, param_extra, flag_extra) in zip(
-            (5, 6, 7), r1b_layouts
+            (6, 7), r1b_layouts
         ):
             layout_params = dict(r1a_params, **param_extra)
             layout_flags = dict(r1a_flags, **flag_extra)
@@ -13343,7 +12950,6 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
     r1c_flags = dict(
         r1a_flags,
         neutral_momentum=True,
-        neutral_two_zone=True,
         raw_stage_validation=True,
     )
     r1c_dt = 1.0e-10
@@ -13638,7 +13244,7 @@ def _case_resolved_config_manifest_r1e():
     # override set saves cleanly and a genuinely different one still raises.
     with tempfile.TemporaryDirectory() as guard_dir:
         guard_params = {"Te0": 0.22}
-        guard_flags = {"cx": False}
+        guard_flags = {"ionization_energy_cost": False}
         guard_sim = LAPDSim1D(guard_params, guard_flags)
         guard_resolved_params, guard_resolved_flags = guard_sim.get_config()
         assert guard_resolved_params != guard_params
@@ -13662,7 +13268,7 @@ def _case_resolved_config_manifest_r1e():
         # and names the differing key.
         for guard_kind, bad_params, bad_flags in (
             ("params", {"Te0": 0.23}, guard_flags),
-            ("flags", guard_params, {"cx": True}),
+            ("flags", guard_params, {"ionization_energy_cost": True}),
         ):
             try:
                 save_result_hdf5(
@@ -13673,7 +13279,9 @@ def _case_resolved_config_manifest_r1e():
                 )
             except ValueError as error:
                 assert f"{guard_kind} metadata differs" in str(error)
-                assert ("Te0" if guard_kind == "params" else "cx") in str(error)
+                assert (
+                    "Te0" if guard_kind == "params" else "ionization_energy_cost"
+                ) in str(error)
             else:
                 raise AssertionError(
                     f"differing {guard_kind} metadata was accepted on save"
@@ -13859,10 +13467,10 @@ def _case_gas_puff_source_born_at_rest():
     # source/sink term carries is the PUMP sink, which removes the wind that
     # leaves with the gas it is attached to. This invariant is the premise of
     # the neutral-momentum campaign thread -- the flow observable is only
-    # evidence if the puff cannot manufacture wind -- and it lives at four
+    # evidence if the puff cannot manufacture wind -- and it lives at two
     # sites that must stay consistent: the explicit source/sink RHS (both
-    # zone layouts), the two implicit neutral-equilibration steps, and the
-    # local gas-puff ionization channel. All four are pinned below.
+    # zone layouts) and the implicit neutral-equilibration step. Both are
+    # pinned below.
     from cablp.solvers._sim1d.core.geometry import build_geometry as _sgp_build
 
     sgp_params, sgp_flags = default_config()
@@ -13871,13 +13479,16 @@ def _case_gas_puff_source_born_at_rest():
     sgp_ref_sim = LAPDSim1D(dict(sgp_params, nx=12), sgp_flags)
     sgp_mass = sgp_ref_sim.ion_mass_g
     # A puff level well onto the M6 square plateau, and the production
-    # profile/valve count, so the profile under test is the one that runs.
+    # row/valve count, so the row under test is the one that runs.
     sgp_sccm = 3400.0
     sgp_valves = 2.0
-    sgp_profile = "cosine_pipe"
+    sgp_orifice = dict(
+        orifice_id_cm=sgp_params["gas_puff_orifice_id_cm"],
+        orifice_length_cm=sgp_params["gas_puff_orifice_length_cm"],
+    )
     sgp_pump_lps = 4000.0
     sgp_puff = gas_puff_rate_profile(
-        sgp_geom, sgp_sccm, sgp_valves, profile=sgp_profile, end=0
+        sgp_geom, sgp_sccm, sgp_valves, end=0, **sgp_orifice
     )
     assert np.any(sgp_puff > 0.0), "the puff profile under test must be live"
     sgp_kwargs = dict(
@@ -13887,7 +13498,8 @@ def _case_gas_puff_source_born_at_rest():
         S_pump_L=sgp_pump_lps,
         S_pump_R=sgp_pump_lps,
         gas_puff_valves=sgp_valves,
-        gas_puff_profile=sgp_profile,
+        gas_puff_orifice_id_cm=sgp_orifice["orifice_id_cm"],
+        gas_puff_orifice_length_cm=sgp_orifice["orifice_length_cm"],
     )
     sgp_zeros = np.zeros(sgp_cells, dtype=float)
     # A state carrying a real wind everywhere, so a spurious puff momentum
@@ -13999,77 +13611,11 @@ def _case_gas_puff_source_born_at_rest():
     assert np.all(sgp_tz_both.M_n[~sgp_pump_mask] == 0.0)
     assert np.all(sgp_tz_both.M_n_a[~sgp_pump_mask] == 0.0)
 
-    # Site 4: the local gas-puff ionization channel diverts a fraction of the
-    # puff straight to plasma. Those particles are born AT REST too -- the M
-    # row is identically zero -- while n gains exactly the neutrals nn loses.
-    sgp_li_geom = sgp_ref_sim.geometry
-    sgp_li_cells = sgp_li_geom.cells
-    sgp_li_state = conservative_from_primitives(
-        n=np.full(sgp_li_cells, 1e12),
-        nn=np.full(sgp_li_cells, 1e13),
-        u=np.full(sgp_li_cells, 1.0e5),
-        Te=np.full(sgp_li_cells, 5.0),
-        Ti=np.full(sgp_li_cells, 1.0),
-        ion_mass_g=sgp_mass,
-    )
-    sgp_li_puff = gas_puff_rate_profile(
-        sgp_li_geom, sgp_sccm, sgp_valves, profile=sgp_profile, end=0
-    )
-    assert np.any(sgp_li_puff > 0.0)
-    sgp_li_kwargs = dict(
-        state=sgp_li_state,
-        floors=sgp_ref_sim.floors,
-        ion_mass_g=sgp_mass,
-        geometry=sgp_li_geom,
-        puff_profile=sgp_li_puff,
-        I_ion=I_ion,
-    )
-    sgp_li = gas_puff_local_ionization_rhs(fraction=0.3, **sgp_li_kwargs)
-    assert np.array_equal(
-        sgp_li.M, np.zeros(sgp_li_cells, dtype=float)
-    ), "the diverted puff must be born at rest (no momentum source)"
-    assert np.any(sgp_li.n > 0.0)
-    assert np.all(sgp_li.nn <= 0.0) and np.any(sgp_li.nn < 0.0)
-    sgp_li_scale = float(np.max(np.abs(sgp_li.n * sgp_li_geom.plasma_volume_cm3)))
-    assert abs(particle_inventory_rate(sgp_li, sgp_li_geom)) <= (
-        1e-12 * sgp_li_scale
-    ), "the diverted particles must close plasma-plus-neutral inventory"
-    # Default off is bit-exact, and the two-zone combination is rejected loudly.
-    sgp_li_off = gas_puff_local_ionization_rhs(fraction=0.0, **sgp_li_kwargs)
-    for sgp_field in STATE_NAMES_1D:
-        assert np.all(getattr(sgp_li_off, sgp_field) == 0.0)
-    try:
-        gas_puff_local_ionization_rhs(
-            **dict(sgp_li_kwargs, state=sgp_tz_state, fraction=0.3)
-        )
-    except ValueError:
-        pass
-    else:
-        raise AssertionError(
-            "expected gas_puff_local_ionization x neutral_two_zone to fail"
-        )
-
-    # Sites 2 and 3: the implicit neutral-equilibration steps. The puff enters
-    # the nn (and nn_a) linear solve only; M_n and M_n_a pass through bit-exact.
-    sgp_eq_sim = LAPDSim1D(dict(sgp_params, nx=12), sgp_flags)
-    sgp_eq_cells = sgp_eq_sim.geometry.cells
-    sgp_eq_base = sgp_eq_sim.state
-    sgp_eq_Mn = np.full(sgp_eq_cells, 5.0e-9)
-    sgp_eq_state = ConservativeState1D(
-        n=sgp_eq_base.n,
-        nn=sgp_eq_base.nn,
-        M=sgp_eq_base.M,
-        Ee=sgp_eq_base.Ee,
-        Ei=sgp_eq_base.Ei,
-        M_n=sgp_eq_Mn.copy(),
-    )
-    # t on the M6 plateau, so the puff really is driving the solve.
-    sgp_eq_next = sgp_eq_sim._implicit_neutral_step(1.0e-5, sgp_eq_state, 5.0e-3)
-    assert np.any(sgp_eq_next.nn > sgp_eq_state.nn), "the puff must be feeding"
-    assert np.array_equal(sgp_eq_next.M_n, sgp_eq_Mn)
+    # Site 2: the implicit neutral-equilibration step. The puff enters the
+    # nn and nn_a linear solve only; M_n and M_n_a pass through bit-exact.
     sgp_tzq_sim = LAPDSim1D(
-        dict(sgp_params, nx=12, neutral_exchange_model="knudsen"),
-        dict(sgp_flags, neutral_two_zone=True),
+        dict(sgp_params, nx=12),
+        dict(sgp_flags),
     )
     sgp_tzq_cells = sgp_tzq_sim.geometry.cells
     sgp_tzq_base = sgp_tzq_sim.state
@@ -14144,7 +13690,7 @@ def _case_compiled_kernel_equivalence():
         # * ``initial_profile`` -- the shaped initial neutral fill armed.
         #
         # LAYOUT (R2a fold-in, 2026-08-20): both scenarios share ONE base,
-        # and it is the pre-R2a 5-field cold-neutral stance -- the child spells
+        # and it is the pre-R2a 6-field cold-neutral stance -- the child spells
         # _pin_pre_r2a_neutral_stance out itself, since a subprocess cannot
         # import the parent's helper (the TOML block in the
         # cli-run-and-plot-end-to-end case, since retired, spelled the
@@ -14179,7 +13725,6 @@ params, flags = default_config()
 # spelled out because this child is a separate process. See the LAYOUT note
 # in the parent for why kernel equivalence is compared on the pinned stance.
 flags["neutral_momentum"] = False
-flags["neutral_two_zone"] = False
 flags["neutral_energy"] = False
 flags["neutral_hot_internal_wall"] = False
 params["cathode_neutral_jet"] = False
@@ -15055,12 +14600,7 @@ def _case_tracer_construction_refusals(_r2_on_config):
     _r2_refuses("cathode_coupling on", cathode_coupling=False)
     _r2_refuses("active_plasma_topology on", active_plasma_topology=False)
     _r2_refuses("Plasma on", Plasma=False)
-    # The kinetic arm needs the two-zone state, and that prerequisite is
-    # checked earlier; supplying it is what makes this case test the TRACER's
-    # refusal rather than someone else's.
-    _r2_refuses(
-        "R2 is fluid-arms", neutral_model="kinetic_dvm", neutral_two_zone=True
-    )
+    _r2_refuses("R2 is fluid-arms", neutral_model="kinetic_dvm")
     _r2_refuses("restart_from", restart_from="/nonexistent/payload.h5")
     for _key in (
         "tracer_passivity_current_ratio",
@@ -15892,10 +15432,8 @@ def _case_shaped_initial_neutral_fill_sp3():
         # scalar-fill route on the scalar arm and the profile route on the
         # shaped one -- never the equilibrated seed.
         params["initial_neutral_state"] = "fill"
-        # The scalar arm below asserts the single-zone layout outright
-        # (state.nn_a is None) and compares the two arms at the raw bit level,
-        # so the stance names the layout rather than inheriting it. The annulus
-        # profile has its own case further down, which arms two_zone itself.
+        # The scalar arm below compares the two arms at the raw bit level, so
+        # the stance names the cold layout rather than inheriting it.
         _pin_pre_r2a_neutral_stance(params, flags)
         # A UNIFORM nx=12 column. The spreading-kernel checks in (e) state
         # their widths in CELLS and convert with the mesh's MEAN cell length,
@@ -15921,7 +15459,9 @@ def _case_shaped_initial_neutral_fill_sp3():
     assert np.array_equal(
         _sp3_scalar_sim.state.nn, np.full(_sp3_cells, _sp3_nn0)
     )
-    assert _sp3_scalar_sim.state.nn_a is None
+    assert np.array_equal(
+        _sp3_scalar_sim.state.nn_a, np.full(_sp3_cells, _sp3_nn0)
+    )
 
     # (b) THE NULL-CONSTRUCTION IDENTITY. A uniform profile at the scalar's own
     # value must reproduce the scalar run at the RAW BIT level, not merely
@@ -15953,7 +15493,7 @@ def _case_shaped_initial_neutral_fill_sp3():
 
     # (c) A SHAPED PROFILE ROUND-TRIPS. state.nn at t = 0 IS the supplied
     # array -- no normalization, no rescaling, no role masking -- and the same
-    # for the annulus under the two-zone closure.
+    # for the annulus.
     _sp3_shape = (
         _sp3_nn0 * (1.5 + np.sin(np.arange(_sp3_cells, dtype=float)))
     ).tolist()
@@ -15966,12 +15506,9 @@ def _case_shaped_initial_neutral_fill_sp3():
     _sp3_shaped_p["initial_neutral_state"] = "profile"
     _sp3_shaped_sim = LAPDSim1D(dict(_sp3_shaped_p), dict(_sp3_shaped_f))
     assert np.array_equal(_sp3_shaped_sim.state.nn, np.array(_sp3_shape))
-    assert _sp3_shaped_sim.state.nn_a is None
 
     _sp3_tz_f = dict(_sp3_shaped_f)
-    _sp3_tz_f["neutral_two_zone"] = True
     _sp3_tz_p = dict(_sp3_shaped_p)
-    _sp3_tz_p["neutral_exchange_model"] = "knudsen"
     _sp3_tz_sim = LAPDSim1D(dict(_sp3_tz_p), dict(_sp3_tz_f))
     # Omitted annulus profile => the shipped convention that both zones start
     # at the same fill, in its shaped form.
@@ -16009,10 +15546,6 @@ def _case_shaped_initial_neutral_fill_sp3():
     _sp3_refuses(
         "a negative entry",
         params_over={"nn0_profile": _sp3_shape[:-1] + [-1.0]},
-    )
-    _sp3_refuses(
-        "an annulus profile without the two-zone closure",
-        params_over={"nn0_annulus_profile": _sp3_ann_shape},
     )
     _sp3_refuses(
         "the route armed alongside an explicit scalar nn0",
@@ -16078,9 +15611,21 @@ def _case_shaped_initial_neutral_fill_sp3():
     import sp3_build_nn0 as _sp3_mod
 
     _sp3_geom = _sp3_scalar_sim.geometry
+    # The orifice row is not masked to the main-chamber roles (it lands where
+    # the rays land); the spreading kernels act on those roles only, so the
+    # conservation statement is made on the row's part inside them.
     _sp3_deposit = gas_puff_rate_profile(
-        _sp3_geom, 5200.0, 2, profile="cosine_pipe", z_cm=60.0, throw_cm=100.0
+        _sp3_geom, 5200.0, 2, z_cm=60.0, orifice_id_cm=3.95,
+        orifice_length_cm=22.0,
     ) * np.asarray(_sp3_geom.neutral_volume_cm3, dtype=float)
+    _sp3_deposit = _sp3_deposit * np.array(
+        [
+            _sp3_role in _sp3_mod._PUFF_ELIGIBLE_ROLES
+            for _sp3_role in _sp3_geom.cell_role
+        ],
+        dtype=float,
+    )
+    assert float(_sp3_deposit.sum()) > 0.0
     # Widths are stated in CELLS, not centimetres: this smoke geometry is far
     # coarser than a production grid, and a kernel narrower than one cell is
     # the identity on any grid -- it would conserve trivially and say nothing.
@@ -16104,10 +15649,8 @@ def _case_shaped_initial_neutral_fill_sp3():
     # delta the foot addition: with the sp1 reference as base, the arm starts
     # from the reference's OWN equilibrated initial profile rather than from
     # the uniform convention (7.5x denser). The reader must return those
-    # frames exactly, and refuse a closure mismatch in either direction.
+    # frames exactly, and refuse a grid mismatch.
     _sp3_base_p, _sp3_base_f = _sp3_stance()
-    _sp3_base_f["neutral_two_zone"] = True
-    _sp3_base_p["neutral_exchange_model"] = "knudsen"
     _sp3_base_p["nn0"] = 3.3e12
     _sp3_base_sim = LAPDSim1D(dict(_sp3_base_p), dict(_sp3_base_f))
     _sp3_base_result = _sp3_base_sim.run(t_end=1.0e-6, dt=1.0e-7)
@@ -16115,7 +15658,7 @@ def _case_shaped_initial_neutral_fill_sp3():
         _sp3_h5 = str(Path(_sp3_tmpdir) / "sp3_base_source.h5")
         _sp3_base_sim.save_result(_sp3_h5, _sp3_base_result)
         _sp3_got_col, _sp3_got_ann = _sp3_mod.base_profiles_from_h5(
-            _sp3_h5, _sp3_base_sim.geometry.cells, True
+            _sp3_h5, _sp3_base_sim.geometry.cells
         )
         # THE NULL CONSTRUCTION at the reader: the base IS the source's t=0
         # frames, bit for bit, in both zones.
@@ -16131,15 +15674,11 @@ def _case_shaped_initial_neutral_fill_sp3():
         assert np.array_equal(
             _sp3_got_col, np.full(_sp3_got_col.size, 3.3e12)
         )
-        for _sp3_bad_cells, _sp3_bad_tz, _sp3_why in (
-            (_sp3_base_sim.geometry.cells - 1, True, "a cell-count mismatch"),
-            (_sp3_base_sim.geometry.cells, False, "a two-zone source read "
-             "single-field"),
+        for _sp3_bad_cells, _sp3_why in (
+            (_sp3_base_sim.geometry.cells - 1, "a cell-count mismatch"),
         ):
             try:
-                _sp3_mod.base_profiles_from_h5(
-                    _sp3_h5, _sp3_bad_cells, _sp3_bad_tz
-                )
+                _sp3_mod.base_profiles_from_h5(_sp3_h5, _sp3_bad_cells)
             except ValueError:
                 pass
             else:
@@ -16705,21 +16244,14 @@ def _case_prescribed_area_trivial_profile_identity(
     _pa_tight_p, _pa_tight_f = _pa_stance(
         plasma_radius_profile_cm=_pa_tight_rp.tolist(),
         machine_radius_profile_cm=_pa_tight_Rm.tolist(),
-        neutral_exchange_model="knudsen",
     )
     _pa_tight_f["prescribed_area_geometry"] = True
-    _pa_tight_f["neutral_two_zone"] = True
     try:
         LAPDSim1D(dict(_pa_tight_p), dict(_pa_tight_f))
     except ValueError as _pa_exc:
         assert "collapsed to a sliver" in str(_pa_exc), str(_pa_exc)
     else:
         raise AssertionError("a collapsed two-zone annulus must be refused")
-    # Without the two-zone closure there is no annulus row to stiffen, so the
-    # same geometry is legal -- the guard is a property of the closure.
-    _pa_tight_single_f = dict(_pa_tight_f)
-    _pa_tight_single_f["neutral_two_zone"] = False
-    LAPDSim1D(dict(_pa_tight_p), _pa_tight_single_f)
     # The declared ceiling makes the two-zone case legal, at exactly the
     # stated fraction of the local vessel area.
     _pa_cap_p = dict(_pa_tight_p)
@@ -16749,10 +16281,8 @@ def _case_prescribed_area_trivial_profile_identity(
     _pa_full_rp[-3:] = float(_pa_Rm[0])
     _pa_full_p, _pa_full_f = _pa_stance(
         plasma_radius_profile_cm=_pa_full_rp.tolist(),
-        neutral_exchange_model="knudsen",
     )
     _pa_full_f["prescribed_area_geometry"] = True
-    _pa_full_f["neutral_two_zone"] = True
     _pa_full_sim = LAPDSim1D(_pa_full_p, _pa_full_f)
     assert np.all(neutral_zone_volumes(_pa_full_sim.geometry)[1][-3:] == 0.0)
 
@@ -16890,10 +16420,8 @@ def _case_prescribed_area_well_balancedness(
 
     _pa_tz_p, _pa_tz_f = _pa_stance(
         plasma_radius_profile_cm=_pa_flare.tolist(),
-        neutral_exchange_model="knudsen",
     )
     _pa_tz_f["prescribed_area_geometry"] = True
-    _pa_tz_f["neutral_two_zone"] = True
     _pa_tz_sim = LAPDSim1D(_pa_tz_p, _pa_tz_f)
     _pa_Vc, _pa_Va = neutral_zone_volumes(_pa_tz_sim.geometry)
     assert np.array_equal(
@@ -17064,9 +16592,7 @@ def _case_prescribed_area_well_balancedness(
             f"an annulus-fraction threshold outside [0, 1) ({_pa_bad_thr})",
             params_over={
                 "neutral_annulus_volume_fraction_min": _pa_bad_thr,
-                "neutral_exchange_model": "knudsen",
             },
-            flags_over={"neutral_two_zone": True},
             expected="neutral_annulus_volume_fraction_min must be finite",
         )
     # ...and the presence gate the other way: ANY of the three parameters set
@@ -17764,27 +17290,6 @@ def _case_ionization_birth_neutral_temperature():
     )
     # With no En field there is no sink to pair with, so no rows are recorded.
     assert _nb_off_neutral._birth_deficit_diagnostics == {}
-    # The gas-puff local-ionization site reads the same selector by the same
-    # route (it is single-zone only, so it is exercised here rather than above).
-    _nb_puff_profile = np.full(
-        _nb_off_neutral.geometry.cells, 1.0e14, dtype=float
-    )
-    _nb_puff = {
-        _birth: gas_puff_local_ionization_rhs(
-            state=_nb_off_neutral.state,
-            floors=_nb_off_neutral.floors,
-            ion_mass_g=_nb_off_neutral.ion_mass_g,
-            geometry=_nb_off_neutral.geometry,
-            puff_profile=_nb_puff_profile,
-            fraction=0.1,
-            I_ion=I_ion,
-            Ti_birth_ionization=_birth,
-            Tn_K=float(_nb_off_p.get("Tn_K", 300.0)),
-        )
-        for _birth in ("neutral", _nb_TnK_eV)
-    }
-    assert np.any(_nb_puff["neutral"].n > 0.0)
-    assert np.array_equal(_nb_puff["neutral"].Ei, _nb_puff[_nb_TnK_eV].Ei)
 
 
 # --------------------------------------------------------------------
@@ -18103,7 +17608,7 @@ def _case_cathode_closed_audit_export():
         }
     )
     ce_flags = dict(
-        ce_cu_flags, cathode_coupling=True, neutral_prebreakdown=False
+        ce_cu_flags, cathode_coupling=True
     )
     ce_sim = LAPDSim1D(ce_params, ce_flags)
     # Start the loop at a real discharge current. The residual gate below is
@@ -19053,7 +18558,6 @@ def _case_configuration_fluid_comparator_example():
         "neutral_momentum": True,
         "neutral_energy": True,
         "neutral_hot_internal_wall": True,
-        "neutral_kinetic_dvm_baffles": False,
     }
     assert _fc_lineage.delta_keys == tuple(
         sorted({*_fc_extra_params, *_fc_extra_flags})
@@ -19421,7 +18925,7 @@ def _case_ts_retirement_successor_key():
         "R_comp": 5.72e-3,
     })
     _ts_sflags = dict(
-        _ts_sflags, cathode_coupling=True, neutral_prebreakdown=False,
+        _ts_sflags, cathode_coupling=True,
     )
     _ts_sim = LAPDSim1D(_ts_static, _ts_sflags)
     _ts_sim._circuit_I_loop = 800.0
@@ -19673,7 +19177,6 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
     # a cathode solve for its launch energy, so this rides its own minimal
     # armed build rather than the coupling-free one above.
     pl_ja_params, pl_ja_flags = default_config()
-    pl_ja_flags["neutral_two_zone"] = True
     for pl_ja_space, pl_ja_key, pl_ja_value, _pl_ja_why in (
         KINETIC_DVM_INCOMPATIBLE_DEFAULTS
     ):
@@ -19681,7 +19184,6 @@ def _case_dvm_particle_ledger_export(kd_flags, kd_params):
             pl_ja_key
         ] = pl_ja_value
     pl_ja_params["initial_neutral_state"] = "fill"
-    pl_ja_flags["neutral_prebreakdown"] = False
     pl_ja_params.update({
         "neutral_model": "kinetic_dvm",
         # Smoke-scale clock, and a velocity grid PINNED wide enough to carry
@@ -20679,7 +20181,6 @@ def _case_prescribed_drive_handoff():
             "tau_afterglow": 1.0e-4,
         })
         _f["cathode_coupling"] = True
-        _f["neutral_prebreakdown"] = False
         _p["initial_neutral_state"] = "fill"
         if trace_path is not None:
             _p.update({
@@ -21191,7 +20692,6 @@ def _case_afterglow_tail_handoff_criterion():
     _th_f = dict(
         _th_f,
         cathode_coupling=True,
-        neutral_prebreakdown=False,
     )
     # This case steps the solver directly, so the equilibration seed is not
     # being asked for; the scalar-fill route keeps run() from warning that it
@@ -23628,13 +23128,11 @@ def _case_cathode_jet_incident_power_one_book():
     # same booking read twice -- the created-once identity with the tick term
     # at zero.
     _cp_jp, _cp_jf = default_config()
-    _cp_jf["neutral_two_zone"] = True
     for _cp_space, _cp_key, _cp_value, _cp_why in (
         KINETIC_DVM_INCOMPATIBLE_DEFAULTS
     ):
         (_cp_jf if _cp_space == "flags" else _cp_jp)[_cp_key] = _cp_value
     _cp_jp["initial_neutral_state"] = "fill"
-    _cp_jf["neutral_prebreakdown"] = False
     _cp_jf["cathode_coupling"] = True
     _cp_jp.update({
         "neutral_model": "kinetic_dvm",
@@ -23682,7 +23180,6 @@ def _anode_sink_config():
     })
     flags.update({
         "cathode_coupling": True,
-        "neutral_prebreakdown": False,
     })
     return params, flags
 
@@ -24061,10 +23558,18 @@ def _case_anode_e_sheath_realised_equals_booked():
     assert diag["anode_e_sheath_realised_J"] == (
         sim._anode_e_sheath_ledger_J["realised"]
     )
-    assert np.isclose(
-        diag["anode_e_sheath_booked_W"] * step_dt, step_booked,
-        rtol=1.0e-12, atol=0.0,
-    ), (diag["anode_e_sheath_booked_W"], step_dt, step_booked)
+    # The step value is a difference of the cumulative ledger, so it is held
+    # to a few ulps of that ledger -- the same bound the realised half below
+    # is held to.
+    booked_tol = 8.0 * np.finfo(float).eps * max(
+        abs(sim._anode_e_sheath_ledger_J["circuit_booked"]),
+        abs(before["circuit_booked"]),
+    )
+    assert abs(
+        diag["anode_e_sheath_booked_W"] * step_dt - step_booked
+    ) <= booked_tol, (
+        diag["anode_e_sheath_booked_W"], step_dt, step_booked, booked_tol,
+    )
     # The step value is a difference of the cumulative ledger, so it cannot
     # be resolved more finely than a few ulps of that ledger.
     realised_tol = 8.0 * np.finfo(float).eps * max(
@@ -24583,6 +24088,27 @@ def _case_neutral_retired_keys_refuse():
         "coverage_backfill_time_s": 3.0e-5,
         "coverage_initial_fraction": None,
         "coverage_initial_profile": None,
+        # Adopted selections whose keys had one legal value left, and the
+        # puff shapes and waveforms they retired.
+        "neutral_exchange_model": "knudsen",
+        "neutral_exchange_coeff_cm3_s": 1.0e5,
+        "neutral_kinetic_dvm_elastic": "phelps_iso",
+        "neutral_kinetic_dvm_wall_reflection": "diffuse_elastic",
+        "gas_puff_mode": "square",
+        "gas_puff_profile": "orifice",
+        "gas_puff_sigma_cm": 50.0,
+        "gas_puff_throw_cm": 100.0,
+        "gas_puff_local_ionization_fraction": 0.0,
+        "S_gp_decay_target": 1610.23,
+        "Twin_S_gp_decay_target": 0.0,
+        "tau_gp_after_breakdown": None,
+        "tau_gp_decay_factor": 1.0,
+        "tau_gp_pulse_duration": 1e-3,
+        "tau_gp_decay_duration": 5e-3,
+        "tau_gp_rise_center": -5e-3,
+        "tau_gp_rise_width": 1e-3,
+        "tau_gp_drop_center": 1e-3,
+        "tau_gp_drop_width": 1e-3,
     }
     _nr_flags = {
         "end_recycle_to_annulus": False,
@@ -24596,6 +24122,13 @@ def _case_neutral_retired_keys_refuse():
         "neutral_equilibration": True,
         "launch_plasma_after_equilibration": True,
         "neutral_initial_profile": False,
+        # Adopted: the behaviour is unconditional.
+        "cx": True,
+        "ion_neutral_drag": True,
+        "ion_neutral_moment_closure": True,
+        "neutral_two_zone": True,
+        "neutral_kinetic_dvm_baffles": False,
+        "neutral_prebreakdown": True,
     }
     _nr_base_p, _nr_base_f = default_config()
     for _nr_key, _nr_value in _nr_params.items():
@@ -24647,7 +24180,7 @@ def _case_neutral_retired_keys_refuse():
 # module re-derives them from ``_CASES`` and fails loudly on a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 166, "historical_stance": 64}
+_CASE_CENSUS = {"total": 164, "historical_stance": 64}
 
 
 def _assert_case_census():

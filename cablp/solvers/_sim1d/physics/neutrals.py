@@ -149,26 +149,17 @@ def knudsen_flow_coefficients(
 
 def neutral_exchange_coefficients(
     geometry,
-    model,
-    constant_coeff_cm3_s,
     Tn_K,
     mu_neutral,
     clausing_scale=1.0,
 ):
-    """Return internal-face neutral exchange coefficients [cm^3/s]."""
-    if model == "constant":
-        return _as_face_coefficients(constant_coeff_cm3_s, geometry)
-    if model == "knudsen":
-        coefficients = knudsen_flow_coefficients(
-            geometry=geometry,
-            Tn_K=Tn_K,
-            mu_neutral=mu_neutral,
-            clausing_scale=clausing_scale,
-        )
-    else:
-        raise ValueError(
-            f"neutral_exchange_model must be 'constant' or 'knudsen' (got {model!r})"
-        )
+    """Return internal-face Knudsen neutral exchange coefficients [cm^3/s]."""
+    coefficients = knudsen_flow_coefficients(
+        geometry=geometry,
+        Tn_K=Tn_K,
+        mu_neutral=mu_neutral,
+        clausing_scale=clausing_scale,
+    )
     # Escape hatch: a face whose conductance is known directly rather than
     # geometrically overrides the computed value (NaN => keep the computed one).
     prescribed = np.asarray(geometry.neutral_face_conductance_cm3_s[1:-1], dtype=float)
@@ -945,10 +936,7 @@ def neutral_source_sink_rhs(
     pump_enabled=True,
     gas_puff_valves=2,
     pump_elbow_conductance_lps=None,
-    gas_puff_profile="cell",
     gas_puff_z_cm=None,
-    gas_puff_sigma_cm=50.0,
-    gas_puff_throw_cm=100.0,
     gas_puff_delivery_fraction=1.0,
     gas_puff_orifice_id_cm=None,
     gas_puff_orifice_length_cm=None,
@@ -990,10 +978,7 @@ def neutral_source_sink_rhs(
             geometry,
             S_gp,
             gas_puff_valves,
-            profile=gas_puff_profile,
             z_cm=gas_puff_z_cm,
-            sigma_cm=gas_puff_sigma_cm,
-            throw_cm=gas_puff_throw_cm,
             end=0,
             delivery_fraction=gas_puff_delivery_fraction,
             orifice_id_cm=gas_puff_orifice_id_cm,
@@ -1004,10 +989,7 @@ def neutral_source_sink_rhs(
                 geometry,
                 Twin_S_gp,
                 gas_puff_valves,
-                profile=gas_puff_profile,
                 z_cm=gas_puff_z_cm,
-                sigma_cm=gas_puff_sigma_cm,
-                throw_cm=gas_puff_throw_cm,
                 end=-1,
                 delivery_fraction=gas_puff_delivery_fraction,
                 orifice_id_cm=gas_puff_orifice_id_cm,
@@ -1195,10 +1177,7 @@ def gas_puff_rate_profile(
     geometry,
     sccm,
     valves,
-    profile="cell",
     z_cm=None,
-    sigma_cm=50.0,
-    throw_cm=100.0,
     end=0,
     delivery_fraction=1.0,
     orifice_id_cm=None,
@@ -1211,57 +1190,25 @@ def gas_puff_rate_profile(
     matrix in the solver -- so the two cannot desync (the historical trap was
     two independently maintained copies of this shape).
 
-    ``profile = "cell"`` (default) reproduces the historical behaviour
-    bit-exactly: the whole flow lands in the role-tagged puff cell.
+    The row is the tube-beamed injection row of :mod:`.puff_orifice`, derived
+    by ray optics from the feed-pipe aperture (``orifice_id_cm`` wide,
+    ``orifice_length_cm`` long) and the grid's own wall and plasma-column
+    radii at the port cell. It is already a per-cell mass fraction, so it is
+    NOT re-weighted by cell length and NOT masked to the eligible roles: the
+    cells it lands in are the cells the ray optics reaches, and folding either
+    operation on top would move fuel away from the geometry that derived it.
+    It is a kinetic first-flight row read as a fluid deposition row -- a
+    disclosed closure, stated in :mod:`.puff_orifice`. It is normalized to
+    conserve the total inflow exactly. ``z_cm = None`` centres on the puff
+    cell; ``end = -1`` selects the twin puff cell and mirrors an explicit
+    centre through the machine midpoint.
 
-    ``profile = "cosine_pipe"`` is the physical source: a small pipe at the
-    chamber wall pointing radially inward with a Lambertian (cosine) outlet.
-    Its first-flight deposition along the wall is the standard cosine-lobe
-    illumination ``[1 + ((z - z0)/d)^2]^-2`` with throw distance ``d``
-    (``throw_cm``) of order the chord across the chamber (~2*Rm), after which
-    the neutral transport model does the spreading. Centre and width both
-    come from geometry, so this adds no free shape parameter.
-
-    ``profile = "gaussian"`` is the generic tunable shape,
-    ``exp(-(z - z0)^2 / (2 sigma^2))``.
-
-    ``profile = "orifice"`` is the tube-beamed injection row of
-    :mod:`.puff_orifice`, derived by ray optics from the feed-pipe aperture
-    (``orifice_id_cm`` wide, ``orifice_length_cm`` long -- both REQUIRED here
-    and rejected under every other profile) and the grid's own wall and
-    plasma-column radii at the port cell. Unlike the two shapes above it is
-    already a per-cell mass fraction, so it is NOT re-weighted by cell length
-    and NOT masked to the eligible roles: the cells it lands in are the cells
-    the ray optics reaches, and folding either operation on top would move
-    fuel away from the geometry that derived it. It is a kinetic first-flight
-    row read as a fluid deposition row -- a disclosed closure, stated in
-    :mod:`.puff_orifice`.
-
-    The ``"gaussian"`` and ``"cosine_pipe"`` profiles weight by cell length and
-    land only on main-chamber cells. Every distributed profile, ``"orifice"``
-    included, is normalized to conserve the total inflow exactly.
-    ``z_cm = None`` centres on the puff cell; ``end = -1`` selects the twin
-    puff cell and mirrors an explicit centre through the machine midpoint.
-
-    ``delivery_fraction`` [1] scales the sccm-to-particles conversion at both
-    of its sites -- the ``"cell"`` profile's ``puff_rate`` and the distributed
-    profiles' ``total_particles_per_s`` -- so the shape is untouched and only
-    the delivered flow moves. ``1.0`` (the default) is the identity.
+    ``delivery_fraction`` [1] scales the sccm-to-particles conversion, so the
+    shape is untouched and only the delivered flow moves. ``1.0`` (the
+    default) is the identity.
     """
-    dnn = np.zeros(geometry.cells, dtype=float)
     puff_index, puff_twin_index = puff_cell_indices(geometry)
     index = puff_twin_index if end == -1 else puff_index
-    if profile == "cell":
-        dnn[index] = puff_rate(
-            sccm, valves, geometry.neutral_volume_cm3[index], delivery_fraction
-        )
-        return dnn
-    if profile not in ("gaussian", "cosine_pipe", "orifice"):
-        raise ValueError(
-            "gas_puff_profile must be 'cell', 'gaussian', 'cosine_pipe', or "
-            f"'orifice' (got {profile!r})"
-        )
-
     roles = np.asarray(geometry.cell_role)
     eligible = np.asarray(
         [role in _PUFF_ELIGIBLE_ROLES for role in roles], dtype=bool
@@ -1276,54 +1223,20 @@ def gas_puff_rate_profile(
             z_hi = float(np.max(z_centers[eligible]))
             z0 = z_lo + z_hi - z0  # mirror through the chamber midpoint
 
-    if profile == "orifice":
-        # Already a per-cell mass fraction summing to 1 (off-grid rays are
-        # folded into the end cells by the derivation, so no fuel is lost):
-        # scale by the throughput and divide by the cell volume, which is the
-        # same normalization the length-weighted shapes below arrive at.
-        row = launch_row_for_grid(
-            geometry,
-            pipe_id_cm=orifice_id_cm,
-            pipe_length_cm=orifice_length_cm,
-            z_port_cm=z0,
-        )
-        return (
-            puff_particles_per_s(sccm, valves, delivery_fraction)
-            * np.asarray(row, dtype=float)
-            / np.asarray(geometry.neutral_volume_cm3, dtype=float)
-        )
-
-    weights = np.zeros(geometry.cells, dtype=float)
-    if profile == "gaussian":
-        sigma = float(sigma_cm)
-        if sigma <= 0.0:
-            raise ValueError(f"gas_puff_sigma_cm must be positive (got {sigma})")
-        shape = np.exp(-0.5 * ((z_centers[eligible] - z0) / sigma) ** 2)
-    else:  # cosine_pipe
-        throw = float(throw_cm)
-        if throw <= 0.0:
-            raise ValueError(f"gas_puff_throw_cm must be positive (got {throw})")
-        shape = 1.0 / (1.0 + ((z_centers[eligible] - z0) / throw) ** 2) ** 2
-    weights[eligible] = shape * np.asarray(
-        geometry.length_cm, dtype=float
-    )[eligible]
-    total_weight = weights.sum()
-    if total_weight <= 0.0:
-        # Profile centred far outside the chamber: fall back to the puff cell
-        # rather than silently deleting the fueling.
-        dnn[index] = puff_rate(
-            sccm, valves, geometry.neutral_volume_cm3[index], delivery_fraction
-        )
-        return dnn
-    total_particles_per_s = puff_particles_per_s(
-        sccm, valves, delivery_fraction
+    # Already a per-cell mass fraction summing to 1 (off-grid rays are folded
+    # into the end cells by the derivation, so no fuel is lost): scale by the
+    # throughput and divide by the cell volume.
+    row = launch_row_for_grid(
+        geometry,
+        pipe_id_cm=orifice_id_cm,
+        pipe_length_cm=orifice_length_cm,
+        z_port_cm=z0,
     )
-    dnn = (
-        total_particles_per_s
-        * (weights / total_weight)
-        / geometry.neutral_volume_cm3
+    return (
+        puff_particles_per_s(sccm, valves, delivery_fraction)
+        * np.asarray(row, dtype=float)
+        / np.asarray(geometry.neutral_volume_cm3, dtype=float)
     )
-    return dnn
 
 
 def neutral_initial_profile_values(geometry, profile, key):

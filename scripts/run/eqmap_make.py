@@ -40,9 +40,9 @@ Two consistency checks run on every build and are recorded in the header
       influx minus a non-negative pump rate.  This is the A0 budget structure
       with the plasma channels absent.
 
-Usage (production ES1 stance, two-zone, a 10 ms foot axis at 0.25 ms cadence)::
+Usage (production ES1 stance, a 10 ms foot axis at 0.25 ms cadence)::
 
-    python scripts/run/eqmap_make.py --es 1 --nx 240 --two-zone \
+    python scripts/run/eqmap_make.py --es 1 --nx 240 \
         --foot-s 10e-3 --cadence-s 0.25e-3 \
         --out scripts/eqmap_demo_es1_nx240.npz
 
@@ -109,7 +109,7 @@ def stance_header_value(stance):
         return str(path)
 
 
-def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
+def stance_config(stance, es, nx, sgp, extra, extra_flag):
     """Return the (params, flags) the map is built at.
 
     Assembled by the SAME path a campaign run uses -- the NAMED configuration
@@ -129,8 +129,6 @@ def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
 
         params.update(PARAM_OVERRIDES)
         flags.update(FLAG_OVERRIDES)
-        # run_m6_point's own neutral-exchange stance.
-        params["neutral_exchange_model"] = "knudsen"
     if stance is not None:
         named = load_named_configuration_or_exit(stance)
         params.update(named.params)
@@ -139,9 +137,6 @@ def stance_config(stance, es, nx, sgp, two_zone, extra, extra_flag):
         params["nx"] = int(nx)
     if sgp is not None:
         params["S_gp"] = float(sgp)
-    if two_zone:
-        flags["neutral_two_zone"] = True
-        params["neutral_exchange_model"] = "knudsen"
     params.update(extra)
     flags.update(extra_flag)
     return params, flags
@@ -367,9 +362,6 @@ def main(argv=None):
              "line")
     ap.add_argument("--nx", type=int, default=None)
     ap.add_argument("--sgp", type=float, default=None, help="override S_gp [sccm]")
-    ap.add_argument("--two-zone", action="store_true",
-                    help="neutral_two_zone: nn is the column density, nn_a the "
-                         "annulus, and the map carries both")
     ap.add_argument("--cycles", type=int, default=None,
                     help="standard equilibration cycles before the 101st "
                          "(default: the stance's neutral_equilibration_cycles)")
@@ -431,13 +423,11 @@ def main(argv=None):
         None if args.es == 0 else args.es,
         args.nx,
         args.sgp,
-        args.two_zone,
         extra,
         extra_flag,
     )
 
-    print(f"# eqmap: equilibrating (es={args.es} nx={params.get('nx')} "
-          f"two_zone={flags.get('neutral_two_zone')})")
+    print(f"# eqmap: equilibrating (es={args.es} nx={params.get('nx')})")
     sim, nn, nn_a, wall, eq_result = equilibrate(params, flags, args.cycles)
     p_eff, f_eff = sim.get_config()
     cycles = int(eq_result.neutral_equilibration_summary.cycles)
@@ -481,8 +471,7 @@ def main(argv=None):
         "es": None if args.es == 0 else int(args.es),
         "nx": int(p_eff["nx"]),
         "cells": int(geometry.cells),
-        "two_zone": bool(f_eff.get("neutral_two_zone", False)),
-        "neutral_exchange_model": p_eff.get("neutral_exchange_model"),
+        "two_zone": True,
         # The build-time overrides, recorded so a consumer can rebuild the
         # SAME stance -- eqmap_slice.py's construction check replays them.
         "stance_extra": extra,
@@ -492,10 +481,9 @@ def main(argv=None):
         # --- the fuelling configuration ---
         "S_gp_sccm": float(p_eff["S_gp"]),
         "gas_puff_valves": int(p_eff.get("gas_puff_valves", 2)),
-        "gas_puff_profile": p_eff.get("gas_puff_profile"),
         "gas_puff_z_cm": p_eff.get("gas_puff_z_cm"),
-        "gas_puff_throw_cm": p_eff.get("gas_puff_throw_cm"),
-        "gas_puff_mode": p_eff.get("gas_puff_mode"),
+        "gas_puff_orifice_id_cm": p_eff.get("gas_puff_orifice_id_cm"),
+        "gas_puff_orifice_length_cm": p_eff.get("gas_puff_orifice_length_cm"),
         "S_pump_L_Lps": p_eff.get("S_pump_L"),
         "S_pump_R_Lps": p_eff.get("S_pump_R"),
         # --- the standard equilibration that produced t=0 ---

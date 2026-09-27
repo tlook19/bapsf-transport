@@ -35,8 +35,8 @@ Gates:
       FLOORED nn and leaves an above-floor En untouched
   P1  presence-off: with the flag off no state carries En, every term's En row
       is absent, and the packed width is the historical one
-  G1, G2, G5 construction guards: missing moment closure, missing neutral
-      momentum, and alpha_E outside [0, 1] each raise a loud ValueError naming
+  G2, G5 construction guards: missing neutral momentum and alpha_E
+      outside [0, 1] each raise a loud ValueError naming
       what is accepted; the happy path constructs and packs En last
   G4  RESOLVER DOWNGRADE: 'kinetic_dvm' resolves neutral_energy off -- a model
       selection resolves a member left at its config default instead of
@@ -84,7 +84,6 @@ CLEAN_PARAMS = {
 }
 CLEAN_FLAGS = {
     "Plasma": True, "implicit_heat_conduction": True,
-    "neutral_prebreakdown": False,
     "cathode_coupling": False, "debug_checks": False,
 }
 
@@ -92,16 +91,14 @@ TN_K = 300.0
 TN_EV = TN_K * kb_cgs / ev_to_erg
 
 
-def make_sim(neutral_energy=True, two_zone=False, **overrides):
+def make_sim(neutral_energy=True, **overrides):
     params, flags = default_config()
     params.update(CLEAN_PARAMS)
     params["nx"] = 60
     params["gas_type"] = "He"
     params["Tn_K"] = TN_K
     flags.update(CLEAN_FLAGS)
-    flags["ion_neutral_moment_closure"] = True
     flags["neutral_momentum"] = True
-    flags["neutral_two_zone"] = bool(two_zone)
     flags["neutral_energy"] = bool(neutral_energy)
     for key, value in overrides.items():
         if key in flags:
@@ -111,7 +108,7 @@ def make_sim(neutral_energy=True, two_zone=False, **overrides):
     return LAPDSim1D(params, flags)
 
 
-def make_state(sim, u_i, u_n, Ti=2.0, Tn_K=TN_K, En_shape=None, two_zone=False):
+def make_state(sim, u_i, u_n, Ti=2.0, Tn_K=TN_K, En_shape=None):
     cells = sim._geometry.cells
     nn = np.full(cells, 1.0e13)
     state = conservative_from_primitives(
@@ -122,7 +119,7 @@ def make_state(sim, u_i, u_n, Ti=2.0, Tn_K=TN_K, En_shape=None, two_zone=False):
         Ti=np.full(cells, float(Ti)),
         ion_mass_g=sim._ion_mass_g,
         un=np.full(cells, float(u_n)),
-        nn_a=nn.copy() if two_zone else None,
+        nn_a=nn.copy(),
         Tn_K=Tn_K,
     )
     if En_shape is not None:
@@ -169,9 +166,9 @@ def _max_rel(residual, scale, mask):
     return float(np.max(np.abs(residual[mask]) / scale[mask]))
 
 
-def gate_c1(two_zone=False):
-    sim = make_sim(two_zone=two_zone)
-    st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0, two_zone=two_zone)
+def gate_c1():
+    sim = make_sim()
+    st = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0)
     term = _collision(sim, st)
     Vp, V_En = _volumes(sim, st)
     u_rel = _u_rel(sim, st)
@@ -181,17 +178,11 @@ def gate_c1(two_zone=False):
     rel = _max_rel(lhs - rhs, rhs, act)
     live = np.any(term.Ei[act] != 0.0) and np.any(np.asarray(term.En)[act] != 0.0)
     ok = rel < 1e-13 and live
-    label = "two-zone" if two_zone else "single-zone"
     return (
-        f"C1 pairwise energy conservation dEi*Vp + dEn*V_En == -dM*u_rel*Vp "
-        f"({label})",
+        "C1 pairwise energy conservation dEi*Vp + dEn*V_En == -dM*u_rel*Vp",
         ok,
         f"max rel residual = {rel:.2e}  both channels live={live}",
     )
-
-
-def gate_c1_two_zone():
-    return gate_c1(two_zone=True)
 
 
 def gate_c2():
@@ -269,7 +260,7 @@ def gate_c4():
     no_field = make_state(sim, u_i=3.0e5, u_n=1.0e5, Ti=2.0)
     no_field = type(no_field)(
         n=no_field.n, nn=no_field.nn, M=no_field.M, Ee=no_field.Ee,
-        Ei=no_field.Ei, M_n=no_field.M_n, En=None,
+        Ei=no_field.Ei, M_n=no_field.M_n, nn_a=no_field.nn_a, En=None,
     )
     scalar_term = _collision(sim, no_field)
     matched_En = 1.5 * np.asarray(no_field.nn, dtype=float) * kb_cgs * TN_K
@@ -302,7 +293,6 @@ def _wall(sim, state, alpha_E=None):
         Rm_cm=sim._geometry.Rm_cm,
         alpha_E=sim._neutral_energy_alpha if alpha_E is None else alpha_E,
         Tn_fit=float(sim._input_dict.get("Tn_fit", 0.1)),
-        wall_rate_1_s=sim._wind_wall_rate,
     )
 
 
@@ -420,14 +410,6 @@ def _guard(label, expect_fragment, **overrides):
     return label, False, "no ValueError raised"
 
 
-def gate_g1():
-    return _guard(
-        "G1 guard: neutral_energy without ion_neutral_moment_closure raises",
-        "requires ion_neutral_moment_closure",
-        ion_neutral_moment_closure=False,
-    )
-
-
 def gate_g2():
     return _guard(
         "G2 guard: neutral_energy without neutral_momentum raises",
@@ -449,7 +431,7 @@ def gate_g4():
     which is what the earlier ValueError stood for.
     """
     try:
-        dvm = make_sim(neutral_model="kinetic_dvm", neutral_two_zone=True)
+        dvm = make_sim(neutral_model="kinetic_dvm")
     except ValueError as exc:
         ok2 = False
         detail2 = f"construction REFUSED: {exc}"
@@ -485,9 +467,9 @@ def gate_g5():
 
 def main():
     gates = [
-        gate_c1, gate_c1_two_zone, gate_c2, gate_c3, gate_c4,
+        gate_c1, gate_c2, gate_c3, gate_c4,
         gate_w1, gate_w2, gate_f1, gate_p1,
-        gate_g1, gate_g2, gate_g4, gate_g5,
+        gate_g2, gate_g4, gate_g5,
     ]
     all_ok = True
     print("NBL pass-1 neutral-energy gate suite (En field core)")

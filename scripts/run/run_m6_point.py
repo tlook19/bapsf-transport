@@ -158,10 +158,6 @@ def main(argv=None):
                         "defer to the shared production config "
                         "(compare_sim1d_es1.PARAM_OVERRIDES)")
     p.add_argument("--c-th", type=float, default=120.0)
-    p.add_argument("--two-zone", action="store_true",
-                   help="neutral_two_zone particle channel "
-                        "-- nn becomes the column "
-                        "density, nn_a the annulus")
     p.add_argument("--nn0-profile-npz", default=None,
                    help="path to a shaped initial neutral profile written by "
                         "scripts/stance/sp3_build_nn0.py. The DRIVER does the file "
@@ -238,7 +234,6 @@ def main(argv=None):
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
         "cathode_cleaning_E_th_eV": 20.0,
-        "gas_puff_mode": "square",
         "S_gp": args.sgp,
     }
     # Passthrough overrides: absent => inherit the shared production config
@@ -252,8 +247,6 @@ def main(argv=None):
     if args.L is not None:
         extra["L_parasitic_H"] = args.L
     flags_extra = {}
-    if args.two_zone:
-        flags_extra["neutral_two_zone"] = True
     # The rung values AS THE RUNG SET THEM, snapshotted before any stance or
     # command-line layer can touch them. Read from ``extra`` rather than from
     # ``op`` again so there is exactly one place the rung reaches this driver.

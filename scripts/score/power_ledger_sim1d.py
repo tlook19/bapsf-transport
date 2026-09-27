@@ -964,7 +964,7 @@ def print_header(f, path, geom, drive, afterglow):
           f"steps={f.attrs.get('steps')!s} "
           f"compiled_kernels={f.attrs.get('compiled_kernels')!s} "
           f"saves={f['time'].shape[0]}")
-    print(f"stance   : neutral_two_zone={flags.get('neutral_two_zone')}, "
+    print(f"stance   : neutral_two_zone={flags.get('neutral_two_zone', True)}, "
           f"neutral_energy={flags.get('neutral_energy')}, "
           f"neutral_hot_internal_wall="
           f"{flags.get('neutral_hot_internal_wall')}, "

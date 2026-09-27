@@ -57,7 +57,6 @@ def _production_base():
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
-    params["neutral_exchange_model"] = "knudsen"
     return params, flags
 
 
@@ -116,7 +115,6 @@ def config_cases():
             "cathode_phiwf_clean_eV": 2.809,
             "cathode_cleaning_sigma_cm2": 3.5e-16,
             "cathode_cleaning_E_th_eV": 20.0,
-            "gas_puff_mode": "square",
             # --sgp, which the reference configuration then supersedes: the
             # driver applies the stance over its own switches, so a stanced arm
             # runs the configuration's puff level and not this one. The value

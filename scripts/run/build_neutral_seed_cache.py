@@ -63,7 +63,6 @@ def es1_config(nx, stance=None):
     params, flags = default_config()
     params.update(PARAM_OVERRIDES)
     flags.update(FLAG_OVERRIDES)
-    params["neutral_exchange_model"] = "knudsen"  # run_model default
     if nx is not None:
         params["nx"] = nx
     lineage = None

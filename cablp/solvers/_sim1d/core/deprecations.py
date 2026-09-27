@@ -30,15 +30,13 @@ Two classes of row exist:
 Controls that already have their own louder guard are deliberately ABSENT.
 ``front_flux_model``, ``D_amb_model`` and ``D_amb`` are
 frozen by ``LAPDSim1D._validate_r1_configuration_presence`` and raise on
-non-default use; ``gas_puff_mode``'s retired waveform modes and the legacy
-ion-neutral path (``ion_neutral_moment_closure=False``) already warn from that
-same method. Adding a second warning for the same condition would only
+non-default use. Adding a second warning for the same condition would only
 duplicate it.
 
 Closure families with a live A/B are APPARATUS, not legacy, and are absent for
-that reason: the ion-neutral drag closures, the beam-deposition family, the
-excitation models and ``atomic_rate_model="janev"`` all stay usable and
-un-warned because the campaign quotes brackets and a bracket needs both arms.
+that reason: the beam-deposition family, the excitation models and
+``atomic_rate_model="janev"`` all stay usable and un-warned because the
+campaign quotes brackets and a bracket needs both arms.
 """
 
 import warnings
@@ -97,16 +95,6 @@ _FREED_BRANCH_FIX = (
     "for reproducing old results at their anchor tag"
 )
 
-_PUFF_WAVEFORM = (
-    "it is read only by the retired gas_puff_mode waveforms "
-    "('decay_after_breakdown', 'pulse_decay_to_level', 'double_erf'), which "
-    "the measured square waveform superseded"
-)
-_PUFF_WAVEFORM_FIX = (
-    "drop the override; the retired waveform modes stay runnable until the "
-    "waveform-comparison figures freeze"
-)
-
 
 # --- the register ---------------------------------------------------------
 # Ordered by group so the table reads as the audit that produced it.
@@ -133,17 +121,9 @@ DEPRECATED_CONTROLS = {
     ),
     "b_ion_neutral_drag": DeprecatedControl(
         PARAMS,
-        "it scales the legacy ion-neutral drag term, which the moment-closed "
-        "Phelps operator replaced, and " + _FREED_BRANCH,
+        "it scales the moment-closed Phelps ion-neutral collision rates, "
+        "whose cross sections carry no fitted scale, and " + _FREED_BRANCH,
         _FREED_BRANCH_FIX,
-    ),
-    "gas_puff_profile": DeprecatedControl(
-        PARAMS,
-        "the historical single-cell puff deposits the whole fuelling rate in "
-        "one cell, which the resolved cosine pipe profile superseded, and "
-        + _FREED_BRANCH,
-        _FREED_BRANCH_FIX,
-        values=("cell",),
     ),
     # ==== dead levers: cathode ============================================
     "anode_radius_cm": DeprecatedControl(PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX),
@@ -161,28 +141,6 @@ DEPRECATED_CONTROLS = {
         "override is off-stance rather than a supported arm",
         "drop the override and leave the key at its default; move the pair "
         "together if the re-approach itself needs retuning",
-    ),
-    # ==== dead levers: the retired puff-waveform family ====================
-    "Twin_S_gp_decay_target": DeprecatedControl(
-        PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
-    ),
-    "tau_gp_after_breakdown": DeprecatedControl(
-        PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
-    ),
-    "tau_gp_decay_factor": DeprecatedControl(
-        PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
-    ),
-    "tau_gp_rise_center": DeprecatedControl(
-        PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
-    ),
-    "tau_gp_rise_width": DeprecatedControl(
-        PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
-    ),
-    "tau_gp_drop_center": DeprecatedControl(
-        PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
-    ),
-    "tau_gp_drop_width": DeprecatedControl(
-        PARAMS, _PUFF_WAVEFORM, _PUFF_WAVEFORM_FIX,
     ),
     # ==== dead levers: scaling factors ====================================
     # The b_* rate/cooling/conduction/boundary scalars that stood here were
