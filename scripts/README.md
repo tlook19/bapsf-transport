@@ -60,6 +60,8 @@ each leg in its own process on its own tree, and compares each pair;
         --head <rev-or-tree> --outdir <dir outside the repo> [--compiled]
     python scripts/gates/result_bitdiff.py --self-test --outdir <dir outside the repo>
 
+`reference_coverage.py` records which `cablp/` lines the golden route executes on each kernel route (`capture`) and classifies each hunk of a diff as reached, unreached or import-only against those maps (`check`); it is under evaluation and gates nothing.
+
 **`run/`** — the drivers that build a `LAPDSim1D` and run it.
 `run_m6_point.py` is the config-complete campaign driver, `run_sim1d.py` the
 plain one, `run_mechanism_ladder.py` the ladder, `run_closure_ladder.py` the
