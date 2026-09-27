@@ -237,5 +237,3 @@ def _apply_case_order():
 _apply_case_order()
 _assert_case_census()
 _assert_case_bodies_reachable()
-
-__all__ = ["main"]

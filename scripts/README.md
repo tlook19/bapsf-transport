@@ -44,6 +44,28 @@ values; `preflight_diffcfg.py` is the no-solve config
 diff every campaign arm runs before spending compute. A file belongs here when
 a merge is blocked by its verdict.
 
+`smoke_sim1d.py` is the entry point of the smoke suite, and it keeps the
+command line: no arguments for the full gate, `--list`, `--only <case>` and
+`--trace`. The suite itself is the `gates/smoke/` package. Each case module
+holds the cases of one subsystem, and `smoke/__init__.py` fixes the run order
+in `_CASE_ORDER`. A new case goes in its subsystem's module and at the end of
+`_CASE_ORDER`. The modules:
+
+- `_harness.py`: the case registry and `@_case`, the runner and command line, the historical-stance pins, the fixtures, and the helpers that cases in more than one module share.
+- `configuration.py`: configuration files, derived configurations, key namespaces and construction refusals.
+- `geometry.py`: the axial grid, area profiles, obstructions and the mirror-field loader.
+- `end_wall.py`: the end-wall sheath, its face fluxes and its retired names.
+- `circuit_cathode.py`: the cathode sheath solve, the discharge circuit, the anode and the electrode sample.
+- `beam.py`: the primary beam, CSDA deposition, the walked hot tail and the quasilinear relaxation closure.
+- `tracer.py`: the regime tracer.
+- `neutrals.py`: neutral state, gas puff, fill, equilibration and the neutral closures.
+- `atomic_rates.py`: atomic rate models and cross sections.
+- `dvm.py`: the transient discrete-velocity neutral model and its exports.
+- `phases.py`: breakdown, ignition, the prescribed drive and the afterglow tail hand-off.
+- `numerics.py`: time integration, timestep bounds, heat conduction, fluid operators and the implicit sinks.
+- `results_io.py`: results, HDF5 I/O, restart, capture artifacts, and the scoring and comparison tools.
+- `compiled.py`: compiled-kernel equivalence against the pure path.
+
 `result_bitdiff.py` is the full-result bit-diff gate: the golden compares
 `time`, `y` and `phase`, and this gate compares every group, dataset and
 attribute of a saved `sim1d-hdf5-v1` result at raw bytes (so `-0.0` against
