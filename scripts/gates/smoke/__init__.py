@@ -187,6 +187,7 @@ _CASE_ORDER = (
     "implicit-ee-sink-pure-decay-exact",
     "implicit-ee-sink-substep-order",
     "anode-e-sheath-realised-equals-booked",
+    "cathode-e-climb-realised-equals-booked",
     "anode-cells-no-within-step-sawtooth",
     "anode-ion-collection-counted-vs-circuit",
     "dt-not-bound-by-anode-row",
