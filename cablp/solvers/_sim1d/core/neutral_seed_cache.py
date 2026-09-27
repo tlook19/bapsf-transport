@@ -145,7 +145,7 @@ INERT_PARAM_KEYS = frozenset({
     "implicit_heat_scheme", "operator_splitting", "heat_picard_iterations",
     "heat_picard_tol", "max_density_step_fraction",
     "max_energy_step_fraction",
-    "hyperbolic_wave_speed", "dt_growth_enabled", "dt_growth_factor",
+    "dt_growth_enabled", "dt_growth_factor",
     "adaptive_retries_enabled",
     # --- output cadence (run_neutral_equilibration overrides these) ---
     "dt_save", "t_save_start", "max_output_steps",
@@ -157,10 +157,9 @@ INERT_FLAG_KEYS = frozenset({
     # plasma / cathode / circuit / numerics toggles inert to neutral-only equil,
     # plus the cache-control flags themselves (they select the seed source, not
     # its content).
-    "Plasma", "cathode_coupling", "active_plasma_topology",
-    "electron_heat_flux_limit", "heat_conduction", "hyperbolic_energy_consistent",
+    "Plasma", "cathode_coupling",
+    "heat_conduction",
     "icool_recomb", "implicit_heat_conduction", "ionization_energy_cost",
-    "raw_stage_validation",
     "debug_checks",
     # The two end-face energy-booking flags are inert because
     # run_neutral_equilibration does not merely leave them unreached, it

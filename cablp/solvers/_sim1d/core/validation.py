@@ -85,8 +85,6 @@ def validate_r1_configuration_presence(
     flags,
     *,
     geometry,
-    hyperbolic_wave_speed,
-    raw_stage_validation,
 ):
     """Reject R1-audited controls that would otherwise be silent no-ops."""
     frozen_controls = {
@@ -165,12 +163,7 @@ def validate_r1_configuration_presence(
             "selector that the conservative solver never branched on). "
             f"Accepted: 'end_wall'.{renamed}"
         )
-    if hyperbolic_wave_speed not in {"isothermal", "adiabatic"}:
-        raise ValueError(
-            "hyperbolic_wave_speed must be 'isothermal' or 'adiabatic' "
-            f"(got {hyperbolic_wave_speed!r})"
-        )
-    if raw_stage_validation and flags.get("Plasma", True):
+    if flags.get("Plasma", True):
         for initial_name, floor_name in (
             ("Te0", "Te_floor"),
             ("Ti0", "Ti_floor"),
@@ -180,8 +173,8 @@ def validate_r1_configuration_presence(
             if not initial > floor:
                 raise ValueError(
                     f"{initial_name} must be strictly greater than "
-                    f"{floor_name} when raw_stage_validation=True "
-                    f"(got {initial} <= {floor})"
+                    f"{floor_name}: raw-stage validation rejects a state "
+                    f"at its floor (got {initial} <= {floor})"
                 )
 
 
@@ -880,9 +873,7 @@ ELECTRON_DRIFT_ANODE_HANDSHAKES = (
 )
 
 
-def resolve_electron_drift_transport_config(
-    input_dict, flags, *, geometry, active_plasma_topology
-):
+def resolve_electron_drift_transport_config(input_dict, flags, *, geometry):
     """Validate and RESOLVE the electron drift-transport operator.
 
     Every failure here is a construction-time ``ValueError``: an operator that
@@ -896,15 +887,13 @@ def resolve_electron_drift_transport_config(
     operator is bounded by -- or ``None`` when the flag is off, which is the
     presence gate every consumer reads.
 
-    The three geometric refusals are refusals rather than fallbacks because
-    each leaves a physics form open that this function has no authority to
-    close. Without a resolved anode face the drift current has nothing to
-    terminate on, and letting it run off the end of the machine would invent a
-    boundary condition. Under ``TwinCathode`` there are two cathode faces
-    driving one column and the split of the loop current between them is not
-    something the operator can read off the circuit. Without
-    ``active_plasma_topology`` there are two live face conventions in the
-    solver and the operator would have to pick one silently.
+    The geometric refusals are refusals rather than fallbacks because each
+    leaves a physics form open that this function has no authority to close.
+    Without a resolved anode face the drift current has nothing to terminate
+    on, and letting it run off the end of the machine would invent a boundary
+    condition. Under ``TwinCathode`` there are two cathode faces driving one
+    column and the split of the loop current between them is not something
+    the operator can read off the circuit.
     """
     enabled = bool(flags.get("electron_drift_transport", False))
     defaults = model_mode_defaults()
@@ -939,18 +928,6 @@ def resolve_electron_drift_transport_config(
             "unknown electron_drift_anode_handshake "
             f"{anode_handshake!r}. Accepted: "
             f"{', '.join(ELECTRON_DRIFT_ANODE_HANDSHAKES)}"
-        )
-    if not active_plasma_topology:
-        raise ValueError(
-            "electron_drift_transport requires active_plasma_topology: the "
-            "operator carries T_e and n to faces by the typed-topology rule "
-            "(arithmetic mean between two live cells, one-sided where the "
-            "neighbour is plasma-dead), and with that flag off the solver "
-            "carries a second face convention the operator would have to "
-            "choose between silently. Accepted: "
-            "electron_drift_transport=True with "
-            "active_plasma_topology=True, or "
-            "electron_drift_transport=False"
         )
     if bool(flags.get("TwinCathode", False)):
         raise ValueError(

@@ -148,8 +148,6 @@ def suggest_timestep(
     include_front=True,
     alpha_front=1.0,
     plasma_active=None,
-    active_plasma_topology=False,
-    wave_speed="isothermal",
 ):
     """Return a bounded explicit timestep and diagnostics.
 
@@ -207,7 +205,6 @@ def suggest_timestep(
             geometry=geometry,
             cfl=cfl,
             plasma_active=plasma_active,
-            wave_speed=wave_speed,
         ),
         "front_density": front_density_timestep(
             state=state,
@@ -218,7 +215,6 @@ def suggest_timestep(
             include_front=include_front,
             alpha_front=alpha_front,
             plasma_active=plasma_active,
-            active_plasma_topology=active_plasma_topology,
         ),
         # Retain the historical diagnostic key while assigning it to the live
         # resolved electrode/source bundle. The old volumetric endpoint loss
@@ -385,13 +381,12 @@ def apply_dt_global_scale(dt, dt_global_scale):
 
 def plasma_cfl_timestep(
     state, floors, ion_mass_g, geometry, cfl=0.4, plasma_active=None,
-    wave_speed="isothermal",
 ):
     """Return the plasma wave CFL timestep [s]."""
     if cfl <= 0.0:
         raise ValueError(f"cfl must be positive (got {cfl})")
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g, wave_speed)
+    cs = plasma_wave_speed(derived.Te, derived.Ti, ion_mass_g)
     face_speed = 0.5 * (
         np.abs(derived.u[:-1])
         + np.abs(derived.u[1:])
@@ -532,7 +527,6 @@ def front_density_timestep(
     include_front=True,
     alpha_front=1.0,
     plasma_active=None,
-    active_plasma_topology=False,
 ):
     """Return a fractional density-change timestep for front filling."""
     if not include_front:
@@ -548,7 +542,6 @@ def front_density_timestep(
         geometry=geometry,
         include_front=True,
         alpha_front=alpha_front,
-        active_plasma_topology=active_plasma_topology,
     )
     rhs_without_front = plasma_flux_rhs(
         state=state,
@@ -557,7 +550,6 @@ def front_density_timestep(
         geometry=geometry,
         include_front=False,
         alpha_front=alpha_front,
-        active_plasma_topology=active_plasma_topology,
     )
     dn_front = rhs_with_front.n - rhs_without_front.n
     return _fractional_timestep(

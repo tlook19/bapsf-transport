@@ -77,11 +77,16 @@ def heat_conduction_rhs(
     mu,
     geometry,
     heat_conduction=True,
-    electron_heat_flux_limit=False,
     heat_flux_limiter_f=0.3,
     heat_flux_limiter_exponent=1.0,
 ):
-    """Return conservative axial heat-conduction energy sources."""
+    """Return conservative axial heat-conduction energy sources.
+
+    The electron conductivity is always flux-limited
+    (:func:`flux_limited_electron_conductivity`, factor
+    ``heat_flux_limiter_f`` and exponent ``heat_flux_limiter_exponent``, both
+    ``> 0``); the ion conductivity is the unlimited Braginskii one.
+    """
     zeros = np.zeros_like(state.n, dtype=float)
     if not heat_conduction:
         return ConservativeState1D(
@@ -100,11 +105,10 @@ def heat_conduction_rhs(
         kappa_par_elec(derived.Te, n, ln_lambda, per_particle=False)
         * ev_to_erg
     )
-    if electron_heat_flux_limit:
-        conductivity_e = flux_limited_electron_conductivity(
-            conductivity_e, derived.Te, n, geometry, heat_flux_limiter_f,
-            exponent=heat_flux_limiter_exponent,
-        )
+    conductivity_e = flux_limited_electron_conductivity(
+        conductivity_e, derived.Te, n, geometry, heat_flux_limiter_f,
+        exponent=heat_flux_limiter_exponent,
+    )
     qe_face = conductive_face_flux(
         temperature=derived.Te,
         conductivity=conductivity_e,
@@ -217,19 +221,18 @@ def heat_conduction_timestep_bound(
     geometry,
     heat_conduction=True,
     active_cells=None,
-    electron_heat_flux_limit=False,
     heat_flux_limiter_f=0.3,
     heat_flux_limiter_exponent=1.0,
 ):
     """Return an explicit diffusion timestep bound for heat conduction.
 
-    The R5.2/A9 flux limiter (``electron_heat_flux_limit``) only REDUCES the
-    electron conductivity, so the unlimited-conductivity bound computed here is a
-    conservative (tighter) over-estimate of the limited operator's stiffness --
-    accepted and ignored so the shared ``_heat_conduction_kwargs`` fits.
+    The electron heat-flux limiter only REDUCES the electron conductivity, so
+    the unlimited-conductivity bound computed here is a conservative (tighter)
+    over-estimate of the limited operator's stiffness. The limiter's factor
+    and exponent are accepted and ignored so the shared
+    ``_heat_conduction_kwargs`` fits.
     """
-    del electron_heat_flux_limit, heat_flux_limiter_f  # conservative: see above
-    del heat_flux_limiter_exponent
+    del heat_flux_limiter_f, heat_flux_limiter_exponent  # conservative: see above
     if not heat_conduction:
         return np.inf
 
@@ -278,7 +281,6 @@ def implicit_heat_conduction_step(
     implicit_heat_scheme="backward_euler",
     heat_picard_iterations=0,
     heat_picard_tol=1e-10,
-    electron_heat_flux_limit=False,
     heat_flux_limiter_f=0.3,
     heat_flux_limiter_exponent=1.0,
     ee_source=None,
@@ -424,11 +426,10 @@ def implicit_heat_conduction_step(
                 n=n,
                 mu=mu,
             )
-            if electron_heat_flux_limit:
-                conductivity_e = flux_limited_electron_conductivity(
-                    conductivity_e, Te_eval, n, geometry, heat_flux_limiter_f,
-                    exponent=heat_flux_limiter_exponent,
-                )
+            conductivity_e = flux_limited_electron_conductivity(
+                conductivity_e, Te_eval, n, geometry, heat_flux_limiter_f,
+                exponent=heat_flux_limiter_exponent,
+            )
         else:
             # Reached only with a sink to apply (the no-sink case returned
             # above). K = 0 leaves the banded operator diagonal, so the same

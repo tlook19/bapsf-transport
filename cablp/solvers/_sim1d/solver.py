@@ -245,11 +245,10 @@ DT_REJECT_FACTOR = 0.5
 TWO_ZONE_MATRIX_CACHE_ENTRIES = 32
 
 #: Relative threshold [dimensionless] for the floor-aware drain exemption on
-#: the "surface_loss" timestep bound, consulted only when the
-#: ``surface_loss_floor_exempt`` flag is on. It separates a cell HOVERING at
-#: its temperature floor (clip plus one step of re-heating residue) from a
-#: healthy drained cell orders of magnitude above it; see the flag's entry in
-#: ``core/config.py``. It is the ENTRY threshold only: re-admission uses the
+#: the "surface_loss" timestep bound. It separates a cell HOVERING at its
+#: temperature floor (clip plus one step of re-heating residue) from a
+#: healthy drained cell orders of magnitude above it; see NUMERICS.md
+#: ("Floor-aware drain exemption"). It is the ENTRY threshold only: re-admission uses the
 #: wider outer threshold named by the params key
 #: ``surface_loss_floor_exempt_exit_rtol``, which must exceed this one and is
 #: armed at its default; that key set to 0 makes re-admission use this value
@@ -1026,8 +1025,6 @@ class LAPDSim1D:
             self._input_dict,
             self._flags,
             geometry=self._geometry,
-            hyperbolic_wave_speed=self._hyperbolic_wave_speed,
-            raw_stage_validation=self._raw_stage_validation,
         )
         # The declarative half of the deprecation surface (core/deprecations.py):
         # one DeprecationWarning per deprecated control this config actually
@@ -1050,7 +1047,6 @@ class LAPDSim1D:
             geometry=self._geometry,
             gas_type=self._gas_type,
             I_ion=self._I_ion,
-            electron_heat_flux_limit=self._electron_heat_flux_limit,
             heat_flux_limiter_f=self._heat_flux_limiter_f,
             heat_flux_limiter_exponent=self._heat_flux_limiter_exponent,
             neutral_energy=self._neutral_energy,
@@ -1125,18 +1121,6 @@ class LAPDSim1D:
         self._variable_area_geometry = bool(
             self._flags.get("end_expansion_geometry")
         ) or bool(self._flags.get("prescribed_area_geometry"))
-        self._active_plasma_topology = bool(
-            self._flags.get("active_plasma_topology")
-        )
-        self._raw_stage_validation = bool(
-            self._flags.get("raw_stage_validation")
-        )
-        self._hyperbolic_wave_speed = str(
-            self._input_dict.get("hyperbolic_wave_speed")
-        )
-        self._hyperbolic_energy_consistent = bool(
-            self._flags.get("hyperbolic_energy_consistent")
-        )
         # R4.3 / audit A7+A8: the moment-closed reduced ion-neutral collision
         # operator (Phelps He+/He) carries the ion-neutral drag, frictional
         # heating, thermalization and CX cooling as ONE term. He-only.
@@ -1519,40 +1503,33 @@ class LAPDSim1D:
         checked HERE so a misconfigured guard cannot be discovered hours into
         the run it exists to catch.
         """
-        # R5.2 / audit A9: flux-limited electron heat conduction (default on).
-        self._electron_heat_flux_limit = bool(
-            self._flags.get("electron_heat_flux_limit")
-        )
+        # Flux-limited electron heat conduction: the limiter is always on,
+        # and its factor and exponent must both be positive.
         self._heat_flux_limiter_f = float(
             self._input_dict.get("heat_flux_limiter_f")
         )
-        if self._electron_heat_flux_limit and self._heat_flux_limiter_f <= 0.0:
+        if self._heat_flux_limiter_f <= 0.0:
             raise ValueError(
-                "heat_flux_limiter_f must be > 0 when electron_heat_flux_limit "
-                f"is on (got {self._heat_flux_limiter_f})"
+                "heat_flux_limiter_f must be > 0: the electron heat-flux "
+                f"limiter is always on (got {self._heat_flux_limiter_f})"
             )
         self._heat_flux_limiter_exponent = float(
             self._input_dict.get("heat_flux_limiter_exponent")
         )
-        if self._electron_heat_flux_limit and self._heat_flux_limiter_exponent <= 0.0:
+        if self._heat_flux_limiter_exponent <= 0.0:
             raise ValueError(
-                "heat_flux_limiter_exponent must be > 0 when "
-                f"electron_heat_flux_limit is on (got {self._heat_flux_limiter_exponent})"
+                "heat_flux_limiter_exponent must be > 0: the electron "
+                "heat-flux limiter is always on "
+                f"(got {self._heat_flux_limiter_exponent})"
             )
-        # Floor-aware drain exemption on the "surface_loss" dt bound (default
-        # ON; presence-gated: None disables the exemption branch entirely so
-        # the off path is bit-exact historical behavior).
-        _surface_loss_floor_exempt = bool(
-            self._flags.get("surface_loss_floor_exempt")
-        )
-        self._surface_loss_floor_exempt_rtol = (
-            SURFACE_LOSS_FLOOR_EXEMPT_RTOL if _surface_loss_floor_exempt else None
-        )
+        # Floor-aware drain exemption on the "surface_loss" dt bound, always
+        # on at the entry threshold SURFACE_LOSS_FLOOR_EXEMPT_RTOL.
+        self._surface_loss_floor_exempt_rtol = SURFACE_LOSS_FLOOR_EXEMPT_RTOL
         # Hysteresis band on that exemption (armed at the default width; 0
         # restores the knife edge above). Validated here so a band that could
         # never be a band -- outer at or below the inner threshold, or wide
-        # enough to be a permanent exemption -- or one armed with the
-        # exemption itself off is refused before any compute.
+        # enough to be a permanent exemption -- is refused before any
+        # compute.
         _exempt_exit_rtol = self._input_dict.get(
             "surface_loss_floor_exempt_exit_rtol"
         )
@@ -1567,17 +1544,6 @@ class LAPDSim1D:
                 f"band (got {_exempt_exit_rtol!r})"
             )
         if _exempt_exit_value > 0.0:
-            if not _surface_loss_floor_exempt:
-                raise ValueError(
-                    "surface_loss_floor_exempt_exit_rtol is set "
-                    f"({_exempt_exit_rtol!r}) while the surface_loss_floor_exempt "
-                    "flag is off; the hysteresis band re-admits cells to an "
-                    "exemption that is not running, so it could never do "
-                    "anything. The band is armed by DEFAULT, so recovering "
-                    "the historical bound takes both keys: pass "
-                    "surface_loss_floor_exempt_exit_rtol=0.0 alongside the "
-                    "cleared flag"
-                )
             if _exempt_exit_value <= SURFACE_LOSS_FLOOR_EXEMPT_RTOL:
                 raise ValueError(
                     "surface_loss_floor_exempt_exit_rtol must be strictly "
@@ -2550,7 +2516,6 @@ class LAPDSim1D:
             self._input_dict,
             self._flags,
             geometry=self._geometry,
-            active_plasma_topology=self._active_plasma_topology,
         )
         # The operator's named power rows from the LAST RHS evaluation, for the
         # saved diagnostics. Same discipline as the hot-channel rows: written
@@ -2641,14 +2606,6 @@ class LAPDSim1D:
                 "produces, and without it the tracer has no source at all and "
                 "a true-vacuum start would stay at vacuum forever. Accepted: "
                 "cathode_coupling on"
-            )
-        if not self._active_plasma_topology:
-            raise ValueError(
-                "regime_tracer needs active_plasma_topology: the passive/"
-                "active interface is a typed plasma topology (a closed face "
-                "with one live cell), and the legacy all-cells flux path has "
-                "no notion of the live cell at a closed face, so it cannot "
-                "represent the interface. Accepted: active_plasma_topology on"
             )
         neutral_model = str(self._input_dict.get("neutral_model"))
         if neutral_model in RESTART_REFUSED_NEUTRAL_MODELS:
@@ -4189,20 +4146,15 @@ class LAPDSim1D:
             cathode_solve=cathode_solve,
             time=time,
         )
-        # The "pressure_work" row is pressure_work_rhs, whatever the selector
-        # says: -p_s div u is ALREADY the exact energy partner of the momentum
-        # equation's net pressure force, so nothing is folded onto it. What the
-        # energy-consistent selector adds is the Rusanov numerical-dissipation
-        # deposit, and that is its own row. Both rows are always present --
-        # unarmed, the dissipation row is the zero state -- so the saved term
-        # structure does not move with the flag.
+        # The "pressure_work" row is pressure_work_rhs: -p_s div u is ALREADY
+        # the exact energy partner of the momentum equation's net pressure
+        # force, so nothing is folded onto it. The Rusanov numerical-
+        # dissipation deposit the energy-consistent hyperbolic core returns to
+        # Ei is its own row.
         pressure_work = self.pressure_work_rhs(state=state)
-        if self._hyperbolic_energy_consistent:
-            hyperbolic_dissipation = self.hyperbolic_energy_correction_rhs(
-                state=state
-            )
-        else:
-            hyperbolic_dissipation = self._zero_rhs_state()
+        hyperbolic_dissipation = self.hyperbolic_energy_correction_rhs(
+            state=state
+        )
         terms = {
             **zone_terms,
             **momentum_sink_terms,
@@ -4531,12 +4483,8 @@ class LAPDSim1D:
         With the R2 tracer engaged the mask also covers the cells the tracer
         owns: their plasma rows are the exact affine update's, so a fluid
         contribution to them would be a second, unowned opinion about the same
-        density. The tracer refuses to construct without
-        ``active_plasma_topology``, so this method is always reached when it is
-        engaged.
+        density.
         """
-        if not self._active_plasma_topology:
-            return terms
         neutral_only = {
             "neutral_zone_exchange",
             "neutral_momentum_wall",
@@ -4845,25 +4793,18 @@ class LAPDSim1D:
                     not self._flags.get("Plasma")
                     or self._neutral_prebreakdown_active()
                 ):
-                    if self._raw_stage_validation:
-                        raw_next = pack_state(
-                            self._implicit_neutral_step(
-                                dt=dt, apply_density_floor=False
-                            )
+                    raw_next = pack_state(
+                        self._implicit_neutral_step(
+                            dt=dt, apply_density_floor=False
                         )
-                        self._validate_raw_stage(raw_next, "implicit_neutral")
-                        y_next = floor_with_ledger(raw_next)
-                    else:
-                        y_next = pack_state(self._implicit_neutral_step(dt=dt))
+                    )
+                    self._validate_raw_stage(raw_next, "implicit_neutral")
+                    y_next = floor_with_ledger(raw_next)
                 elif operator_split:
                     y_next = self.operator_split_step(
                         dt=dt,
                         floor_func=floor_with_ledger,
-                        raw_stage_func=(
-                            self._validate_raw_stage
-                            if self._raw_stage_validation
-                            else None
-                        ),
+                        raw_stage_func=self._validate_raw_stage,
                     )
                 else:
                     y_next = ssprk2_step(
@@ -4872,11 +4813,7 @@ class LAPDSim1D:
                         rhs_func=self._explicit_stage_rhs(dt),
                         floor_func=floor_with_ledger,
                         time=self._time,
-                        raw_stage_func=(
-                            self._validate_raw_stage
-                            if self._raw_stage_validation
-                            else None
-                        ),
+                        raw_stage_func=self._validate_raw_stage,
                     )
             except _RawStageError as error:
                 y_next = error.y
@@ -6427,7 +6364,7 @@ class LAPDSim1D:
             splitting = validate_operator_splitting(splitting)
         if floor_func is None:
             floor_func = self.floor_state_vector
-        if raw_stage_func is None and self._raw_stage_validation:
+        if raw_stage_func is None:
             raw_stage_func = self._validate_raw_stage
 
         def heat(y_in, sub_dt, source_time=None):
@@ -7413,12 +7350,7 @@ class LAPDSim1D:
         dt_max = float(self._input_dict.get("dt_max"))
         dvm_superseded = plasma_enabled and self._dvm_rows_superseded()
         plasma_source_rhs = None
-        # The bundle's historical trigger is the raw-stage stance. An engaged
-        # DVM arm needs it unconditionally: its coupling term is the largest
-        # unbounded drain in the ledger, and whether it is bounded must not
-        # depend on a validation switch that has nothing to do with it. The
-        # widening reaches DVM-engaged runs only, so no other path moves.
-        if plasma_enabled and (self._raw_stage_validation or dvm_superseded):
+        if plasma_enabled:
             plasma_source_rhs = self._plasma_source_timestep_rhs(
                 state=state,
                 time=time,
@@ -7503,13 +7435,7 @@ class LAPDSim1D:
             # has no stability limit, so the floor-poisoned fractional bounds
             # they would otherwise contribute must not set the step. The
             # background is left to choose it.
-            plasma_active=(
-                self._plasma_active_mask()
-                if self._active_plasma_topology
-                else None
-            ),
-            active_plasma_topology=self._active_plasma_topology,
-            wave_speed=self._hyperbolic_wave_speed,
+            plasma_active=self._plasma_active_mask(),
         )
         if not plasma_enabled:
             neutral_candidates = {
@@ -7861,9 +7787,6 @@ class LAPDSim1D:
             geometry=self._plasma_geometry(),
             include_front=use_front,
             alpha_front=float(self._input_dict.get("alpha_front")),
-            active_plasma_topology=self._active_plasma_topology,
-            wave_speed=self._hyperbolic_wave_speed,
-            energy_consistent=self._hyperbolic_energy_consistent,
         )
 
     def plasma_flux_rhs_terms(self, y=None, state=None, include_front=None):
@@ -7880,9 +7803,6 @@ class LAPDSim1D:
             geometry=self._plasma_geometry(),
             include_front=use_front,
             alpha_front=float(self._input_dict.get("alpha_front")),
-            active_plasma_topology=self._active_plasma_topology,
-            wave_speed=self._hyperbolic_wave_speed,
-            energy_consistent=self._hyperbolic_energy_consistent,
         )
 
     def cathode_jet_neutral_energy_rhs(
@@ -8002,7 +7922,6 @@ class LAPDSim1D:
             # must be 1 for conservative pressure-work booking (hardwired).
             electron_scale=1.0,
             ion_scale=1.0,
-            active_plasma_topology=self._active_plasma_topology,
         )
 
     def hyperbolic_energy_correction_rhs(self, y=None, state=None):
@@ -8019,7 +7938,6 @@ class LAPDSim1D:
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._plasma_geometry(),
-            wave_speed=self._hyperbolic_wave_speed,
         )
 
     def flux_tube_geometry_rhs(self, y=None, state=None):
@@ -8679,10 +8597,9 @@ class LAPDSim1D:
         power_W = np.asarray(
             metadata.get("anode_power_loss_W", zeros), dtype=float
         )
-        if self._active_plasma_topology:
-            active = self._plasma_active_mask()
-            rate = np.where(active, rate, 0.0)
-            power_W = np.where(active, power_W, 0.0)
+        active = self._plasma_active_mask()
+        rate = np.where(active, rate, 0.0)
+        power_W = np.where(active, power_W, 0.0)
         return rate, power_W
 
     def beam_deposition_ee_source(
@@ -8733,9 +8650,7 @@ class LAPDSim1D:
         row = np.asarray(
             beam_terms[BEAM_POWER_DEPOSITION_TERM].Ee, dtype=float
         )
-        if self._active_plasma_topology:
-            row = np.where(self._plasma_active_mask(), row, 0.0)
-        return row
+        return np.where(self._plasma_active_mask(), row, 0.0)
 
     def _cathode_solve_memo_key(
         self,
@@ -11732,9 +11647,7 @@ class LAPDSim1D:
 
     def _dvm_transfer_apply_mask(self):
         """Cells the coupling term is actually applied on."""
-        if self._active_plasma_topology:
-            return np.asarray(self._geometry.plasma_active, dtype=bool)
-        return np.ones(self._geometry.cells, dtype=bool)
+        return np.asarray(self._geometry.plasma_active, dtype=bool)
 
     def _dvm_scope_step_transfer(self, dt):
         """Scope one step's applied DVM transfer (the K2d floor-aware relax).
@@ -12691,10 +12604,9 @@ class LAPDSim1D:
                 dtype=float,
             )
         nu = S / np.maximum(np.asarray(state.nn, dtype=float), self._floors["nn"])
-        if self._active_plasma_topology:
-            nu = np.where(
-                np.asarray(self._geometry.plasma_active, dtype=bool), nu, 0.0
-            )
+        nu = np.where(
+            np.asarray(self._geometry.plasma_active, dtype=bool), nu, 0.0
+        )
         return np.maximum(nu, 0.0)
 
     def _zero_rhs_state(self):
