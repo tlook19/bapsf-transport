@@ -327,33 +327,33 @@ def _build_resolved_geometry(input_dict, flags):
 
     Twin cathode (``TwinCathode``) mirrors the source end instead of the
     end wall, putting its cathode surface at ``z = Lm``. Which column cell
-    carries the ``puff`` role depends on ``source_fixed_grid``: with it on
-    (the default) the role follows ``gas_puff_z_cm``, and on the uniform
-    column it is the cell adjacent to an anode face, where gas enters in
-    front of the anode. The plasma cell against a cathode surface carries the
-    ``cathode`` role so cathode surface terms have somewhere to land.
+    carries the ``puff`` role depends on the layout: on the single-cathode
+    fixed source grid the role follows ``gas_puff_z_cm``, and on the twin
+    layout's uniform column it is the cell adjacent to each anode face, where
+    gas enters in front of the anode. The plasma cell against a cathode
+    surface carries the ``cathode`` role so cathode surface terms have
+    somewhere to land.
 
     The annular cathode-structure obstruction is a *real cell* of length
     ``Lcs``, so it holds gas and its inventory reaches the pump. It is omitted
     entirely when ``Lcs <= 0``, which is the legacy limit.
 
-    The ``source_fixed_grid`` flag replaces the uniform column with a
-    fixed-cell source region plus an ``nx``-refined far column, so a refinement
-    study no longer moves the near-source cell edges (see
-    ``_source_fixed_grid_spec``). With it on, ``nx`` counts the far-column cells
-    only and the ``puff`` role follows ``gas_puff_z_cm``.
+    The single-cathode column is a fixed-cell source region plus an
+    ``nx``-refined far column, so a refinement study does not move the
+    near-source cell edges (see ``_source_fixed_grid_spec``): ``nx`` counts the
+    far-column cells only and the ``puff`` role follows ``gas_puff_z_cm``. The
+    ``TwinCathode`` layout takes its own path, ``nx`` uniform column cells
+    between the two anode faces, because the fixed source region is not
+    mirrored onto a second cathode end.
 
     The plasma cross-section is the uniform ``pi Rp^2`` inside the uniform
-    ``Rm`` bore unless a variable-area machine is configured, and there are two
-    mutually exclusive ways to do that. ``end_expansion_geometry`` resolves a
-    built-in half-cosine flare over a terminal block at one enlarged vessel
-    radius; the default-off ``prescribed_area_geometry`` flag instead takes the
-    whole geometry from the caller as ``plasma_radius_profile_cm`` (required)
-    and ``machine_radius_profile_cm`` (optional), one entry per mesh cell each,
+    ``Rm`` bore unless ``plasma_radius_profile_cm`` is supplied, in which case
+    the whole geometry comes from the caller: that profile (required) and
+    ``machine_radius_profile_cm`` (optional), one entry per mesh cell each,
     with an optional ``plasma_area_max_vessel_fraction`` ceiling (see
-    ``_prescribed_area_geometry_spec``). Either way the per-cell areas, the cell
-    volumes, and the face areas follow, and the quasi-1D ``p dA/dz`` momentum
-    source that pairs with the area-weighted pressure flux comes on with them.
+    ``_prescribed_area_geometry_spec``). The per-cell areas, the cell volumes,
+    and the face areas follow, and the quasi-1D ``p dA/dz`` momentum source
+    that pairs with the area-weighted pressure flux comes on with them.
     """
     nx = int(input_dict.get("nx", 60))
     nx_gap = int(input_dict.get("nx_gap", 5))
@@ -364,11 +364,7 @@ def _build_resolved_geometry(input_dict, flags):
 
     total_length = float(input_dict.get("Lm", 2000.0))
     twin = bool(flags.get("TwinCathode", False))
-    # Resolved BEFORE the end expansion so that configuring both area
-    # machineries reports the composition refusal rather than whichever
-    # parameter the other one happens to be missing.
-    prescribed = _prescribed_area_geometry_spec(input_dict, flags)
-    end_expansion = _end_expansion_spec(input_dict, flags, twin=twin)
+    prescribed = _prescribed_area_geometry_spec(input_dict)
 
     plenum_length = float(input_dict.get("plenum_length_cm", 100.0))
     gap_length = float(input_dict.get("cathode_anode_gap_cm", 50.0))
@@ -417,16 +413,16 @@ def _build_resolved_geometry(input_dict, flags):
 
     source_grid = _source_fixed_grid_spec(
         input_dict,
-        flags,
         gap_length=gap_length,
         total_length=total_length,
         end_wall_length=end_wall_length,
         twin=twin,
     )
-    if source_grid is None:
+    if twin:
+        # The TwinCathode layout's own column: nx uniform cells, a puff cell
+        # against each anode face. The spec above returned None for it.
         column_roles = ["puff"] + ["column"] * (nx - 1)
-        if twin:
-            column_roles[-1] = "puff"
+        column_roles[-1] = "puff"
         column_lengths = [column_length / nx] * nx
     else:
         # Fixed-cell source region: the first ``n_fixed`` column cells have a
@@ -437,8 +433,8 @@ def _build_resolved_geometry(input_dict, flags):
         outer_length = column_length - source_grid["span_cm"]
         if outer_length <= 0.0:
             raise ValueError(
-                "source_fixed_grid leaves no far column between the source "
-                f"region and the end wall (outer_length={outer_length} cm)"
+                "the fixed source region leaves no far column between it "
+                f"and the end wall (outer_length={outer_length} cm)"
             )
         column_roles = ["column"] * (n_fixed + nx)
         column_roles[source_grid["puff_offset"]] = "puff"
@@ -452,9 +448,8 @@ def _build_resolved_geometry(input_dict, flags):
         roles += list(reversed(gap_roles)) + list(reversed(behind_roles))
         lengths += list(reversed(gap_lengths)) + list(reversed(behind_lengths))
     else:
-        end_cells = 1 if end_expansion is None else end_expansion["cells"]
-        roles += ["end"] * (end_cells - 1) + ["end_wall"]
-        lengths += [end_wall_length / end_cells] * end_cells
+        roles += ["end_wall"]
+        lengths += [end_wall_length]
 
     length_cm = np.asarray(lengths, dtype=float)
     cell_role = np.asarray(roles, dtype=object)
@@ -493,43 +488,6 @@ def _build_resolved_geometry(input_dict, flags):
     plasma_area_cm2 = np.pi * Rp_cm**2
     neutral_area_cm2 = np.pi * Rm_cm**2
     neutral_hydraulic_radius_cm = Rm_cm.copy()
-    plasma_face_area_override = None
-
-    if end_expansion is not None:
-        end = np.flatnonzero(
-            np.isin(cell_role, np.asarray(["end", "end_wall"], dtype=object))
-        )
-        n_end = int(end_expansion["cells"])
-        if end.size != n_end or not np.array_equal(
-            end, np.arange(cells - n_end, cells)
-        ):
-            raise ValueError("expanded end cells must be one contiguous terminal block")
-
-        # The vessel makes an abrupt step to its larger radius at the end-cell
-        # entrance. Neutral faces remain restricting apertures, so that entrance
-        # still sees the upstream bore while the downstream volume is enlarged.
-        Rm_end = float(end_expansion["machine_radius_cm"])
-        Rm_cm[end] = Rm_end
-        neutral_area_cm2[end] = np.pi * Rm_end**2
-        neutral_hydraulic_radius_cm[end] = Rm_end
-
-        # Resolve a smooth *area* flare. Area is the flux-tube variable
-        # (A*B=const); the half-cosine has zero slope at both ends and is an
-        # explicit provisional closure until measured B(z) is supplied.
-        A0 = np.pi * Rp**2
-        A1 = np.pi * float(end_expansion["plasma_radius_cm"]) ** 2
-        xi_face = np.linspace(0.0, 1.0, n_end + 1)
-        smooth = 0.5 - 0.5 * np.cos(np.pi * xi_face)
-        end_face_area = A0 + (A1 - A0) * smooth
-        end_cell_area = 0.5 * (end_face_area[:-1] + end_face_area[1:])
-        plasma_area_cm2[end] = end_cell_area
-        Rp_cm[end] = np.sqrt(end_cell_area / np.pi)
-
-        plasma_face_area_override = _face_area(plasma_area_cm2)
-        start_face = int(end[0])
-        plasma_face_area_override[
-            start_face : start_face + n_end + 1
-        ] = end_face_area
 
     if prescribed is not None and prescribed["machine_radius_cm"] is not None:
         # The prescribed bore replaces the uniform scalar Rm cell by cell,
@@ -620,7 +578,6 @@ def _build_resolved_geometry(input_dict, flags):
 
     baffle_faces, baffle_radii = _neutral_baffle_spec(
         input_dict=input_dict,
-        flags=flags,
         z_edges_cm=z_edges_cm,
         Rp_cm=Rp_cm,
         Rm_cm=Rm_cm,
@@ -660,52 +617,44 @@ def _build_resolved_geometry(input_dict, flags):
         absorbing_face_indices=(
             list(cathode_faces) if twin else list(cathode_faces) + [cells]
         ),
-        plasma_face_area_override=plasma_face_area_override,
     )
 
 
 def _source_fixed_grid_spec(
-    input_dict, flags, *, gap_length, total_length, end_wall_length, twin
+    input_dict, *, gap_length, total_length, end_wall_length, twin
 ):
-    """Validate and return the optional fixed-cell source-region specification.
+    """Validate and return the single-cathode fixed-cell source region.
 
-    Resolution studies on the default mesh are self-confounding: ``nx`` uniform
-    column cells span anode face to end wall start, so refining ``nx`` moves
-    every cell edge -- including the puff cell, whose centre anchors the default
-    cosine puff profile. This mode -- the ``source_fixed_grid`` flag, which
-    ships ON -- pins the column between the anode
-    face and ``source_region_length_cm`` to cells of exactly
-    ``source_region_dz_cm``, leaving ``nx`` to refine only the far column.
+    A uniform column would make resolution studies self-confounding: refining
+    ``nx`` would move every cell edge, including the puff cell's. The
+    single-cathode mesh therefore pins the column between the anode face and
+    ``source_region_length_cm`` to cells of exactly ``source_region_dz_cm``,
+    leaving ``nx`` to refine only the far column.
 
-    Presence-gated in both directions (the ``input_dict`` / ``input_flags``
-    silent-namespace trap): the two parameters are required when the flag is on
-    and forbidden when it is off. Returns ``None`` when off; the shipped
-    default has the flag ON, so the production geometry takes the fixed-cell
-    path.
+    Selected by layout, not by a flag. On the single-cathode layout both
+    parameters and ``gas_puff_z_cm`` are required. On the ``TwinCathode``
+    layout, whose mesh is its own uniform column, both parameters are
+    forbidden (nothing would read them) and ``None`` is returned. Raises
+    ``ValueError`` on every misconfiguration, at construction.
     """
     keys = ("source_region_length_cm", "source_region_dz_cm")
     raw = {key: input_dict.get(key) for key in keys}
     provided = {key: value is not None for key, value in raw.items()}
-    enabled = bool(flags.get("source_fixed_grid", False))
-    if not enabled:
+    if twin:
         stale = [key for key, present in provided.items() if present]
         if stale:
             raise ValueError(
-                "source region parameters require the "
-                "source_fixed_grid flag: " + ", ".join(stale)
+                "source region parameters are defined only for the "
+                "single-cathode layout; the TwinCathode mesh is a uniform "
+                "column that does not read them. Accepted under TwinCathode: "
+                "None for " + ", ".join(stale)
             )
         return None
     missing = [key for key, present in provided.items() if not present]
     if missing:
         raise ValueError(
-            "source_fixed_grid requires all source region parameters; missing "
-            + ", ".join(missing)
-        )
-    if twin:
-        raise ValueError(
-            "source_fixed_grid is defined only for the single-cathode layout; "
-            "mirroring the fixed source region onto a TwinCathode end is not "
-            "implemented"
+            "the single-cathode mesh requires all source region parameters; "
+            "missing " + ", ".join(missing)
         )
 
     region_length = float(raw["source_region_length_cm"])
@@ -741,7 +690,8 @@ def _source_fixed_grid_spec(
     puff_z = input_dict.get("gas_puff_z_cm")
     if puff_z is None:
         raise ValueError(
-            "source_fixed_grid requires an explicit gas_puff_z_cm: the puff "
+            "the single-cathode mesh requires an explicit gas_puff_z_cm: the "
+            "puff "
             "role follows the fueling position instead of the first column "
             "cell, so it cannot be left to the mesh"
         )
@@ -767,66 +717,9 @@ def _source_fixed_grid_spec(
     }
 
 
-def _end_expansion_spec(input_dict, flags, *, twin):
-    """Validate and return the optional expanded-end geometry specification."""
-    keys = (
-        "end_expansion_cells",
-        "end_expansion_machine_radius_cm",
-        "end_expansion_plasma_radius_cm",
-    )
-    raw = {key: input_dict.get(key) for key in keys}
-    provided = {key: value is not None for key, value in raw.items()}
-    enabled = bool(flags.get("end_expansion_geometry", False))
-    if not enabled:
-        stale = [key for key, present in provided.items() if present]
-        if stale:
-            raise ValueError(
-                "end expansion parameters require the default-off "
-                "end_expansion_geometry flag: " + ", ".join(stale)
-            )
-        return None
-    missing = [key for key, present in provided.items() if not present]
-    if missing:
-        raise ValueError(
-            "end_expansion_geometry requires all end expansion parameters; "
-            "missing " + ", ".join(missing)
-        )
-    if twin:
-        raise ValueError(
-            "end_expansion_geometry is defined only for the single-cathode "
-            "end wall"
-        )
-
-    cells_float = float(raw["end_expansion_cells"])
-    cells = int(cells_float)
-    if cells_float != cells or cells < 2:
-        raise ValueError(
-            "end_expansion_cells must be an integer >= 2 "
-            f"(got {raw['end_expansion_cells']!r})"
-        )
-    Rm = float(input_dict.get("Rm", 50.0))
-    Rp = float(input_dict.get("Rp", 18.0))
-    Rm_end = float(raw["end_expansion_machine_radius_cm"])
-    Rp_end = float(raw["end_expansion_plasma_radius_cm"])
-    if not np.isfinite(Rm_end) or Rm_end < Rm:
-        raise ValueError(
-            "end_expansion_machine_radius_cm must be finite and >= Rm "
-            f"(got {Rm_end} vs Rm={Rm})"
-        )
-    if not np.isfinite(Rp_end) or not Rp <= Rp_end <= Rm_end:
-        raise ValueError(
-            "end_expansion_plasma_radius_cm must satisfy "
-            f"Rp <= Rp_end <= Rm_end (got {Rp_end}, Rp={Rp}, Rm_end={Rm_end})"
-        )
-    return {
-        "cells": cells,
-        "machine_radius_cm": Rm_end,
-        "plasma_radius_cm": Rp_end,
-    }
-
-
-#: ``input_dict`` keys the ``prescribed_area_geometry`` flag owns. Every one is
-#: forbidden with the flag off, where it would be inert.
+#: ``input_dict`` keys of the prescribed per-cell geometry. The first is the
+#: presence gate; the other two are forbidden without it, where they would be
+#: inert.
 PRESCRIBED_AREA_KEYS = (
     "plasma_radius_profile_cm",
     "machine_radius_profile_cm",
@@ -879,58 +772,41 @@ def _prescribed_profile_values(radius, cells, key):
     return radius
 
 
-def _prescribed_area_geometry_spec(input_dict, flags):
+def _prescribed_area_geometry_spec(input_dict):
     """Validate and return the prescribed per-cell geometry, or ``None``.
 
-    Returns ``None`` when the default-off ``prescribed_area_geometry`` flag is
-    off -- which is the presence gate ``_build_resolved_geometry`` reads: on the
-    off path no array is built, the column keeps the uniform ``pi Rp^2``
-    cross-section and the vessel keeps the scalar ``Rm``, exactly as they always
-    have. When on, returns a dict with
+    Presence-gated on ``plasma_radius_profile_cm``. Returns ``None`` when it is
+    ``None``, which is the gate ``_build_resolved_geometry`` reads: no array is
+    built, the column keeps the uniform ``pi Rp^2`` cross-section and the
+    vessel keeps the scalar ``Rm``. When it is supplied, returns a dict with
 
-    - ``plasma_radius_cm``: the required per-cell flux-tube radius vector,
+    - ``plasma_radius_cm``: the per-cell flux-tube radius vector,
     - ``machine_radius_cm``: the optional per-cell vessel radius vector, or
       ``None`` to keep the scalar ``Rm`` in every cell,
     - ``max_vessel_fraction``: the optional plasma-area ceiling as a fraction
       of the local vessel open area, or ``None`` for no ceiling.
 
-    Checked here: the flag/parameter pairing in BOTH directions (the
-    ``input_dict`` / ``input_flags`` silent-namespace trap), each profile's
-    finiteness and strict positivity, the ceiling's range, and the refusal to
-    compose with ``end_expansion_geometry``. The per-cell LENGTH and the
-    vessel-vs-plasma consistency are checked by the caller, which is where the
-    mesh and the duct reductions exist. Raises ``ValueError`` on every one of
-    them, at construction.
+    Checked here: the two optional keys are refused without the plasma
+    profile, each profile's finiteness and strict positivity, and the
+    ceiling's range. The per-cell LENGTH and the vessel-vs-plasma consistency
+    are checked by the caller, which is where the mesh and the duct
+    reductions exist. Raises ``ValueError`` on every one of them, at
+    construction.
     """
     raw = {key: input_dict.get(key) for key in PRESCRIBED_AREA_KEYS}
-    if not bool(flags.get("prescribed_area_geometry", False)):
+    if raw["plasma_radius_profile_cm"] is None:
         stale = [key for key, value in raw.items() if value is not None]
         if stale:
             raise ValueError(
-                "prescribed per-cell geometry parameters require the "
-                "default-off prescribed_area_geometry flag, where they are "
-                "inert: the run would silently take the uniform pi*Rp^2 column "
-                "inside the scalar Rm and none of them would be read. Set the "
-                "flag or drop the parameters: " + ", ".join(stale)
+                "machine_radius_profile_cm and "
+                "plasma_area_max_vessel_fraction require "
+                "plasma_radius_profile_cm (a per-cell sequence of plasma "
+                "flux-tube radii [cm], one entry per mesh cell); without it "
+                "the run takes the uniform pi*Rp^2 column inside the scalar "
+                "Rm and none of them would be read. Supply the profile or "
+                "drop the parameters: " + ", ".join(stale)
             )
         return None
-    if raw["plasma_radius_profile_cm"] is None:
-        raise ValueError(
-            "prescribed_area_geometry requires plasma_radius_profile_cm (a "
-            "per-cell sequence of plasma flux-tube radii [cm], one entry per "
-            "mesh cell). There is no default: the flag's whole content is the "
-            "profile the caller computed from the solved field"
-        )
-    if bool(flags.get("end_expansion_geometry", False)):
-        raise ValueError(
-            "prescribed_area_geometry cannot be combined with "
-            "end_expansion_geometry: both prescribe the plasma flux-tube area "
-            "across the end block and there is no composition rule, so the "
-            "run would silently take whichever was applied last. The "
-            "prescribed profile IS the replacement for the built-in "
-            "half-cosine flare -- fold the end expansion into the profile and "
-            "clear that flag"
-        )
     fraction = raw["plasma_area_max_vessel_fraction"]
     if fraction is not None:
         fraction = float(fraction)
@@ -959,31 +835,28 @@ def _prescribed_area_geometry_spec(input_dict, flags):
 def _neutral_baffle_spec(
     *,
     input_dict,
-    flags,
     z_edges_cm,
     Rp_cm,
     Rm_cm,
     cathode_face_indices,
     anode_face_indices,
 ):
-    """Validate and map optional thin annular baffles onto mesh faces."""
+    """Validate and map optional thin annular baffles onto mesh faces.
+
+    Presence-gated on the two parameters: both ``None`` means no baffles
+    (empty arrays), both supplied means baffles at those positions, and one
+    without the other raises ``ValueError`` at construction.
+    """
     keys = ("neutral_baffle_positions_cm", "neutral_baffle_clear_radii_cm")
     raw = {key: input_dict.get(key) for key in keys}
     provided = {key: value is not None for key, value in raw.items()}
-    enabled = bool(flags.get("neutral_baffles", False))
-    if not enabled:
-        stale = [key for key, present in provided.items() if present]
-        if stale:
-            raise ValueError(
-                "neutral baffle parameters require the default-off "
-                "neutral_baffles flag: " + ", ".join(stale)
-            )
+    if not any(provided.values()):
         return np.empty(0, dtype=int), np.empty(0, dtype=float)
     missing = [key for key, present in provided.items() if not present]
     if missing:
         raise ValueError(
-            "neutral_baffles requires positions and clear radii; missing "
-            + ", ".join(missing)
+            "neutral baffles require positions and clear radii together; "
+            "missing " + ", ".join(missing)
         )
 
     def as_vector(name, value):
@@ -1060,7 +933,6 @@ def _assemble_geometry(
     anode_transparency=1.0,
     anode_neutral_transparency=None,
     absorbing_face_indices=None,
-    plasma_face_area_override=None,
 ):
     """Derive the face arrays from the cell arrays and pack a ``Sim1DGeometry``.
 
@@ -1076,16 +948,6 @@ def _assemble_geometry(
         else np.asarray(cathode_face_indices, dtype=int)
     )
     plasma_face_area_cm2 = _face_area(plasma_area_cm2)
-    if plasma_face_area_override is not None:
-        override = np.asarray(plasma_face_area_override, dtype=float)
-        if override.shape != (cells + 1,) or not np.all(
-            np.isfinite(override) & (override > 0.0)
-        ):
-            raise ValueError(
-                "plasma_face_area_override must be finite and positive with "
-                f"shape {(cells + 1,)}"
-            )
-        plasma_face_area_cm2 = override.copy()
     # Restricting apertures for the neutral conductance (see class docstring).
     neutral_face_area_cm2 = _face_min(neutral_area_cm2)
     neutral_face_hydraulic_radius_cm = _face_min(neutral_hydraulic_radius_cm)
