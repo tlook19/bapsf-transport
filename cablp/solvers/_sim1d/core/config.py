@@ -2695,9 +2695,15 @@ input_flags_template_1d = {
     # reading outside the bracket is not, and the smoke suite asserts the
     # bracket rather than a value.
     #
-    # CATHODE -- ``cathode_face_full_debit`` arms THREE rows at the emitting
-    # face, kept apart because they are three different physical channels
-    # with two different signs:
+    # CATHODE -- no key. THREE rows at the emitting face, armed by the
+    # GEOMETRY and the circuit: present exactly when the mesh carries a
+    # plasma-absorbing face whose live cell has the cathode role and the
+    # cathode circuit solve (``cathode_coupling``) runs, because the solve is
+    # the source of I_eth_star, I_e_ret and the sheath potentials. The
+    # TwinCathode layout books each emitting face from its own circuit result.
+    # With the end wall row this is ONE sheath-edge rule at every electrode
+    # face. The three rows are kept apart because they are three different
+    # physical channels with two different signs:
     #   ``cathode_e_emitted_enthalpy``  +2 k_B T_s Gamma_em, positive. The
     #       enthalpy the released electrons carry in, off a half-Maxwellian at
     #       the emitter surface temperature. Gamma_em = I_eth_star/e is the
@@ -2716,14 +2722,8 @@ input_flags_template_1d = {
     # energy of the emitted electrons and nothing here re-books it. The
     # 2 (Te - T_s) Gamma_em form is NOT what this books.
     #
-    # WHAT IT RAISES. Must be a real bool. Arming it refuses at construction
-    # unless the configuration supplies the cathode circuit solve
-    # (``cathode_coupling``, the source of I_eth_star, I_e_ret and the sheath
-    # potentials) and a cathode-adjacent plasma cell for the three rows to
-    # land on -- the refusal names whichever is missing. A non-finite current
-    # or potential from the solve raises RuntimeError rather than planting a
-    # NaN in an energy row. Bit-exact when off.
-    "cathode_face_full_debit": False,
+    # A non-finite current or potential from the solve raises RuntimeError
+    # rather than planting a NaN in an energy row.
     # The electron-energy sink charged per ionization event, I_ion * S_ion. Off
     # zeroes that cooling row, so ionizations cost the electrons nothing. This
     # flag is the whole on/off: the companion scale is hardwired to 1.0 and is
@@ -3195,9 +3195,16 @@ RETIRED_FLAG_KEYS = {
         "geometry has an end wall face, unconditionally"
     ),
     "end_sheath_full_debit": (
-        "cathode_face_full_debit for the emitting cathode face's three "
-        "rows; the end wall's sheath-climb row is armed wherever the "
+        "nothing: the emitting cathode face's three sheath rows are armed "
+        "wherever the geometry has a cathode face and the cathode circuit "
+        "solve runs, and the end wall's sheath-climb row wherever the "
         "geometry has an end wall face, unconditionally"
+    ),
+    "cathode_face_full_debit": (
+        "nothing: the emitting cathode face's three sheath rows (emitted "
+        "enthalpy, virtual-cathode fall, collected climb) are armed wherever "
+        "the geometry has a cathode face and the cathode circuit solve runs, "
+        "unconditionally"
     ),
     "beam_tail_anode_interception": (
         "nothing: the QL tail walkers are culled at the anode mesh wherever "
@@ -3232,7 +3239,7 @@ RETIRED_FLAG_KEYS = {
     ),
     "cathode_enthalpy_on_beam": (
         "nothing: the emitted electrons' launch enthalpy stays in the "
-        "cathode_face_full_debit row"
+        "cathode_e_emitted_enthalpy row at the cathode cell"
     ),
     "cathode_ion_secondary_emission": (
         "nothing: ion-induced secondary emission at the cathode face is "

@@ -2535,8 +2535,8 @@ def _deposit_electrode_power(
     plasma-electron energy IN THIS FUNCTION's own
     booking. The sibling rows ``end_wall_e_sheath_climb`` and
     ``cathode_e_collected_climb`` -- presence-gated by the geometry's end wall
-    face and by ``cathode_face_full_debit`` respectively, and independent of this
-    function -- do book a collected-electron fall as plasma-electron energy,
+    face and by its emitting cathode face respectively, and independent of
+    this function -- do book a collected-electron fall as plasma-electron energy,
     at the end wall and at the emitting cathode face. ``I_e_coll`` is the
     collected electron current ``I_i_a * fe_a``, and its ``phi_a`` moment is
     the result's own ``P_anode_e_phi``, the complementary member of the R3.2
@@ -2653,7 +2653,7 @@ END_SHEATH_CATHODE_ROWS = (
 def cathode_emission_sheath_power_W(result, T_s_K):
     """Return the emitting face's three electron-energy powers [W].
 
-    The ``cathode_face_full_debit`` closure: what the plasma
+    The emitting cathode face's sheath-edge closure: what the plasma
     ELECTRON store gains and loses at an emitting surface, over and above the
     ``2 Te`` per collected electron ``P_cathode_e_thermal`` already books and
     the net-``phi_c`` beam energy the deposition march already distributes.
@@ -2702,7 +2702,7 @@ def cathode_emission_sheath_power_W(result, T_s_K):
     ):
         if not np.isfinite(value):
             raise RuntimeError(
-                "cathode_face_full_debit: the cathode solve returned a "
+                "cathode face sheath debit: the cathode solve returned a "
                 f"non-finite {name} ({value!r}); the emitting face's "
                 "electron-energy booking is undefined there"
             )

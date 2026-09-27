@@ -425,9 +425,11 @@ max_steps_action = "stop"
 # surface and the end wall surface-power diagnostic includes it. The row is
 # ELECTRON ENERGY ONLY -- no particle, momentum or ion-thermal booking at the
 # face moves -- and it is booked whenever plasma reaches the face, independent
-# of the cathode circuit solve. The emitting cathode face's own three rows are
-# the separate cathode_face_full_debit key, which this stance leaves at its
-# config default.
+# of the cathode circuit solve. The emitting cathode face books its own three
+# rows on the same sheath-edge rule (no key: armed by the mesh's cathode face
+# with the cathode circuit solve running): the enthalpy 2 k_B T_s each released
+# electron carries in, the virtual-cathode remainder of the fall, and the
+# climb e phi_c_plus each returning electron pays.
 # The response is not local to the end cell: the column re-equilibrates as a
 # whole through the far-end neutral field, so the port-level response to this
 # booking is conditional on the kinetic neutral closure (kinetic_dvm).

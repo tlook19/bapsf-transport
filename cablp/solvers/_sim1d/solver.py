@@ -346,7 +346,8 @@ END_SHEATH_END_WALL_ROWS = ("end_wall_e_sheath_climb",)
 #: :func:`~.physics.cathode.cathode_emission_sheath_power_W` returns them.
 #: PRESENCE-GATED PER END -- this tuple is the union, not a group that arms
 #: together. The end wall row exists wherever the geometry has an end wall
-#: face, the cathode rows wherever ``cathode_face_full_debit`` is armed.
+#: face, the cathode rows wherever the geometry has an emitting cathode face
+#: (a cathode-role absorbing face with the cathode circuit solve running).
 #: Every reader defaults their absence.
 END_SHEATH_DEBIT_ROWS = END_SHEATH_END_WALL_ROWS + END_SHEATH_CATHODE_ROWS
 
@@ -1741,33 +1742,19 @@ class LAPDSim1D:
         self._end_wall_sheath_full_debit = bool(
             absorbing_live_cells_by_role(self._geometry).get("end_wall")
         )
-        _cathode_face_full_debit = self._flags.get("cathode_face_full_debit")
-        if not isinstance(_cathode_face_full_debit, bool):
-            raise ValueError(
-                "cathode_face_full_debit must be a bool (got "
-                f"{_cathode_face_full_debit!r})"
-            )
-        if _cathode_face_full_debit:
-            missing = []
-            if not self._flags.get("cathode_coupling"):
-                missing.append(
-                    "the cathode circuit solve (input_flags "
-                    "cathode_coupling), which is where the released current "
-                    "I_eth_star, the returning current I_e_ret and the sheath "
-                    "potentials phi_c_plus/phi_c come from"
-                )
-            if not cathode_adjacent_cells(self._geometry):
-                missing.append(
-                    "a cathode-adjacent plasma cell, which is where the "
-                    "emitted enthalpy and the collected barrier climb are "
-                    "booked"
-                )
-            if missing:
-                raise ValueError(
-                    "cathode_face_full_debit cannot arm: this configuration "
-                    "does not supply " + "; ".join(missing) + "."
-                )
-        self._cathode_face_full_debit = _cathode_face_full_debit
+        # The emitting cathode face's three sheath rows are armed the same
+        # way, by presence on ROLE: exactly when the geometry carries a
+        # plasma-absorbing face whose live cell has the cathode role AND the
+        # cathode circuit solve runs, because that face emits only through
+        # the solve. The solve is where the released current I_eth_star, the
+        # returning current I_e_ret and the sheath potentials phi_c_plus and
+        # phi_c come from; without it the face releases no electrons and
+        # collects none against a barrier, so there is nothing to book and
+        # the rows are absent.
+        self._cathode_face_full_debit = bool(
+            self._flags.get("cathode_coupling")
+            and absorbing_live_cells_by_role(self._geometry).get("cathode")
+        )
         # The beam's electron-energy deposition rides the implicit heat
         # substep whenever there IS one: all heat conduction lives in B, so
         # inside operator A the deposition cell would have no operator opposing
@@ -3128,14 +3115,14 @@ class LAPDSim1D:
                 momentum_sink_terms["parallel_momentum_sink_heating"] = (
                     self._zero_rhs_state()
                 )
-            # The end-face sheath rows each key arms, present and identically
+            # The end-face sheath rows each face arms, present and identically
             # zero in this branch: there is no plasma reaching either end face
             # and no cathode solve to read a released or returning current
             # from. Recording the zeros rather than dropping the keys keeps
             # the saved term structure stable across the phase change, exactly
-            # as the drift and dissipation rows below do -- and each key seeds
-            # only its own rows, so a one-key run's structure is the same here
-            # as it is once the plasma exists.
+            # as the dissipation rows below do -- and each face seeds only its
+            # own rows, so a one-face machine's structure is the same here as
+            # it is once the plasma exists.
             end_sheath_terms = {}
             if self._end_wall_sheath_full_debit:
                 end_sheath_terms.update(
@@ -3415,11 +3402,11 @@ class LAPDSim1D:
                 )
             )
         if self._end_wall_sheath_full_debit or self._cathode_face_full_debit:
-            # The end-face sheath rows, each key's own. The end wall row
+            # The end-face sheath rows, each face's own. The end wall row
             # travels here through ``end_wall_climb_out``, filled by the
             # boundary operator's own evaluation above, so the fall charged
             # and the flux it is charged on are one number rather than two
-            # readings of it; it is ``None`` when that key is unarmed, which
+            # readings of it; it is ``None`` when that row is unarmed, which
             # is how the builder knows to omit the row rather than book a
             # zero for it.
             terms.update(
@@ -6072,16 +6059,6 @@ class LAPDSim1D:
         # control flags are inert to the seed signature, so clearing this here
         # cannot change the stored entry's key or content.
         flags["use_cached_neutral_seed"] = False
-        # The cathode end-face sheath key, cleared for the SAME reason as
-        # cathode_coupling above: it books the emitting face's currents, and
-        # this pre-solve has no cathode solve to read a current from, so it is
-        # inert here. Left armed, its construction guard -- which requires
-        # exactly the cathode solve the line above has just switched off --
-        # refuses the INNER sim, a guard firing on a state where the thing it
-        # protects cannot happen. The end wall's sheath row has no key: it is
-        # armed by the geometry's end wall face in the inner sim as in the
-        # outer one, and on a Plasma=False pre-solve it seeds zero rows.
-        flags["cathode_face_full_debit"] = False
         # The two DVM directed-recycle jets, cleared for the SAME reason as
         # cathode_coupling above: this pre-solve has no plasma and no cathode
         # solve, so there is no collected ion flux for either jet to split and
@@ -7430,9 +7407,10 @@ class LAPDSim1D:
 
         Keyed by :data:`END_SHEATH_END_WALL_ROWS` when the geometry has an
         end wall face and by
-        :data:`END_SHEATH_CATHODE_ROWS` when ``cathode_face_full_debit`` is
-        armed; an unarmed end contributes NO key at all, so the caller's term dict
-        carries exactly the rows the configuration asked for. Every row is
+        :data:`END_SHEATH_CATHODE_ROWS` when it has an emitting cathode face
+        (a cathode-role absorbing face with the cathode circuit solve
+        running); an unarmed end contributes NO key at all, so the caller's
+        term dict carries exactly the rows the machine's faces arm. Every row is
         ELECTRON ENERGY ONLY (``n``, ``nn``, ``M`` and ``Ei`` are exactly
         zero), because the particle, momentum and ion-thermal bookings at both
         faces are already complete in the boundary and electrode rows and
@@ -7441,7 +7419,7 @@ class LAPDSim1D:
 
         ``end_wall_climb_row`` is the per-cell electron-energy row
         [erg cm^-3 s^-1] the boundary operator wrote back for the end wall
-        faces on THIS evaluation, or ``None`` when the end wall key is
+        faces on THIS evaluation, or ``None`` when the end wall row is
         unarmed and the operator computed none. The three cathode rows are
         built from ``cathode_solve``'s own circuit result at the emitter
         surface temperature the solve ran at, converted from watts to the same
@@ -7453,8 +7431,8 @@ class LAPDSim1D:
         cathode phase runs none) the three cathode rows are exactly zero: the
         released and returning currents are quantities of a solve, and there
         is no honest value for them without one. The end wall row is
-        independent of the circuit and is booked whenever its own key is
-        armed, solve or no solve.
+        independent of the circuit and is booked whenever the geometry has
+        an end wall face, solve or no solve.
 
         THE TWIN CATHODE is booked at its own cell from its own circuit
         result, the way ``_deposit_electrode_power`` books the electrode

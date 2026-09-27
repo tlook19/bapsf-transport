@@ -375,13 +375,6 @@ MATRIX = (
         "scripts/stances/examples/g1atrim_es1_reference.toml",
         500,
     ),
-    # The emitting end face's sheath debit: three cathode-cell electron
-    # energy rows the reference does not carry.
-    MatrixEntry(
-        "cathode_face_full_debit",
-        "scripts/stances/examples/g1atrim_cathode_face_full_debit.toml",
-        500,
-    ),
 )
 MATRIX_BY_NAME = {entry.name: entry for entry in MATRIX}
 

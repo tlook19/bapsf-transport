@@ -140,10 +140,12 @@ def legacy_get(mapping, key, default=None):
 
 #: The four END-FACE sheath rhs_terms channels, in the order the per-window
 #: block reports them: the end wall's one row first (armed wherever the
-#: geometry has an end wall face), then `cathode_face_full_debit`'s
-#: emitting-face three.  Each end is PRESENCE-GATED on its own, so a run may
-#: carry the end wall row alone, the three cathode rows alone, all four, or
-#: none -- absence here means "never booked", never "booked zero".
+#: geometry has an end wall face), then the emitting cathode face's three
+#: (armed wherever the geometry has a cathode face and the cathode circuit
+#: solve runs).  Each end is PRESENCE-GATED on its own, so a run may carry the
+#: end wall row alone, the three cathode rows alone, all four, or none -- and
+#: an artifact saved before either end's rows were booked carries neither.
+#: Absence here means "never booked", never "booked zero".
 END_SHEATH_ROWS = (
     "end_wall_e_sheath_climb",
     "cathode_e_emitted_enthalpy",
@@ -227,8 +229,8 @@ CHANNEL_PHASE = {
          "at the space-charge-released current. BOTH, not DRIVE-ONLY: the "
          "emitting surface is still hot and still releasing current into the "
          "floating afterglow, so this row runs in both windows by "
-         "construction. Present only on a run with cathode_face_full_debit "
-         "armed"),
+         "construction. Present on a run whose geometry has an emitting "
+         "cathode face"),
     "cathode_e_emitted_fall":
         ("AFTERGLOW-ACTIVE",
          "END-FACE SHEATH CLOSURE (Ee only), HEATING: the part of the "
@@ -236,8 +238,8 @@ CHANNEL_PHASE = {
          "row does not already carry. AFTERGLOW-ACTIVE BY CONSTRUCTION: it "
          "is identically zero while phi_c_minus = 0, so it is exactly zero "
          "through the drive and nonzero only in the virtual-cathode regime "
-         "the afterglow reaches. Present only on a run with "
-         "cathode_face_full_debit armed"),
+         "the afterglow reaches. Present on a run whose geometry has an "
+         "emitting cathode face"),
     "cathode_e_collected_climb":
         ("AFTERGLOW-ACTIVE",
          "END-FACE SHEATH CLOSURE (Ee only), COOLING: the barrier the "
@@ -246,8 +248,8 @@ CHANNEL_PHASE = {
          "electrode. AFTERGLOW-ACTIVE: the discharge-phase cathode sheath "
          "repels plasma electrons, so the returning current is microamps "
          "there and the row is negligible against the drive-phase terms; it "
-         "carries real power only once the barrier collapses. Present only "
-         "on a run with cathode_face_full_debit armed"),
+         "carries real power only once the barrier collapses. Present on a "
+         "run whose geometry has an emitting cathode face"),
     "ei_exchange":
         ("BOTH",
          "collisional electron-ion temperature equilibration at the local "
@@ -721,14 +723,15 @@ def report_window(f, label, lo, hi, geom, port_top):
                       "tail or discount them explicitly.")
 
     print("\n--- END-FACE SHEATH CLOSURE (end wall, "
-          "cathode_face_full_debit) [kW], window mean ---")
+          "emitting cathode face) [kW], window mean ---")
     if not table:
         print("  n/a -- rhs_terms ABSENT from this artifact")
     else:
         present = [r for r in END_SHEATH_ROWS if (r, "Ee") in table]
         if not present:
-            print("  n/a -- this run armed neither end-face key (the four "
-                  "rows are absent, which is not the same as zero)")
+            print("  n/a -- this artifact books neither end face's rows "
+                  "(the four rows are absent, which is not the same as "
+                  "zero)")
         else:
             missing = [r for r in END_SHEATH_ROWS if r not in present]
             total = 0.0
@@ -740,9 +743,10 @@ def report_window(f, label, lo, hi, geom, port_top):
             if missing:
                 print(f"  NB rows absent from this artifact: {missing} -- the "
                       "net above is over the rows present, not the closure "
-                      "(the two end-face keys arm independently, so a "
-                      "one-key run is missing the other key's rows by "
-                      "construction)")
+                      "(the two end faces arm independently, so a run "
+                      "without one of the faces, or an artifact saved "
+                      "before that face's rows were booked, is missing "
+                      "them by construction)")
             print("  the end wall row is the sheath fall its collected "
                   "electrons climbed; read it WITH characteristic_boundary,\n"
                   "  which carries the same face's 2 Te. The three cathode "
