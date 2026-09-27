@@ -269,10 +269,15 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             run_result.electron_energy_terms_W_cm3[term_name],
             1.0e-7 * term_fields["Ee"],
         )
-        assert np.allclose(
-            run_result.ion_energy_terms_W_cm3[term_name],
-            1.0e-7 * term_fields["Ei"],
-        )
+        if term_name in END_SHEATH_DEBIT_ROWS:
+            # Electron-only: Ei is exactly zero and the row is absent from
+            # the ion table.
+            assert np.all(term_fields["Ei"] == 0.0), term_name
+        else:
+            assert np.allclose(
+                run_result.ion_energy_terms_W_cm3[term_name],
+                1.0e-7 * term_fields["Ei"],
+            )
         saved_term_sum = saved_term_sum + np.concatenate(
             [term_fields[field_name] for field_name in STATE_NAMES_1D],
             axis=1,
