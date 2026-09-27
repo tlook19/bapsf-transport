@@ -95,8 +95,6 @@ def config_cases():
             "cathode_solver_model": "current_driven",
             "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
-            "cathode_emission_profile": "gaussian",
-            "cathode_warming_model": "power_balance",
             "Te_birth_ionization": LADDER_ELECTRON_BIRTH_POLICY,
             "cathode_Ts_base_K": ladder_op["Ts_standby_K"],
             "cathode_heat_capacity_J_per_K": 120.0,
@@ -116,15 +114,12 @@ def config_cases():
             "cathode_solver_model": "current_driven",
             "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
-            "cathode_emission_profile": "gaussian",
-            "cathode_warming_model": "power_balance",
             "cathode_Ts_base_K": m6_op["Ts_standby_K"],
             "cathode_heat_capacity_J_per_K": 120.0,
             # cathode_conduction_W_per_K is deliberately absent: --g-cond now
             # defaults to None and defers to the shared production config (7c).
             "cathode_emissivity": 0.7,
             "phi_wf": 2.869,
-            "cathode_surface_model": "ads_des",
             "cathode_phiwf_clean_eV": 2.809,
             "cathode_cleaning_sigma_cm2": 3.5e-16,
             "cathode_cleaning_E_th_eV": 20.0,
@@ -136,7 +131,6 @@ def config_cases():
             # stays because it is what the command line supplies, and the case
             # is the driver's resolution of that command line.
             "S_gp": 3649.84,
-            "cathode_sample_smoothing": "presheath",
         }
     )
     _apply_reference_configuration(m6_params, m6_flags)

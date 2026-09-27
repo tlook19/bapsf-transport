@@ -66,19 +66,11 @@ def _restore(sim, snap):
     sim._state = None
 
 
-def _build_sim(picard=False, picard_tol=None):
+def _build_sim():
     # The exact golden/production stance (baseline_sim1d): the ES1 drive
     # (V_bank etc.) and M6 constants are essential -- without them the discharge
     # never forms and the stepper crawls.
     params, flags = build_baseline_config()
-    if picard:
-        # R5.1/A11: the gated fluid<->circuit Picard fix under test. A tiny
-        # picard_tol FORCES the re-run every driven step (a diagnostic: does
-        # full self-consistent coupling remove the knee dt-error, or is the
-        # residual the separate SCL-corner chatter?).
-        flags = {**flags, "coupled_circuit_picard": True}
-        if picard_tol is not None:
-            params = {**params, "circuit_picard_tol_rel": picard_tol}
     return LAPDSim1D(params, flags)
 
 
@@ -93,22 +85,19 @@ def _observables(sim):
     }
 
 
-def _fresh_to_t0_then_window(t0, T, n, picard=False, picard_tol=None):
+def _fresh_to_t0_then_window(t0, T, n):
     """Build a FRESH sim, integrate (adaptive, current-gated) to t0, then advance
     the fixed window [t0, t0+T] with the full coupled step at dt=T/n.
 
     Fresh per refinement guarantees an identical starting state at t0 (the run to
     t0 is deterministic), avoiding the incomplete-snapshot fragility.
     """
-    sim = _build_sim(picard=picard, picard_tol=picard_tol)
+    sim = _build_sim()
     sim.start_simulation(t_end=t0)
     dt = T / n
     for _ in range(n):
         sim.advance_one_step(dt=dt)
-    obs = _observables(sim)
-    if picard:
-        obs["_picard_reruns"] = int(getattr(sim, "_picard_extra_solves", 0))
-    return obs
+    return _observables(sim)
 
 
 def main(argv=None):
@@ -119,11 +108,6 @@ def main(argv=None):
     ap.add_argument("--window-us", type=float, default=2.0,
                     help="refinement window length [us]")
     ap.add_argument("--n0", type=int, default=4, help="coarsest step count")
-    ap.add_argument("--picard", action="store_true",
-                    help="enable the R5.1/A11 gated fluid<->circuit Picard fix")
-    ap.add_argument("--picard-tol", type=float, default=None,
-                    help="override circuit_picard_tol_rel (tiny => force re-run "
-                         "every driven step; diagnostic)")
     args = ap.parse_args(argv)
 
     # The production stance is CURRENT-GATED (phase_transition_mode="current",
@@ -145,13 +129,10 @@ def main(argv=None):
     ns = [args.n0, 2 * args.n0, 4 * args.n0, 8 * args.n0]
     results = {}
     for n in ns:
-        results[n] = _fresh_to_t0_then_window(
-            t0, T, n, picard=args.picard, picard_tol=args.picard_tol)
+        results[n] = _fresh_to_t0_then_window(t0, T, n)
         r = results[n]
-        rr = f" reruns={r['_picard_reruns']}" if "_picard_reruns" in r else ""
         print(f"  N={n:3d} dt={T/n*1e9:7.2f} ns : V_b={r['V_b']:.6g} "
-              f"phi_c={r['phi_c']:.6g} T_s={r['T_s']:.7g} I_tot={r['I_tot']:.7g}"
-              f"{rr}")
+              f"phi_c={r['phi_c']:.6g} T_s={r['T_s']:.7g} I_tot={r['I_tot']:.7g}")
 
     # self-convergence order + production-dt error (coarsest vs finest)
     print("\nself-convergence (order p from successive halvings; "

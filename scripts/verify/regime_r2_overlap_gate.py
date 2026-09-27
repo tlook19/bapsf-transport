@@ -81,14 +81,11 @@ def build_config(nx, tracer_on, extra=None):
             "cathode_solver_model": "current_driven",
             "beam_deposition_model": "csda",
             "beam_anomalous_model": "quasilinear",
-            "cathode_emission_profile": "gaussian",
-            "cathode_warming_model": "power_balance",
             "cathode_heat_capacity_J_per_K": 120.0,
             "cathode_emissivity": 0.7,
         }
     )
     flags["neutral_equilibration"] = False
-    flags["cathode_circuit_voltage_bound"] = True
     flags["regime_tracer"] = bool(tracer_on)
     if extra:
         for key, value in extra.items():

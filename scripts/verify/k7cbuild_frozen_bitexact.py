@@ -120,16 +120,12 @@ EXTRA = {
     "cathode_solver_model": "current_driven",
     "beam_deposition_model": "csda",
     "beam_anomalous_model": "quasilinear",
-    "cathode_emission_profile": "gaussian",
-    "cathode_warming_model": "power_balance",
     "cathode_heat_capacity_J_per_K": 120.0,
     "cathode_emissivity": 0.7,
     "phi_wf": 2.869,
-    "cathode_surface_model": "ads_des",
     "cathode_phiwf_clean_eV": 2.809,
     "cathode_cleaning_sigma_cm2": 3.5e-16,
     "cathode_cleaning_E_th_eV": 20.0,
-    "cathode_sample_smoothing": "presheath",
     "gas_puff_mode": "square",
     # SUPERSEDED 2026-08-21: sccm now MEANS meter-sccm (4.171431e17 particles/s
     # per sccm, 20 C / 1013 mbar), so this literal ships ~6.85 % less flux than

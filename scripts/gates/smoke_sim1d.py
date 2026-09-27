@@ -18113,12 +18113,47 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
     # seconds of wall time), and liveness is ASSERTED rather than tested for:
     # a state that stops driving the beam must break this gate loudly, not
     # silently retire it.
-    from covbuild_run_conducting_phase import build_config as _cov_live_config
+    import tomllib as _cov_tomllib
+    from compare_sim1d_es1 import (
+        FLAG_OVERRIDES as _cov_flag_overrides,
+        PARAM_OVERRIDES as _cov_param_overrides,
+    )
+    from run_mechanism_ladder import ES_OPERATING as _cov_es_operating
 
-    # build_config returns (params, flags, lineage); the lineage is metadata
-    # and is deliberately not handed to the solver here -- this case measures
-    # the beam split, not the recording of a configuration name.
-    _cov_live_p, _cov_live_f, _ = _cov_live_config(24, coverage=(0.05, 0.0))
+    # The conducting-phase window on the scorer's instrument base at the ES1
+    # rung, with the window delta applied last and the closure armed at
+    # f0 = 0.05 on a stopped clock.
+    _cov_live_p, _cov_live_f = default_config()
+    _cov_live_p.update(_cov_param_overrides)
+    _cov_live_f.update(_cov_flag_overrides)
+    _cov_op = _cov_es_operating[1]
+    _cov_live_p.update({
+        "nx": 24,
+        "V_bank": _cov_op["V_bank"],
+        "cathode_solver_model": "current_driven",
+        "beam_deposition_model": "csda",
+        "beam_anomalous_model": "quasilinear",
+        "cathode_Ts_base_K": _cov_op["Ts_standby_K"],
+        "cathode_heat_capacity_J_per_K": 120.0,
+        "cathode_emissivity": 0.7,
+        "phi_wf": 2.869,
+        "cathode_phiwf_clean_eV": 2.809,
+        "cathode_cleaning_sigma_cm2": 3.5e-16,
+        "cathode_cleaning_E_th_eV": 20.0,
+        "Te_birth_ionization": "floor",
+        "gas_puff_mode": "square",
+    })
+    _cov_delta = _cov_tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "run"
+         / "covbuild_conducting_phase.toml").read_text()
+    )
+    _cov_live_p.update(_cov_delta.get("params", {}))
+    _cov_live_f.update(_cov_delta.get("flags", {}))
+    _cov_live_p["coverage_initial_fraction"] = 0.05
+    _cov_live_p["coverage_growth_rate_per_s"] = 0.0
+    _cov_live_f["coverage_closure"] = True
+    _cov_live_f["neutral_energy"] = False
+    _cov_live_f["neutral_hot_internal_wall"] = False
     _cov_split_sim = LAPDSim1D(_cov_live_p, _cov_live_f)
     for _ in range(40):
         _cov_split_sim.advance_one_step(dt=2.0e-9)
@@ -23578,13 +23613,6 @@ def _case_configuration_drivers_refuse_unnamed_runs():
         # corner is well behaved under one closure and marginal under another.
         (["scripts/run/sweep_sim1d_stability.py"],
          "sweep_sim1d_stability: name the configuration package", "--stance"),
-        # The window instrument: its delta table is a delta OVER something, and
-        # what that something is used to be whatever the shared driver dicts
-        # held.
-        (["scripts/run/covbuild_run_conducting_phase.py",
-          "--save-h5", "unused.h5"],
-         "covbuild_run_conducting_phase: name the configuration package",
-         "--stance"),
     )
 
     for _dr_bare, _dr_phrase, _dr_switch in _dr_drivers:
@@ -23673,10 +23701,10 @@ def _case_configuration_drivers_refuse_rung_owned_supersession():
             _ro_clash_file = str((_ro_room / "rungclash.toml").resolve())
             _ro_h5 = str(_ro_room / "unused.h5")
 
-            # (i) THE LADDER ROUTE, --warming none, which is where the rung's
-            # standby was being superseded.
+            # (i) THE LADDER ROUTE, which is where the rung's standby was
+            # being superseded.
             _ro_msg = _ro_refused(_ro_ladder.main, [
-                "--es", "1", "--warming", "none",
+                "--es", "1",
                 "--stance", "rungclash", "--save-h5", _ro_h5,
             ])
             assert "run_mechanism_ladder:" in _ro_msg, _ro_msg
@@ -23688,18 +23716,10 @@ def _case_configuration_drivers_refuse_rung_owned_supersession():
             # No restatement route on this driver, so none is offered.
             assert "--extra" not in _ro_msg, _ro_msg
 
-            # The same refusal on --warming power_balance: the key is live
-            # under both warming models, so neither route may inherit it.
-            _ro_msg_pb = _ro_refused(_ro_ladder.main, [
-                "--es", "1", "--warming", "power_balance",
-                "--stance", "rungclash", "--save-h5", _ro_h5,
-            ])
-            assert "cathode_Ts_base_K" in _ro_msg_pb, _ro_msg_pb
-
             # (ii) THE OTHER RUNG-OWNED KEY, and a rung that is not ES1, so the
             # refusal is not reading one hard-coded operating point.
             _ro_msg_vb = _ro_refused(_ro_ladder.main, [
-                "--es", "2", "--warming", "power_balance",
+                "--es", "2",
                 "--stance", "vbankclash", "--save-h5", _ro_h5,
             ])
             assert "V_bank" in _ro_msg_vb, _ro_msg_vb
@@ -23722,7 +23742,7 @@ def _case_configuration_drivers_refuse_rung_owned_supersession():
             # (iv) POSITIVE CONTROL. A configuration that names no rung-owned
             # key runs: the guard refuses supersession, not stances.
             _ro_passed(_ro_ladder.main, [
-                "--es", "1", "--warming", "none",
+                "--es", "1",
                 "--stance", "nonrung", "--save-h5", _ro_h5,
             ])
             _ro_passed(_ro_m6.main, [
@@ -23735,7 +23755,7 @@ def _case_configuration_drivers_refuse_rung_owned_supersession():
             # driver has no --extra with which a command line could put
             # something there, so its unstanced route cannot trip the guard.
             _ro_passed(_ro_ladder.main, [
-                "--es", "1", "--warming", "none", "--no-stance",
+                "--es", "1", "--no-stance",
                 "--save-h5", _ro_h5,
             ])
 

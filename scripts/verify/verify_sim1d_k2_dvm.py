@@ -2358,12 +2358,6 @@ REFUSALS = (
         )[1],
     ),
     (
-        "G7 Picard coupling refused",
-        dict(),
-        "coupled_circuit_picard",
-        lambda d, fl: (fl.__setitem__("coupled_circuit_picard", True), None)[1],
-    ),
-    (
         "G8 puff local ionization refused",
         dict(),
         "gas_puff_local_ionization_fraction",

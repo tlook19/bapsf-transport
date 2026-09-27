@@ -154,6 +154,11 @@ def _deposition_profile_split(sim, result):
 
 
 def main(argv=None):
+    raise SystemExit(
+        "covbuild_run_conducting_phase: retired -- its instrument package "
+        "names configuration keys the solver no longer has, and the coverage "
+        "closure it serves is being removed"
+    )
     p = argparse.ArgumentParser()
     p.add_argument("--nx", type=int, default=120)
     p.add_argument("--t-end", type=float, default=None)

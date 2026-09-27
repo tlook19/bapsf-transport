@@ -1,16 +1,15 @@
-"""Run the candidate config with a chosen warming mechanism across the ladder.
+"""Run the candidate config across the ladder.
 
 Mechanism-campaign driver: candidate
-config = current_driven + manifold-era csda_ql deposition + gaussian
-emission profile + Schottky (flag default), with per-campaign inputs
+config = current_driven + manifold-era csda_ql deposition + the surface
+power balance + Schottky lowering, with per-campaign inputs
 restricted to one machine-input pair -- the MEASURED open-circuit V0 and the
 DERIVED standby T_s (the operator-set heater current read through the Fig-10
 map, not a machine temperature reading). Transfer across the ladder is the
 test, so everything else is frozen at the ES1 calibration.
 
     python scripts/run/run_mechanism_ladder.py --es 1 --stance g1atrim \
-        --warming power_balance --phi-wf 2.87 --g-cond 1500 --c-th 120 \
-        --save-h5 out.h5
+        --phi-wf 2.87 --g-cond 1500 --c-th 120 --save-h5 out.h5
 
 The rung is a DELTA, not a configuration. ``--es`` supplies the one measured
 machine-input pair and every switch below states one more override, but what
@@ -215,14 +214,9 @@ def main(argv=None):
              "configured by this driver's defaults plus the overrides on "
              "this command line")
     p.add_argument("--nx", type=int, default=120)
-    p.add_argument(
-        "--warming",
-        choices=("none", "power_balance"),
-        default="power_balance",
-    )
     p.add_argument("--phi-wf", type=float, default=None,
                    help="shared work function [eV] (emission, Schottky, "
-                        "cooling, gaussian inversion -- one constant)")
+                        "cooling -- one constant)")
     p.add_argument("--g-cond", type=float, default=1500.0,
                    help="skin->substrate conduction [W/K] (the one fitted "
                         "knob; frozen after ES1)")
@@ -230,25 +224,18 @@ def main(argv=None):
                    help="skin-layer heat capacity [J/K] (honest >=120, "
                         "per the surface energy budget)")
     p.add_argument("--emissivity", type=float, default=0.7)
-    p.add_argument("--annuli", type=int, default=None,
-                   help="cathode_emission_annuli override (10 -> 30 A/B)")
     p.add_argument("--standby-offset-K", type=float, default=0.0,
                    help="offset added to the map-derived standby T_s [K] "
                         "(the +-8 K trim-quantum stability-derivative "
                         "probe; NOT a tuning knob)")
-    p.add_argument("--surface", action="store_true",
-                   help="enable cathode_surface_model='ads_des' (M5a: "
-                        "in-shot fluence-cleaning limit)")
     p.add_argument("--phiwf-clean", type=float, default=None,
-                   help="per-shot-accessible clean floor phi_clean [eV] "
-                        "(required with --surface)")
-    p.add_argument("--sigma-clean", type=float, default=0.0,
+                   help="per-shot-accessible clean floor phi_clean [eV] of "
+                        "the ads/des surface state")
+    p.add_argument("--sigma-clean", type=float, default=None,
                    help="ion-stimulated desorption cross section [cm^2]")
     p.add_argument("--E-th", type=float, default=None,
                    help="desorption threshold [eV] (M5a' Bohdansky yield "
                         "factor; omit for the energy-independent limit)")
-    p.add_argument("--bridge", action="store_true",
-                   help="enable the kT_s emission-release thermal bridge")
     p.add_argument("--mn", action="store_true",
                    help="evolved neutral momentum closure for the jet "
                         "campaign: neutral_momentum + two-zone radial + "
@@ -281,9 +268,6 @@ def main(argv=None):
     p.add_argument("--sgp", type=float, default=None,
                    help="gas puff level [sccm/valve] (the M6 single "
                         "calibration knob; default keeps PARAM_OVERRIDES)")
-    p.add_argument("--smooth", action="store_true",
-                   help="electrode sample smoothing at the presheath "
-                        "transit time (cathode + anode-flank EMA)")
     p.add_argument("--rec-return", action="store_true",
                    help="enable recombination_energy_return (the GCR pair "
                         "+I_ion*S_rec - P_PRB on the electron fluid; the "
@@ -312,40 +296,27 @@ def main(argv=None):
         "cathode_solver_model": "current_driven",
         "beam_deposition_model": "csda",
         "beam_anomalous_model": "quasilinear",
-        "cathode_emission_profile": "gaussian",
-        "cathode_warming_model": args.warming,
         # Named rather than inherited: this driver states its own
         # configuration package, so a key it cares about is spelled out even
         # where it agrees with the default. See ELECTRON_BIRTH_POLICY above.
         "Te_birth_ionization": ELECTRON_BIRTH_POLICY,
     }
-    if args.warming == "power_balance":
-        extra.update({
-            "cathode_Ts_base_K": op["Ts_standby_K"],
-            "cathode_heat_capacity_J_per_K": args.c_th,
-            "cathode_conduction_W_per_K": args.g_cond,
-            "cathode_emissivity": args.emissivity,
-        })
-    else:
-        extra["cathode_Ts_base_K"] = op["Ts_standby_K"]
+    extra.update({
+        "cathode_Ts_base_K": op["Ts_standby_K"],
+        "cathode_heat_capacity_J_per_K": args.c_th,
+        "cathode_conduction_W_per_K": args.g_cond,
+        "cathode_emissivity": args.emissivity,
+    })
     if args.phi_wf is not None:
         extra["phi_wf"] = args.phi_wf
-    if args.annuli is not None:
-        extra["cathode_emission_annuli"] = args.annuli
-    if args.surface:
-        if args.phiwf_clean is None:
-            raise SystemExit("--surface requires --phiwf-clean")
-        extra.update({
-            "cathode_surface_model": "ads_des",
-            "cathode_phiwf_clean_eV": args.phiwf_clean,
-            "cathode_cleaning_sigma_cm2": args.sigma_clean,
-        })
-        if args.E_th is not None:
-            extra["cathode_cleaning_E_th_eV"] = args.E_th
+    if args.phiwf_clean is not None:
+        extra["cathode_phiwf_clean_eV"] = args.phiwf_clean
+    if args.sigma_clean is not None:
+        extra["cathode_cleaning_sigma_cm2"] = args.sigma_clean
+    if args.E_th is not None:
+        extra["cathode_cleaning_E_th_eV"] = args.E_th
 
     flags_extra = {}
-    if args.bridge:
-        flags_extra["cathode_emission_bridge"] = True
     if args.jet and not args.mn:
         raise SystemExit("--jet requires --mn (the jet is an M_n source)")
     if args.jet_debit and args.jet is None:
@@ -378,8 +349,6 @@ def main(argv=None):
         extra["gas_puff_mode"] = "square"
     if args.sgp is not None:
         extra["S_gp"] = args.sgp
-    if args.smooth:
-        extra["cathode_sample_smoothing"] = "presheath"
 
     # The rung values AS THE RUNG SET THEM, snapshotted before the stance layer
     # below can touch them. Nothing between here and the rung's own writes

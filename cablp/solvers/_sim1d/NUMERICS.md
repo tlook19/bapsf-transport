@@ -331,7 +331,6 @@ over every cell.**
 | `neutral_sources` | fractional on $n_n$ against the fueling and pumping terms |
 | `neutral_wind` | distance, $\Delta t\le\varepsilon\min(\Delta z/\lvert u_n\rvert)$ at $\varepsilon$ = `cfl`, folding in the annulus drift where the state carries one |
 | `neutral_energy` | rate — $\Delta t$ times the summed neutral-energy relaxation rates below `neutral_dt_fraction`, folding in the neutral signal speed $(\lvert u_n\rvert+c_n)/\Delta z$ |
-| `circuit` | $\Delta t\le\varepsilon\tau_\text{circuit}$, $\tau_\text{circuit}=L/(xR_\text{comp}+dV_\text{dis}/dI)$ — the same external series share the loop advance integrates against — with the device slope read by a one-sided finite difference of that same evaluator. Withdrawn at local equilibrium ($\lvert f(I)\rvert\tau_\text{circuit}<dI_\text{probe}$), for $L\le0$ or a non-positive slope, and unless `cathode_circuit_voltage_bound` is armed. An accuracy bound, the loop advance being L-stable |
 | `dt_max` | the configured ceiling |
 
 **Floor-aware drain exemption** (under `surface_loss_floor_exempt`). A cell
@@ -477,10 +476,9 @@ $[10^{-8}\ \mathrm{V},\ \phi_{c,\text{cap}}]$ at the same tight tolerances; a
 residual already non-negative at the bottom returns $10^{-8}$ V UNTAGGED.
 Uniqueness rests on each residual's monotonicity.
 
-**A demand past the composed ceiling is CLAMPED, not raised — in the
-current-driven and prescribed forms.** There the solve returns the ceiling value
-and TAGS itself `capability_limited`, `bound_active` recording which member of
-the ceiling bound; no error is raised and the run continues. Because nothing
+**A demand past the ceiling `cathode_phi_c_cap_V` is CLAMPED, not raised — in
+the current-driven and prescribed forms.** There the solve returns the ceiling
+value and TAGS itself `capability_limited`; no error is raised and the run continues. Because nothing
 raises, the clamp is COUNTED: the solver censuses how many of a run's accepted
 cathode solves were tagged that way out of how many it performed and when the
 first one fired, prints that census at run end, and saves it in the result file
@@ -497,45 +495,12 @@ $V_\text{dis}$ evaluated at the frozen plasma state as a function of trial
 current and a modelled bank capacitor discharging trapezoidally alongside. Each
 stage is itself a `brentq` root at `xtol` $10^{-10}$ and `rtol` $10^{-12}$,
 bracketed by up to two hundred doublings, with the current clamped at $I\ge0$.
-WHICH sampled state that frozen $V_\text{dis}(I)$ is built on is selected by
-`cathode_circuit_sample`: `"raw"` (the default) the accepted end-of-step state
-itself, `"smoothed"` the supply-averaged EMA of the sampled electrode cells
-that `cathode_sample_smoothing` maintains — the same sample the RHS-side sheath
-solve and the accepted-state surface re-solve read, so under `"smoothed"` the
-loop and the fluid evaluate the sheath from one sample within an accepted step.
-The selection reaches BOTH readers of that relation — this advance and the
-`circuit` timestep bound of the adaptive-control table above, which reads the
-device slope off the same evaluator, so the bound and the step cannot be built
-on different samples.
+That frozen $V_\text{dis}(I)$ is built on the accepted end-of-step state
+itself, not on the supply-averaged EMA of the sampled electrode cells the
+RHS-side sheath solve and the accepted-state surface re-solve read.
 
-**The over-wall projection** (`cathode_circuit_project_over_wall`, default
-off) edits ONE input of that advance: the current it starts from. The explicit
-half of the TR-BDF2 stage is evaluated at the held current $I_n$, and above the
-emission wall the UNBOUNDED $V_\text{dis}$ the loop integrates sits on the
-atomic-data ceiling `cathode_phi_c_cap_V`, so that half sees the cap against a
-supply of $V_\text{src}-I_nR_\text{loop}$ and displaces the loop by of order
-$\Delta t(V_\text{cap}-V_\text{supply})/L$ in a single step. Armed, when the
-unbounded solve at $I_n$ — evaluated on the same sampled state the advance's
-own evaluator is built on — comes back `capability_limited` (which for that
-evaluator means at the data cap, it carrying no circuit member), $I_n$ is
-replaced by the WALL ROOT: the root of
-$V_\text{src}-IxR_\text{comp}-V_\text{dis}(I)=0$ found by `brentq` at `xtol`
-$10^{-9}$ A on $[I_n-2k,I_n]$ with $k=\Delta t(V_\text{cap}-V_\text{supply})/L$,
-the bracket widened downward once to $4k$ (floored at zero current) and
-otherwise left alone and counted. The load line is deliberately not a trigger:
-under `cathode_circuit_voltage_bound` the bounded solve's accepted root sits on
-it by construction. The replacement is not conservative — the inductor energy
-$\tfrac{1}{2}L(I_n^2-I_\text{root}^2)$ is dropped and booked cumulatively
-beside an event count — and it is confined to the advance's input: the advance
-overwrites the loop current with its own result immediately, so the timestep
-bound below and every other reader see the advance's OUTPUT as before.
-
-The fluid stages run at a loop current frozen over the step;
-`coupled_circuit_picard` re-runs the accepted step, at most
-`circuit_picard_max_iter` times in a driven phase, until the current a step
-produces matches the one it ran at to `circuit_picard_tol_rel` relative to
-$\max(\lvert I\rvert,1\ \mathrm{A})$, a snapshot/restore pair restoring every
-step-mutated attribute exactly so a rejected iteration leaves no trace.
+The fluid stages run at a loop current frozen over the step, and the circuit
+advances once per accepted step from the accepted plasma.
 The scheme's order matters here: a backward-Euler (first-order) fold of the
 same loop equation is not dt-converged at production time steps, while the
 TR-BDF2 (second-order) fold is.
@@ -551,8 +516,7 @@ exactly zero at the hand-off. An open circuit is solved as the CURRENT-DRIVEN
 form at $I_\text{tot}=0$ — the same monotone root at the same tolerances,
 returning the same electrode power split — so no discretization changes across
 the hand-off and the electrode terms are the same formulas evaluated at zero
-current. The ceiling's CIRCUIT member is withdrawn there, an open loop having
-no available voltage to offer, leaving `cathode_phi_c_cap_V` alone.
+current.
 
 **The beam march.** The CSDA ray is integrated over adaptive substeps
 $dz_\text{sub}=\min(\text{remaining},f_\text{sub}E/L_\text{tot})$,
@@ -576,7 +540,7 @@ differs by form:
 | form | where $l_b$ is evaluated | iterated with |
 |---|---|---|
 | voltage-driven | between successive `brentq` solves, the bypass fraction held frozen as a parameter inside the residual | the $(\psi_+,l_b,\beta_\text{bypass})$ triple, to $10^{-4}$ in the bypass fraction over at most four passes |
-| current-driven | after the root: the residual is $J_\text{tot}(\psi_+)-J_\text{target}$ and never reads $l_b$ | nothing — one root, then $l_b$ once. (The separate, conditionally-run ceiling root over the device voltage does evaluate $l_b$ inside its own residual.) |
+| current-driven | after the root: the residual is $J_\text{tot}(\psi_+)-J_\text{target}$ and never reads $l_b$ | nothing — one root, then $l_b$ once |
 | prescribed | inside the residual, through the anode state the root passes | nothing beyond the single bracketed root |
 
 The one BISECTED quantity in the deposition module is the plateau-edge energy $E_1$: a fixed
@@ -860,7 +824,6 @@ bookkeeping.
 | Step attempt, validation, retry ladder | `solver.py:_attempt_step`, `_accept_step_attempt`, `_attempt_step_with_retries` |
 | Ignition guards | `core/ignition.py`; `solver.py:_open_ignition_switch` |
 | Sheath root find, loop advance | `cablp/cathode/circuit.py:solve`, `circuit_idriven.py:solve_idriven`, `circuit_prescribed.py:solve_prescribed`; `physics/cathode.py:advance_circuit_current_driven` |
-| Fluid↔circuit Picard | `solver.py:_accept_step_with_picard`, `_picard_snapshot`, `_picard_restore` |
 | CSDA beam march; plateau edge | `cablp/cathode/beam_deposition.py:deposit_beam`, `plateau_edge_energy_eV` |
 | Velocity grid, moment projection | `physics/kinetic_neutrals.py:stretched_axis`, `stretched_positive_axis`, `VGrid.maxwellian` |
 | Launch spectra; extent guard | `physics/kinetic_dvm.py:_cathode_jet_launch_spectrum`, `_anode_jet_launch_spectrum`, `_end_wall_jet_launch_spectrum`, `_refuse_unreachable_launch_band` |
