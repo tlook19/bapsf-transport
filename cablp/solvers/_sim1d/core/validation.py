@@ -111,10 +111,6 @@ def validate_r1_configuration_presence(
             float(input_dict.get("D_amb")),
             0.0,
         ),
-        "cathode_model": (
-            str(input_dict.get("cathode_model")),
-            "disabled",
-        ),
     }
     changed = [
         name
@@ -156,17 +152,13 @@ def validate_r1_configuration_presence(
         )
     _deprecated_selectors = {
         "D_amb_model": (str(input_dict.get("D_amb_model", "cs_dz")), "cs_dz"),
-        "cathode_model": (
-            str(input_dict.get("cathode_model", "disabled")), "disabled",
-        ),
     }
     _sel = [n for n, (a, d) in _deprecated_selectors.items() if a != d]
     if _sel:
         warnings.warn(
             "legacy-compat selectors " + ", ".join(_sel) + " are DEPRECATED "
             "and never consumed by the conservative solver (D_amb_model was "
-            "a _sim3-compat knob; cathode_model is superseded by the "
-            "cathode_coupling flag).",
+            "a _sim3-compat knob).",
             DeprecationWarning,
             stacklevel=2,
         )

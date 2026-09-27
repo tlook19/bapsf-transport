@@ -2189,7 +2189,6 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
 
     cathode_boundary = sim.cathode_boundary_state()
     assert not cathode_boundary.enabled
-    assert cathode_boundary.mode == "disabled"
     assert cathode_boundary.source.index == cathode_face
     assert cathode_boundary.source.role == "cathode"
     assert cathode_boundary.end.index == geom.cells - 1
@@ -2228,7 +2227,6 @@ def _case_cathode_resolved_gap_resistance(cathode_face):
             assert np.isfinite(value)
     cathode_terms = sim.cathode_source_terms()
     assert not cathode_terms.enabled
-    assert cathode_terms.mode == "disabled"
     assert cathode_terms.metadata["source_index"] == cathode_face
     assert cathode_terms.metadata["end_index"] == geom.cells - 1
     for key, value in cathode_boundary.circuit.items():
@@ -17697,7 +17695,6 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
         {"front_flux_model": "unregistered"},
         {"D_amb_model": "constant"},
         {"D_amb": 1.0},
-        {"cathode_model": "enabled"},
     ):
         try:
             LAPDSim1D(dict(r1a_params, **stale_param), r1a_flags)

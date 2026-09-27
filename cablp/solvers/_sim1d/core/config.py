@@ -762,10 +762,6 @@ def model_mode_defaults():
         diagnostics as a label. ``"end_wall"`` is the only accepted value;
         the 0D-era ``"mirrored_source"`` alternative, which the conservative
         solver never branched on, was removed at D3 (2026-08-21) and raises.
-    cathode_model:
-        Cathode model selector retained for configuration compatibility. The
-        current option is ``"disabled"``; actual cathode coupling is controlled
-        by the ``cathode_coupling`` flag.
     Te_birth_ionization:
         Electron birth temperature model for ionization. Options are
         ``"local"`` to use the local electron temperature, ``"floor"`` to use
@@ -1507,8 +1503,6 @@ def model_mode_defaults():
         # warns; retained for reproducibility at the tag) ---
         # D_amb_model: _sim3-compat; the conservative flux closure never uses it.
         "D_amb_model": "cs_dz",
-        # cathode_model: compat only; actual coupling is the cathode_coupling flag.
-        "cathode_model": "disabled",
     }
 
 
@@ -4243,8 +4237,7 @@ input_flags_template_1d = {
     # strict no-op where the trigger does not fire (one pass == the sequential
     # advance, bit-exact). Incompatible with the kinetic neutral engine.
     "coupled_circuit_picard": False,
-    # The cathode/anode/bank circuit solve. This is the actual coupling control
-    # (cathode_model is compat-only). OFF, no cathode solve is produced for the
+    # The cathode/anode/bank circuit solve. OFF, no cathode solve is produced for the
     # whole run: the boundary carries no device current or voltage, the cathode
     # and anode jets return nothing, and the tracer's beam rows get no source.
     # run_neutral_equilibration pins it off on its inner sim.

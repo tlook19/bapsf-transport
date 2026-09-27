@@ -2829,75 +2829,6 @@ class LAPDSim1D:
         validate_cathode_ion_secondary_emission(
             self._input_dict, self._flags
         )
-        # WHICH SAMPLE THE CIRCUIT ADVANCE READS. Validated at construction --
-        # the advance runs once per accepted step deep inside the run, and a
-        # configuration that names a sample this run cannot supply must say so
-        # before it spends any time -- and, like the secondary-emission pair
-        # above, BEFORE the prescribed drive is resolved, so a configuration
-        # that names the smoothed sample under the measured drive is refused
-        # by name rather than by whatever the trace resolution happens to
-        # complain about first. "smoothed" names three things it needs -- an
-        # EMA to read, the current-driven advance that reads it, and the
-        # cathode coupling that runs that advance -- and each absence is
-        # refused by the name of the key that would have to change.
-        _circuit_sample = self._input_dict.get("cathode_circuit_sample")
-        if _circuit_sample not in _CIRCUIT_SAMPLES:
-            raise ValueError(
-                "cathode_circuit_sample must be one of "
-                f"{list(_CIRCUIT_SAMPLES)} (got {_circuit_sample!r})"
-            )
-        if _circuit_sample == "smoothed":
-            if self._input_dict.get("cathode_sample_smoothing") is None:
-                raise ValueError(
-                    "cathode_circuit_sample='smoothed' requires "
-                    "cathode_sample_smoothing to name a smoothing: with it "
-                    "None there is no supply-averaged sample for the circuit "
-                    "advance to read, and the mode would be a silent no-op"
-                )
-            if self._cathode_solver_model != "current_driven":
-                raise ValueError(
-                    "cathode_circuit_sample='smoothed' requires "
-                    "cathode_solver_model='current_driven' (got "
-                    f"{self._cathode_solver_model!r}): the sample it "
-                    "substitutes is read by the current-driven circuit "
-                    "advance, which no other solver model performs"
-                )
-            if not bool(self._flags.get("cathode_coupling")):
-                raise ValueError(
-                    "cathode_circuit_sample='smoothed' requires the "
-                    "cathode_coupling flag: with no cathode solve there is "
-                    "no circuit advance to evaluate V_dis(I) on any sample"
-                )
-        self._cathode_circuit_sample = _circuit_sample
-        # THE OVER-WALL PROJECTION, validated here for the reason the sample
-        # selector above is: it edits the circuit advance, the advance runs
-        # once per accepted step deep inside the run, and a configuration that
-        # arms an edit to an advance this run never performs must say so before
-        # it spends any time. Beside those refusals, and like them BEFORE the
-        # prescribed drive is resolved, so a configuration that arms the
-        # projection under the measured drive is refused by the name of the key
-        # that would have to change rather than by whatever the trace
-        # resolution happens to complain about first.
-        _project_over_wall = bool(
-            self._flags.get("cathode_circuit_project_over_wall", False)
-        )
-        if _project_over_wall:
-            if not bool(self._flags.get("cathode_coupling")):
-                raise ValueError(
-                    "cathode_circuit_project_over_wall requires the "
-                    "cathode_coupling flag: with no cathode solve there is no "
-                    "circuit advance whose starting current could be "
-                    "projected onto the emission wall"
-                )
-            if self._cathode_solver_model != "current_driven":
-                raise ValueError(
-                    "cathode_circuit_project_over_wall requires "
-                    "cathode_solver_model='current_driven' (got "
-                    f"{self._cathode_solver_model!r}): the projection edits "
-                    "the current-driven loop advance, which no other solver "
-                    "model performs"
-                )
-        self._circuit_project_over_wall = _project_over_wall
         # PRESCRIBED MEASURED DRIVE (cathode_solver_model =
         # "prescribed_measured"). Resolved ONCE, here: the trace file is read,
         # its columns and clock validated, its bytes digested, and the hand-off
@@ -2916,38 +2847,6 @@ class LAPDSim1D:
         self._prescribed_active = False
         self._circuit_V_dis_prescribed = 0.0
         self._prescribed_handoff = None
-        # Circuit voltage bound (R1): a ceiling on the device voltage set by
-        # what the loop can supply. It lives inside the current-driven sheath
-        # solve and is formed from the bank/capacitor source, so a
-        # configuration that has neither would turn it on and get nothing --
-        # exactly the silent no-op the house rules forbid.
-        if bool(self._flags.get("cathode_circuit_voltage_bound")):
-            if not bool(self._flags.get("cathode_coupling")):
-                raise ValueError(
-                    "cathode_circuit_voltage_bound requires the "
-                    "cathode_coupling flag: with no cathode solve there is "
-                    "no device voltage to bound"
-                )
-            if not float(self._input_dict.get("V_bank")) > 0.0:
-                raise ValueError(
-                    "cathode_circuit_voltage_bound requires a positive "
-                    f"V_bank (got {self._input_dict.get('V_bank')!r}); "
-                    "the bound is the source voltage minus the series "
-                    "resistive drop, so a zero source would leave it "
-                    "permanently inactive"
-                )
-            # Which quantity the available voltage bounds. Validated here so a
-            # typo is a construction error rather than a run that silently
-            # bounds nothing; the sheath solve validates it again where it is
-            # consumed, because it is reachable from callers that never build
-            # a solver.
-            _bound_object = circuit_bound_object(self._input_dict)
-            if _bound_object not in _CIRCUIT_BOUND_OBJECTS:
-                raise ValueError(
-                    "cathode_circuit_bound_object must be one of "
-                    f"{sorted(_CIRCUIT_BOUND_OBJECTS)} (got "
-                    f"{_bound_object!r})"
-                )
         # Current-driven circuit state: the loop current, integrated once
         # per accepted step.
         self._circuit_I_loop = 0.0
@@ -2965,138 +2864,69 @@ class LAPDSim1D:
         # (time, integral) pair at the previous trajectory save anchors it.
         self._circuit_V_dis_time_integral = 0.0
         self._circuit_V_dis_prev_save = None
-        # THE OVER-WALL PROJECTION's census, seeded on every run and mutated
-        # only while ``cathode_circuit_project_over_wall`` is armed. Three
-        # counters, none of which any exported value is a function of:
-        #   events        accepted steps whose starting current was replaced
-        #                 by the wall root;
-        #   energy_J      cumulative 0.5*L*(I^2 - I_root^2) [J] over those
-        #                 events -- the inductor energy the replacement drops,
-        #                 which is the whole non-conservative cost of the edit
-        #                 and is therefore measured rather than argued;
-        #   unbracketed   steps that TRIGGERED but whose widened bracket still
-        #                 did not straddle the root, so the current was left
-        #                 alone. A non-zero count here is the statement that
-        #                 the kick estimate under-covered the excursion.
-        # Exported presence-gated on the flag, so an unarmed run's diagnostic
-        # set and restart payload are unchanged.
-        self._circuit_projection_events = 0
-        self._circuit_projection_energy_J = 0.0
-        self._circuit_projection_unbracketed = 0
 
     def _init_cathode_surface_state(self):
-        """Arm the vessel node and the evolving cathode surface state.
+        """Arm the evolving cathode surface state.
 
-        The warming model's surface temperature and the ads/des coverage
-        are the two pieces of cathode state that evolve over a shot; both
-        are ``None`` under their default 'none' selectors, which is the
-        presence gate every consumer reads.
+        The power-balance surface temperature and the ads/des contaminant
+        coverage are the two pieces of cathode state that evolve over a shot.
         """
-        # Vessel / common-mode node (default absent). ``_vessel`` is the
-        # resolved constant record or None; ``_vessel_V_cm`` is the node's
-        # single state variable and stays None while the node is absent, so
-        # every consumer is presence-gated on one object.
-        self._configure_regime_vessel_node()
-        # Cathode warming state: the evolving emitter surface temperature [K]
-        # (config cathode_warming_model). None = the surface held static at
-        # cathode_Ts_base_K.
-        warming_model = str(
-            self._input_dict.get("cathode_warming_model")
-        )
-        if warming_model not in ("none", "power_balance"):
+        # Cathode warming state: the evolving emitter surface temperature [K],
+        # seeded at the heater-maintained standby value cathode_Ts_base_K.
+        Ts_base = self._input_dict.get("cathode_Ts_base_K")
+        if Ts_base is None:
             raise ValueError(
-                "cathode_warming_model must be 'none' or 'power_balance' "
-                f"(got {warming_model!r})"
+                "the cathode power balance requires cathode_Ts_base_K (the "
+                "heater-maintained standby surface temperature)"
             )
-        self._cathode_warming_model = warming_model
-        self._cathode_Ts_K = None
-        if warming_model == "power_balance":
-            Ts_base = self._input_dict.get("cathode_Ts_base_K")
-            if Ts_base is None:
-                raise ValueError(
-                    "cathode_warming_model='power_balance' requires "
-                    "cathode_Ts_base_K (the heater-maintained standby "
-                    "surface temperature)"
-                )
-            if float(
-                self._input_dict.get("cathode_heat_capacity_J_per_K")
-            ) <= 0.0:
-                raise ValueError(
-                    "cathode_heat_capacity_J_per_K must be positive"
-                )
-            eps = float(self._input_dict.get("cathode_emissivity"))
-            if not 0.0 < eps <= 1.0:
-                raise ValueError(
-                    f"cathode_emissivity must be in (0, 1] (got {eps})"
-                )
-            if float(
-                self._input_dict.get("cathode_conduction_W_per_K")
-            ) < 0.0:
-                raise ValueError(
-                    "cathode_conduction_W_per_K must be non-negative"
-                )
-            if float(Ts_base) <= CATHODE_ENV_T_K:
-                raise ValueError(
-                    "cathode_Ts_base_K must exceed the "
-                    f"{CATHODE_ENV_T_K:g} K chamber-wall temperature"
-                )
-            self._cathode_Ts_K = float(Ts_base)
-        else:
-            # The STATIC model holds the surface at cathode_Ts_base_K for the
-            # whole shot, so the key is as required here as it is above --
-            # every emission path, the T_s_surface diagnostic and the TPMC
-            # kinetic background read it, and there is no evolving value to
-            # fall back on. Left unset it reached those reads as None and
-            # failed as a TypeError inside the cathode solve; refuse it here
-            # instead, where the configuration is still the thing being
-            # talked about.
-            if self._input_dict.get("cathode_Ts_base_K") is None:
-                raise ValueError(
-                    "cathode_warming_model='none' holds the cathode surface "
-                    "at cathode_Ts_base_K for the whole shot, so that key is "
-                    "required and must not be None. It is the surface "
-                    "temperature under BOTH warming models: set it to the "
-                    "heater-maintained standby temperature, or select "
-                    "cathode_warming_model='power_balance' to evolve from it."
-                )
-        # Surface-state coverage (cathode_surface_model="ads_des",
-        # M5a): theta in [0, 1] is the contaminant
+        if float(
+            self._input_dict.get("cathode_heat_capacity_J_per_K")
+        ) <= 0.0:
+            raise ValueError(
+                "cathode_heat_capacity_J_per_K must be positive"
+            )
+        eps = float(self._input_dict.get("cathode_emissivity"))
+        if not 0.0 < eps <= 1.0:
+            raise ValueError(
+                f"cathode_emissivity must be in (0, 1] (got {eps})"
+            )
+        if float(
+            self._input_dict.get("cathode_conduction_W_per_K")
+        ) < 0.0:
+            raise ValueError(
+                "cathode_conduction_W_per_K must be non-negative"
+            )
+        if float(Ts_base) <= CATHODE_ENV_T_K:
+            raise ValueError(
+                "cathode_Ts_base_K must exceed the "
+                f"{CATHODE_ENV_T_K:g} K chamber-wall temperature"
+            )
+        self._cathode_Ts_K = float(Ts_base)
+        # Surface-state coverage (ads/des): theta in [0, 1] is the contaminant
         # coverage raising the effective work function,
         # phi_eff = phi_clean + (phi_wf - phi_clean) * theta, evolving as
         #   dtheta/dt = -sigma Gamma_i theta
-        # (ion-stimulated desorption -- M5a, the fluence-cleaning limit --
-        # which is the only coverage channel, so theta is monotonically
-        # non-increasing). None = static phi_wf (historical).
-        surface_model = str(
-            self._input_dict.get("cathode_surface_model")
-        )
-        if surface_model not in ("none", "ads_des"):
+        # (ion-stimulated desorption, the fluence-cleaning limit, which is the
+        # only coverage channel, so theta is monotonically non-increasing).
+        clean = self._input_dict.get("cathode_phiwf_clean_eV")
+        if clean is None:
             raise ValueError(
-                "cathode_surface_model must be 'none' or 'ads_des' "
-                f"(got {surface_model!r})"
+                "the ads/des cathode surface model requires "
+                "cathode_phiwf_clean_eV (the per-shot-accessible floor)"
             )
-        self._cathode_theta = None
-        if surface_model == "ads_des":
-            clean = self._input_dict.get("cathode_phiwf_clean_eV")
-            if clean is None:
-                raise ValueError(
-                    "cathode_surface_model='ads_des' requires "
-                    "cathode_phiwf_clean_eV (the per-shot-accessible floor)"
-                )
-            if not float(clean) < float(self._input_dict["phi_wf"]):
-                raise ValueError(
-                    "cathode_phiwf_clean_eV must be below phi_wf (the "
-                    "contaminated shot-start value)"
-                )
-            if float(self._input_dict.get("cathode_cleaning_sigma_cm2")) < 0.0:
-                raise ValueError(
-                    "cathode_cleaning_sigma_cm2 must be non-negative"
-                )
-            self._cathode_theta = 1.0
+        if not float(clean) < float(self._input_dict["phi_wf"]):
+            raise ValueError(
+                "cathode_phiwf_clean_eV must be below phi_wf (the "
+                "contaminated shot-start value)"
+            )
+        if float(self._input_dict.get("cathode_cleaning_sigma_cm2")) < 0.0:
+            raise ValueError(
+                "cathode_cleaning_sigma_cm2 must be non-negative"
+            )
+        self._cathode_theta = 1.0
         # Per-shot surface energy ledger [J]: running integrals of the
-        # balance terms over accepted steps. These FIVE rows are
-        # power_balance only and stay zero otherwise (the presence-gated
-        # backscatter row added just below is not -- see its own note). The net
+        # balance terms over accepted steps (the presence-gated backscatter
+        # row added just below has its own note). The net
         # (heater + ion - rad - emis - cond) is the shot's unreturned
         # energy into the emitting skin; cond is what the heater-held
         # substrate absorbed -- the quantity the open-loop-heater drift
@@ -7350,19 +7180,14 @@ class LAPDSim1D:
         )
 
     def _cathode_phi_wf_eff(self):
-        """Effective work function [eV] under cathode_surface_model; None off."""
-        if self._cathode_theta is None:
-            return None
+        """Effective work function [eV] at the current contaminant coverage."""
         clean = float(self._input_dict["cathode_phiwf_clean_eV"])
         dirty = float(self._input_dict["phi_wf"])
         return clean + (dirty - clean) * float(self._cathode_theta)
 
     def _surface_effective_input_dict(self):
         """input_dict with the evolving phi_wf substituted (shared-constant rule)."""
-        eff = self._cathode_phi_wf_eff()
-        if eff is None:
-            return self._input_dict
-        return {**self._input_dict, "phi_wf": eff}
+        return {**self._input_dict, "phi_wf": self._cathode_phi_wf_eff()}
 
     def _accept_step_attempt(self, attempt):
         # The anode electron-sheath pair, committed for an ACCEPTED step
