@@ -40,6 +40,7 @@ from cablp.solvers._sim1d.physics.cathode import (
     cathode_sample_indices,
 )
 from cablp.solvers._sim1d.physics.conduction import conductive_face_flux
+from cablp.solvers._sim1d.solver import END_SHEATH_CATHODE_ROWS
 from cablp.solvers._sim1d.physics.neutrals import (
     gas_puff_rate_profile,
     neutral_exchange_coefficients,
@@ -1692,14 +1693,19 @@ def _case_cathode_power_balance_warming(
     assert not np.any((_cathode_Ee != 0.0) & (_anode_Ee != 0.0))
     assert np.abs(_anode_Ee).max() > 0.0
     assert np.abs(_cathode_Ee).max() > 0.0
-    # Summed over the five base rows; the packed y also carries nn_a.
+    # Summed over the five base rows; the packed y also carries nn_a. The
+    # circuit solve arms the emitting cathode face's three sheath rows on top
+    # of the circuit-off term set.
     cathode_saved_sum = np.zeros(
         (
             cathode_run_result.y.shape[0],
             len(STATE_NAMES_1D) * np.asarray(cathode_run_result.nn).shape[1],
         )
     )
-    for term_name in expected_rhs_terms:
+    assert set(cathode_run_result.rhs_terms) == (
+        expected_rhs_terms | set(END_SHEATH_CATHODE_ROWS)
+    )
+    for term_name in cathode_run_result.rhs_terms:
         term_fields = cathode_run_result.rhs_terms[term_name]
         assert np.allclose(
             cathode_run_result.electron_energy_terms_W_cm3[term_name],
@@ -1783,7 +1789,11 @@ def _case_cathode_power_balance_warming(
             loaded_cathode_result.phase_cathode_enabled,
             cathode_run_result.phase_cathode_enabled,
         )
-        assert set(loaded_cathode_result.rhs_terms) == expected_rhs_terms
+        # The circuit solve arms the emitting cathode face's three sheath
+        # rows on top of the circuit-off term set.
+        assert set(loaded_cathode_result.rhs_terms) == (
+            expected_rhs_terms | set(END_SHEATH_CATHODE_ROWS)
+        )
         assert np.allclose(
             loaded_cathode_result.rhs_terms["cathode_surface_loss"]["n"],
             cathode_run_result.rhs_terms["cathode_surface_loss"]["n"],
