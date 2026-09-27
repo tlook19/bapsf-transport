@@ -97,7 +97,7 @@ from cablp.plasma.params import (
     LN_LAMBDA_MIN,
     bohm_sound_speed as _bohm_sound_speed,
 )
-from cablp.atomic.cross_sections import H_EII_cross_lkup, He_EII_cross_lkup
+from cablp.atomic.cross_sections import He_EII_cross_lkup
 from cablp.cathode.kernels import COMPILED_KERNELS as _COMPILED_KERNELS
 
 __all__ = [
@@ -827,7 +827,6 @@ def solve_beam_system_idriven(
     beam_cross_prev: np.ndarray,
     plasma_cross: np.ndarray,
     I_ion: float,
-    gas_type: str,
     I_tot_A: float,
     cathode_index: int = 0,
     anode_current_A: float | None = None,
@@ -874,7 +873,6 @@ def solve_beam_system_idriven(
         nn=nn,
         plasma_cross=plasma_cross,
         I_ion=I_ion,
-        gas_type=gas_type,
         cathode_index=cathode_index,
         b_beam_excitation=b_beam_excitation,
         beam_excitation_energy_eV=beam_excitation_energy_eV,
@@ -889,7 +887,6 @@ def assemble_beam_arrays(
     nn: np.ndarray,
     plasma_cross: np.ndarray,
     I_ion: float,
-    gas_type: str,
     cathode_index: int = 0,
     b_beam_excitation: float = 0.0,
     beam_excitation_energy_eV: float = 21.218,
@@ -924,45 +921,41 @@ def assemble_beam_arrays(
         n_beam[cathode_index] = _I_beam_0 / (
             E_SI * plasma_cross[cathode_index] * v_beam[cathode_index]
         )
-        if gas_type == "He":
-            # The tabulated He EII cross section ends at eps = E/I_ion =
-            # HE_EII_EPS_TOP, and the lookup CLAMPS to its last node above
-            # that. On a capability-limited step the beam energy is the sheath
-            # ceiling, which at the shipped cap (``cathode_phi_c_cap_V``) sits
-            # on the table's last node to within a ULP -- so the edge is
-            # INCLUSIVE within HE_EII_EDGE_REL_TOL, exactly as the tail walk's
-            # guard has it (K7c): at the edge the clamped value IS the
-            # endpoint node and nothing is extrapolated. A larger excess is
-            # refused rather than silently clamped, which is what this call
-            # did before. Since the sheath root is now capped, reaching the
-            # refusal requires a cap configured above the table top.
-            _beam_eps = phi_c_0 / I_ion
-            _beam_edge_excess = (
-                _beam_eps - HE_EII_EPS_TOP
-            ) / HE_EII_EPS_TOP
-            if _beam_edge_excess > HE_EII_EDGE_REL_TOL:
-                raise ValueError(
-                    "the beam ionization cross section is read from the "
-                    "tabulated He EII data, which ends at eps = E/I_ion = "
-                    f"{HE_EII_EPS_TOP:.6f} (i.e. "
-                    f"{HE_EII_EPS_TOP * I_ion:.2f} eV at I_ion={I_ion}); at "
-                    f"phi_c={phi_c_0} V the lookup would clamp to its last "
-                    "node and the beam would deposit on an extrapolated cross "
-                    "section. This is refused, not approximated (relative "
-                    f"excess {_beam_edge_excess:.3e}, tolerated "
-                    f"{HE_EII_EDGE_REL_TOL:.1e}); lower "
-                    "cathode_phi_c_cap_V to the table top or below"
-                )
-            beam_cross[cathode_index] = He_EII_cross_lkup(_beam_eps)
-        elif gas_type == "H":
-            beam_cross[cathode_index] = H_EII_cross_lkup(phi_c_0)
+        # The tabulated He EII cross section ends at eps = E/I_ion =
+        # HE_EII_EPS_TOP, and the lookup CLAMPS to its last node above
+        # that. On a capability-limited step the beam energy is the sheath
+        # ceiling, which at the shipped cap (``cathode_phi_c_cap_V``) sits
+        # on the table's last node to within a ULP -- so the edge is
+        # INCLUSIVE within HE_EII_EDGE_REL_TOL, exactly as the tail walk's
+        # guard has it (K7c): at the edge the clamped value IS the
+        # endpoint node and nothing is extrapolated. A larger excess is
+        # refused rather than silently clamped, which is what this call
+        # did before. Since the sheath root is now capped, reaching the
+        # refusal requires a cap configured above the table top.
+        _beam_eps = phi_c_0 / I_ion
+        _beam_edge_excess = (
+            _beam_eps - HE_EII_EPS_TOP
+        ) / HE_EII_EPS_TOP
+        if _beam_edge_excess > HE_EII_EDGE_REL_TOL:
+            raise ValueError(
+                "the beam ionization cross section is read from the "
+                "tabulated He EII data, which ends at eps = E/I_ion = "
+                f"{HE_EII_EPS_TOP:.6f} (i.e. "
+                f"{HE_EII_EPS_TOP * I_ion:.2f} eV at I_ion={I_ion}); at "
+                f"phi_c={phi_c_0} V the lookup would clamp to its last "
+                "node and the beam would deposit on an extrapolated cross "
+                "section. This is refused, not approximated (relative "
+                f"excess {_beam_edge_excess:.3e}, tolerated "
+                f"{HE_EII_EDGE_REL_TOL:.1e}); lower "
+                "cathode_phi_c_cap_V to the table top or below"
+            )
+        beam_cross[cathode_index] = He_EII_cross_lkup(_beam_eps)
         (
             beam_exc_cross[cathode_index],
             beam_exc_energy[cathode_index],
         ) = beam_excitation_channel(
             phi_c_0,
             b_beam_excitation,
-            gas_type,
             threshold_eV=beam_excitation_energy_eV,
         )
 

@@ -3,8 +3,6 @@ import math
 import numpy as np
 
 from cablp.atomic.adas import he_rates
-from cablp.atomic.cross_sections import He_ion_rate_lkup, alpha_3, alpha_r
-from cablp.atomic.fits import rate_coeff
 from cablp.constants import ev_to_erg
 
 from ..core.state import ConservativeState1D, derive_state
@@ -14,68 +12,31 @@ from .sources import (
 )
 
 
-H_ION_COEFF = (1e-5, 6.0)
-
-ATOMIC_RATE_MODELS = ("janev", "adas")
-
-
-def _check_atomic_rate_model(atomic_rate_model, gas_type):
-    if atomic_rate_model not in ATOMIC_RATE_MODELS:
-        raise ValueError(
-            f"atomic_rate_model must be one of {ATOMIC_RATE_MODELS} "
-            f"(got {atomic_rate_model!r})"
-        )
-    if atomic_rate_model == "adas" and gas_type != "He":
-        raise ValueError(
-            "atomic_rate_model='adas' is only wired for gas_type 'He' "
-            f"(got {gas_type!r})"
-        )
-
-
 def reaction_rates(
     state,
     floors,
     ion_mass_g,
-    gas_type,
-    I_ion,
-    atomic_rate_model="janev",
     adas_low_te_extension=False,
 ):
     """Return bulk ionization and recombination density rates [cm^-3 s^-1].
 
-    ``atomic_rate_model`` selects the coefficient source. ``"janev"`` (the
-    historical default) uses the direct ground-state ionization rate and the
-    separate radiative/three-body recombination coefficients. ``"adas"`` uses
-    the OPEN-ADAS GCR effective coefficients (``cablp.atomic.adas``): SCD for
-    ionization -- which includes the stepwise/metastable channel the direct
-    rate lacks (up to ~3-6x at 3-5 eV, LAPD densities) -- and ACD for
-    recombination. ACD already contains three-body recombination at the
-    tabulated density, so in adas mode the whole sink is reported through the
-    ``S_rec_rad`` slot, and the separate three-body channel is inert.
+    The coefficients are the OPEN-ADAS GCR effective coefficients
+    (``cablp.atomic.adas``): SCD for ionization -- which includes the
+    stepwise/metastable channel the direct rate lacks (up to ~3-6x at 3-5 eV,
+    LAPD densities) -- and ACD for recombination. ACD already contains
+    three-body recombination at the tabulated density, so the whole sink is
+    reported through the ``S_rec_rad`` slot, and the three-body slot
+    ``S_rec_3b`` is zero.
     """
-    _check_atomic_rate_model(atomic_rate_model, gas_type)
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    if atomic_rate_model == "adas":
-        n_safe = np.maximum(state.n, floors["n"])
-        rates = he_rates(
-            n_safe, derived.Te, ("scd", "acd"),
-            low_te_extension=adas_low_te_extension,
-        )
-        S_ion = state.n * state.nn * rates["scd"]
-        S_rec_rad = state.n * state.n * rates["acd"]
-        S_rec_3b = np.zeros_like(state.n, dtype=float)
-        return S_ion, S_rec_rad, S_rec_3b
-
-    if gas_type == "He":
-        ion_rate = He_ion_rate_lkup(derived.Te)
-    elif gas_type == "H":
-        ion_rate = rate_coeff(derived.Te, I_ion, *H_ION_COEFF)
-    else:
-        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")
-
-    S_ion = state.n * state.nn * ion_rate
-    S_rec_rad = state.n * state.n * alpha_r(derived.Te, I=I_ion)
-    S_rec_3b = state.n * state.n * state.n * alpha_3(derived.Te)
+    n_safe = np.maximum(state.n, floors["n"])
+    rates = he_rates(
+        n_safe, derived.Te, ("scd", "acd"),
+        low_te_extension=adas_low_te_extension,
+    )
+    S_ion = state.n * state.nn * rates["scd"]
+    S_rec_rad = state.n * state.n * rates["acd"]
+    S_rec_3b = np.zeros_like(state.n, dtype=float)
     return S_ion, S_rec_rad, S_rec_3b
 
 
@@ -84,9 +45,6 @@ def reaction_rhs(
     floors,
     ion_mass_g,
     geometry,
-    gas_type,
-    I_ion,
-    atomic_rate_model="janev",
     adas_low_te_extension=False,
     Ti_birth_ionization="neutral",
     Tn_K=300.0,
@@ -97,9 +55,6 @@ def reaction_rhs(
         floors=floors,
         ion_mass_g=ion_mass_g,
         geometry=geometry,
-        gas_type=gas_type,
-        I_ion=I_ion,
-        atomic_rate_model=atomic_rate_model,
         adas_low_te_extension=adas_low_te_extension,
         Ti_birth_ionization=Ti_birth_ionization,
         Tn_K=Tn_K,
@@ -121,9 +76,6 @@ def reaction_rhs_terms(
     floors,
     ion_mass_g,
     geometry,
-    gas_type,
-    I_ion,
-    atomic_rate_model="janev",
     adas_low_te_extension=False,
     Ti_birth_ionization="neutral",
     Tn_K=300.0,
@@ -134,9 +86,6 @@ def reaction_rhs_terms(
         state=state,
         floors=floors,
         ion_mass_g=ion_mass_g,
-        gas_type=gas_type,
-        I_ion=I_ion,
-        atomic_rate_model=atomic_rate_model,
         adas_low_te_extension=adas_low_te_extension,
     )
     volume_ratio = geometry.plasma_volume_cm3 / geometry.neutral_volume_cm3
@@ -242,9 +191,7 @@ def recombination_energy_return_rhs(
     state,
     floors,
     ion_mass_g,
-    gas_type,
     I_ion,
-    atomic_rate_model="janev",
     enabled=False,
     adas_low_te_extension=False,
 ):
@@ -263,8 +210,7 @@ def recombination_energy_return_rhs(
     pair adds ``I_ion*S_rec - P_PRB`` on top. The PAIR is the consistent
     unit (PRB alone double-charges -- the ``icool_recomb`` audit); both
     halves are evaluated from the same ACD sink so the credit tracks the particle
-    equation's actual sink. ADAS ('adas' rate model) only: the janev path
-    has no PRB booking. Grid lookups clamp at the adf11 edges (0.2 eV Te
+    equation's actual sink. Grid lookups clamp at the adf11 edges (0.2 eV Te
     floor), nearest-edge.
     """
     zeros = np.zeros_like(state.n, dtype=float)
@@ -276,18 +222,13 @@ def recombination_energy_return_rhs(
             Ee=zeros.copy(),
             Ei=zeros.copy(),
         )
-    if atomic_rate_model != "adas":
-        raise ValueError(
-            "recombination_energy_return requires atomic_rate_model='adas' "
-            "(the PRB radiated-power booking has no janev counterpart)"
-        )
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     n_safe = np.maximum(state.n, floors["n"])
     rates = he_rates(
         n_safe, derived.Te, ("acd", "prb1"),
         low_te_extension=adas_low_te_extension,
     )
-    # Mirror reaction_rates' adas branch exactly: the credit is I_ion per
+    # Mirror reaction_rates exactly: the credit is I_ion per
     # particle the particle equation actually recombines.
     S_rec = state.n * state.n * rates["acd"]
     P_prb_eV = state.n * state.n * rates["prb1"]

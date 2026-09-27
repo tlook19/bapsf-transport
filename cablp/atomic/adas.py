@@ -3,7 +3,7 @@
 Parses the iso-nuclear master files in ``cablp/atomic/data/adas`` (see the README
 there for provenance and conventions) and exposes vectorized (n_e, T_e)
 interpolators for the generalized collisional-radiative coefficients the
-sim1d ``atomic_rate_model = "adas"`` path consumes.
+sim1d atomic rates consume.
 
 All interpolation is bilinear in (log10 n_e, log10 T_e) on the file's own
 grid, clamped to the grid edges outside it (the grid spans 5e7-2e15 cm^-3
@@ -35,7 +35,7 @@ def _missing_data_file_message(path):
         "The ADAS .dat files are NOT tracked in this repository -- OPEN-ADAS's "
         "terms forbid redistributing them on a public website -- so they must "
         "be fetched by hand into cablp/atomic/data/adas/ before the "
-        'atomic_rate_model = "adas" path (or any adf11 reader) can run.\n'
+        "sim1d solver (or any adf11 reader) can run.\n"
         "See cablp/atomic/data/adas/README.md for the per-file download URL, the "
         "local filename to save as, and the checksum to verify."
     )
@@ -371,8 +371,8 @@ def he_rates(ne_cm3, Te_eV, quantities, low_te_extension=False):
     freezes ACD exactly where the detachment-regime recombination
     explodes (three-body ~ Te^-9/2 * ne). With the extension on, "acd"
     (and "prb1", holding the per-event radiated energy at its edge
-    value) are scaled below the edge by the in-repo janev shape anchored
-    continuously at the edge:
+    value) are scaled below the edge by the in-repo analytic recombination
+    shape anchored continuously at the edge:
 
         R(Te, ne) = [alpha_r(Te) + ne*alpha_3(Te)]
                     / [alpha_r(edge) + ne*alpha_3(edge)]

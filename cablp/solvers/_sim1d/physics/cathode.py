@@ -256,7 +256,6 @@ def cathode_circuit_alpha_sheath(
         ion_mass_g=ion_mass_g,
         alpha_isat=float(input_dict.get("alpha_isat", math.exp(-0.5))),
         b_presheath_length=float(input_dict.get("b_presheath_length", 1.0)),
-        gas_type=input_dict.get("gas_type", "He"),
     )
 
 
@@ -679,7 +678,6 @@ def solve_cathode_boundary(
     input_flags,
     beam_cross_prev,
     I_ion,
-    gas_type,
     x0=None,
     x0_twin=None,
     floating=False,
@@ -773,7 +771,6 @@ def solve_cathode_boundary(
             beam_cross_prev=beam_cross_prev,
             plasma_cross=geometry.plasma_area_cm2,
             I_ion=I_ion,
-            gas_type=gas_type,
             # Floored at zero on the same convention the current-driven
             # branch floors its loop current: the device carries what it can,
             # never a backwards current, and a trace sample below zero is
@@ -821,7 +818,6 @@ def solve_cathode_boundary(
             beam_cross_prev=beam_cross_prev,
             plasma_cross=geometry.plasma_area_cm2,
             I_ion=I_ion,
-            gas_type=gas_type,
             I_tot_A=I_tot_A,
             cathode_index=beam_launch(geometry, end=0)[0],
             anode_current_A=anode_source[0],
