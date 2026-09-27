@@ -224,89 +224,11 @@ def _apply_plasma_walls(
         face_Ei[face] = 0.0
 
 
-def front_filling_fluxes(state, floors, ion_mass_g, geometry, alpha_front=1.0):
-    """Return sonic-relaxation front-filling face fluxes."""
-    raw = _front_raw_faces(
-        state=state,
-        floors=floors,
-        ion_mass_g=ion_mass_g,
-        geometry=geometry,
-        alpha_front=alpha_front,
-    )
-    return _apply_front_conditions(raw, geometry)
-
-
-def _front_raw_faces(state, floors, ion_mass_g, geometry, alpha_front=1.0):
-    """Return front-filling faces before transmission or wall closure."""
-    if alpha_front < 0:
-        raise ValueError(f"alpha_front must be non-negative (got {alpha_front})")
-
-    derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    cells = geometry.cells
-    face_n = np.zeros(cells + 1, dtype=float)
-    face_M = np.zeros(cells + 1, dtype=float)
-    face_Ee = np.zeros(cells + 1, dtype=float)
-    face_Ei = np.zeros(cells + 1, dtype=float)
-
-    cs = ion_sound_speed(derived.Te, ion_mass_g)
-    raw_gamma = state.n[:-1] * cs[:-1] - state.n[1:] * cs[1:]
-    cap = alpha_front * np.maximum(state.n[:-1] * cs[:-1], state.n[1:] * cs[1:])
-    gamma = np.clip(raw_gamma, -cap, cap)
-    donor_left = gamma >= 0.0
-
-    u_donor = np.where(donor_left, derived.u[:-1], derived.u[1:])
-    n_donor = np.where(donor_left, state.n[:-1], state.n[1:])
-    Ee_donor = np.where(donor_left, state.Ee[:-1], state.Ee[1:])
-    Ei_donor = np.where(donor_left, state.Ei[:-1], state.Ei[1:])
-    energy_floor = np.maximum(n_donor, floors["n"])
-
-    face_n[1:-1] = gamma
-    face_M[1:-1] = ion_mass_g * gamma * u_donor
-    face_Ee[1:-1] = gamma * Ee_donor / energy_floor
-    face_Ei[1:-1] = gamma * Ei_donor / energy_floor
-    return PlasmaFaceFluxes1D(n=face_n, M=face_M, Ee=face_Ee, Ei=face_Ei)
-
-
-def _apply_front_conditions(faces, geometry):
-    """Apply transmission and wall closure to raw front-filling faces.
-
-    Unlike the advective flux, a wall carries *no* front flux at all -- the wall's
-    momentum is the pressure term in the advective flux, not here.
-    """
-    transmission = geometry.plasma_transmission
-    face_n = faces.n * transmission
-    face_M = faces.M * transmission
-    face_Ee = faces.Ee * transmission
-    face_Ei = faces.Ei * transmission
-    walls = ~np.asarray(geometry.plasma_open, dtype=bool)
-    face_n[walls] = 0.0
-    face_M[walls] = 0.0
-    face_Ee[walls] = 0.0
-    face_Ei[walls] = 0.0
-    return PlasmaFaceFluxes1D(n=face_n, M=face_M, Ee=face_Ee, Ei=face_Ei)
-
-
-def _front_fluxes(
-    state, floors, ion_mass_g, geometry, alpha_front, pressure=None
-):
-    """Return ``(raw, transmitted)`` front-filling faces."""
-    raw = _front_raw_faces(
-        state=state,
-        floors=floors,
-        ion_mass_g=ion_mass_g,
-        geometry=geometry,
-        alpha_front=alpha_front,
-    )
-    return raw, _apply_front_conditions(raw, geometry)
-
-
 def plasma_flux_rhs(
     state,
     floors,
     ion_mass_g,
     geometry,
-    include_front=True,
-    alpha_front=1.0,
     active_plasma_topology=False,
     wave_speed="isothermal",
     energy_consistent=False,
@@ -317,16 +239,11 @@ def plasma_flux_rhs(
         floors=floors,
         ion_mass_g=ion_mass_g,
         geometry=geometry,
-        include_front=include_front,
-        alpha_front=alpha_front,
         active_plasma_topology=active_plasma_topology,
         wave_speed=wave_speed,
         energy_consistent=energy_consistent,
     )
-    return _add_state_rhs(
-        flux_terms["plasma_advective_flux"],
-        flux_terms["plasma_front_flux"],
-    )
+    return flux_terms["plasma_advective_flux"]
 
 
 def plasma_flux_rhs_terms(
@@ -334,8 +251,6 @@ def plasma_flux_rhs_terms(
     floors,
     ion_mass_g,
     geometry,
-    include_front=True,
-    alpha_front=1.0,
     alpha_isat=np.exp(-0.5),
     active_plasma_topology=False,
     wave_speed="isothermal",
@@ -351,18 +266,8 @@ def plasma_flux_rhs_terms(
         wave_speed=wave_speed,
         energy_consistent=energy_consistent,
     )
-    front = _zero_fluxes(geometry.cells)
-    if include_front:
-        front = front_filling_fluxes(
-            state=state,
-            floors=floors,
-            ion_mass_g=ion_mass_g,
-            geometry=geometry,
-            alpha_front=alpha_front,
-        )
     return {
         "plasma_advective_flux": _flux_rhs(rusanov, geometry),
-        "plasma_front_flux": _flux_rhs(front, geometry),
     }
 
 
@@ -383,26 +288,6 @@ def _rusanov_face(flux_l, flux_r, state_l, state_r, amax):
 def _flux_divergence(face_flux, geometry):
     inventory_flux = geometry.plasma_face_area_cm2 * face_flux
     return -(inventory_flux[1:] - inventory_flux[:-1]) / geometry.plasma_volume_cm3
-
-
-def _zero_fluxes(cells):
-    zeros = np.zeros(cells + 1, dtype=float)
-    return PlasmaFaceFluxes1D(
-        n=zeros,
-        M=zeros.copy(),
-        Ee=zeros.copy(),
-        Ei=zeros.copy(),
-    )
-
-
-def _add_state_rhs(left, right):
-    return ConservativeState1D(
-        n=left.n + right.n,
-        nn=left.nn + right.nn,
-        M=left.M + right.M,
-        Ee=left.Ee + right.Ee,
-        Ei=left.Ei + right.Ei,
-    )
 
 
 def kep_rusanov_face_scalar(

@@ -96,8 +96,6 @@ def electron_cooling_rhs(
     b_ionization_energy_cost=1.0,
     atomic_rate_model="janev",
     ionization_energy_cost=True,
-    icool_recomb=False,
-    adas_low_te_extension=False,
 ):
     """Return conservative electron inelastic/radiative cooling sources.
 
@@ -114,8 +112,6 @@ def electron_cooling_rhs(
         b_ionization_energy_cost=b_ionization_energy_cost,
         atomic_rate_model=atomic_rate_model,
         ionization_energy_cost=ionization_energy_cost,
-        icool_recomb=icool_recomb,
-        adas_low_te_extension=adas_low_te_extension,
     )
     rhs = terms["ionization_energy_cost"]
     for term in (
@@ -141,8 +137,6 @@ def electron_cooling_rhs_terms(
     b_ionization_energy_cost=1.0,
     atomic_rate_model="janev",
     ionization_energy_cost=True,
-    icool_recomb=False,
-    adas_low_te_extension=False,
 ):
     """Return split conservative electron cooling source terms.
 
@@ -151,7 +145,7 @@ def electron_cooling_rhs_terms(
     *includes* the ionization-potential loss, so combined with the separate
     ``ionization_energy_cost`` term it double-counts that channel. ``"adas"``
     uses the OPEN-ADAS radiated-power
-    coefficients (PLT; plus PRB for ``icool_recomb``), which are radiation
+    coefficients (PLT), which are radiation
     only and therefore consistent with the separate ionization-cost term.
 
     The cooling coefficients are applied unscaled: atomic rates are fixed
@@ -173,18 +167,9 @@ def electron_cooling_rhs_terms(
         if want_cost:
             quantities.append("scd")
         quantities.append("plt2")
-        if icool_recomb:
-            quantities.append("prb1")
         quantities.append("plt1")
         n_safe = np.maximum(state.n, floors["n"])
-        # A18/R5.3: honor the low-Te extension here too, so prb1 (recombination
-        # radiated power) matches acd (recombination rate, particle path) below
-        # the 0.2 eV edge -- one consistent low-Te package. No effect off, or
-        # unless prb1 is requested (icool_recomb) at sub-edge Te.
-        adas = he_rates(
-            n_safe, derived.Te, quantities,
-            low_te_extension=adas_low_te_extension,
-        )
+        adas = he_rates(n_safe, derived.Te, quantities)
 
     if want_cost:
         if use_adas:
@@ -203,17 +188,13 @@ def electron_cooling_rhs_terms(
         ionization_cost_eV = float(b_ionization_energy_cost) * I_ion * S_ion
 
     if use_adas:
-        coeff = adas["plt2"]
-        if icool_recomb:
-            coeff = coeff + adas["prb1"]
-        electron_ion_cooling_eV = coeff * state.n * state.n
+        electron_ion_cooling_eV = adas["plt2"] * state.n * state.n
         electron_neutral_cooling_eV = adas["plt1"] * state.n * state.nn
     else:
         electron_ion_cooling_eV = _ion_inelastic_cooling_eV(
             derived.Te,
             state.n,
             gas_type=gas_type,
-            recomb=icool_recomb,
         )
         electron_neutral_cooling_eV = _neutral_inelastic_cooling_eV(
             derived.Te,
@@ -248,10 +229,10 @@ def _electron_energy_sink(zeros, loss_eV_cm3_s):
     )
 
 
-def _ion_inelastic_cooling_eV(Te, n, gas_type, recomb=False):
+def _ion_inelastic_cooling_eV(Te, n, gas_type):
     """Return electron-ion inelastic/radiative cooling [eV cm^-3 s^-1]."""
     if gas_type == "He":
-        return IAEA_exp4(Te, aHeII, recomb=recomb) * n * n
+        return IAEA_exp4(Te, aHeII, recomb=False) * n * n
     if gas_type == "H":
         return IAEA_exp6(Te, aHII) * n * n
     raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He' or 'H'")

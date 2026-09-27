@@ -104,10 +104,10 @@ INERT_PARAM_KEYS = frozenset({
     "beam_excitation_energy_eV", "b_beam_excitation",
     # --- atomic-rate / cooling / plasma-physics scales (no plasma during equil) ---
     "atomic_rate_model", "recombination_energy_return",
-    "sigma_in_model", "Ti_birth_ionization",
-    "b_ion_neutral_drag", "D_amb", "D_amb_model", "heat_flux_limiter_f",
+    "Ti_birth_ionization",
+    "b_ion_neutral_drag", "heat_flux_limiter_f",
     "b_presheath_length",
-    "b_surface_loss", "alpha_isat", "alpha_front", "front_flux_model",
+    "b_surface_loss", "alpha_isat",
     "adas_low_te_extension",
     # --- plasma initial condition + plasma floors ---
     "ne0", "Te0", "Ti0", "u0", "ne_floor", "Te_floor", "Ti_floor",
@@ -159,7 +159,7 @@ INERT_FLAG_KEYS = frozenset({
     # its content).
     "Plasma", "cathode_coupling", "active_plasma_topology",
     "electron_heat_flux_limit", "heat_conduction", "hyperbolic_energy_consistent",
-    "icool_recomb", "implicit_heat_conduction", "ionization_energy_cost",
+    "implicit_heat_conduction", "ionization_energy_cost",
     "raw_stage_validation",
     "debug_checks",
     # The two end-face energy-booking flags are inert because

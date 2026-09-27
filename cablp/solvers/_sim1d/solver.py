@@ -71,7 +71,6 @@ from .core.validation import (
     refuse_dvm_anode_jet_without_cathode_coupling,
     refuse_dvm_cathode_jet_without_cathode_coupling,
     refuse_te_floor_above_adas_table_edge,
-    resolve_electron_drift_transport_config,
     resolve_energy_exchange_rate_fraction,
     resolve_initial_neutral_state,
     resolve_jet_arming_criterion,
@@ -131,7 +130,6 @@ from .physics.cathode import (
     tail_reflect_face,
     validate_cathode_solver_model,
 )
-from cablp.cathode.circuit_common import beam_launched_current_A
 from .physics.cathode import (
     CATHODE_ENV_T_K,
     advance_circuit_current_driven,
@@ -184,9 +182,6 @@ from .physics.sources import (
     cathode_jet_backscatter_speed,
     cathode_jet_incident_energy_eV,
     characteristic_boundary_rhs,
-    ELECTRON_DRIFT_DIAGNOSTIC_ROWS,
-    ELECTRON_DRIFT_DIAGNOSTIC_SCALARS,
-    electron_drift_transport_rhs,
     ion_neutral_collision_rhs,
     ionization_birth_neutral_temperature_eV,
     neutral_cx_channel_rhs,
@@ -312,11 +307,7 @@ _NEUTRAL_ENERGY_TERM_BOOKING = {
     "recombination_3b_loss": "ion",
     # --- everything else never touches nn --------------------------------
     "plasma_advective_flux": "none",
-    "plasma_front_flux": "none",
     "pressure_work": "none",
-    # The drift operator writes the ELECTRON row alone; it moves no particles
-    # of any species, so it has no neutrals to carry a birth temperature for.
-    "electron_drift_transport": "none",
     "hyperbolic_dissipation_heating": "none",
     "flux_tube_geometry": "none",
     "ei_exchange": "none",
@@ -886,7 +877,6 @@ def _estimate_wall_remaining(elapsed_s, fraction):
 def _timestep_limiters(diag, count=3):
     candidates = (
         ("plasma_cfl", diag.dt_plasma_cfl),
-        ("front_density", diag.dt_front_density),
         ("surface_loss", diag.dt_surface_loss),
         ("neutral_exchange", diag.dt_neutral_exchange),
         ("neutral_sources", diag.dt_neutral_sources),
@@ -1122,23 +1112,6 @@ class LAPDSim1D:
                 "the moment-closed ion-neutral collision operator uses the "
                 "Phelps He+/He cross sections and requires gas_type='He' "
                 f"(got {self._gas_type!r})"
-            )
-        # The presheath sigma_in model shares the He-only Phelps cross
-        # section. Its two legacy arms ("constant", "cx_derived") were the
-        # only non-helium path in the solver and were removed at D3.
-        _sigma_in_model = str(self._input_dict.get("sigma_in_model"))
-        if _sigma_in_model != "phelps":
-            raise ValueError(
-                f"sigma_in_model={_sigma_in_model!r} is not available: the "
-                "legacy 'constant' and 'cx_derived' arms were removed at D3, "
-                "2026-08-21. Accepted: 'phelps'."
-            )
-        if self._gas_type != "He":
-            raise ValueError(
-                "sigma_in_model='phelps' uses the Phelps He+/He cross section "
-                f"and requires gas_type='He' (got {self._gas_type!r}); the "
-                "non-helium arms were removed at D3, 2026-08-21 and the "
-                "solver is helium-only"
             )
 
     def _init_neutral_closure_selection(self):
@@ -1759,19 +1732,6 @@ class LAPDSim1D:
         self._energy_exchange_rate_fraction = resolve_energy_exchange_rate_fraction(
             self._input_dict
         )
-        # Rate-freezing instrument (I3). A real bool is required: the flag
-        # switches which STATE the explicit operator's reaction terms read,
-        # and an int or a string smuggled in there would arm a first-order
-        # rate channel while reading like a value.
-        _rates_at_accepted_state = self._flags.get(
-            "rates_at_accepted_state"
-        )
-        if not isinstance(_rates_at_accepted_state, bool):
-            raise ValueError(
-                "rates_at_accepted_state must be a bool (got "
-                f"{_rates_at_accepted_state!r})"
-            )
-        self._rates_at_accepted_state = _rates_at_accepted_state
         # End-face sheath electron debit, the anode debit's twin at the two
         # ends of the machine -- and TWO INDEPENDENT keys, one per end,
         # because the two faces carry different fluxes in different regimes
@@ -2088,27 +2048,6 @@ class LAPDSim1D:
                     "atomic_rate_model='adas' (the PRB radiated-power "
                     "booking has no janev counterpart)"
                 )
-            if bool(self._flags.get("icool_recomb")):
-                raise ValueError(
-                    "recombination_energy_return already charges the full "
-                    "PRB; combining it with icool_recomb double-charges "
-                    "the recombination photons"
-                )
-        if bool(
-            self._input_dict.get("adas_low_te_extension")
-        ) and bool(self._flags.get("icool_recomb")):
-            raise ValueError(
-                "adas_low_te_extension must not be combined with "
-                "icool_recomb: icool_recomb charges bare PRB, and "
-                "adas_low_te_extension amplifies the sub-edge PRB by "
-                "~9,300x, so the electron fluid runs away thermally to the "
-                "Te floor and the electron_cooling timestep bound collapses "
-                "permanently. The consistent net booking "
-                "(I_ion*S_rec - P_PRB) that would make the pair sound is "
-                "not built. The deep-afterglow low-Te recipe that paired "
-                "them is RETIRED; without that booking the afterglow "
-                "validity window is Te > 0.2 eV (the ADF11 edge)"
-            )
 
     def _init_floors_and_initial_state(self):
         """Set the floors, arm the initial-condition features, and build state.
@@ -2506,21 +2445,6 @@ class LAPDSim1D:
         self._momentum_sink = resolve_parallel_momentum_sink(
             self._input_dict, geometry=self._geometry
         )
-        # Electron drift transport and EMF work (default off, bit-exact off).
-        # ``None`` when unarmed IS the presence gate: the RHS reads it to
-        # decide whether to evaluate Gamma_d at all, so the off path never
-        # enters the operator.
-        self._electron_drift = resolve_electron_drift_transport_config(
-            self._input_dict,
-            self._flags,
-            geometry=self._geometry,
-            active_plasma_topology=self._active_plasma_topology,
-        )
-        # The operator's named power rows from the LAST RHS evaluation, for the
-        # saved diagnostics. Same discipline as the hot-channel rows: written
-        # by the evaluation, read by the snapshot that triggered it, never
-        # recomputed from the saved sample.
-        self._electron_drift_rows = None
 
     def _init_run_machinery(self):
         """Initialize the run-loop bookkeeping and apply any restart payload."""
@@ -3313,18 +3237,12 @@ class LAPDSim1D:
                 **kinetic_terms,
                 **end_sheath_terms,
                 "plasma_advective_flux": self._zero_rhs_state(),
-                "plasma_front_flux": self._zero_rhs_state(),
                 # boundary_absorption is permanently zero everywhere since the
                 # legacy absorber was retired (see commit 1fc05c9); kept for
                 # saved-ledger schema stability.
                 "boundary_absorption": self._zero_rhs_state(),
                 "characteristic_boundary": self._zero_rhs_state(),
                 "pressure_work": self._zero_rhs_state(),
-                # Present with zero rows whether or not the flag is armed, so
-                # the saved term structure is stable across the phase change
-                # AND across the flag. There is no drive in this branch, so an
-                # armed run books zero here too.
-                "electron_drift_transport": self._zero_rhs_state(),
                 "hyperbolic_dissipation_heating": self._zero_rhs_state(),
                 "ei_exchange": self._zero_rhs_state(),
                 "ionization_energy_cost": self._zero_rhs_state(),
@@ -3360,16 +3278,7 @@ class LAPDSim1D:
                 self._apply_active_plasma_topology(terms), state
             )
         plasma_terms = self.plasma_flux_rhs_terms(state=state)
-        # I3 instrument. Armed, the bulk reaction terms are evaluated at the
-        # step-START accepted state -- ``self._y`` is only rewritten when a
-        # step is ACCEPTED, so it is exactly that state for every SSPRK2 stage
-        # and every rejected attempt -- which freezes the rates across the
-        # step and caps it at first order in them. Unarmed, this IS ``state``,
-        # object for object, so the evaluations below are unchanged.
-        reaction_state = (
-            self.state if self._rates_at_accepted_state else state
-        )
-        reaction_terms = self.reaction_rhs_terms(state=reaction_state)
+        reaction_terms = self.reaction_rhs_terms(state=state)
         electron_cooling_terms = self.electron_cooling_rhs_terms(state=state)
         cathode_phase = self._cathode_phase_options(time=time)
         cathode_solve = None
@@ -3459,7 +3368,6 @@ class LAPDSim1D:
             **momentum_sink_terms,
             **geometry_terms,
             "plasma_advective_flux": plasma_terms["plasma_advective_flux"],
-            "plasma_front_flux": plasma_terms["plasma_front_flux"],
             # Permanently zero since the legacy volumetric absorber was
             # retired; see commit 1fc05c9. The ROW is kept because it is
             # part of the saved ledger schema that existing artifacts and
@@ -3476,18 +3384,6 @@ class LAPDSim1D:
                 end_wall_climb_out=end_wall_climb_out,
             ),
             "pressure_work": pressure_work,
-            # The electron-velocity correction to the row above: pressure_work
-            # books with the ION velocity, which is exact only where J = 0.
-            # Presence-gated -- unarmed, the zero state is recorded and
-            # Gamma_d is never evaluated -- and always present, so the saved
-            # term structure does not move with the flag.
-            "electron_drift_transport": (
-                self.electron_drift_transport_rhs(
-                    state=state, cathode_solve=cathode_solve
-                )
-                if self._electron_drift is not None
-                else self._zero_rhs_state()
-            ),
             # The Rusanov (n, M) numerical kinetic-energy dissipation, deposited
             # into the ion internal energy. It sits in the slot the combined
             # correction row occupied, so the dissipation booking keeps its
@@ -6690,8 +6586,6 @@ class LAPDSim1D:
             dt_min=dt_min,
             dt_max=dt_max,
             dt_global_scale=self._dt_global_scale,
-            include_front=plasma_enabled and self._flags.get("front_flux"),
-            alpha_front=float(self._input_dict.get("alpha_front")),
             plasma_active=(
                 self._plasma_active_mask()
                 if self._active_plasma_topology
@@ -6724,7 +6618,6 @@ class LAPDSim1D:
                 diag,
                 dt=float(neutral_dt),
                 dt_plasma_cfl=np.inf,
-                dt_front_density=np.inf,
                 dt_surface_loss=np.inf,
                 dt_reactions=np.inf,
                 dt_energy_exchange=np.inf,
@@ -7037,38 +6930,28 @@ class LAPDSim1D:
                 return float(boundary)
         return None
 
-    def plasma_flux_rhs(self, y=None, include_front=None):
+    def plasma_flux_rhs(self, y=None):
         """Return the conservative plasma flux RHS for inspection/testing."""
         state = self.state if y is None else self._unpack(y)
-        use_front = self._flags.get("front_flux")
-        if include_front is not None:
-            use_front = include_front
         return plasma_flux_rhs(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._plasma_geometry(),
-            include_front=use_front,
-            alpha_front=float(self._input_dict.get("alpha_front")),
             active_plasma_topology=self._active_plasma_topology,
             wave_speed=self._hyperbolic_wave_speed,
             energy_consistent=self._hyperbolic_energy_consistent,
         )
 
-    def plasma_flux_rhs_terms(self, y=None, state=None, include_front=None):
+    def plasma_flux_rhs_terms(self, y=None, state=None):
         """Return split conservative plasma face-flux RHS terms."""
         if state is None:
             state = self.state if y is None else self._unpack(y)
-        use_front = self._flags.get("front_flux")
-        if include_front is not None:
-            use_front = include_front
         return plasma_flux_rhs_terms(
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             geometry=self._plasma_geometry(),
-            include_front=use_front,
-            alpha_front=float(self._input_dict.get("alpha_front")),
             active_plasma_topology=self._active_plasma_topology,
             wave_speed=self._hyperbolic_wave_speed,
             energy_consistent=self._hyperbolic_energy_consistent,
@@ -7235,51 +7118,6 @@ class LAPDSim1D:
             time=time,
             update_cache=True,
         )
-
-    def electron_drift_transport_rhs(self, state, cathode_solve):
-        """Return the electron drift-transport and EMF-work term.
-
-        Presence-gated on ``self._electron_drift``: unarmed, this method is
-        never called and ``Gamma_d`` is never evaluated. Armed but with no
-        cathode solve carrying a current -- the pre-drive phases, and any
-        afterglow frame whose solve did not converge -- the operator books
-        exactly zero, because with no current there is no drift.
-
-        The two currents come from the SAME solve, and therefore carry the
-        same lag as every other row built on it: the cathode solve is
-        evaluated against the loop current the last ACCEPTED step committed
-        (``_circuit_I_loop``), frozen across the step and part of the solve's
-        own memo key. Reading both from one object is what keeps ``I_beam``
-        from being subtracted off a different ``I_tot`` than the one the
-        electrode rows are proportional to.
-        """
-        if cathode_solve is None or cathode_solve.beam_result is None:
-            self._electron_drift_rows = None
-            return self._zero_rhs_state()
-        result = cathode_solve.beam_result.result
-        I_tot_A = float(result.I_tot)
-        # The LAUNCHED electron current, which is the beam the drift term has
-        # to subtract off the loop current: with ion-induced secondary
-        # emission armed the secondaries cross the gap with the thermionic
-        # primaries and are part of that beam. ``I_eth_star`` bit for bit
-        # unarmed.
-        I_beam_A = float(beam_launched_current_A(result))
-        if not (np.isfinite(I_tot_A) and np.isfinite(I_beam_A)):
-            # A solve that did not resolve its currents cannot say what the
-            # drift is; booking a guess would be worse than booking nothing.
-            self._electron_drift_rows = None
-            return self._zero_rhs_state()
-        rhs, rows = electron_drift_transport_rhs(
-            state=state,
-            floors=self._floors,
-            ion_mass_g=self._ion_mass_g,
-            geometry=self._plasma_geometry(),
-            spec=self._electron_drift,
-            I_tot_A=I_tot_A,
-            I_beam_A=I_beam_A,
-        )
-        self._electron_drift_rows = rows
-        return rhs
 
     def _cathode_jet_censored(self):
         """True when the arming criterion is declared and currently DISARMED.
@@ -10114,35 +9952,6 @@ class LAPDSim1D:
             "beam_tail_above_bar_power_W": 0.0,
             "beam_tail_sub_threshold_fraction": np.nan,
         }
-        if self._electron_drift is not None:
-            # The drift operator's named rows, PRESENCE-GATED so an unarmed
-            # run's saved diagnostic structure -- the golden included -- is
-            # byte-identical to before the operator existed. They ride the
-            # electrode-diagnostics channel because that is where the current
-            # they are built from already lives (``circuit_I_loop``), so a
-            # reader can check a row against its own input in one group.
-            #
-            # The four per-cell power rows [W] are the operator's own four
-            # terms and sum to its total, so the volume identity is checkable
-            # from a saved trajectory rather than only from a live solver.
-            # ``edt_inplasma_emf_V`` is the V_dis partition member: the
-            # in-plasma EMF the drift works against, W_EMF per ampere.
-            # ``edt_total_W`` is the per-step ledger total over the operator's
-            # support.
-            #
-            # Zeros, not absence, on a save whose RHS evaluation found no
-            # solve to read a current from: the row structure must not move
-            # between saves of one run, and "no current" is a measurement.
-            rows = self._electron_drift_rows
-            zeros = np.zeros(self._geometry.cells, dtype=float)
-            for name in ELECTRON_DRIFT_DIAGNOSTIC_ROWS:
-                diag[name] = (
-                    zeros.copy()
-                    if rows is None
-                    else np.asarray(rows[name], dtype=float).copy()
-                )
-            for name in ELECTRON_DRIFT_DIAGNOSTIC_SCALARS:
-                diag[name] = 0.0 if rows is None else float(rows[name])
         # Anode sheath debit census. Cumulative count of ACCEPTED steps whose
         # sheath solve returned an electron-ATTRACTING anode (phi_a <= 0),
         # where the debit is thermal-only and the bank pays the fall, plus the
@@ -12083,7 +11892,7 @@ class LAPDSim1D:
                 "0195a02. It returned proton constants that no construction "
                 "could ever carry into physics -- the solver is helium-only "
                 "and refuses gas_type != 'He' a few lines later in "
-                "__init__, at the Phelps He+/He sigma_in_model gate. "
+                "__init__, at the Phelps He+/He collision-operator gate. "
                 "Accepted: 'He'."
             )
         raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")

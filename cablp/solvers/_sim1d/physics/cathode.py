@@ -68,7 +68,6 @@ class CathodeBoundaryState1D:
     source: CathodeCellState1D
     end: CathodeCellState1D
     enabled: bool
-    end_mode: str
     twin_cathode: bool
     circuit: dict
 
@@ -223,7 +222,7 @@ def cathode_sample_indices(geometry):
     temperature would drive the circuit with garbage.
 
     A twin machine samples both cathodes; otherwise the ``end`` slot is the
-    end wall, which is what ``end_mode`` describes.
+    end wall.
     """
     cathode_cells = cathode_adjacent_cells(geometry)
     if not cathode_cells:
@@ -275,7 +274,6 @@ def cathode_boundary_state(
         source=_cell_state(source_index, state, derived, geometry),
         end=_cell_state(end_index, state, derived, geometry),
         enabled=bool(input_flags.get("cathode_coupling", False)),
-        end_mode=input_dict.get("end_mode", "end_wall"),
         twin_cathode=bool(input_flags.get("TwinCathode", False)),
         circuit=_circuit_placeholders(input_dict),
     )
@@ -720,7 +718,6 @@ def solve_cathode_boundary(
                 "floating": bool(floating),
                 "source_index": boundary.source.index,
                 "end_index": boundary.end.index,
-                "end_mode": boundary.end_mode,
                 "twin_cathode": boundary.twin_cathode,
                 "circuit": dict(boundary.circuit),
             },
@@ -880,7 +877,6 @@ def solve_cathode_boundary(
             "floating": bool(floating),
             "source_index": boundary.source.index,
             "end_index": boundary.end.index,
-            "end_mode": boundary.end_mode,
             "twin_cathode": boundary.twin_cathode,
             "circuit": dict(boundary.circuit),
             "cathode_solver_model": solver_model,
@@ -1811,7 +1807,6 @@ def cathode_source_terms(
             metadata={
                 "source_index": boundary.source.index,
                 "end_index": boundary.end.index,
-                "end_mode": boundary.end_mode,
                 "twin_cathode": boundary.twin_cathode,
                 "circuit": dict(boundary.circuit),
                 "surface_particle_loss_s_inv": zeros.copy(),
@@ -1944,7 +1939,6 @@ def cathode_source_terms(
         metadata={
             "source_index": boundary.source.index,
             "end_index": boundary.end.index,
-            "end_mode": boundary.end_mode,
             "twin_cathode": boundary.twin_cathode,
             "circuit": dict(boundary.circuit),
             "surface_particle_loss_s_inv": dN_loss,
