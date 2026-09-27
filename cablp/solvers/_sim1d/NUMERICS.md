@@ -168,8 +168,10 @@ collected-electron climb** (`cathode_e_collected_climb`, the one sink among
 that face's three rows): its booked loss $e\phi_c^+\Gamma_\text{ec}$ over the
 cathode cell's electron heat capacity at the state the substep starts from is
 the rate, so the substep removes exactly the booked power at its start and
-less as the store empties, and the debit cannot take the cathode cell's store
-below zero within a step. The face's two source rows (the emitted enthalpy
+less as the store empties. That it cannot take the cathode cell's store below
+zero within a step rests on the shared accuracy bound ($\nu\Delta t\le1$)
+under the substep's scheme: backward Euler is positive at any step, while the
+second-order schemes hold it only while $\nu\Delta t$ stays order one. The face's two source rows (the emitted enthalpy
 and the virtual-cathode fall) stay in $A$, and so does the end wall's
 sheath-climb row, which is applied explicitly. Each implicit sink keeps its
 own booked-against-realised pair, split by cell. The **beam's electron-energy

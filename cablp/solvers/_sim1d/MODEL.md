@@ -906,7 +906,9 @@ split is in force: the implicit electron-energy substep applies each as a
 first-order loss rate under one shared accuracy bound, and each keeps its own
 booked-against-realised energy pair. The climb's rate is its booked loss over
 the cathode cell's electron heat capacity at the state the substep starts
-from, so it cannot take that cell's store below zero within a step. The
+from; that it cannot take that cell's store below zero within a step rests
+on the shared accuracy bound ($\nu\Delta t\le1$) under the substep's scheme.
+The
 face's two source rows and the end wall's sheath-climb row are applied
 explicitly. [`NUMERICS.md`](NUMERICS.md) carries the substep and the bound.
 
