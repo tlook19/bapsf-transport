@@ -20648,6 +20648,10 @@ def _case_ql_relaxation_solver_refusals(_r2ql_config):
             return
         raise AssertionError(f"LAPDSim1D must refuse {overrides}")
 
+    # This sub-check pins the regime_tracer refusal (solver.py
+    # _configure_regime_tracer), which fires first under this case's
+    # tracer-on configuration; the ql_relaxation / beer_lambert refusal in
+    # _init_beam_transport_refusals is NOT reached here.
     _qlr_refuses(
         "beam_anomalous_model='ql_relaxation' together with "
         "beam_deposition_model='beer_lambert'",
