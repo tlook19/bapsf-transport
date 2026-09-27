@@ -558,7 +558,7 @@ def characteristic_boundary_rhs(
     ``end_wall_sheath_climb_out``: when given (a dict), the END WALL's
     sheath-fall electron debit is computed and written back into it under the
     key ``"Ee"`` as a per-cell electron-energy row [erg cm^-3 s^-1], negative
-    where it acts. It is the ``end_wall_sheath_full_debit`` closure's row
+    where it acts. It is the end wall sheath debit's row
     and is NOT added to the returned state: the caller books it as its
     own named RHS row, so the two rows together are the sheath-edge
     ``(2 + Lambda_eff) Te`` per collected electron while this function's own
@@ -699,7 +699,7 @@ def characteristic_boundary_rhs(
         if roles[live] == "end_wall":
             d_Ee[live] += 2.0 * Te_l * ev_to_erg * (scale * f_n)
             if climb_active:
-                # end_wall_sheath_full_debit. The fall those
+                # The end wall sheath debit. The fall those
                 # electrons climbed, at the sheath edge THIS face sampled its
                 # Bohm flux at: alpha_eff is the same factor, so the density
                 # drop the flux was taken across and the drop the barrier is

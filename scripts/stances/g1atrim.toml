@@ -261,11 +261,10 @@ machine_radius_profile_cm = [
   75.25, 75.25, 75.25, 75.25,
 ]
 
-# MESH. nx counts the FAR column only under source_fixed_grid; the source
-# region is meshed at a fixed cell size so a refinement does not move the
-# near-source cell edges. The flag and the two source_region_* values are
-# config defaults since the R2a fold-in; nx stays here because it is a
-# run-cost choice and the per-cell profiles above are sized to it.
+# MESH. nx counts the FAR column only; the source region is meshed at a
+# fixed cell size so a refinement does not move the near-source cell edges.
+# The two source_region_* values are config defaults; nx stays here because
+# it is a run-cost choice and the per-cell profiles above are sized to it.
 nx = 268
 
 # CATHODE AND CIRCUIT.
@@ -414,7 +413,8 @@ max_steps_action = "stop"
 
 [input_flags]
 
-# END-WALL SHEATH ELECTRON-ENERGY BOOKING. The plasma electron store is
+# END-WALL SHEATH ELECTRON-ENERGY BOOKING (no key: armed by the geometry's
+# end wall face, which this stance's mesh carries). The plasma electron store is
 # debited, per electron the chamber's far end wall collects, the barrier those
 # electrons climbed -- Lambda_eff Te, the floating-sheath lift for the
 # configured gas plus the presheath drop implied by the same sheath-edge
@@ -425,31 +425,23 @@ max_steps_action = "stop"
 # surface and the end wall surface-power diagnostic includes it. The row is
 # ELECTRON ENERGY ONLY -- no particle, momentum or ion-thermal booking at the
 # face moves -- and it is booked whenever plasma reaches the face, independent
-# of the cathode circuit solve. It requires a
-# plasma-absorbing face of the END WALL role, which this stance's geometry
-# supplies. The emitting cathode face's own three rows are the separate
-# cathode_face_full_debit key, which this stance leaves at its config default.
+# of the cathode circuit solve. The emitting cathode face's own three rows are
+# the separate cathode_face_full_debit key, which this stance leaves at its
+# config default.
 # The response is not local to the end cell: the column re-equilibrates as a
 # whole through the far-end neutral field, so the port-level response to this
 # booking is conditional on the kinetic neutral closure (kinetic_dvm).
-end_wall_sheath_full_debit = true
 
 # NEUTRAL CLOSURE. The three closure flags this stance turns -- neutral
 # momentum, neutral energy and the hot internal wall, all config defaults ON
 # since the R2a fold-in -- are members of the neutral_closure family and are
 # stated in [models.neutral_closure] below, not here.
 #
-# The baffles armed below act on the DVM annulus as well as on the fluid
+# The baffles placed in [input_dict] act on the DVM annulus as well as on the fluid
 # neutral field: the annulus flux crossing each baffle face is intercepted in
 # the blocked fraction of the face area and re-emitted at the wall temperature
 # in the cell it came from, particle-conserving. It adds no coefficient -- the
 # clear radius is the measured CAD value already named in [input_dict].
-
-# GEOMETRY: the per-cell prescribed areas and the baffles that go with the
-# measured machine. Both stay stance-side because the arrays they require are
-# sized to this mesh; source_fixed_grid folded into the config defaults.
-prescribed_area_geometry = true
-neutral_baffles = true
 
 
 # ---------------------------------------------------------------------------

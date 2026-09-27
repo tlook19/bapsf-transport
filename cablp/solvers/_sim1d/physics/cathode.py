@@ -2203,7 +2203,7 @@ def _beam_smoothing_key(geometry, sigma_cm):
     by a differently meshed allocation at the same address would return the
     OLD mesh's matrix. A shape mismatch would raise at the matmul, but two
     geometries with the same cell count and different positions/lengths/roles
-    (a ``source_fixed_grid`` A/B, an nx-matched ``source_region_dz_cm`` sweep)
+    (an nx-matched ``source_region_dz_cm`` sweep)
     would silently smooth with the wrong kernel.
 
     Every geometry input the matrix build reads is in the key: ``z_cm`` and
@@ -2534,8 +2534,8 @@ def _deposit_electrode_power(
     accelerated species is the ion, so the electron fall there is not
     plasma-electron energy IN THIS FUNCTION's own
     booking. The sibling rows ``end_wall_e_sheath_climb`` and
-    ``cathode_e_collected_climb`` -- presence-gated by ``end_wall_sheath_full_debit``
-    and ``cathode_face_full_debit`` respectively, and independent of this
+    ``cathode_e_collected_climb`` -- presence-gated by the geometry's end wall
+    face and by ``cathode_face_full_debit`` respectively, and independent of this
     function -- do book a collected-electron fall as plasma-electron energy,
     at the end wall and at the emitting cathode face. ``I_e_coll`` is the
     collected electron current ``I_i_a * fe_a``, and its ``phi_a`` moment is

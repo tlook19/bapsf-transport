@@ -932,8 +932,8 @@ $Q_i^\text{out}$ are the face fluxes themselves, but **$Q_e^\text{out}$
 is not**: the face's electron-energy flux is DISCARDED and the operator books
 instead $2T_e$ per collected electron on the face's own particle flux,
 $2T_e\Gamma_n$, at the end wall and zero at the
-cathode, where the electron thermal channel belongs to the circuit. When
-`end_wall_sheath_full_debit` is armed, $Q_e^\text{out}$ at the end wall
+cathode, where the electron thermal channel belongs to the circuit. Wherever
+the geometry has an end wall face, $Q_e^\text{out}$ at the end wall
 additionally carries the sheath climb $-\Lambda_\text{eff}T_e\Gamma_\text{coll}$
 of the paragraph below, saved as its own `end_wall_e_sheath_climb` row on that
 same particle flux. The sheath-edge
@@ -970,11 +970,14 @@ across a wave fan: the density step from the live cell to $n_\text{se}$ is the
 sub-grid presheath model, and a sheath sends no wave back into the plasma. The
 numerical statement is [`NUMERICS.md`](NUMERICS.md).
 
-**End-face sheath debit at the end wall.** `end_wall_sheath_full_debit`
-completes that booking the way the anode sheath debit completes the anode's.
-The two end-face keys are INDEPENDENT — different faces, different fluxes,
-different regimes — so either, both or neither may be armed and each refuses at
-construction on its own missing input alone. A
+The **end wall sheath debit** completes that
+booking the way the anode sheath debit completes the anode's. It has no key:
+it is armed by the geometry, present exactly when the mesh has a
+plasma-absorbing face whose live cell has the end wall role, and absent on a
+geometry without one (the twin-cathode layout). The two end faces are
+INDEPENDENT — different faces, different fluxes, different regimes — and the
+emitting cathode face's rows are armed separately by
+`cathode_face_full_debit`. A
 floating surface draws no net current, so the electrons that reach it climbed a
 barrier $\Lambda_\text{eff}T_e$ — and with no circuit branch behind the
 end wall there is nothing but the electron thermal store to supply it: the
@@ -1211,7 +1214,7 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `recombination_energy_return` | `physics/reactions.py:recombination_energy_return_rhs` |
 | `cathode_surface_loss` | `physics/cathode.py:cathode_source_terms` |
 | `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode part); REPORTED here and applied by the implicit heat substep as `solver.py:electrode_ee_sink_rate` wherever the operator split is in force |
-| `end_wall_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (`end_wall_sheath_full_debit` only) |
+| `end_wall_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (geometries with an end wall face) |
 | `cathode_e_emitted_enthalpy` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
 | `cathode_e_emitted_fall` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
 | `cathode_e_collected_climb` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |

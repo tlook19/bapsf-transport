@@ -1582,16 +1582,18 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
     # NOT identify those cells -- the dead cells have a finite plasma volume --
     # so the support has to come from ``plasma_active``.
     #
-    # Checked on BOTH a uniform and a non-uniform (source_fixed_grid) mesh: the
-    # kernel is weighted by cell length, and without that weighting a refined
-    # region is over-weighted per cm, which makes the smoothing operator itself
-    # mesh-dependent even where it happens to conserve.
+    # Checked on two meshes, the default one and one with a pinned fixed
+    # source region (non-uniform: the source cells are shorter than the far
+    # column's): the kernel is weighted by cell length, and without that
+    # weighting a refined region is over-weighted per cm, which makes the
+    # smoothing operator itself mesh-dependent even where it happens to
+    # conserve.
     cathode_flags = _cathode_flags()
     smooth_sigma_cm = 50.0
     smoothing_meshes = (
-        ("uniform", dict(csda_params), dict(cathode_flags)),
+        ("default", dict(csda_params), dict(cathode_flags)),
         (
-            "source_fixed_grid",
+            "pinned_source_grid",
             {
                 **csda_params,
                 # Gap pinned with the region: see _case_source_fixed_grid.
@@ -1600,7 +1602,7 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
                 "source_region_dz_cm": 10.0,
                 "gas_puff_z_cm": 60.0,
             },
-            {**cathode_flags, "source_fixed_grid": True},
+            dict(cathode_flags),
         ),
     )
     for mesh_label, smooth_base, smooth_flags in smoothing_meshes:
@@ -1619,7 +1621,7 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
         # old ``Vp > 0`` support could not have found them.
         assert not smooth_active.all(), mesh_label
         assert (smooth_Vp > 0.0).all(), mesh_label
-        if mesh_label == "source_fixed_grid":
+        if mesh_label == "pinned_source_grid":
             assert np.unique(np.round(smooth_dz[smooth_active], 9)).size > 1
 
         # (a) The kernel itself: no weight on any row the RHS mask will zero,
@@ -1695,7 +1697,7 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
     # positions -- exactly what an nx-matched source_region_dz_cm refinement
     # sweep builds.
     cathode_flags = _cathode_flags()
-    smoothkey_flags = {**cathode_flags, "source_fixed_grid": True}
+    smoothkey_flags = dict(cathode_flags)
     smoothkey_base = dict(
         csda_params,
         # Gap pinned with the region: see _case_source_fixed_grid.

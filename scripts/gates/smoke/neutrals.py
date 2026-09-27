@@ -2520,15 +2520,17 @@ def _case_shaped_initial_neutral_fill_sp3():
         # The scalar arm below compares the two arms at the raw bit level, so
         # the stance names the cold layout rather than inheriting it.
         _pin_pre_r2a_neutral_stance(params, flags)
-        # A UNIFORM nx=12 column. The spreading-kernel checks in (e) state
-        # their widths in CELLS and convert with the mesh's MEAN cell length,
-        # which only means "cells" on a uniform mesh; the fixed source region
-        # (a config default since the R2a fold-in) makes cell sizes differ by
-        # a factor of several, and a 2-cell kernel would then be sub-cell where
-        # it lands. The IC construction under test is mesh-agnostic.
-        flags["source_fixed_grid"] = False
-        params["source_region_length_cm"] = None
-        params["source_region_dz_cm"] = None
+        # A UNIFORM column. The spreading-kernel checks in (e) state their
+        # widths in CELLS and convert with the mesh's MEAN cell length, which
+        # only means "cells" on a uniform column. The single-cathode mesh
+        # always carries the fixed source region, so the region is sized to
+        # the far column's own cell: 4 source cells + nx = 12 far cells of
+        # exactly (Lm - gap - end wall) / 16 = 128.546875 cm each (exact in
+        # binary). The IC construction under test is mesh-agnostic.
+        params["source_region_dz_cm"] = 128.546875
+        params["source_region_length_cm"] = (
+            params["cathode_anode_gap_cm"] + 4 * 128.546875
+        )
         params.update(over)
         return params, flags
 

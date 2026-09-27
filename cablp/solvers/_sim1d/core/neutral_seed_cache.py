@@ -130,8 +130,8 @@ INERT_PARAM_KEYS = frozenset({
     "initial_neutral_state",
     # The prescribed per-cell geometry keys (plasma_radius_profile_cm,
     # machine_radius_profile_cm, plasma_area_max_vessel_fraction,
-    # neutral_annulus_volume_fraction_min) are deliberately NOT listed here,
-    # and neither is prescribed_area_geometry in INERT_FLAG_KEYS: these change
+    # neutral_annulus_volume_fraction_min) are deliberately NOT listed here:
+    # these change
     # the GEOMETRY. The column volume Vp, the vessel volume Vm, the annulus volume
     # V_ann = Vm - Vp, the zone exchange conductance (~ Rp dz) and the
     # free-molecular face conductances (~ the hydraulic radius) are all read by
@@ -162,23 +162,20 @@ INERT_FLAG_KEYS = frozenset({
     "implicit_heat_conduction", "ionization_energy_cost",
     "raw_stage_validation",
     "debug_checks",
-    # The two end-face energy-booking flags are inert because
-    # run_neutral_equilibration does not merely leave them unreached, it
-    # CLEARS both on the inner sim's copy of
-    # the config (two assignments beside the Plasma=False and
-    # cathode_coupling=False lines that open that function), so the
-    # equilibration runs with them off no matter what the outer run arms and no
-    # armed value can reach a seed. Their content says the same thing:
-    # end_wall_sheath_full_debit books the sheath fall of the electrons the end
-    # wall collects and cathode_face_full_debit books the emitting face's
-    # currents -- and a Plasma=False, cathode_coupling=False pre-solve has no
-    # plasma reaching either end face and no cathode solve to read a current
-    # from, so neither has a term to book even before the clearing.
-    # Categorised rather than left to fail closed for the reason spelled out
-    # for the prescribed cathode trace above: the fail-closed default rotates
-    # every stored seed's signature the moment such a key joins the template,
-    # an invalidation with no neutral content behind it.
-    "end_wall_sheath_full_debit", "cathode_face_full_debit",
+    # The cathode end-face energy-booking flag is inert because
+    # run_neutral_equilibration does not merely leave it unreached, it
+    # CLEARS it on the inner sim's copy of the config (an assignment beside
+    # the Plasma=False and cathode_coupling=False lines that open that
+    # function), so the equilibration runs with it off no matter what the
+    # outer run arms and no armed value can reach a seed. Its content says the
+    # same thing: cathode_face_full_debit books the emitting face's currents,
+    # and a cathode_coupling=False pre-solve has no cathode solve to read a
+    # current from. Categorised rather than left to fail closed for the
+    # reason spelled out for the prescribed cathode trace above: the
+    # fail-closed default rotates every stored seed's signature the moment
+    # such a key joins the template, an invalidation with no neutral content
+    # behind it.
+    "cathode_face_full_debit",
     # the cache-control flag (not seed content)
     "use_cached_neutral_seed",
 })

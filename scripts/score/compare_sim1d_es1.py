@@ -289,12 +289,12 @@ PARAM_OVERRIDES = {
     "operator_splitting": "strang",
     "heat_picard_iterations": 2,
     "heat_picard_tol": 1e-10,
-    # NO machine geometry here. The provisional R5 end-expansion flare
-    # (end_expansion_geometry over 10 cells to a 1 m vessel radius) and the
-    # plenum-choke obstruction (Rcs=40/Lcs=25) were RETIRED by the G1 measured
-    # geometry, which prescribes the vessel and flux-tube radii per cell
-    # instead (prescribed_area_geometry, and the two are mutually exclusive by
-    # construction). Those profiles are sized to their own mesh, so they are
+    # NO machine geometry here. The provisional R5 end-expansion flare (10
+    # cells to a 1 m vessel radius, since removed) and the plenum-choke
+    # obstruction (Rcs=40/Lcs=25) were RETIRED by the G1 measured geometry,
+    # which prescribes the vessel and flux-tube radii per cell instead
+    # (plasma_radius_profile_cm, machine_radius_profile_cm). Those profiles
+    # are sized to their own mesh, so they are
     # not shared-driver material: geometry now comes with the stance, whole.
     # Rsup stays at the no-support-rods limit, which is also the config
     # default, because the plenum obstruction it belongs to is gone.
@@ -335,9 +335,8 @@ PARAM_OVERRIDES = {
     # source artifacts ran at the config default 5.
 }
 FLAG_OVERRIDES = {
-    # NB end_expansion_geometry is NOT set here any more: the G1 measured
-    # geometry replaced the built-in flare with per-cell prescribed radii, and
-    # the solver refuses the two together. It comes with the stance.
+    # NB no geometry flag is set here: the G1 measured geometry is per-cell
+    # prescribed radii, and it comes with the stance.
     # NB electron_heat_flux_limit is NOT set here any more either: the flag
     # folded into the config defaults at R2a and its coefficient at R2b, so
     # neither namespace names the limiter.

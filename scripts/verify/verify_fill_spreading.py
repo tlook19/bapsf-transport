@@ -755,7 +755,7 @@ def _rebuild_rows(base_h5, es, nx, sgp, geometry_npz, kernel, dt_foot_s=None):
         sigma_hehe_cm2=sp3.SIGMA_HE_HE_CM2, mfp_cm=None, tn_k=None,
         extra=["gas_puff_orifice_id_cm=3.95",
                "gas_puff_orifice_length_cm=22.0"],
-        extra_flag=["prescribed_area_geometry=true", "neutral_baffles=true"],
+        extra_flag=[],
         extra_npz=[
             "plasma_radius_profile_cm=" + keys[0],
             "machine_radius_profile_cm=" + keys[1],
@@ -898,7 +898,7 @@ def _production_geometry(geometry_npz, es, nx, sgp):
         int(es), int(nx), float(sgp),
         extra_params=values,
         extra_flags=sp3.parse_extra_overrides(
-            ["prescribed_area_geometry=true", "neutral_baffles=true"],
+            [],
             "--extra-flag",
         ),
     )

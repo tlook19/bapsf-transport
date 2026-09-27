@@ -1279,8 +1279,6 @@ def main(argv=None):
     params["machine_radius_profile_cm"] = [float(v) for v in vessel]
     params["neutral_baffle_positions_cm"] = list(census_build.BAFFLE_POSITIONS_CM)
     params["neutral_baffle_clear_radii_cm"] = list(census_build.BAFFLE_CLEAR_RADII_CM)
-    flags["prescribed_area_geometry"] = True
-    flags["neutral_baffles"] = True
     geometry = build_geometry(params, flags)
     say("build_geometry with the new profile: OK (no ValueError)")
     annulus = geometry.neutral_volume_cm3 - geometry.plasma_volume_cm3

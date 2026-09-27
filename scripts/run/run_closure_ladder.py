@@ -504,7 +504,7 @@ def cmd_feet(args):
                    ["--extra", "gas_puff_orifice_id_cm=3.95", "gas_puff_orifice_length_cm=22.0",
                     "--extra-npz"] + [f"{k}={g}:{k}" for k in
                                       ("plasma_radius_profile_cm", "machine_radius_profile_cm", "neutral_baffle_positions_cm", "neutral_baffle_clear_radii_cm")] + \
-                   ["--extra-flag", "prescribed_area_geometry=true", "neutral_baffles=true", "--out", out]
+                   ["--out", out]
             r = run_wt(argv, FEET_DIR / f"foot_es{es}_{end}.log", timeout=1800)
             m = re.search(r"S_gp x dt_foot = ([0-9.e+]+) atoms", r.stdout)
             d = re.search(r"dt_foot=([0-9.e-]+) s", r.stdout)
