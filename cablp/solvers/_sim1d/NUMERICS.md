@@ -478,7 +478,8 @@ Uniqueness rests on each residual's monotonicity.
 
 **A demand past the ceiling `cathode_phi_c_cap_V` is CLAMPED, not raised — in
 the current-driven and prescribed forms.** There the solve returns the ceiling
-value and TAGS itself `capability_limited`; no error is raised and the run continues. Because nothing
+value and TAGS itself `capability_limited`; no error is raised and the run
+continues. Because nothing
 raises, the clamp is COUNTED: the solver censuses how many of a run's accepted
 cathode solves were tagged that way out of how many it performed and when the
 first one fired, prints that census at run end, and saves it in the result file

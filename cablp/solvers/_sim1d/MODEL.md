@@ -734,7 +734,8 @@ conduction into the heater-held substrate, and $P_\text{back}$ the energy the
 backscattered atoms of the cathode jet carry away, the $R_E$ share of the
 incident ion energy that the gas receives and the surface therefore loses.
 
-The work function is not a constant either: an adsorbate coverage $\theta\in[0,1]$ obeys
+The work function is not a constant either: an adsorbate coverage
+$\theta\in[0,1]$ obeys
 
 $$\frac{d\theta}{dt}=-\sigma_\text{cl}(E)\Gamma_i\theta,\qquad \phi_\text{wf,eff}=\phi_\text{clean}+\left(\phi_\text{wf}-\phi_\text{clean}\right)\theta,$$
 
@@ -853,7 +854,8 @@ the `anode_collection` row, formed on the fluid's own $S_\text{an}$ below,
 not on the circuit's ion current.
 
 **What the plasma pays is not the same at the two electrodes.** At the cathode
-it pays the thermal part alone. At the anode, at a REPELLING sheath ($\phi_a>0$), the collected electrons climbed the fall
+it pays the thermal part alone. At the anode, at a REPELLING sheath
+($\phi_a>0$), the collected electrons climbed the fall
 and the plasma pays $\phi_a$ per electron on top of the thermal $2T_e$; at an
 ATTRACTING sheath ($\phi_a\le0$) the field does work ON the electrons, the bank
 is the payer, and the thermal debit stands alone. A non-finite $\phi_a$ belongs

@@ -18120,40 +18120,47 @@ def _case_coverage_two_medium_beam_split(_coverage_config):
     )
     from run_mechanism_ladder import ES_OPERATING as _cov_es_operating
 
-    # The conducting-phase window on the scorer's instrument base at the ES1
-    # rung, with the window delta applied last and the closure armed at
-    # f0 = 0.05 on a stopped clock.
-    _cov_live_p, _cov_live_f = default_config()
-    _cov_live_p.update(_cov_param_overrides)
-    _cov_live_f.update(_cov_flag_overrides)
-    _cov_op = _cov_es_operating[1]
-    _cov_live_p.update({
-        "nx": 24,
-        "V_bank": _cov_op["V_bank"],
-        "cathode_solver_model": "current_driven",
-        "beam_deposition_model": "csda",
-        "beam_anomalous_model": "quasilinear",
-        "cathode_Ts_base_K": _cov_op["Ts_standby_K"],
-        "cathode_heat_capacity_J_per_K": 120.0,
-        "cathode_emissivity": 0.7,
-        "phi_wf": 2.869,
-        "cathode_phiwf_clean_eV": 2.809,
-        "cathode_cleaning_sigma_cm2": 3.5e-16,
-        "cathode_cleaning_E_th_eV": 20.0,
-        "Te_birth_ionization": "floor",
-        "gas_puff_mode": "square",
-    })
-    _cov_delta = _cov_tomllib.loads(
-        (Path(__file__).resolve().parents[1] / "run"
-         / "covbuild_conducting_phase.toml").read_text()
-    )
-    _cov_live_p.update(_cov_delta.get("params", {}))
-    _cov_live_f.update(_cov_delta.get("flags", {}))
-    _cov_live_p["coverage_initial_fraction"] = 0.05
-    _cov_live_p["coverage_growth_rate_per_s"] = 0.0
-    _cov_live_f["coverage_closure"] = True
-    _cov_live_f["neutral_energy"] = False
-    _cov_live_f["neutral_hot_internal_wall"] = False
+    def _cov_live_config(nx, coverage=None, extra=None):
+        """The conducting-phase window on the scorer's instrument base at the
+        ES1 rung, the window delta applied over it, then the closure armed at
+        ``coverage = (f0, r)``, then ``extra``. Returns ``(params, flags)``."""
+        params, flags = default_config()
+        params.update(_cov_param_overrides)
+        flags.update(_cov_flag_overrides)
+        op = _cov_es_operating[1]
+        params.update({
+            "nx": nx,
+            "V_bank": op["V_bank"],
+            "cathode_solver_model": "current_driven",
+            "beam_deposition_model": "csda",
+            "beam_anomalous_model": "quasilinear",
+            "cathode_Ts_base_K": op["Ts_standby_K"],
+            "cathode_heat_capacity_J_per_K": 120.0,
+            "cathode_emissivity": 0.7,
+            "phi_wf": 2.869,
+            "cathode_phiwf_clean_eV": 2.809,
+            "cathode_cleaning_sigma_cm2": 3.5e-16,
+            "cathode_cleaning_E_th_eV": 20.0,
+            "Te_birth_ionization": "floor",
+            "gas_puff_mode": "square",
+        })
+        delta = _cov_tomllib.loads(
+            (Path(__file__).resolve().parents[1] / "run"
+             / "covbuild_conducting_phase.toml").read_text()
+        )
+        params.update(delta.get("params", {}))
+        flags.update(delta.get("flags", {}))
+        if coverage is not None:
+            params["coverage_initial_fraction"] = coverage[0]
+            params["coverage_growth_rate_per_s"] = coverage[1]
+            flags["coverage_closure"] = True
+            flags["neutral_energy"] = False
+            flags["neutral_hot_internal_wall"] = False
+        if extra:
+            params.update(extra)
+        return params, flags
+
+    _cov_live_p, _cov_live_f = _cov_live_config(24, coverage=(0.05, 0.0))
     _cov_split_sim = LAPDSim1D(_cov_live_p, _cov_live_f)
     for _ in range(40):
         _cov_split_sim.advance_one_step(dt=2.0e-9)
@@ -20055,9 +20062,15 @@ def _case_tracer_ql_booking_passive_cells(_r2, _r2_on_config, solver_module):
     _r2ql_params, _r2ql_flags = _r2ql_config()
     _r2ql_sim = LAPDSim1D(_r2ql_params, _r2ql_flags)
     _r2ql_sim.run(t_end=1.0e-6, dt=1.0e-7)
+    # The electrode sample re-seeded from the state the probe reads, so the
+    # sheath solve below sees that state's emitting cathode rather than the
+    # supply-averaged sample, which over a 1 us window still sits near the
+    # cold start. The solve is written to the cache, so the audit below reads
+    # the same one.
+    _r2ql_sim._init_sample_smoothing()
     _r2ql_passive = _r2ql_sim._tracer_passive
     _r2ql_solve = _r2ql_sim.solve_cathode_boundary(
-        state=_r2ql_sim.state, time=_r2ql_sim._time, update_cache=False
+        state=_r2ql_sim.state, time=_r2ql_sim._time, update_cache=True
     )
     _r2ql_S, _r2ql_net, _r2ql_full = _r2ql_sim._tracer_beam_rows(
         _r2ql_sim.state, _r2ql_solve, _r2ql_sim._time
@@ -20123,8 +20136,9 @@ def _case_tracer_ql_booking_passive_cells(_r2, _r2_on_config, solver_module):
     )
     _r2ql_sm_sim = LAPDSim1D(_r2ql_sm_params, _r2ql_sm_flags)
     _r2ql_sm_sim.run(t_end=1.0e-6, dt=1.0e-7)
+    _r2ql_sm_sim._init_sample_smoothing()
     _r2ql_sm_solve = _r2ql_sm_sim.solve_cathode_boundary(
-        state=_r2ql_sm_sim.state, time=_r2ql_sm_sim._time, update_cache=False
+        state=_r2ql_sm_sim.state, time=_r2ql_sm_sim._time, update_cache=True
     )
     _r2ql_sm_rows = _r2ql_sm_sim._tracer_beam_rows(
         _r2ql_sm_sim.state, _r2ql_sm_solve, _r2ql_sm_sim._time

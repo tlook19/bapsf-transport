@@ -1723,8 +1723,8 @@ class LAPDSim1D:
     def _init_numerical_guards(self):
         """Validate the step-controller and non-ignition guards.
 
-        These are budgets rather than physics: the heat-flux limiter, the floor-exempt drain, the max-step and dt_min
-        locks, the wall-clock and accepted-step ignition caps, and the
+        These are budgets rather than physics: the heat-flux limiter, the
+        floor-exempt drain, the max-step and dt_min locks, the wall-clock and accepted-step ignition caps, and the
         dt_growth recovery. Each is checked HERE so a misconfigured guard
         cannot be discovered hours into the run it exists to catch.
         """
@@ -2053,8 +2053,9 @@ class LAPDSim1D:
         # ends of the machine -- and TWO INDEPENDENT keys, one per end,
         # because the two faces carry different fluxes in different regimes
         # and an arm that moves both cannot say which one the response came
-        # from. Each is a real bool: it arms a multi-kilowatt re-booking of the electron store, and an int
-        # or a string there would read like a value. Each refuses on ITS OWN
+        # from. Each is a real bool: it arms a multi-kilowatt re-booking of
+        # the electron store, and an int or a string there would read like a
+        # value. Each refuses on ITS OWN
         # missing input only, so arming one never reports the other's.
         #
         # Each face is looked up through the SAME helper its own booking
