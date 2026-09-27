@@ -484,11 +484,19 @@ def integrate_rows(f, i0, i1, vols):
     # it actually took. Prefer that: the ledger's job is what the plasma
     # paid. An artifact without the array (every pre-implicit run, and every
     # run with the operator split off) keeps the reported row.
-    realised_key = "anode_e_sheath_realised_W_cm3"
-    if realised_key in f and ("anode_e_sheath_loss", "Ee") in table:
-        realised = np.mean(f[realised_key][i0:i1 + 1], axis=0)
-        table[("anode_e_sheath_loss", "Ee")] = (
-            -float(realised.dot(vols["Ee"])) / 1e3)
+    # The cathode face's collected-electron climb is the same kind of row:
+    # reported at the circuit's statement, realised by the implicit substep,
+    # and saved as what was taken. An artifact without the array (one saved
+    # before the climb rode the substep, or with the split off) keeps the
+    # reported row.
+    for realised_key, row_name in (
+        ("anode_e_sheath_realised_W_cm3", "anode_e_sheath_loss"),
+        ("cathode_e_climb_realised_W_cm3", "cathode_e_collected_climb"),
+    ):
+        if realised_key in f and (row_name, "Ee") in table:
+            realised = np.mean(f[realised_key][i0:i1 + 1], axis=0)
+            table[(row_name, "Ee")] = (
+                -float(realised.dot(vols["Ee"])) / 1e3)
     return table, channels
 
 
