@@ -871,8 +871,7 @@ def model_mode_defaults():
         arms that bound the size of the double count; neither is
         claim-bearing.
 
-        Under every reading the ``anode_sheath_full_debit`` booking is
-        untouched, and the anode PRESHEATH term is NOT booked here -- it
+        Under every reading the anode sheath debit is untouched, and the anode PRESHEATH term is NOT booked here -- it
         belongs to the separate anode-potential-debit question, and only one
         of the two may ever book it. Read only under the
         ``electron_drift_transport`` flag, and refused at a non-default value
@@ -922,8 +921,7 @@ def model_mode_defaults():
         member set and every offending key.
 
         Outside that set the arm still requires the ``neutral_two_zone``
-        flag (a prerequisite, never resolved for you) and refuses
-        ``coupled_circuit_picard``, a nonzero
+        flag (a prerequisite, never resolved for you) and refuses a nonzero
         ``gas_puff_local_ionization_fraction``, and ``gas_type`` other than
         ``"He"``. Any other value, or ``"kinetic"``/``"kinetic_dvm"`` without
         the two-zone flag, raises at construction.
@@ -1344,31 +1342,6 @@ def model_mode_defaults():
         Number of perpendicular-speed (``v_perp``) bins in that same grid.
         This axis is positive-only -- it carries the 2D perpendicular speed
         measure -- and is likewise stretched. Inert under ``"moment"``.
-    cathode_circuit_sample:
-        Which sampled electrode state the CURRENT-DRIVEN circuit's
-        ``V_dis(I)`` relation is built on. It has exactly two readers, and
-        they move together: the accepted-step circuit advance, and the
-        loop-relaxation timestep bound (read only under the
-        ``cathode_circuit_voltage_bound`` flag, and built on the same
-        relation as the advance precisely so the two cannot disagree).
-        Nothing else in the model reads this key.
-
-        ``"raw"`` (default) evaluates the loop relation on the accepted
-        end-of-step state itself, so the loop-current root sees the raw
-        ``(n, Te)`` of the sampled cells.
-
-        ``"smoothed"`` evaluates it on the supply-averaged sample
-        ``cathode_sample_smoothing`` maintains -- the same EMA the RHS-side
-        sheath solve and the accepted-state surface re-solve already read --
-        so the loop and the fluid evaluate the sheath from one sample within
-        an accepted step.
-
-        Construction raises on any other value. ``"smoothed"`` additionally
-        requires the sample it names to exist and the advance it selects for
-        to run: it raises when ``cathode_sample_smoothing`` is ``None`` (there is
-        no EMA to read), when ``cathode_solver_model`` is not
-        ``"current_driven"``, and when the ``cathode_coupling`` flag is off
-        (there is no circuit advance).
     adas_low_te_extension:
         Extends the ADAS ``acd`` (recombination) and ``prb1`` (recombination
         radiated power) coefficients consistently below the bundled ADF11
@@ -1492,9 +1465,6 @@ def model_mode_defaults():
         # refused outright by every other neutral model, so the key can
         # never be a silently inert control:
         "neutral_kinetic_dvm_transfer_hold": None,
-        # Which sampled state the current-driven circuit advance evaluates
-        # V_dis(I) on. "raw" is the shipped behaviour, bit for bit:
-        "cathode_circuit_sample": "raw",
         # Bucket-2 default-off closure instrument: extends acd/prb1 below the
         # 0.2 eV adf11 edge. REFUSED with icool_recomb; the prb1 half is
         # booked through recombination_energy_return:
@@ -1830,73 +1800,45 @@ def cathode_defaults():
 
         L is inert for the sigma-scored discharge quantities and shows up in
         the current-rise shape and the ignition time.
-    circuit_picard_tol_rel:
-        Relative convergence tolerance on the loop current for the
-        fluid<->circuit Picard iteration. A step is re-run when
-        ``|I_new - I_frozen| > tol * max(|I_new|, 1)``, until the current a
-        step PRODUCES matches the frozen one it was RUN at -- so the fluid,
-        the surface temperature and the circuit end the step sharing one
-        self-consistent ``I_loop`` instead of the fluid seeing a lagged
-        current. Re-runs restore an exact snapshot first, so discarded
-        iterations mutate no accepted-step state. Read only when the
-        ``coupled_circuit_picard`` flag is on, where it must be ``> 0``;
-        raises at construction otherwise.
-    circuit_picard_max_iter:
-        Cap on those re-runs per step; ``1`` permits a single attempt and so
-        reproduces the uniterated behaviour. Only driven phases iterate --
-        floating phases break after the first attempt regardless. Read only
-        when the ``coupled_circuit_picard`` flag is on, where it must be
-        ``>= 1``; raises at construction otherwise.
-    cathode_warming_model:
-        Slow evolution of the emitter surface temperature within a shot.
-        ``"none"`` holds the surface at ``cathode_Ts_base_K``, so the
-        emission ceiling -- and with it the discharge current -- saturates
-        on the circuit timescale (~1-2 ms), where the measured current rises
-        for ~15-20 ms. ``"power_balance"`` (default, M1b) uses
-        imposed asymptote with the surface energy balance
-
-            C_th dT_s/dt = P_heater + P_cathode_i
-                           - eps*sigma*A*(T_s^4 - T_env^4)
-                           - (I_eth_star/e)*(phi_wf + 2 k_B T_s)
-
-        The last term is the emission cooling the relaxation model lacks:
-        each *actually emitted* electron (``I_eth_star`` from the accepted
-        solve, not the Richardson ceiling) carries away the work function
-        plus its ~2kT_s of thermal energy. Space-charge clamping therefore
-        suppresses cooling early (faster warm-up) and releases it near the
-        ceiling (harder cap). ``P_heater`` is pinned by the pre-discharge
-        equilibrium ``P_heater = eps*sigma*A*(T_base^4 - T_env^4)`` (open
-        circuit => no net emission), so the heater is not a free parameter.
-        The steady state -- and with it the plateau current -- becomes an
-        *output* of the balance, independent of ``C_th``, so no configured
-        surface temperature is an asymptote here: ``cathode_Ts_base_K`` is
-        the initial condition and the substrate the heater holds, nothing
-        more. During floating phases the emitted electrons return to
-        the surface, so the emission-cooling term is dropped there. The
-        update is semi-implicit in the linearized loss (unconditionally
-        stable for any ``C_th``), floored at the 300 K chamber-wall
-        temperature the surface radiates against, accepted steps only.
     cathode_Ts_base_K:
         Heater-maintained standby surface temperature [K] -- the temperature
         the cathode sits at before the discharge. DERIVED, not measured: it
         is the operator-set heater current read through the Fig-10
         heater-current -> surface-temperature map.
 
-        It is the cathode's surface temperature under BOTH warming models,
-        and so the single configured input every emission path resolves
-        against: ``cathode_warming_model = "none"`` holds the surface at it
-        for the whole shot, and ``"power_balance"`` takes it as the initial
-        condition and as the substrate temperature of the conduction term.
-        Required, and refused as ``None``, under EITHER model -- there is no
+        It is the initial condition of the evolving emitter surface
+        temperature and the substrate temperature of the conduction term.
+        Within a shot the surface temperature evolves by the surface energy
+        balance
+
+            C_th dT_s/dt = P_heater + P_cathode_i
+                           - eps*sigma*A*(T_s^4 - T_env^4)
+                           - (I_eth_star/e)*(phi_wf + 2 k_B T_s)
+                           - G_cond*(T_s - T_base)
+
+        where each *actually emitted* electron (``I_eth_star`` from the
+        accepted solve, not the Richardson ceiling) carries away the work
+        function plus its ~2kT_s of thermal energy. Space-charge clamping
+        therefore suppresses cooling early (faster warm-up) and releases it
+        near the ceiling (harder cap). ``P_heater`` is pinned by the
+        pre-discharge equilibrium ``P_heater = eps*sigma*A*(T_base^4 -
+        T_env^4)`` (open circuit => no net emission), so the heater is not a
+        free parameter. The steady state -- and with it the plateau current --
+        is an *output* of the balance, independent of ``C_th``. The update is
+        semi-implicit in the linearized loss (unconditionally stable for any
+        ``C_th``), floored at the 300 K chamber-wall temperature the surface
+        radiates against, accepted steps only.
+
+        Required, and refused as ``None`` at construction -- there is no
         other configured surface temperature to fall back on, and the TPMC
-        kinetic background reads it too. Raises at construction.
+        kinetic background reads it too.
         Per-run operating points live in
         ``run_mechanism_ladder.ES_OPERATING[es]["Ts_standby_K"]``. Note the
         degeneracy with ``C_R`` documented above: the two describe one flat
         direction, so a configuration must not move both.
     cathode_heat_capacity_J_per_K:
-        Effective thermal mass of the *emitting layer* [J/K] for
-        ``"power_balance"``. NB this is the thermal skin depth reached over
+        Effective thermal mass of the *emitting layer* [J/K] in the surface
+        energy balance. NB this is the thermal skin depth reached over
         the discharge (sqrt(alpha*t) ~ 0.3-0.5 mm of LaB6), not the disc's
         bulk heat capacity (~hundreds of J/K) -- it shapes only the ramp
         timescale; the steady state is independent of it.
@@ -1917,54 +1859,34 @@ def cathode_defaults():
         a 0.4 mm skin depth; the effective value over a ~20 ms transient is
         lower. This term sets the plateau surface-temperature rise, and the
         plateau *current* then follows from the balance.
-    cathode_emission_profile:
-        Radial structure of the thermionic emitter. ``"uniform"``
-        (default) is a single-temperature disc, whose emission ceiling is a
-        razor wall in the discharge V(I) curve -- the operating point riding
-        that wall is what makes the circuit-coupled current/voltage noisy.
-        ``"gaussian"`` gives the cathode a radial falloff: the
-        emission-current footprint ``exp(-4 ln2 r^2/FWHM^2)``,
-        Richardson-inverted into a local surface temperature profile. The
-        implied centre-to-edge temperature drop of order 150-200 K softens the
-        ceiling into a stable ramp. Use with the physical cathode ``R_cath``
-        and keep ``Rp`` at the plasma-channel value.
-    cathode_Ts_fwhm_cm:
-        Emission-footprint FWHM [cm] for the gaussian profile.
-    cathode_emission_annuli:
-        Number of annuli discretizing the profile.
-    cathode_surface_model:
-        Whether the cathode work function evolves with the coverage of the
-        contaminant layer. ``"none"`` holds ``phi_wf`` static for the shot.
-        ``"ads_des"`` carries a coverage ``theta`` in ``[0, 1]``, initialized
-        fully covered (``theta = 1``, so the shot starts at ``phi_wf``
-        exactly), evolving as
-
-            dtheta/dt = -sigma_cl Gamma_i theta
-
-        (ion-stimulated desorption, the only coverage channel, so ``theta``
-        is monotonically non-increasing through a shot), and
-        substitutes ``phi_eff = phi_clean + (phi_wf - phi_clean)*theta``
-        wherever the work function is read -- Richardson emission, Schottky
-        lowering, emission cooling and the gaussian profile's Richardson
-        inversion all take the one substituted value, never a mix of
-        ``phi_eff`` and ``phi_wf``. ``theta`` advances by a backward-Euler
-        update on accepted steps only. Any other value raises at
-        construction. Under ``"ads_des"``, ``phi_wf`` keeps its meaning as
-        the fully-covered shot-start work function.
     cathode_phiwf_clean_eV:
         Work function [eV] of the fully cleaned surface -- the ``theta -> 0``
         floor of ``phi_eff``, i.e. the per-shot-accessible depth of the
         removable layer rather than a literature clean-surface value.
-        REQUIRED under ``cathode_surface_model = "ads_des"`` and must be
-        strictly below ``phi_wf``; raises at construction when missing or not
-        below it. Inert under ``"none"``.
+        REQUIRED and must be strictly below ``phi_wf``; raises at
+        construction when missing or not below it.
+
+        The cathode work function evolves with the coverage ``theta`` in
+        ``[0, 1]`` of the contaminant layer, initialized fully covered
+        (``theta = 1``, so the shot starts at ``phi_wf`` exactly), evolving
+        as
+
+            dtheta/dt = -sigma_cl Gamma_i theta
+
+        (ion-stimulated desorption, the only coverage channel, so ``theta``
+        is monotonically non-increasing through a shot), and substitutes
+        ``phi_eff = phi_clean + (phi_wf - phi_clean)*theta`` wherever the
+        work function is read -- Richardson emission, Schottky lowering and
+        emission cooling all take the one substituted value, never a mix of
+        ``phi_eff`` and ``phi_wf``. ``theta`` advances by a backward-Euler
+        update on accepted steps only. ``phi_wf`` keeps its meaning as the
+        fully-covered shot-start work function.
     cathode_cleaning_sigma_cm2:
         Ion-stimulated desorption cross section [cm^2] in the coverage loss
         term ``sigma_cl*Gamma_i``, where the ion flux density onto the
         cathode is ``Gamma_i = I_i/(e*pi*R_cath^2)`` taken from the
         accepted-state sheath solve. Must be non-negative; raises at
         construction otherwise. ``0`` removes the ion-stimulated channel.
-        Inert unless ``cathode_surface_model = "ads_des"``.
     cathode_cleaning_E_th_eV:
         Threshold energy [eV] for that desorption cross section. When set,
         ``cathode_cleaning_sigma_cm2`` is scaled by the near-threshold
@@ -1972,8 +1894,7 @@ def cathode_defaults():
         deposited energy per ion ``E = P_cathode_i/I_i`` from the same
         accepted-state solve, and the channel is switched off entirely for
         ``E <= E_th``. ``None`` leaves the cross section energy-independent
-        (the pure fluence limit). Inert unless
-        ``cathode_surface_model = "ads_des"``.
+        (the pure fluence limit).
     cathode_solver_model:
         Which formulation supplies the discharge drive.
 
@@ -2006,15 +1927,11 @@ def cathode_defaults():
         DRIVE while the prescribed drive is in force, and the
         cathode-warming ledger rows accumulate nothing over those steps.
         The surface temperature is FROZEN rather than retired: it holds the
-        value it carried into the hand-off (the configured standby under
-        ``cathode_warming_model = "none"``, the last warmed value under
-        ``"power_balance"``) and stays load-bearing on the NEUTRALS, since
-        an engaged kinetic neutral closure reads it as the cathode-end wall
-        re-emission temperature. Requires all three
-        ``cathode_prescribed_*`` keys below, and refuses
-        ``cathode_circuit_voltage_bound`` (a bound on what the loop can supply
-        is meaningless where the device voltage is measured rather than
-        sourced). See ``cablp/cathode/circuit_prescribed.py``.
+        value it carried into the hand-off (the last warmed value) and stays
+        load-bearing on the NEUTRALS, since an engaged kinetic neutral closure
+        reads it as the cathode-end wall re-emission temperature. Requires all
+        three ``cathode_prescribed_*`` keys below. See
+        ``cablp/cathode/circuit_prescribed.py``.
 
         BRACKET AXIS (advisor, 2026-09-05). Under this mode the beam's birth
         energy is ``e·phi_c`` with ``phi_c`` assembled from the measured
@@ -2092,120 +2009,8 @@ def cathode_defaults():
         ceiling value is reported as ``phi_c`` for as long as that regime
         holds, and every consumer keyed to ``phi_c`` (notably the tail birth
         energy under ``heating_anomalous_tail_energy_keying="phi_c"``) sees it.
-        Under the ``cathode_circuit_voltage_bound`` flag this cap is not the
-        whole ceiling: the solve is run against ``min`` of it and the circuit
-        member selected by ``cathode_circuit_bound_object``, and the
-        ``bound_active`` diagnostic says which of the two the solve sat on.
-        This cap alone is a domain guard on the atomic data and holds in every
-        regime; the restrictions on the composition belong to the circuit
-        member and are stated at that key and at the flag.
-    cathode_circuit_bound_object:
-        Which quantity the circuit-available voltage bounds under the
-        ``cathode_circuit_voltage_bound`` flag. Read only while that flag is
-        on; inert otherwise, and construction raises on an unknown value when
-        it is on.
-
-        ``"device_voltage"`` (default) makes the object the DEVICE voltage
-        ``V_b = phi_c - phi_a + V_p``, which is the quantity the loop equation
-        contains. The circuit member of the composed ceiling is then the net
-        cathode drop at which ``V_b`` reaches the available voltage, located
-        by a bracketed solve on the same monotone device relation the current
-        root uses, with ``phi_a`` and ``V_p`` evaluated by the identical
-        expressions that assemble the returned result. Because the anode fall
-        SUBTRACTS, ``phi_c`` may legitimately exceed the available voltage
-        while ``V_b`` does not, and this object permits exactly that.
-
-        ``"phi_c"`` makes the object the net cathode drop itself: the circuit
-        member IS the available voltage. This is the R1 composition, bit for
-        bit, retained as an A/B arm. It coincides with ``"device_voltage"``
-        only where ``phi_a`` and ``V_p`` are negligible — the near-vacuum
-        build leg — and mis-clamps a correct plateau solve elsewhere,
-        silently except for the ``bound_active`` census.
-
-        NEITHER object changes what the bound leaves alone: the inductor's
-        back-EMF is not counted as supply, so on a FALLING leg the physical
-        ``V_b`` exceeds the available voltage and the bound engages -- but
-        the loop current is not held there, because the circuit integrates
-        the sheath's unbounded demand rather than the clamped ``V_b``. Only
-        the reported/beam-facing objects are clamped.
-    cathode_ion_secondary_emission_yield:
-        Ion-induced secondary electron yield ``gamma_se`` at the emitting
-        face, in electrons released per ion arriving there [dimensionless].
-        ``None`` (the default) and READ ONLY under the
-        ``cathode_ion_secondary_emission`` flag, which the term is gated on;
-        the key has no numeric default, so an armed run states the yield it
-        means.
-
-        WHAT CONSUMES IT. The cathode sheath solve, where the released
-        secondary current ``I_see = gamma_se * I_i`` is formed on the ion
-        current that solve already draws to the face. ``I_see`` is a positive
-        addition to the EMITTED side of the cathode current balance, which
-        the solve keeps as ``I_eth_star + I_see + I_i - I_e_ret = I_tot``, and
-        the secondaries join the LAUNCHED beam: released at the surface at a
-        few eV, they cross the same cathode fall as the thermionic primaries
-        and are priced at the same launch potential in ``P_prim`` and in the
-        gap bypass. Because the ion current is independent of the sheath
-        depth, the term reaches the monotone current match as a reduction of
-        the imposed target rather than as a change to the device relation, so
-        the root, its ceiling ladder and its compiled kernel are unchanged.
-
-        WHAT DOES NOT CONSUME IT, each a disclosed omission rather than an
-        oversight. The space-charge ceiling and its virtual-cathode barrier
-        stay keyed to the ion current alone: both are statements about a
-        half-Maxwellian at the emitter temperature, and the secondaries are
-        not that population, so in the virtual-cathode regime the released
-        total is an overstatement. The ``cathode_face_full_debit`` emission
-        rows keep ``Gamma_em = I_eth_star/e``: their ``2 k_B T_s`` form is the
-        thermionic population's surface enthalpy and does not describe an
-        Auger secondary, which carries no surface-thermal enthalpy here. The
-        surface power balance under ``cathode_warming_model =
-        "power_balance"`` is likewise untouched: thermionic emission cools the
-        lattice through the work function, whereas a secondary's release
-        energy comes from the arriving ion's neutralization, so no additional
-        emission cooling is booked and the ion's potential energy is not
-        removed from the surface either.
-
-        WHAT RAISES. Set while the flag is off, refused at construction (a
-        control nothing reads). Armed, must be a finite float in [0, 1] and is
-        refused outside that bracket. Armed under any ``cathode_solver_model``
-        other than ``"current_driven"``, or without ``cathode_coupling``,
-        refused at construction naming what is missing.
-    cathode_Rp_model:
-        How the cathode solver's parallel plasma (gap) resistance ``R_p`` is
-        built. ``"sample"`` (default, historical) is the solver's internal
-        ``R_p = L_cath / (pi R_cath^2 sigma_par(Te_sample))`` with the
-        Spitzer conductivity evaluated at the *one* cathode-adjacent sampled
-        cell -- which underestimates the resistance of a gap colder than
-        that sample (eta_Spitzer ~ Te^-3/2), and so can bias V_dis(t) over a
-        discharge in which the gap cools away from the sampled cell.
-        ``"resolved_gap"`` integrates ``R_p = sum_k dz_k / (sigma_par(Te_k)
-        * A_k)`` over the resolved cathode-anode gap cells with each cell's
-        own Te and plasma-channel area -- the same per-cell weighting the
-        ohmic deposition already uses. Fed to the sheath evaluator through an
-        effective ``DeviceConfig.R_cath`` chosen so the
-        solver's internal formula reproduces the integrated value exactly
-        (``R_cath`` is used nowhere else in the solve). Requires a single
-        cathode (``TwinCathode`` raises: one shared DeviceConfig
-        cannot carry two gaps sampled at different Te). NB with ``Rp !=
-        R_cath`` the two models differ even for a uniform gap -- conduction
-        through the plasma channel, not the cathode disc.
-    cathode_lnL_model:
-        Which Coulomb logarithm the parallel Spitzer conductivity
-        ``sigma_par`` is built from, in BOTH sheath solvers and in every
-        sim1d-side consumer of ``sigma_par`` (the ``"resolved_gap"`` R_p
-        integral and the ohmic gap deposition weights).
-
-        ``"nrl_ei"`` (default) evaluates the electron-ion Coulomb logarithm at
-        the local ``(Te, n)`` and floors it at ``LN_LAMBDA_MIN``, the same
-        convention the conduction and electron-ion exchange terms use, giving
-        ``sigma_par = (1.96/(1.03e-2 lnLambda)) Te^1.5`` [Ohm^-1 cm^-1].
-
-        ``"fixed_14p6"`` restores the frozen-coefficient form
-        ``sigma_par = 14.6 Te^1.5``, i.e. ``"nrl_ei"`` evaluated at
-        ``lnLambda = 13.03`` and held there regardless of state. It is an
-        ATTRIBUTION-ONLY comparison arm: it exists so a result can be split
-        between the lnLambda correction and everything else, and it is not a
-        physical alternative. Any other value raises at construction.
+        This cap is a domain guard on the atomic data and holds in every
+        regime.
     b_beam_excitation:
         Scale on the neutral-excitation cross section added to the primary
         beam's inelastic channels. ``0`` (default) is the historical beam:
@@ -2312,13 +2117,10 @@ def cathode_defaults():
         walks exactly as under ``"nonlocal"`` (same machinery, same
         thermalization rule, same end ledger) while every ALONG-RAY product,
         the secondaries included, is banked in its birth cell exactly as under
-        ``"local"``. It differs from ``"nonlocal"`` in two further bookings:
+        ``"local"``. It differs from ``"nonlocal"`` in one further booking:
         the transmitted primary keeps its own term instead of joining the end
         ledger (so under this value the ledger holds the walked terminal
-        escape alone), and the escaping terminal electrons' CURRENT is added
-        to the vessel node's wall electron channel when ``regime_vessel_node``
-        is also armed -- charge to the node, energy to the ledger, neither
-        counted twice. Not available on the compiled kernel, which takes
+        escape alone). Not available on the compiled kernel, which takes
         product transport as a single boolean covering both populations and
         so cannot express one walking without the other; selecting it takes
         the Python march. Motivation: at
@@ -2842,22 +2644,9 @@ def cathode_defaults():
         ``False`` is off. Requires the ``neutral_momentum`` flag and anode
         faces with ``eta > 0`` and positive neutral transparency; raises at
         construction otherwise.
-    cathode_sample_smoothing:
-        Exponential-moving-average smoothing of the ``(n, Te)`` the sheath
-        solve samples, covering the cathode sample cell and the two cells
-        flanking the first anode face -- every cell the solve reads. The EMA
-        is seeded from the initial state and advances on accepted steps only,
-        so dt-retries never move it, and the sampled ``Ee`` is rebuilt from
-        the smoothed pair. ``"presheath"`` derives the time constant per cell
-        as the ion transit across it, ``tau = l_cell/c_s(Te_ema)``, so it is
-        a local physical timescale rather than a configured number; a float
-        is a fixed ``tau`` [s] and must be positive; ``None`` disables the
-        smoothing bit-exactly, passing the raw state through. Any other
-        string, or a non-positive float, raises at construction.
     """
-    # These defaults ship the full cathode stack: power_balance warming, CSDA
-    # beam + quasilinear anomalous drag, gaussian emission profile, ads_des
-    # surface state, and presheath sample smoothing. Rp_model stays "sample".
+    # These defaults ship the full cathode stack: CSDA beam + quasilinear
+    # anomalous drag.
     #
     # The circuit values here are mirrored EXACTLY by the campaign stance in
     # ``scripts/score/compare_sim1d_es1.PARAM_OVERRIDES``; the duplication is
@@ -2871,7 +2660,8 @@ def cathode_defaults():
         # live in ``scripts/run/run_mechanism_ladder.ES_OPERATING``; any run that
         # means the machine rather than the dial must set V_bank from there.
         "V_bank": 180.0,
-        # phi_wf is the contaminated SHOT-START work function read by ads_des.
+        # phi_wf is the contaminated SHOT-START work function the coverage
+        # model starts from.
         "phi_wf": 2.869,
         "C_R": 29.0,
         "R_comp": 7.2244e-3,
@@ -2879,11 +2669,6 @@ def cathode_defaults():
         "R_mesh_ohm": 0.0,
         "L_parasitic_H": 8.1e-6,
         "C_bank_F": 9.5,
-        # Gated fluid<->circuit Picard (only read when the
-        # coupled_circuit_picard flag is on): relative loop-current change that
-        # triggers a re-run, and the iteration cap.
-        "circuit_picard_tol_rel": 1.0e-2,
-        "circuit_picard_max_iter": 3,
         "eta": 0.358,
         "anode_radius_cm": None,
         "L_cath": 53.25,
@@ -2932,21 +2717,11 @@ def cathode_defaults():
         "b_beam_excitation": 0.0,
         "beam_excitation_model": "2p_scalar",
         "beam_excitation_energy_eV": 21.218,
-        # --- ACTIVE: cathode warming (power_balance) ---
-        "cathode_warming_model": "power_balance",
+        # --- cathode surface power balance ---
         "cathode_Ts_base_K": 1910.0,
         "cathode_heat_capacity_J_per_K": 120.0,
         "cathode_conduction_W_per_K": 1200.0,
         "cathode_emissivity": 0.7,
-        # --- ACTIVE: uniform emission profile ---
-        "cathode_emission_profile": "uniform",
-        "cathode_Ts_fwhm_cm": 28.0,
-        "cathode_emission_annuli": 10,
-        "cathode_Rp_model": "sample",
-        # Coulomb logarithm behind sigma_par. "nrl_ei" reads it at the local
-        # (Te, n); "fixed_14p6" freezes it at the historical 13.03 and is an
-        # attribution-only comparison arm.
-        "cathode_lnL_model": "nrl_ei",
         "cathode_solver_model": "current_driven",
         # --- OFF: prescribed measured drive (cathode_solver_model=
         # "prescribed_measured"). All three are None on the off path and are
@@ -2956,26 +2731,16 @@ def cathode_defaults():
         "cathode_prescribed_t0_s": None,
         "cathode_prescribed_start_s": None,
         "cathode_phi_c_cap_V": 1000.0,
-        "cathode_circuit_bound_object": "device_voltage",
-        # --- OFF: ion-induced secondary electron emission
-        # (cathode_ion_secondary_emission). None on the off path and REFUSED
-        # at construction while the flag is off, so a yield can never be
-        # configured into a run that would ignore it.
-        "cathode_ion_secondary_emission_yield": None,
-        # Surface-state coverage model:
-        # "ads_des" evolves contaminant coverage theta with
+        # Surface-state coverage: the contaminant coverage theta evolves with
         # dtheta/dt = -sigma Gamma_i theta
-        # and substitutes phi_eff = phi_clean + (phi_wf - phi_clean)*theta
-        # everywhere phi_wf is read (emission, Schottky, cooling, gaussian
-        # inversion -- every consumer reads the one substituted
-        # value, never a mix of phi_eff and phi_wf). phi_wf keeps its
-        # meaning as the contaminated SHOT-START value; the clean floor is
-        # the per-shot-accessible depth of the re-adsorbed layer, not the
-        # literature clean-LaB6 value. Ion-stimulated desorption is the only
-        # coverage-loss channel: the coverage is monotonically non-increasing
-        # through a shot.
-        # --- ACTIVE: ads_des surface state (in-shot ion-stimulated cleaning) ---
-        "cathode_surface_model": "ads_des",
+        # and phi_eff = phi_clean + (phi_wf - phi_clean)*theta is substituted
+        # everywhere phi_wf is read (emission, Schottky, cooling -- every
+        # consumer reads the one substituted value, never a mix of phi_eff
+        # and phi_wf). phi_wf keeps its meaning as the contaminated
+        # SHOT-START value; the clean floor is the per-shot-accessible depth
+        # of the re-adsorbed layer, not the literature clean-LaB6 value.
+        # Ion-stimulated desorption is the only coverage-loss channel: the
+        # coverage is monotonically non-increasing through a shot.
         "cathode_phiwf_clean_eV": 2.809,
         "cathode_cleaning_sigma_cm2": 3.5e-16,
         # Ion-stimulated desorption threshold [eV]: scales sigma by the
@@ -3018,7 +2783,7 @@ def cathode_defaults():
         # tabulated coefficients above are published in.
         "anode_jet_energy_convention": None,
         # Debit the cathode surface's ion heating by the reflected-energy
-        # fraction (power_balance receives (1 - R_E) * P_cathode_i); off, the
+        # fraction (the power balance receives (1 - R_E) * P_cathode_i); off, the
         # jet is momentum-only and the surface keeps that power. Requires
         # cathode_neutral_jet, and is REQUIRED by neutral_energy with the jet
         # armed -- with an En field the reflected power is booked into the gas,
@@ -3043,20 +2808,6 @@ def cathode_defaults():
         # gap recirculation artificially elastic). Requires
         # neutral_momentum and anode faces.
         "neutral_mesh_accommodation": False,
-        # Electrode sample smoothing: the sheath solve's inputs are the
-        # instantaneous cathode-cell and anode-flank (n, Te) cell averages,
-        # which carry grid-level explicit-step noise the physical supply
-        # integrates over -- the presheath delivers flux averaged over an ion
-        # transit time tau ~ l_cell/c_s. Because V(I) is nearly flat, that
-        # sampling noise amplifies into per-solve V_b and leaks into physics
-        # through the beam energy (phi_c per solve) and the trapezoidal fold's
-        # EMF residual. The anode sample matters equally: J_i_a and Te_anode
-        # enter the residual through tau_a*ln(1 + J_anode/J_i_a), so anode-side
-        # noise flaps phi_a and drags phi_c with it. "presheath" computes
-        # tau = l_cell/c_s(Te_ema) per sampled cell, so it is a derived
-        # physical timescale rather than a knob; a float is a fixed tau [s];
-        # None disables bit-exactly. EMA updates on accepted steps only.
-        "cathode_sample_smoothing": "presheath",
     }
 
 
@@ -3293,17 +3044,6 @@ def timestep_defaults():
     max_energy_step_fraction:
         Optional accepted-step thermal-energy fractional-change guard. Zero
         disables it.
-    circuit_dt_fraction:
-        Fraction of the current-driven loop's LOCAL relaxation time
-        ``tau_circuit = L_parasitic_H / (R_comp + R_mesh_ohm + dV_dis/dI)``
-        allowed per accepted step. Read only while
-        ``cathode_circuit_voltage_bound`` is armed and a live loop exists;
-        the candidate is withdrawn to ``inf`` otherwise, so this key cannot
-        move an unarmed run. Bounds the sheath's capability wall, whose
-        device slope reaches ~2 kOhm (``tau_circuit`` ~ 4 ns) while ``L/R``
-        is 1.12 ms -- the wall, not the loop's bulk time constant, is the
-        stiff feature. Accuracy, not stability: the TR-BDF2 advance is
-        L-stable. See ``cathode.circuit_relaxation_timestep``.
     """
     return {
         "cfl": 0.4,
@@ -3339,7 +3079,6 @@ def timestep_defaults():
         "max_density_step_fraction": 0.0,
         "max_neutral_step_fraction": 0.0,
         "max_energy_step_fraction": 0.0,
-        "circuit_dt_fraction": 0.25,
     }
 
 
@@ -3366,14 +3105,6 @@ def coverage_closure_defaults():
         state (deposition depends on the coverage it drives), so the solver
         CO-INTEGRATES it on the step's stage structure rather than evaluating
         a closed form.
-
-        SHARED CLOCK: this key is ALSO the growth rate of the cathode
-        emitting-area fraction under the ``cathode_emitting_area`` flag (see
-        ``emitting_area_defaults``), which reads it rather than carrying a
-        rate of its own. The two closures describe one percolation clock seen
-        from two surfaces, so the constant is fitted once and has one owner;
-        the key is therefore live -- and non-default values are accepted --
-        whenever EITHER flag is armed.
     coverage_backfill_time_s:
         Relaxation time ``tau_backfill`` [s] over which the uncovered
         reservoir refills the covered column's neutral density toward the
@@ -3403,40 +3134,6 @@ def coverage_closure_defaults():
         "coverage_backfill_time_s": 3.0e-5,
         "coverage_initial_fraction": None,
         "coverage_initial_profile": None,
-    }
-
-
-def emitting_area_defaults():
-    """Return cathode emitting-area percolation defaults (ea1).
-
-    Every key here is read ONLY under the ``cathode_emitting_area`` flag and is
-    inert otherwise. The closure carries ONE scalar ``f_em(t) in (0, 1]``: the
-    fraction of the cathode's emitting face that is actually lit. The annular
-    emission tuples are scaled by it at the single device-config seam --
-    ``area_k -> f_em*area_k`` (which throttles each annulus's Richardson
-    emission) and ``frac_k -> f_em*frac_k`` (which throttles the share of the
-    Bohm ion current attributed to the lit patches, and hence each patch's
-    space-charge release limit). Electron repulsion, the full-disc ion sink,
-    the anode sample and the warming ion power stay FULL-DISC.
-
-    cathode_emitting_area_initial_fraction:
-        Initial lit fraction ``f_em0`` at the run's time origin. Must be finite
-        and in ``(0, 1]``; with the flag off it must sit at its shipped value,
-        so a run that sets a seed and forgets the flag raises rather than
-        running mean-field. This is an initial condition AND a physical
-        estimate of the machine's window-start emitting fraction, so its
-        shipped value carries a bracket rather than a single pinned number.
-
-    The growth law is the logistic ``df_em/dt = r*f_em*(1 - f_em)``, advanced
-    on ACCEPTED steps only in the exactly-integrated form, so ``f_em`` is
-    monotone non-decreasing for ``r >= 0``, never leaves ``(0, 1]``, and never
-    falls below its seed. The rate ``r`` is NOT a key of this group: it is
-    ``coverage_growth_rate_per_s``, the SAME disclosed percolation constant the
-    column coverage closure uses, read here so the two surfaces share one clock
-    with one owner and one fit.
-    """
-    return {
-        "cathode_emitting_area_initial_fraction": 0.0075,
     }
 
 
@@ -3654,8 +3351,8 @@ def regime_tracer_defaults():
         Picard cadence for ``gamma`` and the quasi-static ``Te``: both are
         frozen until the largest relative change in the background they are
         built from (``n``, ``nn``, ``S``) exceeds this, then both are rebuilt.
-        ``0`` refreshes every step. A numerics tolerance in the same family as
-        ``circuit_picard_tol_rel``, not a description-selecting constant.
+        ``0`` refreshes every step. A numerics tolerance, not a
+        description-selecting constant.
         Raises at construction if negative.
     tracer_activation_ne:
         Handoff density [cm^-3]: the density at or above which the FLUID
@@ -3687,66 +3384,6 @@ def regime_tracer_defaults():
         # default would fail the saved-vs-rebuilt config identity check.
         "tracer_overlap_band_ne": [1.0e10, 1.0e11],
         "tracer_overlap_rtol": 0.05,
-    }
-
-
-def regime_vessel_node_defaults():
-    """Vessel / common-mode node constants (flag ``regime_vessel_node``).
-
-    Inert unless the flag is on, in which case each value below is validated
-    at construction. The node itself is ONE state variable ``V_cm``, the
-    anode-to-wall (common-mode) potential, obeying
-    ``C_total dV_cm/dt = I_wall_net`` with ``I_wall_net`` the electron current
-    landing on wall-connected surfaces minus the ion wall flux from the column
-    minus the leak. Method of record: ``_sim1d/physics/cathode.py``
-    (``vessel_node_advance``, the closed-form step and its charge ledger).
-
-    vessel_capacitance_F:
-        ``C_total`` [F]: the total capacitance bridging the floating
-        cathode/anode system to the vessel wall. The LAPD cathode/anode system
-        floats with respect to the machine wall, the whole electrically
-        connected stainless vessel is ONE wall conductor, and the anode is
-        referenced to it only through four feedthrough capacitors across the
-        ceramic gap insulators, so ``C_total`` is their parallel sum. Must be
-        finite and positive; construction raises otherwise. This value is
-        ESTIMATED and the BRACKET is the claim, not the shipped number: sweep
-        it rather than quoting it.
-    vessel_leak_resistance_ohm:
-        ``R_leak`` [Ohm]: the resistive tie from the same node to the wall,
-        draining ``V_cm/R_leak``. Must be positive and finite; construction
-        raises on zero, negative or non-finite. ``None`` is accepted and means
-        the idealized HARD FLOAT (no DC path at all) — an explicit A/B arm.
-
-        The capacitor TYPE is visually UNRESOLVED, so the value is ESTIMATED
-        over a bracket spanning both readings (2.5e7 Ohm, the aged-electrolytic
-        low edge, to 1e11 Ohm, the polypropylene-film insulation class); the
-        shipped default takes the second-look FILM reading. The bench
-        measurement resolves it; until it does, sweep this value rather than
-        quoting it.
-
-        **The structural fact the model rests on does not depend on the type.**
-        ``R_leak*C_total`` is at least ~10 s at BOTH bracket edges, against a
-        ~25 ms discharge, so within a shot the node is hard-float **in kind**
-        either way and the leak moves nothing that a run measures.
-
-        Two documented model deviations, neither of them built. (i) POLARITY,
-        conditional on the unresolved type: IF the capacitors are electrolytic
-        they are polarized and conduct asymmetrically under reverse bias
-        (diode-like above ~1-2 V), which this node can reach because the
-        machine's plateau bias is observed at EITHER sign — the shipped leak is
-        SYMMETRIC, a linear resistor in both directions. IF they are film there
-        is no polarity nuance at all, and the black band on one side of the
-        cylinder is the conventional OUTER-FOIL marking (a shielding
-        convention; electrolytics mark polarity with explicit -/+ symbols).
-        (ii) INTER-SHOT MEMORY: with a leak timescale far longer than the ~3 s
-        shot period under either reading, the capacitors cannot discharge the
-        node between shots, so the physical reset path is the afterglow plasma
-        conductance, not the leak. Runs here are single-shot and start from
-        ``V_cm = 0``.
-    """
-    return {
-        "vessel_capacitance_F": 1.3e-6,
-        "vessel_leak_resistance_ohm": 1.0e10,
     }
 
 
@@ -3847,11 +3484,9 @@ _PARAMETER_DEFAULT_GROUPS = (
     physics_fit_defaults,
     timestep_defaults,
     coverage_closure_defaults,
-    emitting_area_defaults,
     restart_defaults,
     neutral_probe_source_defaults,
     regime_tracer_defaults,
-    regime_vessel_node_defaults,
     parallel_momentum_sink_defaults,
 )
 
@@ -3883,17 +3518,15 @@ input_flags_template_1d = {
     # instead of the discharge schedule, the gas puff loses its waveform, and
     # default_t_end becomes cycles * tau_cycle (which raises unless cycles is
     # positive). run_neutral_equilibration pins it off on its inner sim.
-    # regime_tracer and regime_vessel_node each REFUSE it off at construction:
-    # both describe plasma channels that would have nothing to integrate.
+    # regime_tracer REFUSES it off at construction: it describes a plasma
+    # channel that would have nothing to integrate.
     # A structural restart key -- a payload whose run had it set differently is
     # refused rather than restored.
     "Plasma": True,
     # Two-cathode layout: a cathode at BOTH ends, both plasma-terminating faces
     # mirrored, and the end-side puff Twin_S_gp carrying the second source.
-    # Four construction-time refusals, each where the twin geometry leaves a
+    # Three construction-time refusals, each where the twin geometry leaves a
     # single-valued quantity undefined: cathode_solver_model='current_driven';
-    # cathode_Rp_model='resolved_gap' (both cathodes share one DeviceConfig, so
-    # one effective R_cath cannot carry two gaps sampled at different Te);
     # source_fixed_grid (the fixed source region is not mirrored onto a twin
     # end); and heating_anomalous_tail_cathode_boundary='reflect' (both walls of
     # the walk window would be reflecting cathodes, trapping the walkers, and the
@@ -4227,142 +3860,19 @@ input_flags_template_1d = {
     # b_ion_neutral_drag / slip closures are
     # superseded and DEPRECATED.
     "ion_neutral_moment_closure": True,
-    # Gated fluid<->circuit Picard. The fluid step runs at a loop current
-    # frozen over the step, then the circuit advances from the accepted plasma
-    # -- a frozen-current lag that can fail to converge at the emission knee.
-    # When ON, the accepted step is re-run (<= circuit_picard_max_iter times)
-    # with the updated loop current whenever |dI/dt| is large (a driven phase
-    # and the loop current moved more than circuit_picard_tol_rel), so
-    # fluid+T_s+circuit share one self-consistent I_loop. Default OFF and a
-    # strict no-op where the trigger does not fire (one pass == the sequential
-    # advance, bit-exact). Incompatible with the kinetic neutral engine.
-    "coupled_circuit_picard": False,
     # The cathode/anode/bank circuit solve. OFF, no cathode solve is produced for the
     # whole run: the boundary carries no device current or voltage, the cathode
     # and anode jets return nothing, and the tracer's beam rows get no source.
     # run_neutral_equilibration pins it off on its inner sim.
-    # Six construction-time refusals of things that need a solve that would not
-    # exist: cathode_circuit_voltage_bound (no device voltage to bound),
-    # regime_tracer (its affine source IS the beam-impact ionization birth),
-    # regime_vessel_node (the wall electron current IS the transmitted beam),
-    # cathode_emitting_area (it throttles an emission that would not be solved),
-    # and the two DVM jets, whose launch energies are the sheath potentials
+    # Three construction-time refusals of things that need a solve that would
+    # not exist: regime_tracer (its affine source IS the beam-impact ionization
+    # birth), and the two DVM jets, whose launch energies are the sheath potentials
     # phi_c and phi_a -- armed without a solve they would silently launch at the
     # thermal Ti alone. With the flag ON, a zero anode ion current is a runtime
     # error rather than a clamp: the circuit cannot close, and the message names
     # clearing this flag as the way to model a machine with no anode collection.
     # A structural restart key.
     "cathode_coupling": True,
-    # Schottky barrier lowering in the *current-driven* sheath solve only:
-    # the extracting sheath field lowers the
-    # effective work function, tilting the emission ceiling into a sloped
-    # line. It collapses the per-solve V_b two-state chatter into a steady
-    # band and restores current that the gaussian emission profile's edge
-    # cooling costs. Because it shifts the effective barrier, phi_wf and this
-    # flag are only meaningful together: a configuration quoting phi_wf must
-    # state this flag's value.
-    "cathode_schottky": True,
-    # kT_s-width thermal bridge across the SCL<->classical emission-release
-    # corner, *current-driven* sheath solve only:
-    # the emitted Maxwellian's kT_s energy spread smooths the razor
-    # min(J_eth, J_crit) corner that turns boundary-cell Te noise into V_b
-    # chatter. C1 blend with exact hard-branch reduction outside the window,
-    # monotonicity of J_tot(psi) preserved by construction (convex combination
-    # of branch slopes -- see cathode.circuit_idriven._bridge_release).
-    # Off => bit-exact hard branches.
-    "cathode_emission_bridge": False,
-    # Bound the device voltage by what the CIRCUIT can supply, *current-driven*
-    # sheath solve only. The
-    # ceiling the sheath root is solved against becomes
-    # min(cathode_phi_c_cap_V, <the circuit member>) -- the atomic-data cap
-    # composed with the loop equation V_src - I*(R_comp + R_mesh_ohm) read at
-    # dI/dt = 0 -- so the returned phi_c, the beam birth energy keyed to it,
-    # and the capability-limited device voltage V_b are all held at or below
-    # the supply. Which quantity the available voltage bounds is
-    # cathode_circuit_bound_object's choice. Without the flag the
-    # capability-limited branch floors V_b at the data cap
-    # (``cathode_phi_c_cap_V``), which on the pre-breakdown build leg drives
-    # a ~keV beam against a bank supplying ~178 V. The cap itself is
-    # untouched and still composes as the other upper bound (it is the He EII
-    # table top, an atomic-data domain guard). The inductor's back-EMF is
-    # deliberately NOT counted as available voltage. Requires
-    # cathode_solver_model='current_driven', cathode_coupling and V_bank > 0;
-    # inactive (ceiling falls back to the data cap) wherever the available
-    # voltage is not positive, notably the zero-bank inductive tail. Default
-    # OFF and bit-exact off.
-    #
-    # WHAT THE BOUND DOES NOT BOUND is the loop current. The circuit
-    # integrates the sheath's UNBOUNDED demand, not this clamped V_b, so the
-    # restoring force survives the clamp. Feeding the clamped value back in
-    # was the ratchet defect (2026-08-12): the loop residual went identically
-    # zero above the capability wall, dI/dt >= 0 everywhere, and I_loop
-    # became the running maximum of the TR stage's explicit overshoot --
-    # 156.7 A in one 2e-5 s step against a converged 0.9 A. See
-    # cathode.idriven_vdis_evaluator.
-    #
-    # SCOPE. A FULL-WINDOW RUN WITH THIS FLAG ON IS IN CONTRACT (2026-08-12);
-    # both of the exclusions that once narrowed it are gone. The phi_c/V_b
-    # OBJECT mismatch went with cathode_circuit_bound_object='device_voltage',
-    # which bounds V_b itself, so phi_c may legitimately exceed the available
-    # voltage where the anode fall subtracts. The BACK-EMF exclusion went with
-    # the integrand: it held that while the bound binds the loop residual is
-    # identically zero, hence dI/dt = 0, hence a frozen main-discharge decay.
-    # That was true of the old integrand and is not true of this one --
-    # measured on the ON-probe build leg, where the current FALLS on 12 of 33
-    # bound saves. Nothing raises when the bound engages; only the
-    # bound_active census shows it, and the probe window reaches no plateau
-    # decay, so reading the census on a run that does remains worthwhile.
-    "cathode_circuit_voltage_bound": False,
-    # THE OVER-WALL PROJECTION of the current-driven circuit advance, default
-    # OFF. It edits ONE number: the loop current the TR-BDF2 advance starts
-    # its step from, and only on a step that starts ABOVE the emission wall.
-    #
-    # WHAT IT DOES. Before the advance, the sheath's UNBOUNDED demand is
-    # evaluated at the held loop current on the same sampled state the
-    # advance's own V_dis(I) evaluator is built on. When that solve comes back
-    # capability-limited -- sitting on the atomic-data ceiling
-    # cathode_phi_c_cap_V, the only ceiling the unbounded evaluator carries --
-    # the held current is above the wall and the step is replaced by the WALL
-    # ROOT: the current at which the loop equation balances,
-    # V_src - I*R_series - V_dis(I) = 0, found by a bracketed root find on
-    # [I - 2*kick, I] with kick = dt*(cap - V_src + I*R_loop)/L. The bracket is
-    # widened downward once if it does not straddle; if it still does not the
-    # current is left alone and the event is counted.
-    #
-    # WHY. The advance is TR-BDF2 and its explicit half is evaluated at the
-    # HELD current. On a falling leg -- where the wall has moved down under
-    # that current within the step -- the unbounded V_dis sits on the data cap,
-    # so the explicit half sees a device voltage of ~cap against a supply of
-    # ~V_avail and throws the loop dt*(cap - V_avail)/L below the wall in one
-    # step; the next step climbs back a fraction of that, and the loop rings
-    # instead of tracking. The sheath maps the excursion into the beam energy.
-    # Starting the step ON the wall root removes the excursion without
-    # touching the advance itself: from the root the same step lands on the
-    # root to within the electron-return tail.
-    #
-    # NOT THE LOAD LINE. The trigger is the DATA-CAP branch only. Under the
-    # circuit voltage bound the bounded solve's accepted root sits on the load
-    # line by construction, so a trigger keyed to the circuit member of the
-    # composed ceiling would fire on every plateau step and pull the inductor
-    # down each time. The unbounded evaluator the circuit integrates carries no
-    # circuit member at all, which is what makes "capability-limited" here mean
-    # "at the data cap" and nothing else.
-    #
-    # WHAT IT COSTS. Replacing the current is not conservative: the inductor
-    # energy difference 0.5*L*(I^2 - I_root^2) is booked per event and exported
-    # cumulatively, with the event count and the unbracketed count beside it,
-    # PRESENCE-GATED on this flag so an unarmed run's diagnostic set is
-    # unchanged. Those three counters ride the restart payload, also
-    # presence-gated.
-    #
-    # WHAT IT RAISES. Arming it refuses at construction without
-    # cathode_coupling (there is no circuit advance to project) and under any
-    # cathode_solver_model other than "current_driven" (no other model performs
-    # this advance); each refusal names this key and the requirement.
-    #
-    # Presence-gated: off, the projection block is not entered, no evaluator is
-    # built and no diagnostic appears. Bit-exact when off.
-    "cathode_circuit_project_over_wall": False,
     # Gates the neutral-only pre-drive phase. DELIBERATELY LEFT ON while
     # tau_neutral_prebreakdown defaults to 0.0: the duration alone decides
     # whether the phase runs, so ON + zero duration is already inert
@@ -4451,29 +3961,6 @@ input_flags_template_1d = {
     # neutral_model="moment", no beam clumping, and the pure-Python kernels;
     # each is a construction-time ValueError.
     "coverage_closure": False,
-    # Cathode emitting-area percolation (ea1). Thermionic release in the
-    # machine's current foot is patchy: only lit patches of the emitting face
-    # carry it, and the lit area percolates outward. When ON, one scalar
-    # f_em(t) in (0, 1] throttles the emission at the annuli seam -- area_k ->
-    # f_em*area_k and the ion attribution frac_k -> f_em*frac_k, unrenormalized
-    # -- so each patch keeps its clamp ratio and its barrier and the whole
-    # space-charge release curve rescales as f_em * (the full-disc curve),
-    # leaving phi_c and the beam launch energy invariant at a fixed sheath
-    # state. Full-disc quantities (electron repulsion, the ion sink, the anode
-    # sample, the warming ion power) are NOT scaled. f_em grows logistically on
-    # accepted steps at coverage_growth_rate_per_s -- the SHARED percolation
-    # clock, not a second constant. Requires cathode_coupling,
-    # cathode_emission_profile="gaussian" (under "uniform" A_c is dual-use for
-    # emission AND ion collection, so the throttle is not expressible) and a
-    # seed in (0, 1]; each is a construction-time ValueError, as is setting the
-    # seed key with this flag off. Default OFF and bit-exact off
-    # (presence-gated: the off path passes no override, scales no tuple and
-    # leaves every device config identical). COMPOSES with coverage_closure:
-    # the two describe different surfaces (the cathode face and the column
-    # cross-section), share no state, and their only common object is the
-    # growth constant -- so the composition is permitted rather than refused,
-    # and a composed arm must disclose that it is one.
-    "cathode_emitting_area": False,
     # Ad-hoc probe neutral source S_probe(z,t) = A p(z) w(t), a volumetric
     # particle source on the neutral density equation. An INFERENCE
     # INSTRUMENT: an arm with this on measures the plasma's response to a
@@ -4502,30 +3989,6 @@ input_flags_template_1d = {
     # construction-time ValueErrors, as is any out-of-range criterion constant.
     # Default OFF, presence-gated and bit-exact off.
     "regime_tracer": False,
-    # Vessel / common-mode node. The cathode/anode system FLOATS with respect
-    # to the machine wall (the whole electrically connected stainless vessel is
-    # one conductor; the anode is tied to it only through four feedthrough
-    # electrolytic capacitors across the ceramic gap insulators). This adds ONE state
-    # variable V_cm, the anode-to-wall potential, obeying
-    # C_total dV_cm/dt = I_wall_net -- electron current landing on
-    # wall-connected surfaces (the transmitted beam terminates on the far end,
-    # which IS the vessel) minus the column's ion wall flux minus V_cm/R_leak.
-    # V_cm is the potential a transmitted beam electron must CLIMB from the
-    # mesh into the column, so the energy reaching column physics is
-    # phi_c - max(V_cm, 0): the node throttles the beam, ionization feeds the
-    # ion wall flux back, and the floating constraint (zero net system-to-wall
-    # current) is what lets beam leakage into the column grow. Advanced once
-    # per ACCEPTED step, in closed form over the step's frozen currents.
-    # Requires cathode_coupling, Plasma, cathode_circuit_voltage_bound (the
-    # beam energy the climb is subtracted from must be the circuit-bounded
-    # one, never the atomic-data cap), beam_deposition_model='csda' (only the
-    # CSDA rays book a transmitted flux at a terminating surface) and a
-    # plasma-terminating end wall face (the ion wall channel) -- each a
-    # construction-time ValueError, as are a non-positive vessel_capacitance_F
-    # and a non-positive vessel_leak_resistance_ohm. V_cm(t) and the three
-    # current channels ride the cathode diagnostics; nothing here is scored.
-    # Default OFF, presence-gated and bit-exact off.
-    "regime_vessel_node": False,
     # Rate-freezing INSTRUMENT, default OFF. When on, the bulk reaction
     # source terms (ionization birth and both recombination losses) inside the
     # explicit non-heat operator are evaluated at the step-START accepted
@@ -4538,33 +4001,6 @@ input_flags_template_1d = {
     # anything else (0/1, a string) raises ValueError at construction.
     # Bit-exact when off.
     "rates_at_accepted_state": False,
-    # Anode sheath electron-energy booking, default OFF. Armed, the plasma
-    # electron store is debited (2 Te + phi_a) per electron the anode
-    # collects -- the sheath-edge energy flux of the truncated Maxwellian
-    # whose zeroth moment the sheath solve already closes on -- rather than
-    # the plasma-thermal 2 Te alone. The added phi_a * I_e_coll lands on the
-    # anode-flanking cells under the SAME Bohm split weights the thermal part
-    # uses, and the circuit/load ledger is untouched: the phi_a those
-    # electrons pay is the field energy the loop and the anode ions already
-    # book. It also re-cuts the anode mesh's own Bohm collection rows to
-    # their sheath-edge values -- Te/2 per collected ion on Ee (the presheath
-    # work; those electrons' thermal transport is carried by the sheath term)
-    # in place of 3/2 Te, and 5/2 Ti on Ei (the enthalpy flux) in place of
-    # 3/2 Ti. It completes the thermal-only electrode routing, which is
-    # unconditional since the stance that switched it off was retired
-    # (see commit 1fc05c9). TWO
-    # REGIMES, both booked: the increment above is the electron-REPELLING
-    # anode (phi_a > 0), where the collected electrons climbed the fall and
-    # the plasma paid; at an electron-ATTRACTING anode (phi_a <= 0 -- an
-    # anode demanding at or above electron saturation) the field does work ON
-    # the electrons, the BANK pays the fall, and the plasma-side debit stays
-    # the thermal-only 2 Te, so no increment is applied and the booking is
-    # the unarmed one. That branch is counted rather than silent: an armed
-    # run's cathode diagnostics carry ``anode_attracting_steps`` (accepted
-    # steps that took it, cumulative) and ``anode_attracting_last_time_s``.
-    # A non-finite phi_a belongs to neither regime and raises RuntimeError.
-    # Must be a real bool. Bit-exact when off.
-    "anode_sheath_full_debit": False,
     # END-FACE SHEATH ELECTRON-ENERGY BOOKING -- TWO INDEPENDENT default-OFF
     # keys, one per axial end. The anode flag above applied to the machine's
     # two AXIAL ends, where the same thermal-only routing leaves the same
@@ -4644,103 +4080,6 @@ input_flags_template_1d = {
     # or potential from the solve raises RuntimeError rather than planting a
     # NaN in an energy row. Bit-exact when off.
     "cathode_face_full_debit": False,
-    # Where the emitted electrons' launch enthalpy is booked while the beam is
-    # launched. Requires ``cathode_face_full_debit`` (the key that computes the
-    # row at all); arming it without that key refuses at construction.
-    #
-    # OFF (default) the ``cathode_e_emitted_enthalpy`` row books
-    # ``+2 k_B T_s Gamma_em`` into the cathode-adjacent plasma cell in every
-    # phase. ON, that placement holds everywhere EXCEPT where the emitted
-    # electrons ARE the primary beam -- the regime the circuit itself names,
-    # ``phi_c_minus == 0``, in which no virtual cathode has formed and
-    # ``cathode_e_emitted_fall`` is identically zero. There the enthalpy is
-    # added to the beam LAUNCH POTENTIAL instead, ahead of the anode-mesh
-    # climb, so it is carried by the deposition route and deposited where that
-    # route deposits; the cathode-adjacent row is then exactly zero and the two
-    # cannot both book it. In the virtual-cathode regime, and in every
-    # floating, afterglow and inductive-tail phase, the cathode-adjacent
-    # booking returns unchanged.
-    #
-    # WHAT IT MOVES BESIDES THE ROW. The beam mean free path, and so the
-    # cathode-anode gap bypass, is evaluated at that launch potential rather
-    # than at the bare fall -- the primary crosses the gap carrying its
-    # emission enthalpy on top of it. That is the one channel through which
-    # this key moves an armed trajectory; the current-driven sheath root
-    # itself is a current match the bypass does not enter.
-    #
-    # WHAT IT ADDS TO THE FILE. ``2 k_B T_s / e`` [V] rides the sheath result
-    # as ``beam_launch_enthalpy_V`` and the power it carries as
-    # ``P_emitted_enthalpy_on_beam``, normalised at the flux the ACTIVE
-    # ``beam_deposition_model`` launches into the column: the full
-    # ``2 k_B T_s Gamma_em`` under ``"csda"``, whose march is handed the whole
-    # released flux at the launch potential; that power netted by the
-    # gap-survival factor ``P_prim`` carries under ``"beer_lambert"``, where
-    # the bypassing beam's enthalpy never enters the column. Both are exported
-    # to the cathode diagnostics PRESENCE-GATED on this key, so an unarmed
-    # run's dataset set is unchanged. ``T_s`` is the surface temperature the
-    # solve ran at (the evolving value under ``cathode_warming_model =
-    # "power_balance"``).
-    #
-    # WHAT IT RAISES. Must be a real bool. Bit-exact when off.
-    "cathode_enthalpy_on_beam": False,
-    # ION-INDUCED SECONDARY ELECTRON EMISSION at the emitting face, default
-    # OFF. Ions arriving at the cathode surface release electrons from it by
-    # potential (Auger) emission -- a channel the model otherwise omits
-    # entirely, so this key ADDS a current rather than moving one. Armed, the
-    # sheath solve releases gamma_se electrons per arriving ion, gamma_se
-    # being cathode_ion_secondary_emission_yield, which the key REQUIRES: the
-    # yield has no default and is refused outside the bracket [0, 1].
-    #
-    # WHAT IT MOVES. The released secondary current I_see = gamma_se * I_i
-    # enters the EMITTED side of the cathode current balance, which stays the
-    # real check, I_eth_star + I_see + I_i - I_e_ret = I_tot. It is
-    # independent of the sheath depth -- the ion current is set by the plasma
-    # state, not by psi -- so it enters the monotone current match as a
-    # reduction of the imposed target and leaves the device relation, its
-    # bracket ladder, its ceiling test and its compiled root exactly as they
-    # were: the sheath and its thermionic release have that much less of the
-    # loop current to supply, so an armed solve sits at a SHALLOWER fall and
-    # releases slightly less thermionic current at the same loop current. The
-    # secondaries are LAUNCHED with the thermionic primaries -- released at
-    # the surface at a few eV, they cross the same fall -- so the beam power,
-    # the gap bypass and the cathode field work are all priced at the sum
-    # I_eth_star + I_see.
-    #
-    # WHAT IT DELIBERATELY LEAVES ALONE, disclosed here because each is a
-    # modelling choice rather than an oversight:
-    #   - the space-charge ceiling and its virtual-cathode barrier, which stay
-    #     keyed to the ion current alone. Both describe a half-Maxwellian at
-    #     the emitter temperature and the secondaries are not that population,
-    #     so this model carries no barrier width for them; in the
-    #     virtual-cathode regime the released total is an OVERSTATEMENT, and
-    #     in the classical regime, where the ceiling does not bind, the
-    #     treatment is exact.
-    #   - the cathode_face_full_debit emission rows, which keep
-    #     Gamma_em = I_eth_star/e. Their +2 k_B T_s form is the thermionic
-    #     population's surface enthalpy; an Auger secondary does not leave off
-    #     that half-Maxwellian and no surface-thermal enthalpy is booked for
-    #     it.
-    #   - the surface power balance under cathode_warming_model =
-    #     "power_balance". Thermionic emission cools the lattice through the
-    #     work function; a secondary's release energy comes from the arriving
-    #     ion's neutralization, not from the lattice, so no extra emission
-    #     cooling is booked -- and the ion potential energy that pays for it
-    #     is not removed from the surface either.
-    #
-    # WHAT IT ADDS TO THE FILE. I_see_A [A] and the launched secondary power
-    # P_see_launched_W [W] ride the sheath result and are exported to the
-    # cathode diagnostics PRESENCE-GATED on this key, so an unarmed run's
-    # dataset set is unchanged.
-    #
-    # WHAT IT RAISES. Must be a real bool. Arming it refuses at construction
-    # without cathode_coupling (the source of the ion current the secondaries
-    # are proportional to) and under any cathode_solver_model other than
-    # "current_driven" (the prescribed measured drive imposes both loop
-    # quantities and takes the emitted current as the remainder, so there is
-    # no emission side for the secondaries to join); the refusal names the
-    # model. Setting the yield while this is off refuses as well. Bit-exact
-    # when off, and bit-exact at a yield of exactly zero.
-    "cathode_ion_secondary_emission": False,
     # The electron drift-transport and EMF-work operator, default OFF. The
     # electron energy equation books its pressure work with the ION velocity,
     # which is exact where J = 0 but not in the current-carrying source region:
@@ -4934,14 +4273,79 @@ RETIRED_PARAM_KEYS = {
     ),
     "T_s": (
         "cathode_Ts_base_K, the heater-maintained standby surface "
-        "temperature -- the static warming model holds the surface at it "
-        "and 'power_balance' evolves from it"
+        "temperature the cathode power balance evolves from"
     ),
     "end_wall_face_riemann_solver": (
         "nothing: the end wall face removes the PHYSICAL flux at the "
         "sheath-edge state it samples (n_se = alpha_se n, u = c_s), which "
         "is a single state and so poses no Riemann problem for a solver to "
         "resolve"
+    ),
+    # Circuit and cathode selectors and their parameters, removed with the
+    # closures they served. Selectors whose one surviving value is now
+    # unconditional name that behaviour; the rest name nothing.
+    "cathode_model": (
+        "nothing: the cathode solve is controlled by the cathode_coupling "
+        "flag alone"
+    ),
+    "cathode_warming_model": (
+        "nothing: the surface power balance ('power_balance') is "
+        "unconditional"
+    ),
+    "cathode_surface_model": (
+        "nothing: the ads/des contaminant-coverage surface state "
+        "('ads_des') is unconditional"
+    ),
+    "cathode_sample_smoothing": (
+        "nothing: the presheath-transit electrode sample smoothing "
+        "('presheath') is unconditional"
+    ),
+    "cathode_emission_profile": (
+        "nothing: the uniform emitting disc ('uniform') is unconditional"
+    ),
+    "cathode_Ts_fwhm_cm": (
+        "nothing: it was read only by the removed gaussian emission profile"
+    ),
+    "cathode_emission_annuli": (
+        "nothing: it was read only by the removed gaussian emission profile"
+    ),
+    "cathode_emitting_area_initial_fraction": (
+        "nothing: the emitting-area closure it seeded is removed"
+    ),
+    "cathode_Rp_model": (
+        "nothing: the gap resistance is the sampled-cell form ('sample'), "
+        "unconditionally"
+    ),
+    "cathode_lnL_model": (
+        "nothing: the Coulomb logarithm is the local electron-ion form "
+        "('nrl_ei'), unconditionally"
+    ),
+    "cathode_circuit_sample": (
+        "nothing: the circuit advance reads the raw accepted sample ('raw'), "
+        "unconditionally"
+    ),
+    "cathode_circuit_bound_object": (
+        "nothing: the circuit voltage bound it configured is removed"
+    ),
+    "circuit_dt_fraction": (
+        "nothing: the circuit relaxation timestep bound it scaled is removed "
+        "with the circuit voltage bound"
+    ),
+    "circuit_picard_tol_rel": (
+        "nothing: the fluid-circuit Picard coupling it configured is removed"
+    ),
+    "circuit_picard_max_iter": (
+        "nothing: the fluid-circuit Picard coupling it configured is removed"
+    ),
+    "cathode_ion_secondary_emission_yield": (
+        "nothing: ion-induced secondary emission at the cathode face is "
+        "removed"
+    ),
+    "vessel_capacitance_F": (
+        "nothing: the vessel common-mode node it configured is removed"
+    ),
+    "vessel_leak_resistance_ohm": (
+        "nothing: the vessel common-mode node it configured is removed"
     ),
 }
 
@@ -4976,6 +4380,44 @@ RETIRED_FLAG_KEYS = {
         "sheath-edge state it samples, unconditionally -- a sheath sends no "
         "wave back into the plasma, so there is no face kernel left to "
         "select between"
+    ),
+    # Circuit and cathode flags. The adopted ones name the behaviour that is
+    # now unconditional; the deleted ones name nothing.
+    "cathode_schottky": (
+        "nothing: Schottky barrier lowering in the current-driven sheath "
+        "solve is unconditional"
+    ),
+    "anode_sheath_full_debit": (
+        "nothing: the anode sheath debit (2 Te + phi_a per collected "
+        "electron at an electron-repelling anode, sheath-edge collection "
+        "rows) is unconditional"
+    ),
+    "cathode_emission_bridge": (
+        "nothing: the emission release keeps its hard space-charge corner"
+    ),
+    "cathode_emitting_area": (
+        "nothing: the cathode emitting-area closure is removed"
+    ),
+    "cathode_enthalpy_on_beam": (
+        "nothing: the emitted electrons' launch enthalpy stays in the "
+        "cathode_face_full_debit row"
+    ),
+    "cathode_ion_secondary_emission": (
+        "nothing: ion-induced secondary emission at the cathode face is "
+        "removed"
+    ),
+    "coupled_circuit_picard": (
+        "nothing: the fluid-circuit Picard coupling is removed; the circuit "
+        "advances once per accepted step"
+    ),
+    "cathode_circuit_voltage_bound": (
+        "nothing: the sheath ceiling is cathode_phi_c_cap_V alone"
+    ),
+    "cathode_circuit_project_over_wall": (
+        "nothing: the over-wall projection of the circuit advance is removed"
+    ),
+    "regime_vessel_node": (
+        "nothing: the vessel common-mode node is removed"
     ),
 }
 
