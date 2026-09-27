@@ -168,8 +168,6 @@ PERTURBED = {
     "beam_clump_fraction": 0.5,
     "beam_clump_enhancement": 2.0,
     "beam_deposition_smoothing_cm": 25.0,
-    "b_beam_excitation": 1.0,
-    "beam_excitation_energy_eV": 22.218,
     # cathode_surface_recycle
     "cathode_neutral_jet": False,
     "cathode_jet_R_N": 0.5,

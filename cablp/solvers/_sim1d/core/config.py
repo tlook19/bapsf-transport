@@ -1595,20 +1595,6 @@ def cathode_defaults():
         multi-group plateau spectrum) sees it.
         This cap is a domain guard on the atomic data and holds in every
         regime.
-    b_beam_excitation:
-        Scale on the neutral-excitation cross section added to the primary
-        beam's inelastic channels in the cathode sheath solve. ``0``
-        (default) is ionization-only attenuation. Nonzero adds beam-driven
-        neutral excitation, whose ~21-22 eV per event radiates away promptly
-        as He I light and whose cross section shortens the beam's inelastic
-        deposition length. It scales the 2^1P cross section alone, so ``1.0``
-        books that channel and a larger value stands in for the rest of the
-        singlet manifold. Triplet/metastable excitation is exchange-driven
-        and collapses above ~50 eV, so it is deliberately absent. He-only.
-    beam_excitation_energy_eV:
-        Threshold and radiated energy per beam excitation event [eV] (the
-        2^1P excitation energy) in the cathode sheath solve's excitation
-        channel.
     beam_anomalous_model:
         Anomalous (beam-plasma instability) drag for the CSDA deposition
         module (``cathode/beam_deposition.deposit_beam``). A declared closure
@@ -2029,8 +2015,6 @@ def cathode_defaults():
         "beam_clump_fraction": 0.0,
         "beam_clump_enhancement": 1.0,
         "beam_deposition_smoothing_cm": 0.0,
-        "b_beam_excitation": 0.0,
-        "beam_excitation_energy_eV": 21.218,
         # --- cathode surface power balance ---
         "cathode_Ts_base_K": 1910.0,
         "cathode_heat_capacity_J_per_K": 120.0,
@@ -2695,9 +2679,15 @@ input_flags_template_1d = {
     # reading outside the bracket is not, and the smoke suite asserts the
     # bracket rather than a value.
     #
-    # CATHODE -- ``cathode_face_full_debit`` arms THREE rows at the emitting
-    # face, kept apart because they are three different physical channels
-    # with two different signs:
+    # CATHODE -- no key. THREE rows at the emitting face, armed by the
+    # GEOMETRY and the circuit: present exactly when the mesh carries a
+    # plasma-absorbing face whose live cell has the cathode role and the
+    # cathode circuit solve (``cathode_coupling``) runs, because the solve is
+    # the source of I_eth_star, I_e_ret and the sheath potentials. The
+    # TwinCathode layout books each emitting face from its own circuit result.
+    # With the end wall row this is ONE sheath-edge rule at every electrode
+    # face. The three rows are kept apart because they are three different
+    # physical channels with two different signs:
     #   ``cathode_e_emitted_enthalpy``  +2 k_B T_s Gamma_em, positive. The
     #       enthalpy the released electrons carry in, off a half-Maxwellian at
     #       the emitter surface temperature. Gamma_em = I_eth_star/e is the
@@ -2716,14 +2706,8 @@ input_flags_template_1d = {
     # energy of the emitted electrons and nothing here re-books it. The
     # 2 (Te - T_s) Gamma_em form is NOT what this books.
     #
-    # WHAT IT RAISES. Must be a real bool. Arming it refuses at construction
-    # unless the configuration supplies the cathode circuit solve
-    # (``cathode_coupling``, the source of I_eth_star, I_e_ret and the sheath
-    # potentials) and a cathode-adjacent plasma cell for the three rows to
-    # land on -- the refusal names whichever is missing. A non-finite current
-    # or potential from the solve raises RuntimeError rather than planting a
-    # NaN in an energy row. Bit-exact when off.
-    "cathode_face_full_debit": False,
+    # A non-finite current or potential from the solve raises RuntimeError
+    # rather than planting a NaN in an energy row.
     # The electron-energy sink charged per ionization event, I_ion * S_ion. Off
     # zeroes that cooling row, so ionizations cost the electrons nothing. This
     # flag is the whole on/off: the companion scale is hardwired to 1.0 and is
@@ -2923,9 +2907,21 @@ RETIRED_PARAM_KEYS = {
         "('fast_electron'), unconditionally"
     ),
     "beam_excitation_model": (
-        "nothing: the sheath solve's beam excitation channel is the 2^1P "
-        "cross section scaled by b_beam_excitation ('2p_scalar'), "
-        "unconditionally"
+        "nothing: the sheath solve carries no beam excitation channel; the "
+        "cathode-anode gap attenuation it feeds back is the effective cross "
+        "section inverted from the CSDA deposition march, and the march "
+        "books the beam's excitation of the gas"
+    ),
+    "b_beam_excitation": (
+        "nothing: the sheath solve carries no beam excitation channel; the "
+        "cathode-anode gap attenuation it feeds back is the effective cross "
+        "section inverted from the CSDA deposition march, and the march "
+        "books the beam's excitation of the gas"
+    ),
+    "beam_excitation_energy_eV": (
+        "nothing: the sheath solve carries no beam excitation channel, and "
+        "the CSDA deposition march reads each excitation's radiated energy "
+        "from the helium singlet manifold"
     ),
     "beam_product_transport": (
         "nothing: the CSDA ray's event products are banked in their birth "
@@ -3195,9 +3191,16 @@ RETIRED_FLAG_KEYS = {
         "geometry has an end wall face, unconditionally"
     ),
     "end_sheath_full_debit": (
-        "cathode_face_full_debit for the emitting cathode face's three "
-        "rows; the end wall's sheath-climb row is armed wherever the "
+        "nothing: the emitting cathode face's three sheath rows are armed "
+        "wherever the geometry has a cathode face and the cathode circuit "
+        "solve runs, and the end wall's sheath-climb row wherever the "
         "geometry has an end wall face, unconditionally"
+    ),
+    "cathode_face_full_debit": (
+        "nothing: the emitting cathode face's three sheath rows (emitted "
+        "enthalpy, virtual-cathode fall, collected climb) are armed wherever "
+        "the geometry has a cathode face and the cathode circuit solve runs, "
+        "unconditionally"
     ),
     "beam_tail_anode_interception": (
         "nothing: the QL tail walkers are culled at the anode mesh wherever "
@@ -3232,7 +3235,7 @@ RETIRED_FLAG_KEYS = {
     ),
     "cathode_enthalpy_on_beam": (
         "nothing: the emitted electrons' launch enthalpy stays in the "
-        "cathode_face_full_debit row"
+        "cathode_e_emitted_enthalpy row at the cathode cell"
     ),
     "cathode_ion_secondary_emission": (
         "nothing: ion-induced secondary emission at the cathode face is "

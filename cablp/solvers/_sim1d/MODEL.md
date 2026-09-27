@@ -418,10 +418,8 @@ solver.
 
 **There is no separate three-body sink.** `acd` already contains three-body
 recombination at the tabulated density, so the whole recombination loss is the
-quadratic term above and the cubic channel is identically zero; the
-`recombination_3b_loss` term a result carries reads zero throughout. The
-BULK coefficients carry no scale factor; the beam excitation channel is the one
-exception and carries `b_beam_excitation`. Each result records an
+quadratic term above and there is no cubic channel. The
+coefficients carry no scale factor. Each result records an
 `atomic_rate_domain` ledger of where the run sampled below the tabulated $T_e$
 edge. Below that edge the lookup clamps the log-$T_e$ (and log-$n_e$)
 interpolation coordinate to the grid boundary rather than extrapolating, so
@@ -839,12 +837,18 @@ per collected ion IS a live electron-energy term, but it is the $E_e$ member of
 the `anode_collection` row, formed on the fluid's own $S_\text{an}$ below,
 not on the circuit's ion current.
 
-**What the plasma pays is not the same at the two electrodes.** At the cathode
-it pays the thermal part alone. At the anode, at a REPELLING sheath
-($\phi_a>0$), the collected electrons climbed the fall
-and the plasma pays $\phi_a$ per electron on top of the thermal $2T_e$; at an
-ATTRACTING sheath ($\phi_a\le0$) the field does work ON the electrons, the bank
-is the payer, and the thermal debit stands alone. A non-finite $\phi_a$ belongs
+One **sheath-edge rule** holds at every electrode face. At the anode, the end
+wall and the emitting cathode alike, the plasma electron store pays, per electron a
+face collects, the thermal $2T_e$ plus the barrier that electron climbed
+through a repelling sheath, and it is credited with the energy the face
+injects. Where the field does work ON the collected electrons instead, the
+circuit is the payer and the thermal debit stands alone. At the anode, at a
+REPELLING sheath ($\phi_a>0$), the plasma pays $\phi_a$ per collected
+electron on top of the thermal $2T_e$; at an ATTRACTING sheath ($\phi_a\le0$)
+the bank is the payer. At the end wall the barrier is
+$\Lambda_\text{eff}T_e$ (the end wall sheath debit below). At the emitting
+cathode the returning electrons climb $e\phi_c^+$, and the face also injects
+the released electrons (the cathode face's sheath debit below). A non-finite $\phi_a$ belongs
 to neither regime and raises. The collected IONS leave with the enthalpy
 $\tfrac52T_i$, not $\tfrac32T_i$ — the $S_\text{an}$ terms above.
 
@@ -866,10 +870,12 @@ charge and the realised debit are saved so the difference is a measured number
 rather than a convention. [`NUMERICS.md`](NUMERICS.md) carries how the rate is
 integrated.
 
-**End-face sheath debit at the cathode.** `cathode_face_full_debit` extends
-that convention to the emitting face and adds what an emitter does that a
-end wall does not. Armed, three further electron-energy rows are booked at the
-cathode cell, kept apart because they are three channels with two signs:
+The **cathode face sheath debit** books the same sheath-edge rule at the
+emitting face and adds what an emitter does that an end wall does not.
+It has no key: wherever the geometry has a plasma-absorbing face whose live
+cell has the cathode role and the cathode circuit solve runs, three further
+electron-energy rows are booked at the cathode cell, kept apart because they
+are three channels with two signs:
 $+2k_BT_s\Gamma_\text{em}$, the enthalpy the released electrons carry in off a
 half-Maxwellian at the surface temperature; $+e(\phi_c^+-\max(\phi_c,0))\Gamma_\text{em}$,
 the remainder of the fall those electrons drop through, which is identically
@@ -886,7 +892,25 @@ $2(T_e-T_s)\Gamma_\text{em}$: emission and collection are two fluxes, not one
 flux with a temperature difference. Because the emitted enthalpy is a heating
 term and the collected climb a cooling one, the face's net sign is a property
 of the state — an emitter releasing a large current into a sub-$T_s$ plasma
-heats it. The rows are absent entirely when the flag is off.
+heats it. It is a convention of the model that the emitted enthalpy is placed
+in the cathode cell, where the released electrons enter the plasma, rather
+than along the beam deposition that carries those electrons' fall into the
+column. Without the circuit solve the face releases and collects nothing
+against a barrier, so the three rows are absent, as they are on a geometry
+without a cathode face. The twin-cathode layout books each emitting face from
+its own circuit result at its own cell.
+
+The sheath SINKS of the electrode faces — the anode electron debit and the
+cathode face's collected climb — are carried implicitly wherever the operator
+split is in force: the implicit electron-energy substep applies each as a
+first-order loss rate under one shared accuracy bound, and each keeps its own
+booked-against-realised energy pair. The climb's rate is its booked loss over
+the cathode cell's electron heat capacity at the state the substep starts
+from; that it cannot take that cell's store below zero within a step rests
+on the shared accuracy bound ($\nu\Delta t\le1$) under the substep's scheme.
+The
+face's two source rows and the end wall's sheath-climb row are applied
+explicitly. [`NUMERICS.md`](NUMERICS.md) carries the substep and the bound.
 
 **Prescribed drive.** `cathode_solver_model = "prescribed_measured"` imposes
 both loop quantities — $I(t)$ and $V_\text{dis}(t)$ interpolated from a
@@ -975,8 +999,7 @@ it is armed by the geometry, present exactly when the mesh has a
 plasma-absorbing face whose live cell has the end wall role, and absent on a
 geometry without one (the twin-cathode layout). The two end faces are
 INDEPENDENT — different faces, different fluxes, different regimes — and the
-emitting cathode face's rows are armed separately by
-`cathode_face_full_debit`. A
+emitting cathode face's rows are armed by that face (above). A
 floating surface draws no net current, so the electrons that reach it climbed a
 barrier $\Lambda_\text{eff}T_e$ — and with no circuit branch behind the
 end wall there is nothing but the electron thermal store to supply it: the
@@ -1016,11 +1039,10 @@ booked whenever plasma reaches the face, independent of the circuit, on the
 very flux that operator books; the end wall surface-power diagnostic includes
 it. The form assumes a surface drawing no net current and the cold-ion sheath,
 so with $T_i\gtrsim T_e$ at the face it overstates the barrier by
-$\tfrac12\ln(1+\gamma_iT_i/T_e)$, $\gamma_i$ the ion adiabatic index. Arming
-refuses at construction on a configuration supplying no plasma-absorbing face
-of the end wall role.
-Cathode faces are untouched — the accelerated species there is the ion. The
-row is absent entirely when the flag is off.
+$\tfrac12\ln(1+\gamma_iT_i/T_e)$, $\gamma_i$ the ion adiabatic index.
+This row is not booked at a cathode face, whose returning electrons climb the
+solved $\phi_c^+$ in that face's own row (above). The row is absent on a
+geometry without an end wall face.
 
 **ONE book for the cathode ion current.** The circuit's ion current $I_i$
 (saved as `source_I_i`) is the Bohm collection on the cathode's own emitting
@@ -1209,14 +1231,13 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `electron_ion_cooling` | `physics/energy.py:electron_cooling_rhs_terms` |
 | `electron_neutral_cooling` | `physics/energy.py:electron_cooling_rhs_terms` |
 | `recombination_rad_loss` | `physics/reactions.py:reaction_rhs_terms` |
-| `recombination_3b_loss` | `physics/reactions.py:reaction_rhs_terms` |
 | `recombination_energy_return` | `physics/reactions.py:recombination_energy_return_rhs` |
 | `cathode_surface_loss` | `physics/cathode.py:cathode_source_terms` |
 | `anode_e_sheath_loss` | `physics/cathode.py:cathode_source_terms` (anode part); REPORTED here and applied by the implicit heat substep as `solver.py:electrode_ee_sink_rate` wherever the operator split is in force |
 | `end_wall_e_sheath_climb` | `physics/sources.py:characteristic_boundary_rhs` (geometries with an end wall face) |
-| `cathode_e_emitted_enthalpy` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
-| `cathode_e_emitted_fall` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
-| `cathode_e_collected_climb` | `physics/cathode.py:cathode_emission_sheath_power_W` (`cathode_face_full_debit` only) |
+| `cathode_e_emitted_enthalpy` | `physics/cathode.py:cathode_emission_sheath_power_W` (geometries with an emitting cathode face) |
+| `cathode_e_emitted_fall` | `physics/cathode.py:cathode_emission_sheath_power_W` (geometries with an emitting cathode face) |
+| `cathode_e_collected_climb` | `physics/cathode.py:cathode_emission_sheath_power_W` (geometries with an emitting cathode face); REPORTED here and applied by the implicit heat substep as `solver.py:cathode_climb_ee_sink_rate` wherever the operator split is in force |
 | `anode_collection` | `physics/sources.py:anode_collection_rhs` |
 | `beam_ionization_birth` | `physics/cathode.py:beam_ionization_rhs_terms` |
 | `beam_power_deposition` | `physics/cathode.py:beam_ionization_rhs_terms` (beam banks, smoothing, and the ohmic gap booking) |
@@ -1226,11 +1247,8 @@ Terms a result carries in `rhs_terms`, for the model above.
 | `parallel_momentum_sink` | `physics/sources.py:parallel_momentum_sink_rhs` |
 | `parallel_momentum_sink_heating` | `physics/sources.py:parallel_momentum_sink_heating_rhs` |
 
-`boundary_absorption`, `surface_loss`, `gas_puff_local_ionization`,
-`plasma_front_flux` and `electron_drift_transport` are permanently zero terms
-kept for saved-ledger schema stability, as is `recombination_3b_loss` under
-the ADAS coefficients. The saved timestep diagnostic `dt_front_density` is
-likewise a constant infinity.
+`boundary_absorption`, `surface_loss` and `gas_puff_local_ionization` are
+permanently zero terms kept for saved-ledger schema stability.
 
 The model presented here is the equation set the reference configuration
 integrates. A result may carry further terms that are not part of it: those of

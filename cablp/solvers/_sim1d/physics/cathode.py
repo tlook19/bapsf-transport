@@ -782,12 +782,6 @@ def solve_cathode_boundary(
                 state, derived, geometry, beam_launch(geometry, end=0)[0],
                 ion_mass_g, input_dict,
             ),
-            b_beam_excitation=float(
-                input_dict.get("b_beam_excitation", 0.0)
-            ),
-            beam_excitation_energy_eV=float(
-                input_dict.get("beam_excitation_energy_eV", 21.218)
-            ),
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
             tail_anode_current_A=float(tail_anode_current_prev_A),
         )
@@ -824,12 +818,6 @@ def solve_cathode_boundary(
                 state, derived, geometry, beam_launch(geometry, end=0)[0],
                 ion_mass_g, input_dict,
             ),
-            b_beam_excitation=float(
-                input_dict.get("b_beam_excitation", 0.0)
-            ),
-            beam_excitation_energy_eV=float(
-                input_dict.get("beam_excitation_energy_eV", 21.218)
-            ),
             schottky=True,
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
             tail_anode_current_A=float(tail_anode_current_prev_A),
@@ -848,6 +836,19 @@ def solve_cathode_boundary(
         I_ion=I_ion,
         twin=boundary.twin_cathode,
     )
+    # The primary beam's per-cell mean free path, a saved diagnostic, at the
+    # attenuation cross section the call above has just written into the
+    # launch cell -- the one fed back to the next sheath solve -- so the
+    # profile reports the quantity the solve uses. At the launch potential
+    # ``phi_c``, like the deposition ray, so the two are one beam energy.
+    launch_0 = beam_launch(geometry, end=0)[0]
+    if beam_result.beam_cross[launch_0] != 0.0:
+        phi_c_0 = beam_result.result.phi_c
+        sigma_atten = beam_result.beam_atten_cross[launch_0]
+        for j in range(geometry.cells):
+            beam_result.l_b_profile[j] = compute_l_b(
+                phi_c_0, derived.Te[j], state.n[j], state.nn[j], sigma_atten,
+            )
     # A2a: what the anode actually COLLECTED from the tail this solve --
     # the culled walkers less the ones the rider sent back, converted from a
     # walker flux to a current. Summed over the ends with an active ray,
@@ -2535,8 +2536,8 @@ def _deposit_electrode_power(
     plasma-electron energy IN THIS FUNCTION's own
     booking. The sibling rows ``end_wall_e_sheath_climb`` and
     ``cathode_e_collected_climb`` -- presence-gated by the geometry's end wall
-    face and by ``cathode_face_full_debit`` respectively, and independent of this
-    function -- do book a collected-electron fall as plasma-electron energy,
+    face and by its emitting cathode face respectively, and independent of
+    this function -- do book a collected-electron fall as plasma-electron energy,
     at the end wall and at the emitting cathode face. ``I_e_coll`` is the
     collected electron current ``I_i_a * fe_a``, and its ``phi_a`` moment is
     the result's own ``P_anode_e_phi``, the complementary member of the R3.2
@@ -2653,7 +2654,7 @@ END_SHEATH_CATHODE_ROWS = (
 def cathode_emission_sheath_power_W(result, T_s_K):
     """Return the emitting face's three electron-energy powers [W].
 
-    The ``cathode_face_full_debit`` closure: what the plasma
+    The emitting cathode face's sheath-edge closure: what the plasma
     ELECTRON store gains and loses at an emitting surface, over and above the
     ``2 Te`` per collected electron ``P_cathode_e_thermal`` already books and
     the net-``phi_c`` beam energy the deposition march already distributes.
@@ -2702,7 +2703,7 @@ def cathode_emission_sheath_power_W(result, T_s_K):
     ):
         if not np.isfinite(value):
             raise RuntimeError(
-                "cathode_face_full_debit: the cathode solve returned a "
+                "cathode face sheath debit: the cathode solve returned a "
                 f"non-finite {name} ({value!r}); the emitting face's "
                 "electron-energy booking is undefined there"
             )

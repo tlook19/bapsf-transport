@@ -40,6 +40,7 @@ from cablp.solvers._sim1d.physics.cathode import (
     cathode_sample_indices,
 )
 from cablp.solvers._sim1d.physics.conduction import conductive_face_flux
+from cablp.solvers._sim1d.solver import END_SHEATH_CATHODE_ROWS
 from cablp.solvers._sim1d.physics.neutrals import (
     gas_puff_rate_profile,
     neutral_exchange_coefficients,
@@ -1218,23 +1219,11 @@ def _case_circuit_current_driven_integration():
         validate_cathode_solver_model(m3_params, resolved_cathode_flags)
         == "current_driven"
     )
-    # The excitation channel is consumed by the current-driven builder: the
-    # 2^1P cross section and its constant radiated energy per event.
-    m3_exc_params = dict(m3_params, b_beam_excitation=1.0)
-    m3_exc_sim = LAPDSim1D(m3_exc_params, resolved_cathode_flags)
-    m3_exc_sim._circuit_I_loop = 800.0
-    m3_exc_solve = m3_exc_sim.solve_cathode_boundary(update_cache=False)
-    m3_launch = int(
-        np.flatnonzero(m3_exc_solve.beam_result.beam_cross)[0]
-    )
-    assert m3_exc_solve.beam_result.beam_exc_cross[m3_launch] > 0.0
-    assert (
-        float(m3_exc_solve.beam_result.beam_exc_energy_eV[m3_launch])
-        == 21.218
-    )
     # B2: the CSDA deposition rides the current-driven dispatch too (the
     # solver-agnostic interface's second consumer).
-    m3_csda_solve = m3_exc_solve
+    m3_csda_sim = LAPDSim1D(dict(m3_params), resolved_cathode_flags)
+    m3_csda_sim._circuit_I_loop = 800.0
+    m3_csda_solve = m3_csda_sim.solve_cathode_boundary(update_cache=False)
     assert m3_csda_solve.beam_deposition is not None
     m3_csda_dep = m3_csda_solve.beam_deposition[0]
     assert m3_csda_dep is not None
@@ -1704,14 +1693,19 @@ def _case_cathode_power_balance_warming(
     assert not np.any((_cathode_Ee != 0.0) & (_anode_Ee != 0.0))
     assert np.abs(_anode_Ee).max() > 0.0
     assert np.abs(_cathode_Ee).max() > 0.0
-    # Summed over the five base rows; the packed y also carries nn_a.
+    # Summed over the five base rows; the packed y also carries nn_a. The
+    # circuit solve arms the emitting cathode face's three sheath rows on top
+    # of the circuit-off term set.
     cathode_saved_sum = np.zeros(
         (
             cathode_run_result.y.shape[0],
             len(STATE_NAMES_1D) * np.asarray(cathode_run_result.nn).shape[1],
         )
     )
-    for term_name in expected_rhs_terms:
+    assert set(cathode_run_result.rhs_terms) == (
+        expected_rhs_terms | set(END_SHEATH_CATHODE_ROWS)
+    )
+    for term_name in cathode_run_result.rhs_terms:
         term_fields = cathode_run_result.rhs_terms[term_name]
         assert np.allclose(
             cathode_run_result.electron_energy_terms_W_cm3[term_name],
@@ -1795,7 +1789,11 @@ def _case_cathode_power_balance_warming(
             loaded_cathode_result.phase_cathode_enabled,
             cathode_run_result.phase_cathode_enabled,
         )
-        assert set(loaded_cathode_result.rhs_terms) == expected_rhs_terms
+        # The circuit solve arms the emitting cathode face's three sheath
+        # rows on top of the circuit-off term set.
+        assert set(loaded_cathode_result.rhs_terms) == (
+            expected_rhs_terms | set(END_SHEATH_CATHODE_ROWS)
+        )
         assert np.allclose(
             loaded_cathode_result.rhs_terms["cathode_surface_loss"]["n"],
             cathode_run_result.rhs_terms["cathode_surface_loss"]["n"],
@@ -3156,6 +3154,137 @@ def _case_anode_e_sheath_realised_equals_booked():
 
 
 # ----------------------------------------------------------------------
+# cathode-e-climb-realised-equals-booked
+# ----------------------------------------------------------------------
+@_case("cathode-e-climb-realised-equals-booked")
+def _case_cathode_e_climb_realised_equals_booked():
+    # The emitting cathode face's collected-electron climb rides the implicit
+    # heat substep beside the anode's debit, with its own booked-against-
+    # realised pair. The anode case above gates the anode pair; this gates
+    # the climb's, on the same fixture.
+    sim, pair = _anode_sink_sim()
+    assert sim._cathode_climb_in_heat_substep
+    nu, booked_W = sim.cathode_climb_ee_sink_rate()
+    cells = [int(c) for c in np.flatnonzero(nu)]
+    assert cells and not set(cells) & set(pair), (cells, pair)
+    row = np.asarray(
+        sim.rhs_terms()["cathode_e_collected_climb"].Ee, dtype=float
+    )
+    volumes = np.asarray(sim.geometry.plasma_volume_cm3, dtype=float)
+    # booked_W is the reported row, cell for cell: W vs erg cm^-3 s^-1.
+    assert np.allclose(
+        -row * volumes * 1.0e-7, booked_W, rtol=1.0e-13, atol=0.0
+    )
+    # nu is that power over the cell's electron heat capacity at the state
+    # the rate is formed at.
+    Te0 = np.asarray(sim.derived.Te, dtype=float)
+    n_floor = np.maximum(np.asarray(sim.state.n, dtype=float), sim.floors["n"])
+    expected = np.zeros_like(nu)
+    expected[cells] = -row[cells] / (1.5 * n_floor[cells] * Te0[cells] * ev_to_erg)
+    assert np.allclose(nu, expected, rtol=1.0e-13, atol=0.0)
+
+    # One attempt: the climb's share of the attempt's book, apart from the
+    # anode's. The rate is referenced to the temperature each substep starts
+    # at, so the realised debit is the booked one scaled by the substep's
+    # mean Te/Te_start. Against the sink alone that mean is the exponential
+    # decay's (1 - exp(-x))/x at x = nu*dt over the whole step (a Strang half
+    # re-forms the rate at its own start, which only raises it) and at most
+    # 1; the bracket is those two, widened by the anode case's 0.9/1.1. (The
+    # end state cannot bracket it: the temperature floor acts on this cell.)
+    ledger_before = dict(sim._cathode_e_climb_ledger_J)
+    accum_before = sim._cathode_e_climb_realised_accum
+    attempt = sim._attempt_step()
+    booking = attempt.electrode_sink_booking
+    assert booking is not None
+    assert booking["cathode_circuit_booked"] > 0.0
+    assert booking["cathode_realised"] > 0.0
+    ratio = booking["cathode_realised"] / booking["cathode_circuit_booked"]
+    x = float(np.max(nu[cells])) * float(attempt.dt)
+    bracket = [(1.0 - np.exp(-x)) / x, 1.0]
+    print(
+        "  cathode climb realised/booked = %.4f; nu*dt = %.4f, decay "
+        "bracket [%.4f, %.4f]" % (ratio, x, bracket[0], bracket[1])
+    )
+    assert bracket[0] * 0.9 <= ratio <= bracket[1] * 1.1, (ratio, bracket)
+    assert booking["cathode_realised"] <= booking["cathode_circuit_booked"], (
+        booking["cathode_realised"], booking["cathode_circuit_booked"]
+    )
+    # The per-cell profile is the same energy, on the climb's cells only; the
+    # anode's profile carries nothing there.
+    profile = np.asarray(booking["cathode_realised_profile"], dtype=float)
+    assert set(np.flatnonzero(profile).tolist()) <= set(cells)
+    assert np.all(np.asarray(booking["realised_profile"])[cells] == 0.0)
+    profile_J = float(np.sum(profile * volumes)) * 1.0e-7
+    assert abs(profile_J / booking["cathode_realised"] - 1.0) < 1.0e-12, (
+        profile_J, booking["cathode_realised"]
+    )
+    # An attempt that is not accepted -- what a rejection is -- books
+    # nothing: the ledger and the accumulator are untouched, and the
+    # attempt-scoped book is dropped.
+    assert sim._cathode_e_climb_ledger_J == ledger_before
+    assert sim._cathode_e_climb_realised_accum is accum_before
+    assert sim._anode_e_sheath_attempt is None
+
+    # An accepted step commits the pair, and the saved scalars are the
+    # committed book, not a recompute.
+    accum_start = (
+        np.zeros(sim.geometry.cells, dtype=float)
+        if accum_before is None
+        else np.array(accum_before, dtype=float)
+    )
+    step_dt = sim.suggest_timestep(include_heat_conduction=False).dt
+    sim.advance_one_step(dt=step_dt)
+    step_booked = (
+        sim._cathode_e_climb_ledger_J["circuit_booked"]
+        - ledger_before["circuit_booked"]
+    )
+    step_realised = (
+        sim._cathode_e_climb_ledger_J["realised"] - ledger_before["realised"]
+    )
+    assert step_booked > 0.0 and step_realised > 0.0
+    # The accumulator's growth over the step, times the cell volumes, is the
+    # ledger's realised step.
+    accum_J = float(
+        np.sum((sim._cathode_e_climb_realised_accum - accum_start) * volumes)
+    ) * 1.0e-7
+    realised_tol = 8.0 * np.finfo(float).eps * max(
+        abs(sim._cathode_e_climb_ledger_J["realised"]),
+        abs(ledger_before["realised"]),
+    )
+    assert abs(accum_J - step_realised) <= realised_tol + 1.0e-12 * abs(
+        step_realised
+    ), (accum_J, step_realised)
+    diag = sim._cathode_diagnostic_snapshot()
+    assert diag["cathode_e_climb_booked_J"] == (
+        sim._cathode_e_climb_ledger_J["circuit_booked"]
+    )
+    assert diag["cathode_e_climb_realised_J"] == (
+        sim._cathode_e_climb_ledger_J["realised"]
+    )
+
+    # RESTART ROUND-TRIP: the pair travels in the payload and is restored
+    # exactly; a payload written before the pair existed restores 0.0.
+    payload = sim.restart_payload()
+    for key in ("circuit_booked", "realised"):
+        assert payload["ledgers"][f"cathode_e_climb_{key}_J"] == (
+            sim._cathode_e_climb_ledger_J[key]
+        )
+    fresh = LAPDSim1D(*_anode_sink_config())
+    fresh._apply_restart_payload(payload)
+    assert fresh._cathode_e_climb_ledger_J == sim._cathode_e_climb_ledger_J
+    old_payload = dict(payload)
+    old_payload["ledgers"] = {
+        k: v for k, v in payload["ledgers"].items()
+        if not k.startswith("cathode_e_climb_")
+    }
+    older = LAPDSim1D(*_anode_sink_config())
+    older._apply_restart_payload(old_payload)
+    assert older._cathode_e_climb_ledger_J == {
+        "circuit_booked": 0.0, "realised": 0.0,
+    }
+
+
+# ----------------------------------------------------------------------
 # anode-cells-no-within-step-sawtooth
 # ----------------------------------------------------------------------
 @_case("anode-cells-no-within-step-sawtooth")
@@ -3337,13 +3466,30 @@ def _case_anode_e_sheath_row_reported_not_applied():
     assert "anode_e_sheath_loss" in terms
     row = np.asarray(terms["anode_e_sheath_loss"].Ee, dtype=float)
     assert np.all(np.abs(row[pair]) > 0.0)
+    # The rows the implicit substep applies are withdrawn from rhs(): the
+    # anode's (above) and, on this single-cathode layout with the circuit
+    # solve running, the cathode face's collected-electron climb, which is
+    # reported too.
+    assert sim._cathode_climb_in_heat_substep
+    assert "cathode_e_collected_climb" in terms
+    withdrawn = sim._heat_substep_terms | {"cathode_e_collected_climb"}
     # rhs() is the sum of every OTHER row, bit for bit.
     expected = None
     for name, term in terms.items():
-        if name in sim._heat_substep_terms:
+        if name in withdrawn:
             continue
         expected = term if expected is None else add_state_rhs(expected, term)
     assert sim.rhs().tobytes() == pack_state(expected).tobytes()
+    # ... and the anode row, on its own, is withdrawn and reported but not
+    # applied: adding it back to rhs() is the sum with it included.
+    with_anode = None
+    for name, term in terms.items():
+        if name in withdrawn - {"anode_e_sheath_loss"}:
+            continue
+        with_anode = (
+            term if with_anode is None else add_state_rhs(with_anode, term)
+        )
+    assert sim.rhs().tobytes() != pack_state(with_anode).tobytes()
 
     # With the split OFF the row is back in A, bit-exactly.
     off_params, off_flags = _anode_sink_config()

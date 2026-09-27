@@ -157,6 +157,10 @@ _OPTIONAL_ARRAY_FIELDS = (
     # loss. Its companion is the ``anode_e_sheath_loss`` rhs_terms row,
     # which is the circuit's instantaneous statement at the saved state.
     "anode_e_sheath_realised_W_cm3",
+    # The same record for the emitting cathode face's collected-electron
+    # climb, present where that row rides the implicit substep; its companion
+    # is the ``cathode_e_collected_climb`` rhs_terms row.
+    "cathode_e_climb_realised_W_cm3",
 ) + HOT_CHANNEL_DIAGNOSTIC_FIELDS + IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS
 
 _ARRAY_FIELDS = (

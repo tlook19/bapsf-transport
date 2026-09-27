@@ -157,12 +157,25 @@ selects the composition: `"lie"` applies $A(\Delta t)$ then $B(\Delta t)$ and is
 $O(\Delta t)$, the splitting error going as $\Delta t[A,B]$; `"strang"`
 applies $B(\Delta t/2)\to A(\Delta t)\to B(\Delta t/2)$, whose symmetry cancels
 that leading commutator and leaves $O(\Delta t^2)$.
-Two terms cross the split into $B$, under either composition. The **anode
-electron-sheath debit** always does: at a frozen circuit solve the row is
-$I_{e,a}(2+\psi_a^+)T_e$, exactly linear in $T_e$, so $B$ carries it as a
-first-order REACTION RATE rather than as a power (below), which is what keeps
-the two anode-flanking cells off a within-step sawtooth and takes the row out
-of the `surface_loss` bundle. The **beam's electron-energy deposition** always
+Three terms cross the split into $B$, under either composition. The
+sheath sinks of the two electrode faces do, as first-order REACTION RATES
+rather than as powers (below), under one shared accuracy bound
+(`electrode_sink_rate`). The **anode electron-sheath debit**: at a frozen
+circuit solve the row is $I_{e,a}(2+\psi_a^+)T_e$, exactly linear in $T_e$,
+and carried in $B$ it keeps the two anode-flanking cells off a within-step
+sawtooth and leaves the `surface_loss` bundle. The **emitting cathode face's
+collected-electron climb** (`cathode_e_collected_climb`, the one sink among
+that face's three rows): its booked loss $e\phi_c^+\Gamma_\text{ec}$ over the
+cathode cell's electron heat capacity at the state the substep starts from is
+the rate, so the substep removes exactly the booked power at its start and
+less as the store empties. That it cannot take the cathode cell's store below
+zero within a step rests on the shared accuracy bound ($\nu\Delta t\le1$)
+under the substep's scheme: backward Euler is positive at any step, while the
+second-order schemes hold it only while $\nu\Delta t$ stays order one. The face's two source rows (the emitted enthalpy
+and the virtual-cathode fall) stay in $A$, and so does the end wall's
+sheath-climb row, which is applied explicitly. Each implicit sink keeps its
+own booked-against-realised pair, split by cell. The **beam's electron-energy
+deposition** always
 does too, applied as a source held constant over each substep on the same
 tridiagonal operator: all heat conduction lives in $B$, so inside $A$ the
 deposition cell would have no operator opposing the beam over the whole
@@ -172,7 +185,7 @@ operator applies them moves — and each substep's terms are evaluated at the
 state it starts from and the time that state represents, which under Strang
 pairs $(y^n,t^n)$ with $(A y,t^n+\Delta t)$ and makes the two halves a
 trapezoidal quadrature. With `implicit_heat_conduction` off there is no $B$,
-both rows stay in $A$, and a step explicitly asked for
+all three rows stay in $A$, and a step explicitly asked for
 `operator_split=False` on a split stance is REFUSED rather than dropping the
 debit.
 
@@ -186,9 +199,10 @@ $$\left(C+\theta\Delta tL\right)T^{n+1}=CT^n-(1-\theta)\Delta tLT^n
 
 $C$ the heat capacity, $K$ the conduction operator built from the same face
 coefficients as the explicit half, and $L=K+\nu C$ where $\nu\ge0$ is the
-per-cell electron-energy REACTION RATE the substep was handed (the anode
-electron-sheath debit; zero on the ion solve and absent whenever no caller
-supplies one). $S$ is the constant source. Both $\nu$ and $S$ are frozen over
+per-cell electron-energy REACTION RATE the substep was handed (the electrode
+faces' sheath sinks -- the anode electron-sheath debit and the cathode face's
+collected-electron climb, on disjoint cells; zero on the ion solve and absent
+whenever no caller supplies one). $S$ is the constant source. Both $\nu$ and $S$ are frozen over
 the substep — they depend on the density, the circuit solve and the electrode
 split weights, none of which the substep moves — so each scheme integrates the
 reaction term at its own order and the Picard loop below re-evaluates
@@ -325,7 +339,7 @@ over every cell.**
 | `surface_loss` | negative-margin — $\Delta t\le\varepsilon\min(\text{margin}/\lvert\dot X\rvert)$ over DRAINING cells only ($\varepsilon$ = `density_dt_fraction`), margins $n-n_\text{floor}$ and the exact conservative $E_s-\tfrac32nT_{s,\text{floor}}$ whose rates include the change in floor energy when $n$ changes, $d(E-\tfrac32nT_\text{floor})/dt=\dot E-\tfrac32T_\text{floor}\dot n$; a non-positive margin returns 0. Bundles the cathode/sheath, anode-collection and plasma-terminating boundary terms plus an engaged kinetic arm's coupling term, and is assembled whenever the plasma phase runs. It does NOT bundle the anode electron-sheath row wherever the operator split carries that row implicitly: the bound must describe what operator $A$ applies |
 | `energy_exchange` | fractional on $E_e$, $E_i$ against $Q_{ie}$ (floor 0) |
 | `energy_exchange_rate` | rate, $\Delta t\le c/\max\nu_\text{eq}$ at $c$ = `energy_exchange_rate_fraction`; withdrawn to infinity at that key's default `None` |
-| `electrode_sink_rate` | rate, $\Delta t\le c/\max\nu$ over the plasma-active cells at $c$ = `ELECTRODE_SINK_DT_FRACTION` = 1, $\nu$ the electrode electron-energy sink the implicit substep carries. An ACCURACY bound, not a stability one — the sink is L-stable at any step, but a second-order substep only expresses its order while $\nu\Delta t$ is order one, and the anode sheath can change regime between steps taken longer. Withdrawn to infinity wherever the row is applied explicitly instead |
+| `electrode_sink_rate` | rate, $\Delta t\le c/\max\nu$ over the plasma-active cells at $c$ = `ELECTRODE_SINK_DT_FRACTION` = 1, $\nu$ the electrode electron-energy sinks the implicit substep carries (the anode electron-sheath debit and the emitting cathode face's collected-electron climb, one shared bound over both). An ACCURACY bound, not a stability one — the sink is L-stable at any step, but a second-order substep only expresses its order while $\nu\Delta t$ is order one, and an electrode sheath can change regime between steps taken longer. Withdrawn to infinity wherever the rows are applied explicitly instead |
 | `electron_cooling` | fractional on $E_e$ against the inelastic and radiative terms |
 | `ion_charge_exchange` | fractional on $E_i$ against the charge-exchange cooling rate, which the moment-closed collision operator carries and which is not a saved term of its own |
 | `ion_neutral_drag` | rate, $\Delta t\max\nu_{in}\le$ `DRAG_DT_FRACTION`, $\nu$ scaled by $\lvert b\rvert$ (`b_ion_neutral_drag`) |

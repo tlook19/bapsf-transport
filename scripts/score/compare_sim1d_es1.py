@@ -274,10 +274,6 @@ PARAM_OVERRIDES = {
     # Ion-neutral closure: the Phelps moment-closed operator is unconditional
     # (first-principles drag+CX+thermal, no knob), so no ion-neutral key is
     # set here.
-    # Beam-driven neutral excitation: 1.0 books the 2^1P channel alone, the
-    # rest approximates the remainder of the singlet manifold. Radiates ~21 eV
-    # per event as He I light and shortens the beam deposition length.
-    "b_beam_excitation": _STANCE["b_beam_excitation"],
     # L2 GEOMETRY REBASELINE (2026-08-17): the measured cathode aperture, not
     # the fitted 15.0 the two radii previously shared. Caliper: a 15.0 in LaB6
     # disc behind a graphite front panel whose 14.5 in opening is the exposed

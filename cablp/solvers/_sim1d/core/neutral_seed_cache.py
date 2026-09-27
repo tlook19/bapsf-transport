@@ -101,7 +101,6 @@ INERT_PARAM_KEYS = frozenset({
     "cathode_prescribed_start_s",
     # --- beam deposition / excitation (no plasma/beam during equil) ---
     "beam_anomalous_model", "ql_relaxation_coeff",
-    "beam_excitation_energy_eV", "b_beam_excitation",
     # --- atomic-rate / cooling / plasma-physics scales (no plasma during equil) ---
     "recombination_energy_return",
     "Ti_birth_ionization",
@@ -161,20 +160,6 @@ INERT_FLAG_KEYS = frozenset({
     "heat_conduction",
     "implicit_heat_conduction", "ionization_energy_cost",
     "debug_checks",
-    # The cathode end-face energy-booking flag is inert because
-    # run_neutral_equilibration does not merely leave it unreached, it
-    # CLEARS it on the inner sim's copy of the config (an assignment beside
-    # the Plasma=False and cathode_coupling=False lines that open that
-    # function), so the equilibration runs with it off no matter what the
-    # outer run arms and no armed value can reach a seed. Its content says the
-    # same thing: cathode_face_full_debit books the emitting face's currents,
-    # and a cathode_coupling=False pre-solve has no cathode solve to read a
-    # current from. Categorised rather than left to fail closed for the
-    # reason spelled out for the prescribed cathode trace above: the
-    # fail-closed default rotates every stored seed's signature the moment
-    # such a key joins the template, an invalidation with no neutral content
-    # behind it.
-    "cathode_face_full_debit",
     # the cache-control flag (not seed content)
     "use_cached_neutral_seed",
 })

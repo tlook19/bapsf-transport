@@ -49,7 +49,10 @@ from cablp.solvers._sim1d.results.phase3_capture import (
     reserve_run_id,
     write_qualified_capture,
 )
-from cablp.solvers._sim1d.solver import END_SHEATH_DEBIT_ROWS
+from cablp.solvers._sim1d.solver import (
+    END_SHEATH_CATHODE_ROWS,
+    END_SHEATH_DEBIT_ROWS,
+)
 
 from ._harness import (
     _CAPFIX_ESCAPE_CONFIG,
@@ -1050,7 +1053,11 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.isclose(cathode_run_result.final_time, 3.0e-10)
     assert cathode_run_result.time.shape == (4,)
     assert np.all(np.isfinite(cathode_run_result.y))
-    assert set(cathode_run_result.rhs_terms) == expected_rhs_terms
+    # With the circuit solve running, the emitting cathode face books its
+    # three sheath rows on top of the circuit-off term set.
+    assert set(cathode_run_result.rhs_terms) == (
+        expected_rhs_terms | set(END_SHEATH_CATHODE_ROWS)
+    )
     assert np.allclose(cathode_run_result.phase_cathode_enabled, 1.0)
     assert np.allclose(cathode_run_result.phase_gas_puff_enabled, 0.0)
     assert np.allclose(cathode_run_result.phase_floating, 0.0)

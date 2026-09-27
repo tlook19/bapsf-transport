@@ -25,8 +25,7 @@ def reaction_rates(
     stepwise/metastable channel the direct rate lacks (up to ~3-6x at 3-5 eV,
     LAPD densities) -- and ACD for recombination. ACD already contains
     three-body recombination at the tabulated density, so the whole sink is
-    reported through the ``S_rec_rad`` slot, and the three-body slot
-    ``S_rec_3b`` is zero.
+    ``S_rec_rad`` and there is no separate three-body rate.
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     n_safe = np.maximum(state.n, floors["n"])
@@ -36,8 +35,7 @@ def reaction_rates(
     )
     S_ion = state.n * state.nn * rates["scd"]
     S_rec_rad = state.n * state.n * rates["acd"]
-    S_rec_3b = np.zeros_like(state.n, dtype=float)
-    return S_ion, S_rec_rad, S_rec_3b
+    return S_ion, S_rec_rad
 
 
 def reaction_rhs(
@@ -61,13 +59,12 @@ def reaction_rhs(
     )
     ionization = terms["ionization_birth"]
     recombination_rad = terms["recombination_rad_loss"]
-    recombination_3b = terms["recombination_3b_loss"]
     return ConservativeState1D(
-        n=ionization.n + recombination_rad.n + recombination_3b.n,
-        nn=ionization.nn + recombination_rad.nn + recombination_3b.nn,
-        M=ionization.M + recombination_rad.M + recombination_3b.M,
-        Ee=ionization.Ee + recombination_rad.Ee + recombination_3b.Ee,
-        Ei=ionization.Ei + recombination_rad.Ei + recombination_3b.Ei,
+        n=ionization.n + recombination_rad.n,
+        nn=ionization.nn + recombination_rad.nn,
+        M=ionization.M + recombination_rad.M,
+        Ee=ionization.Ee + recombination_rad.Ee,
+        Ei=ionization.Ei + recombination_rad.Ei,
     )
 
 
@@ -82,7 +79,7 @@ def reaction_rhs_terms(
 ):
     """Return ionization and recombination conservative source terms."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    S_ion, S_rec_rad, S_rec_3b = reaction_rates(
+    S_ion, S_rec_rad = reaction_rates(
         state=state,
         floors=floors,
         ion_mass_g=ion_mass_g,
@@ -154,14 +151,6 @@ def reaction_rhs_terms(
         "ionization_birth": ionization,
         "recombination_rad_loss": _recombination_loss(
             S_rec_rad,
-            momentum_ratio,
-            ion_mass_g,
-            derived,
-            with_wind=with_wind,
-            nn_ratio=nn_ratio,
-        ),
-        "recombination_3b_loss": _recombination_loss(
-            S_rec_3b,
             momentum_ratio,
             ion_mass_g,
             derived,
