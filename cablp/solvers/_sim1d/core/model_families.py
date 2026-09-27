@@ -307,30 +307,16 @@ NEUTRAL_RADIAL_CLOSURE_MEMBERS = (
 )
 
 #: Family K -- beam deposition, the anomalous (quasilinear) channel, and the
-#: walked tail. MEASURED 2026-08-30 at 22 keys and now 23 with the launch
-#: split, not the census's "~10": the
-#: census counted the tail spine and left out the excitation trio, the clump
-#: pair, the anode-reflect riders and the interception FLAG, all of which
-#: the same guard block couples. The enforced chain is likewise 7 deep, not 4
-#: (beam_anode_interception -> the anode tail cull -> the riders ->
-#: tail_ionization -> the walked-tail selector -> beam_anomalous_model ->
-#: beam_deposition_model); the census's "depth 4" is the middle spine read
-#: upward. This is the family whose one-key-at-a-time refusal cascade motivated
-#: the declaration block (measured 2026-08-23): change one key and the guards
-#: refuse one at a time, which is exactly what declaring the whole membership
-#: at once removes.
+#: walked tail: the anomalous closure, the walked-tail selector and its
+#: launch, cathode-face and anode-rider conventions, the clump pair, the
+#: deposition smoothing and the sheath solve's excitation pair, all coupled by
+#: the same guard block. Declaring the whole membership at once is what a
+#: declaration block is for: change one key and the guards would otherwise
+#: refuse one at a time.
 BEAM_TAIL_CLOSURE_MEMBERS = (
-    (PARAMS, "beam_deposition_model"),
-    (PARAMS, "beam_coulomb_model"),
     (PARAMS, "beam_anomalous_model"),
     (PARAMS, "ql_relaxation_coeff"),
-    (PARAMS, "beam_product_transport"),
     (PARAMS, "heating_anomalous_transport"),
-    (PARAMS, "heating_anomalous_disposal"),
-    (PARAMS, "heating_anomalous_tail_energy_eV"),
-    (PARAMS, "heating_anomalous_tail_ionization"),
-    (PARAMS, "heating_anomalous_tail_energy_keying"),
-    (PARAMS, "heating_anomalous_tail_phi_c_fraction"),
     (PARAMS, "heating_anomalous_tail_cathode_boundary"),
     (PARAMS, "heating_anomalous_tail_forward_fraction"),
     (PARAMS, "beam_tail_anode_reflected_particles"),
@@ -339,9 +325,7 @@ BEAM_TAIL_CLOSURE_MEMBERS = (
     (PARAMS, "beam_clump_enhancement"),
     (PARAMS, "beam_deposition_smoothing_cm"),
     (PARAMS, "b_beam_excitation"),
-    (PARAMS, "beam_excitation_model"),
     (PARAMS, "beam_excitation_energy_eV"),
-    (FLAGS, "beam_anode_interception"),
 )
 
 #: Family B, cathode half -- the cathode surface's directed-recycle channel.

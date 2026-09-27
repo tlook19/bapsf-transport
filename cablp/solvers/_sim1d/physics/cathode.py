@@ -2610,11 +2610,10 @@ def beam_ionization_rhs_terms(
         beam_M_birth = zeros.copy()
         beam_Mn_debit = None
         beam_Mna = None
-    Ti_birth_ionization = input_dict.get("Ti_birth_ionization", "floor")
+    Ti_birth_ionization = input_dict.get("Ti_birth_ionization", "neutral")
     Ti_birth = _birth_temperature(
         Ti_birth_ionization,
         beam_derived.Ti,
-        floors["Ti"],
         neutral_temperature=(
             ionization_birth_neutral_temperature_eV(
                 state, floors, input_dict.get("Tn_K", 300.0)
@@ -2623,18 +2622,13 @@ def beam_ionization_rhs_terms(
             else None
         ),
     )
-    # A14 (R4.2): the beam electron birth already uses the defensible Ee=0
-    # convention; under "conservative" reconcile the ion energy too by booking
-    # the mass-loading relative-drift mixing energy to Ei (the beam ion is born
-    # at u_birth and joins the bulk flow at u_i), matching the bulk birth.
-    birth_energy_model = str(
-        input_dict.get("ionization_birth_energy_model", "legacy")
-    )
+    # The beam electron is born cold (Ee = 0); the ion energy books the
+    # mass-loading relative-drift mixing energy to Ei (the beam ion is born at
+    # u_birth and joins the bulk flow at u_i), matching the bulk birth.
     beam_Ei = 1.5 * ev_to_erg * Ti_birth * S_beam
-    if birth_energy_model == "conservative":
-        beam_Ei = beam_Ei + 0.5 * ion_mass_g * (
-            beam_derived.u - u_birth
-        ) ** 2 * S_beam
+    beam_Ei = beam_Ei + 0.5 * ion_mass_g * (
+        beam_derived.u - u_birth
+    ) ** 2 * S_beam
     exc_model = str(input_dict.get("beam_excitation_model", "2p_scalar"))
     csda_active = getattr(cathode_solve, "beam_deposition", None) is not None
     if exc_model == "2p_scalar" and not csda_active:

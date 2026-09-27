@@ -5798,7 +5798,6 @@ class LAPDSim1D:
         Ti_birth = _birth_temperature(
             Ti_birth_ionization,
             derived.Ti,
-            self._floors["Ti"],
             neutral_temperature=(
                 Tn if Ti_birth_ionization == "neutral" else None
             ),
@@ -10882,14 +10881,8 @@ class LAPDSim1D:
             puff_profile=puff,
             fraction=f,
             I_ion=self._I_ion,
-            Te_birth_ionization=self._input_dict.get(
-                "Te_birth_ionization"
-            ),
             Ti_birth_ionization=self._input_dict.get(
                 "Ti_birth_ionization"
-            ),
-            ionization_birth_energy_model=str(
-                self._input_dict.get("ionization_birth_energy_model")
             ),
             Tn_K=float(self._input_dict.get("Tn_K")),
         )

@@ -88,9 +88,7 @@ def reaction_rhs(
     I_ion,
     atomic_rate_model="janev",
     adas_low_te_extension=False,
-    Te_birth_ionization="local",
-    Ti_birth_ionization="floor",
-    ionization_birth_energy_model="legacy",
+    Ti_birth_ionization="neutral",
     wind_column_factor=None,
     Tn_K=300.0,
 ):
@@ -104,9 +102,7 @@ def reaction_rhs(
         I_ion=I_ion,
         atomic_rate_model=atomic_rate_model,
         adas_low_te_extension=adas_low_te_extension,
-        Te_birth_ionization=Te_birth_ionization,
         Ti_birth_ionization=Ti_birth_ionization,
-        ionization_birth_energy_model=ionization_birth_energy_model,
         wind_column_factor=wind_column_factor,
         Tn_K=Tn_K,
     )
@@ -131,18 +127,11 @@ def reaction_rhs_terms(
     I_ion,
     atomic_rate_model="janev",
     adas_low_te_extension=False,
-    Te_birth_ionization="local",
-    Ti_birth_ionization="floor",
-    ionization_birth_energy_model="legacy",
+    Ti_birth_ionization="neutral",
     wind_column_factor=None,
     Tn_K=300.0,
 ):
     """Return ionization and recombination conservative source terms."""
-    if ionization_birth_energy_model not in ("legacy", "conservative"):
-        raise ValueError(
-            "ionization_birth_energy_model must be 'legacy' or 'conservative' "
-            f"(got {ionization_birth_energy_model!r})"
-        )
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     S_ion, S_rec_rad, S_rec_3b = reaction_rates(
         state=state,
@@ -170,11 +159,9 @@ def reaction_rhs_terms(
         else volume_ratio
     )
 
-    Te_birth = _birth_temperature(Te_birth_ionization, derived.Te, floors["Te"])
     Ti_birth = _birth_temperature(
         Ti_birth_ionization,
         derived.Ti,
-        floors["Ti"],
         neutral_temperature=(
             ionization_birth_neutral_temperature_eV(state, floors, Tn_K)
             if Ti_birth_ionization == "neutral"
@@ -204,21 +191,14 @@ def reaction_rhs_terms(
         M_birth = zeros
         M_n_birth = None
         u_birth = zeros
-    # A14 (R4.2) energy moments. "legacy": the historical booking that adds
-    # 3/2 Te_birth to Ee (creating electron thermal energy per new electron) and
-    # 3/2 Ti_birth to Ei. "conservative": the new electron carries no kinetic
-    # energy (Ee birth = 0, reconciled to the beam Ee=0 convention; Te falls by
-    # dilution), and the ion mass-loading relative-drift mixing energy
-    # 1/2 m (u_i - u_birth)^2 S_ion is booked to Ei, so ion total energy closes
-    # to the consumed neutral's energy instead of vanishing through the bulk
-    # kinetic derivative.
-    if ionization_birth_energy_model == "conservative":
-        Ee_birth = zeros.copy()
-        mixing = 0.5 * ion_mass_g * (derived.u - u_birth) ** 2 * S_ion
-        Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_ion + mixing
-    else:
-        Ee_birth = 1.5 * ev_to_erg * Te_birth * S_ion
-        Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_ion
+    # Energy moments: the new electron carries no kinetic energy (Ee birth =
+    # 0, the beam's convention; Te falls by dilution), and the ion
+    # mass-loading relative-drift mixing energy 1/2 m (u_i - u_birth)^2 S_ion
+    # is booked to Ei, so ion total energy closes to the consumed neutral's
+    # energy instead of vanishing through the bulk kinetic derivative.
+    Ee_birth = zeros.copy()
+    mixing = 0.5 * ion_mass_g * (derived.u - u_birth) ** 2 * S_ion
+    Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_ion + mixing
     ionization = ConservativeState1D(
         n=S_ion,
         nn=-S_ion * nn_ratio,
@@ -341,9 +321,7 @@ def gas_puff_local_ionization_rhs(
     puff_profile,
     fraction,
     I_ion,
-    Te_birth_ionization="local",
-    Ti_birth_ionization="floor",
-    ionization_birth_energy_model="legacy",
+    Ti_birth_ionization="neutral",
     Tn_K=300.0,
 ):
     """Local ionization of the fresh dense gas-puff clumps (fractional coverage).
@@ -380,24 +358,18 @@ def gas_puff_local_ionization_rhs(
     # plasma-density source: same particles, converted V_neutral -> V_plasma
     S_li = nn_sink / np.maximum(volume_ratio, 1e-300)
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
-    Te_birth = _birth_temperature(Te_birth_ionization, derived.Te, floors["Te"])
     Ti_birth = _birth_temperature(
         Ti_birth_ionization,
         derived.Ti,
-        floors["Ti"],
         neutral_temperature=(
             ionization_birth_neutral_temperature_eV(state, floors, Tn_K)
             if Ti_birth_ionization == "neutral"
             else None
         ),
     )
-    if ionization_birth_energy_model == "conservative":
-        Ee_birth = zeros.copy()
-        mixing = 0.5 * ion_mass_g * derived.u ** 2 * S_li  # born at rest, u_birth=0
-        Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_li + mixing
-    else:
-        Ee_birth = 1.5 * ev_to_erg * Te_birth * S_li
-        Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_li
+    Ee_birth = zeros.copy()
+    mixing = 0.5 * ion_mass_g * derived.u ** 2 * S_li  # born at rest, u_birth=0
+    Ei_birth = 1.5 * ev_to_erg * Ti_birth * S_li + mixing
     cost = I_ion * ev_to_erg * S_li
     return ConservativeState1D(
         n=S_li,
@@ -408,14 +380,13 @@ def gas_puff_local_ionization_rhs(
     )
 
 
-def _birth_temperature(
-    value, local_temperature, floor_temperature, neutral_temperature=None
-):
+def _birth_temperature(value, local_temperature, neutral_temperature=None):
+    """Per-cell ion birth temperature [eV], shaped like ``local_temperature``.
+
+    ``value`` is ``"neutral"`` (``neutral_temperature``, which the caller must
+    supply) or a numeric eV value.
+    """
     if isinstance(value, str):
-        if value == "local":
-            return local_temperature
-        if value == "floor":
-            return np.full_like(local_temperature, floor_temperature, dtype=float)
         if value == "neutral":
             if neutral_temperature is None:
                 raise ValueError(
@@ -428,7 +399,7 @@ def _birth_temperature(
                 np.shape(local_temperature),
             ).astype(float, copy=True)
         raise ValueError(
-            "birth temperature must be 'local', 'floor', 'neutral', or a "
-            f"numeric eV value (got {value!r})"
+            "birth temperature must be 'neutral' or a numeric eV value "
+            f"(got {value!r})"
         )
     return np.full_like(local_temperature, float(value), dtype=float)
