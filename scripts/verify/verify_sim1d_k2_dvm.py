@@ -432,17 +432,12 @@ def advance_one_step(sim, operator_split=None):
         else operator_split
     )
     diag = sim.suggest_timestep(include_heat_conduction=not split)
-
-    def _generate():
-        attempt, retries, reason, events = sim._attempt_step_with_retries(
-            dt=diag.dt,
-            operator_split=operator_split,
-            diag=diag,
-        )
-        return attempt, (retries, reason, events)
-
-    result, _attempt, _extra = sim._accept_step_with_picard(_generate)
-    return result
+    attempt, _retries, _reason, _events = sim._attempt_step_with_retries(
+        dt=diag.dt,
+        operator_split=operator_split,
+        diag=diag,
+    )
+    return sim._accept_step_attempt(attempt)
 
 
 def run_until_updates(sim, n_updates, max_steps=6000):

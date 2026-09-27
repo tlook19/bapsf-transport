@@ -86,10 +86,10 @@ class _StepCensus:
     def __init__(self, sim):
         self.sim = sim
         self.rows = []
-        self._inner = sim._accept_step_with_picard
-        sim._accept_step_with_picard = self._wrapped
+        self._inner = sim._accept_step_attempt
+        sim._accept_step_attempt = self._wrapped
 
-    def _wrapped(self, generate_attempt):
+    def _wrapped(self, attempt):
         t0 = float(self.sim._time)
         I_prev = float(self.sim._circuit_I_prev)
         V_dis_step = float(self.sim._circuit_V_dis_step)
@@ -97,17 +97,16 @@ class _StepCensus:
         # T_s is recorded because the SURFACE ledger crosses the hand-off too:
         # the emitting face keeps cooling at its released current on both
         # sides of it, so the temperature trace should show no kink there.
-        # ``None`` whenever no warming model is evolving it.
         T_s = self.sim._cathode_Ts_K
         self.rows.append(
             (t0, I_prev, V_dis_step, bool(phase["floating"]),
              bool(phase["inductive_tail"]), bool(phase["cathode_enabled"]),
-             float("nan") if T_s is None else float(T_s))
+             float(T_s))
         )
-        return self._inner(generate_attempt)
+        return self._inner(attempt)
 
     def release(self):
-        del self.sim._accept_step_with_picard
+        del self.sim._accept_step_attempt
 
 
 def _report(times_s, floating, driven_tail, I_loop, V_dis, resolution,
