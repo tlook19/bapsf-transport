@@ -264,9 +264,6 @@ DEPRECATED_CONTROLS = {
     "plasma_area_max_vessel_fraction": DeprecatedControl(
         PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
     ),
-    "vessel_leak_resistance_ohm": DeprecatedControl(
-        PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
-    ),
     "beam_excitation_energy_eV": DeprecatedControl(
         PARAMS, _DEAD_LEVER, _DEAD_LEVER_FIX,
     ),
