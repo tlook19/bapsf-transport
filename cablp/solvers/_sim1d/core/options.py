@@ -15,8 +15,7 @@ fresh ``dict`` exactly as before, so a caller may still mutate what it gets.
 
 Bundles that depend on the STEP rather than the run stay on the solver:
 ``_neutral_source_kwargs`` (phase switches and the gas-puff waveform at
-``time``), ``_circuit_timestep_kwargs`` (the loop state and a per-step device
-relation), and the ``_tracer_*`` builders (derived views, two of them keyed on
+``time``) and the ``_tracer_*`` builders (derived views, two of them keyed on
 the live state and cathode solve).
 """
 
