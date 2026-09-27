@@ -30,8 +30,7 @@ they remain the authority on what each edge means, and this module's WHY
 strings are summaries of them.
 
 **Prerequisites are not members.** A selection that REQUIRES another control
-to be ON (``kinetic_dvm`` requires ``neutral_two_zone``) keeps its own
-standalone guard. Those are not
+to be ON keeps its own standalone guard. Those are not
 incompatibilities to be cleared away -- turning them on silently would arm
 physics the caller did not ask for -- and every one of them is already ON in
 the shipped defaults, so nothing is resolved there in practice.

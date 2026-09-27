@@ -321,7 +321,7 @@ gas_puff_orifice_id_cm = 3.95
 gas_puff_orifice_length_cm = 22.0
 
 # KINETIC NEUTRAL CLOSURE -- the DVM engine's own controls. The closure
-# SELECTION and the thirteen keys it forces are [models.neutral_closure]
+# SELECTION and the ten keys it forces are [models.neutral_closure]
 # below; the keys here belong to no family and are therefore stated flat.
 #
 # VELOCITY MESH AND NEUTRAL CLOCK. Numerical choices, not physics. The kinetic

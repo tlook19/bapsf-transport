@@ -564,14 +564,14 @@ def neutral_fluid_flux_rhs(
 
     - ``nn`` and ``En`` share a volume by construction (the ``En`` field is
       defined on it), so both use ``V_nn`` and ``A_nn``: the plasma column
-      under ``neutral_two_zone``, the chamber otherwise;
+      on a two-zone state (``nn_a`` present), the chamber otherwise;
     - ``M_n`` is a CHAMBER-MEAN momentum density, so it uses ``V_m`` and
       ``A_m`` -- the same convention the donor-cell term it replaces already
       used, so the momentum inventory ``sum M_n V_m`` is conserved by the
       interior fluxes exactly as before;
     - the PRESSURE FORCE crosses the area the pressure actually acts on
-      (``A_nn``) and lands on the momentum's volume (``V_m``). Under
-      ``neutral_two_zone`` that is the column pressure pushing on the chamber
+      (``A_nn``) and lands on the momentum's volume (``V_m``). On a two-zone
+      state that is the column pressure pushing on the chamber
       mean, which is the correct total force per chamber volume from the
       modelled gas. The annulus gas's own pressure gradient is NOT modelled --
       the annulus carries no energy field under the v1 cold cut -- and that
@@ -965,8 +965,8 @@ def neutral_source_sink_rhs(
     what the pass-1 flag-on watch item was missing: the puff added particles
     with no energy of their own and the floor had to invent it, one clip at a
     time. The PUMP removes gas at the local energy per atom, so pumping is
-    temperature-preserving. Under ``neutral_two_zone`` the puff feeds the
-    annulus, which carries no energy field, so nothing is booked there.
+    temperature-preserving. On a two-zone state the puff feeds the annulus,
+    which carries no energy field, so nothing is booked there.
     """
     dnn = np.zeros(geometry.cells, dtype=float)
     dEn = None if state.En is None else np.zeros(geometry.cells, dtype=float)
@@ -1074,9 +1074,9 @@ def neutral_source_sink_rhs(
 
 # --- Saved per-sample gas-puff waveform fields ------------------------------
 # The EFFECTIVE puff the solver actually applied at each save: the configured
-# S_gp after waveform shaping (``gas_puff_mode``) AND the phase gate, not the
-# nominal input_dict level. Recording it removes the need to reconstruct the
-# waveform from the phase switch plus the mode's formula after the fact.
+# S_gp after the square waveform's shaping AND the phase gate, not the nominal
+# input_dict level. Recording it removes the need to reconstruct the waveform
+# from the phase switch plus the envelope's formula after the fact.
 # Pure recording -- nothing here feeds an RHS row.
 GAS_PUFF_DIAGNOSTIC_FIELDS = (
     # Source-end and twin-end valve rates [sccm] as applied; zero whenever the

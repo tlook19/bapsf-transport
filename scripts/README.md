@@ -104,7 +104,7 @@ into four kinds: read-only audits/censuses of a saved run or build
 (`r3fma_underflow_fence.py`); and one-build acceptance instruments not named
 `verify_sim1d_*.py` (`k2_dvm_exchange_acceptance.py`,
 `k2_dvm_exchange_measure.py`,
-`verify_beam_deposition.py`, `verify_hbd_momentum.py`,
+`verify_beam_deposition.py`,
 `verify_phase3_source_capture.py`,
 `verify_fill_spreading.py` — the initial fill's spreading members. The
 registered member is a finite-volume Knudsen diffusion of the foot inventory

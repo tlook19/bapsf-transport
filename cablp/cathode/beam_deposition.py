@@ -285,7 +285,7 @@ electrons are the instability's product; they do not re-drive it) and
 ``product_transport="local"`` -- so it attenuates on the local COLUMN neutral
 density with the same He ionization and excitation cross sections the primary
 uses, at the walker's CURRENT energy, simultaneously with its Coulomb slowing.
-Under ``neutral_two_zone`` the ``nn`` the caller passes IS the column channel,
+Under the two-zone split the ``nn`` the caller passes IS the column channel,
 and that is the density the walker attenuates on; the attic/annulus channel is
 not on the walker's field line.
 

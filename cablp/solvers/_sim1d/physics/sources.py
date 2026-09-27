@@ -1297,8 +1297,8 @@ def ion_neutral_collision_frequency(
     """Return the ion-neutral momentum-transfer collision frequency [s^-1].
 
     The DEFINITIVE momentum-transfer rate -- the same Phelps He+/He isotropic
-    + backscatter cross section the ``ion_neutral_moment_closure`` operator
-    uses, ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with
+    + backscatter cross section the moment-closed ion-neutral collision
+    operator uses, ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with
     ``T_eff = (Ti + Tn)/2`` (A8 single cold-gas ``Tn`` = ``Tn_eV``, 300 K by
     default). This ties the R3.1 presheath sampling to the same collision
     physics as the drag. He-only; ``gas_type`` is required and the He gate

@@ -335,7 +335,7 @@ def main(argv=None):
     ap.add_argument(
         "--puff-orifice", choices=PUFF_ORIFICE_ENDPOINTS, default=None,
         help="place the puff by the CAD-derived tube-beamed injection row "
-             "instead of the run's own gas_puff_profile row, at the named "
+             "instead of the run's own puff row, at the named "
              "endpoint of the one-sided feed-line bracket (default: unset, "
              "the run's own row)",
     )

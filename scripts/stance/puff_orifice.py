@@ -1,7 +1,7 @@
 """Re-export of :mod:`cablp.solvers._sim1d.physics.puff_orifice`.
 
-The tube-beamed launch row moved INTO the package when the fluid solver gained
-``gas_puff_profile = "orifice"``: the row is now derived in one place and read
+The tube-beamed launch row lives IN the package, because the fluid solver's
+gas puff uses it as its injection row: the row is derived in one place and read
 by the solver's own puff sites as well as by the kinetic instruments here, so
 the two cannot desync. This module is the scripts-side name those instruments
 already import (``mc_neutrals.py``, ``porf_footprint_proof.py`` (retired;

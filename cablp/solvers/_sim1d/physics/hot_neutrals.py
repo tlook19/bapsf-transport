@@ -41,7 +41,7 @@ set the branching:
     1/tau_hot = v_hot/Rp + nu_recx + nu_ion
 
     ballistic  the atom crosses the column boundary and joins the cold gas
-               outside it (the annulus under ``neutral_two_zone``), leaving its
+               outside it (the annulus), leaving its
                excess energy on the wall
     re-CX      the atom exchanges charge again, handing its momentum and energy
                to the ION channel at the cell it reached and launching a

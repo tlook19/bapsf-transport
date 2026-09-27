@@ -468,15 +468,13 @@ PUFF_ORIFICE_ENDPOINTS = ("wide", "narrow")
 def _apply_orifice_puff_row(bg, endpoint, z_port_cm, path):
     """Replace the puff row with the CAD-derived tube-beamed launch row.
 
-    THE KINETIC ROW IS THE INJECTION GEOMETRY. The row this overwrites is the
-    solver's own ``gas_puff_profile`` row, which under the config of record is
-    the fluid ``"cosine_pipe"`` DEPOSITION envelope: with no neutral transport
-    of its own the fluid model must spread its source, so its width is a
-    closure, not the aperture. The engines fed from here transport their own
-    atoms, so what they need is where the gas ENTERS -- the tube-beamed jet
-    from the measured port, derived in :mod:`puff_orifice`. The two rows
-    disagree by construction; that difference is a registered finding, and the
-    fluid stance is not touched by this route.
+    THE KINETIC ROW IS THE INJECTION GEOMETRY. The engines fed from here
+    transport their own atoms, so what they need is where the gas ENTERS --
+    the tube-beamed jet from the measured port, derived in
+    :mod:`puff_orifice`. The row this overwrites is the run's own puff row,
+    which on an artifact written before the orifice row became the solver's
+    only puff shape can be a fluid DEPOSITION envelope instead; the fluid
+    stance is not touched by this route.
 
     Only the SHAPE moves: the total ``sources["puff"]`` is carried through
     unchanged, so the delivered flow is the run's own. ``sources["puff_z"]``
@@ -518,7 +516,7 @@ def _apply_orifice_puff_row(bg, endpoint, z_port_cm, path):
     bg.setdefault("source_provenance", {})["puff_cells"] = (
         f"puff row DERIVED from the CAD port geometry ([puff-orifice], "
         f"{endpoint} bracket endpoint) rather than read as the solver's "
-        f"gas_puff_profile row: tube-beamed Clausing launch at z = "
+        f"puff row: tube-beamed Clausing launch at z = "
         f"{z_port_cm:.4g} cm, flown from the vessel wall to the plasma column"
     )
     for line in orifice.describe(
@@ -537,7 +535,7 @@ def load_background(path, window_ms, puff_orifice=None):
 
     ``puff_orifice`` selects the axial placement of the gas puff. ``None``
     (the default) keeps the row the run itself carries -- the neutral
-    ledger's, or the solver's own ``gas_puff_profile`` row where the ledger
+    ledger's, or the solver's own puff row where the ledger
     cannot supply one. Either ruled bracket endpoint, ``"wide"`` or
     ``"narrow"``, replaces that row with the CAD-derived tube-beamed
     injection row instead (:func:`_apply_orifice_puff_row`), carrying the
@@ -2149,7 +2147,7 @@ def main(argv=None):
     ap.add_argument(
         "--puff-orifice", choices=PUFF_ORIFICE_ENDPOINTS, default=None,
         help="place the puff by the CAD-derived tube-beamed injection row "
-             "instead of the run's own gas_puff_profile row, at the named "
+             "instead of the run's own puff row, at the named "
              "endpoint of the one-sided feed-line bracket (default: unset, "
              "the run's own row)",
     )

@@ -39,7 +39,7 @@ THE ROUTES, and why each one is here:
     argument parsing and its own override precedence, stopped at the
     constructor. Not a re-implementation.
 ``ka1c``
-    the same driver plus the THIRTEEN-MEMBER kinetic declaration on the command
+    the same driver plus the TEN-MEMBER kinetic declaration on the command
     line -- ``neutral_model=kinetic_dvm`` with every member of
     ``KINETIC_DVM_INCOMPATIBLE_DEFAULTS`` named explicitly in its own
     namespace. This is the flat-namespace shape the declaration block replaces,
