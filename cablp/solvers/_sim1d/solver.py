@@ -3043,8 +3043,9 @@ class LAPDSim1D:
         """Return the packed explicit RHS for the current scaffold physics.
 
         Rows the implicit heat substep applies are LEFT OUT of this sum --
-        ``anode_e_sheath_loss`` and ``beam_power_deposition`` whenever the
-        operator split is in force. Each is still built and still
+        ``anode_e_sheath_loss``, ``beam_power_deposition`` and, where the
+        geometry has an emitting cathode face, ``cathode_e_collected_climb``
+        whenever the operator split is in force. Each is still built and still
         REPORTED by :meth:`rhs_terms` at the same power; only which operator
         applies it moves (:meth:`operator_split_step`). With the split off
         the set is empty and every row enters the sum as it always did.
@@ -5465,8 +5466,8 @@ class LAPDSim1D:
         conductivity (``heat_picard_iterations``); Strang alone only removes
         the splitting term.
 
-        TWO TERMS CROSS THE SPLIT into B, both applied under either
-        splitting and both still reported by :meth:`rhs_terms`:
+        THREE TERMS CROSS THE SPLIT into B, all applied under either
+        splitting and all still reported by :meth:`rhs_terms`:
 
         ``anode_e_sheath_loss``
             The anode's electron-sheath energy debit, always -- the row is
@@ -5476,14 +5477,22 @@ class LAPDSim1D:
             off the within-step sawtooth A's explicit removal used to leave,
             and it takes the row out of A's timestep bundle.
 
+        ``cathode_e_collected_climb``
+            The emitting cathode face's collected-electron climb, wherever
+            that face is armed -- the one sink among its three rows, carried
+            as a first-order RATE (:meth:`cathode_climb_ee_sink_rate`) on the
+            cathode-adjacent cell, disjoint from the anode's cells, and
+            bounded by the same electrode-sink accuracy candidate. The face's
+            two source rows stay in A.
+
         ``beam_power_deposition``
             Always: B receives it as a source held constant over each
             substep
             (:meth:`beam_deposition_ee_source`). The beam's particle births,
             ionization cost and excitation radiation stay in A.
 
-        Both are booked once either way. One read-only cathode solve per
-        substep serves both builders.
+        Each is booked once either way. One read-only cathode solve per
+        substep serves every builder.
         """
         y0 = self._y if y is None else np.asarray(y, dtype=float)
         if dt is None:
@@ -5607,7 +5616,11 @@ class LAPDSim1D:
         return heat(explicit(y0, dt), dt, source_time_end)
 
     def _book_electrode_sink_substep(self, realised_erg_cm3, booked_W, sub_dt):
-        """Add one heat substep's anode electron debit to the attempt's book.
+        """Add one heat substep's electrode sheath debits to the attempt's book.
+
+        The anode electron debit and, where it rides the substep, the cathode
+        face's collected-electron climb: the realised sink and the booked
+        power are split by cell between the two electrodes' pairs.
 
         ``realised_erg_cm3`` (<= 0) is what the substep actually took out of
         the plasma electron store, at the scheme's own stage weights;
