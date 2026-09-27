@@ -18,13 +18,23 @@ under it) -- and they are separate source paths that reach the same tables. A
 gate that exercised only one would leave the other uncertified against exactly
 the ISA-baseline contraction question this gate exists to answer.
 
-**Leg A -- the SCALAR path, pure vs compiled on the frozen K7c arms.** It
-reuses ``k7cbuild_frozen_bitexact.py``, whose arms carry
-``beam_deposition_model = "csda"`` and therefore drive the compiled march's
-three cross-section table interpolations:
+**Leg A -- the SCALAR path, pure vs compiled on two frozen probe arms.** The
+arms are defined in this file (``PROBE_PARAMS``, ``PROBE_FLAGS``, ``EXTRA``,
+``ARMS``); they carry ``beam_deposition_model = "csda"`` and therefore drive
+the compiled march's three cross-section table interpolations:
 
-- ``tw``    -- tail_walk at the shipped rung, energy-only, legacy-pinned;
+- ``tw``    -- tail_walk at a fixed 75 eV rung, energy-only, with the fixed
+  keying and escaping cathode boundary pinned;
 - ``twion`` -- the same plus the ionizing tail channel.
+
+The probe configuration is FROZEN: every value it stands on is written out in
+this file and moves only when someone edits it, so two checkouts compared by
+this gate run the same configuration. It names no committed stance and does
+not track the reference one; each child prints the :func:`config_identity` of
+the arm it ran, so two transcripts can be seen to share a configuration.
+SHA-256 digests are taken over the raw little-endian float64 bytes of every
+piece of state the arm carries (the fluid state and the kinetic-neutral
+distributions, pending fluxes, transfers and debt ledgers).
 
 Each arm is run twice, once per kernel path, in a SEPARATE process -- the
 compiled/pure choice is bound at import, so it cannot be switched inside one
@@ -75,6 +85,7 @@ extension built with ``python build_ext.py --inplace``)::
 """
 
 import argparse
+import hashlib
 import os
 import re
 import subprocess
@@ -95,7 +106,7 @@ GATE_DIR = Path(__file__).resolve().parent
 PURE_PROVENANCE = "pure"
 COMPILED_PROVENANCE = "cython/_cathode_kernels_cy/tierA+csda"
 
-#: A digest line is an indented label followed by the sha256 hex k7cbuild
+#: A digest line is an indented label followed by the sha256 hex the child
 #: prints. Step headers and the arm banner deliberately do NOT match.
 _DIGEST_LINE = re.compile(r"^\s+\w+\s+[0-9a-f]{64}\s*$")
 
@@ -118,6 +129,166 @@ _LANE_CENSUS_LINE = re.compile(
 )
 
 _LANE_VERDICT_OK = "LANE EQUIVALENCE OK"
+
+
+# --------------------------------------------------------------------------
+# THE FROZEN PROBE CONFIGURATION of leg A. These values are owned by this
+# file and held still on purpose; they are not a view of any live
+# configuration and nothing keeps them in step with one. Some coincide with
+# values the reference stance carries; they must never become a live read,
+# because a probe whose configuration drifts underneath it cannot certify
+# that two checkouts carried the same trajectory.
+PROBE_PARAMS = {
+    "V_bank": 177.843,
+    "R_comp": 0.0072244,
+    "L_parasitic_H": 8.1e-06,
+    "C_bank_F": 9.5,
+    "equilibration_gas_puff_on_s": 0.025,
+    "S_gp": 9010.0,
+    "tau_gp_pulse_duration": 0.001,
+    "tau_gp_decay_duration": 0.005,
+    "atomic_rate_model": "adas",
+    "b_beam_excitation": 1.4,
+    "Rp": 18.415,
+    "R_cath": 18.415,
+    "implicit_heat_scheme": "tr_bdf2",
+    "operator_splitting": "strang",
+    "heat_picard_iterations": 2,
+    "heat_picard_tol": 1e-10,
+    "Rsup": 0.0,
+    "cathode_conduction_W_per_K": 12058.0,
+    "cathode_heat_capacity_J_per_K": 181.0,
+    "C_R": 8.76,
+    "beam_deposition_smoothing_cm": 50.0,
+}
+PROBE_FLAGS = {
+    "ion_neutral_drag_cx_only": False,
+}
+
+#: Applied over ``PROBE_PARAMS`` (and over the ES1 operating point below);
+#: where a key appears in both, this value wins. ``S_gp`` is in sccm.
+EXTRA = {
+    "cathode_solver_model": "current_driven",
+    "beam_deposition_model": "csda",
+    "beam_anomalous_model": "quasilinear",
+    "cathode_heat_capacity_J_per_K": 120.0,
+    "cathode_emissivity": 0.7,
+    "phi_wf": 2.869,
+    "cathode_phiwf_clean_eV": 2.809,
+    "cathode_cleaning_sigma_cm2": 3.5e-16,
+    "cathode_cleaning_E_th_eV": 20.0,
+    "gas_puff_mode": "square",
+    "S_gp": 3000.0,
+    "nx": 240,
+    "Te_birth_ionization": "local",
+    "tau_afterglow": 0.006,
+    "neutral_model": "kinetic_dvm",
+    "neutral_kinetic_dvm_cadence_s": 1.0e-5,
+    "neutral_kinetic_dvm_nvz": 96,
+    "neutral_kinetic_dvm_nvp": 32,
+    "neutral_kinetic_dvm_exchange": "cauchy_chord",
+    "neutral_kinetic_dvm_annulus_flights": "bounded_chord",
+    "C_R": 12.96,
+}
+
+#: The two leg-A arms.
+ARMS = {
+    "tw": {"heating_anomalous_transport": "tail_walk"},
+    "twion": {
+        "heating_anomalous_transport": "tail_walk",
+        "heating_anomalous_tail_ionization": "on",
+    },
+}
+
+#: Pinned on every arm, and only where this checkout's configuration
+#: template owns the key.
+LEGACY_PINS = {
+    "heating_anomalous_tail_energy_keying": "fixed",
+    "heating_anomalous_tail_cathode_boundary": "escape",
+}
+# --------------------------------------------------------------------------
+
+
+def build_arm(arm):
+    """Return ``(sim, pinned, identity)`` for one leg-A arm.
+
+    ``pinned`` is the subset of ``LEGACY_PINS`` applied; ``identity`` is the
+    :func:`config_identity` of the assembled ``(params, flags)`` pair.
+    """
+    from run_mechanism_ladder import ES_OPERATING
+
+    from cablp.solvers._sim1d import (
+        LAPDSim1D,
+        config_identity,
+        config_manifest,
+        default_config,
+    )
+
+    params, flags = default_config()
+    params.update(PROBE_PARAMS)
+    flags.update(PROBE_FLAGS)
+    flags["neutral_two_zone"] = True
+    params["neutral_exchange_model"] = "knudsen"
+    op = ES_OPERATING[1]
+    params["V_bank"] = op["V_bank"]
+    params["cathode_Ts_base_K"] = op["Ts_standby_K"]
+    params.update(EXTRA)
+    known = set(config_manifest()["parameters"])
+    pinned = {k: v for k, v in LEGACY_PINS.items() if k in known}
+    params.update(ARMS[arm])
+    params.update(pinned)
+    return LAPDSim1D(params, flags), pinned, config_identity(params, flags)
+
+
+def state_digest(*arrays):
+    """SHA-256 hex over the raw little-endian float64 bytes of ``arrays``."""
+    import numpy as np
+
+    h = hashlib.sha256()
+    for arr in arrays:
+        a = np.ascontiguousarray(np.asarray(arr, dtype="<f8"))
+        h.update(a.tobytes())
+    return h.hexdigest()
+
+
+def run_arm(arm, steps, report_every):
+    """Advance one arm ``steps`` steps, printing state digests periodically."""
+    sim, pinned, identity = build_arm(arm)
+    print(
+        "frozen probe configuration (names no stance; does not track one)\n"
+        f"config_identity={identity}"
+    )
+    print(
+        f"arm={arm} cells={sim.geometry.cells} dvm={sim._dvm is not None} "
+        f"anom_transport="
+        f"{sim._input_dict.get('heating_anomalous_transport', 'local')!r} "
+        f"tail_ionization="
+        f"{sim._input_dict.get('heating_anomalous_tail_ionization', 'off')!r} "
+        f"E_tail="
+        f"{sim._input_dict.get('heating_anomalous_tail_energy_eV', 75.0)!r} "
+        f"keying="
+        f"{sim._input_dict.get('heating_anomalous_tail_energy_keying', 'n/a')!r} "
+        f"f_phi_c="
+        f"{sim._input_dict.get('heating_anomalous_tail_phi_c_fraction', 'n/a')!r}"
+        f"\nlegacy pins applied: "
+        f"{pinned if pinned else '(none -- shipped-closure arm)'}"
+    )
+    for step in range(1, steps + 1):
+        sim.advance_one_step()
+        if step % report_every == 0 or step == steps:
+            dvm = sim._dvm
+            print(
+                f"step {step:6d}  t={sim.time:.9e}  updates={dvm.updates:6d}\n"
+                f"    y      {state_digest(sim._y)}\n"
+                f"    f_c    {state_digest(dvm.f_c)}\n"
+                f"    f_a    {state_digest(dvm.f_a)}\n"
+                f"    pend   {state_digest(dvm.pend_L_c, dvm.pend_R_c, dvm.pend_L_a, dvm.pend_R_a)}\n"
+                f"    xfer   {state_digest(dvm.M_transfer, dvm.Ei_transfer, dvm.S_transfer, dvm.Tn_col_eV)}\n"
+                f"    debt   {state_digest(dvm.M_debt, dvm.Ei_debt, dvm.M_applied_cum, dvm.Ei_applied_cum, dvm.M_booked_cum, dvm.Ei_booked_cum)}",
+                flush=True,
+            )
+    print(f"frozen-arm digests printed (arm={arm})")
+
 
 
 def _digest_lines(text):
@@ -149,10 +320,7 @@ def child(arm, steps, report_every, want):
         if _dir not in _sys.path:
             _sys.path.insert(0, _dir)
 
-    import k7cbuild_frozen_bitexact as k7c
-
-    k7c.main(["--steps", str(steps), "--report-every", str(report_every),
-              "--arm", arm])
+    run_arm(arm, steps, report_every)
     return 0
 
 
@@ -284,7 +452,8 @@ def array_leg(outdir):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--arms", nargs="+", default=["tw", "twion"])
+    p.add_argument("--arms", nargs="+", choices=sorted(ARMS),
+                   default=["tw", "twion"])
     p.add_argument("--steps", type=int, default=400)
     p.add_argument("--report-every", type=int, default=25)
     p.add_argument("--outdir", type=Path, default=None,
@@ -310,7 +479,8 @@ def main(argv=None):
     a.outdir.mkdir(parents=True, exist_ok=True)
     print(f"interp bit-exactness gate: arms={a.arms} steps={a.steps} "
           f"report_every={a.report_every}")
-    print("  leg A: scalar fused lerp, pure vs compiled on the K7c arms")
+    print("  leg A: scalar fused lerp, pure vs compiled on the frozen probe "
+          "arms")
     print("  leg B: array fused lerp, lane march vs recursive route on the "
           "deposit_beam corpus")
     failures = []

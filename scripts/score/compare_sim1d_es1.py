@@ -1530,6 +1530,12 @@ def compare(
                 "rms_rel": rel,
                 "sigma": sigma,
                 "sigma_tot": sigma_tot,
+                # The primary leg's default-domain drop count, carried on the
+                # row like every other leg's so `_dropped_notes` prints it and
+                # --json exports it.
+                "n_dropped_nonfinite_sigma": scored[
+                    "n_dropped_nonfinite_sigma"
+                ],
                 # Union of the two criteria, so re-basing cannot un-flag.
                 "semiquant": bool(te_low or spread_high),
                 "semiquant_te": bool(te_low),

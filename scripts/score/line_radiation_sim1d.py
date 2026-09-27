@@ -3211,7 +3211,7 @@ def markdown_sweep(rep):
     for pkey, key in rep["fiber_panels"]:
         st = rep["stages"][key]
         fp = rep["fiber_ports"][pkey]
-        sw = rep["sweeps"][pkey]
+        sw = rep["sweeps"][(pkey, key)]
         L.append(f"**Port {fp['port']} -- {st['label']}**")
         L.append("")
         rows = []
@@ -3591,7 +3591,7 @@ def figure_sweep(rep, path_stem, dpi=180):
     for ax, axz, (pkey, key) in zip(axes, zooms, rep["fiber_panels"]):
         st = rep["stages"][key]
         fp = rep["fiber_ports"][pkey]
-        sw = rep["sweeps"][pkey]["dispersions"][disp_key]
+        sw = rep["sweeps"][(pkey, key)]["dispersions"][disp_key]
         bp = sw["bandpass_nm"]
         curve = sw["curve"]
         if curve is None:
@@ -3795,10 +3795,12 @@ def build(
     # the ion stage, the second the neutral stage.
     panels = [(str(ports[0]), "he1"), (str(ports[-1]), "he0")]
 
+    # Keyed by (port, stage): the two panels may name the same port, and a
+    # port-only key would let the second stage's sweep replace the first's.
     sweeps = None
     if sweep_knobs is not None:
         sweeps = {
-            pk: sweep_at_port(
+            (pk, key): sweep_at_port(
                 stages[key], fiber_ports[pk]["stages"][key], fibers,
                 sweep_knobs,
             )
@@ -3992,7 +3994,7 @@ def print_console(rep):
         for pkey, key in rep["fiber_panels"]:
             st = rep["stages"][key]
             fp = rep["fiber_ports"][pkey]
-            sw = rep["sweeps"][pkey]
+            sw = rep["sweeps"][(pkey, key)]
             print("")
             print(f"  port {fp['port']} / {st['short']} -- peak counts/ms")
             for disp in knobs["dispersions"]:
