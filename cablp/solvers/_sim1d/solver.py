@@ -362,6 +362,12 @@ BEAM_POWER_DEPOSITION_TERM = "beam_power_deposition"
 #: a silent energy leak.
 ANODE_E_SHEATH_TERM = "anode_e_sheath_loss"
 
+#: Name of the RHS row carrying the emitting cathode face's collected-electron
+#: sheath climb -- the one SINK among that face's three rows, and the one the
+#: implicit heat substep carries beside the anode's debit. Bound to a constant
+#: for the same reason as the anode row above.
+CATHODE_E_CLIMB_TERM = "cathode_e_collected_climb"
+
 #: The cathode-circuit scalars written to the HDF5, per solved end.
 #:
 #: SIX NAMES ARE GONE from this tuple and are not exported any more:
@@ -1776,7 +1782,29 @@ class LAPDSim1D:
             _heat_substep_terms.append(BEAM_POWER_DEPOSITION_TERM)
         if self._electrode_sink_in_heat_substep:
             _heat_substep_terms.append(ANODE_E_SHEATH_TERM)
+        # The cathode face's collected-electron climb rides the same substep
+        # on the same terms: it is a sheath SINK on the plasma electron store
+        # at an electrode face, and carried explicitly it can empty the
+        # cathode cell's store within one step. Its two companions -- the
+        # emitted enthalpy and the virtual-cathode fall -- are SOURCES and
+        # stay in operator A.
+        # Its gate is its own (the split in force and the face armed), and so
+        # is its withdrawal from operator A: the anode row's gate and set
+        # can be turned independently of it.
+        self._cathode_climb_in_heat_substep = bool(
+            self._flags.get("implicit_heat_conduction")
+            and self._cathode_face_full_debit
+        )
         self._heat_substep_terms = frozenset(_heat_substep_terms)
+        # The cells the cathode climb lands in (the cathode-adjacent cell of
+        # each emitting face), as a mask: the implicit substep's realised
+        # sink is split between the anode's book and the cathode's on it.
+        # The two supports are disjoint wherever an anode is resolved.
+        self._cathode_climb_mask = np.zeros(self._geometry.cells, dtype=bool)
+        if self._cathode_climb_in_heat_substep:
+            self._cathode_climb_mask[
+                [int(c) for c in cathode_adjacent_cells(self._geometry)]
+            ] = True
         # Cumulative anode electron-sheath energy books [J], advanced on
         # ACCEPTED steps only. ``circuit_booked`` is what the circuit solve
         # charged at its own anode sample temperature; ``realised`` is what
@@ -1797,6 +1825,15 @@ class LAPDSim1D:
         # _attempt_step and dropped in its finally, so a rejected attempt
         # books nothing.
         self._anode_e_sheath_attempt = None
+        # The cathode climb's pair, on the anode pair's discipline: committed
+        # on ACCEPTED steps only, ``circuit_booked`` what the circuit solve
+        # states, ``realised`` what the implicit substep removed. Both 0.0
+        # wherever the row is applied by operator A.
+        self._cathode_e_climb_ledger_J = {"circuit_booked": 0.0, "realised": 0.0}
+        self._cathode_e_climb_last_booked_W = 0.0
+        self._cathode_e_climb_last_realised_W = 0.0
+        self._cathode_e_climb_realised_accum = None
+        self._cathode_e_climb_realised_window_s = 0.0
         # Census of the attracting-anode branch, advanced on ACCEPTED steps
         # only (see _accept_step_attempt) and exposed on an armed run's
         # cathode diagnostics. Initialised unconditionally so the attributes
@@ -3018,9 +3055,12 @@ class LAPDSim1D:
             include_heat_conduction=include_heat_conduction,
             time=time,
         )
-        if self._heat_substep_terms:
+        withdrawn = self._heat_substep_terms
+        if self._cathode_climb_in_heat_substep:
+            withdrawn = withdrawn | {CATHODE_E_CLIMB_TERM}
+        if withdrawn:
             for name, term in terms.items():
-                if name in self._heat_substep_terms:
+                if name in withdrawn:
                     continue
                 state_rhs = add_state_rhs(state_rhs, term)
         else:
@@ -3757,6 +3797,7 @@ class LAPDSim1D:
         if (
             self._beam_deposition_in_heat_substep
             or self._electrode_sink_in_heat_substep
+            or self._cathode_climb_in_heat_substep
         ) and not operator_split:
             # The only way here is a caller passing operator_split=False
             # explicitly (run/advance_one_step) with implicit_heat_conduction
@@ -3765,12 +3806,12 @@ class LAPDSim1D:
             # with no B has nowhere to apply them -- both would simply vanish.
             raise ValueError(
                 "implicit_heat_conduction is on but this step was asked for "
-                "operator_split=False: the beam electron-energy source and "
-                "the anode electron-sheath energy debit have been removed "
-                "from the explicit operator and live in the implicit heat "
-                "substep, so a non-split step would deposit no beam power "
-                "and charge the plasma nothing for the electrons the anode "
-                "collects"
+                "operator_split=False: the beam electron-energy source, the "
+                "anode electron-sheath energy debit and the cathode face's "
+                "collected-electron climb have been removed from the "
+                "explicit operator and live in the implicit heat substep, so "
+                "a non-split step would deposit no beam power and charge the "
+                "plasma nothing for the electrons the electrodes collect"
             )
         if operator_split:
             if dt is None:
@@ -3819,7 +3860,10 @@ class LAPDSim1D:
         # same discipline the DVM accumulators use: the heat
         # substeps add into it, the ``finally`` below drops it, and only
         # ``_accept_step_attempt`` commits it.
-        if self._electrode_sink_in_heat_substep and operator_split:
+        if (
+            self._electrode_sink_in_heat_substep
+            or self._cathode_climb_in_heat_substep
+        ) and operator_split:
             self._anode_e_sheath_attempt = {
                 "circuit_booked": 0.0,
                 "realised": 0.0,
@@ -3827,6 +3871,13 @@ class LAPDSim1D:
                     self._geometry.cells, dtype=float
                 ),
                 "window_s": 0.0,
+                # The cathode climb's share of the same substeps, kept apart
+                # so each electrode's booked-vs-realised pair is its own.
+                "cathode_circuit_booked": 0.0,
+                "cathode_realised": 0.0,
+                "cathode_realised_profile": np.zeros(
+                    self._geometry.cells, dtype=float
+                ),
             }
 
         starting_cache = self._step_cache_snapshot()
@@ -4369,6 +4420,31 @@ class LAPDSim1D:
                 electrode_sink["realised_profile"]
             )
             self._anode_e_sheath_realised_window_s += step_window
+            if self._cathode_climb_in_heat_substep:
+                self._cathode_e_climb_ledger_J["circuit_booked"] += (
+                    electrode_sink["cathode_circuit_booked"]
+                )
+                self._cathode_e_climb_ledger_J["realised"] += (
+                    electrode_sink["cathode_realised"]
+                )
+                self._cathode_e_climb_last_booked_W = (
+                    electrode_sink["cathode_circuit_booked"] / step_window
+                    if step_window > 0.0
+                    else 0.0
+                )
+                self._cathode_e_climb_last_realised_W = (
+                    electrode_sink["cathode_realised"] / step_window
+                    if step_window > 0.0
+                    else 0.0
+                )
+                if self._cathode_e_climb_realised_accum is None:
+                    self._cathode_e_climb_realised_accum = np.zeros(
+                        self._geometry.cells, dtype=float
+                    )
+                self._cathode_e_climb_realised_accum += (
+                    electrode_sink["cathode_realised_profile"]
+                )
+                self._cathode_e_climb_realised_window_s += step_window
         # B5: what the cathode surface owes the kinetic gas for THIS step's
         # backscatter [erg]. Zero unless the DVM cathode jet booked
         # something below, which is what keeps the surface power balance
@@ -5105,6 +5181,12 @@ class LAPDSim1D:
                 for key, value in self._anode_e_sheath_ledger_J.items()
             }
         )
+        ledgers.update(
+            {
+                f"cathode_e_climb_{key}_J": value
+                for key, value in self._cathode_e_climb_ledger_J.items()
+            }
+        )
         if self._anode_energy_ledger_J is not None:
             # PRESENCE-GATED: off the channel these keys are absent and the
             # restart payload is byte-unchanged.
@@ -5312,6 +5394,11 @@ class LAPDSim1D:
             self._anode_e_sheath_ledger_J[key] = float(
                 ledgers.get(f"anode_e_sheath_{key}_J", 0.0)
             )
+        for key in self._cathode_e_climb_ledger_J:
+            # Defaulted on the same ground as the anode pair above.
+            self._cathode_e_climb_ledger_J[key] = float(
+                ledgers.get(f"cathode_e_climb_{key}_J", 0.0)
+            )
         if self._anode_energy_ledger_J is not None:
             for key in self._anode_energy_ledger_J:
                 self._anode_energy_ledger_J[key] = float(
@@ -5414,7 +5501,7 @@ class LAPDSim1D:
             raw_stage_func = self._validate_raw_stage
 
         def heat(y_in, sub_dt, source_time=None):
-            if self._heat_substep_terms:
+            if self._heat_substep_terms or self._cathode_climb_in_heat_substep:
                 substep_state = self._unpack(y_in)
                 cathode_solve = None
                 cathode_phase = self._cathode_phase_options(time=source_time)
@@ -5445,6 +5532,21 @@ class LAPDSim1D:
                         time=source_time,
                         cathode_solve=cathode_solve,
                     )
+                if self._cathode_climb_in_heat_substep:
+                    climb_rate, climb_W = self.cathode_climb_ee_sink_rate(
+                        state=substep_state,
+                        time=source_time,
+                        cathode_solve=cathode_solve,
+                    )
+                    # Disjoint supports (the cathode-adjacent cells against
+                    # the anode-flanking ones): the sum is each electrode's
+                    # own rate cell by cell, and the booking below splits the
+                    # realised sink back apart on the same cells.
+                    if ee_sink_rate is None:
+                        ee_sink_rate, sink_power_W = climb_rate, climb_W
+                    else:
+                        ee_sink_rate = ee_sink_rate + climb_rate
+                        sink_power_W = sink_power_W + climb_W
                 ledger = {} if ee_sink_rate is not None else None
                 state = self.implicit_heat_conduction_step(
                     dt=sub_dt,
@@ -5492,7 +5594,7 @@ class LAPDSim1D:
         # two half-substeps together form the trapezoidal quadrature over the
         # step rather than a left-endpoint rule.
         source_time_start = source_time_end = None
-        if self._heat_substep_terms:
+        if self._heat_substep_terms or self._cathode_climb_in_heat_substep:
             source_time_start = self._time
             source_time_end = self._time + dt
         if splitting == "strang":
@@ -5519,11 +5621,26 @@ class LAPDSim1D:
         if attempt is None:
             return
         realised = np.asarray(realised_erg_cm3, dtype=float)
+        booked_W = np.asarray(booked_W, dtype=float)
+        volume_cm3 = self._plasma_geometry().plasma_volume_cm3
+        if self._cathode_climb_in_heat_substep:
+            # Split the one realised sink by electrode: the cathode climb's
+            # cells go to its own book, every other cell to the anode's.
+            mask = self._cathode_climb_mask
+            cathode_realised = np.where(mask, realised, 0.0)
+            cathode_booked_W = np.where(mask, booked_W, 0.0)
+            realised = np.where(mask, 0.0, realised)
+            booked_W = np.where(mask, 0.0, booked_W)
+            attempt["cathode_realised"] += -float(
+                np.sum(cathode_realised * volume_cm3)
+            ) * 1.0e-7
+            attempt["cathode_circuit_booked"] += (
+                float(np.sum(cathode_booked_W)) * sub_dt
+            )
+            attempt["cathode_realised_profile"] += -cathode_realised
         # erg cm^-3 over the cell volumes -> erg -> J, and a DEBIT is
         # reported positive here (the row is a loss).
-        realised_J = -float(
-            np.sum(realised * self._plasma_geometry().plasma_volume_cm3)
-        ) * 1.0e-7
+        realised_J = -float(np.sum(realised * volume_cm3)) * 1.0e-7
         attempt["realised"] += realised_J
         attempt["circuit_booked"] += float(np.sum(booked_W)) * sub_dt
         attempt["realised_profile"] += -realised
@@ -6390,6 +6507,19 @@ class LAPDSim1D:
                 state=state,
                 time=time,
             )[0]
+        if plasma_enabled and self._cathode_climb_in_heat_substep:
+            # The cathode climb's rate joins the same accuracy candidate:
+            # Delta t <= c / max nu over every electrode sink the substep
+            # carries (disjoint supports, so the sum is the per-cell rate).
+            climb_rate = self.cathode_climb_ee_sink_rate(
+                state=state,
+                time=time,
+            )[0]
+            electrode_sink_rate = (
+                climb_rate
+                if electrode_sink_rate is None
+                else electrode_sink_rate + climb_rate
+            )
         diag = suggest_timestep(
             state=state,
             floors=self._floors,
@@ -7557,6 +7687,78 @@ class LAPDSim1D:
         power_W = np.asarray(
             metadata.get("anode_power_loss_W", zeros), dtype=float
         )
+        active = self._plasma_active_mask()
+        rate = np.where(active, rate, 0.0)
+        power_W = np.where(active, power_W, 0.0)
+        return rate, power_W
+
+    def cathode_climb_ee_sink_rate(
+        self, y=None, state=None, time=None, cathode_solve=None,
+    ):
+        """Return ``(nu, P_booked_W)`` for the cathode face's collected climb.
+
+        ``P_booked_W`` is the loss ``e phi_c_plus Gamma_ec`` [W] the
+        ``cathode_e_collected_climb`` row books at each emitting face's
+        cathode-adjacent cell, from the same circuit result. ``nu`` [s^-1] is
+        that power over the cell's electron heat capacity at the state the
+        substep starts from, ``P / (3/2 n Te e V)``: applied to the substep's
+        own temperature it removes exactly the booked power at the start of
+        the substep and less as the store empties, so the debit can never
+        take the store below zero. Zero with no solve this substep. Power
+        with no positive heat capacity to form a rate against raises.
+
+        It carries the gates :meth:`electrode_ee_sink_rate` carries (the
+        phase gate and the active-plasma-topology mask), and its cathode
+        solve runs with ``update_cache=False`` for the same reason.
+        """
+        if state is None:
+            state = self.state if y is None else self._unpack(y)
+        zeros = np.zeros(self._geometry.cells, dtype=float)
+        rate = zeros.copy()
+        power_W = zeros.copy()
+        if not self._flags.get("Plasma") or self._neutral_prebreakdown_active(
+            time=time,
+        ):
+            return rate, power_W
+        if cathode_solve is None:
+            cathode_phase = self._cathode_phase_options(time=time)
+            if cathode_phase["solve_enabled"]:
+                cathode_solve = self.solve_cathode_boundary(
+                    state=state,
+                    floating=cathode_phase["floating"],
+                    time=time,
+                    update_cache=False,
+                )
+        beam_result = (
+            None if cathode_solve is None else cathode_solve.beam_result
+        )
+        if beam_result is None:
+            return rate, power_W
+        cathode_cells = cathode_adjacent_cells(self._geometry)
+        pairs = [(int(cathode_cells[0]), beam_result.result)]
+        if self._flags.get("TwinCathode") and beam_result.result_twin is not None:
+            pairs.append((int(cathode_cells[-1]), beam_result.result_twin))
+        derived = derive_state(state, self._floors, self._ion_mass_g)
+        n = np.maximum(np.asarray(state.n, dtype=float), self._floors["n"])
+        Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+        for cell, result in pairs:
+            loss_W = -cathode_emission_sheath_power_W(
+                result, float(self._cathode_Ts_K)
+            )[2]
+            capacity_erg = (
+                1.5 * n[cell] * float(derived.Te[cell]) * ev_to_erg * Vp[cell]
+            )
+            if loss_W != 0.0 and not capacity_erg > 0.0:
+                raise RuntimeError(
+                    "the cathode face's collected-electron climb has no rate "
+                    f"form at cell {cell}: loss={loss_W!r} W against an "
+                    f"electron heat capacity of {capacity_erg!r} erg; the "
+                    "implicit substep cannot carry a debit whose heat "
+                    "capacity is not positive"
+                )
+            power_W[cell] += loss_W
+            if loss_W != 0.0:
+                rate[cell] += loss_W * 1.0e7 / capacity_erg
         active = self._plasma_active_mask()
         rate = np.where(active, rate, 0.0)
         power_W = np.where(active, power_W, 0.0)
@@ -8862,6 +9064,12 @@ class LAPDSim1D:
             snapshot["anode_e_sheath_realised_W_cm3"] = (
                 self._drain_anode_e_sheath_realised()
             )
+        if self._cathode_climb_in_heat_substep:
+            # The cathode climb's realised debit, the same save-interval mean
+            # [W cm^-3], present exactly where that row is implicit.
+            snapshot["cathode_e_climb_realised_W_cm3"] = (
+                self._drain_cathode_e_climb_realised()
+            )
         # Only the DVM arm carries a transfer ledger, so only its runs carry
         # the per-save census record; a moment-model snapshot is unchanged.
         if self._dvm is not None:
@@ -8873,6 +9081,22 @@ class LAPDSim1D:
                 self._dvm_neutral_moment_sample(time=time)
             )
         return snapshot
+
+    def _drain_cathode_e_climb_realised(self):
+        """Return and reset the save-interval mean realised cathode climb.
+
+        [W cm^-3], positive for a loss; the cathode counterpart of
+        :meth:`_drain_anode_e_sheath_realised`, on the same rules.
+        """
+        window = self._cathode_e_climb_realised_window_s
+        accum = self._cathode_e_climb_realised_accum
+        if accum is None or not window > 0.0:
+            profile = np.zeros(self._geometry.cells, dtype=float)
+        else:
+            profile = accum * (1.0e-7 / window)
+        self._cathode_e_climb_realised_accum = None
+        self._cathode_e_climb_realised_window_s = 0.0
+        return profile
 
     def _drain_anode_e_sheath_realised(self):
         """Return and reset the save-interval mean realised anode debit.
@@ -9271,6 +9495,10 @@ class LAPDSim1D:
         if saved and "anode_e_sheath_realised_W_cm3" in saved[0]:
             result.anode_e_sheath_realised_W_cm3 = stack(
                 "anode_e_sheath_realised_W_cm3"
+            )
+        if saved and "cathode_e_climb_realised_W_cm3" in saved[0]:
+            result.cathode_e_climb_realised_W_cm3 = stack(
+                "cathode_e_climb_realised_W_cm3"
             )
         if saved and "nn_a" in saved[0]:
             result.nn_a = stack("nn_a")
@@ -9708,6 +9936,26 @@ class LAPDSim1D:
             ),
             "anode_e_sheath_realised_J": float(
                 self._anode_e_sheath_ledger_J["realised"]
+            ),
+            # The cathode climb's pair, on the same terms, PRESENCE-GATED on
+            # the emitting cathode face's rows existing.
+            **(
+                {
+                    "cathode_e_climb_booked_W": float(
+                        self._cathode_e_climb_last_booked_W
+                    ),
+                    "cathode_e_climb_realised_W": float(
+                        self._cathode_e_climb_last_realised_W
+                    ),
+                    "cathode_e_climb_booked_J": float(
+                        self._cathode_e_climb_ledger_J["circuit_booked"]
+                    ),
+                    "cathode_e_climb_realised_J": float(
+                        self._cathode_e_climb_ledger_J["realised"]
+                    ),
+                }
+                if self._cathode_face_full_debit
+                else {}
             ),
             # The ANODE's cumulative surface energy book [J], PRESENCE-GATED on
             # the B4 anode jet: absent the channel these keys do not exist and
