@@ -448,6 +448,19 @@ def _resolved_cathode_flags():
 # cathode emission/coverage, so the production baseline stays warning-free
 # and the INERT-on-production params stay inert. Dedicated production cathode
 # tests do NOT use this and exercise the real defaults.
+def _tracking_electrode_sample(sim):
+    """Make ``sim``'s electrode sample follow its accepted state.
+
+    The sample EMA is re-seeded from the accepted state after every accepted
+    step instead of relaxing toward it at the presheath transit time, so the
+    sheath solve reads the state the step started from. For probes whose
+    window is shorter than that transit time and that need the cathode to
+    respond to the plasma inside it. Returns ``sim``.
+    """
+    sim._update_sample_smoothing = lambda dt: sim._init_sample_smoothing()
+    return sim
+
+
 def _cathode_unit_config():
     """Return (params, flags) on the simple cathode/fluid stance for the
     cathode-mechanism unit tests (moment closure stays on)."""
@@ -20060,17 +20073,16 @@ def _case_tracer_ql_booking_passive_cells(_r2, _r2_on_config, solver_module):
         return params, flags
 
     _r2ql_params, _r2ql_flags = _r2ql_config()
-    _r2ql_sim = LAPDSim1D(_r2ql_params, _r2ql_flags)
+    # The electrode sample follows the accepted state: over this 1 us window
+    # the supply-averaged sample would still sit at the cold start and no
+    # beam would launch.
+    _r2ql_sim = _tracking_electrode_sample(
+        LAPDSim1D(_r2ql_params, _r2ql_flags)
+    )
     _r2ql_sim.run(t_end=1.0e-6, dt=1.0e-7)
-    # The electrode sample re-seeded from the state the probe reads, so the
-    # sheath solve below sees that state's emitting cathode rather than the
-    # supply-averaged sample, which over a 1 us window still sits near the
-    # cold start. The solve is written to the cache, so the audit below reads
-    # the same one.
-    _r2ql_sim._init_sample_smoothing()
     _r2ql_passive = _r2ql_sim._tracer_passive
     _r2ql_solve = _r2ql_sim.solve_cathode_boundary(
-        state=_r2ql_sim.state, time=_r2ql_sim._time, update_cache=True
+        state=_r2ql_sim.state, time=_r2ql_sim._time, update_cache=False
     )
     _r2ql_S, _r2ql_net, _r2ql_full = _r2ql_sim._tracer_beam_rows(
         _r2ql_sim.state, _r2ql_solve, _r2ql_sim._time
@@ -20134,11 +20146,12 @@ def _case_tracer_ql_booking_passive_cells(_r2, _r2_on_config, solver_module):
     _r2ql_sm_params, _r2ql_sm_flags = _r2ql_config(
         beam_deposition_smoothing_cm=50.0
     )
-    _r2ql_sm_sim = LAPDSim1D(_r2ql_sm_params, _r2ql_sm_flags)
+    _r2ql_sm_sim = _tracking_electrode_sample(
+        LAPDSim1D(_r2ql_sm_params, _r2ql_sm_flags)
+    )
     _r2ql_sm_sim.run(t_end=1.0e-6, dt=1.0e-7)
-    _r2ql_sm_sim._init_sample_smoothing()
     _r2ql_sm_solve = _r2ql_sm_sim.solve_cathode_boundary(
-        state=_r2ql_sm_sim.state, time=_r2ql_sm_sim._time, update_cache=True
+        state=_r2ql_sm_sim.state, time=_r2ql_sm_sim._time, update_cache=False
     )
     _r2ql_sm_rows = _r2ql_sm_sim._tracer_beam_rows(
         _r2ql_sm_sim.state, _r2ql_sm_solve, _r2ql_sm_sim._time
@@ -20195,7 +20208,9 @@ def _case_tracer_owner_state_criteria(
     # advanced by a description that does not own it. Both are composed against
     # the fluid's own state before any criterion reads them.
     _r2own_params, _r2own_flags = _r2ql_config()
-    _r2own_sim = LAPDSim1D(_r2own_params, _r2own_flags)
+    _r2own_sim = _tracking_electrode_sample(
+        LAPDSim1D(_r2own_params, _r2own_flags)
+    )
     _r2own_sim.run(t_end=1.0e-6, dt=1.0e-7)
     _r2own_cells = int(_r2own_sim.geometry.cells)
     # Hand two cells to the fluid by hand. Every tracer config starts with the
@@ -20273,7 +20288,9 @@ def _case_tracer_owner_state_criteria(
     # untouched row, and the audit is identically zero.
     _r2ql_off_params, _r2ql_off_flags = _r2ql_config()
     _r2ql_off_flags["regime_tracer"] = False
-    _r2ql_off_sim = LAPDSim1D(_r2ql_off_params, _r2ql_off_flags)
+    _r2ql_off_sim = _tracking_electrode_sample(
+        LAPDSim1D(_r2ql_off_params, _r2ql_off_flags)
+    )
     _r2ql_off_sim.run(t_end=1.0e-6, dt=1.0e-7)
     _r2ql_off_solve = _r2ql_off_sim.solve_cathode_boundary(
         state=_r2ql_off_sim.state,
@@ -20566,7 +20583,9 @@ def _case_ql_relaxation_presence_gating(_r2ql_config):
 
         _cathode_mod.deposit_beam = _watch
         try:
-            out = LAPDSim1D(params, flags).run(t_end=1.0e-6, dt=1.0e-7)
+            out = _tracking_electrode_sample(
+                LAPDSim1D(params, flags)
+            ).run(t_end=1.0e-6, dt=1.0e-7)
         finally:
             _cathode_mod.deposit_beam = _real
         return np.asarray(out.n, dtype=float).tobytes(), seen
@@ -20643,7 +20662,9 @@ def _case_ql_relaxation_passive_cell_booking(_r2, _r2ql_config):
     # would delete the physics the middle leg exists to supply.
     _qlr_t_params, _qlr_t_flags = _r2ql_config()
     _qlr_t_params["beam_anomalous_model"] = "ql_relaxation"
-    _qlr_t_sim = LAPDSim1D(_qlr_t_params, _qlr_t_flags)
+    _qlr_t_sim = _tracking_electrode_sample(
+        LAPDSim1D(_qlr_t_params, _qlr_t_flags)
+    )
     _qlr_t_sim.run(t_end=1.0e-6, dt=1.0e-7)
     _qlr_t_passive = _qlr_t_sim._tracer_passive
     _qlr_t_solve = _qlr_t_sim.solve_cathode_boundary(
