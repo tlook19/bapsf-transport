@@ -2,9 +2,8 @@
 
 Deterministic CSDA (continuous-slowing-down) integration of a monoenergetic
 primary-electron beam through the column. **Pure function of the beam and the
-column** — ``(E0, Gamma0, nn, ne, Te, ray)`` — with no solver state, so both
-the voltage-driven and current-driven cathode formulations can consume it at
-the same call sites.
+column** — ``(E0, Gamma0, nn, ne, Te, ray)`` — with no solver state, so every
+cathode formulation can consume it at the same call sites.
 
 Energy channels, per unit path length [eV/cm]:
 

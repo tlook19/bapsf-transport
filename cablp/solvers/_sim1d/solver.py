@@ -12369,14 +12369,13 @@ class LAPDSim1D:
             # power-balance value.
             "T_s_surface": float(self._cathode_Ts_K),
             "configured": float(cathode_phase["configured"]),
-            # Current-driven circuit state (0.0 under the voltage-driven
-            # solver, whose loop current lives in source_I_tot).
+            # Current-driven circuit state.
             "circuit_I_loop": float(self._circuit_I_loop),
             # Discharge voltage [V] (the inductor's view): dt-weighted
             # average of the step-integrated V_dis over the save interval
             # (see above) -- the honest discharge-voltage trace, agreeing
             # with per-solve source_V_b and the loop reconstruction on the
-            # plateau. 0.0 under voltage-driven. Runs saved before
+            # plateau. Runs saved before
             # 2026-07-21 store the biased last-step sample under this key
             # (~25 V low on the ES1 plateau).
             "circuit_V_dis_step": V_dis_save,
@@ -12655,10 +12654,8 @@ class LAPDSim1D:
                 diag[f"{prefix}_beam_plateau_edge_eV"] = np.nan
                 diag[f"{prefix}_beam_plateau_edge_clamped"] = np.nan
         # The ``end`` prefix is PRESENCE-GATED on the twin cathode. Only
-        # ``beam_result.result_twin`` ever fills these, and that object is
-        # non-``None`` only under ``TwinCathode`` (the voltage-driven solve
-        # builds it inside ``if config.Twin``; the current-driven and
-        # prescribed solves leave it ``None`` unconditionally). A
+        # ``beam_result.result_twin`` would fill these, and the current-driven
+        # and prescribed solves leave it ``None`` unconditionally. A
         # single-cathode file therefore carried a full second copy of the
         # cathode-result block that was all-NaN in every frame of every run
         # -- a column a reader has to know to ignore. Gating the SEED on the

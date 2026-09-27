@@ -32,8 +32,8 @@ qe_cgs = 4.80320425e-10  # electron charge in cgs
 
 # Helium-4 atom to electron mass ratio, DERIVED at import from the two masses
 # above rather than carried as a literal, so it cannot drift away from them
-# (the same construction as cablp/cathode/circuit.py's proton-electron
-# ``_pemr``). Consumed by the Braginskii electron-ion energy exchange
+# (the same construction as cablp/cathode/circuit_common.py's proton-electron
+# ``PEMR``). Consumed by the Braginskii electron-ion energy exchange
 # ``cablp/plasma/heat.py:Q_ie`` as the m_i/m_e of its 3(Te-Ti)/tau_e/(m_i/m_e).
 He_e_mass_ratio = m_He_cgs / m_e_cgs  # ≈ 7296.2994
 

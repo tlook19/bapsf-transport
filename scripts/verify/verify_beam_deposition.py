@@ -39,7 +39,7 @@ from cablp.cathode.beam_deposition import (
     he_mean_secondary_energy_eV,
     quasilinear_relaxation_length_cm,
 )
-from cablp.cathode.circuit import _c_log_ei, _compute_l_b
+from cablp.cathode.circuit_common import c_log_ei, compute_l_b
 from cablp.atomic.cross_sections import He_EII_cross_lkup, He_beam_excitation_channel
 
 _ERG_PER_EV = 1.602176634e-12
@@ -108,7 +108,7 @@ def main() -> None:
     sigma_i0 = He_EII_cross_lkup(E0 / HE_I_ION_EV)
     sigma_x0, _ = He_beam_excitation_channel(E0)
     l_bn = 1.0 / (3.0e14 * (sigma_i0 + sigma_x0))
-    l_b = _compute_l_b(E0, 1.0, 1.0e10, 3.0e14, sigma_i0 + sigma_x0)
+    l_b = compute_l_b(E0, 1.0, 1.0e10, 3.0e14, sigma_i0 + sigma_x0)
     bl_ionizations = min(l_b / l_bn, 1.0) * (
         sigma_i0 / (sigma_i0 + sigma_x0)
     )
@@ -129,7 +129,7 @@ def main() -> None:
     res = deposit_beam(
         E0, GAMMA0, E_stop_eV=E_stop, coulomb_model="fast_electron", **col
     )
-    k = 2.0 * math.pi * _E4_CGS * ne_c * _c_log_ei(Te_c, ne_c) / _ERG_PER_EV**2
+    k = 2.0 * math.pi * _E4_CGS * ne_c * c_log_ei(Te_c, ne_c) / _ERG_PER_EV**2
     R_analytic = (E0**2 - E_stop**2) / (2.0 * k)
     absorbed_cells = np.flatnonzero(res.plasma_heating_erg_s > 0.0)
     R_numeric = float(absorbed_cells[-1]) + 1.0

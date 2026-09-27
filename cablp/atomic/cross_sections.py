@@ -396,10 +396,9 @@ def He_beam_excitation_channel(E_eV, n_max=20):
 # spacing across the threshold cluster (20-25 eV, where the curve kinks
 # at each level), log-spaced (0.15% steps) on the smooth 25-2000 eV
 # decay; measured relative error ~1e-6 away from thresholds. Callers
-# above the table span fall back to the exact function. The frozen
-# voltage-driven solver keeps calling the exact function directly --
-# only the deposition hot loop opts in (deliberate: the frozen path
-# stays bit-stable).
+# above the table span fall back to the exact function. The sheath
+# solves' beam assembly keeps calling the exact function directly --
+# only the deposition hot loop opts in.
 _HE_BEAM_EXC_TABLE = None
 _HE_BEAM_EXC_SEQ = None
 
