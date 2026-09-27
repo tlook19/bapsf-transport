@@ -1,9 +1,8 @@
 """Prescribed-measured cathode sheath solve.
 
-``circuit_idriven`` inverts the voltage-driven formulation: given the loop
-CURRENT, find the sheath the cathode's Richardson emission must sit at to carry
-it. This module goes one step further and imposes BOTH measured drive
-quantities -- the discharge current ``I(t)`` and the discharge voltage
+``circuit_idriven`` is given the loop CURRENT and finds the sheath the
+cathode's Richardson emission must sit at to carry it. This module imposes
+BOTH measured drive quantities -- the discharge current ``I(t)`` and the discharge voltage
 ``V_dis(t)`` from the rung's own overlay trace -- so the cathode's emission
 model, its surface temperature and the bank loop are not consulted at all.
 
@@ -95,25 +94,22 @@ import math
 import numpy as np
 from scipy.optimize import brentq
 
-from cablp.cathode.circuit import (
-    CATHODE_LNL_MODELS,
+from cablp.cathode.circuit_common import (
+    E_SI,
     BeamResult,
     DeviceConfig,
+    P_ion,
     PlasmaState,
     SolverResult,
-    _LN_LAMBDA_MIN,
-    _P_ion,
-    _beam_launch_enthalpy_V,
-    _c_log_ei,
-    _compute_beam_bypass_fraction,
-    _compute_l_b,
-    _e_SI,
-    _emitted_enthalpy_on_beam_W,
-    _exp_clamped,
-    _launch_potential_V,
-    _mp_cgs,
+    c_log_ei,
+    compute_beam_bypass_fraction,
+    compute_l_b,
+    exp_clamped,
 )
-from cablp.plasma.params import bohm_sound_speed as _bohm_sound_speed
+from cablp.plasma.params import (
+    LN_LAMBDA_MIN,
+    bohm_sound_speed as _bohm_sound_speed,
+)
 from cablp.cathode.circuit_idriven import assemble_beam_arrays
 
 __all__ = [
@@ -140,8 +136,6 @@ def solve_prescribed(
     alpha_sheath_anode: float | None = None,
     tail_anode_current_A: float = 0.0,
     anode_electron_saturation_A: float | None = None,
-    emitted_enthalpy_V: float = 0.0,
-    emitted_enthalpy_gap_netted: bool = False,
 ) -> SolverResult:
     """Solve the cathode sheath for a MEASURED current and device voltage.
 
@@ -166,22 +160,9 @@ def solve_prescribed(
     member is carried because it states the cap as what it is, an electron
     random flux on the wire area, and because a caller whose ``I_i_a`` is not
     that analytic form has no other way to say so.
-    ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy
-    ``2 k_B T_s / e`` [V] when ``cathode_enthalpy_on_beam`` has placed it on
-    the beam, 0.0 (the default) otherwise; this mode has no space-charge
-    barrier, so ``phi_c_minus`` is always zero here and the shift always
-    applies when it is given -- including to the beam mean free path inside
-    the loop root below, which is evaluated at the LAUNCH potential
-    ``phi_c + enthalpy`` because that sum is the energy the primary carries
-    across the gap. ``emitted_enthalpy_gap_netted`` says whether the
-    deposition route that consumes this solve heats the column through
-    ``P_prim`` and so already nets out the gap-bypassing beam (Beer-Lambert)
-    rather than launching the full released flux (the CSDA march); it selects
-    the flux the reported ``P_emitted_enthalpy_on_beam`` rides at and NOTHING
-    else -- see ``circuit._emitted_enthalpy_on_beam_W``.
 
-    Returns a ``SolverResult`` field-for-field compatible with the other two
-    solvers'; see the module docstring for the ``I_eth``, ``regime`` and
+    Returns a ``SolverResult`` field-for-field compatible with the
+    current-driven solve's; see the module docstring for the ``I_eth``, ``regime`` and
     ``phi_c_minus`` contract notes.
     """
     if I_tot_A < 0.0:
@@ -202,16 +183,8 @@ def solve_prescribed(
     # Plasma-derived quantities: the SAME formulas the current-driven solve
     # uses, so the two agree bit-for-bit about the gap the loop crosses.
     # ------------------------------------------------------------------
-    ln_lambda = max(_c_log_ei(T_e, n_e), _LN_LAMBDA_MIN)
-    if config.lnL_model == "nrl_ei":
-        sigma_par = (1.96 / (1.03e-2 * ln_lambda)) * T_e**1.5
-    elif config.lnL_model == "fixed_14p6":
-        sigma_par = 14.6 * T_e**1.5
-    else:
-        raise ValueError(
-            "lnL_model must be one of "
-            f"{CATHODE_LNL_MODELS} (got {config.lnL_model!r})"
-        )
+    ln_lambda = max(c_log_ei(T_e, n_e), LN_LAMBDA_MIN)
+    sigma_par = (1.96 / (1.03e-2 * ln_lambda)) * T_e**1.5
     R_p = config.L_cath / (math.pi * config.R_cath**2 * sigma_par)
     C_s = float(_bohm_sound_speed(T_e, config.ion_mass_g))
 
@@ -225,7 +198,7 @@ def solve_prescribed(
 
     alpha_eff, lam_shift = _sheath_factors(alpha_sheath)
     _alpha_eff_anode, lam_shift_anode = _sheath_factors(alpha_sheath_anode)
-    I_i = config.A_c * _e_SI * n_e * C_s * alpha_eff
+    I_i = config.A_c * E_SI * n_e * C_s * alpha_eff
     if cathode_current_A is not None:
         I_i = float(cathode_current_A)
     I_i_a = 2 * config.eta * I_i
@@ -261,13 +234,6 @@ def solve_prescribed(
     # The anode fall as a function of the cathode fall, and the single
     # bracketed root of the loop relation (see the module docstring).
     # ------------------------------------------------------------------
-    # This mode reports no space-charge barrier, so the regime gate is
-    # satisfied on every solve here and the shift is whatever was given; it is
-    # read through the shared gate all the same, so the mean free path and the
-    # returned ``beam_launch_enthalpy_V`` cannot disagree. Unarmed, the launch
-    # potential IS the drop, the same float object.
-    _enthalpy_V = _beam_launch_enthalpy_V(emitted_enthalpy_V, 0.0)
-
     # THE ELECTRON SATURATION the wires can draw, stated EXPLICITLY as the
     # random flux on the mesh area where the caller sampled it. The relation
     # below used to reach it implicitly, as ``I_i_a * exp(Lambda_a)``, which
@@ -288,11 +254,8 @@ def solve_prescribed(
         )
 
     def _anode_state(phi_c):
-        l_b = _compute_l_b(
-            _launch_potential_V(phi_c, _enthalpy_V),
-            T_e, n_e, plasma.n_n, plasma.sigma_b,
-        )
-        bypass = _compute_beam_bypass_fraction(l_b, config.L_cath)
+        l_b = compute_l_b(phi_c, T_e, n_e, plasma.n_n, plasma.sigma_b)
+        bypass = compute_beam_bypass_fraction(l_b, config.L_cath)
         I_anode = I_tot - eta * bypass * I_eth_star - float(
             tail_anode_current_A
         )
@@ -347,43 +310,25 @@ def solve_prescribed(
     P_wall = I_tot * (V_b + I_tot * config.R_comp)
     P_load = I_tot * V_b
     P_comp = I_tot**2 * config.R_comp
-    # The same gate the mean free path above was evaluated through, read on
-    # the solved ``phi_c_minus`` (identically zero in this mode).
-    beam_launch_enthalpy_V = _beam_launch_enthalpy_V(
-        emitted_enthalpy_V, phi_c_minus
-    )
     gap_survival = 1.0 - eta * beam_bypass_fraction
-    P_emitted_enthalpy_on_beam = _emitted_enthalpy_on_beam_W(
-        beam_launch_enthalpy_V,
-        I_eth_star,
-        gap_survival,
-        emitted_enthalpy_gap_netted,
-    )
-    # Priced at the launch potential itself, BEFORE any anode-mesh climb: the
-    # beam readers deposit beam_launch_energy_eV(...) instead, net of that
-    # climb, and the climbed-away difference is not booked into this power.
-    P_prim = (
-        gap_survival
-        * I_eth_star
-        * _launch_potential_V(phi_c, beam_launch_enthalpy_V)
-    )
+    P_prim = gap_survival * I_eth_star * phi_c
     P_ohmic = I_tot * V_p
     # Electron/ion sheath powers: the SAME expressions the current-driven
     # solve assembles, with the same physical flux barriers (an attracting
     # electrode collects at most electron saturation, and the barrier the
     # plasma electrons climb is phi_c_plus).
-    fe_c = _exp_clamped(Lambda - max(phi_c_plus, 0.0) / T_e)
+    fe_c = exp_clamped(Lambda - max(phi_c_plus, 0.0) / T_e)
     fe_a = (
         (I_e_sat_a / I_i_a)
-        * _exp_clamped(-max(phi_a, 0.0) / T_e_anode)
+        * exp_clamped(-max(phi_a, 0.0) / T_e_anode)
     )
     P_cathode_e = I_i * (2.0 * T_e + phi_c) * fe_c
     P_cathode_e_thermal = I_i * (2.0 * T_e) * fe_c
     P_cathode_e_phi = P_cathode_e - P_cathode_e_thermal
-    P_cathode_i = _P_ion(phi_c, T_e, I_i)
+    P_cathode_i = P_ion(phi_c, T_e, I_i)
     P_cathode_i_thermal = I_i * (T_e / 2.0)
     P_cathode_i_phi = P_cathode_i - P_cathode_i_thermal
-    P_cathode_i_pl = _P_ion(phi_c, T_e, I_i_a, pl=True)
+    P_cathode_i_pl = P_ion(phi_c, T_e, I_i_a, pl=True)
     P_anode_e = I_i_a * (2.0 * T_e_anode + phi_a) * fe_a
     P_anode_e_thermal = I_i_a * (2.0 * T_e_anode) * fe_a
     P_anode_e_phi = P_anode_e - P_anode_e_thermal
@@ -394,14 +339,14 @@ def solve_prescribed(
     # ``I_tail_a`` is LAGGED -- the deposition is solved after the circuit
     # within a step, so this reads the previous accepted step's cull.
     P_tail_phi = max(phi_a, 0.0) * float(tail_anode_current_A)
-    P_anode_i = _P_ion(phi_a, T_e_anode, I_i_a)
+    P_anode_i = P_ion(phi_a, T_e_anode, I_i_a)
     P_anode_i_thermal = I_i_a * (T_e_anode / 2.0)
     P_anode_i_phi = P_anode_i - P_anode_i_thermal
-    P_anode_i_pl = _P_ion(phi_a, T_e_anode, I_i_a, pl=True)
+    P_anode_i_pl = P_ion(phi_a, T_e_anode, I_i_a, pl=True)
     _P_beam_bypass = eta * beam_bypass_fraction * I_eth_star * V_b
     # DEPRECATED unclosed scalars, kept only because SolverResult carries the
     # fields; they are not exported to the saved trajectory (see the
-    # SolverResult field block in circuit.py).
+    # SolverResult field block in circuit_common.py).
     P_net = (
         P_load - P_cathode_e - P_cathode_i - P_anode_e - P_anode_i
         - _P_beam_bypass
@@ -486,13 +431,9 @@ def solve_prescribed(
         P_load_ledger=P_load_ledger,
         P_load_residual=P_load_residual,
         I_cathode_kirchhoff_residual=I_cathode_kirchhoff_residual,
-        # The data cap is the only ceiling in this mode: there is no loop to
-        # supply a circuit member, so the census can only ever read 0 or 1.
+        # The data cap is the only ceiling, so the census reads 0 or 1.
         phi_c_ceiling_V=float(phi_c_cap_V),
-        circuit_V_avail_V=float("nan"),
         bound_active=1.0 if capability_limited else 0.0,
-        beam_launch_enthalpy_V=beam_launch_enthalpy_V,
-        P_emitted_enthalpy_on_beam=P_emitted_enthalpy_on_beam,
         regime=regime,
         long_mfp=long_mfp,
         beam_bypass_fraction=beam_bypass_fraction,
@@ -520,11 +461,8 @@ def solve_beam_system_prescribed(
     phi_c_cap_V: float = 1000.0,
     alpha_sheath: float | None = None,
     alpha_sheath_anode: float | None = None,
-    beam_climb_V: float | None = None,
     tail_anode_current_A: float = 0.0,
     anode_electron_saturation_A: float | None = None,
-    emitted_enthalpy_V: float = 0.0,
-    emitted_enthalpy_gap_netted: bool = False,
 ) -> BeamResult:
     """Prescribed-measured counterpart of ``solve_beam_system_idriven``.
 
@@ -533,14 +471,6 @@ def solve_beam_system_prescribed(
     (:func:`cablp.cathode.circuit_idriven.assemble_beam_arrays`), so the beam
     the column sees is built by exactly the same code on both drive routes and
     only the sheath underneath it differs.
-
-    ``emitted_enthalpy_V`` is the emitted electrons' launch enthalpy [V] the
-    beam carries when ``cathode_enthalpy_on_beam`` has placed it there,
-    handed to the sheath solve and reaching the arrays through the result.
-    0.0 (the default) leaves every array bit-for-bit historical.
-    ``emitted_enthalpy_gap_netted`` is handed to that same solve and selects
-    the flux its ``P_emitted_enthalpy_on_beam`` DIAGNOSTIC is normalised at,
-    per deposition route; no array below reads it.
     """
     result = solve_prescribed(
         config,
@@ -559,8 +489,6 @@ def solve_beam_system_prescribed(
         alpha_sheath_anode=alpha_sheath_anode,
         tail_anode_current_A=tail_anode_current_A,
         anode_electron_saturation_A=anode_electron_saturation_A,
-        emitted_enthalpy_V=emitted_enthalpy_V,
-        emitted_enthalpy_gap_netted=emitted_enthalpy_gap_netted,
     )
     return assemble_beam_arrays(
         result=result,
@@ -574,5 +502,4 @@ def solve_beam_system_prescribed(
         cathode_index=cathode_index,
         b_beam_excitation=b_beam_excitation,
         beam_excitation_energy_eV=beam_excitation_energy_eV,
-        beam_climb_V=beam_climb_V,
     )

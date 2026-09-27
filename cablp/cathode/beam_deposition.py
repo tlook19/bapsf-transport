@@ -29,8 +29,8 @@ Coulomb closures (both parameter-free):
   primary falls as 1/v^3, so at main-discharge conditions (150 eV, n_e =
   5e12) the energy e-fold is ~35 m.
 - ``"legacy_tau_ei"``: ``dE/dx = E / (v(E) tau_ei(Te, ne))`` with the
-  *thermal* NRL collision time — the historical `_cathode_solver._compute_l_b`
-  form (~1.1 m at the same conditions). Provided for continuity experiments;
+  *thermal* NRL collision time — the `circuit_common.compute_l_b` form
+  (~1.1 m at the same conditions). Provided for continuity experiments;
   its "Coulomb" label overestimates the classical drag ~30x.
 
 Anomalous closure:
@@ -583,7 +583,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .circuit import _c_log_ei
+from .circuit_common import c_log_ei
 from ..atomic.cross_sections import (
     _HE_LOG_EPS,
     _HE_LOG_SIGMA,
@@ -695,7 +695,7 @@ HE_EII_EDGE_REL_TOL = 1.0e-12
 # key.
 _PRODUCT_FLOOR_TE_MULTIPLE = 1.5
 # Absolute floor [eV], reusing the module's OWN lnLambda temperature clamp
-# (``_c_log_ei(max(Te, 0.1), ne)`` in coulomb_stopping_eV_per_cm): below it the
+# (``c_log_ei(max(Te, 0.1), ne)`` in coulomb_stopping_eV_per_cm): below it the
 # Coulomb logarithm is already being evaluated at a substitute temperature, so
 # a walk there would be tracking a formula outside its own domain. Also the
 # guard that keeps the walk finite when Te -> 0.
@@ -1001,7 +1001,7 @@ def coulomb_stopping_eV_per_cm(
     """Coulomb energy-loss rate [eV/cm] of a primary at E_eV."""
     if ne <= 0.0 or E_eV <= 0.0:
         return 0.0
-    lnL = _c_log_ei(max(Te, 0.1), ne)
+    lnL = c_log_ei(max(Te, 0.1), ne)
     if model == "fast_electron":
         return 2.0 * math.pi * _E4_CGS * ne * lnL / (E_eV * _ERG_PER_EV) / _ERG_PER_EV
     if model == "legacy_tau_ei":

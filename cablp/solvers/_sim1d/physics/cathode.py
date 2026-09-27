@@ -13,11 +13,11 @@ from cablp.cathode.beam_deposition import (
     BeamDepositionResult,
     _coulomb_stopping_coefficient,
 )
-from cablp.cathode.circuit import (
+from cablp.cathode.circuit_common import (
     DeviceConfig,
     PlasmaState,
-    _compute_beam_bypass_fraction,
-    _compute_l_b,
+    compute_beam_bypass_fraction,
+    compute_l_b,
     beam_launched_current_A,
 )
 from cablp.plasma.params import LN_LAMBDA_MIN, c_log, electron_mean_speed
@@ -359,7 +359,6 @@ def cathode_device_config(input_dict, input_flags, mu, ion_mass_g):
         A_c=math.pi * R_cath**2,
         mu=mu,
         ion_mass_g=ion_mass_g,
-        V_bank=float(input_dict["V_bank"]),
         T_s=float(input_dict["cathode_Ts_base_K"]),
         phi_wf=float(input_dict["phi_wf"]),
         C_R=float(input_dict["C_R"]),
@@ -367,7 +366,6 @@ def cathode_device_config(input_dict, input_flags, mu, ion_mass_g):
         R_comp_partition=float(input_dict.get("R_comp_partition", 1.0)),
         R_mesh_ohm=float(input_dict.get("R_mesh_ohm", 0.0)),
         eta=float(input_dict["eta"]),
-        Twin=bool(input_flags.get("TwinCathode", False)),
         L_cath=float(input_dict["L_cath"]),
         R_cath=R_cath,
     )
@@ -1771,7 +1769,7 @@ def _csda_beam_deposition(
         # channel densities instead would leave the frozen solve reproducing
         # nothing, and the gap ledger tripwire below would say so.
         nn_launch = float(state.nn[launch])
-        l_bi = _compute_l_b(
+        l_bi = compute_l_b(
             phi_c_ray,
             float(derived.Te[launch]),
             float(state.n[launch]),
@@ -1816,8 +1814,8 @@ def _csda_beam_deposition(
         gap_ledger[end] = (
             transmission,
             ray_survival,
-            _compute_beam_bypass_fraction(
-                _compute_l_b(
+            compute_beam_bypass_fraction(
+                compute_l_b(
                     phi_c_ray,
                     float(derived.Te[launch]),
                     float(state.n[launch]),
@@ -1826,7 +1824,7 @@ def _csda_beam_deposition(
                 ),
                 L_cath,
             ),
-            _compute_beam_bypass_fraction(l_bi, L_cath),
+            compute_beam_bypass_fraction(l_bi, L_cath),
         )
     return deposition, gap_ledger, reservoir_deposition, plateau_edge
 

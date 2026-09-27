@@ -51,7 +51,7 @@ from ..atomic.cross_sections import (
     _HE_LOG_SIGMA,
     _he_beam_excitation_table,
 )
-from ..cathode.circuit import _c_log_ei
+from ..cathode.circuit_common import c_log_ei
 from ..numerics.interp import (
     _interp_array_unchecked_multi,
     check_fma_domain,
@@ -321,7 +321,7 @@ def lane_march(
     for c in range(cells):
         if not ne_live[c]:
             continue
-        lnL = _c_log_ei(max(float(Te[c]), 0.1), float(ne[c]))
+        lnL = c_log_ei(max(float(Te[c]), 0.1), float(ne[c]))
         if coulomb_model == "fast_electron":
             coul_num[c] = 2.0 * math.pi * _E4_CGS * float(ne[c]) * lnL
         else:
