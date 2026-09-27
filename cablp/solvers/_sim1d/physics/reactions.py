@@ -208,7 +208,7 @@ def recombination_energy_return_rhs(
     (E_rad/event > I_ion there). The ``3/2 Te S_rec`` capture-KE loss in
     the recombination terms stays booked -- it cancels in the net; this
     pair adds ``I_ion*S_rec - P_PRB`` on top. The PAIR is the consistent
-    unit (PRB alone double-charges -- the ``icool_recomb`` audit); both
+    unit (PRB alone double-charges); both
     halves are evaluated from the same ACD sink so the credit tracks the particle
     equation's actual sink. Grid lookups clamp at the adf11 edges (0.2 eV Te
     floor), nearest-edge.

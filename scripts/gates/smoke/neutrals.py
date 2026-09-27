@@ -29,7 +29,6 @@ from cablp.solvers._sim1d.physics.energy import (
     electron_cooling_rhs_terms,
     ion_charge_exchange_rhs,
 )
-from cablp.solvers._sim1d.physics.flux import front_filling_fluxes
 from cablp.solvers._sim1d.physics.neutrals import (
     GAS_PUFF_DIAGNOSTIC_FIELDS,
     _effective_pump_speed,
@@ -315,34 +314,17 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         Ti=np.full(geom.cells, params["Ti0"]),
         ion_mass_g=sim.ion_mass_g,
     )
-    ramp_front = front_filling_fluxes(
-        state=ramp_state,
-        floors=sim.floors,
-        ion_mass_g=sim.ion_mass_g,
-        geometry=geom,
-        alpha_front=params["alpha_front"],
-    )
-    open_plasma_faces = np.asarray(geom.plasma_open, dtype=bool)
-    assert np.all(ramp_front.n[open_plasma_faces] > 0.0)
-    ramp_rhs = sim.plasma_flux_rhs(y=pack_state(ramp_state), include_front=True)
+    ramp_rhs = sim.plasma_flux_rhs(y=pack_state(ramp_state))
     for values in (ramp_rhs.n, ramp_rhs.nn, ramp_rhs.M, ramp_rhs.Ee, ramp_rhs.Ei):
         assert np.all(np.isfinite(values))
-    ramp_flux_terms = sim.plasma_flux_rhs_terms(
-        state=ramp_state,
-        include_front=True,
-    )
-    assert set(ramp_flux_terms) == {"plasma_advective_flux", "plasma_front_flux"}
+    ramp_flux_terms = sim.plasma_flux_rhs_terms(state=ramp_state)
+    assert set(ramp_flux_terms) == {"plasma_advective_flux"}
     ramp_flux_sum = np.zeros_like(pack_state(ramp_rhs))
     for term in ramp_flux_terms.values():
         for field_name in STATE_NAMES_1D:
             assert np.all(np.isfinite(getattr(term, field_name)))
         ramp_flux_sum = ramp_flux_sum + pack_state(term)
     assert np.allclose(ramp_flux_sum, pack_state(ramp_rhs))
-    no_front_terms = sim.plasma_flux_rhs_terms(
-        state=ramp_state,
-        include_front=False,
-    )
-    assert np.allclose(pack_state(no_front_terms["plasma_front_flux"]), 0.0)
 
     nn_ramp_state = conservative_from_primitives(
         n=state.n,
@@ -493,7 +475,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         I_ion=sim.I_ion,
         b_ionization_energy_cost=0.0,
         ionization_energy_cost=True,
-        icool_recomb=flags["icool_recomb"],
     )
     assert np.allclose(costless_terms["ionization_energy_cost"].Ee, 0.0)
     assert np.all(cooling_terms["ionization_energy_cost"].Ee < 0.0)
@@ -725,7 +706,7 @@ def _case_equilibration_puff_width(
         ramp_derived_1.Ti,
     ):
         assert np.all(values >= 0.0)
-    ramp_after = sim.plasma_flux_rhs(y=ramp_y1, include_front=True)
+    ramp_after = sim.plasma_flux_rhs(y=ramp_y1)
     for values in (
         ramp_after.n,
         ramp_after.nn,

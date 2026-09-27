@@ -76,19 +76,6 @@ def _case_config_key_namespace_and_seed_cache():
     # A key added to the wrong namespace silently does nothing (input_dict and
     # input_flags validate neither), so the split is asserted here.
     _r2_reg_p, _r2_reg_f = default_config()
-    for _key in (
-        "tracer_passivity_current_ratio",
-        "tracer_passivity_thinness",
-        "tracer_passivity_depletion",
-        "tracer_passivity_hysteresis",
-        "tracer_refresh_tol",
-        "tracer_activation_ne",
-        "tracer_overlap_band_ne",
-        "tracer_overlap_rtol",
-    ):
-        assert _key in _r2_reg_p and _key not in _r2_reg_f, _key
-    assert "regime_tracer" in _r2_reg_f and "regime_tracer" not in _r2_reg_p
-    assert _r2_reg_f["regime_tracer"] is False, "regime_tracer must ship OFF"
     for _key in ("nn0_profile", "nn0_annulus_profile"):
         assert _key in _r2_reg_p and _key not in _r2_reg_f, _key
         assert _r2_reg_p[_key] is None, "a shaped IC ships no shape"
@@ -216,6 +203,68 @@ def _case_config_key_namespace_and_seed_cache():
     assert _sf_base_sig != _sf_sig, (
         "exempting the three flags must rotate the reference's seed signature"
     )
+
+
+# --------------------------------------------------------------------
+# closed-experiment-keys-retired
+# --------------------------------------------------------------------
+@_case("closed-experiment-keys-retired")
+def _case_closed_experiment_keys_retired():
+    # The closed experiments and one-value legacy selectors are gone from the
+    # templates, and supplying one -- at ANY value, its old default included --
+    # raises the retired-key ValueError naming it, in the namespace it lived
+    # in. Checked one key at a time so a key still read somewhere cannot hide
+    # behind another's refusal.
+    from cablp.solvers._sim1d.core.config import (
+        RETIRED_FLAG_KEYS,
+        RETIRED_PARAM_KEYS,
+    )
+
+    _retired_params = {
+        "front_flux_model": "sonic_relaxation",
+        "alpha_front": 1.0,
+        "D_amb_model": "cs_dz",
+        "D_amb": 0.0,
+        "sigma_in_model": "phelps",
+        "end_mode": "end_wall",
+        "electron_drift_charge_death": "cell_1",
+        "electron_drift_anode_handshake": "sheath_row_closes_all",
+        "tracer_passivity_current_ratio": 0.01,
+        "tracer_passivity_thinness": 0.01,
+        "tracer_passivity_depletion": 0.01,
+        "tracer_passivity_hysteresis": 3.0,
+        "tracer_refresh_tol": 0.01,
+        "tracer_activation_ne": 1.0e10,
+        "tracer_overlap_band_ne": [1.0e10, 1.0e11],
+        "tracer_overlap_rtol": 0.05,
+    }
+    _retired_flags = {
+        "regime_tracer": False,
+        "front_flux": False,
+        "rates_at_accepted_state": False,
+        "resolved_boundaries": True,
+        "icool_recomb": False,
+        "electron_drift_transport": False,
+    }
+    _tpl_p, _tpl_f = default_config()
+    for _namespace, _keys, _register in (
+        ("params", _retired_params, RETIRED_PARAM_KEYS),
+        ("flags", _retired_flags, RETIRED_FLAG_KEYS),
+    ):
+        for _key, _value in _keys.items():
+            assert _key in _register, (_namespace, _key)
+            assert _key not in _tpl_p and _key not in _tpl_f, _key
+            _p, _f = default_config()
+            (_p if _namespace == "params" else _f)[_key] = _value
+            try:
+                LAPDSim1D(_p, _f)
+            except ValueError as _exc:
+                _msg = str(_exc)
+                assert f"{_key} is RETIRED" in _msg, (_key, _msg)
+            else:
+                raise AssertionError(
+                    f"retired {_namespace} key {_key!r} was accepted"
+                )
 
 
 # --------------------------------------------------------------------

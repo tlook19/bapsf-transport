@@ -45,8 +45,33 @@ from ._harness import (
     _case,
     _cathode_flags,
     _cathode_unit_config,
+    _pin_pre_r2a_neutral_stance,
     _tracking_electrode_sample,
 )
+
+
+def _qlr_config(**overrides):
+    """Return a 12-cell, already-emitting current-driven cathode pair.
+
+    The surface is held hot (no step's temperature increment survives this
+    heat capacity, and nothing cleans at a zero cross section), so a beam
+    launches inside a smoke-sized window and the anomalous closures have
+    power to act on.
+    """
+    params, flags = default_config()
+    params["nx"] = 12
+    params["cathode_solver_model"] = "current_driven"
+    params["initial_neutral_state"] = "fill"
+    flags["cathode_coupling"] = True
+    _pin_pre_r2a_neutral_stance(params, flags)
+    params.update({
+        "cathode_Ts_base_K": 1998.15,
+        "cathode_heat_capacity_J_per_K": 1.0e30,
+        "cathode_cleaning_sigma_cm2": 0.0,
+        "cathode_cleaning_E_th_eV": None,
+    })
+    params.update(overrides)
+    return params, flags
 
 
 # --------------------------------------------------------------------
@@ -1756,7 +1781,7 @@ def _case_ionization_birth_energy_model(csda_sim):
     assert np.all(cons_react.Ee == 0.0)
     assert np.any(cons_react.n > 0.0)
 
-    rhs = sim.plasma_flux_rhs(include_front=False)
+    rhs = sim.plasma_flux_rhs()
     # A uniform stationary plasma has no advective divergence -- exactly, on
     # every row, everywhere EXCEPT the momentum row at the plasma-terminating
     # faces. There the advective flux is deliberately zeroed and the ghost
@@ -3059,12 +3084,12 @@ def _case_ql_relaxation_compiled_kernel_refusal(_qlr_ray):
 # ql-relaxation-presence-gating
 # --------------------------------------------------------------------
 @_case("ql-relaxation-presence-gating")
-def _case_ql_relaxation_presence_gating(_r2ql_config):
+def _case_ql_relaxation_presence_gating():
     # ---- (e) PRESENCE GATING: byte-identity with ql_relaxation unselected ---
     # The key must not reach deposit_beam, and sweeping it must not move a
     # single bit of a run on either of the other two arms.
     def _qlr_unselected_bytes(model, coeff):
-        params, flags = _r2ql_config()
+        params, flags = _qlr_config()
         params["beam_anomalous_model"] = model
         params["ql_relaxation_coeff"] = coeff
         seen = []
@@ -3116,10 +3141,10 @@ def _case_ql_relaxation_presence_gating(_r2ql_config):
 # ql-relaxation-solver-refusals
 # --------------------------------------------------------------------
 @_case("ql-relaxation-solver-refusals")
-def _case_ql_relaxation_solver_refusals(_r2ql_config):
+def _case_ql_relaxation_solver_refusals():
     # ---- (f) construction-time refusals, at the SOLVER ----
     def _qlr_refuses(says, **overrides):
-        params, flags = _r2ql_config()
+        params, flags = _qlr_config()
         params["beam_anomalous_model"] = "ql_relaxation"
         params.update(overrides)
         try:
@@ -3137,11 +3162,11 @@ def _case_ql_relaxation_solver_refusals(_r2ql_config):
     _qlr_refuses(_qlr_bad_coeff, ql_relaxation_coeff=0.0)
     _qlr_refuses(_qlr_bad_coeff, ql_relaxation_coeff=-30.0)
     _qlr_refuses(_qlr_bad_coeff, ql_relaxation_coeff=float("nan"))
-    _qlr_ok_params, _qlr_ok_flags = _r2ql_config()
+    _qlr_ok_params, _qlr_ok_flags = _qlr_config()
     _qlr_ok_params["beam_anomalous_model"] = "ql_relaxation"
     LAPDSim1D(_qlr_ok_params, _qlr_ok_flags)
     # The selector domain is closed.
-    _qlr_zzz_params, _qlr_zzz_flags = _r2ql_config()
+    _qlr_zzz_params, _qlr_zzz_flags = _qlr_config()
     _qlr_zzz_params["beam_anomalous_model"] = "zzz"
     try:
         LAPDSim1D(_qlr_zzz_params, _qlr_zzz_flags)
@@ -3151,85 +3176,6 @@ def _case_ql_relaxation_solver_refusals(_r2ql_config):
         )
     else:
         raise AssertionError("beam_anomalous_model must reject 'zzz'")
-
-
-# --------------------------------------------------------------------
-# ql-relaxation-passive-cell-booking
-# --------------------------------------------------------------------
-@_case("ql-relaxation-passive-cell-booking")
-def _case_ql_relaxation_passive_cell_booking(_r2, _r2ql_config):
-    # ---- (g) a PASSIVE cell BOOKS ql_relaxation's power ----
-    # The option-3 refusal is keyed to the FIAT arm. This closure carries its
-    # own onset gate and its own density-dependent extracted fraction, so it
-    # already books what a low-density cell can absorb; refusing it wholesale
-    # would delete the physics the middle leg exists to supply.
-    _qlr_t_params, _qlr_t_flags = _r2ql_config()
-    _qlr_t_params["beam_anomalous_model"] = "ql_relaxation"
-    _qlr_t_sim = _tracking_electrode_sample(
-        LAPDSim1D(_qlr_t_params, _qlr_t_flags)
-    )
-    _qlr_t_sim.run(t_end=1.0e-6, dt=1.0e-7)
-    _qlr_t_passive = _qlr_t_sim._tracer_passive
-    _qlr_t_solve = _qlr_t_sim.solve_cathode_boundary(
-        state=_qlr_t_sim.state, time=_qlr_t_sim._time, update_cache=False
-    )
-    _qlr_t_kwargs = _qlr_t_sim._tracer_beam_kwargs(
-        _qlr_t_sim.state, _qlr_t_solve, _qlr_t_sim._time
-    )
-    _qlr_t_power = _r2.beam_anomalous_power_density(**_qlr_t_kwargs)
-    # PRECONDITION: there IS ql_relaxation power on passive cells here, so
-    # "the passive cell booked it" is a statement about something.
-    assert float(np.max(np.abs(_qlr_t_power[_qlr_t_passive]))) > 0.0, (
-        "the ql_relaxation booking assertions are vacuous: no anomalous power "
-        "on any passive cell at this state"
-    )
-    _qlr_t_S, _qlr_t_net, _qlr_t_full = _qlr_t_sim._tracer_beam_rows(
-        _qlr_t_sim.state, _qlr_t_solve, _qlr_t_sim._time
-    )
-    assert np.array_equal(_qlr_t_net, _qlr_t_full), (
-        "under ql_relaxation a passive cell must book the anomalous power in "
-        "full -- nothing may be subtracted"
-    )
-    assert float(
-        np.max(np.abs(_qlr_t_sim.tracer_passive_anomalous_leak()))
-    ) == 0.0
-
-    # ANTI-VACUITY for the BOOKING: hand the audit a build that wrongly refuses
-    # (the fiat arm's subtraction applied under this closure) and it must
-    # report the whole anomalous power. Without this the "leak == 0" above
-    # would be satisfied by an audit that checks nothing under this model.
-    _qlr_t_broken = _r2.passive_anomalous_leak(
-        P_beam_net_consumed=_qlr_t_full - np.where(
-            _qlr_t_passive, _qlr_t_power, 0.0
-        ),
-        P_beam_net_full=_qlr_t_full,
-        passive=_qlr_t_passive,
-        beam_kwargs=_qlr_t_kwargs,
-    )
-    assert np.array_equal(
-        _qlr_t_broken, -np.where(_qlr_t_passive, _qlr_t_power, 0.0)
-    ), (
-        "the ql_relaxation booking audit is vacuous: a build that refused the "
-        "channel on passive cells was not caught"
-    )
-    assert float(np.max(np.abs(_qlr_t_broken))) > 0.0
-    # ... and the MODEL KEY is what decides, read by the audit itself: relabel
-    # the same booking as the fiat arm and the expectation flips.
-    _qlr_t_relabel = _r2.passive_anomalous_leak(
-        P_beam_net_consumed=_qlr_t_full,
-        P_beam_net_full=_qlr_t_full,
-        passive=_qlr_t_passive,
-        beam_kwargs=dict(
-            _qlr_t_kwargs,
-            input_dict=dict(
-                _qlr_t_kwargs["input_dict"],
-                beam_anomalous_model="quasilinear",
-            ),
-        ),
-    )
-    assert np.array_equal(
-        _qlr_t_relabel, np.where(_qlr_t_passive, _qlr_t_power, 0.0)
-    ), "the passive-cell policy must be keyed on beam_anomalous_model"
 
 
 # --------------------------------------------------------------------

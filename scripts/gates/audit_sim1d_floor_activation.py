@@ -388,7 +388,7 @@ def print_header(params, flags, lineage, scheme_override):
 
     The name and the base chain are facts about the FILE and come from the
     lineage; the identity is restated over the pair this process actually
-    constructs, so a ``--scheme``, ``--resolved`` or ``--nx`` on the command
+    constructs, so a ``--scheme`` or ``--nx`` on the command
     line moves it. With none of those on the golden route it is the golden's
     own. ``lineage`` is ``None`` for a run that named no configuration; the
     identity is printed either way, because it is a fact about the resolved
@@ -417,7 +417,6 @@ def print_header(params, flags, lineage, scheme_override):
         )
     )
     print(f"operator_splitting   : {params['operator_splitting']!r}")
-    print(f"resolved_boundaries  : {bool(flags['resolved_boundaries'])}")
 
 
 def main(argv=None):
@@ -449,16 +448,6 @@ def main(argv=None):
         help="axial cell count, layered on the --golden-route treatment. "
              "Without --golden-route there is no mesh treatment to layer it "
              "on, so it is refused there rather than half-applied.",
-    )
-    parser.add_argument(
-        "--resolved",
-        action="store_true",
-        help=(
-            "enable the resolved_boundaries geometry. Use this to check that the "
-            "plasma-dead plenum behind the cathode stays inert: its cells sit at "
-            "the floor by construction, and floor clips there would mean the "
-            "reflecting cathode face is leaking."
-        ),
     )
     stance_group = parser.add_mutually_exclusive_group()
     stance_group.add_argument(
@@ -504,8 +493,6 @@ def main(argv=None):
         )
 
     params, flags, lineage = build_audit_config(args)
-    if args.resolved:
-        flags["resolved_boundaries"] = True
     if args.scheme is not None:
         params["implicit_heat_scheme"] = args.scheme
     scheme = params["implicit_heat_scheme"]

@@ -127,17 +127,8 @@ class Sim1DGeometry:
 
 
 def build_geometry(input_dict, flags=None):
-    """Build the resolved typed-segment machine geometry.
-
-    The resolved geometry is the only geometry. ``resolved_boundaries`` is
-    retained purely as a stale-config guard: it must be True.
-    """
+    """Build the resolved typed-segment machine geometry."""
     flags = flags or {}
-    if not bool(flags.get("resolved_boundaries", True)):
-        raise ValueError(
-            "resolved_boundaries must be True: the resolved typed-segment "
-            "geometry is the only geometry LAPDSim1D builds"
-        )
     return _build_resolved_geometry(input_dict, flags)
 
 

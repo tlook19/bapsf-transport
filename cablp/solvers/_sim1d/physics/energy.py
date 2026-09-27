@@ -91,8 +91,6 @@ def electron_cooling_rhs(
     I_ion,
     b_ionization_energy_cost=1.0,
     ionization_energy_cost=True,
-    icool_recomb=False,
-    adas_low_te_extension=False,
 ):
     """Return conservative electron inelastic/radiative cooling sources.
 
@@ -107,8 +105,6 @@ def electron_cooling_rhs(
         I_ion=I_ion,
         b_ionization_energy_cost=b_ionization_energy_cost,
         ionization_energy_cost=ionization_energy_cost,
-        icool_recomb=icool_recomb,
-        adas_low_te_extension=adas_low_te_extension,
     )
     rhs = terms["ionization_energy_cost"]
     for term in (
@@ -132,14 +128,12 @@ def electron_cooling_rhs_terms(
     I_ion,
     b_ionization_energy_cost=1.0,
     ionization_energy_cost=True,
-    icool_recomb=False,
-    adas_low_te_extension=False,
 ):
     """Return split conservative electron cooling source terms.
 
     The cooling coefficients are the OPEN-ADAS radiated-power coefficients
-    (PLT; plus PRB for ``icool_recomb``), which are radiation only and
-    therefore consistent with the separate ionization-cost term.
+    (PLT), which are radiation only and therefore consistent with the
+    separate ionization-cost term.
 
     The cooling coefficients are applied unscaled: atomic rates are fixed
     inputs, not knobs.
@@ -156,18 +150,9 @@ def electron_cooling_rhs_terms(
     if want_cost:
         quantities.append("scd")
     quantities.append("plt2")
-    if icool_recomb:
-        quantities.append("prb1")
     quantities.append("plt1")
     n_safe = np.maximum(state.n, floors["n"])
-    # A18/R5.3: honor the low-Te extension here too, so prb1 (recombination
-    # radiated power) matches acd (recombination rate, particle path) below
-    # the 0.2 eV edge -- one consistent low-Te package. No effect off, or
-    # unless prb1 is requested (icool_recomb) at sub-edge Te.
-    adas = he_rates(
-        n_safe, derived.Te, quantities,
-        low_te_extension=adas_low_te_extension,
-    )
+    adas = he_rates(n_safe, derived.Te, quantities)
 
     if want_cost:
         # Must mirror reaction_rates exactly: the cost is I_ion per particle
@@ -175,10 +160,7 @@ def electron_cooling_rhs_terms(
         S_ion = state.n * state.nn * adas["scd"]
         ionization_cost_eV = float(b_ionization_energy_cost) * I_ion * S_ion
 
-    coeff = adas["plt2"]
-    if icool_recomb:
-        coeff = coeff + adas["prb1"]
-    electron_ion_cooling_eV = coeff * state.n * state.n
+    electron_ion_cooling_eV = adas["plt2"] * state.n * state.n
     electron_neutral_cooling_eV = adas["plt1"] * state.n * state.nn
 
     return {

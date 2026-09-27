@@ -339,9 +339,9 @@ def _case_end_wall_rename_retired_names():
     # every configuration key that carried the old ``collector`` name were
     # renamed to ``end_wall``. Two halves are asserted here:
     #
-    #   IN: a LIVE configuration naming a retired key, or the retired
-    #       ``end_mode`` VALUE, is REFUSED at construction with the
-    #       replacement named. A quietly accepted alias would be exactly the
+    #   IN: a LIVE configuration naming a retired key, ``end_mode``
+    #       included, is REFUSED at construction with the replacement
+    #       named. A quietly accepted alias would be exactly the
     #       silent/inert control the config boundary exists to forbid.
     #   BACK: a SAVED artifact written before the rename still reads, because
     #       ``load_result_hdf5`` maps the stored ``cell_role`` string and says
@@ -406,25 +406,17 @@ def _case_end_wall_rename_retired_names():
     assert "collector_sheath_full_debit is RETIRED" in _ew_fmsg, _ew_fmsg
     assert "end_wall_sheath_full_debit" in _ew_fmsg, _ew_fmsg
 
-    # (c) the retired end_mode VALUE. The key survives the rename; the value
-    # it names does not, and the refusal says what replaced it.
-    try:
-        LAPDSim1D(dict(_ew_p, end_mode="collector"), _ew_f)
-    except ValueError as _ew_vexc:
-        _ew_vmsg = str(_ew_vexc)
-    else:
-        raise AssertionError("end_mode='collector' was ACCEPTED")
-    assert "end_mode='collector' is not available" in _ew_vmsg, _ew_vmsg
-    assert "Accepted: 'end_wall'" in _ew_vmsg, _ew_vmsg
-    assert "RENAMED to 'end_wall'" in _ew_vmsg, _ew_vmsg
-    # NEGATIVE CONTROL on that clause: it is scoped to the retired value, so
-    # any other rejected end_mode gets the bare refusal.
-    try:
-        LAPDSim1D(dict(_ew_p, end_mode="mirrored_source"), _ew_f)
-    except ValueError as _ew_oexc:
-        assert "RENAMED" not in str(_ew_oexc), str(_ew_oexc)
-    else:
-        raise AssertionError("end_mode='mirrored_source' was ACCEPTED")
+    # (c) end_mode itself. The far face is the end wall unconditionally, so
+    # the key is retired and every value of it, the old 'collector' included,
+    # is refused with the retired-key message.
+    for _ew_mode in ("collector", "end_wall"):
+        try:
+            LAPDSim1D(dict(_ew_p, end_mode=_ew_mode), _ew_f)
+        except ValueError as _ew_vexc:
+            _ew_vmsg = str(_ew_vexc)
+        else:
+            raise AssertionError(f"end_mode={_ew_mode!r} was ACCEPTED")
+        assert "end_mode is RETIRED" in _ew_vmsg, _ew_vmsg
 
     # (d) THE READ SHIM. A stored role array is mapped, and the load reports
     # that it was; an array carrying none of the retired strings is returned

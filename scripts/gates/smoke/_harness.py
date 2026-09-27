@@ -164,7 +164,6 @@ def _pin_operator_algebra_stance(params, flags):
     flags["active_plasma_topology"] = False
     flags["raw_stage_validation"] = False
     flags["hyperbolic_energy_consistent"] = False
-    flags["front_flux"] = True
     params["hyperbolic_wave_speed"] = "isothermal"
     return _pin_pre_r2a_neutral_stance(params, flags)
 
@@ -191,7 +190,6 @@ _HISTORICAL_PIN_KEYS = (
     "active_plasma_topology",
     "raw_stage_validation",
     "hyperbolic_energy_consistent",
-    "front_flux",
     "hyperbolic_wave_speed",
 )
 
@@ -238,7 +236,6 @@ def _base_sim():
 def _resolved_config():
     """(resolved_params, resolved_flags): resolved typed-segment geometry."""
     resolved_params, resolved_flags = default_config()
-    resolved_flags["resolved_boundaries"] = True
     # This fixture and everything derived from it (twin_*, m5_*, rgap_*, ...)
     # exercises geometry, the cathode solve and the beam on the 5-field
     # cold-neutral layout, hand-packing (n, nn, M, Ee, Ei) state vectors, and
@@ -323,7 +320,6 @@ def _cathode_unit_config():
     })
     f.update({
         "hyperbolic_energy_consistent": False,
-        "front_flux": True,
     })
     # These unit tests are about the cathode and the fluid; keep the simple
     # cold-neutral stance the helper's name promises.
@@ -520,7 +516,7 @@ def _anode_sink_sim(steps=60):
 # a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 165, "historical_stance": 64}
+_CASE_CENSUS = {"total": 157, "historical_stance": 63}
 
 
 def _assert_case_census():

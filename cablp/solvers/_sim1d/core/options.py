@@ -15,8 +15,7 @@ fresh ``dict`` exactly as before, so a caller may still mutate what it gets.
 
 Bundles that depend on the STEP rather than the run stay on the solver:
 ``_neutral_source_kwargs`` (phase switches and the gas-puff waveform at
-``time``) and the ``_tracer_*`` builders (derived views, two of them keyed on
-the live state and cathode solve).
+``time``).
 """
 
 from dataclasses import dataclass
@@ -50,7 +49,6 @@ def surface_loss_kwargs(input_dict):
     # non-default use.
     return {
         "alpha_isat": float(input_dict.get("alpha_isat", np.exp(-0.5))),
-        "end_mode": input_dict.get("end_mode", "end_wall"),
         "b_surface_loss": float(input_dict.get("b_surface_loss", 1.0)),
     }
 
@@ -70,13 +68,6 @@ def electron_cooling_kwargs(input_dict, flags, *, I_ion):
         "b_ionization_energy_cost": 1.0,
         "ionization_energy_cost": bool(
             flags.get("ionization_energy_cost", True)
-        ),
-        "icool_recomb": bool(flags.get("icool_recomb", False)),
-        # A18/R5.3: the low-Te extension defines ONE consistent atomic
-        # package -- the electron-cooling prb1 honors it just like the
-        # particle-rate acd. Default off => golden bit-exact.
-        "adas_low_te_extension": bool(
-            input_dict.get("adas_low_te_extension", False)
         ),
     }
 

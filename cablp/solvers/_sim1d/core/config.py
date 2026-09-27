@@ -346,26 +346,6 @@ def floor_defaults():
     }
 
 
-# Deep-afterglow low-Te recipe -- RETIRED, DO NOT RUN.
-#
-# The recipe was: lower Te_floor to the neutral-gas temperature (0.02585) and
-# set the input_dict key adas_low_te_extension=True together with the
-# input_flags key icool_recomb=True. The extension makes
-# acd (recombination) and prb1 (recombination radiation) extend consistently
-# below the 0.2 eV ADF11 edge; scd (ionization) and plt (line power) still
-# clamp there but are exponentially dead at <0.2 eV, so a recombining 300 K
-# afterglow would be well represented.
-#
-# icool_recomb TOGETHER WITH adas_low_te_extension RAISES at construction. The
-# two compose destructively: icool_recomb charges bare PRB (the double-charge
-# warned about at recombination_energy_return below), and adas_low_te_extension
-# amplifies the sub-edge PRB by ~9,300x, so the electron fluid runs away
-# thermally to the floor and the electron_cooling timestep bound collapses
-# permanently. The consistent net booking (I_ion*S_rec - P_PRB) that would make
-# the pair sound is NOT built. Without it the afterglow validity window is
-# Te > 0.2 eV (the ADF11 edge).
-
-
 def neutral_source_defaults():
     """Return gas-puff, pump, and neutral-source defaults.
 
@@ -658,25 +638,12 @@ def output_defaults():
 def model_mode_defaults():
     """Return string-valued model selector defaults.
 
-    front_flux_model:
-        Axial plasma front-filling flux closure. The implemented option is
-        ``"sonic_relaxation"``; the ``front_flux`` flag enables or disables the
-        closure.
     hyperbolic_wave_speed:
         Signal speed used by both the Rusanov dissipation ``a_max`` and the
         plasma CFL. ``"isothermal"`` is the historical gamma=1 Bohm
         speed ``sqrt(Te/m_i)``; ``"adiabatic"`` (default) is the exact linear
         acoustic speed of the implemented gamma=5/3 two-species ideal-gas
         energy system, ``sqrt((5/3)(Te+Ti)/m_i)``.
-    D_amb_model:
-        Ambipolar diffusion coefficient model. ``"cs_dz"`` is retained for
-        _sim3 compatibility; the current conservative flux closure does not
-        directly use this selector.
-    end_mode:
-        End boundary behaviour, carried into the cathode-boundary
-        diagnostics as a label. ``"end_wall"`` is the only accepted value;
-        the 0D-era ``"mirrored_source"`` alternative, which the conservative
-        solver never branched on, was removed at D3 (2026-08-21) and raises.
     Ti_birth_ionization:
         Ion birth temperature model for ionization -- the temperature the ion
         BORN by bulk ionization, by a beam ionization, and by the gas-puff
@@ -716,43 +683,6 @@ def model_mode_defaults():
         orifice conductance in series. Prefer this for resolved runs, where the
         puff-to-pump back-path is the physics of interest and the historical model
         under-predicts it by 2-14x depending on cell size.
-    electron_drift_charge_death:
-        Where the launched beam's CHARGE is taken to die, and hence which
-        faces of the source region still carry beam current in the drift flux
-        ``Gamma_d = (I_tot - I_beam) / (e A)``. ``"cell_1"`` puts the death in
-        the cathode cell, so only that cell's cathode-side face carries beam
-        current and every face downstream carries the full loop current as
-        thermal-electron drift. ``"cell_2"`` puts it in the next cell, so the
-        cathode cell's downstream face carries it too. Read only under the
-        ``electron_drift_transport`` flag, and refused at a non-default value
-        without it.
-    electron_drift_anode_handshake:
-        Which of the operator's channels the anode mesh face closes. The face
-        carries two: the ENTHALPY-and-thermal-force flux ``2.21 T_e I / e``,
-        and the pressure-drift WORK ``1.00 T_e I / e`` that the volume
-        identity's ``3.21`` boundary coefficient is completed by.
-
-        ``"sheath_row_closes_all"`` (the DEFAULT, and the registered
-        closure) closes BOTH — the full ``3.21``. The kinetic anode
-        sheath row ``(2 T_e + phi_a) Gamma`` IS the total electron energy flux
-        at the sheath edge for the THERMAL population, so any fluid export
-        there double-counts it. The beam electrons that reach the mesh
-        directly lie outside both bookings: the circuit's own bypass row
-        carries them, and ``Gamma_d = (I_tot - I_beam) / (e A)`` carries the
-        thermal drift only by construction.
-
-        ``"sheath_row_closes"`` closes the ``2.21`` channel alone and
-        ``"export_counts"`` closes neither, booking the whole ``3.21`` as an
-        export out of the plasma. Both are RETAINED as disclosed INSTRUMENT
-        arms that bound the size of the double count; neither is
-        claim-bearing.
-
-        Under every reading the anode sheath debit is untouched, and the
-        anode PRESHEATH term is NOT booked here -- it belongs to the separate
-        anode-potential-debit question, and only one of the two may ever book
-        it. Read only under the
-        ``electron_drift_transport`` flag, and refused at a non-default value
-        without it.
     neutral_model:
         Which engine carries the neutral population. ``"moment"`` integrates
         the fluid neutral density (and, with the ``neutral_momentum`` flag,
@@ -1168,10 +1098,7 @@ def model_mode_defaults():
         low-Te edge at 0.2 eV, where the lookups otherwise clamp to the edge
         value. ``False`` keeps the clamp. Read by the reaction and energy
         terms; ``scd`` (ionization) and ``plt`` (line power) clamp at the edge
-        either way. Raises at
-        construction when combined with the ``icool_recomb`` flag: the two
-        compose destructively -- see the module note above
-        ``neutral_source_defaults``.
+        either way.
     operator_splitting:
         How the operator-split path composes the explicit non-heat operator A
         with the implicit heat operator B. ``"lie"`` does ``A(dt)`` then
@@ -1199,22 +1126,13 @@ def model_mode_defaults():
     """
     return {
         # --- ACTIVE ---
-        "front_flux_model": "sonic_relaxation",
         # "adiabatic" is the exact linear acoustic speed of the implemented
         # energy system: its pressure work is -p_s div u, so the system is the
         # gamma=5/3 one and sqrt((5/3)(Te+Ti)/m_i) is the speed the Rusanov
         # a_max and the CFL must use for the flux to bound its own signals.
         "hyperbolic_wave_speed": "adiabatic",
-        "end_mode": "end_wall",
         "Ti_birth_ionization": "neutral",
         "neutral_model": "moment",
-        # The two DECLARED conventions of the electron drift-transport
-        # operator. Both are bracket ENDPOINTS, not chosen readings: the
-        # deliverable of that operator is the spread across them. Inert -- and
-        # refused at anything but these values -- unless the
-        # electron_drift_transport flag is armed.
-        "electron_drift_charge_death": "cell_1",
-        "electron_drift_anode_handshake": "sheath_row_closes_all",
         # 2nd-order operator-split pair; both are needed together with
         # heat_picard_iterations > 0 for the step to reach second order.
         "operator_splitting": "strang",
@@ -1268,23 +1186,15 @@ def model_mode_defaults():
         # never be a silently inert control:
         "neutral_kinetic_dvm_transfer_hold": None,
         # Bucket-2 default-off closure instrument: extends acd/prb1 below the
-        # 0.2 eV adf11 edge. REFUSED with icool_recomb; the prb1 half is
-        # booked through recombination_energy_return:
+        # 0.2 eV adf11 edge; the prb1 half is booked through
+        # recombination_energy_return:
         "adas_low_te_extension": False,
-        # --- DEPRECATED (legacy-compat selectors; superseded, non-default
-        # warns; retained for reproducibility at the tag) ---
-        # D_amb_model: _sim3-compat; the conservative flux closure never uses it.
-        "D_amb_model": "cs_dz",
     }
 
 
 def fudge_factor_defaults():
     """Return physics scale factors and boundary geometry multipliers.
 
-    alpha_front:
-        Multiplier for the front-filling/sonic relaxation flux.
-    D_amb:
-        Constant ambipolar diffusion coefficient when selected [cm^2/s].
     recombination_energy_return:
         Books the GCR-consistent recombination energy PAIR on the electron
         fluid: per recombination event credit the binding energy ``I_ion``
@@ -1297,9 +1207,7 @@ def fudge_factor_defaults():
         and cancels in the net. The sign of the net follows the conditions --
         heating where the radiated energy per event is below ``I_ion``, an
         extra sink where it is above. ``False`` returns a zero source without
-        evaluating the term. The pair is the consistent unit, so it raises
-        when combined with the ``icool_recomb`` flag, which charges PRB on its
-        own. Lookups clamp at
+        evaluating the term. The pair is the consistent unit. Lookups clamp at
         the ADF11 grid edges.
     heat_flux_limiter_f:
         Free-streaming fraction ``f`` setting the electron heat-flux
@@ -1340,19 +1248,6 @@ def fudge_factor_defaults():
         to an upstream sample. `0` collapses the sample to the adjacent cell,
         recovering the historical behaviour; `1` (default) uses the physical
         depth. Inert in legacy geometry, which has no absorbing faces.
-    sigma_in_model:
-        Source of the ion-neutral momentum-transfer rate, which feeds the
-        drag, the drag timestep bound, and the presheath depth.
-
-        ``"phelps"`` is the only accepted value: the definitive
-        momentum-transfer rate, the same Phelps He+/He isotropic +
-        backscatter cross section the moment-closed ion-neutral collision
-        operator uses, ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with
-        ``T_eff = (Ti + Tn)/2`` at the single cold-gas ``Tn`` (300 K). This
-        ties the presheath sampling to the same collision physics as the
-        drag. He-only, gated at construction; the legacy ``"constant"`` and
-        ``"cx_derived"`` arms, which were the solver's only non-helium path,
-        were removed at D3 (2026-08-21) and raise.
     alpha_isat:
         Ion-saturation/surface-loss coefficient.
     """
@@ -1371,33 +1266,13 @@ def fudge_factor_defaults():
         "b_surface_loss": 1.0,      # functional: =0 disables the boundary sink
         "b_presheath_length": 1.0,  # presheath depth (load-bearing)
         "alpha_isat": 0.6065306597126334,
-        # alpha_front is ACTIVE only if the front_flux flag is on; front_flux
-        # ships OFF, so this is inert by default.
-        "alpha_front": 1.0,
-        # Ion-neutral momentum-transfer rate, which also feeds the presheath
-        # depth (electrode_sheath_alpha). "phelps" is the same cross section
-        # the moment-closed ion-neutral collision operator uses, and the only
-        # accepted value: the solver is helium-only.
-        "sigma_in_model": "phelps",
-        "D_amb": 0.0,          # dead with the deprecated D_amb_model
         # GCR-consistent recombination energy booking (default-off closure
-        # instrument; only active with icool_recomb, sub-0.2 eV). Per
+        # instrument; sub-0.2 eV). Per
         # recombination event, credit the binding energy I_ion to the electron
         # fluid (paid at ionization via I_ion*S_ion and never returned) AND
         # charge the full ADAS PRB (recombination radiation + bremsstrahlung +
-        # cascade). Net = I_ion - E_rad. The PAIR is the consistent unit;
-        # enabling PRB alone double-charges (why icool_recomb stays off) --
-        # construction refuses the combination. adf11 grid bottoms at 0.2 eV;
-        # lookups clamp there.
-        #
-        # NOT BUILT: the consistent net booking (I_ion*S_rec - P_PRB), so
-        # icool_recomb still charges bare PRB. Paired with
-        # adas_low_te_extension -- which amplifies the sub-edge PRB by
-        # ~9,300x -- that double-charge drives a thermal runaway to the Te
-        # floor and a permanent electron_cooling timestep-bound collapse.
-        # Construction refuses icool_recomb TOGETHER WITH
-        # adas_low_te_extension; see the retired recipe in the module note
-        # above.
+        # cascade). Net = I_ion - E_rad. The PAIR is the consistent unit.
+        # adf11 grid bottoms at 0.2 eV; lookups clamp there.
         "recombination_energy_return": False,
         # --- Electron heat-flux limiter (read only when the
         # electron_heat_flux_limit flag is on, which is a shipped default) ---
@@ -2555,108 +2430,6 @@ def restart_defaults():
     }
 
 
-def regime_tracer_defaults():
-    """Pre-breakdown passive-tracer bridge (regime R2); ``regime_tracer`` flag.
-
-    Every key here is read ONLY under the ``regime_tracer`` flag and is inert
-    otherwise. With the flag off the tracer object is never constructed and no
-    branch below it is reachable, so the trajectory is bit-identical to a
-    checkout that has never heard of the feature.
-
-    On a cell the tracer owns, the plasma density is the exact integral of the
-    affine ODE ``dn/dt = gamma(z)*n + S(z, t)``: ``gamma`` a Picard-frozen
-    functional of the slow background (bulk ionization minus recombination
-    minus surface absorption) and ``S`` the n-independent beam-impact
-    ionization birth. ``Te`` on those cells is the root of a quasi-static local
-    electron energy balance rather than an integrated field. The method, the
-    passive/active interface, and the neglect bounds are
-    ``_sim1d/physics/tracer.py``.
-
-    A cell is PASSIVE while all three criteria below hold; it activates (and
-    the fluid takes it over) when any of them fails AND its density has reached
-    ``tracer_activation_ne``. Each criterion is expressed as a ratio that must
-    stay ``<= 1`` after division by its constant, so the three are directly
-    comparable and the census can name the one that binds.
-
-    tracer_passivity_current_ratio:
-        Criterion (a). Largest share of the loop current the cell may CONDUCT
-        and still count as passive, dimensionless in ``(0, 1]``. The conducted
-        current is ``I_cond = sigma_par(n, Te) * A_plasma * V_dev / L_plasma``
-        with the Spitzer parallel conductivity and the R1-bounded device
-        voltage; it is the current the plasma actually passes under the applied
-        drop, NOT the cathode's emission capability. Raises at construction
-        outside ``(0, 1]``.
-
-        ``I_cond`` is an UPPER BOUND, so this criterion is one-sided:
-        satisfying it establishes passivity, failing it does not establish the
-        converse. The bound puts the WHOLE device drop across the column, while
-        most of that drop is the cathode sheath fall, so the axial field and
-        therefore ``I_cond`` are overstated. Two consequences for a caller:
-        cells are handed to the fluid earlier than the physics alone requires
-        (the safe direction), and at low density it is the
-        ``tracer_activation_ne`` gate rather than this criterion that binds.
-    tracer_passivity_thinness:
-        Criterion (b). Largest cumulative single-pass fraction of the beam's
-        energy the plasma may absorb and still count as passive, dimensionless
-        in ``(0, 1]``. Accumulated along each cathode's ray from the launch end
-        as ``sum (dE/dx)_plasma * dz / E_beam`` with the Coulomb slowing rate
-        on plasma electrons; the max over ends is the cell's value. Raises at
-        construction outside ``(0, 1]``.
-    tracer_passivity_depletion:
-        Criterion (c). Largest fraction of the local neutral density the
-        plasma's own bulk ionization may burn and still count as passive,
-        dimensionless in ``(0, 1]``. The beam's neutral debit is NOT counted --
-        the beam is background, and criterion (c) measures the plasma's
-        back-reaction on the neutrals, not the discharge's. Raises at
-        construction outside ``(0, 1]``.
-    tracer_passivity_hysteresis:
-        Enter/exit ratio on all three criteria, ``> 1``. A cell activates when
-        its worst ratio exceeds ``1`` and can only return to passive when that
-        ratio falls below ``1 / tracer_passivity_hysteresis``. All three ratios
-        are monotone increasing while the discharge builds, so re-entry is not
-        an expected event; the width exists so that a cell sitting exactly on a
-        criterion cannot chatter between descriptions on round-off and make the
-        step sequence irreproducible. Raises at construction at ``<= 1``.
-    tracer_refresh_tol:
-        Picard cadence for ``gamma`` and the quasi-static ``Te``: both are
-        frozen until the largest relative change in the background they are
-        built from (``n``, ``nn``, ``S``) exceeds this, then both are rebuilt.
-        ``0`` refreshes every step. A numerics tolerance, not a
-        description-selecting constant.
-        Raises at construction if negative.
-    tracer_activation_ne:
-        Handoff density [cm^-3]: the density at or above which the FLUID
-        description is usable, so a cell that has failed passivity may be given
-        to it. Must sit far above ``ne_floor`` -- handing the fluid a cell
-        whose density the floor clip is holding up would reproduce exactly the
-        floor-poisoned regime the tracer exists to skip -- and construction
-        raises unless it is at least ten times ``ne_floor``.
-    tracer_overlap_band_ne:
-        Two-element ``[low, high]`` density band [cm^-3] over which BOTH
-        descriptions are valid and must therefore agree: at or above
-        ``tracer_activation_ne`` (fluid valid) and below the density at which
-        passivity fails (tracer valid). Read by
-        ``scripts/verify/regime_r2_overlap_gate.py``, which is the two-sided gate.
-        Construction raises unless ``0 < low < high``.
-    tracer_overlap_rtol:
-        Relative agreement the two descriptions must reach inside that band for
-        the overlap gate to PASS. Raises at construction if not positive.
-    """
-    return {
-        "tracer_passivity_current_ratio": 0.01,
-        "tracer_passivity_thinness": 0.01,
-        "tracer_passivity_depletion": 0.01,
-        "tracer_passivity_hysteresis": 3.0,
-        "tracer_refresh_tol": 0.01,
-        "tracer_activation_ne": 1.0e10,
-        # A LIST, not a tuple: the resolved config round-trips through JSON in
-        # the HDF5 result header, and a tuple comes back as a list, so a tuple
-        # default would fail the saved-vs-rebuilt config identity check.
-        "tracer_overlap_band_ne": [1.0e10, 1.0e11],
-        "tracer_overlap_rtol": 0.05,
-    }
-
-
 def parallel_momentum_sink_defaults():
     """Imposed parallel momentum sink beyond a stated axial position.
 
@@ -2754,7 +2527,6 @@ _PARAMETER_DEFAULT_GROUPS = (
     physics_fit_defaults,
     timestep_defaults,
     restart_defaults,
-    regime_tracer_defaults,
     parallel_momentum_sink_defaults,
 )
 
@@ -2786,8 +2558,6 @@ input_flags_template_1d = {
     # instead of the discharge schedule, the gas puff loses its waveform, and
     # default_t_end becomes cycles * tau_cycle (which raises unless cycles is
     # positive). run_neutral_equilibration pins it off on its inner sim.
-    # regime_tracer REFUSES it off at construction: it describes a plasma
-    # channel that would have nothing to integrate.
     # A structural restart key -- a payload whose run had it set differently is
     # refused rather than restored.
     "Plasma": True,
@@ -2813,9 +2583,6 @@ input_flags_template_1d = {
     # requires Te0 > Te_floor and Ti0 > Ti_floor, raising otherwise. A
     # non-default value warns at construction (deprecation register).
     "raw_stage_validation": True,
-    # The resolved typed-segment geometry is the only geometry. Retained as a
-    # stale-config guard; False raises at construction.
-    "resolved_boundaries": True,
     # End-vessel / magnetic-flare geometry. Presence gated in core.geometry:
     # all three end_expansion_* parameters are required when on and forbidden
     # when off. Bit-exact off.
@@ -2883,10 +2650,6 @@ input_flags_template_1d = {
     # off; a declared closure-family A/B instrument. The cap COEFFICIENT
     # heat_flux_limiter_f is a separate input_dict key with its own default.
     "electron_heat_flux_limit": True,
-    # Sonic front-filling closure, OFF by default: the mesh A/B found the front
-    # to be a numerical artifact (its L1 activity and Rusanov numerical
-    # diffusion vanish under refinement). OFF renders alpha_front inert.
-    "front_flux": False,
     # Conservative hyperbolic core: kinetic-energy-preserving convective
     # momentum flux, plus deposit of the Rusanov (n,M) numerical kinetic-energy
     # dissipation into the ion internal energy. The pressure work is the
@@ -2967,13 +2730,11 @@ input_flags_template_1d = {
     "neutral_hot_internal_wall": True,
     # The cathode/anode/bank circuit solve. OFF, no cathode solve is produced
     # for the whole run: the boundary carries no device current or voltage, the
-    # cathode and anode jets return nothing, and the tracer's beam rows get no
-    # source. run_neutral_equilibration pins it off on its inner sim. Three
-    # construction-time refusals of things that need a solve that would not
-    # exist: regime_tracer (its affine source IS the beam-impact ionization
-    # birth), and the two DVM jets, whose launch energies are the sheath
-    # potentials phi_c and phi_a -- armed without a solve they would silently
-    # launch at the thermal Ti alone. With the flag ON, a zero anode ion
+    # cathode and anode jets return nothing. run_neutral_equilibration pins it
+    # off on its inner sim. Two construction-time refusals of things that need
+    # a solve that would not exist: the two DVM jets, whose launch energies are
+    # the sheath potentials phi_c and phi_a -- armed without a solve they would
+    # silently launch at the thermal Ti alone. With the flag ON, a zero anode ion
     # current is a runtime error rather than a clamp: the circuit cannot close,
     # and the message names clearing this flag as the way to model a machine
     # with no anode collection.
@@ -3008,34 +2769,6 @@ input_flags_template_1d = {
     # Set that key to 0.0 for the knife edge, where any real margin re-admits
     # the cell immediately.
     "surface_loss_floor_exempt": True,
-    # Pre-breakdown PASSIVE-TRACER bridge (regime R2). On a cell that is still
-    # passive -- conducting a negligible share of the loop current, absorbing a
-    # negligible share of the beam's single pass, and burning a negligible
-    # share of the local neutrals -- the plasma feeds back on nothing, so its
-    # density is integrated as the EXACT solution of the affine scalar ODE
-    # dn/dt = gamma*n + S while the background (circuit ramp, cathode thermal,
-    # neutrals) owns the timestep. That removes the floor-poisoned
-    # dt collapse the fluid solver suffers when n sits near ne_floor, and makes
-    # n = 0 a regular state, so ne0 = 0 is a legitimate initial condition.
-    # Cells hand back to the full solver individually, at a closed interface
-    # face; the whole-column handoff is a restart state transfer. Requires
-    # cathode_coupling (the beam birth S is the cathode solve's) and refuses
-    # the kinetic/kinetic_dvm neutral models (R2 is fluid-arms only) -- both
-    # construction-time ValueErrors, as is any out-of-range criterion constant.
-    # Default OFF, presence-gated and bit-exact off.
-    "regime_tracer": False,
-    # Rate-freezing INSTRUMENT, default OFF. When on, the bulk reaction
-    # source terms (ionization birth and both recombination losses) inside the
-    # explicit non-heat operator are evaluated at the step-START accepted
-    # state instead of at the current SSPRK2 stage state, so the rates are
-    # frozen across the step. That deliberately caps the step at first order
-    # in the rates: it isolates the stage-state channel for measurement and is
-    # NOT an accuracy improvement. Scope is the explicit operator's reaction
-    # terms only -- the implicit heat substep, the conductivity Picard
-    # iteration and the kinetic DVM are untouched. Must be a real bool;
-    # anything else (0/1, a string) raises ValueError at construction.
-    # Bit-exact when off.
-    "rates_at_accepted_state": False,
     # END-FACE SHEATH ELECTRON-ENERGY BOOKING -- TWO INDEPENDENT default-OFF
     # keys, one per axial end. The anode flag above applied to the machine's
     # two AXIAL ends, where the same thermal-only routing leaves the same
@@ -3115,66 +2848,11 @@ input_flags_template_1d = {
     # or potential from the solve raises RuntimeError rather than planting a
     # NaN in an energy row. Bit-exact when off.
     "cathode_face_full_debit": False,
-    # The electron drift-transport and EMF-work operator, default OFF. The
-    # electron energy equation books its pressure work with the ION velocity,
-    # which is exact where J = 0 but not in the current-carrying source region:
-    # there the electron drift u_e = u - J/(e n) differs, and the transport and
-    # non-resistive field work it carries,
-    #
-    #     Delta = -div(3/2 T_e Gamma_d) - p_e div(Gamma_d / n) - div(q_u)
-    #             + 0.71 Gamma_d . grad(T_e),
-    #     Gamma_d = (I_tot - I_beam) / (e A),  q_u = 0.71 T_e Gamma_d,
-    #
-    # is absent from the ledger. The RESISTIVE part of the field work is not:
-    # eta j^2 is already booked as P_ohmic, and this operator does not touch
-    # it. Armed, Delta is added as its own named RHS term on the ELECTRON row
-    # only -- n, nn, M and Ei are exactly zero -- over the cells between the
-    # cathode face and the anode mesh, with the drift current terminating on
-    # the mesh rather than continuing downstream. The ion side is untouched:
-    # u there is the ion velocity, the total-grad-p momentum booking is
-    # already exact, and the electron-ion friction cancels, so the coupling
-    # back to the ions is indirect, through Q_ie alone.
-    #
-    # At the CATHODE face the enthalpy and thermal-force channels are exactly
-    # zero: they would carry the returning thermal-electron current, and the
-    # cathode sheath repels plasma electrons (P_cathode_e is 0.06 W on the ES1
-    # artifact, a return current of order 0.3 mA). The work channel there rides
-    # the model's OWN face-1 particle flux, so it is the exact partner of the
-    # expansion cooling pressure_work_rhs books at that face and cancels it to
-    # roundoff.
-    #
-    # electron_drift_charge_death is a DECLARED bracket ENDPOINT: the claim
-    # this operator supports is the spread across its two values, not either
-    # arm alone. electron_drift_anode_handshake selects the registered closure
-    # by default and retains two disclosed instrument arms beside it. Setting
-    # either away from its default without this flag raises, because there it
-    # would be inert.
-    #
-    # Refused at construction under TwinCathode, without a resolved anode
-    # face, and without active_plasma_topology: each of those leaves the face
-    # the operator has to terminate on, or the face convention it reads,
-    # undefined, and a silently-guessed answer there is worse than a refusal.
-    # Presence-gated; the off path never evaluates Gamma_d. The term key is
-    # present with all-zero rows from step 1 either way, so the saved term
-    # structure is stable across the phase change and across the flag.
-    # Bit-exact when off.
-    "electron_drift_transport": False,
     # The electron-energy sink charged per ionization event, I_ion * S_ion. Off
     # zeroes that cooling row, so ionizations cost the electrons nothing. This
     # flag is the whole on/off: the companion scale is hardwired to 1.0 and is
-    # not a config knob. Also read by the tracer's quasi-static Te balance.
+    # not a config knob.
     "ionization_energy_cost": True,
-    # Charge the bare ADAS PRB -- the recombination and bremsstrahlung radiated
-    # power -- as an electron cooling channel. Off, the PRB block is not even
-    # requested and the channel is absent from the cooling sum. Two
-    # construction-time refusals, both against double-charging or runaway:
-    # recombination_energy_return (which already charges the full PRB, so the
-    # pair would charge the recombination photons twice) and
-    # adas_low_te_extension (which amplifies the sub-edge PRB enormously, so the
-    # electrons would run away to the Te floor and collapse the cooling timestep
-    # bound; the consistent net booking that would make the pair sound is not
-    # built).
-    "icool_recomb": False,
     # Non-finite state assertions, checked at the end of construction and after
     # every state-vector set. On, a non-finite value in any state field
     # (n, nn, M, Ee, Ei, M_n, nn_a, M_n_a, En) or any derived field
@@ -3227,6 +2905,26 @@ def load_config(path):
 def default_config():
     """Return copies of the default 1D input dictionary and flags."""
     return dict(input_dict_template_1d), dict(input_flags_template_1d)
+
+
+# Shared successor texts for keys retired together, so a group cannot drift
+# apart in wording.
+_FRONT_FLUX_RETIRED = (
+    "nothing: the sonic front-filling flux is removed; the Rusanov face "
+    "flux is the only plasma face flux"
+)
+_AMBIPOLAR_RETIRED = (
+    "nothing: the conservative solver has no ambipolar-diffusion closure; "
+    "the Rusanov face flux carries the plasma"
+)
+_ELECTRON_DRIFT_RETIRED = (
+    "nothing: the electron drift-transport operator is removed; the "
+    "electron pressure work is booked with the ion velocity"
+)
+_REGIME_TRACER_RETIRED = (
+    "nothing: the pre-breakdown passive tracer is removed; the plasma fluid "
+    "owns every typed-active cell from the first step"
+)
 
 
 #: Keys REMOVED from the templates, each mapped to the successor that took
@@ -3562,6 +3260,30 @@ RETIRED_PARAM_KEYS = {
         "nothing: the OPEN-ADAS effective coefficients ('adas') are "
         "unconditional; the analytic-fit 'janev' arm is removed"
     ),
+    # Closed experiments and one-value legacy selectors, removed with the
+    # code they gated. A one-value selector's behaviour is unconditional.
+    "front_flux_model": _FRONT_FLUX_RETIRED,
+    "alpha_front": _FRONT_FLUX_RETIRED,
+    "D_amb_model": _AMBIPOLAR_RETIRED,
+    "D_amb": _AMBIPOLAR_RETIRED,
+    "sigma_in_model": (
+        "nothing: the ion-neutral momentum-transfer rate is the Phelps "
+        "He+/He cross section of the moment-closed collision operator, "
+        "unconditionally"
+    ),
+    "end_mode": (
+        "nothing: the far face is the chamber end wall, unconditionally"
+    ),
+    "electron_drift_charge_death": _ELECTRON_DRIFT_RETIRED,
+    "electron_drift_anode_handshake": _ELECTRON_DRIFT_RETIRED,
+    "tracer_passivity_current_ratio": _REGIME_TRACER_RETIRED,
+    "tracer_passivity_thinness": _REGIME_TRACER_RETIRED,
+    "tracer_passivity_depletion": _REGIME_TRACER_RETIRED,
+    "tracer_passivity_hysteresis": _REGIME_TRACER_RETIRED,
+    "tracer_refresh_tol": _REGIME_TRACER_RETIRED,
+    "tracer_activation_ne": _REGIME_TRACER_RETIRED,
+    "tracer_overlap_band_ne": _REGIME_TRACER_RETIRED,
+    "tracer_overlap_rtol": _REGIME_TRACER_RETIRED,
 }
 
 
@@ -3714,6 +3436,22 @@ RETIRED_FLAG_KEYS = {
     "neutral_prebreakdown": (
         "tau_neutral_prebreakdown: the phase runs whenever its duration "
         "is positive"
+    ),
+    # Closed experiments and one-value legacy flags; see RETIRED_PARAM_KEYS.
+    "regime_tracer": _REGIME_TRACER_RETIRED,
+    "front_flux": _FRONT_FLUX_RETIRED,
+    "electron_drift_transport": _ELECTRON_DRIFT_RETIRED,
+    "rates_at_accepted_state": (
+        "nothing: the rate-freezing instrument is removed; the reaction "
+        "terms are evaluated at the stage state"
+    ),
+    "resolved_boundaries": (
+        "nothing: the resolved typed-segment geometry is unconditional"
+    ),
+    "icool_recomb": (
+        "recombination_energy_return, which charges the ADAS PRB together "
+        "with the recombination binding-energy credit; bare PRB charging is "
+        "removed"
     ),
 }
 
