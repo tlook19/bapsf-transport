@@ -1,24 +1,20 @@
 {
   "cases": {
     "compare_sim1d_es1": {
-      "Te_birth_ionization": "local",
-      "sha256": "0967a21636bd7ccc88ef247cd6f7e8d4cd3436481ff0171a5b699ec04b263976"
+      "sha256": "26b72aa8dfae247254d5aad5a4dc463ef7c1f4d81dae68387aae45a561948c6b"
     },
     "production_golden": {
-      "Te_birth_ionization": "local",
-      "sha256": "96efb1f3f22351ef85873298b0cbf0d8f1e6fdfae0349aa0cbcea87b4780efda"
+      "sha256": "024ff2d0c091121035bf935c4b36affacfc68b71c3e7957bc92c07f092b44c2f"
     },
     "run_m6_point_es1_stance_g1atrim": {
-      "Te_birth_ionization": "local",
-      "sha256": "9483065f2e102b31e7fc197a5d27bc2b2db4f17e312fd4fc6715ce8b717dd3b6"
+      "sha256": "a6e5fff5c7cf8c41e6970b5bec73ca757ed7314e637e8602a94abf61c3083c01"
     },
     "run_mechanism_ladder_es1_stance_g1atrim": {
-      "Te_birth_ionization": "local",
-      "sha256": "9483065f2e102b31e7fc197a5d27bc2b2db4f17e312fd4fc6715ce8b717dd3b6"
+      "sha256": "a6e5fff5c7cf8c41e6970b5bec73ca757ed7314e637e8602a94abf61c3083c01"
     }
   },
-  "flag_count": 47,
-  "manifest_sha256": "a53b266590d45fbf3ec009617bab27eccabfa1eaee417a183b8532dd1e28d114",
-  "parameter_count": 254,
+  "flag_count": 44,
+  "manifest_sha256": "077b1dff14b2c7b55e68a8bb14a47666ece30072bcb07104cbfa70627742762f",
+  "parameter_count": 243,
   "schema": "lapdsim1d-resolved-config-snapshots-v1"
 }
