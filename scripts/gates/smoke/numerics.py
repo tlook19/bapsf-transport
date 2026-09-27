@@ -1989,13 +1989,18 @@ def _case_implicit_ee_sink_substep_order():
     nu = np.zeros(geometry.cells, dtype=float)
     sink_cells = np.flatnonzero(nu_shape > 0.0)
     nu[sink_cells] = 0.30 / (window / 4.0)
-    # The electron heat-flux limiter is always on, and at the reference
-    # f = 0.45 the LIMITED conduction operator reads its own orders on this
-    # fixture (backward Euler 0.89, Crank-Nicolson 1.90, TR-BDF2 0.88) --
-    # a property of the limiter, not of the sink this case is about. So the
-    # conduction runs in the limiter's Spitzer limit: at this free-streaming
-    # fraction the suppression factor on this state is 1 to within 5.5e-9
-    # (against 0.55 at f = 0.45).
+    # The electron heat-flux limiter is always on. The limited conduction
+    # operator is second order on this fixture: against a converged
+    # reference its error envelope has slope ~2 over 8 octaves of dt for
+    # TR-BDF2 and Crank-Nicolson. A reference-free Richardson triplet
+    # (4, 8, 16 steps) at the reference f = 0.45 is contaminated, though:
+    # the sink drives the limiter's gradient through a sign change at cell
+    # 7, and under the shared-midpoint conductivity the step that crosses it
+    # carries a phase-dependent O(dt^2) residual, so the triplet reads an
+    # erratic order at any dt. This case is about the sink, so the
+    # conduction runs in the limiter's Spitzer limit, f = 1e8: at that
+    # free-streaming fraction the suppression factor on this state is 1 to
+    # within 5.5e-9 (against 0.55 at f = 0.45).
     spitzer_limit_f = 1.0e8
 
     def integrate(scheme, picard, steps):

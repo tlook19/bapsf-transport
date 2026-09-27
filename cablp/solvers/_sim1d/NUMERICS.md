@@ -292,6 +292,15 @@ $\Delta t\lambda_\text{max}$ beside every reading, flags a coarser triplet
 PRE-ASYMPTOTIC, and closes on both preconditions — floors inert AND the stiff
 mode resolved.
 
+**Limited-flux sign change.** A reference-free Richardson triplet taken over
+a window where the gradient of the limited electron heat flux changes sign
+can read an erratic order at any
+$\Delta t$: under the shared-midpoint conductivity, the step that crosses the
+sign change carries a phase-dependent $O(\Delta t^2)$ residual. The
+PRE-ASYMPTOTIC flag is keyed on $\Delta t\lambda_\text{max}$ and cannot detect
+this. There, read the order from the error envelope against a converged
+reference over at least four refinement levels.
+
 A discharge does not show that order: floors bind and phase transitions are
 threshold-triggered, so the step degrades to first order wherever those engage.
 
