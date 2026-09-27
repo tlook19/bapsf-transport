@@ -11,8 +11,8 @@ Nothing here re-derives physics the solver already owns. ``gamma``, the beam
 birth ``S``, and the quasi-static electron energy balance are all assembled by
 calling the solver's OWN term functions on a probe state and dividing out each
 channel's known homogeneity degree in ``n``. That is exact, and it means the
-tracer automatically consumes whatever closure the run configured (ADAS vs
-Janev rates, coverage split, CSDA vs Beer-Lambert deposition) rather than
+tracer automatically consumes whatever closure the run configured (coverage
+split, CSDA vs Beer-Lambert deposition) rather than
 carrying a second opinion about any of them.
 """
 

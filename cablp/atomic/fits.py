@@ -1,4 +1,4 @@
-from numpy import exp as npexp, sqrt as npsqrt
+from numpy import exp as npexp
 from math import exp as mexp, sqrt as msqrt
 from ..constants import qe_SI
 
@@ -11,7 +11,7 @@ def IAEA_exp1(t, a):
 
     R(T) = a[0] * exp(-a[1] / T^a[2]) / (T^a[3] + a[4] * T^a[5])
 
-    where T is converted internally to keV. Used for He I and H I neutral cooling.
+    where T is converted internally to keV. Used for He I neutral cooling.
 
     Parameters
     ----------
@@ -58,52 +58,3 @@ def IAEA_exp4(t, a, recomb=True):
     if recomb:
         b += a[6] * T ** a[7]
     return b * 1e-27 / qe_SI
-
-
-def IAEA_exp6(t, a):
-    """
-    IAEA fit expression 6 for electron cooling rate coefficients [cm³/s].
-
-    R(T) = a[0] * T^a[1] + a[2] * T^a[3] + a[4] * T^a[5]
-
-    Used for H II ion cooling.
-
-    Parameters
-    ----------
-    t : float or array
-        Electron temperature [eV].
-    a : list or array
-        Six IAEA fit coefficients [a0 … a5].
-
-    Returns
-    -------
-    float or array
-        Rate coefficient [cm³/s].
-    """
-    T = t * 1e-3  # convert to keV
-    P = a[0] * T ** a[1] + a[2] * T ** a[3] + a[4] * T ** a[5]
-    return P * 1e-27 / qe_SI
-
-
-def rate_coeff(T, I, a, b):
-    """
-    Fit function for the reaction rate coefficient <sigma*v> averaged over a Maxwellian
-    at temp T for a process with threshold energy I.
-
-    Parameters
-    ----------
-    T : float, array of floats
-        Temperature in eV
-    I : float
-        Threshold energy in eV
-    a : float
-        Fitting parameter
-    b : float
-        Fitting parameter
-
-    Returns
-    -------
-    float, array of floats
-        Reaction rate coefficient <sigma*v> averaged over a Maxwellian in units of cm^3/s
-    """
-    return a * npsqrt(T / I) / (I ** (1.5) * (b + T / I)) * npexp(-I / T)

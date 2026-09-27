@@ -3,8 +3,8 @@
 The equations `LAPDSim1D` integrates: a conservative axial fluid plasma
 coupled to a kinetic (discrete-velocity) neutral gas. Schemes are
 [`NUMERICS.md`](NUMERICS.md); configuration-file form is
-[`CONFIG_DECLARATIONS.md`](CONFIG_DECLARATIONS.md). Helium only —
-`gas_type` other than `"He"` raises at construction.
+[`CONFIG_DECLARATIONS.md`](CONFIG_DECLARATIONS.md). Helium only: the
+species is not configurable.
 
 ## Notation and units
 
@@ -420,8 +420,6 @@ solver.
 recombination at the tabulated density, so the whole recombination loss is the
 quadratic term above and the cubic channel is identically zero; the
 `recombination_3b_loss` term a result carries reads zero throughout. The
-`atomic_rate_model = "janev"` arm instead uses the analytic fits and does split
-the two, $\alpha_r(T_e)n^2$ radiative plus $\alpha_3(T_e)n^3$ three-body. The
 BULK coefficients carry no scale factor; the beam excitation channel is the one
 exception and carries `b_beam_excitation`. Each result records an
 `atomic_rate_domain` ledger of where the run sampled below the tabulated $T_e$
@@ -432,7 +430,8 @@ at the reference configuration all five coefficients — `scd`, `acd`,
 cell, under-booking recombination (still rising steeply toward low $T_e$)
 between the table edge and the solver's electron-temperature floor below
 it; under the default-off `adas_low_te_extension` flag, `acd` and `prb1`
-are instead extended below the edge by the Janev shape ratio while `scd`,
+are instead extended below the edge by the analytic
+$\alpha_r(T_e) + n_e\alpha_3(T_e)$ recombination shape ratio while `scd`,
 `plt1`, `plt2` clamp either way. `atomic_rate_domain`'s
 `active_cell_fraction_below` and `active_volume_fraction_below` report how
 much of the active plasma sat below the table edge at each save.

@@ -1,4 +1,4 @@
-"""Atomic data and reaction physics for helium (and the retained hydrogen arms).
+"""Atomic data and reaction physics for helium.
 
 Members are imported by their own module path -- this package deliberately
 re-exports nothing, so there is exactly one name for every symbol.

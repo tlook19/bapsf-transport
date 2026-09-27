@@ -552,7 +552,6 @@ def presheath_length_cm(
     Te,
     Ti,
     ion_mass_g,
-    gas_type=None,
     Tn_eV=None,
 ):
     """Return the collisional presheath depth in front of a surface [cm].
@@ -573,7 +572,6 @@ def presheath_length_cm(
     nu_in = ion_neutral_collision_frequency(
         nn=nn,
         Ti=Ti,
-        gas_type=gas_type,
         **({} if Tn_eV is None else {"Tn_eV": float(Tn_eV)}),
     )
     if nu_in <= 0.0 or not np.isfinite(nu_in):
@@ -619,7 +617,6 @@ def electrode_sheath_alpha(
     ion_mass_g,
     alpha_isat=np.exp(-0.5),
     b_presheath_length=1.0,
-    gas_type=None,
 ):
     """Return the mesh-independent sheath-edge factor ``n_se/n`` at one cell.
 
@@ -641,7 +638,6 @@ def electrode_sheath_alpha(
         Te=Te,
         Ti=Ti,
         ion_mass_g=ion_mass_g,
-        gas_type=gas_type,
     )
     return presheath_alpha(
         alpha_isat=alpha_isat,
@@ -801,7 +797,6 @@ def absorbing_face_states(
     ion_mass_g,
     alpha_isat=np.exp(-0.5),
     b_presheath_length=1.0,
-    gas_type=None,
 ):
     """Return ``(interior, ghost, alpha_eff)`` for one plasma-absorbing face.
 
@@ -839,7 +834,6 @@ def absorbing_face_states(
         ion_mass_g=ion_mass_g,
         alpha_isat=alpha_isat,
         b_presheath_length=b_presheath_length,
-        gas_type=gas_type,
     )
 
     n_se = alpha_eff * float(state.n[live])
@@ -876,7 +870,6 @@ def characteristic_boundary_rhs(
     alpha_isat=np.exp(-0.5),
     b_surface_loss=1.0,
     b_presheath_length=1.0,
-    gas_type=None,
     cathode_jet=None,
     cathode_carrier_out=None,
     end_wall_sheath_climb_out=None,
@@ -1035,7 +1028,6 @@ def characteristic_boundary_rhs(
             ion_mass_g=ion_mass_g,
             alpha_isat=alpha_isat,
             b_presheath_length=b_presheath_length,
-            gas_type=gas_type,
         )
         Te_l = interior["Te"]
         Ti_l = interior["Ti"]
@@ -1291,7 +1283,6 @@ def _cell_surface_particle_loss(n, Te, ion_mass_g, area_cm2, alpha_isat):
 def ion_neutral_collision_frequency(
     nn,
     Ti,
-    gas_type=None,
     Tn_eV=0.025851,
 ):
     """Return the ion-neutral momentum-transfer collision frequency [s^-1].
@@ -1301,20 +1292,15 @@ def ion_neutral_collision_frequency(
     operator uses, ``nu_in = nn * (k_b + 1/2 k_iso)(T_eff)`` with
     ``T_eff = (Ti + Tn)/2`` (A8 single cold-gas ``Tn`` = ``Tn_eV``, 300 K by
     default). This ties the R3.1 presheath sampling to the same collision
-    physics as the drag. He-only; ``gas_type`` is required and the He gate
-    lives in ``phelps_momentum_transfer_rate_cm3_s``.
+    physics as the drag.
 
     NB the presheath ``Tn`` is taken as the fixed A8 cold-gas value (Tn_eV);
     callers do not thread the config ``Tn_K`` because it is a fixed constant,
     not a tuned knob (thread it here if that ever changes).
     """
-    if gas_type is None:
-        raise ValueError(
-            "the ion-neutral momentum-transfer rate requires gas_type"
-        )
     T_eff = 0.5 * (np.asarray(Ti, dtype=float) + float(Tn_eV))
     return np.asarray(nn, dtype=float) * phelps_momentum_transfer_rate_cm3_s(
-        T_eff, gas_type=gas_type
+        T_eff
     )
 
 
@@ -1479,7 +1465,7 @@ def neutral_energy_volume_ratio(state, geometry):
     return np.asarray(geometry.volume_ratio, dtype=float)
 
 
-def ion_neutral_cx_split_rates(nn, Ti, Tn, gas_type):
+def ion_neutral_cx_split_rates(nn, Ti, Tn):
     """Return ``(nu_cx, nu_el)`` [s^-1]: the CX and elastic shares of ``nu_mt``.
 
     The collision operator's momentum-transfer frequency is
@@ -1504,8 +1490,8 @@ def ion_neutral_cx_split_rates(nn, Ti, Tn, gas_type):
     """
     T_eff = 0.5 * (np.asarray(Ti, dtype=float) + np.asarray(Tn, dtype=float))
     nn = np.asarray(nn, dtype=float)
-    k_cx = phelps_cx_rate_cm3_s(T_eff, gas_type=gas_type)
-    k_mt = phelps_momentum_transfer_rate_cm3_s(T_eff, gas_type=gas_type)
+    k_cx = phelps_cx_rate_cm3_s(T_eff)
+    k_mt = phelps_momentum_transfer_rate_cm3_s(T_eff)
     elastic = k_mt - k_cx
     if np.any(elastic < 0.0):
         raise ValueError(
@@ -1555,7 +1541,6 @@ def neutral_cx_channel_rhs(
     state,
     floors,
     ion_mass_g,
-    gas_type,
     Tn_eV,
     b_ion_neutral_drag=1.0,
     geometry=None,
@@ -1616,7 +1601,7 @@ def neutral_cx_channel_rhs(
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     Tn = neutral_temperature_eV(state, floors=floors, Tn_eV=Tn_eV)
     nu_cx, _nu_el = ion_neutral_cx_split_rates(
-        nn=state.nn, Ti=derived.Ti, Tn=Tn, gas_type=gas_type
+        nn=state.nn, Ti=derived.Ti, Tn=Tn
     )
     if state.M_n is not None:
         u_n = neutral_wind_velocity(
@@ -1661,7 +1646,6 @@ def ion_neutral_collision_rhs(
     state,
     floors,
     ion_mass_g,
-    gas_type,
     Tn_eV,
     b_ion_neutral_drag=1.0,
     geometry=None,
@@ -1726,7 +1710,7 @@ def ion_neutral_collision_rhs(
     Tn = neutral_temperature_eV(state, floors=floors, Tn_eV=Tn_eV)
     T_eff = 0.5 * (derived.Ti + Tn)
     nu_mt = np.asarray(state.nn, dtype=float) * phelps_momentum_transfer_rate_cm3_s(
-        T_eff, gas_type=gas_type
+        T_eff
     )
     if state.M_n is not None:
         if geometry is None:

@@ -65,16 +65,10 @@ def _case_beam_excitation_channel(cathode_solve):
     cathode_flags = _cathode_flags()
     from cablp.cathode.circuit_common import beam_excitation_cross
 
-    sigma_exc_100 = beam_excitation_cross(100.0, 1.0, "He")
+    sigma_exc_100 = beam_excitation_cross(100.0, 1.0)
     assert 5.0e-18 < sigma_exc_100 < 2.0e-17
-    assert beam_excitation_cross(100.0, 0.0, "He") == 0.0
-    assert beam_excitation_cross(10.0, 1.0, "He") == 0.0  # below threshold
-    try:
-        beam_excitation_cross(100.0, 1.0, "H")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for H beam excitation")
+    assert beam_excitation_cross(100.0, 0.0) == 0.0
+    assert beam_excitation_cross(10.0, 1.0) == 0.0  # below threshold
 
     # The b_beam_excitation knob scales the sheath solve's excitation
     # channel.
@@ -126,27 +120,26 @@ def _case_beam_manifold_excitation_model(beam_excitation_cross):
     # Dispatch: the scalar path reproduces the historical function
     # byte-for-byte; the manifold path matches the _cross helper with
     # b_beam_excitation as a pure multiplier on the cross section only.
-    assert beam_excitation_channel(100.0, 1.4, "He") == (
-        beam_excitation_cross(100.0, 1.4, "He"),
+    assert beam_excitation_channel(100.0, 1.4) == (
+        beam_excitation_cross(100.0, 1.4),
         21.218,
     )
-    _mf_sigma, _mf_E = beam_excitation_channel(100.0, 1.0, "He", model="manifold")
+    _mf_sigma, _mf_E = beam_excitation_channel(100.0, 1.0, model="manifold")
     assert (_mf_sigma, _mf_E) == _He_manifold_channel(100.0)
     _mf_sigma_h, _mf_E_h = beam_excitation_channel(
-        100.0, 0.5, "He", model="manifold"
+        100.0, 0.5, model="manifold"
     )
     assert np.isclose(_mf_sigma_h, 0.5 * _mf_sigma) and _mf_E_h == _mf_E
-    assert beam_excitation_channel(100.0, 0.0, "He", model="manifold") == (0.0, 0.0)
+    assert beam_excitation_channel(100.0, 0.0, model="manifold") == (0.0, 0.0)
     # Below the lowest manifold threshold (2^1S, 20.6158 eV).
-    assert beam_excitation_channel(15.0, 1.0, "He", model="manifold") == (0.0, 0.0)
+    assert beam_excitation_channel(15.0, 1.0, model="manifold") == (0.0, 0.0)
     # The measured manifold vs the historical 2^1P channel at 100 eV
     # (measure_beam_manifold.py, 2026-07-20): 1.67x the events, mean
     # radiated energy 21.98 eV — within the retired estimate's 1.4 +- 0.4.
-    assert 1.55 < _mf_sigma / beam_excitation_cross(100.0, 1.0, "He") < 1.80
+    assert 1.55 < _mf_sigma / beam_excitation_cross(100.0, 1.0) < 1.80
     assert 21.5 < _mf_E < 22.5
     for bad_call in (
-        lambda: beam_excitation_channel(100.0, 1.0, "He", model="bogus"),
-        lambda: beam_excitation_channel(100.0, 1.0, "H", model="manifold"),
+        lambda: beam_excitation_channel(100.0, 1.0, model="bogus"),
     ):
         try:
             bad_call()
@@ -2699,7 +2692,7 @@ def _case_csda_ql_heating_locality(deposit_beam):
 # --------------------------------------------------------------------
 @_case("csda-walk-window-reflection-k7")
 def _case_csda_walk_window_reflection_k7(
-    cool_flat, cooling_kwargs, deposit_beam, knob_floors, knob_mass,
+    cooling_kwargs, deposit_beam, knob_floors, knob_mass,
     knob_state, shape_state, wpe_E0, wpe_G0, wpe_cells, wpe_removed,
     wpe_thin, wpe_walk
 ):
@@ -2814,48 +2807,29 @@ def _case_csda_walk_window_reflection_k7(
             "expected ValueError for reflection without a tail walk"
         )
 
-    adas_reaction_kwargs = dict(
+    S_ion_a, S_rad_a, S_3b_a = reaction_rates(
         state=knob_state,
         floors=knob_floors,
         ion_mass_g=knob_mass,
-        gas_type="He",
-        I_ion=24.587,
-    )
-    S_ion_j, S_rad_j, S_3b_j = reaction_rates(**adas_reaction_kwargs)
-    S_ion_a, S_rad_a, S_3b_a = reaction_rates(
-        **adas_reaction_kwargs, atomic_rate_model="adas"
     )
     for values in (S_ion_a, S_rad_a):
         assert np.all(np.isfinite(values)) and np.all(values >= 0.0)
-    assert np.all(S_ion_a > S_ion_j)  # SCD > direct at these (Te <= 6 eV) cells
     # ACD carries the whole sink; the three-body slot is empty.
     assert np.all(S_3b_a == 0.0)
-    try:
-        reaction_rates(**adas_reaction_kwargs, atomic_rate_model="nonsense")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for unknown atomic_rate_model")
 
-    cool_adas = electron_cooling_rhs(**cooling_kwargs, atomic_rate_model="adas")
+    cool_adas = electron_cooling_rhs(**cooling_kwargs)
     assert np.all(np.isfinite(cool_adas.Ee))
     assert np.all(cool_adas.Ee <= 0.0)
-    # Radiation-only: strictly weaker electron cooling than the IAEA fits on
-    # the same state (the ionization-cost double count is what's removed).
-    assert np.all(np.abs(cool_adas.Ee) < np.abs(cool_flat.Ee))
     # The cooling path's fused ionization cost must be bit-identical to
     # I_ion * S_ion from reaction_rates -- the cost charges exactly the
     # particles the particle equation creates.
     cost_kwargs = dict(cooling_kwargs)
     cost_kwargs["ionization_energy_cost"] = True
-    cost_terms = electron_cooling_rhs_terms(**cost_kwargs, atomic_rate_model="adas")
+    cost_terms = electron_cooling_rhs_terms(**cost_kwargs)
     S_ion_ref, _, _ = reaction_rates(
         state=shape_state,
         floors=knob_floors,
         ion_mass_g=knob_mass,
-        gas_type="He",
-        I_ion=24.587,
-        atomic_rate_model="adas",
     )
     assert np.allclose(
         cost_terms["ionization_energy_cost"].Ee,

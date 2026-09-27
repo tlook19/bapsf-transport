@@ -34,9 +34,9 @@ non-default use. Adding a second warning for the same condition would only
 duplicate it.
 
 Closure families with a live A/B are APPARATUS, not legacy, and are absent for
-that reason: the beam-deposition family, the excitation models and
-``atomic_rate_model="janev"`` all stay usable and un-warned because the
-campaign quotes brackets and a bracket needs both arms.
+that reason: the beam-deposition family and the excitation models stay
+usable and un-warned because the campaign quotes brackets and a bracket needs
+both arms.
 """
 
 import warnings

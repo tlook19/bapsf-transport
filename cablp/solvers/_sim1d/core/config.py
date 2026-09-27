@@ -21,11 +21,10 @@ import tomllib
 
 
 def initial_condition_defaults():
-    """Return defaults for species and initial primitive state.
+    """Return defaults for the initial primitive state.
 
-    gas_type:
-        Neutral/ion species selector. Options are ``"He"`` for helium atom/ion
-        conventions and ``"H"`` for hydrogen neutral/proton conventions.
+    The species is helium, unconditionally.
+
     ne0:
         Uniform initial plasma/electron density [cm^-3].
     initial_neutral_state:
@@ -112,7 +111,6 @@ def initial_condition_defaults():
     """
     return {
         # --- ACTIVE (production) ---
-        "gas_type": "He",
         "ne0": 1e9,
         "initial_neutral_state": "equilibrate",
         # Pre-shot neutral background for DIRECT runs. The equilibrated path
@@ -790,7 +788,6 @@ def model_mode_defaults():
         ``ValueError`` at construction naming the selection, the whole
         member set and every offending key.
 
-        Outside that set the arm refuses ``gas_type`` other than ``"He"``.
         Any other value raises at construction.
     neutral_kinetic_dvm_cadence_s:
         Neutral-clock interval [s] between transient DVM updates under
@@ -1170,8 +1167,8 @@ def model_mode_defaults():
         radiated power) coefficients consistently below the bundled ADF11
         low-Te edge at 0.2 eV, where the lookups otherwise clamp to the edge
         value. ``False`` keeps the clamp. Read by the reaction and energy
-        terms only under ``atomic_rate_model = "adas"``; ``scd`` (ionization)
-        and ``plt`` (line power) clamp at the edge either way. Raises at
+        terms; ``scd`` (ionization) and ``plt`` (line power) clamp at the edge
+        either way. Raises at
         construction when combined with the ``icool_recomb`` flag: the two
         compose destructively -- see the module note above
         ``neutral_source_defaults``.
@@ -1288,23 +1285,6 @@ def fudge_factor_defaults():
         Multiplier for the front-filling/sonic relaxation flux.
     D_amb:
         Constant ambipolar diffusion coefficient when selected [cm^2/s].
-    atomic_rate_model:
-        Source of the He atomic rate coefficients. ``"adas"`` (default) uses
-        the OPEN-ADAS GCR '96 effective
-        coefficients (``cablp/atomic/data/adas``, see its README): SCD ionization
-        (includes the stepwise/metastable channel the direct rate lacks --
-        up to ~3-6x at 3-5 eV, LAPD densities), ACD recombination (includes
-        three-body, so the separate three-body channel is absorbed), and
-        PLT/PRB radiated power for the electron cooling terms. The ADAS
-        cooling coefficients
-        are radiation-only and therefore consistent with the separate
-        ``ionization_energy_cost`` term; the IAEA He I fit is not -- it
-        already contains the ionization-potential loss, which ``"janev"``
-        double-counts against that term. ``"janev"`` (the historical
-        behaviour) uses the direct ground-state ionization rate, the separate
-        radiative/three-body recombination coefficients, and the IAEA cooling
-        fits. ``"adas"`` is wired for ``gas_type = "He"`` only -- hydrogen
-        configs must set ``"janev"`` or the solver raises at construction.
     recombination_energy_return:
         Books the GCR-consistent recombination energy PAIR on the electron
         fluid: per recombination event credit the binding energy ``I_ion``
@@ -1317,10 +1297,9 @@ def fudge_factor_defaults():
         and cancels in the net. The sign of the net follows the conditions --
         heating where the radiated energy per event is below ``I_ion``, an
         extra sink where it is above. ``False`` returns a zero source without
-        evaluating the term. Requires ``atomic_rate_model = "adas"`` (the
-        janev path has no PRB booking) and raises otherwise; the pair is the
-        consistent unit, so it also raises when combined with the
-        ``icool_recomb`` flag, which charges PRB on its own. Lookups clamp at
+        evaluating the term. The pair is the consistent unit, so it raises
+        when combined with the ``icool_recomb`` flag, which charges PRB on its
+        own. Lookups clamp at
         the ADF11 grid edges.
     heat_flux_limiter_f:
         Free-streaming fraction ``f`` setting the electron heat-flux
@@ -1389,7 +1368,6 @@ def fudge_factor_defaults():
     # not a resurrection of these.
     return {
         # --- ACTIVE coefficients ---
-        "atomic_rate_model": "adas",
         "b_surface_loss": 1.0,      # functional: =0 disables the boundary sink
         "b_presheath_length": 1.0,  # presheath depth (load-bearing)
         "alpha_isat": 0.6065306597126334,
@@ -1409,8 +1387,8 @@ def fudge_factor_defaults():
         # charge the full ADAS PRB (recombination radiation + bremsstrahlung +
         # cascade). Net = I_ion - E_rad. The PAIR is the consistent unit;
         # enabling PRB alone double-charges (why icool_recomb stays off) --
-        # construction refuses the combination and requires atomic_rate_model=
-        # "adas". adf11 grid bottoms at 0.2 eV; lookups clamp there.
+        # construction refuses the combination. adf11 grid bottoms at 0.2 eV;
+        # lookups clamp there.
         #
         # NOT BUILT: the consistent net booking (I_ion*S_rec - P_PRB), so
         # icool_recomb still charges bare PRB. Paired with
@@ -3184,8 +3162,7 @@ input_flags_template_1d = {
     # The electron-energy sink charged per ionization event, I_ion * S_ion. Off
     # zeroes that cooling row, so ionizations cost the electrons nothing. This
     # flag is the whole on/off: the companion scale is hardwired to 1.0 and is
-    # not a config knob. Note atomic_rate_model="janev" double-counts this
-    # channel. Also read by the tracer's quasi-static Te balance.
+    # not a config knob. Also read by the tracer's quasi-static Te balance.
     "ionization_energy_cost": True,
     # Charge the bare ADAS PRB -- the recombination and bremsstrahlung radiated
     # power -- as an electron cooling channel. Off, the PRB block is not even
@@ -3574,6 +3551,16 @@ RETIRED_PARAM_KEYS = {
     "tau_gp_drop_width": (
         "nothing: the pulse, decay and double_erf puff waveforms it "
         "served are removed; the gas puff is the square valve pulse"
+    ),
+    # The hydrogen path and the analytic-fit rate model, deleted. Helium and
+    # the ADAS effective coefficients are unconditional.
+    "gas_type": (
+        "nothing: the species is helium, unconditionally; the hydrogen "
+        "path is removed"
+    ),
+    "atomic_rate_model": (
+        "nothing: the OPEN-ADAS effective coefficients ('adas') are "
+        "unconditional; the analytic-fit 'janev' arm is removed"
     ),
 }
 

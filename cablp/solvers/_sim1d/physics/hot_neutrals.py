@@ -290,7 +290,6 @@ def hot_channel_rates(
     floors,
     ion_mass_g,
     geometry,
-    gas_type,
     Tn_eV,
     ionization_rate_per_neutral,
     residence,
@@ -338,7 +337,7 @@ def hot_channel_rates(
         abs(float(b_ion_neutral_drag))
         * n
         * nn
-        * phelps_cx_rate_cm3_s(T_eff, gas_type=gas_type)
+        * phelps_cx_rate_cm3_s(T_eff)
     )
     if state.M_n is None:
         u_n = np.zeros_like(derived.u)
@@ -352,7 +351,7 @@ def hot_channel_rates(
     nu_ball = np.where(Rp > 0.0, v_hot / np.maximum(Rp, 1e-300), 0.0)
     # The hot atom meets ions at the ion temperature on both sides of the
     # collision, so its own T_eff is Ti rather than the cold-gas mixture.
-    nu_recx = n * phelps_cx_rate_cm3_s(derived.Ti, gas_type=gas_type)
+    nu_recx = n * phelps_cx_rate_cm3_s(derived.Ti)
     nu_ion = np.maximum(np.asarray(ionization_rate_per_neutral, dtype=float), 0.0)
     total = nu_ball + nu_recx + nu_ion
     live = total > 0.0
@@ -395,7 +394,6 @@ def neutral_hot_channel_rhs(
     floors,
     ion_mass_g,
     geometry,
-    gas_type,
     Tn_eV,
     ionization_rate_per_neutral,
     kernels,
@@ -496,7 +494,6 @@ def neutral_hot_channel_rhs(
         floors=floors,
         ion_mass_g=ion_mass_g,
         geometry=geometry,
-        gas_type=gas_type,
         Tn_eV=Tn_eV,
         ionization_rate_per_neutral=ionization_rate_per_neutral,
         residence=residence,

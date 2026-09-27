@@ -590,7 +590,6 @@ def ion_neutral_drag_timestep(
     nu_in = ion_neutral_collision_frequency(
         nn=state.nn,
         Ti=derived.Ti,
-        gas_type=ion_neutral_drag_kwargs.get("gas_type"),
     )
     active = _active_values(nu_in, plasma_active)
     nu_max = (
@@ -678,7 +677,7 @@ def neutral_energy_timestep(
     )
     nn = np.maximum(np.asarray(state.nn, dtype=float), floors["nn"])
     nu_mt = nn * phelps_momentum_transfer_rate_cm3_s(
-        0.5 * (derived.Ti + Tn), gas_type=neutral_energy_kwargs["gas_type"]
+        0.5 * (derived.Ti + Tn)
     )
     rate = (
         abs(float(neutral_energy_kwargs["b_ion_neutral_drag"]))

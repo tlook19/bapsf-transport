@@ -598,18 +598,11 @@ class StepAttempt1D:
 def _atomic_rate_domain(result):
     """Return saved active-plasma coverage of the bundled He ADF11 grid."""
     te_min_eV, te_max_eV = he_rate_temperature_range_eV()
-    atomic_rate_model = str(
-        getattr(result, "params", {}).get("atomic_rate_model", "adas")
-    )
     Te = np.asarray(result.Te, dtype=float)
     active = np.asarray(result.plasma_active, dtype=bool)
     time = np.asarray(result.time, dtype=float)
     phase = np.asarray(result.phase, dtype=str)
-    if atomic_rate_model != "adas":
-        count_fraction = np.full(time.shape, np.nan, dtype=float)
-        volume_fraction = np.full(time.shape, np.nan, dtype=float)
-        active_min = np.full(time.shape, np.nan, dtype=float)
-    elif not np.any(active):
+    if not np.any(active):
         count_fraction = np.zeros(time.shape, dtype=float)
         volume_fraction = np.zeros(time.shape, dtype=float)
         active_min = np.full(time.shape, np.nan, dtype=float)
@@ -631,7 +624,7 @@ def _atomic_rate_domain(result):
         return float(time[indices[0]]) if indices.size else np.nan
 
     return {
-        "table_applies": atomic_rate_model == "adas",
+        "table_applies": True,
         "table_Te_min_eV": te_min_eV,
         "table_Te_max_eV": te_max_eV,
         "active_cell_fraction_below": count_fraction,
@@ -1048,7 +1041,6 @@ class LAPDSim1D:
             self._input_dict,
             self._flags,
             geometry=self._geometry,
-            gas_type=self._gas_type,
             I_ion=self._I_ion,
             electron_heat_flux_limit=self._electron_heat_flux_limit,
             heat_flux_limiter_f=self._heat_flux_limiter_f,
@@ -1108,13 +1100,11 @@ class LAPDSim1D:
         self._progress_interval_s = (
             1.0e-4 if progress_interval_s is None else progress_interval_s
         )
-        self._gas_type = self._input_dict.get("gas_type")
-        (
-            self._ion_mass_g,
-            self._mu,
-            self._mu_neutral,
-            self._I_ion,
-        ) = self._gas_constants(self._gas_type)
+        # Helium: ion mass, ion and neutral mass numbers, ionization energy.
+        self._ion_mass_g = m_He_cgs
+        self._mu = 4
+        self._mu_neutral = 4
+        self._I_ion = I_ion
         self._geometry = build_geometry(self._input_dict, self._flags)
         # Whether the plasma flux tube has a varying cross-section, and so
         # whether the quasi-1D p*dA/dz momentum source that pairs with the
@@ -1139,29 +1129,16 @@ class LAPDSim1D:
         )
         # R4.3 / audit A7+A8: the moment-closed reduced ion-neutral collision
         # operator (Phelps He+/He) carries the ion-neutral drag, frictional
-        # heating, thermalization and CX cooling as ONE term. He-only.
-        if self._gas_type != "He":
-            raise ValueError(
-                "the moment-closed ion-neutral collision operator uses the "
-                "Phelps He+/He cross sections and requires gas_type='He' "
-                f"(got {self._gas_type!r})"
-            )
-        # The presheath sigma_in model shares the He-only Phelps cross
-        # section. Its two legacy arms ("constant", "cx_derived") were the
-        # only non-helium path in the solver and were removed at D3.
+        # heating, thermalization and CX cooling as ONE term.
+        # The presheath sigma_in model shares the Phelps He+/He cross
+        # section. Its two legacy arms ("constant", "cx_derived") were
+        # removed at D3.
         _sigma_in_model = str(self._input_dict.get("sigma_in_model"))
         if _sigma_in_model != "phelps":
             raise ValueError(
                 f"sigma_in_model={_sigma_in_model!r} is not available: the "
                 "legacy 'constant' and 'cx_derived' arms were removed at D3, "
                 "2026-08-21. Accepted: 'phelps'."
-            )
-        if self._gas_type != "He":
-            raise ValueError(
-                "sigma_in_model='phelps' uses the Phelps He+/He cross section "
-                f"and requires gas_type='He' (got {self._gas_type!r}); the "
-                "non-helium arms were removed at D3, 2026-08-21 and the "
-                "solver is helium-only"
             )
 
     def _init_neutral_closure_selection(self):
@@ -2102,15 +2079,6 @@ class LAPDSim1D:
             self._input_dict.get("recombination_energy_return")
         )
         if self._recombination_energy_return:
-            if (
-                str(self._input_dict.get("atomic_rate_model"))
-                != "adas"
-            ):
-                raise ValueError(
-                    "recombination_energy_return requires "
-                    "atomic_rate_model='adas' (the PRB radiated-power "
-                    "booking has no janev counterpart)"
-                )
             if bool(self._flags.get("icool_recomb")):
                 raise ValueError(
                     "recombination_energy_return already charges the full "
@@ -2141,8 +2109,8 @@ class LAPDSim1D:
         is the thing the tracer has to be exempt from and the fill is the
         only thing the profile touches.
         """
-        # The Te floor has to sit below the adf11 low-Te grid edge under
-        # atomic_rate_model='adas'; refused HERE, before the floor is armed,
+        # The Te floor has to sit below the adf11 low-Te grid edge; refused
+        # HERE, before the floor is armed,
         # and read off the loaded table rather than written down.
         refuse_te_floor_above_adas_table_edge(self._input_dict)
         self._floors = {
@@ -2827,9 +2795,6 @@ class LAPDSim1D:
         return {
             name: full[name]
             for name in (
-                "gas_type",
-                "I_ion",
-                "atomic_rate_model",
                 "adas_low_te_extension",
             )
         }
@@ -2848,7 +2813,6 @@ class LAPDSim1D:
             "b_presheath_length": float(
                 self._input_dict.get("b_presheath_length")
             ),
-            "gas_type": self._gas_type,
         }
 
     def _tracer_boundary_rhs(self, cathode_solve, time):
@@ -3379,12 +3343,6 @@ class LAPDSim1D:
                 "the neutral momentum as the first moment of f, so an "
                 "evolved M_n field would be a second, unowned copy. "
                 "Accepted: neutral_momentum off"
-            )
-        if self._gas_type != "He":
-            raise ValueError(
-                "neutral_model='kinetic_dvm' is wired for gas_type='He' "
-                "only (the Phelps He+/He cross sections and the helium "
-                f"velocity grid); got {self._gas_type!r}"
             )
         cadence = float(
             self._input_dict.get("neutral_kinetic_dvm_cadence_s")
@@ -8240,7 +8198,6 @@ class LAPDSim1D:
             b_presheath_length=float(
                 self._input_dict.get("b_presheath_length")
             ),
-            gas_type=self._gas_type,
             cathode_jet=self._cathode_jet_spec(cathode_solve),
             cathode_carrier_out=carrier_out,
             end_wall_sheath_climb_out=end_wall_climb_out,
@@ -8816,7 +8773,7 @@ class LAPDSim1D:
         # the circuit (I_loop), the phase-derived flags and
         # ``floating``. The remaining arguments
         # (``floors``, ``ion_mass_g``, ``mu``, ``geometry``, ``input_dict``,
-        # ``I_ion``, ``gas_type``) are assigned once in __init__ and never
+        # ``I_ion``) are assigned once in __init__ and never
         # mutated, so they cannot separate two calls in one run. A miss on any
         # component solves fresh; a stale memo is never served.
         memo_key = None
@@ -8842,7 +8799,6 @@ class LAPDSim1D:
             beam_cross_prev=self._cathode_beam_cross,
             tail_anode_current_prev_A=self._cathode_tail_anode_I,
             I_ion=self._I_ion,
-            gas_type=self._gas_type,
             x0=self._cathode_x0,
             x0_twin=self._cathode_x0_twin,
             floating=floating,
@@ -9085,11 +9041,7 @@ class LAPDSim1D:
             state=state,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
-            gas_type=self._gas_type,
             I_ion=self._I_ion,
-            atomic_rate_model=str(
-                self._input_dict.get("atomic_rate_model")
-            ),
             enabled=self._recombination_energy_return,
             adas_low_te_extension=bool(
                 self._input_dict.get("adas_low_te_extension")
@@ -12880,24 +12832,6 @@ class LAPDSim1D:
                 NEUTRAL_ENERGY_FLOOR_T_K if self._neutral_energy else None
             ),
         )
-
-    @staticmethod
-    def _gas_constants(gas_type):
-        if gas_type == "He":
-            return m_He_cgs, 4, 4, I_ion
-        # The h-quarantine's successor row: this arm was the last m_p_cgs
-        # consumer in cablp/.
-        if gas_type == "H":
-            raise ValueError(
-                "gas_type='H' is not available: the hydrogen arm of "
-                "_gas_constants was retired as dead code; see commit "
-                "0195a02. It returned proton constants that no construction "
-                "could ever carry into physics -- the solver is helium-only "
-                "and refuses gas_type != 'He' a few lines later in "
-                "__init__, at the Phelps He+/He sigma_in_model gate. "
-                "Accepted: 'He'."
-            )
-        raise ValueError(f"unsupported gas_type {gas_type!r}; expected 'He'")
 
 
 def _finite_or_nan(value):

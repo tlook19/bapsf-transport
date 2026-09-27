@@ -141,7 +141,6 @@ def _case_end_face_full_debit_split():
         ion_mass_g=_es_both.ion_mass_g,
         alpha_isat=float(_es_params["alpha_isat"]),
         b_presheath_length=float(_es_params["b_presheath_length"]),
-        gas_type=_es_params.get("gas_type"),
     )
     _es_lambda_eff = (
         sheath_lift_lambda(_es_both.ion_mass_g) - math.log(_es_alpha)
@@ -321,7 +320,6 @@ def _case_end_wall_lambda_eff_barrier_bracket():
             ion_mass_g=_le_sim.ion_mass_g,
             alpha_isat=float(_le_params["alpha_isat"]),
             b_presheath_length=float(_le_params["b_presheath_length"]),
-            gas_type=_le_params.get("gas_type"),
         )
         assert math.exp(-0.5) <= _le_alpha <= 1.0, (_le_i, _le_alpha)
         assert np.isclose(
@@ -542,7 +540,6 @@ def _case_end_wall_face_sheath_edge_flux():
         b_presheath_length=float(
             _ew_sim._input_dict["b_presheath_length"]
         ),
-        gas_type=_ew_sim._gas_type,
     )
     _ew_Te = float(_ew_derived.Te[_ew_cell])
     _ew_Ti = float(_ew_derived.Ti[_ew_cell])

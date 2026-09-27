@@ -151,9 +151,8 @@ These are generalized collisional-radiative (GCR) coefficients: they are
 tabulated on a log10(n_e) x log10(T_e) grid (24 x 30; 5e7-2e15 cm^-3,
 0.2-1.5e4 eV) and include finite-density effects (stepwise ionization via
 metastables, collisional de-excitation), which the coronal Janev-era fits in
-`cablp.atomic.fits` / `cablp.atomic.cross_sections` do not. Selected by the sim1d
-`atomic_rate_model = "adas"` input; the historical fits remain available as
-`"janev"` (the default).
+`cablp.atomic.fits` / `cablp.atomic.cross_sections` do not. The sim1d solver
+reads its atomic rates from these coefficients unconditionally.
 
 File format: adf11 (see `cablp.atomic.adas.read_adf11`). All tabulated
 values are log10 of the coefficient in the units above.

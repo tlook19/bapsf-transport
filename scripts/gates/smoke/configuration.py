@@ -1380,11 +1380,11 @@ def _case_configuration_file_value_typed_to_template():
 
         # ...and a STRING key likewise. This is the ONE place the file route
         # and the `--extra` route part company on purpose: a command-line
-        # token is text and IS its own value, so `--extra gas_type=1` gives
+        # token is text and IS its own value, so `--extra max_steps_action=1` gives
         # the string "1", while a TOML integer is an integer and the file
         # is refused rather than quietly stringified.
         (_room / "typed_str.toml").write_text(
-            'base = "g1atrim"\n\n[input_dict]\ngas_type = 1\n'
+            'base = "g1atrim"\n\n[input_dict]\nmax_steps_action = 1\n'
         )
         try:
             _sc.load_stance("typed_str")
@@ -1392,7 +1392,7 @@ def _case_configuration_file_value_typed_to_template():
             _ct_smsg = str(_ct_sexc)
         else:
             raise AssertionError("a str key ACCEPTED an integer")
-        assert "gas_type" in _ct_smsg, _ct_smsg
+        assert "max_steps_action" in _ct_smsg, _ct_smsg
         assert "carries str" in _ct_smsg, _ct_smsg
 
         # (iii) AN INT KEY TAKES A WHOLE FLOAT, and resolves to an int: `nx`

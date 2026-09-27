@@ -95,6 +95,7 @@ _CASE_ORDER = (
     "anode-disc-radius",
     "sigma-in-phelps",
     "adas-atomic-rate-model",
+    "retired-gas-type-and-rate-model-keys",
     "he-singlet-manifold-registry",
     "csda-module-standalone",
     "csda-per-cell-accumulators",

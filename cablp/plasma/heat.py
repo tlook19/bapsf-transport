@@ -176,7 +176,7 @@ def Q_ie(Te, Ti, ne, mu, lnlambda, per_particle=True, *, rk=None):
         return Q * ne
 
 
-def Q_cx_He(ne, nn, Ti, Tn, gas_type="He", per_particle=True, *, rk=None):
+def Q_cx_He(ne, nn, Ti, Tn, per_particle=True, *, rk=None):
     """
     Ion cooling rate due to charge exchange with neutrals [eV/s or eV·cm⁻³/s].
 
@@ -192,8 +192,6 @@ def Q_cx_He(ne, nn, Ti, Tn, gas_type="He", per_particle=True, *, rk=None):
         Ion temperature [eV].
     Tn : float or array
         Neutral temperature [eV].
-    gas_type : str
-        Gas species; "He" or "H".
     per_particle : bool
         If True return per-ion rate [eV/s]; if False return volumetric (× ne).
 
@@ -203,7 +201,7 @@ def Q_cx_He(ne, nn, Ti, Tn, gas_type="He", per_particle=True, *, rk=None):
         Ion charge-exchange cooling rate.
     """
     per_particle = _resolve_per_particle(per_particle, rk)
-    Q = nn * charge_ex_react(Ti, gas_type) * (Ti - Tn)
+    Q = nn * charge_ex_react(Ti) * (Ti - Tn)
     if per_particle:
         return Q
     else:

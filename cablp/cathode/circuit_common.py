@@ -532,7 +532,6 @@ def _he_2p_excitation_cross_cm2(eps: float) -> float:
 def beam_excitation_cross(
     phi_c_eV: float,
     b_beam_excitation: float,
-    gas_type: str,
     threshold_eV: float = 21.218,
 ) -> float:
     """Neutral-excitation cross section [cm^2] for the primary beam.
@@ -548,11 +547,6 @@ def beam_excitation_cross(
     """
     if b_beam_excitation == 0.0 or phi_c_eV <= threshold_eV:
         return 0.0
-    if gas_type != "He":
-        raise ValueError(
-            "b_beam_excitation != 0 is only wired for gas_type 'He' "
-            f"(got {gas_type!r}); the excitation cross section is helium's"
-        )
     return float(b_beam_excitation) * _he_2p_excitation_cross_cm2(
         phi_c_eV / threshold_eV
     )
@@ -561,7 +555,6 @@ def beam_excitation_cross(
 def beam_excitation_channel(
     phi_c_eV: float,
     b_beam_excitation: float,
-    gas_type: str,
     model: str = "2p_scalar",
     threshold_eV: float = 21.218,
 ) -> tuple[float, float]:
@@ -575,23 +568,18 @@ def beam_excitation_channel(
     with the energy-weighted mean radiated energy; ``b_beam_excitation``
     survives as a pure sensitivity multiplier on the cross section (benchmark
     value 1.0), and ``threshold_eV`` is ignored — thresholds live in the
-    manifold registry. He-only, like the scalar path.
+    manifold registry.
     """
     if model == "2p_scalar":
         return (
             beam_excitation_cross(
-                phi_c_eV, b_beam_excitation, gas_type, threshold_eV=threshold_eV
+                phi_c_eV, b_beam_excitation, threshold_eV=threshold_eV
             ),
             threshold_eV,
         )
     if model == "manifold":
         if b_beam_excitation == 0.0:
             return 0.0, 0.0
-        if gas_type != "He":
-            raise ValueError(
-                "b_beam_excitation != 0 is only wired for gas_type 'He' "
-                f"(got {gas_type!r}); the excitation manifold is helium's"
-            )
         sigma, E_rad = He_beam_excitation_channel(phi_c_eV)
         return float(b_beam_excitation) * sigma, E_rad
     raise ValueError(

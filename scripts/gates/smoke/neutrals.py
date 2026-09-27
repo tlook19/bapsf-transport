@@ -490,10 +490,8 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         state=cooling_state,
         floors=sim.floors,
         ion_mass_g=sim.ion_mass_g,
-        gas_type=params["gas_type"],
         I_ion=sim.I_ion,
         b_ionization_energy_cost=0.0,
-        atomic_rate_model=params["atomic_rate_model"],
         ionization_energy_cost=True,
         icool_recomb=flags["icool_recomb"],
     )
@@ -521,7 +519,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         state=hot_ion_cx_state,
         floors=sim.floors,
         ion_mass_g=sim.ion_mass_g,
-        gas_type=params["gas_type"],
         Tn_fit=params["Tn_fit"],
     )
     assert np.all(hot_ion_cx.Ei < 0.0)
@@ -547,7 +544,6 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         state=hot_ion_cx_state,
         floors=sim.floors,
         ion_mass_g=sim.ion_mass_g,
-        gas_type=params["gas_type"],
         Tn_fit=20.0,
     )
     assert np.all(warm_neutral_cx.Ei > 0.0)
@@ -975,8 +971,6 @@ def _case_neutral_momentum_sources(
         floors=knob_floors,
         ion_mass_g=knob_mass,
         geometry=mn_geom,
-        gas_type="He",
-        I_ion=I_ion,
     )
     for mn_name in (
         "ionization_birth",
@@ -1006,8 +1000,6 @@ def _case_neutral_momentum_sources(
         floors=knob_floors,
         ion_mass_g=knob_mass,
         geometry=mn_geom,
-        gas_type="He",
-        I_ion=I_ion,
     )["ionization_birth"].M_n is None
 
     # Pump sink: the wind leaves with the gas at the pump cells, so the

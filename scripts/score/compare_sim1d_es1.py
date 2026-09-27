@@ -274,12 +274,6 @@ PARAM_OVERRIDES = {
     # Ion-neutral closure: the Phelps moment-closed operator is unconditional
     # (first-principles drag+CX+thermal, no knob), so no ion-neutral key is
     # set here.
-    # ADAS GCR rates (see cablp/atomic/data/adas/README.md): effective ionization/
-    # recombination and radiation-only cooling, consistent with the separate
-    # ionization-cost term. The rate channels carry no scale factor: the b_*
-    # scalars were removed at commit 3e7d386 and unit scaling is now
-    # structural rather than scaled.
-    "atomic_rate_model": "adas",
     # Beam-driven neutral excitation: 1.0 books the 2^1P channel alone, the
     # rest approximates the remainder of the singlet manifold. Radiates ~21 eV
     # per event as He I light and shortens the beam deposition length.
@@ -1965,10 +1959,10 @@ MACH_FACE_KEYS = (
 #: measured M at BOTH ends rather than picking one.
 MACH_K_BRACKET = (1.34, 1.74)
 
-#: Ion mass [g] the model Mach uses. The solver is hard helium-only --
-#: ``gas_type != "He"`` raises at construction -- so this is the only value a
-#: scored artifact can carry, and the block refuses any other gas_type rather
-#: than assuming it.
+#: Ion mass [g] the model Mach uses. The solver is helium-only, so this is
+#: the only value a scored artifact written by it can carry. An artifact that
+#: still records a ``gas_type`` (written before that key was removed) is
+#: refused unless it records helium, rather than assumed.
 MACH_ION_MASS_G = m_He_cgs
 MACH_GAS_TYPE = "He"
 
@@ -2029,7 +2023,7 @@ def compare_plateau_mach(result, params, overlay, window_ms=None):
             "neither the gas nor the signal-speed convention behind the model "
             "Mach can be read from it"
         )
-    gas = params.get("gas_type")
+    gas = params.get("gas_type", MACH_GAS_TYPE)
     if gas != MACH_GAS_TYPE:
         return [], (
             f"this run's gas_type is {gas!r}, and the ion mass number behind "

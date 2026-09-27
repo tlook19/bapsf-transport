@@ -827,12 +827,9 @@ def refuse_te_floor_above_adas_table_edge(input_dict):
     than by physics, and the standing statement that the floor sits below the
     table edge becomes false while every rate silently reads its edge value.
 
-    Presence-gated on ``atomic_rate_model = "adas"``: under ``"janev"`` the
-    adf11 grid is not consulted at all and its edge orders nothing.
-
     The check is INDEPENDENT of ``adas_low_te_extension``. That key extends
-    only ``acd`` and ``prb1`` below the edge, by the Janev recombination shape
-    ratio, and it does not move the edge itself -- it reads the same grid
+    only ``acd`` and ``prb1`` below the edge, by the analytic recombination
+    shape ratio, and it does not move the edge itself -- it reads the same grid
     edge and rescales beneath it. ``scd`` (ionization) and both ``plt`` line
     powers still clamp there either way, so the ordering claim is owed on the
     extended package exactly as it is on the clamped one.
@@ -841,16 +838,14 @@ def refuse_te_floor_above_adas_table_edge(input_dict):
     the same source the ``atomic_rate_domain`` writer reads) rather than
     written down, so this refusal cannot drift from the bundled data.
     """
-    if str(input_dict.get("atomic_rate_model", "janev")) != "adas":
-        return
     te_edge_eV, _ = he_rate_temperature_range_eV()
     te_floor_eV = float(input_dict["Te_floor"])
     if te_floor_eV < te_edge_eV:
         return
     raise ValueError(
         f"Te_floor={te_floor_eV!r} eV sits at or above the bundled He adf11 "
-        f"low-Te grid edge {te_edge_eV!r} eV, and atomic_rate_model='adas' "
-        "reads that grid. Below the edge every adf11 coefficient is CLAMPED "
+        f"low-Te grid edge {te_edge_eV!r} eV, and the atomic rates read that "
+        "grid. Below the edge every adf11 coefficient is CLAMPED "
         "to its edge value, so the floor is what keeps the clamped band a "
         "band the plasma cools through instead of the only band it occupies: "
         "with the floor at or above the edge no recovered Te can ever lie "
@@ -858,8 +853,7 @@ def refuse_te_floor_above_adas_table_edge(input_dict):
         "active_cell_fraction_below is zero by construction rather than by "
         "physics, and the documented ordering (the floor sits below the "
         "table edge) is false. Accepted: Te_floor strictly below "
-        f"{te_edge_eV!r} eV, or atomic_rate_model='janev', which does not "
-        "consult the adf11 grid. adas_low_te_extension does not lift this: "
+        f"{te_edge_eV!r} eV. adas_low_te_extension does not lift this: "
         "it rescales acd and prb1 beneath the same edge without moving it, "
         "and scd and both plt tables clamp there either way"
     )

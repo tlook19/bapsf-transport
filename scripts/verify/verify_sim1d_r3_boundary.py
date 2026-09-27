@@ -120,7 +120,7 @@ def main():
     # --- G1/G2: Bohm particle sink on both normals, plenum untouched -------
     state, edges, cs = _uniform_state(sim, n0, Te0, Ti0, u_edge_frac=1.0)
     # Call the BOUND method, not the module function: it threads the resolved
-    # run constants (gas_type, b_presheath_length, the cathode jet spec, the
+    # run constants (b_presheath_length, the cathode jet spec, the
     # wave-speed and energy-consistency selectors, alpha_isat and
     # b_surface_loss) exactly as the production callers do, so this probe
     # cannot drift from the operator it is gating. The former raw call
@@ -149,7 +149,6 @@ def main():
             outward=outward, ion_mass_g=m_i,
             alpha_isat=float(np.exp(-0.5)),
             b_presheath_length=float(sim._input_dict["b_presheath_length"]),
-            gas_type=sim._gas_type,
         )
         area = float(geo.plasma_face_area_cm2[face])
         sonic = n0 * cs * area
@@ -190,7 +189,6 @@ def main():
             outward=outward, ion_mass_g=m_i,
             alpha_isat=float(np.exp(-0.5)),
             b_presheath_length=float(sim._input_dict["b_presheath_length"]),
-            gas_type=sim._gas_type,
         )
         n_se = float(ghost_a["n"])
         f_M_want = n_se * (m_i * cs_a**2 + (Te0 + Ti0) * ev_to_erg)

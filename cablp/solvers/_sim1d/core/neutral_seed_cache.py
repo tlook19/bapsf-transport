@@ -103,7 +103,7 @@ INERT_PARAM_KEYS = frozenset({
     "beam_anomalous_model", "ql_relaxation_coeff",
     "beam_excitation_energy_eV", "b_beam_excitation",
     # --- atomic-rate / cooling / plasma-physics scales (no plasma during equil) ---
-    "atomic_rate_model", "recombination_energy_return",
+    "recombination_energy_return",
     "sigma_in_model", "Ti_birth_ionization",
     "b_ion_neutral_drag", "D_amb", "D_amb_model", "heat_flux_limiter_f",
     "b_presheath_length",
@@ -368,7 +368,7 @@ def fill_rate_meta(params, nn):
         # nn0 is deliberately absent: it is the direct-run fill, not the
         # equilibration's start (which is pinned at 1e8), so recording it here
         # would mislabel the entry's provenance.
-        "S_pump_R", "gas_type", "Tn_K", "nx",
+        "S_pump_R", "Tn_K", "nx",
         "neutral_equilibration_cycles",
     )
     meta = {k: params.get(k) for k in keys}
