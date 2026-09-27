@@ -2476,10 +2476,14 @@ REFUSALS = (
     # radius) is NOT here: its solver-route refusal belongs to core.geometry
     # and fires before the kinetic arm is built, so it is made as its own gate
     # that states BOTH owners -- see gate_bf_g32.
+    # A uniform machine with no annulus is refused by the puff's own row
+    # derivation (the orifice row needs the column inside the vessel wall at
+    # the port), which runs at construction ahead of the kinetic arm's
+    # annulus guard; the refusal is quoted from its actual owner.
     (
         "G15 gas puff into a cell with no annulus refused",
         dict(),
-        "V_ann",
+        "r_wall_cm",
         lambda d, fl: (d.__setitem__("Rm", d["Rp"]), None)[1],
     ),
 )
