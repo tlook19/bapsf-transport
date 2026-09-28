@@ -1011,7 +1011,28 @@ def _sum_beam_deposition(a, b):
             float(a.tail_anode_sheath_reflected_erg_s)
             + float(b.tail_anode_sheath_reflected_erg_s)
         ),
+        # Mirror far end: both rays meet the same plane and the same leg
+        # budget, so their arrivals and residuals add like the end ledger.
+        **{
+            name: float(getattr(a, name)) + float(getattr(b, name))
+            for name in _MIRROR_DEPOSITION_FIELDS
+        },
     )
+
+
+#: The ``BeamDepositionResult`` scalars a mirror far end fills (0.0 on every
+#: other layout): the primary and walker flux/power arriving at the plane and
+#: the two leg-cap residuals.
+_MIRROR_DEPOSITION_FIELDS = (
+    "primary_mirror_flux_per_s",
+    "primary_mirror_erg_s",
+    "primary_mirror_residual_flux_per_s",
+    "primary_mirror_residual_erg_s",
+    "tail_mirror_flux_per_s",
+    "tail_mirror_erg_s",
+    "tail_leg_cap_residual_flux_per_s",
+    "tail_leg_cap_residual_erg_s",
+)
 
 
 def _plasma_active_window(geometry):
@@ -1064,6 +1085,32 @@ def tail_reflect_face(geometry, end=0):
             "at that face, so it has to be the face the cathode occupies"
         )
     return face
+
+
+def tail_mirror_face(geometry):
+    """Return the walk-window face the MIRROR plane occupies, or ``None``.
+
+    ``None`` on every geometry without a mirror face (``far_end =
+    "end_wall"``, ``TwinCathode``). Under ``far_end = "mirror"`` the plane
+    ends the grid at its high-index end (face ``cells``), so the answer is
+    ``+1`` -- after checking that the plasma-active window ends at the last
+    cell, because the CSDA module turns the primary and the tail walkers round
+    at that window face and walks them back inside it. A mirror face anywhere
+    else, or a window stopping short of it, raises.
+    """
+    faces = np.asarray(getattr(geometry, "mirror_face_indices", ()), dtype=int)
+    if faces.size == 0:
+        return None
+    cells = int(geometry.cells)
+    lo, hi = _plasma_active_window(geometry)
+    if faces.tolist() != [cells] or hi != cells - 1:
+        raise ValueError(
+            f"the mirror face(s) {faces.tolist()} and the plasma-active window "
+            f"{(lo, hi)} do not end the grid together (cells={cells}); the "
+            "beam and the tail walkers turn round at the window face that is "
+            "the mirror plane"
+        )
+    return 1
 
 
 def _csda_beam_deposition(
@@ -1215,6 +1262,16 @@ def _csda_beam_deposition(
                 state.n, derived.Te, "fast_electron"
             )
         )
+    # The mirror far end, threaded onto the DEPOSITION rays only, like the
+    # walk: the gap probes are clipped at L_cath and never reach the plane.
+    # Presence-gated on the geometry's mirror face, so an end wall ray enters
+    # deposit_beam with the argument list it always had. The window the
+    # module walks the returning populations in is the plasma-active one the
+    # walked tail already uses.
+    mirror_face = tail_mirror_face(geometry)
+    if mirror_face is not None:
+        transport_kwargs["mirror_face"] = mirror_face
+        transport_kwargs["tail_walk_window"] = _plasma_active_window(geometry)
     # Fractional-coverage beam-neutral closure (default off/uniform, bit-exact):
     # split the ray into a clump fraction (short l_b against nn*chi -> local seed)
     # and a gap fraction (background nn -> penetration). See config docstrings.
@@ -2228,10 +2285,12 @@ def _beam_smoothing_key(geometry, sigma_cm):
     would silently smooth with the wrong kernel.
 
     Every geometry input the matrix build reads is in the key: ``z_cm`` and
-    ``length_cm`` (centres and the cell-length weighting), ``z_edges_cm`` and
-    ``cathode_face_indices`` (the reflecting image sources), and
-    ``plasma_active`` (the support -- two meshes agreeing in z/lengths/faces
-    but differing in cell ROLES build different matrices).
+    ``length_cm`` (centres and the cell-length weighting), ``z_edges_cm``,
+    ``cathode_face_indices`` and ``mirror_face_indices`` (the reflecting image
+    sources), and ``plasma_active`` (the support -- two meshes agreeing in
+    z/lengths/faces but differing in cell ROLES build different matrices).
+    The mirror faces enter the key only on a geometry that has one, so an
+    end wall key is the one it always was.
 
     The key itself is memoized on ``id(geometry)``, which is sound here and
     only here because the memo HOLDS A STRONG REFERENCE to the geometry it
@@ -2247,13 +2306,14 @@ def _beam_smoothing_key(geometry, sigma_cm):
 
     The one thing identity keying cannot see is a content edit made IN PLACE
     on a live geometry, so EVERY array the key reads -- ``z_cm``,
-    ``length_cm``, ``z_edges_cm``, ``plasma_active`` and
-    ``cathode_face_indices`` -- is marked read-only on the first key build:
+    ``length_cm``, ``z_edges_cm``, ``plasma_active``,
+    ``cathode_face_indices`` and ``mirror_face_indices`` -- is marked
+    read-only on the first key build:
     such an edit now raises instead of silently returning the previous mesh's
     matrix. Leaving any ONE of them writeable reopens the whole hazard, since
     a stale key is served whenever any component of the content the key
     summarises has moved. ``Sim1DGeometry`` is a frozen dataclass built at
-    exactly one site and no consumer writes to any of the five.
+    exactly one site and no consumer writes to any of the six.
     """
     memo_key = (id(geometry), round(float(sigma_cm), 8))
     entry = _BEAM_SMOOTH_KEY_CACHE.get(memo_key)
@@ -2265,9 +2325,16 @@ def _beam_smoothing_key(geometry, sigma_cm):
         geometry.z_edges_cm,
         geometry.plasma_active,
         geometry.cathode_face_indices,
+        getattr(geometry, "mirror_face_indices", None),
     ):
         if isinstance(values, np.ndarray):
             values.flags.writeable = False
+    mirror_faces = tuple(
+        int(i)
+        for i in np.asarray(
+            getattr(geometry, "mirror_face_indices", ()), dtype=int
+        )
+    )
     key = (
         round(float(sigma_cm), 8),
         _array_fingerprint(geometry.z_cm, float),
@@ -2275,7 +2342,7 @@ def _beam_smoothing_key(geometry, sigma_cm):
         _array_fingerprint(geometry.z_edges_cm, float),
         _array_fingerprint(geometry.plasma_active, bool),
         tuple(int(i) for i in np.asarray(geometry.cathode_face_indices, dtype=int)),
-    )
+    ) + ((("mirror", mirror_faces),) if mirror_faces else ())
     # The geometry is stored, not just its id: the strong reference is what
     # makes the id unique for as long as the entry lives -- and what the cap
     # below bounds, so a long-lived process cannot accumulate geometries.
@@ -2307,9 +2374,13 @@ def _beam_smoothing_matrix(geometry, sigma_cm):
     fall behind an emitting face is folded forward about that face (image
     source at ``2*z_face - z_j``) instead of being discarded, which is what
     keeps the deposit near the cathode physical rather than merely normalized.
-    Both faces reflect under ``TwinCathode``. The far machine end needs no
-    special handling -- every cell there is active, and normalization absorbs
-    the residual tail past the end.
+    Both faces reflect under ``TwinCathode``. A MIRROR face (``far_end =
+    "mirror"``) reflects too, about the mirror plane: the machine is symmetric
+    there, so the Gaussian tail that crosses the plane is the image source's
+    deposit smoothed back across it, and the fold makes the half column's
+    matrix the full two-source machine's restricted to one half. The far end
+    wall needs no special handling -- every cell there is active, and
+    normalization absorbs the residual tail past the end.
 
     Each weight is multiplied by the target cell length (a cell-integrated
     approximation) before the column is normalized, so a refined region is not
@@ -2332,6 +2403,11 @@ def _beam_smoothing_matrix(geometry, sigma_cm):
         z_live = z[live][:, None]
         G = np.exp(-0.5 * ((z_live - z[None, :]) / sigma) ** 2)
         for face in np.asarray(geometry.cathode_face_indices, dtype=int):
+            z_face = float(z_edges[face])
+            G += np.exp(-0.5 * ((z_live + z[None, :] - 2.0 * z_face) / sigma) ** 2)
+        for face in np.asarray(
+            getattr(geometry, "mirror_face_indices", ()), dtype=int
+        ):
             z_face = float(z_edges[face])
             G += np.exp(-0.5 * ((z_live + z[None, :] - 2.0 * z_face) / sigma) ** 2)
         G *= dz[live][:, None]
