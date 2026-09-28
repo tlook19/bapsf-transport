@@ -64,7 +64,78 @@ def rusanov_fluxes(state, floors, ion_mass_g, geometry):
     """Build closed-boundary Rusanov fluxes for plasma conservative variables."""
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     raw = _rusanov_raw_faces(state, derived, ion_mass_g, geometry)
-    return _apply_face_conditions(raw, geometry, derived.p)
+    faces = _apply_face_conditions(raw, geometry, derived.p)
+    _apply_mirror_faces(faces, state, derived, ion_mass_g, geometry)
+    return faces
+
+
+def mirror_ghost_states(state, derived, live):
+    """Return ``(interior, ghost)`` for the mirror face beside cell ``live``.
+
+    The MIRROR ghost is the live cell reflected through the symmetry plane:
+    the same ``n``, ``Ee``, ``Ei``, ``p``, ``Te`` and ``Ti`` and the reversed
+    momentum and velocity, ``(n, -M, Ee, Ei)``. Both dicts carry the
+    conservative and derived scalars (``n, M, Ee, Ei, u, p, Te, Ti``) the
+    single-face kernel :func:`kep_rusanov_face_scalar` reads.
+    """
+    interior = {
+        "n": float(state.n[live]),
+        "M": float(state.M[live]),
+        "Ee": float(state.Ee[live]),
+        "Ei": float(state.Ei[live]),
+        "u": float(derived.u[live]),
+        "p": float(derived.p[live]),
+        "Te": float(derived.Te[live]),
+        "Ti": float(derived.Ti[live]),
+    }
+    ghost = dict(interior)
+    ghost["M"] = -interior["M"]
+    ghost["u"] = -interior["u"]
+    return interior, ghost
+
+
+def mirror_face_flux(state, derived, ion_mass_g, geometry, face):
+    """Return the +z face flux ``(F_n, F_M, F_Ee, F_Ei)`` at one mirror face.
+
+    The ordinary KEP/Rusanov face kernel (:func:`kep_rusanov_face_scalar`)
+    evaluated between the live cell and its mirror ghost
+    (:func:`mirror_ghost_states`), the live cell on its own side of the
+    face. The ghost cancels every odd term, so the result is exactly
+
+        F_n = F_Ee = F_Ei = 0,   F_M = p_L + a_max M_L,
+        a_max = |u_L| + plasma_wave_speed(Te_L, Ti_L),
+
+    for a live cell on the low-z side (the half column's mirror at
+    ``z = Lm/2``). The ``a_max M_L`` part is the kernel's dissipation on the
+    momentum jump ``-2 M_L`` across the symmetry plane; at rest it vanishes
+    and the face carries the pressure alone.
+    """
+    live = int(geometry.plasma_face_live_cell[int(face)])
+    interior, ghost = mirror_ghost_states(state, derived, live)
+    if live == int(face):
+        # Live cell on the high-z side: the ghost is the face's LEFT state.
+        return kep_rusanov_face_scalar(ghost, interior, ion_mass_g)
+    return kep_rusanov_face_scalar(interior, ghost, ion_mass_g)
+
+
+def _apply_mirror_faces(faces, state, derived, ion_mass_g, geometry):
+    """Overwrite each mirror face's closed-face flux with the mirror flux.
+
+    PRESENCE-GATED on ``geometry.mirror_face_indices``: a geometry with no
+    mirror face (every end-wall and twin layout) loops over nothing and its
+    fluxes are untouched. Writes into ``faces`` in place.
+    """
+    for face in np.asarray(
+        getattr(geometry, "mirror_face_indices", ()), dtype=int
+    ):
+        face = int(face)
+        f_n, f_M, f_Ee, f_Ei = mirror_face_flux(
+            state, derived, ion_mass_g, geometry, face
+        )
+        faces.n[face] = f_n
+        faces.M[face] = f_M
+        faces.Ee[face] = f_Ee
+        faces.Ei[face] = f_Ei
 
 
 def _rusanov_raw_faces(state, derived, ion_mass_g, geometry):
@@ -155,6 +226,11 @@ def _apply_plasma_walls(
     array telescopes, so an *interior* absorbing face (a cathode surface) would
     hand the plasma it removes to the plenum behind it instead of out of the
     domain, and would kick a plasma-dead cell with sonic momentum.
+
+    A MIRROR face (``geometry.mirror_face_indices``) is closed here as well,
+    and :func:`_apply_mirror_faces` then replaces this pressure-only value
+    with the mirror-ghost face flux, which keeps the kernel's dissipation on
+    the momentum jump across the symmetry plane.
     """
     for face in np.flatnonzero(~np.asarray(geometry.plasma_open, dtype=bool)):
         face = int(face)

@@ -102,7 +102,12 @@ def hyperbolic_energy_correction_rhs(
 
     It rides the SAME ``a_max``, transmission and closed-face zeroing as the
     flux whose dissipation it returns, and it is not extended to the ghost
-    faces the boundary operator owns.
+    faces the boundary operator owns. A MIRROR face
+    (``geometry.mirror_face_indices``) is the exception among closed faces,
+    because its advective flux carries a dissipation: against the mirror
+    ghost ``(n, -M)`` the kernel's dissipative part there is ``0`` on ``n``
+    and ``a_max M_L`` on ``M`` (``a_max = |u_L| + c``, the live cell's own
+    signal speed), and that is what this deposit returns to ``Ei``.
 
     **Pressure work is not here.** The ``pressure_work`` row is
     :func:`pressure_work_rhs` literally, ``-p_s (div u)_i``, and that row is
@@ -126,15 +131,30 @@ def hyperbolic_energy_correction_rhs(
     open_faces = np.asarray(geometry.plasma_open, dtype=bool)
     transmission = np.asarray(geometry.plasma_transmission, dtype=float)
 
-    def _dissipative_divergence(field):
+    mirror_faces = np.asarray(
+        getattr(geometry, "mirror_face_indices", ()), dtype=int
+    )
+
+    def _dissipative_divergence(field, mirror_odd):
         face = np.zeros(cells + 1, dtype=float)
         face[1:-1] = -0.5 * amax * (field[1:] - field[:-1])
         face = face * transmission
         face[~open_faces] = 0.0
+        # Presence-gated: loops over nothing without a mirror face. The ghost
+        # field is +field (even: n) or -field (odd: M), so the dissipative
+        # part -0.5 a (ghost - live) is 0 or a*field on the live cell's side.
+        for mface in mirror_faces:
+            live = int(geometry.plasma_face_live_cell[int(mface)])
+            a_mirror = abs(u[live]) + cs[live]
+            if mirror_odd:
+                outward = 1.0 if live < int(mface) else -1.0
+                face[int(mface)] = outward * a_mirror * field[live]
+            else:
+                face[int(mface)] = 0.0
         return _flux_divergence(face, geometry)
 
-    dn_diss = _dissipative_divergence(n)
-    dM_diss = _dissipative_divergence(M)
+    dn_diss = _dissipative_divergence(n, mirror_odd=False)
+    dM_diss = _dissipative_divergence(M, mirror_odd=True)
     dK_diss = u * dM_diss - 0.5 * ion_mass_g * u**2 * dn_diss
 
     zeros = np.zeros(cells, dtype=float)
