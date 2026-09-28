@@ -2201,10 +2201,10 @@ def _case_mirror_field_loader_refusals():
 def _mirror_base_config():
     """(params, flags): the operator-algebra stance on the half column.
 
-    The mirror refuses the cathode circuit, the evolved neutral momentum and
-    energy and a right pump speed; the historical operator-algebra stance
-    already holds the first three off, so only the far end and the right pump
-    move here.
+    The mirror refuses the evolved neutral momentum and energy and a right
+    pump speed; the historical operator-algebra stance already holds the
+    first two off (and the cathode circuit, which runs at a mirror, off), so
+    only the far end and the right pump move here.
     """
     # Copies: the fixture hands every caller the SAME two dicts.
     params, flags = (dict(part) for part in _base_config())
@@ -2312,7 +2312,10 @@ def _case_mirror_refusals():
     kinetic neutral closure is not in the set: the mirror base constructs
     under ``neutral_model = "kinetic_dvm"``, its engine ending in the
     specular mirror plane, while its end wall jet and bounded-chord annulus
-    stay refused with the reason stated.
+    stay refused with the reason stated. The cathode circuit is not in the
+    set either: the mirror base constructs with ``cathode_coupling`` on; only
+    the walked tail (``heating_anomalous_transport = "plateau_multigroup"``)
+    WITH the circuit stays refused.
     """
     from cablp.solvers._sim1d.core.validation import (
         validate_far_end_configuration,
@@ -2320,6 +2323,7 @@ def _case_mirror_refusals():
 
     complete = (
         "Incompatible with far_end='mirror' (the complete set): TwinCathode, "
+        "heating_anomalous_transport='plateau_multigroup' with "
         "cathode_coupling, neutral_momentum, neutral_energy, "
         "neutral_kinetic_dvm_end_wall_jet, "
         "neutral_kinetic_dvm_annulus_flights='bounded_chord', "
@@ -2338,10 +2342,13 @@ def _case_mirror_refusals():
     default_params, default_flags = default_config()
     assert validate_far_end_configuration(default_params, default_flags) is None
 
+    # The circuit alone is no conflict (its construction is pinned by the
+    # mirror-cathode-coupling-constructs case); with the walked tail it is.
+    assert validate_far_end_configuration(
+        params, dict(flags, cathode_coupling=True)
+    ) is None
     conflicts = (
         ("flags", "TwinCathode", True, "TwinCathode=False (got True)"),
-        ("flags", "cathode_coupling", True,
-         "cathode_coupling=False (got True)"),
         ("flags", "neutral_momentum", True,
          "neutral_momentum=False (got True)"),
         ("flags", "neutral_energy", True, "neutral_energy=False (got True)"),
@@ -2353,13 +2360,18 @@ def _case_mirror_refusals():
          "its annulus is flown, not marched, and returns its end-plane exits "
          "through the lagged end buffer a tick later, so it cannot reflect "
          "specularly at the mirror plane)"),
+        ("params", "heating_anomalous_transport", "plateau_multigroup",
+         "heating_anomalous_transport='local' (got 'plateau_multigroup': at "
+         "a mirror the walked tail has no absorbing face once the anode "
+         "sheath repels every walker, and the leg cap then books most of its "
+         "power as residual)"),
         ("params", "S_pump_R", 3000.0, "S_pump_R=0.0 (got 3000.0)"),
         ("params", "end_wall_length_cm", 10.0,
          "end_wall_length_cm=7.8 (got 10.0)"),
     )
-    all_params, all_flags = dict(params), dict(flags)
+    all_params, all_flags = dict(params), dict(flags, cathode_coupling=True)
     for space, key, value, wanted in conflicts:
-        bad_params, bad_flags = dict(params), dict(flags)
+        bad_params, bad_flags = dict(params), dict(flags, cathode_coupling=True)
         target = bad_flags if space == "flags" else bad_params
         target[key] = value
         (all_flags if space == "flags" else all_params)[key] = value
@@ -2388,8 +2400,8 @@ def _case_mirror_refusals():
         LAPDSim1D(template_params, template_flags)
     except ValueError as exc:
         assert complete in str(exc), str(exc)
+        assert "cathode_coupling" not in str(exc).split("Set: ")[1], str(exc)
         for item in (
-            "cathode_coupling=False (got True)",
             "neutral_momentum=False (got True)",
             "neutral_energy=False (got True)",
             "S_pump_R=0.0 (got 3000.0)",
