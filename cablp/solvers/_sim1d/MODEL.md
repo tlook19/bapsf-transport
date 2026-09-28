@@ -147,14 +147,17 @@ returns with $v_\parallel\to-v_\parallel$ and its $c_\perp$ unchanged, so the
 distribution there satisfies $f(-v_\parallel,c_\perp)=f(v_\parallel,c_\perp)$
 in both the column and the annulus, with no pumping, no accommodation, no
 sticking and no end-wall return; nothing crosses it net in particles or
-energy. The mirror is a first-stage apparatus: a
+energy. The cathode circuit runs at a mirror: its beam turns round at the
+plane (see Beam deposition). The mirror is a first-stage apparatus: a
 configuration pairing it with anything that presumes the end wall or cannot
-yet run at a mirror — the second cathode layout, the cathode circuit (whose
-beam and tail walk march to the far face), the evolved neutral momentum and
-energy, the kinetic closure's end wall jet, its bounded-chord annulus (which
-returns its end-plane exits a tick late rather than within the transport
-step, and so cannot reflect specularly), a right pump speed, or an end wall
-length — is refused at construction, in one message naming the complete set.
+yet run at a mirror — the second cathode layout, the walked plateau tail
+together with the cathode circuit (whose walkers the anode mesh cannot remove
+once its sheath repels them all, so that they bounce between the cathode
+sheath and the plane without end), the evolved neutral momentum and energy,
+the kinetic closure's end wall jet, its bounded-chord annulus (which returns
+its end-plane exits a tick late rather than within the transport step, and so
+cannot reflect specularly), a right pump speed, or an end wall length — is
+refused at construction, in one message naming the complete set.
 The mirror is verified against the whole machine it
 stands in for: the second cathode layout (`TwinCathode`) meshes the half
 column reflected about $L_m/2$, its near half equal to the half column edge
@@ -699,6 +702,37 @@ came from, keeps walking, thermalizes by the ordinary Coulomb loss, and is
 treated again at any LATER crossing — reflection carries no first-crossing
 memory, while interception remains first-crossing-only. With $\phi_a\le0$ (an
 attracting anode) nothing is reflected.
+
+At a **mirror far end** every electron population turns round at the plane.
+The machine is symmetric about $z=L_m/2$, so what crosses the plane is the
+image half's population entering, and the half column takes it as its own
+population turning round. A primary that reaches the plane unstopped turns at
+unchanged energy and flux and marches back; the anode mesh intercepts its
+solid fraction $\eta$ again on the way back (the image mesh has no memory of
+the image beam), and at the cathode the sheath turns it back, since it never
+carries more than the $e\phi_c$ it was launched with. A tail walker turns at
+the plane at unchanged energy, always, and returns as a NEW walker for the
+anode mesh: its first-crossing interception is re-armed and its sheath
+reflections count afresh. At the cathode face each walker keeps that face's
+own rule: turned back below $e\phi_c$, escaping at or above it. Nothing crosses
+the plane, so the far-end transmitted power and both far-end escape rows are
+zero, and the flux and power arriving at the plane are saved per ray
+(`source_beam_mirror_primary_*`, `source_beam_mirror_tail_*`). A population
+that does not stop bounces between the two faces; each walker together with
+everything it spawns, and the primary, march at most a fixed number of legs
+(`MIRROR_MAX_LEGS`), and what they still carry then is booked to the leg-cap
+residual rows (`source_beam_mirror_primary_residual_*`,
+`source_beam_tail_leg_cap_residual_*`) and leaves the ray's ledger there.
+Under a mirror the per-ray identity is therefore
+
+$$\Gamma_0E_0=\text{heating}+\text{radiated}+\text{cost}+\text{anode-intercepted}+P_\text{tail,cathode}+P_\text{residual},$$
+
+$P_\text{tail,cathode}$ the tail escaping at the cathode face. The series
+converges only while the anode mesh absorbs; where its sheath repels every
+walker nothing removes them, so the walked plateau tail is refused together
+with the cathode circuit at a mirror (see Geometry and state). The
+beam-smoothing Gaussian is folded about the plane as it is about the cathode
+face, so the smoothed deposit is the two-source machine's on the half.
 
 ### Cathode, anode and the circuit
 

@@ -127,6 +127,7 @@ from .physics.cathode import (
     cathode_sample_indices,
     cathode_source_terms,
     solve_cathode_boundary,
+    tail_mirror_face,
     tail_reflect_face,
     validate_cathode_solver_model,
 )
@@ -489,6 +490,27 @@ _CATHODE_RESULT_KEYS = (
 #: because the onset is what a dedicated look is placing and the summary
 #: max/mean (which run over ALL limited steps) carry the amount regardless.
 DVM_LIMITED_STEP_RECORD_CAP = 4096
+
+
+#: The per-ray mirror-plane rows a ``far_end = "mirror"`` run saves, each
+#: ``name: (BeamDepositionResult field, scale to the saved unit)`` -- W from
+#: erg/s, fluxes in 1/s as the module reports them.
+_MIRROR_BEAM_DIAGNOSTICS = {
+    "beam_mirror_primary_flux_per_s": ("primary_mirror_flux_per_s", 1.0),
+    "beam_mirror_primary_W": ("primary_mirror_erg_s", 1.0e-7),
+    "beam_mirror_primary_residual_flux_per_s": (
+        "primary_mirror_residual_flux_per_s", 1.0,
+    ),
+    "beam_mirror_primary_residual_W": (
+        "primary_mirror_residual_erg_s", 1.0e-7,
+    ),
+    "beam_mirror_tail_flux_per_s": ("tail_mirror_flux_per_s", 1.0),
+    "beam_mirror_tail_W": ("tail_mirror_erg_s", 1.0e-7),
+    "beam_tail_leg_cap_residual_flux_per_s": (
+        "tail_leg_cap_residual_flux_per_s", 1.0,
+    ),
+    "beam_tail_leg_cap_residual_W": ("tail_leg_cap_residual_erg_s", 1.0e-7),
+}
 
 
 def _cathode_result_prefixes(flags):
@@ -2327,6 +2349,12 @@ class LAPDSim1D:
                 # than reflecting walkers off an arbitrary window edge on the
                 # first cathode solve.
                 tail_reflect_face(self._geometry, end=0)
+        if bool(self._flags.get("cathode_coupling")):
+            # A mirror far end turns the beam and the walkers round at the
+            # plasma-active window's mirror face; a geometry where the two do
+            # not coincide is refused here rather than on the first solve.
+            # None (no mirror) on every other layout.
+            tail_mirror_face(self._geometry)
         # --- A2a: the anode-mesh cull of the QL tail, and its rider --------
         # Duplicated from the deposition module's own guards for the standing
         # reason: a misconfiguration must fail at construction, not on the
@@ -10154,6 +10182,16 @@ class LAPDSim1D:
             # "escape" the low row fills.
             diag[f"{prefix}_beam_end_loss_tail_low_W"] = 0.0
             diag[f"{prefix}_beam_end_loss_tail_high_W"] = 0.0
+            if self._geometry.mirror_face_indices.size:
+                # MIRROR far end, presence-gated on the geometry's mirror
+                # face so an end wall file's row structure is unchanged. What
+                # reaches the plane turns round and stays in the plasma, so
+                # the arrivals are instruments; the two leg-cap RESIDUALS are
+                # the one place a mirrored ray's power leaves its ledger
+                # (the high-face end-loss rows above read 0.0 here). Arrivals
+                # are summed over every arrival of a bouncing population.
+                for _name in _MIRROR_BEAM_DIAGNOSTICS:
+                    diag[f"{prefix}_{_name}"] = 0.0
             # Item-35 gap-survival ledger: three views of the fraction of the
             # emitted beam that crosses the cathode-anode gap, which must
             # agree. ``_probe`` is the gap-clipped probe that feeds sigma_eff,
@@ -10347,6 +10385,14 @@ class LAPDSim1D:
             diag[f"{prefix}_beam_end_loss_tail_high_W"] = (
                 float(dep.end_loss_tail_high_erg_s) * 1.0e-7
             )
+            if f"{prefix}_beam_mirror_primary_W" in diag:
+                # Presence-gated with the seed (a mirror far end only).
+                for _name, (_field, _scale) in (
+                    _MIRROR_BEAM_DIAGNOSTICS.items()
+                ):
+                    diag[f"{prefix}_{_name}"] = (
+                        float(getattr(dep, _field)) * _scale
+                    )
         for end, entry in (
             getattr(cathode_solve, "beam_plateau_edge", None) or {}
         ).items():

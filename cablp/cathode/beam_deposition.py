@@ -715,6 +715,33 @@ TAIL_ANODE_RIDER_MIN_ENERGY_EV = 50.0
 # convergent series, not an arm.
 TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 
+# How many CSDA legs one electron population may march under a MIRROR far end
+# (``mirror_face``) before what it still carries is booked as the leg-cap
+# RESIDUAL. At the mirror plane every population turns round, and at the
+# cathode face the sheath turns it back, so a population that has not stopped
+# bounces between the two faces; each leg ends at a face, and the cap bounds
+# how many there are. For a tail walker the budget is shared by the walker and
+# every rider and sheath walker it spawns (one tree); for the primary it
+# counts the primary's own legs, its first march included. The residual is
+# never dropped: its flux and power are booked to their own rows
+# (``tail_leg_cap_residual_*`` / ``primary_mirror_residual_*``) and leave the
+# ray's ledger there. Not a config key: it is the length of a convergent
+# series (the anode mesh removes ``eta`` of a walker's flux on each return
+# from the mirror), not an arm. Only a mirror far end reads it; an end wall
+# ray never bounces past two legs and never meets it.
+#
+# MEASURED on recorded half-column deposition rays at breakdown with the
+# cathode drop at its 1000 V ceiling (walkers up to ~1 keV at n_e ~ 1e9 cm^-3,
+# the longest-lived tail the model launches), the residual as a fraction of
+# the launched tail power: 1.0e-2 to 2.0e-2 at 16 legs (fails a 1 % bar),
+# 8.2e-4 to 2.9e-3 at 24, 3.9e-5 to 3.9e-4 at 32, at most 6.9e-6 at 48 and at
+# most 1.1e-7 at 64. The series converges only while the anode mesh ABSORBS:
+# where the anode sheath repels every walker (its drop driven to hundreds or
+# thousands of volts) the same rays keep 70 % at 64 legs and 60 % at 4096, so
+# no cap bounds that regime, and the solver refuses the walked tail at a
+# mirror for that reason.
+MIRROR_MAX_LEGS = 64
+
 # --- Compiled CSDA march (opt-in; see cablp.cathode.kernels) ------------------
 # The cost read of 2026-08-02 measured the substep march at ~61% numpy SCALAR
 # dispatch and Python call overhead -- ~873 sub-calls per ``deposit_beam``
@@ -2047,6 +2074,181 @@ def _tail_sheath_chain(
     return chains, take, sheath
 
 
+#: Names of the scalar ledger :func:`_tail_mirror_chains` returns, in order.
+#: Fluxes in 1/s, energies in ``flux*eV``.
+MIRROR_CHAIN_LEDGER = (
+    "culled_flux",
+    "culled_eV",
+    "returned_flux",
+    "returned_eV",
+    "sheath_flux",
+    "sheath_eV",
+    "mirror_flux",
+    "mirror_eV",
+    "cap_flux",
+    "cap_eV",
+    "escape_low_eV",
+    "escape_high_eV",
+)
+
+
+def _tail_mirror_chains(
+    plans, nn_w, ne_w, Te_w, dz_w, march_kwargs, tail_lo, tail_hi,
+    reflect_face, E_reflect, mirror_face, cull=None,
+):
+    """The ionizing tail-walk legs under a MIRROR window face.
+
+    The window's ``mirror_face`` side is the symmetry plane of a two-source
+    machine, so a walker reaching it is the image walker entering: it TURNS
+    ROUND there at unchanged energy, always, and walks back into the window.
+    On that return it is a NEW walker for the anode mesh (the image mesh it
+    stands for has no memory of it): the cull is re-armed and its sheath-turn
+    count starts again at zero. At the ``reflect_face`` (the cathode) a walker
+    below ``E_reflect`` is turned back exactly as the end wall walk turns it,
+    and at or above it escapes to the tail end ledger. Everything else --
+    the legs (one ``deposit_beam`` march each, in ``march_kwargs``), the
+    first-crossing cull, the wire sheath, the reversed-walker rider -- is the
+    end wall walk's convention unchanged.
+
+    A walker that has not stopped therefore bounces between the two faces.
+    Each LAUNCHED walker and every rider and sheath walker it spawns share one
+    budget of :data:`MIRROR_MAX_LEGS` legs; a leg the budget cannot pay for is
+    not marched, and the flux and power it would have carried are booked to
+    the leg-cap residual (``cap_flux`` / ``cap_eV``) rather than dropped.
+
+    ``plans`` and ``cull`` are :func:`_tail_lane_chains`'s. Returns
+    ``(layout, ledger)``: ``layout`` parallel to ``plans`` (``None`` for a
+    population that does not ionize, else a list of chains, each the list of
+    legs one walker marched, a leg in :func:`_tail_lane_chains`'s form), and
+    ``ledger`` the scalars named by :data:`MIRROR_CHAIN_LEDGER` summed over
+    every walker: the anode take and its rider return, the sheath's turned
+    back share, the flux and power ARRIVING at the mirror (summed over every
+    arrival, a capped one included), the residual, and the power escaping
+    through the window's low and high faces. The caller banks the legs and
+    books the ledger; nothing here writes a bank.
+    """
+    ledger = dict.fromkeys(MIRROR_CHAIN_LEDGER, 0.0)
+    if cull is None:
+        cull_local = -1
+        cull_eta = R_e = eta_E = phi_eV = 0.0
+    else:
+        cull_local, cull_eta, R_e, eta_E, phi_eV = cull
+    n_w = tail_hi - tail_lo + 1
+    face_cell = {-1: 0, 1: n_w - 1}
+
+    def _walk(launch, leg_dir, flux, E, armed, depth, budget, children):
+        """March one walker leg by leg until it stops, escapes or is capped."""
+        legs = []
+        while True:
+            if budget[0] <= 0:
+                ledger["cap_flux"] += flux
+                ledger["cap_eV"] += flux * E
+                break
+            budget[0] -= 1
+            cell = cull_local if leg_dir > 0 else cull_local - 1
+            leg = deposit_beam(
+                E, flux, nn_w, ne_w, Te_w, int(launch), leg_dir, dz_w,
+                **march_kwargs,
+                **(
+                    _leg_cull_kwargs(
+                        dict(anode_cross_index=int(cell),
+                             anode_eta=float(cull_eta)),
+                        cell, launch,
+                    ) if armed else {}
+                ),
+            )
+            legs.append(
+                (
+                    (
+                        leg.ionization_events,
+                        leg.excitation_events,
+                        leg.ionization_cost_erg_s,
+                        leg.radiated_erg_s,
+                        leg.plasma_heating_erg_s,
+                    ),
+                    float(leg.transmitted_flux),
+                    float(leg.transmitted_energy_eV),
+                    leg_dir,
+                )
+            )
+            if armed and float(leg.anode_intercepted_erg_s) > 0.0:
+                armed = False
+                E_cross = float(leg.E_entry_eV[cell])
+                f_cull = (
+                    float(leg.anode_intercepted_erg_s)
+                    / (E_cross * _ERG_PER_EV)
+                )
+                if _anode_sheath_absorbs(np.array([E_cross]), phi_eV)[0]:
+                    g_f, g_eV, r_f, r_eV = _tail_anode_take(
+                        np.array([f_cull]), np.array([E_cross]), R_e, eta_E,
+                    )
+                    ledger["culled_flux"] += g_f
+                    ledger["culled_eV"] += g_eV
+                    ledger["returned_flux"] += r_f
+                    ledger["returned_eV"] += r_eV
+                    if r_f > 0.0:
+                        # The reversed walker leaves the plane cell back the
+                        # way it came, unarmed (first crossing only) until a
+                        # mirror return re-arms it.
+                        children.append(
+                            (cull_local, -leg_dir, r_f, r_eV / r_f, False,
+                             depth)
+                        )
+                else:
+                    ledger["sheath_flux"] += f_cull
+                    ledger["sheath_eV"] += f_cull * E_cross
+                    children.append(
+                        (cell - leg_dir, -leg_dir, f_cull, E_cross,
+                         depth + 1 < TAIL_ANODE_SHEATH_MAX_REFLECTIONS,
+                         depth + 1)
+                    )
+            t_flux = float(leg.transmitted_flux)
+            t_E = float(leg.transmitted_energy_eV)
+            if not t_flux > 0.0:
+                break
+            if leg_dir == mirror_face:
+                ledger["mirror_flux"] += t_flux
+                ledger["mirror_eV"] += t_flux * t_E
+                armed = cull is not None
+                depth = 0
+            elif not (leg_dir == reflect_face and t_E < E_reflect):
+                ledger["escape_high_eV" if leg_dir > 0 else "escape_low_eV"] += (
+                    t_flux * t_E
+                )
+                break
+            flux, E = t_flux, t_E
+            launch = face_cell[leg_dir]
+            leg_dir = -leg_dir
+        return legs
+
+    out = []
+    for E_walk, flux_fwd, flux_bwd, ionizes in plans:
+        if not ionizes:
+            out.append(None)
+            continue
+        built = []
+        for birth in np.flatnonzero(flux_fwd > 0.0):
+            for walk_direction, dir_flux in _tail_launch_legs(
+                flux_fwd, flux_bwd
+            ):
+                budget = [MIRROR_MAX_LEGS]
+                pending = [
+                    (int(birth) - tail_lo, walk_direction,
+                     float(dir_flux[birth]), float(E_walk), cull is not None,
+                     0)
+                ]
+                while pending:
+                    launch, leg_dir, flux, E, armed, depth = pending.pop(0)
+                    children = []
+                    built.append(
+                        _walk(launch, leg_dir, flux, E, armed, depth, budget,
+                              children)
+                    )
+                    pending[:0] = children
+        out.append(built)
+    return out, ledger
+
+
 def _tail_band(E_walk_eV, I_ion_eV, E_stop_eV, label):
     """K7b band treatment for ONE walker energy: ``(ionize, sub, above)``.
 
@@ -2280,6 +2482,30 @@ class BeamDepositionResult:
                           was carrying at the plane -- an instrument for how
                           much of the intercepted share the mesh MIRRORED, not
                           a term of any ledger.
+    primary_mirror_flux_per_s: MIRROR far end only -- the PRIMARY flux [1/s]
+                          arriving at the mirror plane, summed over every
+                          arrival (a primary that bounces arrives once per
+                          round trip). It turns round there and stays in the
+                          plasma, so this is an instrument, not a ledger term;
+                          0.0 without ``mirror_face`` and whenever the primary
+                          stops short of the plane.
+    primary_mirror_erg_s: the power [erg/s] that arriving flux carries.
+    primary_mirror_residual_flux_per_s: the primary flux [1/s] still streaming
+                          when its :data:`MIRROR_MAX_LEGS` legs are spent.
+    primary_mirror_residual_erg_s: the power [erg/s] of that residual flux. It
+                          LEAVES the ray's ledger here (booked, never
+                          dropped) and enters no RHS row.
+    tail_mirror_flux_per_s: MIRROR far end only -- the tail WALKER flux [1/s]
+                          arriving at the mirror plane, summed over every
+                          arrival, a capped one included.
+    tail_mirror_erg_s   : the power [erg/s] that arriving walker flux carries.
+    tail_leg_cap_residual_flux_per_s: the walker flux [1/s] left unmarched
+                          when a launched walker's tree has spent its
+                          :data:`MIRROR_MAX_LEGS` legs.
+    tail_leg_cap_residual_erg_s: the power [erg/s] of that residual walker
+                          flux. It LEAVES the ray's ledger here (booked, never
+                          dropped), enters no RHS row, and closes the tail
+                          identity under a mirror beside the end ledger.
     E_entry_eV          : diagnostic: primary energy entering each cell [eV]
                           (0 for cells the ray never reaches)
     end_loss_low_erg_s  : END LEDGER, low-index end [erg/s]. Identically 0.0
@@ -2408,6 +2634,14 @@ class BeamDepositionResult:
     tail_anode_returned_erg_s: float = 0.0
     tail_anode_sheath_reflected_flux_per_s: float = 0.0
     tail_anode_sheath_reflected_erg_s: float = 0.0
+    primary_mirror_flux_per_s: float = 0.0
+    primary_mirror_erg_s: float = 0.0
+    primary_mirror_residual_flux_per_s: float = 0.0
+    primary_mirror_residual_erg_s: float = 0.0
+    tail_mirror_flux_per_s: float = 0.0
+    tail_mirror_erg_s: float = 0.0
+    tail_leg_cap_residual_flux_per_s: float = 0.0
+    tail_leg_cap_residual_erg_s: float = 0.0
 
 
 def deposit_beam(
@@ -2446,6 +2680,8 @@ def deposit_beam(
     tail_anode_phi_eV: float = 0.0,
     tail_anode_reflected_particles: float = 0.0,
     tail_anode_reflected_energy: float = 0.0,
+    mirror_face: int | None = None,
+    anomalous_bank_eV: np.ndarray | None = None,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
 
@@ -2664,6 +2900,54 @@ def deposit_beam(
     this closed-form walk has no termination convention for, and the caller is
     expected to refuse that configuration rather than have it silently
     approximated here.
+
+    **Mirror far end.** ``mirror_face`` is ``None`` (default, bit-exact: both
+    ends of the grid are what they always were) or ``-1`` / ``+1``, naming the
+    grid end that is the SYMMETRY PLANE of a two-source machine -- the half
+    column of a mirror far end. It requires ``tail_walk_window``, whose face on
+    that side must be the grid end itself, because every population that
+    turns round there walks back inside the window. At the plane every
+    electron population turns round as it would on entering the image half:
+
+    * the PRIMARY, when it reaches the plane unstopped, turns round at
+      unchanged energy and flux and is marched back through the window, leg
+      by leg, with this call's own closures. The anode interception is
+      re-armed on every return from the plane (the image mesh has no memory of
+      the image beam); at the window's other face -- the cathode -- the
+      primary, which never carries more than its launch energy ``E0_eV``
+      (``e*phi_c``), is turned back by the cathode sheath. It bounces until it
+      stops or has marched :data:`MIRROR_MAX_LEGS` legs (its first march
+      included), and a residual still streaming then is booked to
+      ``primary_mirror_residual_*``. Nothing leaves through the plane:
+      ``transmitted_flux`` is 0.0 whenever the primary reached it, and the flux
+      and power that arrived are reported in ``primary_mirror_*``. The
+      returning legs' deposition joins this ray's banks, their anomalous drag
+      joins the withheld bank a walked tail carries, and their interception
+      joins ``anode_intercepted_erg_s``;
+    * the TAIL WALKERS turn round at unchanged energy, always, and are NEW
+      walkers for the anode cull on their return (see
+      :func:`_tail_mirror_chains`); the cathode face keeps its own rule
+      (``tail_reflect_face``, which must name the OTHER face -- one face turns
+      everything, the other turns what is below its sheath). Each launched
+      walker's tree marches at most :data:`MIRROR_MAX_LEGS` legs, the rest
+      booked to ``tail_leg_cap_residual_*``, and the walker flux arriving at
+      the plane is reported in ``tail_mirror_*``. ``end_loss_tail_*`` on the
+      mirror side is identically 0.0.
+
+    Refused under a mirror, each for a stated reason: a walked tail without
+    ``tail_ionization="on"`` and any population the K7b band reverts to the
+    energy-only walk (that closed-form walk carries at most ONE reflection in
+    its unfolded path, and a mirror asks for an unbounded number), the
+    walking ``product_transport`` values (their products would escape through
+    the plane), and ``anomalous_bank_eV`` (a returning leg is marched without
+    a mirror of its own).
+
+    ``anomalous_bank_eV`` is a caller-owned array of shape ``(cells,)`` [eV/s]
+    the march ADDS its anomalous drag into instead of banking it locally --
+    the withholding the walked tail uses, with no walk of this ray's own. It
+    is how a returning primary leg hands its anomalous drag to the ray it
+    belongs to. Requires ``anomalous_transport`` and ``anomalous_disposal``
+    ``"local"``; ``heating_anomalous_erg_s`` then carries none of it.
 
     ``stopping_coefficient`` (cost read 2026-08-02, restructure C) is the
     per-cell ``A`` of ``dE/dx = A W**p`` that the walks below need, HOISTED to
@@ -2995,6 +3279,83 @@ def deposit_beam(
             ionize_tail, tail_sub_threshold, tail_above_bar = _tail_band(
                 E_tail, I_ion_eV, E_stop_eV, "tail_energy_eV"
             )
+    # --- The mirror far end (see the docstring) ----------------------------
+    # Resolved before the tail cull, whose cell is stated in window-local
+    # indices: under a mirror the window is required whatever the transport.
+    mirror = None
+    if mirror_face is not None:
+        mirror = int(mirror_face)
+        if mirror not in (-1, 1):
+            raise ValueError(
+                "mirror_face must be -1 (the grid's low-index end) or +1 (its "
+                f"high-index end), got {mirror_face!r}"
+            )
+        if tail_walk_window is None:
+            raise ValueError(
+                "mirror_face needs tail_walk_window=(lo, hi): every population "
+                "that turns round at the mirror plane walks back inside that "
+                "window, and without it the returning legs would run into "
+                "cells whose plasma rows the solver zeroes"
+            )
+        tail_lo, tail_hi = (int(tail_walk_window[0]), int(tail_walk_window[1]))
+        if not 0 <= tail_lo <= tail_hi < cells:
+            raise ValueError(
+                "tail_walk_window must be an inclusive (lo, hi) cell range "
+                f"with 0 <= lo <= hi < cells={cells} (got {tail_walk_window})"
+            )
+        if (mirror > 0 and tail_hi != cells - 1) or (
+            mirror < 0 and tail_lo != 0
+        ):
+            raise ValueError(
+                f"mirror_face={mirror} names the grid end, so the walk window "
+                f"{(tail_lo, tail_hi)} must end there too (cells={cells}): the "
+                "mirror plane is a face of both"
+            )
+        if reflect_face is not None and reflect_face == mirror:
+            raise ValueError(
+                f"tail_reflect_face={reflect_face} and mirror_face={mirror} "
+                "name the same window face; each face has one rule -- the "
+                "cathode face reflects below its sheath energy, the mirror "
+                "face turns every walker round -- so they must be the two "
+                "different faces"
+            )
+        if product_transport != "local":
+            raise ValueError(
+                f"product_transport={product_transport!r} walks the event "
+                "products on the closed-form walk, which books them as leaving "
+                "through each grid end and has no turn-round; at a mirror "
+                "plane nothing leaves. Use product_transport='local' with "
+                "mirror_face"
+            )
+        if walk_tail and tail_ionization != "on":
+            raise ValueError(
+                "mirror_face with a walked tail requires tail_ionization='on': "
+                "the energy-only closed-form walk carries at most one "
+                "reflection in its unfolded path, and a mirror plane turns a "
+                "walker round every time it arrives"
+            )
+        if anomalous_bank_eV is not None:
+            raise ValueError(
+                "anomalous_bank_eV is the returning-leg hand-off of a mirrored "
+                "ray; a leg is marched without a mirror of its own, so the two "
+                "are refused together"
+            )
+    if anomalous_bank_eV is not None:
+        if walk_tail:
+            raise ValueError(
+                "anomalous_bank_eV hands the anomalous drag to the caller; a "
+                "ray that walks its own tail withholds it for that walk, so "
+                "the two cannot both own the bank"
+            )
+        if not (
+            isinstance(anomalous_bank_eV, np.ndarray)
+            and anomalous_bank_eV.shape == (cells,)
+            and anomalous_bank_eV.dtype == np.float64
+        ):
+            raise ValueError(
+                "anomalous_bank_eV must be a float64 array of shape "
+                f"(cells,) = {(cells,)}"
+            )
     # --- A2a: the anode-mesh cull of the QL tail, and its rider -----------
     # Placed after the walk window is resolved, because the cull cell is stated
     # on the FULL grid and has to land inside the window the walkers traverse.
@@ -3187,8 +3548,20 @@ def deposit_beam(
     # the intercepted share the mesh mirrored.
     tail_anode_sheath_flux = 0.0
     tail_anode_sheath_erg = 0.0
+    # Mirror far end: the walker flux arriving at the plane, and the leg-cap
+    # residual the tail walk books (all four stay 0.0 without a mirror).
+    tail_mirror_flux = 0.0
+    tail_mirror_erg = 0.0
+    tail_cap_flux = 0.0
+    tail_cap_erg = 0.0
+    # The march withholds the anomalous drag from the local banks when the
+    # ray walks its own tail, and when a caller hands it a bank to fill
+    # (``anomalous_bank_eV``); the two never coincide.
+    withhold_anomalous = walk_tail or anomalous_bank_eV is not None
     if walk_tail:
         anom_power_eV = np.zeros(cells)
+    elif anomalous_bank_eV is not None:
+        anom_power_eV = anomalous_bank_eV
 
     order = range(launch, cells) if direction > 0 else range(launch, -1, -1)
     E = float(E0_eV)
@@ -3316,7 +3689,7 @@ def deposit_beam(
             anode_cross_index if intercept_active else -1,
             anode_eta,
             walk_products,
-            walk_tail,
+            withhold_anomalous,
             ionization_events,
             excitation_events,
             heating,
@@ -3329,7 +3702,7 @@ def deposit_beam(
             heat_terminal,
             sec_flux if walk_products else None,
             sec_power_eV if walk_products else None,
-            anom_power_eV if walk_tail else None,
+            anom_power_eV if withhold_anomalous else None,
         )
         if walk_products:
             terminal_cell = _terminal_cell
@@ -3454,7 +3827,7 @@ def deposit_beam(
             # energy decrement further down is UNCHANGED in both modes, so the
             # trajectory, the transmitted flux and every other channel are
             # bit-identical: only the destination of this one bank moves.
-            if walk_tail:
+            if withhold_anomalous:
                 acc_anom_power_eV += gamma * d_anom
                 d_anom_local = 0.0
             else:
@@ -3511,10 +3884,108 @@ def deposit_beam(
         if walk_secondaries:
             sec_flux[cell] += acc_sec_flux
             sec_power_eV[cell] += acc_sec_power_eV
-        if walk_tail:
+        if withhold_anomalous:
             anom_power_eV[cell] += acc_anom_power_eV
         if absorbed:
             break
+
+    # --- The primary at a mirror plane ---------------------------------------
+    # Placed between the march and everything that reads the march's banks, so
+    # the returning legs' deposition is part of this ray before the anomalous
+    # bank is split or walked. Presence-gated on ``mirror``: without it the
+    # block is skipped and the ray is the historical one.
+    primary_mirror_flux = 0.0
+    primary_mirror_erg = 0.0
+    primary_mirror_residual_flux = 0.0
+    primary_mirror_residual_erg = 0.0
+    if (
+        mirror is not None
+        and direction == mirror
+        and not absorbed
+        and gamma > 0.0
+        and E > 0.0
+    ):
+        win_m = slice(tail_lo, tail_hi + 1)
+        n_m = tail_hi - tail_lo + 1
+        face_m = {-1: 0, 1: n_m - 1}
+        return_kwargs = dict(
+            I_ion_eV=I_ion_eV,
+            E_stop_eV=E_stop_eV,
+            coulomb_model=coulomb_model,
+            anomalous_model=anomalous_model,
+            max_energy_fraction_per_substep=frac,
+        )
+        if anomalous_model in ("quasilinear", "ql_relaxation"):
+            return_kwargs["beam_area_cm2"] = np.ascontiguousarray(area[win_m])
+        if anomalous_model == "ql_relaxation":
+            return_kwargs["ql_relaxation_coeff"] = ql_coeff
+        if withhold_anomalous:
+            # A view: the returning legs add their anomalous drag straight
+            # into this ray's withheld bank, which the walk below carries.
+            return_kwargs["anomalous_bank_eV"] = anom_power_eV[win_m]
+        # The anode plane in window cells: between ``plane - 1`` and
+        # ``plane``. A leg crosses it by entering the far side in its own
+        # direction, and the interception is re-armed on every return from
+        # the mirror (the image mesh has no memory of the image beam).
+        plane = None
+        if anode_cross_index is not None and anode_eta > 0.0:
+            plane = (
+                anode_cross_index if direction > 0 else anode_cross_index + 1
+            ) - tail_lo
+        leg_flux, leg_E, leg_dir = gamma, E, direction
+        legs_marched = 1
+        armed = False
+        while True:
+            if leg_dir == mirror:
+                primary_mirror_flux += leg_flux
+                primary_mirror_erg += leg_flux * leg_E * _ERG_PER_EV
+                armed = plane is not None
+            elif leg_E > E0_eV:
+                raise ValueError(
+                    f"the returning primary reached the cathode face at "
+                    f"{leg_E} eV, above its launch energy {E0_eV} eV; a CSDA "
+                    "march only loses energy, so this is unreachable"
+                )
+            # Otherwise it is at the cathode face, below the sheath drop it
+            # was launched through (it only ever loses energy), and the
+            # sheath turns it back.
+            if legs_marched >= MIRROR_MAX_LEGS:
+                primary_mirror_residual_flux += leg_flux
+                primary_mirror_residual_erg += leg_flux * leg_E * _ERG_PER_EV
+                break
+            launch_m = face_m[leg_dir]
+            leg_dir = -leg_dir
+            intercept_kwargs = {}
+            if armed:
+                cell_m = plane if leg_dir > 0 else plane - 1
+                intercept_kwargs = _leg_cull_kwargs(
+                    dict(anode_cross_index=int(cell_m), anode_eta=anode_eta),
+                    cell_m, launch_m,
+                )
+            leg = deposit_beam(
+                leg_E, leg_flux, nn[win_m], ne[win_m], Te[win_m], launch_m,
+                leg_dir, dz_cm[win_m], **return_kwargs, **intercept_kwargs,
+            )
+            legs_marched += 1
+            ionization_events[win_m] += leg.ionization_events
+            excitation_events[win_m] += leg.excitation_events
+            heating[win_m] += leg.plasma_heating_erg_s
+            radiated[win_m] += leg.radiated_erg_s
+            ionization_cost[win_m] += leg.ionization_cost_erg_s
+            heat_coulomb[win_m] += leg.heating_coulomb_erg_s
+            heat_anomalous[win_m] += leg.heating_anomalous_erg_s
+            heat_secondary[win_m] += leg.heating_secondary_erg_s
+            heat_terminal[win_m] += leg.heating_terminal_erg_s
+            if float(leg.anode_intercepted_erg_s) > 0.0:
+                anode_intercepted += float(leg.anode_intercepted_erg_s)
+                armed = False
+            if not float(leg.transmitted_flux) > 0.0:
+                break
+            leg_flux = float(leg.transmitted_flux)
+            leg_E = float(leg.transmitted_energy_eV)
+        # Nothing leaves through the plane: every primary that reached it
+        # stopped inside the window or is in the residual row.
+        absorbed = True
 
     if branch_tail:
         # --- pd1: the Landau/collisional branch ---------------------------
@@ -3705,6 +4176,19 @@ def deposit_beam(
                         tail_sub_threshold_power = tail_power
                     elif tail_above_bar:
                         tail_above_bar_power = tail_power
+                if mirror is not None and not ionize_walk:
+                    # The K7b sub-band reversion to the energy-only walk. Its
+                    # closed-form integral unfolds a path with at most one
+                    # reflection, and a mirror plane turns a walker round on
+                    # every arrival; refused rather than truncated.
+                    raise ValueError(
+                        f"a tail population at {E_walk} eV reverts to the "
+                        "energy-only walk (at or below "
+                        f"E_stop_eV={E_stop_eV}), which cannot run under "
+                        "mirror_face: its closed-form walk carries at most "
+                        "one reflection, and the mirror plane turns a walker "
+                        "round every time it arrives"
+                    )
                 if ionize_walk or reflect_face is not None:
                     # Both WINDOWED closures stand on the same statement: the
                     # window must contain every cell the QL channel drives, or
@@ -3784,15 +4268,40 @@ def deposit_beam(
                 ion_cost_tail[win] += leg_cost
                 radiated_tail[win] += leg_rad
 
-            tail_chains, _take = _tail_lane_chains(
-                tail_plans, nn_w, ne_w, Te_w, dz_w, march_kwargs,
-                tail_lo, tail_hi, reflect_face, E_reflect,
-                cull=(
-                    None if not tail_cull
-                    else (tail_anode_local, tail_anode_eta, R_e_tail,
-                          eta_E_tail, phi_a_tail)
-                ),
+            _tail_cull_spec = (
+                None if not tail_cull
+                else (tail_anode_local, tail_anode_eta, R_e_tail,
+                      eta_E_tail, phi_a_tail)
             )
+            if mirror is not None:
+                # The mirror chains (see _tail_mirror_chains). The lane march
+                # is not offered them: it carries at most one reflection per
+                # walker as a fixed second wave and no anode cull, while a
+                # mirror walker bounces an unbounded number of times and is
+                # re-armed on every return. The recursive legs are the same
+                # CSDA marches either way.
+                tail_chains, _mirror_ledger = _tail_mirror_chains(
+                    tail_plans, nn_w, ne_w, Te_w, dz_w, march_kwargs,
+                    tail_lo, tail_hi, reflect_face, E_reflect, mirror,
+                    cull=_tail_cull_spec,
+                )
+                _take = tuple(
+                    _mirror_ledger[name] for name in MIRROR_CHAIN_LEDGER[:6]
+                )
+                end_loss_tail_low += _mirror_ledger["escape_low_eV"] * _ERG_PER_EV
+                end_loss_tail_high += (
+                    _mirror_ledger["escape_high_eV"] * _ERG_PER_EV
+                )
+                tail_mirror_flux += _mirror_ledger["mirror_flux"]
+                tail_mirror_erg += _mirror_ledger["mirror_eV"] * _ERG_PER_EV
+                tail_cap_flux += _mirror_ledger["cap_flux"]
+                tail_cap_erg += _mirror_ledger["cap_eV"] * _ERG_PER_EV
+            else:
+                tail_chains, _take = _tail_lane_chains(
+                    tail_plans, nn_w, ne_w, Te_w, dz_w, march_kwargs,
+                    tail_lo, tail_hi, reflect_face, E_reflect,
+                    cull=_tail_cull_spec,
+                )
             tail_anode_culled_flux += _take[0]
             tail_anode_culled_erg += _take[1] * _ERG_PER_EV
             tail_anode_returned_flux += _take[2]
@@ -3812,6 +4321,11 @@ def deposit_beam(
                         # at most two legs.
                         for banks, _flux, _E_leg, _leg_dir in chain:
                             _bank_tail_march(banks)
+                        if mirror is not None:
+                            # Booked already, by the mirror ledger above: a
+                            # mirror chain's last leg may end in a turn the
+                            # leg budget did not pay for, not an escape.
+                            continue
                         _banks, leg_flux, leg_E, leg_dir = chain[-1]
                         # A walker still above E_stop at the window face it
                         # was heading for escapes, on the SAME free-escape
@@ -4156,4 +4670,12 @@ def deposit_beam(
         tail_anode_returned_erg_s=tail_anode_returned_erg,
         tail_anode_sheath_reflected_flux_per_s=tail_anode_sheath_flux,
         tail_anode_sheath_reflected_erg_s=tail_anode_sheath_erg,
+        primary_mirror_flux_per_s=primary_mirror_flux,
+        primary_mirror_erg_s=primary_mirror_erg,
+        primary_mirror_residual_flux_per_s=primary_mirror_residual_flux,
+        primary_mirror_residual_erg_s=primary_mirror_residual_erg,
+        tail_mirror_flux_per_s=tail_mirror_flux,
+        tail_mirror_erg_s=tail_mirror_erg,
+        tail_leg_cap_residual_flux_per_s=tail_cap_flux,
+        tail_leg_cap_residual_erg_s=tail_cap_erg,
     )

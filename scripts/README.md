@@ -120,7 +120,9 @@ by name in the campaign record), alongside the wall-return reference corpus's
 builder, verifier and bench (`build_wall_return_reference.py`,
 `verify_wall_return_reference.py`, `bench_wall_return.py`) and the DVM
 mirror-plane corpus's capture/verify script (`dvm_mirror_plane_reference.py`,
-pinning `scripts/data/dvm_mirror_plane_reference.npz`). The rest split
+pinning `scripts/data/dvm_mirror_plane_reference.npz`) and the CSDA module's
+mirror-branch corpus's (`deposit_beam_mirror_reference.py`, pinning
+`scripts/data/deposit_beam_mirror_reference.npz`). The rest split
 into four kinds: read-only audits/censuses of a saved run or build
 (`audit_sim1d_afterglow_ion_channel.py`, `census_afterglow_tail_handoff.py`,
 `t23c_pairwise_audit.py`); a lane-equivalence check

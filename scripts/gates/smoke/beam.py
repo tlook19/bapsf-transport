@@ -3282,3 +3282,586 @@ def _case_beam_l_b_profile_at_fed_back_cross(
     _lp_pre = _lp_profile(_lp_beam.beam_cross[csda_launch])
     assert _lp_beam.beam_cross[csda_launch] != csda_sigma_eff
     assert _lp_pre.tobytes() != _lp_expected.tobytes()
+
+
+# ====================================================================
+# The mirror far end: the CSDA primary, the tail walkers, the smoothing
+# ====================================================================
+_MIRROR_ETA = 0.358  # the anode mesh solid fraction the mirror cases cull at
+
+
+def _mirror_column(cells):
+    """(nn, ne, Te, dz) of a synthetic non-uniform half column."""
+    return (
+        np.full(cells, 1.0e11),
+        np.full(cells, 1.0e10) * np.linspace(1.0, 2.0, cells),
+        np.linspace(3.0, 2.0, cells),
+        np.linspace(8.0, 12.0, cells),
+    )
+
+
+def _mirror_full(*arrays):
+    """The half column's arrays reflected about the mirror plane."""
+    return tuple(np.concatenate([a, a[::-1]]) for a in arrays)
+
+
+def _mirror_fold(values, cells):
+    """The full column's per-cell values folded onto the half column."""
+    values = np.asarray(values, dtype=float)
+    return values[:cells] + values[cells:][::-1]
+
+
+def _mirror_fold_worst(half, full, cells):
+    """Worst per-cell relative difference of a half bank and a folded one.
+
+    Cells whose folded value is zero must be exactly zero in the half bank
+    too; the rest are compared relative to the folded value.
+    """
+    fold = _mirror_fold(full, cells)
+    half = np.asarray(half, dtype=float)
+    zero = fold == 0.0
+    if np.any(half[zero] != 0.0):
+        return math.inf
+    if not np.any(~zero):
+        return 0.0
+    return float(
+        np.max(np.abs(half[~zero] - fold[~zero]) / np.abs(fold[~zero]))
+    )
+
+
+_MIRROR_BANKS = (
+    "plasma_heating_erg_s",
+    "ionization_events",
+    "excitation_events",
+    "radiated_erg_s",
+    "ionization_cost_erg_s",
+    "heating_anomalous_erg_s",
+)
+
+
+def _mirror_mg_kwargs(cells, **extra):
+    """The walked plateau tail on the synthetic column, ionizing."""
+    kwargs = dict(
+        anomalous_model="quasilinear",
+        beam_area_cm2=1000.0,
+        anomalous_transport="plateau_multigroup",
+        plateau_edge_eV=30.0,
+        tail_ionization="on",
+        tail_walk_window=(0, cells - 1),
+    )
+    kwargs.update(extra)
+    return kwargs
+
+
+def _mirror_march_kwargs():
+    """The march configuration the tail legs run in."""
+    return dict(
+        I_ion_eV=I_ion,
+        E_stop_eV=_beam_deposition_mod.HE_E_STOP_EV,
+        coulomb_model="fast_electron",
+        anomalous_model="none",
+        max_energy_fraction_per_substep=0.02,
+    )
+
+
+# --------------------------------------------------------------------
+# mirror-tail-per-face-rule
+# --------------------------------------------------------------------
+@_case("mirror-tail-per-face-rule")
+def _case_mirror_tail_per_face_rule():
+    """Each walk-window face has ONE rule under a mirror far end.
+
+    The cathode face (``tail_reflect_face``) turns back a walker below its
+    threshold and lets one at or above it escape; the mirror face
+    (``mirror_face``) turns every walker round, so its end-loss row is exactly
+    0.0 while walker power arrives there. Naming one face for both, a mirror
+    with no walk window, a window stopping short of the grid end, the
+    energy-only walk, a walking ``product_transport`` and an unknown face are
+    each refused. NEGATIVE CONTROL: the same call without ``mirror_face`` lets
+    the walkers out through the far face, so "the mirror row is 0.0" fails on
+    it.
+    """
+    cells = 24
+    nn, ne, Te, dz = _mirror_column(cells)
+    args = (200.0, 1.0e20, nn, ne, Te, 0, 1, dz)
+    reflect = dict(tail_reflect_face=-1, tail_reflect_threshold_eV=200.0)
+    turned = _deposit_beam_ray(
+        *args, **_mirror_mg_kwargs(cells, mirror_face=1, **reflect)
+    )
+    assert turned.tail_power_erg_s > 0.0
+    assert turned.tail_mirror_erg_s > 0.0
+    assert turned.tail_mirror_flux_per_s > 0.0
+    assert turned.end_loss_tail_high_erg_s == 0.0
+    # Every walker is born below e*phi_c = 200 eV and only loses energy, so
+    # the cathode face turns all of them back as well.
+    assert turned.end_loss_tail_low_erg_s == 0.0
+    # A cathode threshold below the walkers: the cathode face lets them out,
+    # the mirror face still turns every one round.
+    leaky = _deposit_beam_ray(
+        *args,
+        **_mirror_mg_kwargs(
+            cells, mirror_face=1, tail_reflect_face=-1,
+            tail_reflect_threshold_eV=1.0,
+        ),
+    )
+    assert leaky.end_loss_tail_low_erg_s > 0.0
+    assert leaky.end_loss_tail_high_erg_s == 0.0
+    # NEGATIVE CONTROL: no mirror, and the far face is an exit.
+    plain = _deposit_beam_ray(*args, **_mirror_mg_kwargs(cells, **reflect))
+    assert plain.end_loss_tail_high_erg_s > 0.0
+    assert plain.tail_mirror_erg_s == 0.0
+    # The refusals, each by its own message.
+    no_window = dict(mirror_face=1)
+    for kwargs, needle in (
+        (_mirror_mg_kwargs(cells, mirror_face=1, tail_reflect_face=1,
+                           tail_reflect_threshold_eV=200.0),
+         "name the same window face"),
+        (no_window, "mirror_face needs tail_walk_window"),
+        (_mirror_mg_kwargs(cells, mirror_face=1,
+                           tail_walk_window=(0, cells - 2)),
+         "must end there too"),
+        (dict(_mirror_mg_kwargs(cells, mirror_face=1),
+              tail_ionization="off"),
+         "requires tail_ionization='on'"),
+        (dict(mirror_face=1, tail_walk_window=(0, cells - 1),
+              product_transport="nonlocal"),
+         "product_transport='nonlocal'"),
+        (_mirror_mg_kwargs(cells, mirror_face=2), "mirror_face must be"),
+    ):
+        try:
+            _deposit_beam_ray(*args, **kwargs)
+        except ValueError as exc:
+            assert needle in str(exc), (needle, str(exc))
+        else:
+            raise AssertionError(f"{needle}: ACCEPTED")
+
+
+# --------------------------------------------------------------------
+# mirror-tail-full-window-fold
+# --------------------------------------------------------------------
+@_case("mirror-tail-full-window-fold")
+def _case_mirror_tail_full_window_fold():
+    """The mirror turn IS the image half: walkers on the full window, folded.
+
+    The walked plateau tail of one ray on the half column with the mirror
+    turn, against the same ray on the FULL window -- the half column and its
+    reflection, no mirror, both ends free exits -- folded onto the half: every
+    per-cell bank (heating, the anomalous delivery, ionization, excitation,
+    radiation, cost) equal to 1e-12 relative, per cell. The walkers turn round
+    at unchanged energy, so each returning leg marches the floats the full
+    window's walker marches in the image half. What the full window lets out
+    through its far end is what the half lets out through the cathode face
+    after the turn. The primary stops short of the plane here, so the walkers
+    are the only population that turns. NEGATIVE CONTROL: without the mirror
+    the half column's walkers leave through the far face and the fold
+    differs by far more than the bar.
+    """
+    cells = 24
+    nn, ne, Te, dz = _mirror_column(cells)
+    half = _deposit_beam_ray(
+        200.0, 1.0e20, nn, ne, Te, 0, 1, dz,
+        **_mirror_mg_kwargs(cells, mirror_face=1),
+    )
+    full = _deposit_beam_ray(
+        200.0, 1.0e20, *_mirror_full(nn, ne, Te), 0, 1, *_mirror_full(dz),
+        **_mirror_mg_kwargs(2 * cells),
+    )
+    # Non-vacuity: walkers reach the plane; the primary does not.
+    assert half.tail_mirror_erg_s > 0.01 * half.tail_power_erg_s, (
+        half.tail_mirror_erg_s, half.tail_power_erg_s
+    )
+    assert half.primary_mirror_flux_per_s == 0.0
+    assert float(full.E_entry_eV[cells]) == 0.0
+    worst = {
+        name: _mirror_fold_worst(
+            getattr(half, name), getattr(full, name), cells
+        )
+        for name in _MIRROR_BANKS
+    }
+    print(
+        "mirror-tail-full-window-fold: worst per-cell relative difference "
+        + ", ".join(f"{k}={v:.2e}" for k, v in worst.items())
+    )
+    assert max(worst.values()) <= 1.0e-12, worst
+    exits_full = full.end_loss_tail_low_erg_s + full.end_loss_tail_high_erg_s
+    assert math.isclose(
+        half.end_loss_tail_low_erg_s, exits_full, rel_tol=1.0e-12
+    ), (half.end_loss_tail_low_erg_s, exits_full)
+    assert half.end_loss_tail_high_erg_s == 0.0
+    assert half.tail_leg_cap_residual_erg_s == 0.0
+    # NEGATIVE CONTROL.
+    plain = _deposit_beam_ray(
+        200.0, 1.0e20, nn, ne, Te, 0, 1, dz, **_mirror_mg_kwargs(cells),
+    )
+    control = max(
+        _mirror_fold_worst(getattr(plain, name), getattr(full, name), cells)
+        for name in _MIRROR_BANKS
+    )
+    assert control > 1.0e-3, control
+
+
+# --------------------------------------------------------------------
+# mirror-tail-cull-rearmed
+# --------------------------------------------------------------------
+@_case("mirror-tail-cull-rearmed")
+def _case_mirror_tail_cull_rearmed():
+    """A walker returning from the mirror is a NEW walker for the anode cull.
+
+    One walker population, born gap-side of the anode plane and launched
+    toward the mirror on a column with no neutrals and almost no plasma,
+    crosses the plane (the mesh takes ``eta``), turns round at the plane at
+    UNCHANGED energy, is re-armed, crosses the plane again (the mesh takes
+    ``eta`` of what is left) and leaves through the cathode face. The mesh
+    therefore takes ``eta (2 - eta)`` of the launched flux, the mirror sees
+    ``(1 - eta)`` of it arrive, and the returning leg starts at the exact
+    energy the first leg arrived with. NEGATIVE CONTROL: the end wall chains
+    (first crossing only, no turn) take ``eta`` alone.
+    """
+    cells = 20
+    nn = np.zeros(cells)
+    ne = np.full(cells, 1.0e2)
+    Te = np.full(cells, 1.0)
+    dz = np.full(cells, 10.0)
+    flux = np.zeros(cells)
+    flux[4] = 1.0e18
+    plans = [(100.0, flux, None, True)]
+    cull = (8, _MIRROR_ETA, 0.0, 0.0, 0.0)
+    layout, ledger = _beam_deposition_mod._tail_mirror_chains(
+        plans, nn, ne, Te, dz, _mirror_march_kwargs(), 0, cells - 1, None,
+        0.0, 1, cull=cull,
+    )
+    (chain,) = layout[0]
+    assert [leg[3] for leg in chain] == [1, -1], [leg[3] for leg in chain]
+    f0 = 1.0e18
+    expected = f0 * _MIRROR_ETA + (1.0 - _MIRROR_ETA) * f0 * _MIRROR_ETA
+    assert math.isclose(ledger["culled_flux"], expected, rel_tol=1e-12), (
+        ledger["culled_flux"], expected
+    )
+    assert math.isclose(
+        ledger["mirror_flux"], (1.0 - _MIRROR_ETA) * f0, rel_tol=1e-12
+    )
+    # Unchanged energy at the turn: what arrived is what the return carries.
+    E_arrived = chain[0][2]
+    assert ledger["mirror_eV"] == ledger["mirror_flux"] * E_arrived
+    assert ledger["escape_high_eV"] == 0.0
+    assert ledger["escape_low_eV"] > 0.0 and ledger["cap_flux"] == 0.0
+    # NEGATIVE CONTROL: the end wall's first-crossing cull.
+    _wall, wall_take = _beam_deposition_mod._tail_recursive_chains(
+        plans, nn, ne, Te, dz, _mirror_march_kwargs(), 0, cells - 1, None,
+        0.0, cull=cull,
+    )
+    assert math.isclose(wall_take[0], f0 * _MIRROR_ETA, rel_tol=1e-12)
+    assert not math.isclose(wall_take[0], expected, rel_tol=1e-6)
+
+
+# --------------------------------------------------------------------
+# mirror-tail-leg-cap-residual
+# --------------------------------------------------------------------
+@_case("mirror-tail-leg-cap-residual")
+def _case_mirror_tail_leg_cap_residual():
+    """The leg cap is spent exactly, and its residual is BOOKED, not dropped.
+
+    (a) On a vacuum column (no neutrals, no plasma) a walker between the
+    cathode face (which reflects it) and the mirror (which turns it) never
+    loses energy: its tree marches exactly ``MIRROR_MAX_LEGS`` legs and the
+    residual row carries its whole launched flux and power, exactly.
+    (b) On a walked-tail ray whose anode sheath repels every walker (a drop
+    far above the plateau), nothing removes the walkers, the cap binds, and
+    the tail identity
+        P_tail = heating_anomalous + cost_tail + radiated_tail
+                 + end_loss_tail + residual + (culled - returned)
+    still closes to 1e-12, the residual a non-zero term of it.
+    NEGATIVE CONTROL: without the mirror the same ray books no residual and
+    its walkers leave through the far face instead.
+    """
+    cells = 12
+    vacuum = (
+        np.zeros(cells), np.zeros(cells), np.full(cells, 1.0),
+        np.full(cells, 10.0),
+    )
+    flux = np.zeros(cells)
+    flux[3] = 2.0e17
+    layout, ledger = _beam_deposition_mod._tail_mirror_chains(
+        [(80.0, flux, None, True)], *vacuum, _mirror_march_kwargs(), 0,
+        cells - 1, -1, 1.0e9, 1,
+    )
+    legs = sum(len(chain) for chain in layout[0])
+    assert legs == _beam_deposition_mod.MIRROR_MAX_LEGS, legs
+    assert ledger["cap_flux"] == 2.0e17, ledger["cap_flux"]
+    assert ledger["cap_eV"] == 2.0e17 * 80.0, ledger["cap_eV"]
+
+    nn, ne, Te, dz = _mirror_column(cells)
+    trap = dict(
+        tail_reflect_face=-1, tail_reflect_threshold_eV=200.0,
+        tail_anode_cross_index=5, tail_anode_eta=_MIRROR_ETA,
+        tail_anode_phi_eV=1.0e4, plateau_groups=2,
+    )
+    res = _deposit_beam_ray(
+        200.0, 1.0e20, nn, ne, Te, 0, 1, dz,
+        **_mirror_mg_kwargs(cells, mirror_face=1, **trap),
+    )
+
+    def tail_gap(r):
+        bank = r.tail_power_erg_s + r.plateau_wave_power_erg_s
+        booked = (
+            math.fsum(
+                (r.heating_anomalous_erg_s + r.ionization_cost_tail_erg_s
+                 + r.radiated_tail_erg_s).tolist()
+            )
+            + r.end_loss_tail_low_erg_s + r.end_loss_tail_high_erg_s
+            + r.tail_leg_cap_residual_erg_s
+            + r.tail_anode_culled_erg_s - r.tail_anode_returned_erg_s
+        )
+        return abs(booked - bank) / bank
+
+    assert res.tail_anode_sheath_reflected_flux_per_s > 0.0
+    frac = res.tail_leg_cap_residual_erg_s / res.tail_power_erg_s
+    print(
+        "mirror-tail-leg-cap-residual: trapped tail residual "
+        f"{frac:.3e} of the launched tail power, identity "
+        f"{tail_gap(res):.2e}"
+    )
+    assert res.tail_leg_cap_residual_erg_s > 1.0e-6 * res.tail_power_erg_s
+    assert res.tail_leg_cap_residual_flux_per_s > 0.0
+    assert tail_gap(res) <= 1.0e-12, tail_gap(res)
+    assert res.end_loss_tail_high_erg_s == 0.0
+    # NEGATIVE CONTROL.
+    wall = _deposit_beam_ray(
+        200.0, 1.0e20, nn, ne, Te, 0, 1, dz,
+        **_mirror_mg_kwargs(cells, **trap),
+    )
+    assert wall.tail_leg_cap_residual_erg_s == 0.0
+    assert wall.end_loss_tail_high_erg_s > 0.0
+    assert tail_gap(wall) <= 1.0e-12
+
+
+# --------------------------------------------------------------------
+# mirror-beam-smoothing-fold
+# --------------------------------------------------------------------
+@_case("mirror-beam-smoothing-fold")
+def _case_mirror_beam_smoothing_fold():
+    """The beam smoothing folds its Gaussian about the mirror plane.
+
+    On the template at nx = 40 the TwinCathode machine is the half column
+    reflected about Lm/2. A mirror-symmetric deposit smoothed by the twin's
+    matrix, restricted to the half, equals the half column's own smoothing
+    of the half deposit to 1e-12 relative per live cell at a 50 cm width, and
+    the half matrix still conserves (every live column sums to 1).
+    NEGATIVE CONTROL: the half column's matrix built without the mirror fold
+    (the same geometry with no mirror face) differs by more than 1e-3 near
+    the plane.
+    """
+    from cablp.solvers._sim1d.core.geometry import build_geometry
+
+    params, flags = default_config()
+    params["nx"] = 40
+    half = build_geometry(dict(params, far_end="mirror"), flags)
+    twin = build_geometry(params, dict(flags, TwinCathode=True))
+    cells = int(half.cells)
+    assert int(twin.cells) == 2 * cells
+    live = np.asarray(half.plasma_active, dtype=bool)
+    rng = np.random.default_rng(7)
+    ext = np.where(live, rng.uniform(0.5, 1.5, cells), 0.0)
+    ext_full = np.concatenate([ext, ext[::-1]])
+    W_half = _beam_smoothing_matrix(half, 50.0)
+    W_twin = _beam_smoothing_matrix(twin, 50.0)
+    got = W_half @ ext
+    want = (W_twin @ ext_full)[:cells]
+    worst = float(
+        np.max(np.abs(got[live] - want[live]) / np.abs(want[live]))
+    )
+    print(f"mirror-beam-smoothing-fold: worst relative difference {worst:.2e}")
+    assert worst <= 1.0e-12, worst
+    assert np.allclose(
+        W_half[:, live].sum(axis=0), 1.0, rtol=0.0, atol=1.0e-13
+    )
+    # NEGATIVE CONTROL.
+    bare = dataclasses.replace(
+        half, mirror_face_indices=np.zeros(0, dtype=int)
+    )
+    assert _beam_smoothing_key(bare, 50.0) != _beam_smoothing_key(half, 50.0)
+    control = _beam_smoothing_matrix(bare, 50.0) @ ext
+    assert float(
+        np.max(np.abs(control[live] - want[live]) / np.abs(want[live]))
+    ) > 1.0e-3
+
+
+# --------------------------------------------------------------------
+# mirror-csda-primary-turn
+# --------------------------------------------------------------------
+@_case("mirror-csda-primary-turn")
+def _case_mirror_csda_primary_turn():
+    """The CSDA primary turns round at the mirror plane and is booked there.
+
+    (a) A primary that reaches the plane on the half column and stops on its
+    way back, against the same ray on the full window (the half and its
+    reflection) folded onto the half: every per-cell bank equal to 1e-12
+    relative per cell; nothing is transmitted; the flux arriving at the plane
+    is the launched flux and its power is that flux at the full window's
+    entry energy of the first image cell, exactly; the per-ray energy
+    identity closes to 1e-12.
+    (b) On a column with no neutrals and almost no plasma the primary
+    bounces between the cathode sheath and the plane; the anode mesh is
+    re-armed on every return from the plane (33 interceptions in 64 legs),
+    so the residual flux is exactly ``(1 - eta)**33`` of the launch, booked
+    in its row, and the identity still closes.
+    NEGATIVE CONTROL: without ``mirror_face`` the half ray transmits the
+    surviving flux out of the far end and is intercepted once.
+    """
+    cells = 30
+    nn = np.full(cells, 3.5e14) * np.linspace(1.2, 0.8, cells)
+    ne = np.full(cells, 1.0e10)
+    Te = np.linspace(3.0, 2.0, cells)
+    dz = np.linspace(8.0, 12.0, cells)
+    window = dict(tail_walk_window=(0, cells - 1))
+    half = _deposit_beam_ray(
+        150.0, 1.0e18, nn, ne, Te, 0, 1, dz, mirror_face=1, **window,
+    )
+    full = _deposit_beam_ray(
+        150.0, 1.0e18, *_mirror_full(nn, ne, Te), 0, 1, *_mirror_full(dz),
+    )
+    assert float(full.transmitted_flux) == 0.0  # it stops in the image half
+    assert float(full.E_entry_eV[cells]) > 0.0  # ...after crossing the plane
+    worst = max(
+        _mirror_fold_worst(getattr(half, name), getattr(full, name), cells)
+        for name in _MIRROR_BANKS
+    )
+    print(
+        f"mirror-csda-primary-turn: worst per-cell fold difference {worst:.2e}"
+    )
+    assert worst <= 1.0e-12, worst
+    assert half.transmitted_flux == 0.0 and half.transmitted_energy_eV == 0.0
+    assert half.primary_mirror_flux_per_s == 1.0e18
+    assert half.primary_mirror_erg_s == (
+        1.0e18 * float(full.E_entry_eV[cells]) * ev_to_erg
+    )
+
+    def ray_gap(r, E0, G0):
+        booked = (
+            math.fsum(
+                (r.plasma_heating_erg_s + r.radiated_erg_s
+                 + r.ionization_cost_erg_s).tolist()
+            )
+            + r.anode_intercepted_erg_s
+            + r.transmitted_flux * r.transmitted_energy_eV * ev_to_erg
+            + r.primary_mirror_residual_erg_s
+        )
+        return abs(booked - G0 * E0 * ev_to_erg) / (G0 * E0 * ev_to_erg)
+
+    assert ray_gap(half, 150.0, 1.0e18) <= 1.0e-12
+    # (b) the bouncing primary.
+    thin = (np.zeros(cells), np.full(cells, 1.0e2), np.full(cells, 1.0))
+    bounce = _deposit_beam_ray(
+        150.0, 1.0e18, *thin, 0, 1, dz, mirror_face=1,
+        anode_cross_index=5, anode_eta=_MIRROR_ETA, **window,
+    )
+    expected = 1.0e18
+    for _ in range(33):
+        expected *= 1.0 - _MIRROR_ETA
+    assert bounce.primary_mirror_residual_flux_per_s == expected, (
+        bounce.primary_mirror_residual_flux_per_s, expected
+    )
+    assert bounce.primary_mirror_residual_erg_s > 0.0
+    assert ray_gap(bounce, 150.0, 1.0e18) <= 1.0e-12
+    # NEGATIVE CONTROL.
+    plain = _deposit_beam_ray(
+        150.0, 1.0e18, *thin, 0, 1, dz, anode_cross_index=5,
+        anode_eta=_MIRROR_ETA,
+    )
+    assert plain.transmitted_flux == (1.0 - _MIRROR_ETA) * 1.0e18
+    assert plain.primary_mirror_residual_flux_per_s == 0.0
+    assert plain.anode_intercepted_erg_s < bounce.anode_intercepted_erg_s
+
+
+# --------------------------------------------------------------------
+# mirror-cathode-coupling-constructs
+# --------------------------------------------------------------------
+def _mirror_circuit_config(far_end):
+    """A short scheduled discharge with the cathode circuit on, 24 far cells."""
+    params, flags = default_config()
+    flags.update(
+        neutral_momentum=False, neutral_energy=False,
+        neutral_hot_internal_wall=False,
+    )
+    params.update({
+        "cathode_neutral_jet": False,
+        "cathode_jet_surface_debit": False,
+        "cathode_jet_energy_convention": "legacy",
+        "dt_save": 0.0,
+        "phase_transition_mode": "scheduled",
+        "tau_neutral_prebreakdown": 0.0,
+        "tau_prebreakdown": 0.0,
+        "tau_breakdown": 0.0,
+        "tau_discharge": 1.0,
+        "tau_afterglow": 0.0,
+        "nx": 24,
+        "beam_deposition_smoothing_cm": 50.0,
+        "initial_neutral_state": "fill",
+    })
+    if far_end == "mirror":
+        params.update(far_end="mirror", S_pump_R=0.0)
+    return params, flags
+
+
+@_case("mirror-cathode-coupling-constructs")
+def _case_mirror_cathode_coupling_constructs():
+    """The half column runs with the cathode circuit on.
+
+    ``far_end = "mirror"`` with ``cathode_coupling`` constructs and runs a
+    short discharge: the CSDA ray fires, the primary reaches the plane and
+    turns round there (its arrival rows fill), nothing is transmitted out of
+    the far end and no end-loss row fills, the leg-cap rows are saved, and the
+    mirror rows survive a save and reload. The walked tail with the circuit
+    is still refused at the mirror, naming its reason.
+    NEGATIVE CONTROL: the end wall run carries none of the mirror rows, so
+    their presence is the mirror's and not a seeded default.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from cablp.solvers._sim1d.results.io import load_result_hdf5
+
+    params, flags = _mirror_circuit_config("mirror")
+    assert flags["cathode_coupling"] is True
+    sim = LAPDSim1D(params, flags)
+    result = sim.run(t_end=2.0e-6, dt=1.0e-7)
+    diag = result.cathode_diagnostics
+    assert float(np.max(diag["beam_csda_active"])) == 1.0
+    assert float(np.max(diag["source_beam_mirror_primary_flux_per_s"])) > 0.0
+    assert float(np.max(diag["source_beam_mirror_primary_W"])) > 0.0
+    for name in (
+        "source_beam_transmitted_W",
+        "source_beam_transmitted_flux_per_s",
+        "source_beam_end_loss_high_W",
+        "source_beam_end_loss_tail_high_W",
+        "source_beam_mirror_primary_residual_W",
+        "source_beam_tail_leg_cap_residual_W",
+    ):
+        assert float(np.max(np.abs(diag[name]))) == 0.0, name
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "mirror.h5"
+        sim.save_result(path, result)
+        loaded = load_result_hdf5(path)
+    assert np.array_equal(
+        loaded.cathode_diagnostics["source_beam_mirror_primary_W"],
+        diag["source_beam_mirror_primary_W"],
+    )
+    try:
+        LAPDSim1D(
+            dict(params, heating_anomalous_transport="plateau_multigroup"),
+            flags,
+        )
+    except ValueError as exc:
+        assert (
+            "heating_anomalous_transport='local' (got 'plateau_multigroup'"
+            in str(exc)
+        ), str(exc)
+    else:
+        raise AssertionError("the walked tail ACCEPTED at a mirror")
+    # NEGATIVE CONTROL.
+    wall_params, wall_flags = _mirror_circuit_config("end_wall")
+    wall = LAPDSim1D(wall_params, wall_flags).run(t_end=3.0e-7, dt=1.0e-7)
+    assert not any(
+        "mirror" in name or "leg_cap" in name
+        for name in wall.cathode_diagnostics
+    )

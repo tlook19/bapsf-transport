@@ -99,6 +99,35 @@ plane vanish to rounding (the velocity axis is antisymmetric to rounding, so
 mirrored bins carry equal kinetic energy to an ulp), and the tick's particle
 and energy closure hold with no mirror term.
 
+The **beam at the mirror plane** is the CSDA module's: it is handed the
+plane as the grid end of the deposition ray (`deposit_beam(mirror_face=+1)`,
+with the plasma-active window, whose last cell borders the plane). Each
+population that reaches the plane turns round there by starting a NEW march
+leg at the plane's cell in the opposite direction, at the transmitted energy
+and flux of the leg that arrived: the new leg's entry energy is the identical float the arriving
+leg left the cell with, so a leg pair marches exactly the substeps the full
+two-source column marches in the image half, and the half column's banks equal
+the full column's folded about the plane to rounding (the bank additions run in
+a different order). The returning primary's legs add their anomalous drag
+straight into the ray's withheld bank (`anomalous_bank_eV`, the march's own
+withholding branch), so the walked tail carries it with the rest. Legs
+alternate between the plane and the cathode face until the population stops;
+a walker tree (a launched walker and every rider and sheath walker it spawns)
+and the primary each march at most `MIRROR_MAX_LEGS` = 64 legs, and the flux
+and power a leg the budget cannot pay for would have carried are booked to the
+leg-cap residual rows. While the anode mesh absorbs, the budget converges
+geometrically (measured on breakdown rays at the 1000 V cathode ceiling: at
+most $1.1\times10^{-7}$ of the launched tail power left at 64 legs, 1-2 %
+at 16); where the anode sheath repels every walker nothing absorbs them and
+no budget bounds the residual (70 % at 64 legs, 60 % at 4096), which is why
+the solver refuses the walked tail with the circuit at a mirror. Each leg is a
+`deposit_beam` march and takes the compiled CSDA kernel whenever it is loaded,
+so the mirror branch adds no kernel code; the batched lane march is not
+offered mirror chains, which bounce an unbounded number of times. The beam
+smoothing's Gaussian is folded about the plane as it is about each cathode
+face (`_beam_smoothing_matrix`), which makes the half column's matrix the
+full column's restricted to one half.
+
 **Energy-consistent hyperbolic core.** The convective momentum flux is the
 kinetic-energy-preserving $\lbrace u\rbrace\lbrace M\rbrace$ form, and the
 Rusanov $(n,M)$ numerical kinetic-energy dissipation is deposited into $E_i$ as
@@ -950,6 +979,7 @@ bookkeeping.
 | KEP single-face flux (boundary) | `physics/flux.py:kep_rusanov_face_scalar` |
 | Mirror-face ghost and flux | `physics/flux.py:mirror_ghost_states`, `mirror_face_flux`, `_apply_mirror_faces` |
 | Kinetic mirror plane (specular, same-march) | `physics/kinetic_dvm.py:TransientDVM._configure_mirror_plane`, `_march`, `update` |
+| Beam at the mirror plane (turn legs, leg budget, residual) | `cablp/cathode/beam_deposition.py:deposit_beam` (`mirror_face`), `_tail_mirror_chains`; `physics/cathode.py:tail_mirror_face`, `_beam_smoothing_matrix` |
 | Material-face physical flux (boundary) | `physics/flux.py:physical_face_scalar` |
 | Flux divergence | `physics/flux.py:_flux_divergence` |
 | Ghost-cell Bohm outflow | `physics/sources.py:characteristic_boundary_rhs` |
