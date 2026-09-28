@@ -3364,6 +3364,22 @@ def _mirror_march_kwargs():
     )
 
 
+def _mirror_residual_bound_lifted():
+    """Lift the run-time mirror residual bound for a synthetic ray.
+
+    The mirror cases below that exercise a configuration where nothing
+    removes the walkers (a reflecting cathode and no absorbing anode) do so
+    to test a per-face rule or the capped branch itself, which
+    ``MIRROR_RESIDUAL_MAX_FRACTION`` refuses on a solver-facing call; the
+    bound tests the result and changes no float the march produces.
+    """
+    from unittest import mock
+
+    return mock.patch.object(
+        _beam_deposition_mod, "MIRROR_RESIDUAL_MAX_FRACTION", math.inf
+    )
+
+
 # --------------------------------------------------------------------
 # mirror-tail-per-face-rule
 # --------------------------------------------------------------------
@@ -3385,9 +3401,12 @@ def _case_mirror_tail_per_face_rule():
     nn, ne, Te, dz = _mirror_column(cells)
     args = (200.0, 1.0e20, nn, ne, Te, 0, 1, dz)
     reflect = dict(tail_reflect_face=-1, tail_reflect_threshold_eV=200.0)
-    turned = _deposit_beam_ray(
-        *args, **_mirror_mg_kwargs(cells, mirror_face=1, **reflect)
-    )
+    # Nothing removes these walkers (both faces turn them), so the residual
+    # bound is lifted for this one call; mirror-residual-bound-raises owns it.
+    with _mirror_residual_bound_lifted():
+        turned = _deposit_beam_ray(
+            *args, **_mirror_mg_kwargs(cells, mirror_face=1, **reflect)
+        )
     assert turned.tail_power_erg_s > 0.0
     assert turned.tail_mirror_erg_s > 0.0
     assert turned.tail_mirror_flux_per_s > 0.0
@@ -3596,10 +3615,13 @@ def _case_mirror_tail_leg_cap_residual():
         tail_anode_cross_index=5, tail_anode_eta=_MIRROR_ETA,
         tail_anode_phi_eV=1.0e4, plateau_groups=2,
     )
-    res = _deposit_beam_ray(
-        200.0, 1.0e20, nn, ne, Te, 0, 1, dz,
-        **_mirror_mg_kwargs(cells, mirror_face=1, **trap),
-    )
+    # The capped branch itself: the residual bound is lifted so the budget's
+    # booking can be read (mirror-residual-bound-raises owns the bound).
+    with _mirror_residual_bound_lifted():
+        res = _deposit_beam_ray(
+            200.0, 1.0e20, nn, ne, Te, 0, 1, dz,
+            **_mirror_mg_kwargs(cells, mirror_face=1, **trap),
+        )
 
     def tail_gap(r):
         bank = r.tail_power_erg_s + r.plateau_wave_power_erg_s
@@ -3919,3 +3941,73 @@ def _case_mirror_primary_needs_absorbing_anode():
     wall_params, wall_flags = _mirror_circuit_config("end_wall")
     LAPDSim1D(dict(wall_params, eta=0.0), wall_flags)
     LAPDSim1D(dict(params, eta=0.0), dict(flags, cathode_coupling=False))
+
+
+# --------------------------------------------------------------------
+# mirror-residual-bound-raises
+# --------------------------------------------------------------------
+@_case("mirror-residual-bound-raises")
+def _case_mirror_residual_bound_raises():
+    """A mirrored ray whose leg budget leaves power unmarched is refused.
+
+    ``deposit_beam(mirror_face=...)`` raises when the tail leg-cap residual
+    plus the primary's residual exceeds ``MIRROR_RESIDUAL_MAX_FRACTION`` of
+    the ray's launched power ``Gamma0 * E0``. Both components are exercised:
+    (a) a primary bouncing on a near-vacuum column behind a thin mesh
+    (``eta = 0.05``: ``0.95**33`` of it is left after 64 legs), and
+    (b) walkers between a reflecting cathode and the mirror with no anode
+    to remove them. Each raises a RuntimeError naming the bound.
+    NEGATIVE CONTROL: with the bound lifted -- the pre-bound behaviour -- the
+    same two calls return and book a residual above the bound, so the
+    refusal is the bound's; and the primary behind the shipped mesh
+    (``eta = 0.358``) converges under the bound and returns.
+    """
+    cells = 30
+    dz = np.linspace(8.0, 12.0, cells)
+    thin = (np.zeros(cells), np.full(cells, 1.0e2), np.full(cells, 1.0))
+    window = dict(tail_walk_window=(0, cells - 1), mirror_face=1)
+    bound = _beam_deposition_mod.MIRROR_RESIDUAL_MAX_FRACTION
+    assert bound == 1.0e-4, bound
+    primary = (
+        (150.0, 1.0e18, *thin, 0, 1, dz),
+        dict(window, anode_cross_index=5, anode_eta=0.05),
+    )
+    walker_cells = 24
+    nn, ne, Te, wdz = _mirror_column(walker_cells)
+    walkers = (
+        (200.0, 1.0e20, nn, ne, Te, 0, 1, wdz),
+        _mirror_mg_kwargs(
+            walker_cells, mirror_face=1, tail_reflect_face=-1,
+            tail_reflect_threshold_eV=200.0,
+        ),
+    )
+    shares = {}
+    for label, (args, kwargs), row in (
+        ("primary", primary, "primary_mirror_residual_erg_s"),
+        ("walkers", walkers, "tail_leg_cap_residual_erg_s"),
+    ):
+        try:
+            _deposit_beam_ray(*args, **kwargs)
+        except RuntimeError as exc:
+            assert "MIRROR_RESIDUAL_MAX_FRACTION" in str(exc), str(exc)
+        else:
+            raise AssertionError(f"{label}: an unconverged mirror ray RETURNED")
+        # NEGATIVE CONTROL: the pre-bound behaviour.
+        with _mirror_residual_bound_lifted():
+            res = _deposit_beam_ray(*args, **kwargs)
+        share = getattr(res, row) / (args[0] * args[1] * ev_to_erg)
+        assert share > bound, (label, share)
+        shares[label] = share
+    converged = _deposit_beam_ray(
+        150.0, 1.0e18, *thin, 0, 1, dz,
+        **dict(window, anode_cross_index=5, anode_eta=_MIRROR_ETA),
+    )
+    conv_share = converged.primary_mirror_residual_erg_s / (
+        150.0 * 1.0e18 * ev_to_erg
+    )
+    assert 0.0 < conv_share < bound, conv_share
+    print(
+        "mirror-residual-bound-raises: refused at residual shares "
+        + ", ".join(f"{k}={v:.3e}" for k, v in shares.items())
+        + f"; eta=0.358 primary returns at {conv_share:.3e}"
+    )

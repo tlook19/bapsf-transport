@@ -216,6 +216,7 @@ _CASE_ORDER = (
     "mirror-cathode-coupling-constructs",
     "mirror-compiled-equivalence",
     "mirror-primary-needs-absorbing-anode",
+    "mirror-residual-bound-raises",
 )
 
 

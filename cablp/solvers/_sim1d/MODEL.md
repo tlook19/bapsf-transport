@@ -722,7 +722,10 @@ that does not stop bounces between the two faces; each walker together with
 everything it spawns, and the primary, march at most a fixed number of legs
 (`MIRROR_MAX_LEGS`), and what they still carry then is booked to the leg-cap
 residual rows (`source_beam_mirror_primary_residual_*`,
-`source_beam_tail_leg_cap_residual_*`) and leaves the ray's ledger there.
+`source_beam_tail_leg_cap_residual_*`) and leaves the ray's ledger there;
+a ray that would leave more than $10^{-4}$ of its launched power there is
+refused at run time, and the two residual rows count in the ignition
+monitor's beam end-loss total.
 Under a mirror the per-ray identity is therefore
 
 $$\Gamma_0E_0=\text{heating}+\text{radiated}+\text{cost}+\text{anode-intercepted}+P_\text{tail,cathode}+P_\text{residual},$$

@@ -191,12 +191,23 @@ def _smoothing_arm(sigma):
 
 
 def _replay(sigma=50.0):
-    """Replay every arm; return ``{key: array}`` in the corpus layout."""
+    """Replay every arm; return ``{key: array}`` in the corpus layout.
+
+    The run-time residual bound (``MIRROR_RESIDUAL_MAX_FRACTION``) is lifted
+    for the ray arms: the arms whose walkers nothing removes exist to pin the
+    capped branch and its booked residual, which a solver-facing call refuses.
+    The bound tests the result; it changes no float the march produces.
+    """
     out = {}
-    for name, (args, kwargs) in _ray_arms().items():
-        res = bd.deposit_beam(*args, **kwargs)
-        for field, value in _result_arrays(res).items():
-            out[f"{name}/{field}"] = value
+    bound = bd.MIRROR_RESIDUAL_MAX_FRACTION
+    bd.MIRROR_RESIDUAL_MAX_FRACTION = float("inf")
+    try:
+        for name, (args, kwargs) in _ray_arms().items():
+            res = bd.deposit_beam(*args, **kwargs)
+            for field, value in _result_arrays(res).items():
+                out[f"{name}/{field}"] = value
+    finally:
+        bd.MIRROR_RESIDUAL_MAX_FRACTION = bound
     for key, value in _chains_arm().items():
         out[f"chains_rearm/{key}"] = value
     for key, value in _smoothing_arm(sigma).items():

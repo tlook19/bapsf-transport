@@ -742,6 +742,16 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # refuses the walked tail at a mirror for that reason.
 MIRROR_MAX_LEGS = 64
 
+# The largest share of a mirrored ray's launched power (``Gamma0 * E0``) the
+# leg budget may leave unmarched: ``deposit_beam(mirror_face=...)`` raises when
+# the tail leg-cap residual plus the primary's residual exceeds it on a call.
+# The residual rows are diagnostics, never a sink, so the bound keeps what
+# leaves the ledger through them below the rows' own significance. Converged
+# rays sit far under it (at most 1.1e-7 of the launched TAIL power at 64 legs
+# in the scans above). Not a config key: it is a validity bound on the
+# truncation, not an arm.
+MIRROR_RESIDUAL_MAX_FRACTION = 1.0e-4
+
 # --- Compiled CSDA march (opt-in; see cablp.cathode.kernels) ------------------
 # The cost read of 2026-08-02 measured the substep march at ~61% numpy SCALAR
 # dispatch and Python call overhead -- ~873 sub-calls per ``deposit_beam``
@@ -4635,6 +4645,26 @@ def deposit_beam(
     # by construction and not by an argument about adding zero.
     if tail_cull:
         anode_intercepted += tail_anode_culled_erg - tail_anode_returned_erg
+
+    if mirror is not None:
+        # The run-time bound on what the leg budget leaves unmarched: the
+        # booked residual is a diagnostic row, never a sink, so a ray whose
+        # capped legs would still carry a measurable share of its power is
+        # refused rather than run on with that power out of the ledger.
+        _beam_erg = float(Gamma0_per_s) * float(E0_eV) * _ERG_PER_EV
+        _residual_erg = tail_cap_erg + primary_mirror_residual_erg
+        if _residual_erg > MIRROR_RESIDUAL_MAX_FRACTION * _beam_erg:
+            raise RuntimeError(
+                "the mirror leg budget left "
+                f"{_residual_erg / _beam_erg:.6e} of the ray's launched power "
+                f"{_beam_erg * 1.0e-7:.6g} W unmarched (tail leg-cap residual "
+                f"{tail_cap_erg * 1.0e-7:.6g} W, primary residual "
+                f"{primary_mirror_residual_erg * 1.0e-7:.6g} W after "
+                f"MIRROR_MAX_LEGS={MIRROR_MAX_LEGS} legs), above the "
+                "MIRROR_RESIDUAL_MAX_FRACTION bound "
+                f"{MIRROR_RESIDUAL_MAX_FRACTION:.1e}: the populations are not "
+                "stopping between the cathode face and the mirror plane"
+            )
 
     return BeamDepositionResult(
         ionization_events=ionization_events,

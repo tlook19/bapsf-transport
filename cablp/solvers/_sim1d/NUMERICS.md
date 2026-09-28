@@ -115,7 +115,9 @@ alternate between the plane and the cathode face until the population stops;
 a walker tree (a launched walker and every rider and sheath walker it spawns)
 and the primary each march at most `MIRROR_MAX_LEGS` = 64 legs, and the flux
 and power a leg the budget cannot pay for would have carried are booked to the
-leg-cap residual rows. While the anode mesh absorbs, the budget converges
+leg-cap residual rows. The rows are diagnostics, not a sink: a call whose tail
+and primary residuals together exceed `MIRROR_RESIDUAL_MAX_FRACTION` =
+$10^{-4}$ of the ray's launched power $\Gamma_0E_0$ raises. While the anode mesh absorbs, the budget converges
 geometrically (measured on breakdown rays at the 1000 V cathode ceiling: at
 most $1.1\times10^{-7}$ of the launched tail power left at 64 legs, 1-2 %
 at 16); where the anode sheath repels every walker nothing absorbs them and
