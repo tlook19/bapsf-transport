@@ -117,8 +117,9 @@ and the primary each march at most `MIRROR_MAX_LEGS` = 64 legs, and the flux
 and power a leg the budget cannot pay for would have carried are booked to the
 leg-cap residual rows. The rows are diagnostics, not a sink: a call whose tail
 and primary residuals together exceed `MIRROR_RESIDUAL_MAX_FRACTION` =
-$10^{-4}$ of the ray's launched power $\Gamma_0E_0$ raises. While the anode mesh absorbs, the budget converges
-geometrically (measured on breakdown rays at the 1000 V cathode ceiling: at
+$10^{-4}$ of the ray's launched power $\Gamma_0E_0$ raises. While the anode
+mesh absorbs, the budget converges geometrically (measured on breakdown rays
+at the 1000 V cathode ceiling: at
 most $1.1\times10^{-7}$ of the launched tail power left at 64 legs, 1-2 %
 at 16); where the anode sheath repels every walker nothing absorbs them and
 the series converges only by their thermalizing. There the wire sheath turns
@@ -129,7 +130,11 @@ rest's gap leg, so a walker stays one chain instead of splitting into a tree
 on every return from the mirror. On the two recorded breakdown rays of that
 regime the residual is then 10-46 % at 64 legs, 0.2-6 % at 256 and zero at
 1024 (every walker stopped); the cap does not bound that regime at 64 legs,
-which is why the solver refuses the walked tail with the circuit at a mirror. Each leg is a
+and a ray in it raises the residual bound. The anode sheath reaches that
+regime when the circuit books more fast electrons at the anode than the
+cathode emits, which is why the walked tail with the circuit at a mirror
+constructs only under `anode_tail_booking = "emission_fraction"` (MODEL.md,
+the anode sheath). Each leg is a
 `deposit_beam` march and takes the compiled CSDA kernel whenever it is loaded,
 so the mirror branch adds no kernel code; the batched lane march is not
 offered mirror chains, which bounce an unbounded number of times. The beam
@@ -661,7 +666,11 @@ times and carrying a plateau tolerance of $64\epsilon$. The prescribed-drive
 form roots $\phi_c+V_p-\phi_a(\phi_c)-V_b$ on
 $[10^{-8}\ \mathrm{V},\ \phi_{c,\text{cap}}]$ at the same tight tolerances; a
 residual already non-negative at the bottom returns $10^{-8}$ V UNTAGGED.
-Uniqueness rests on each residual's monotonicity.
+Uniqueness rests on each residual's monotonicity. An anode balance with no
+floating solution raises at the solved sheath; the prescribed form's trial
+sheaths, and the loop advance's TR-BDF2 stages at their bracket's lower
+endpoint $I=0$ (evaluated once through an explicit probe flag and handed back
+to `brentq` at that endpoint), keep the floored value instead.
 
 **A demand past the ceiling `cathode_phi_c_cap_V` is CLAMPED, not raised.**
 The solve returns the ceiling value and TAGS itself `capability_limited`; no error is raised and the run
