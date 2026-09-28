@@ -96,10 +96,12 @@ PRE-ASYMPTOTIC; neither is an order:
     ------ --------- -------------- ---------------  -----------------  -----------------
       0     lie      1.00           1.00             1.00               0.94-1.00
       4     lie      1.00           1.00             0.98-1.00          0.90-1.00
-      0     strang   0.98-1.03      0.89-1.13;       n,nn,u band        n,nn,u band
-                                    Ti band          1.57->1.24;        1.59->1.27;
-                                    1.38->1.06       Ti band            Ti band
-                                                     1.76->1.44; Te PA  1.76->1.48; Te PA
+      0     strang   0.98-1.03      0.89-1.13;       bands:             bands:
+                                    Ti band          n 1.57->1.25,      n, nn, u each
+                                    1.38->1.06       nn 1.56->1.25,     1.59->1.27,
+                                                     u 1.56->1.24,      Ti 1.76->1.48;
+                                                     Ti 1.76->1.44;     Te PA
+                                                     Te PA
       2     strang   0.97-1.04      1.17 (n,nn,u);   2.00               1.99-2.00
                                     Te band
                                     0.66->0.93, Ti
@@ -118,8 +120,9 @@ second-order AND L-stable.
 
 backward_euler is the negative control: theta = 1 cannot be second-order at any
 dt, so if it reaches 2.0 the harness is wrong rather than good. shifted is
-theta = 0.6, first-order for the same reason; on the Strang rows its Te and Ti
-fits drift toward 1 across the levels (its leading first-order coefficient is
+theta = 0.6, first-order for the same reason; its DRIFTING fits (Te and Ti on
+the Picard 2 and 4 Strang rows, Ti on the Picard-0 Strang row) have local
+slopes approaching 1 across the levels (its leading first-order coefficient is
 (theta - 1/2) = 0.1 of backward Euler's, so the second-order term still
 contributes at these dt). Read shifted as a scale check.
 
@@ -210,7 +213,11 @@ ORDER_SE_BOUND = 0.10
 #: a fit is still quoted as an ORDER; wider, it is labelled DRIFTING. Added
 #: after the first results: a four-level fit has two residual degrees of
 #: freedom and is blind to monotone curvature, so a slope still drifting
-#: across the levels can fit with a small standard error.
+#: across the levels can fit with a small standard error. The bound was set
+#: after those results. Measured at the default levels, the widest monotone
+#: span still quoted as an ORDER is 0.18 (shifted n, nn, u, Picard 2 and 4
+#: Strang, 1.27 -> 1.09) and the narrowest labelled DRIFTING is 0.27 (shifted
+#: Te, the same rows, 0.66 -> 0.93), either side of 0.2.
 DRIFT_SPAN_BOUND = 0.2
 
 #: Neutral temperature [K] the seed puts the optional ``En`` row at. The ``En``

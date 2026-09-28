@@ -354,7 +354,7 @@ a PRE-ASYMPTOTIC fit is an order.
 |---|---|---|---|---|---|
 | 0 | `lie` | 1.00 | 1.00 | 1.00 | 0.94–1.00 |
 | 4 | `lie` | 1.00 | 1.00 | 0.98–1.00 | 0.90–1.00 |
-| 0 | `strang` | 0.98–1.03 | 0.89–1.13; $T_i$ band 1.38→1.06 | $n, n_n, u$ band 1.57→1.24; $T_i$ band 1.76→1.44; $T_e$ PRE-ASYMPTOTIC | $n, n_n, u$ band 1.59→1.27; $T_i$ band 1.76→1.48; $T_e$ PRE-ASYMPTOTIC |
+| 0 | `strang` | 0.98–1.03 | 0.89–1.13; $T_i$ band 1.38→1.06 | bands $n$ 1.57→1.25, $n_n$ 1.56→1.25, $u$ 1.56→1.24, $T_i$ 1.76→1.44; $T_e$ PRE-ASYMPTOTIC | bands $n$, $n_n$, $u$ each 1.59→1.27, $T_i$ 1.76→1.48; $T_e$ PRE-ASYMPTOTIC |
 | 2 (production) | `strang` | 0.97–1.04 | 1.17 ($n, n_n, u$); $T_e$ band 0.66→0.93; $T_i$ band 1.46→1.02 | 2.00 | 1.99–2.00 |
 | 4 | `strang` | 0.97–1.04 | 1.17 ($n, n_n, u$); $T_e$ band 0.66→0.93; $T_i$ band 1.46→1.02 | 2.00 | 1.99–2.00 |
 
@@ -367,8 +367,10 @@ Picard-0 `strang` row the frozen conductivity alone caps `crank_nicolson` and
 those entries are bands, not orders. `backward_euler` is the negative control:
 $\theta=1$ cannot be second-order at any $\Delta t$, so a 2.0 there would
 indict the harness rather than commend the scheme. `shifted` is $\theta=0.6$
-and first-order for the same reason; on the `strang` rows its $T_e$ and $T_i$
-fits drift toward 1 across the levels, because its leading first-order
+and first-order for the same reason; its DRIFTING fits (the $T_e$ and $T_i$
+fits on the Picard 2 and 4 `strang` rows, the $T_i$ fit on the Picard-0
+`strang` row) have local slopes approaching 1 across the levels, because its
+leading first-order
 coefficient is $(\theta-\tfrac12)=0.1$ of backward Euler's and the
 second-order term still contributes at these $\Delta t$. Read it as a scale
 check.

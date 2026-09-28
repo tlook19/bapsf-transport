@@ -2048,6 +2048,7 @@ def _case_order_gate_envelope_fit():
     # log(dt); the triplet ratio is a screen. Pinned on synthetic error
     # sequences whose slope is known exactly.
     from verify_sim1d_order import (
+        DRIFT_SPAN_BOUND,
         DT_LAMBDA_FLAG,
         MIN_LEVELS,
         ORDER_SE_BOUND,
@@ -2070,7 +2071,7 @@ def _case_order_gate_envelope_fit():
     assert np.allclose(fit["local"], 1.7, rtol=0.0, atol=1e-12), fit
     assert pre_asymptotic_reasons(fit, clean, 0.0, 1.0) == []
     assert drift_label(fit) is None, fit
-    exact =np.array([1.0, 2.0])
+    exact = np.array([1.0, 2.0])
     shape = np.array([1.0, -0.5])
     solutions = [exact + 0.1 * (dt / dts[0]) ** 1.7 * shape for dt in dts]
     assert np.allclose(triplet_screens(solutions), 1.7, rtol=0.0, atol=1e-9)
@@ -2108,7 +2109,7 @@ def _case_order_gate_envelope_fit():
     assert pre_asymptotic_reasons(fit9, e9, 0.0, 1.0) == []
     # The alternating local slopes are a wobble, not a drift.
     assert drift_label(fit9) is None, fit9
-    screens9 =triplet_screens([np.array([e]) for e in e9])
+    screens9 = triplet_screens([np.array([e]) for e in e9])
     assert max(screens9) - min(screens9) > 1.0, screens9
 
     # A monotone drift of the local slope (1.6 -> 1.4 -> 1.2, a crossover band)
@@ -2122,6 +2123,25 @@ def _case_order_gate_envelope_fit():
     assert pre_asymptotic_reasons(fit_drift, e_drift, 0.0, 1.0) == []
     label = drift_label(fit_drift)
     assert label is not None and label.startswith("DRIFTING"), label
+
+    # The span half of the rule: monotone local slopes spanning 0.10 stay an
+    # ORDER, and spanning 0.25 are labelled, either side of the 0.2 bound.
+    assert DRIFT_SPAN_BOUND == 0.2, DRIFT_SPAN_BOUND
+    for local, drifting in (
+        (np.array([1.10, 1.05, 1.00]), False),
+        (np.array([1.25, 1.125, 1.00]), True),
+    ):
+        e_mono = 1.0e-3 * 2.0 ** -np.concatenate(([0.0], np.cumsum(local)))
+        fit_mono = envelope_fit(dts[:4], e_mono)
+        assert np.allclose(fit_mono["local"], local, rtol=0.0, atol=1e-12)
+        assert pre_asymptotic_reasons(fit_mono, e_mono, 0.0, 1.0) == []
+        mono_label = drift_label(fit_mono)
+        if drifting:
+            assert mono_label is not None and mono_label.startswith(
+                "DRIFTING"
+            ), (local, mono_label)
+        else:
+            assert mono_label is None, (local, mono_label)
 
     # The smallest level error must clear the reference's error bound by
     # REF_RESOLVE_FACTOR; below it the envelope is PRE-ASYMPTOTIC.
