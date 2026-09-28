@@ -47,6 +47,17 @@ Per save it reports the relative L-infinity error over the half domain
 the same for the annulus neutral density ``nn_a`` and the full column's own
 symmetry defect (left half against the reflected right half).
 
+``--neutral-model kinetic_dvm`` runs both cases with the kinetic neutral
+closure (``neutral_model = "kinetic_dvm"``) in place of the fluid one, every
+other key unchanged; the half column's far plane is then the DVM's specular
+mirror plane. It additionally records, at every neutral tick of the half
+column, the DVM ledger's right-end rows -- the gross particle traffic out
+through the mirror plane and its same-tick return, their difference (the net
+particle flux through the plane), the plane's net energy row
+``net_surface_end_R``, the right pump row, the largest entry of the lagged
+right-end buffers -- and the tick's particle and energy closure residuals,
+and reports the worst of each. They are reported, not gated.
+
 PASS = every one of ``n``, ``Te``, ``Ti``, ``nn`` at or below
 :data:`TOLERANCE` at every save. Exit 0 on PASS, 1 on FAIL, 2 when the
 precondition checks, the dt replay or the save lattices refuse the
@@ -55,11 +66,15 @@ comparison.
 Usage::
 
     python scripts/verify/verify_twin_mirror_equivalence.py --outdir DIR
+    python scripts/verify/verify_twin_mirror_equivalence.py --outdir DIR \
+        --neutral-model kinetic_dvm
 
 Outputs (under ``--outdir``, which must lie outside the repository):
 ``twin_mirror_equivalence.tsv`` (the per-save table),
 ``twin_mirror_dt.tsv`` (both accepted-dt sequences) and
-``twin_mirror_equivalence.json`` (summary and verdict).
+``twin_mirror_equivalence.json`` (summary and verdict); under
+``--neutral-model kinetic_dvm`` also ``twin_mirror_dvm_ledger.tsv`` (the
+per-tick mirror-plane ledger rows).
 """
 
 import argparse
@@ -112,10 +127,21 @@ SHARED_OVERRIDES = {
 }
 
 
-def build_configs(t_dt_save):
+#: The ``--neutral-model`` choices; the first is the default.
+NEUTRAL_MODELS = ("moment", "kinetic_dvm")
+
+
+def build_configs(t_dt_save, neutral_model="moment"):
     """Return ``((half_params, half_flags), (twin_params, twin_flags))``."""
+    if neutral_model not in NEUTRAL_MODELS:
+        raise ValueError(
+            f"neutral_model must be one of {list(NEUTRAL_MODELS)} "
+            f"(got {neutral_model!r})"
+        )
     params, flags = default_config()
     params.update(SHARED_OVERRIDES["params"])
+    if neutral_model != "moment":
+        params["neutral_model"] = neutral_model
     flags.update(SHARED_OVERRIDES["flags"])
     params["dt_save"] = float(t_dt_save)
     params["t_save_start"] = 0.0
@@ -217,6 +243,77 @@ def replay_proposals(sim, proposals):
     sim.suggest_timestep = suggest_timestep
 
 
+class _MirrorLedgerRecorder:
+    """Record the half column's DVM mirror-plane ledger rows at every tick.
+
+    Wraps ``update`` on the one engine instance, passing every ledger through
+    unchanged.
+    """
+
+    FIELDS = (
+        "out_R", "return_R", "net_particles_R", "pump_R",
+        "net_energy_R_erg", "energy_out_R_erg", "pending_R_max",
+        "particle_distribution_rel", "particle_domain_rel",
+        "energy_distribution_rel", "energy_domain_rel",
+    )
+
+    def __init__(self, dvm):
+        from cablp.solvers._sim1d.physics.kinetic_dvm import (
+            ledger_energy_residual,
+            ledger_residual,
+        )
+
+        self.rows = []
+        original = dvm.update
+
+        def update(*args, **kwargs):
+            ledger = original(*args, **kwargs)
+            energy = ledger["energy"]
+            particles = ledger_residual(ledger)
+            energies = ledger_energy_residual(ledger)
+            self.rows.append({
+                "out_R": ledger["loss_end_out_R"],
+                "return_R": ledger["birth_end_return_R"],
+                "net_particles_R": (
+                    ledger["loss_end_out_R"] - ledger["birth_end_return_R"]
+                ),
+                "pump_R": ledger["loss_pump_R"],
+                "net_energy_R_erg": energy["net_surface_end_R"],
+                "energy_out_R_erg": energy["loss_end_out_R"],
+                "pending_R_max": float(max(
+                    np.max(np.abs(dvm.pend_R_c)), np.max(np.abs(dvm.pend_R_a))
+                )),
+                "particle_distribution_rel": particles["distribution_rel"],
+                "particle_domain_rel": particles["domain_rel"],
+                "energy_distribution_rel": energies["distribution_rel"],
+                "energy_domain_rel": energies["domain_rel"],
+            })
+            return ledger
+
+        dvm.update = update
+
+    def summary(self):
+        """Return ``{field: worst |value|}`` over the ticks, plus the count."""
+        out = {"ticks": len(self.rows)}
+        for name in self.FIELDS:
+            out[f"max_abs_{name}"] = max(
+                (abs(float(row[name])) for row in self.rows), default=0.0
+            )
+        # The net rows relative to the gross traffic they are the difference
+        # of, tick by tick.
+        out["max_net_particles_over_out_R"] = max(
+            (abs(row["net_particles_R"]) / row["out_R"]
+             for row in self.rows if row["out_R"] > 0.0),
+            default=0.0,
+        )
+        out["max_net_energy_over_energy_out_R"] = max(
+            (abs(row["net_energy_R_erg"]) / row["energy_out_R_erg"]
+             for row in self.rows if row["energy_out_R_erg"] > 0.0),
+            default=0.0,
+        )
+        return out
+
+
 def _rel_linf(values, reference):
     scale = float(np.max(np.abs(reference)))
     diff = float(np.max(np.abs(np.asarray(values) - np.asarray(reference))))
@@ -234,6 +331,11 @@ def main(argv=None):
         "--dt-save", type=float, default=1.0e-4,
         help="save cadence [s] (default 1e-4)",
     )
+    ap.add_argument(
+        "--neutral-model", choices=NEUTRAL_MODELS, default=NEUTRAL_MODELS[0],
+        help="neutral closure both cases run (default moment); kinetic_dvm "
+        "also reports the half column's DVM mirror-plane ledger rows",
+    )
     args = ap.parse_args(argv)
     outdir = args.outdir.expanduser().resolve()
     if outdir == REPO_ROOT or REPO_ROOT in outdir.parents:
@@ -242,7 +344,7 @@ def main(argv=None):
         ap.error("--t-end must be at least 3e-3 s")
     outdir.mkdir(parents=True, exist_ok=True)
 
-    (hp, hf), (tp, tf) = build_configs(args.dt_save)
+    (hp, hf), (tp, tf) = build_configs(args.dt_save, args.neutral_model)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         half_sim = LAPDSim1D(hp, hf)
@@ -251,6 +353,10 @@ def main(argv=None):
     print(
         f"half column: {cells} cells (far_end='mirror'); full column: "
         f"{int(twin_sim.geometry.cells)} cells (TwinCathode)"
+        + (
+            "" if args.neutral_model == "moment"
+            else f"; neutral_model={args.neutral_model!r}"
+        )
     )
     failures = preconditions(half_sim, twin_sim)
     for failure in failures:
@@ -266,6 +372,10 @@ def main(argv=None):
 
     half_dt, twin_dt = _DtRecorder(), _DtRecorder()
     proposals = record_proposals(half_sim)
+    mirror_ledger = (
+        _MirrorLedgerRecorder(half_sim._dvm)
+        if args.neutral_model == "kinetic_dvm" else None
+    )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         half = half_sim.run(
@@ -384,6 +494,23 @@ def main(argv=None):
             + f"  {'PASS' if row['pass'] else 'FAIL'}"
         )
 
+    if mirror_ledger is not None:
+        with open(outdir / "twin_mirror_dvm_ledger.tsv", "w") as fh:
+            fh.write("tick\t" + "\t".join(mirror_ledger.FIELDS) + "\n")
+            for k, row in enumerate(mirror_ledger.rows):
+                fh.write(f"{k}\t" + "\t".join(
+                    repr(float(row[name])) for name in mirror_ledger.FIELDS
+                ) + "\n")
+        ledger_summary = mirror_ledger.summary()
+        print(
+            "DVM mirror plane, worst over the half column's "
+            f"{ledger_summary['ticks']} neutral ticks: "
+            + ", ".join(
+                f"{k} {v:.3e}" for k, v in ledger_summary.items()
+                if k != "ticks"
+            )
+        )
+
     passed = all(row["pass"] for row in rows) and bool(rows)
     summary = {
         "tolerance": TOLERANCE,
@@ -407,6 +534,9 @@ def main(argv=None):
         "shared_overrides": SHARED_OVERRIDES,
         "verdict": "PASS" if passed else "FAIL",
     }
+    if mirror_ledger is not None:
+        summary["neutral_model"] = args.neutral_model
+        summary["dvm_mirror_plane"] = ledger_summary
     with open(outdir / "twin_mirror_equivalence.json", "w") as fh:
         json.dump(summary, fh, indent=2, sort_keys=True)
     print(

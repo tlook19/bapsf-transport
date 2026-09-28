@@ -205,6 +205,8 @@ _CASE_ORDER = (
     "twin-mirror-mesh-identity",
     "mirror-puff-row-reflection",
     "order-gate-envelope-fit",
+    "dvm-mirror-plane-specular",
+    "dvm-mirror-no-lagged-buffer",
 )
 
 

@@ -2308,7 +2308,11 @@ def _case_mirror_refusals():
 
     The mirror-valid base constructs. Each conflicting setting alone raises
     with the complete incompatible set in the message and its own required
-    value under "Set:"; all of them together raise once, listing each.
+    value under "Set:"; all of them together raise once, listing each. The
+    kinetic neutral closure is not in the set: the mirror base constructs
+    under ``neutral_model = "kinetic_dvm"``, its engine ending in the
+    specular mirror plane, while its end wall jet and bounded-chord annulus
+    stay refused with the reason stated.
     """
     from cablp.solvers._sim1d.core.validation import (
         validate_far_end_configuration,
@@ -2317,13 +2321,18 @@ def _case_mirror_refusals():
     complete = (
         "Incompatible with far_end='mirror' (the complete set): TwinCathode, "
         "cathode_coupling, neutral_momentum, neutral_energy, "
-        "neutral_model='kinetic_dvm', neutral_kinetic_dvm_end_wall_jet, "
+        "neutral_kinetic_dvm_end_wall_jet, "
         "neutral_kinetic_dvm_annulus_flights='bounded_chord', "
         "S_pump_R != 0, end_wall_length_cm != 7.8."
     )
     params, flags = _mirror_base_config()
     sim = LAPDSim1D(params, flags)
     assert sim.geometry.mirror_face_indices.size == 1
+    # The kinetic closure runs at a mirror: it constructs, and its engine's
+    # right end is the specular plane with no right sticking.
+    kinetic = LAPDSim1D(dict(params, neutral_model="kinetic_dvm"), flags)
+    assert kinetic._dvm.mirror_plane is True
+    assert kinetic._dvm.s_R == 0.0
     # The end wall template passes the refusal untouched, its S_pump_R and
     # all.
     default_params, default_flags = default_config()
@@ -2336,12 +2345,14 @@ def _case_mirror_refusals():
         ("flags", "neutral_momentum", True,
          "neutral_momentum=False (got True)"),
         ("flags", "neutral_energy", True, "neutral_energy=False (got True)"),
-        ("params", "neutral_model", "kinetic_dvm",
-         "neutral_model='moment' (got 'kinetic_dvm')"),
         ("params", "neutral_kinetic_dvm_end_wall_jet", True,
-         "neutral_kinetic_dvm_end_wall_jet=False (got True)"),
+         "neutral_kinetic_dvm_end_wall_jet=False (got True: a mirror has "
+         "no end wall to return from)"),
         ("params", "neutral_kinetic_dvm_annulus_flights", "bounded_chord",
-         "neutral_kinetic_dvm_annulus_flights='rates' (got 'bounded_chord')"),
+         "neutral_kinetic_dvm_annulus_flights='rates' (got 'bounded_chord': "
+         "its annulus is flown, not marched, and returns its end-plane exits "
+         "through the lagged end buffer a tick later, so it cannot reflect "
+         "specularly at the mirror plane)"),
         ("params", "S_pump_R", 3000.0, "S_pump_R=0.0 (got 3000.0)"),
         ("params", "end_wall_length_cm", 10.0,
          "end_wall_length_cm=7.8 (got 10.0)"),
