@@ -273,3 +273,110 @@ print(json.dumps({
                 f"{_ck_pure['nested_marches']} nested marches, "
                 "final state bit-identical)"
             )
+
+
+# --------------------------------------------------------------------
+# mirror-compiled-equivalence
+# --------------------------------------------------------------------
+@_case("mirror-compiled-equivalence")
+def _case_mirror_compiled_equivalence():
+    """The mirror branch marches the same floats on the compiled CSDA march.
+
+    Every leg the mirror branch adds -- the returning primary's legs, which
+    hand their anomalous drag to the ray's bank through the march's
+    withholding argument, and the mirror chains' walker legs -- is a
+    ``deposit_beam`` march, so it takes the compiled CSDA kernel whenever the
+    kernel is loaded. The mirror fixture corpus's arms
+    (``scripts/verify/deposit_beam_mirror_reference.py``) are replayed in a
+    pure child and in a compiled child, and every array must be bit-identical
+    between them. Each child reports which path it took, and the compiled
+    child's march count is positive, so the comparison is not vacuous. SKIPS
+    on a checkout with no built extension, like the solver-level
+    equivalence case.
+    """
+    try:
+        import importlib as _mc_importlib
+
+        _mc_module = _mc_importlib.import_module(
+            "cablp.cathode._cathode_kernels_cy"
+        )
+    except ImportError:
+        _mc_module = None
+    if _mc_module is None:
+        print(
+            "mirror compiled equivalence: SKIPPED -- "
+            "cablp.cathode._cathode_kernels_cy is not built "
+            "(`python build_ext.py --inplace` enables it)"
+        )
+        return
+    corpus_dir = Path(__file__).resolve().parents[2] / "verify"
+    child = f'''
+import hashlib
+import json
+import sys
+
+sys.path.insert(0, {str(corpus_dir)!r})
+import numpy as np
+
+from cablp.cathode import beam_deposition as bd
+from cablp.cathode import kernels as K
+import deposit_beam_mirror_reference as R
+
+_marches = [0]
+_kernel = bd._CSDA_MARCH
+
+
+def _counted(*args, **kwargs):
+    _marches[0] += 1
+    return _kernel(*args, **kwargs)
+
+
+if _kernel is not None:
+    bd._CSDA_MARCH = _counted
+out = R._replay()
+print(json.dumps({{
+    "kernel_id": (
+        None if K.COMPILED_KERNELS is None
+        else str(K.COMPILED_KERNELS.KERNEL_ID)
+    ),
+    "kernel_marches": _marches[0],
+    "arrays": {{
+        key: hashlib.sha256(
+            np.ascontiguousarray(value, dtype=float).tobytes()
+        ).hexdigest()
+        for key, value in sorted(out.items())
+    }},
+}}))
+'''
+    results = {}
+    with tempfile.TemporaryDirectory() as tmpdir:
+        script = Path(tmpdir) / "mirror_compiled_child.py"
+        script.write_text(child)
+        for tag, optin in (("pure", None), ("compiled", "1")):
+            env = dict(os.environ)
+            if optin is None:
+                env.pop(_kernel_selector.ENV_VAR, None)
+            else:
+                env[_kernel_selector.ENV_VAR] = optin
+            proc = subprocess.run(
+                [sys.executable, str(script)], env=env,
+                capture_output=True, text=True,
+            )
+            assert proc.returncode == 0, (tag, proc.stderr[-2000:])
+            results[tag] = json.loads(proc.stdout.strip().splitlines()[-1])
+    pure, compiled = results["pure"], results["compiled"]
+    assert pure["kernel_id"] is None, pure["kernel_id"]
+    assert compiled["kernel_id"] == _mc_module.KERNEL_ID, compiled["kernel_id"]
+    assert pure["kernel_marches"] == 0
+    assert compiled["kernel_marches"] > 0
+    assert sorted(pure["arrays"]) == sorted(compiled["arrays"])
+    differing = [
+        key for key in pure["arrays"]
+        if pure["arrays"][key] != compiled["arrays"][key]
+    ]
+    assert not differing, differing
+    print(
+        "mirror compiled equivalence: ok "
+        f"({compiled['kernel_id']}, {len(pure['arrays'])} arrays, "
+        f"{compiled['kernel_marches']} compiled marches, bit-identical)"
+    )

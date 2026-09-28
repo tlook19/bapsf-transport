@@ -214,6 +214,7 @@ _CASE_ORDER = (
     "mirror-beam-smoothing-fold",
     "mirror-csda-primary-turn",
     "mirror-cathode-coupling-constructs",
+    "mirror-compiled-equivalence",
 )
 
 
