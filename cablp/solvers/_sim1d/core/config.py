@@ -142,8 +142,9 @@ def geometry_defaults():
     nx:
         Number of resolved column cells. On the single-cathode layout it
         counts only the *far* column cells, between the fixed source region's
-        end and the end wall; on the ``TwinCathode`` layout, the uniform
-        column cells between the two anode faces.
+        end and the end wall (or the mirror face); on the ``TwinCathode``
+        layout, the far cells on EACH side of the mid-plane, so the twin
+        column carries ``2 nx`` far cells.
     Rm:
         Default neutral/machine radius [cm].
     Rp:
@@ -265,24 +266,24 @@ def geometry_defaults():
         End of the fixed-cell-size source region [cm, measured from the cathode
         surface]; the region runs from the anode face at ``cathode_anode_gap_cm``
         to here and must lie strictly between the anode face and the end wall
-        block (``Lm - end_wall_length_cm``). Required on the single-cathode
-        layout, whose mesh always carries the fixed source region; must be
-        ``None`` under ``TwinCathode``, whose uniform column does not read it.
+        block (``Lm - end_wall_length_cm``), or the mid-plane ``Lm/2`` under
+        ``far_end = "mirror"`` or ``TwinCathode``. Required on every layout;
+        ``TwinCathode`` mirrors the region onto its far cathode end.
     source_region_dz_cm:
         Cell size [cm] inside that source region, held fixed independently of
         ``nx``; the region length minus the anode gap must be an integer
-        multiple of it (1e-9 relative tolerance). Required on the
-        single-cathode layout; must be ``None`` under ``TwinCathode``.
+        multiple of it (1e-9 relative tolerance). Required on every layout.
     far_end:
         What ends the column at the far machine end, one of
         ``"end_wall"`` (default) and ``"mirror"``; any other value raises.
         ``"end_wall"``: the column runs to ``Lm - end_wall_length_cm`` and
         the end wall cell closes the machine, its outer face plasma-absorbing.
         ``"mirror"``: the HALF column. The mesh stops at the mid-plane
-        ``z = Lm/2`` in a MIRROR face -- the symmetry plane of a machine with
-        a second, identical cathode-anode source at ``z = Lm`` -- with no end
-        wall cell; ``Lm`` stays the whole machine's length and ``nx`` counts
-        the far column cells between the fixed source region and ``Lm/2``.
+        ``z = Lm/2`` in a MIRROR face -- the symmetry plane of a two-source
+        machine whose image cathode-anode source sits at ``z = Lm`` -- with
+        no end wall cell; under it ``Lm`` is the mirror configuration's own
+        length, cathode to image cathode, and ``nx`` counts the far column
+        cells between the fixed source region and ``Lm/2``.
         The mirror face is closed and not absorbing: its fluid face flux is
         the ordinary face kernel against the mirror ghost state
         ``(n, -M, Ee, Ei)`` of the cell beside it, so it carries no particle
@@ -2546,10 +2547,9 @@ input_flags_template_1d = {
     "Plasma": True,
     # Two-cathode layout: a cathode at BOTH ends, both plasma-terminating faces
     # mirrored, and the end-side puff Twin_S_gp carrying the second source.
-    # Its mesh is its own uniform column of nx cells between the two anode
-    # faces: the single-cathode fixed source region is not mirrored onto a
-    # twin end, so source_region_length_cm and source_region_dz_cm must be None
-    # under it. It has no end wall, so the end wall sheath debit is absent.
+    # Its mesh is the far_end='mirror' half column reflected about Lm/2: the
+    # fixed source region and puff cell at both ends and nx far cells on each
+    # side. It has no end wall, so the end wall sheath debit is absent.
     # Two construction-time refusals, each where the twin geometry leaves a
     # single-valued quantity undefined: cathode_solver_model='current_driven';
     # and heating_anomalous_tail_cathode_boundary='reflect' (both walls of
@@ -3398,9 +3398,9 @@ RETIRED_FLAG_KEYS = {
         "geometry has an end wall face, unconditionally"
     ),
     "source_fixed_grid": (
-        "nothing: the single-cathode mesh always carries the fixed source "
-        "region (source_region_length_cm, source_region_dz_cm); the "
-        "TwinCathode mesh is its own uniform column"
+        "nothing: the mesh always carries the fixed source region "
+        "(source_region_length_cm, source_region_dz_cm), mirrored onto the "
+        "far cathode end under TwinCathode"
     ),
     # The adopted numerics flags: the behaviour is unconditional.
     "active_plasma_topology": (

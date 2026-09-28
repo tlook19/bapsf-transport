@@ -245,14 +245,15 @@ def _case_end_wall_debit_armed_by_geometry_role():
             raise AssertionError(f"retired key {_rg_key} was accepted")
 
     # (b) A TwinCathode geometry, circuit off, as its fixtures build it: it
-    # constructs on its own uniform-column mesh, has no end wall face, and
+    # constructs on its mirrored fixed-source mesh, has no end wall face, and
     # so has no end wall debit armed and no end wall row in its ledger.
     _rg_res_p, _rg_res_f = _resolved_config()
     _rg_twin_p = dict(
         _rg_res_p,
         cathode_anode_gap_cm=50.0,
-        source_region_length_cm=None,
-        source_region_dz_cm=None,
+        source_region_length_cm=100.0,
+        source_region_dz_cm=10.0,
+        gas_puff_z_cm=60.0,
     )
     _rg_twin_f = dict(_rg_res_f, TwinCathode=True, cathode_coupling=False)
     _rg_twin = LAPDSim1D(_rg_twin_p, _rg_twin_f)

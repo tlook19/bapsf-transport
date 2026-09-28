@@ -87,8 +87,7 @@ CASES = (
         dt_max=1.0e-8,
         cathode=True,
     ),
-    # twin_cathode_midrange is retired: its layout does not carry the
-    # single-cathode fixed source grid (see RETIRED_CASES).
+    # twin_cathode_midrange is retired (see RETIRED_CASES).
 )
 
 #: Corners removed from ``CASES``, and the reason ``--list``/``--only`` state
@@ -96,8 +95,8 @@ CASES = (
 #: skipped, so a caller who names one is told why it is gone.
 RETIRED_CASES = {
     "twin_cathode_midrange":
-        "the fixed source grid is defined only for the single-cathode "
-        "layout, so a twin-cathode corner has no meaning on this source grid",
+        "it was retired while the twin-cathode mesh had no fixed source grid "
+        "and has not been re-registered on the mirrored grid it now carries",
 }
 
 

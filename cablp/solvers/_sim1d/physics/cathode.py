@@ -63,10 +63,14 @@ class CathodeCellState1D:
 
 @dataclass(frozen=True)
 class CathodeBoundaryState1D:
-    """Source/end boundary state and circuit placeholders for cathode coupling."""
+    """Source/end boundary state and circuit placeholders for cathode coupling.
+
+    ``end`` is ``None`` on a column ending in a mirror face, which has no
+    far electrode to sample (see ``cathode_sample_indices``).
+    """
 
     source: CathodeCellState1D
-    end: CathodeCellState1D
+    end: CathodeCellState1D | None
     enabled: bool
     twin_cathode: bool
     circuit: dict
@@ -221,8 +225,10 @@ def cathode_sample_indices(geometry):
     cell ``[0]`` there is the plasma-dead plenum, whose floor density and
     temperature would drive the circuit with garbage.
 
-    A twin machine samples both cathodes; otherwise the ``end`` slot is the
-    end wall.
+    A twin machine samples both cathodes; an end wall machine's ``end`` slot
+    is the end wall cell. A column ending in a mirror face has no far
+    electrode: its last cell sits against the symmetry plane, so the ``end``
+    slot is ``None`` there.
     """
     cathode_cells = cathode_adjacent_cells(geometry)
     if not cathode_cells:
@@ -230,6 +236,8 @@ def cathode_sample_indices(geometry):
     source_index = int(cathode_cells[0])
     if len(cathode_cells) > 1:
         return source_index, int(cathode_cells[-1])
+    if np.asarray(getattr(geometry, "mirror_face_indices", ())).size:
+        return source_index, None
     return source_index, geometry.cells - 1
 
 
@@ -271,7 +279,11 @@ def cathode_boundary_state(
     source_index, end_index = cathode_sample_indices(geometry)
     return CathodeBoundaryState1D(
         source=_cell_state(source_index, state, derived, geometry),
-        end=_cell_state(end_index, state, derived, geometry),
+        end=(
+            None
+            if end_index is None
+            else _cell_state(end_index, state, derived, geometry)
+        ),
         enabled=bool(input_flags.get("cathode_coupling", False)),
         twin_cathode=bool(input_flags.get("TwinCathode", False)),
         circuit=_circuit_placeholders(input_dict),
@@ -715,7 +727,9 @@ def solve_cathode_boundary(
                 "enabled": False,
                 "floating": bool(floating),
                 "source_index": boundary.source.index,
-                "end_index": boundary.end.index,
+                "end_index": (
+                    None if boundary.end is None else boundary.end.index
+                ),
                 "twin_cathode": boundary.twin_cathode,
                 "circuit": dict(boundary.circuit),
             },
@@ -873,7 +887,9 @@ def solve_cathode_boundary(
             "enabled": True,
             "floating": bool(floating),
             "source_index": boundary.source.index,
-            "end_index": boundary.end.index,
+            "end_index": (
+                None if boundary.end is None else boundary.end.index
+            ),
             "twin_cathode": boundary.twin_cathode,
             "circuit": dict(boundary.circuit),
             "cathode_solver_model": solver_model,
@@ -1803,7 +1819,9 @@ def cathode_source_terms(
             enabled=boundary.enabled,
             metadata={
                 "source_index": boundary.source.index,
-                "end_index": boundary.end.index,
+                "end_index": (
+                    None if boundary.end is None else boundary.end.index
+                ),
                 "twin_cathode": boundary.twin_cathode,
                 "circuit": dict(boundary.circuit),
                 "surface_particle_loss_s_inv": zeros.copy(),
@@ -1935,7 +1953,9 @@ def cathode_source_terms(
         enabled=boundary.enabled,
         metadata={
             "source_index": boundary.source.index,
-            "end_index": boundary.end.index,
+            "end_index": (
+                None if boundary.end is None else boundary.end.index
+            ),
             "twin_cathode": boundary.twin_cathode,
             "circuit": dict(boundary.circuit),
             "surface_particle_loss_s_inv": dN_loss,

@@ -398,8 +398,7 @@ def _case_source_fixed_grid():
     # including the puff cell. Instead the column from the anode face to
     # source_region_length_cm is meshed at exactly source_region_dz_cm
     # regardless of nx, and the puff role follows gas_puff_z_cm. The
-    # TwinCathode layout keeps its own uniform column and reads neither
-    # source region parameter.
+    # TwinCathode layout carries the same region, mirrored onto its far end.
     #
     # The gap, the region end and the puff position are PINNED below rather
     # than inherited. They were inherited until the 2026-08-24 CAD-span gap
@@ -410,27 +409,34 @@ def _case_source_fixed_grid():
     # gap-agnostic, so it now states the round geometry its hard-coded edge
     # positions below describe.
     #
-    # (d) The TwinCathode layout takes its own branch: with both keys None the
-    # spec helper returns None for it. Both values are config defaults, so the
-    # twin base is constructed here rather than read off default_config().
+    # (d) The TwinCathode layout reads the same source region: its spec is
+    # the half column's (far_end = "mirror"), validated against the mid-plane.
+    # The twin base states the same round geometry as (a).
     resolved_params, resolved_flags = _resolved_config()
     twin_base_flags = dict(resolved_flags)
     twin_base_params = dict(
         resolved_params,
         cathode_anode_gap_cm=50.0,
-        source_region_length_cm=None,
-        source_region_dz_cm=None,
+        source_region_length_cm=100.0,
+        source_region_dz_cm=10.0,
+        gas_puff_z_cm=60.0,
     )
-    assert (
-        _source_fixed_grid_spec(
-            twin_base_params,
-            gap_length=twin_base_params["cathode_anode_gap_cm"],
-            total_length=twin_base_params["Lm"],
-            end_wall_length=twin_base_params["end_wall_length_cm"],
-            twin=True,
-        )
-        is None
+    _twin_spec_kwargs = dict(
+        gap_length=twin_base_params["cathode_anode_gap_cm"],
+        total_length=twin_base_params["Lm"],
+        end_wall_length=twin_base_params["end_wall_length_cm"],
     )
+    assert _source_fixed_grid_spec(
+        twin_base_params, twin=True, **_twin_spec_kwargs
+    ) == _source_fixed_grid_spec(
+        twin_base_params, twin=False, mirror=True, **_twin_spec_kwargs
+    ) == {
+        "cells": 5,
+        "dz_cm": 10.0,
+        "span_cm": 50.0,
+        "region_length_cm": 100.0,
+        "puff_offset": 1,
+    }
 
     srcgrid_flags = dict(resolved_flags)
 
@@ -514,8 +520,21 @@ def _case_source_fixed_grid():
     )
 
     # (c) Every misconfiguration raises loudly at construction; none falls back.
+    # Under TwinCathode the region is mirrored onto the far end, so it must
+    # stop short of the mid-plane Lm/2; this one reaches past it, rounded up
+    # to a whole number of source cells like the end wall row below.
     srcgrid_twin_params = _srcgrid_params(60)
-    srcgrid_twin_params["end_wall_length_cm"] = 100.0
+    srcgrid_twin_params["source_region_length_cm"] = float(
+        srcgrid_twin_params["cathode_anode_gap_cm"]
+        + 10.0
+        * np.ceil(
+            (
+                0.5 * resolved_params["Lm"]
+                - srcgrid_twin_params["cathode_anode_gap_cm"]
+            )
+            / 10.0
+        )
+    )
     # A source region reaching PAST the end wall block start, derived from the
     # machine rather than hardcoded (the G1 end wall is 7.8 cm, so a fixed
     # 1900 cm would now be comfortably inside the column) and rounded up to a
@@ -545,9 +564,9 @@ def _case_source_fixed_grid():
             "requires all source region parameters",
         ),
         (
-            {**twin_base_params, "source_region_dz_cm": 10.0},
+            {**twin_base_params, "source_region_dz_cm": None},
             {**twin_base_flags, "TwinCathode": True},
-            "defined only for the single-cathode layout",
+            "the TwinCathode mesh requires all source region parameters",
         ),
         (
             {**_srcgrid_params(60), "source_region_length_cm": 50.0},
@@ -585,7 +604,7 @@ def _case_source_fixed_grid():
         (
             srcgrid_twin_params,
             {**srcgrid_flags, "TwinCathode": True},
-            "single-cathode layout",
+            "strictly before the mid-plane of the TwinCathode machine",
         ),
     ):
         try:
@@ -618,10 +637,9 @@ def _case_variable_area_well_balancedness(
     resolved_geom = _resolved_geometry()
 
     # Twin cathode mirrors the source end: its cathode
-    # surface sits at z = Lm, with that plenum beyond it. It builds on its own
-    # uniform column, with both source region parameters cleared, because the
-    # fixed source region is not mirrored onto a second cathode end (the
-    # geometry refuses the pair; checked in the source-fixed-grid table).
+    # surface sits at z = Lm, with that plenum beyond it. Its fixed source
+    # region and puff cell are mirrored onto that end (the mesh identity with
+    # the half column is pinned in twin-mirror-mesh-identity).
     twin_resolved_flags = dict(twin_base_flags)
     twin_resolved_flags["TwinCathode"] = True
     twin_resolved_flags["cathode_coupling"] = False
@@ -2377,3 +2395,177 @@ def _case_mirror_refusals():
         )
     else:
         raise AssertionError("far_end='collector' ACCEPTED")
+
+
+# --------------------------------------------------------------------
+# twin-mirror-mesh-identity
+# --------------------------------------------------------------------
+@_case("twin-mirror-mesh-identity")
+def _case_twin_mirror_mesh_identity():
+    """The TwinCathode mesh is the half column's mesh reflected about Lm/2.
+
+    On the template at nx = 128 the half column (far_end = "mirror") has 139
+    cells and the twin 278. The twin's cell edges from its first cell to
+    Lm/2 EQUAL the half column's, bit for bit: both prefix-sum the same
+    length values in the same order from the same origin, so exact equality
+    is the claim, not a tolerance. The twin's lengths and roles are
+    palindromes, it carries the fixed source region and the puff cell at
+    both ends, and its far cathode face sits on Lm to the prefix-sum
+    roundoff. The half column's cathode sample has no end slot; the end wall
+    and twin layouts keep theirs.
+    """
+    from cablp.solvers._sim1d.core.geometry import build_geometry
+
+    params, flags = default_config()
+    params["nx"] = 128
+    half = build_geometry(dict(params, far_end="mirror"), flags)
+    twin = build_geometry(params, dict(flags, TwinCathode=True))
+    wall = build_geometry(params, flags)
+    cells = int(half.cells)
+    assert cells == 139, cells
+    assert int(twin.cells) == 2 * cells, twin.cells
+    assert np.array_equal(twin.z_edges_cm[: cells + 1], half.z_edges_cm)
+    assert float(twin.z_edges_cm[cells]) == float(half.z_edges_cm[-1])
+    assert abs(float(half.z_edges_cm[-1]) - 1058.9) <= 1.0e-9
+    assert np.array_equal(twin.length_cm, twin.length_cm[::-1])
+    assert np.array_equal(twin.length_cm[:cells], half.length_cm)
+    roles = [str(role) for role in twin.cell_role]
+    assert roles == roles[::-1]
+    assert roles[:cells] == [str(role) for role in half.cell_role]
+    # The fixed source region (5 cells of 10 cm) and the puff cell at both
+    # ends; 2 x 128 uniform far cells meet at Lm/2.
+    near_cathode, far_cathode = (int(f) for f in twin.cathode_face_indices)
+    near_anode, far_anode = (int(f) for f in twin.anode_face_indices)
+    assert np.all(twin.length_cm[near_anode : near_anode + 5] == 10.0)
+    assert np.all(twin.length_cm[far_anode - 5 : far_anode] == 10.0)
+    far = np.asarray(twin.length_cm[near_anode + 5 : far_anode - 5])
+    assert far.size == 256 and np.all(far == half.length_cm[-1]), far.size
+    puff_near, puff_far = puff_cell_indices(twin)
+    assert puff_near == puff_cell_indices(half)[0]
+    assert puff_far == int(twin.cells) - 1 - puff_near
+    assert roles.count("puff") == 2
+    assert abs(float(twin.z_edges_cm[far_cathode]) - params["Lm"]) <= 1.0e-9
+    assert near_cathode == int(half.cathode_face_indices[0])
+    # The cathode sample: no end slot at a mirror; the end wall and twin
+    # layouts keep theirs.
+    assert cathode_sample_indices(half) == (near_cathode, None)
+    assert cathode_sample_indices(wall) == (near_cathode, int(wall.cells) - 1)
+    assert cathode_sample_indices(twin) == (near_cathode, int(twin.cells) - 2)
+
+
+# --------------------------------------------------------------------
+# mirror-puff-row-reflection
+# --------------------------------------------------------------------
+@_case("mirror-puff-row-reflection")
+def _case_mirror_puff_row_reflection():
+    """Under far_end = "mirror" the puff row reflects at the mirror plane.
+
+    (a) On the two-source machine (Lm = 1965.4 cm, nx = 118) the half
+    column's puff deposition [particles/s per cell] equals the left half of
+    the full TwinCathode column's deposition from BOTH puffs, to roundoff:
+    rays the half column's source sends past Lm/2 land in their image cells,
+    where the image source's rays land in the whole column. (b) A port next
+    to the plane on a small grid: without the mirror its rays past the last
+    edge fold into the last cell; with it none is clipped, a positive share
+    is reflected, and the row equals the one-source row on the doubled grid
+    folded about the plane. (c) The end wall and twin rows take the
+    unmirrored path.
+    """
+    from cablp.solvers._sim1d.core.geometry import build_geometry
+    from cablp.solvers._sim1d.physics import puff_orifice
+    from cablp.solvers._sim1d.physics.neutrals import gas_puff_rate_profile
+
+    params, flags = default_config()
+    params.update(Lm=1965.4, nx=118)
+    half = build_geometry(dict(params, far_end="mirror"), flags)
+    twin = build_geometry(params, dict(flags, TwinCathode=True))
+    cells = int(half.cells)
+    puff_kwargs = dict(
+        z_cm=params["gas_puff_z_cm"],
+        delivery_fraction=params["gas_puff_delivery_fraction"],
+        orifice_id_cm=params["gas_puff_orifice_id_cm"],
+        orifice_length_cm=params["gas_puff_orifice_length_cm"],
+    )
+    sccm, valves = params["S_gp"], params["gas_puff_valves"]
+    half_particles = gas_puff_rate_profile(
+        half, sccm, valves, end=0, **puff_kwargs
+    ) * np.asarray(half.neutral_volume_cm3)
+    twin_particles = (
+        gas_puff_rate_profile(twin, sccm, valves, end=0, **puff_kwargs)
+        + gas_puff_rate_profile(twin, sccm, valves, end=-1, **puff_kwargs)
+    ) * np.asarray(twin.neutral_volume_cm3)
+    scale = float(np.max(half_particles))
+    assert scale > 0.0
+    defect = float(
+        np.max(np.abs(twin_particles[:cells] - half_particles)) / scale
+    )
+    assert defect <= 1.0e-12, defect
+    # Non-vacuity: the rays past the plane are a real share, so folding them
+    # into the last cell (the unmirrored rule) misses the twin by far more.
+    edges = np.ascontiguousarray(half.z_edges_cm, dtype=float)
+    i_port = int(np.searchsorted(edges, params["gas_puff_z_cm"]) - 1)
+    row_kwargs = dict(
+        pipe_id_cm=params["gas_puff_orifice_id_cm"],
+        aspect_ratio=(
+            params["gas_puff_orifice_length_cm"]
+            / params["gas_puff_orifice_id_cm"]
+        ),
+        r_wall_cm=float(half.Rm_cm[i_port]),
+        r_edge_cm=float(half.Rp_cm[i_port]),
+        z_port_cm=params["gas_puff_z_cm"],
+    )
+    folded, folded_meta = puff_orifice.launch_row(edges, **row_kwargs)
+    mirrored, mirrored_meta = puff_orifice.launch_row(
+        edges, mirror_far_edge=True, **row_kwargs
+    )
+    assert mirrored_meta["reflected_fraction"] > 0.0
+    assert mirrored_meta["clipped_fraction"] < folded_meta["clipped_fraction"]
+    assert float(folded[-1]) > float(mirrored[-1])
+    # Both rows are mass fractions summing to 1, so the total is the rate.
+    folded_particles = float(np.sum(half_particles)) * folded
+    assert float(
+        np.max(np.abs(twin_particles[:cells] - folded_particles)) / scale
+    ) > 1.0e3 * max(defect, 1.0e-16)
+
+    # (b) A ray past the plane lands in its image cell.
+    small = np.linspace(0.0, 40.0, 41)
+    small_kwargs = dict(
+        pipe_id_cm=3.95, aspect_ratio=2.0, r_wall_cm=50.0, r_edge_cm=18.0,
+        z_port_cm=36.5,
+    )
+    small_folded, small_folded_meta = puff_orifice.launch_row(
+        small, **small_kwargs
+    )
+    small_mirror, small_mirror_meta = puff_orifice.launch_row(
+        small, mirror_far_edge=True, **small_kwargs
+    )
+    assert small_folded_meta["clipped_fraction"] > 0.0
+    assert small_mirror_meta["reflected_fraction"] > 0.0
+    assert small_mirror_meta["clipped_fraction"] < (
+        small_folded_meta["clipped_fraction"]
+    )
+    doubled = np.concatenate((small, 80.0 - small[-2::-1]))
+    full, _ = puff_orifice.launch_row(doubled, **small_kwargs)
+    image = full[:40] + full[40:][::-1]
+    assert np.allclose(small_mirror, image, rtol=0.0, atol=1.0e-12), float(
+        np.max(np.abs(small_mirror - image))
+    )
+    assert math.isclose(float(np.sum(small_mirror)), 1.0, rel_tol=1e-12)
+
+    # (c) The end wall and twin geometries take the unmirrored row.
+    wall = build_geometry(params, flags)
+    wall_edges = np.ascontiguousarray(wall.z_edges_cm, dtype=float)
+    wall_kwargs = dict(
+        row_kwargs,
+        r_wall_cm=float(wall.Rm_cm[i_port]),
+        r_edge_cm=float(wall.Rp_cm[i_port]),
+    )
+    assert np.array_equal(
+        puff_orifice.launch_row_for_grid(
+            wall,
+            pipe_id_cm=params["gas_puff_orifice_id_cm"],
+            pipe_length_cm=params["gas_puff_orifice_length_cm"],
+            z_port_cm=params["gas_puff_z_cm"],
+        ),
+        puff_orifice.launch_row(wall_edges, **wall_kwargs)[0],
+    )

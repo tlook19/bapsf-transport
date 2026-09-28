@@ -331,35 +331,41 @@ def _build_resolved_geometry(input_dict, flags):
         [puff, column x (nx-1)] [end wall]
 
     Half column (``far_end = "mirror"``) stops at the mid-plane ``z = Lm/2``
-    in a MIRROR face instead of the end wall: the symmetric half of a machine
-    with a second, identical cathode-anode source at ``z = Lm``. No end wall
-    cell is appended, the fixed source region is unchanged, and the far
-    column's ``nx`` uniform cells end at ``Lm/2``; ``Lm`` stays the whole
-    machine's length::
+    in a MIRROR face instead of the end wall: the symmetric half of a
+    two-source machine whose image cathode-anode source sits at ``z = Lm``
+    of the mirror configuration. ``Lm`` is that configuration's own length,
+    cathode to image cathode, not the end wall machine's. No end wall cell is
+    appended, the fixed source region is unchanged, and the far column's
+    ``nx`` uniform cells end at ``Lm/2``::
 
         [plenum, (obstruction)] |cathode  [cathode..gap x nx_gap]  anode|
         [source region, puff] [column x nx] |mirror
 
     Twin cathode (``TwinCathode``) mirrors the source end instead of the
-    end wall, putting its cathode surface at ``z = Lm``. Which column cell
-    carries the ``puff`` role depends on the layout: on the single-cathode
-    fixed source grid the role follows ``gas_puff_z_cm``, and on the twin
-    layout's uniform column it is the cell adjacent to each anode face, where
-    gas enters in front of the anode. The plasma cell against a cathode
-    surface carries the ``cathode`` role so cathode surface terms have
-    somewhere to land.
+    end wall, putting its cathode surface at ``z = Lm``. Its mesh is the half
+    column's mesh reflected about ``Lm/2``: the same fixed source region and
+    puff cell at both ends, and ``nx`` uniform far cells on each side, so
+    ``2 nx`` far cells meet exactly at the mid-plane. The cell lengths are
+    the half column's, in the same order, followed by their reverse, so the
+    twin mesh's cell edges from its first cell to ``Lm/2`` are the half
+    column's edges bit for bit::
+
+        [plenum] |cathode [gap x nx_gap] anode| [source, puff] [column x nx]
+        [column x nx] [puff, source] |anode [gap x nx_gap] cathode| [plenum]
+
+    The ``puff`` role follows ``gas_puff_z_cm`` on every layout (mirrored at
+    the twin's far end). The plasma cell against a cathode surface carries
+    the ``cathode`` role so cathode surface terms have somewhere to land.
 
     The annular cathode-structure obstruction is a *real cell* of length
     ``Lcs``, so it holds gas and its inventory reaches the pump. It is omitted
     entirely when ``Lcs <= 0``, which is the legacy limit.
 
-    The single-cathode column is a fixed-cell source region plus an
-    ``nx``-refined far column, so a refinement study does not move the
-    near-source cell edges (see ``_source_fixed_grid_spec``): ``nx`` counts the
-    far-column cells only and the ``puff`` role follows ``gas_puff_z_cm``. The
-    ``TwinCathode`` layout takes its own path, ``nx`` uniform column cells
-    between the two anode faces, because the fixed source region is not
-    mirrored onto a second cathode end.
+    The column is a fixed-cell source region plus an ``nx``-refined far
+    column, so a refinement study does not move the near-source cell edges
+    (see ``_source_fixed_grid_spec``): ``nx`` counts the far-column cells only
+    (per half on the ``TwinCathode`` layout) and the ``puff`` role follows
+    ``gas_puff_z_cm``.
 
     The plasma cross-section is the uniform ``pi Rp^2`` inside the uniform
     ``Rm`` bore unless ``plasma_radius_profile_cm`` is supplied, in which case
@@ -419,11 +425,10 @@ def _build_resolved_geometry(input_dict, flags):
     gap_roles = ["cathode"] + ["gap"] * (nx_gap - 1)
     gap_lengths = [gap_length / nx_gap] * nx_gap
 
-    if twin:
-        column_length = total_length - 2.0 * gap_length
-    elif mirror:
+    if twin or mirror:
         # The half machine: the column runs from the anode face to the
-        # mid-plane Lm/2, and no end wall cell is appended.
+        # mid-plane Lm/2, and no end wall cell is appended. The twin layout
+        # builds this half and then appends its reflection.
         column_length = mirror_plane_z_cm(total_length) - gap_length
     else:
         if end_wall_length <= 0.0:
@@ -445,30 +450,32 @@ def _build_resolved_geometry(input_dict, flags):
         twin=twin,
         mirror=mirror,
     )
+    # Fixed-cell source region: the first ``n_fixed`` column cells have a
+    # prescribed length independent of ``nx``, which then meshes only the
+    # remaining far column. The puff role follows gas_puff_z_cm rather than
+    # the first column cell, so the fueling centre stops moving with nx.
+    n_fixed = source_grid["cells"]
+    outer_length = column_length - source_grid["span_cm"]
+    if outer_length <= 0.0:
+        far_end_name = (
+            "mid-plane" if twin else "mirror face" if mirror else "end wall"
+        )
+        raise ValueError(
+            "the fixed source region leaves no far column between it "
+            f"and the {far_end_name} "
+            f"(outer_length={outer_length} cm)"
+        )
+    column_roles = ["column"] * (n_fixed + nx)
+    column_roles[source_grid["puff_offset"]] = "puff"
+    column_lengths = [source_grid["dz_cm"]] * n_fixed + [
+        outer_length / nx
+    ] * nx
     if twin:
-        # The TwinCathode layout's own column: nx uniform cells, a puff cell
-        # against each anode face. The spec above returned None for it.
-        column_roles = ["puff"] + ["column"] * (nx - 1)
-        column_roles[-1] = "puff"
-        column_lengths = [column_length / nx] * nx
-    else:
-        # Fixed-cell source region: the first ``n_fixed`` column cells have a
-        # prescribed length independent of ``nx``, which then meshes only the
-        # remaining far column. The puff role follows gas_puff_z_cm rather than
-        # the first column cell, so the fueling centre stops moving with nx.
-        n_fixed = source_grid["cells"]
-        outer_length = column_length - source_grid["span_cm"]
-        if outer_length <= 0.0:
-            raise ValueError(
-                "the fixed source region leaves no far column between it "
-                f"and the {'mirror face' if mirror else 'end wall'} "
-                f"(outer_length={outer_length} cm)"
-            )
-        column_roles = ["column"] * (n_fixed + nx)
-        column_roles[source_grid["puff_offset"]] = "puff"
-        column_lengths = [source_grid["dz_cm"]] * n_fixed + [
-            outer_length / nx
-        ] * nx
+        # The far half is the near half reflected about Lm/2: the same
+        # length values in reverse order, so the near half's prefix sums
+        # (and hence its cell edges) are the half column's exactly.
+        column_roles += list(reversed(column_roles))
+        column_lengths += list(reversed(column_lengths))
 
     roles = behind_roles + gap_roles + column_roles
     lengths = behind_lengths + gap_lengths + column_lengths
@@ -681,8 +688,9 @@ def _far_end_is_mirror(input_dict):
 def mirror_plane_z_cm(total_length_cm):
     """Return the mirror plane's position ``Lm / 2`` [cm from the cathode face].
 
-    The half column models one half of a machine carrying a second, identical
-    cathode-anode source at ``z = Lm``, so the symmetry plane is the mid-plane.
+    The half column models one half of a two-source machine whose image
+    cathode-anode source sits at ``z = Lm`` of the mirror configuration
+    (cathode to image cathode), so the symmetry plane is the mid-plane.
     """
     return 0.5 * float(total_length_cm)
 
@@ -691,41 +699,31 @@ def _source_fixed_grid_spec(
     input_dict, *, gap_length, total_length, end_wall_length, twin,
     mirror=False,
 ):
-    """Validate and return the single-cathode fixed-cell source region.
+    """Validate and return the fixed-cell source region.
 
     A uniform column would make resolution studies self-confounding: refining
-    ``nx`` would move every cell edge, including the puff cell's. The
-    single-cathode mesh therefore pins the column between the anode face and
+    ``nx`` would move every cell edge, including the puff cell's. The mesh
+    therefore pins the column between the anode face and
     ``source_region_length_cm`` to cells of exactly ``source_region_dz_cm``,
     leaving ``nx`` to refine only the far column.
 
-    Selected by layout, not by a flag. On the single-cathode layout both
-    parameters and ``gas_puff_z_cm`` are required. On the ``TwinCathode``
-    layout, whose mesh is its own uniform column, both parameters are
-    forbidden (nothing would read them) and ``None`` is returned. Raises
-    ``ValueError`` on every misconfiguration, at construction.
+    Both parameters and ``gas_puff_z_cm`` are required on every layout.
+    Raises ``ValueError`` on every misconfiguration, at construction.
 
     Under ``mirror`` (``far_end = "mirror"``) the column ends at the mirror
     plane ``Lm / 2`` instead of the end wall block, and the region must lie
-    strictly before that plane.
+    strictly before that plane. Under ``twin`` (``TwinCathode``) the region
+    is mirrored onto the far cathode end, so it too must lie strictly before
+    the mid-plane ``Lm / 2``.
     """
     keys = ("source_region_length_cm", "source_region_dz_cm")
     raw = {key: input_dict.get(key) for key in keys}
     provided = {key: value is not None for key, value in raw.items()}
-    if twin:
-        stale = [key for key, present in provided.items() if present]
-        if stale:
-            raise ValueError(
-                "source region parameters are defined only for the "
-                "single-cathode layout; the TwinCathode mesh is a uniform "
-                "column that does not read them. Accepted under TwinCathode: "
-                "None for " + ", ".join(stale)
-            )
-        return None
     missing = [key for key, present in provided.items() if not present]
     if missing:
+        layout = "TwinCathode" if twin else "single-cathode"
         raise ValueError(
-            "the single-cathode mesh requires all source region parameters; "
+            f"the {layout} mesh requires all source region parameters; "
             "missing " + ", ".join(missing)
         )
 
@@ -747,6 +745,14 @@ def _source_fixed_grid_spec(
             raise ValueError(
                 "source_region_length_cm must lie strictly before the mirror "
                 f"plane (got {region_length} cm vs Lm/2 = {column_end} cm)"
+            )
+    elif twin:
+        column_end = mirror_plane_z_cm(total_length)
+        if region_length >= column_end:
+            raise ValueError(
+                "source_region_length_cm must lie strictly before the "
+                "mid-plane of the TwinCathode machine (got "
+                f"{region_length} cm vs Lm/2 = {column_end} cm)"
             )
     else:
         column_end = total_length - end_wall_length
@@ -770,7 +776,8 @@ def _source_fixed_grid_spec(
     puff_z = input_dict.get("gas_puff_z_cm")
     if puff_z is None:
         raise ValueError(
-            "the single-cathode mesh requires an explicit gas_puff_z_cm: the "
+            f"the {'TwinCathode' if twin else 'single-cathode'} mesh "
+            "requires an explicit gas_puff_z_cm: the "
             "puff "
             "role follows the fueling position instead of the first column "
             "cell, so it cannot be left to the mesh"

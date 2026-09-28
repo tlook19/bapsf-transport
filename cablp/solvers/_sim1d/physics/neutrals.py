@@ -1237,7 +1237,8 @@ def gas_puff_rate_profile(
             z0 = z_lo + z_hi - z0  # mirror through the chamber midpoint
 
     # Already a per-cell mass fraction summing to 1 (off-grid rays are folded
-    # into the end cells by the derivation, so no fuel is lost): scale by the
+    # into the end cells by the derivation, or reflected into their image
+    # cells past a mirror face, so no fuel is lost): scale by the
     # throughput and divide by the cell volume.
     row = launch_row_for_grid(
         geometry,
