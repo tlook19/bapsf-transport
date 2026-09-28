@@ -44,9 +44,11 @@ def validate_far_end_configuration(input_dict, flags):
     value each would have to take:
 
     * ``TwinCathode`` -- a different far end;
-    * ``cathode_coupling`` -- every cathode solve launches the CSDA beam
-      (and, under the walked plateau closure, its tail walkers), and both
-      march to the far face and book what reaches it as leaving the machine;
+    * ``heating_anomalous_tail_cathode_boundary = "escape"`` under the walked
+      plateau closure (``heating_anomalous_transport = "plateau_multigroup"``)
+      -- at a mirror the tail walkers turn round at the plane and REFLECT at
+      the cathode sheath, the two faces of the symmetric machine's half; a
+      free-escape cathode would book the image walkers' return as leaving;
     * ``neutral_momentum`` -- the neutral wind's wall-momentum sink at the far
       face treats it as a wall;
     * ``neutral_energy`` -- the end-face energy accommodation and the hot
@@ -71,7 +73,6 @@ def validate_far_end_configuration(input_dict, flags):
     conflicts = []
     for flag in (
         "TwinCathode",
-        "cathode_coupling",
         "neutral_momentum",
         "neutral_energy",
     ):
@@ -91,6 +92,16 @@ def validate_far_end_configuration(input_dict, flags):
             "tick later, so it cannot reflect specularly at the mirror "
             "plane)"
         )
+    if (
+        input_dict.get("heating_anomalous_transport") == "plateau_multigroup"
+        and input_dict.get("heating_anomalous_tail_cathode_boundary")
+        == "escape"
+    ):
+        conflicts.append(
+            "heating_anomalous_tail_cathode_boundary='reflect' (got "
+            "'escape': at a mirror the walked tail reflects at the cathode "
+            "sheath and turns round at the plane)"
+        )
     S_pump_R = float(input_dict.get("S_pump_R", 0.0))
     if S_pump_R != 0.0:
         conflicts.append(f"S_pump_R=0.0 (got {S_pump_R!r})")
@@ -107,7 +118,9 @@ def validate_far_end_configuration(input_dict, flags):
             "no end wall; this configuration sets keys that presume the end "
             "wall or cannot yet run at a mirror. Incompatible with "
             "far_end='mirror' (the complete set): TwinCathode, "
-            "cathode_coupling, neutral_momentum, neutral_energy, "
+            "heating_anomalous_tail_cathode_boundary='escape' under "
+            "heating_anomalous_transport='plateau_multigroup', "
+            "neutral_momentum, neutral_energy, "
             "neutral_kinetic_dvm_end_wall_jet, "
             "neutral_kinetic_dvm_annulus_flights='bounded_chord', "
             "S_pump_R != 0, end_wall_length_cm != "
