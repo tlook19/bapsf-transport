@@ -144,7 +144,12 @@ yet run at a mirror — the second cathode layout, the cathode circuit (whose
 beam and tail walk march to the far face), the evolved neutral momentum and
 energy, the kinetic neutral closure and its far-end options, a right pump
 speed, or an end wall length — is refused at construction, in one message
-naming the complete set.
+naming the complete set. The mirror is verified against the whole machine it
+stands in for: the second cathode layout (`TwinCathode`) meshes the half
+column reflected about $L_m/2$, its near half equal to the half column edge
+for edge, and `scripts/verify/verify_twin_mirror_equivalence.py` marches the
+two from one mirror-symmetric state with the circuit off, comparing $n$,
+$T_e$, $T_i$ and $n_n$ on the half domain at every save.
 
 Under the reference configuration's prescribed area geometry the flux-tube
 area expands from roughly 60 cm upstream of port 53 into the end chamber,
