@@ -946,3 +946,214 @@ def _case_dvm_jet_rn_interval_refusals():
             raise AssertionError(
                 f"the DVM {_jr_label} jet accepted R_N = 0"
             )
+
+
+def _dvm_mirror_tube(nz, doubled=False):
+    """A synthetic neutral tube, ending in a mirror face unless ``doubled``.
+
+    ``nz`` cells of varying length and column radius inside a fixed bore.
+    ``doubled`` is the whole symmetric machine the half tube stands for: the
+    same cells followed by their reflection, both ends ordinary end planes,
+    no mirror face.
+    """
+    from types import SimpleNamespace
+
+    lengths = np.linspace(4.0, 7.0, nz)
+    Rp = np.linspace(1.5, 2.5, nz)
+    if doubled:
+        lengths = np.concatenate([lengths, lengths[::-1]])
+        Rp = np.concatenate([Rp, Rp[::-1]])
+    Rm = np.full(lengths.size, 5.0)
+    return SimpleNamespace(
+        length_cm=lengths,
+        plasma_volume_cm3=np.pi * Rp**2 * lengths,
+        neutral_volume_cm3=np.pi * Rm**2 * lengths,
+        Rp_cm=Rp,
+        Rm_cm=Rm,
+        mirror_face_indices=None if doubled else np.array([nz]),
+    )
+
+
+def _dvm_mirror_tick(engine, dt):
+    """One collisionless, sourceless update of ``engine``: its ledger."""
+    nz = engine.nz
+    return engine.update(
+        dt,
+        n_i=np.zeros(nz),
+        Ti_eV=np.ones(nz),
+        u_i=np.zeros(nz),
+        nu_ion=np.zeros(nz),
+    )
+
+
+def _rel_linf(values, reference):
+    return float(np.max(np.abs(values - reference))) / float(
+        np.max(np.abs(reference))
+    )
+
+
+# --------------------------------------------------------------------
+# dvm-mirror-plane-specular
+# --------------------------------------------------------------------
+@_case("dvm-mirror-plane-specular")
+def _case_dvm_mirror_plane_specular():
+    """The DVM mirror plane reflects a one-sided distribution specularly.
+
+    A half tube ending in a mirror face starts with gas only in its last
+    three cells and only in the ``+v_z`` bins, both zones, so everything it
+    holds is headed at the plane. The doubled tube it stands for (the same
+    cells, then their reflection, no mirror face) starts from that state and
+    its bin-mirrored reflection. With no collisions and no sources both take
+    three ticks. The doubled tube is symmetric across its middle face,
+    ``f_{nz}(-v) = f_{nz-1}(v)`` -- the plane condition -- and the half tube
+    reproduces its left half in both zones, so the half tube's plane carries
+    ``f(-v) = f(v)`` after each march. The plane is hit (outflow > 0), its
+    same-tick return equals the outflow in particles and in energy, it pumps
+    and buffers nothing, and the tick's particle and energy closures hold at
+    roundoff with no mirror term in them.
+    """
+    from cablp.solvers._sim1d.physics.kinetic_dvm import (
+        TransientDVM,
+        ledger_energy_residual,
+    )
+
+    nz = 6
+    dt = 1.0e-4
+    half = TransientDVM(geometry=_dvm_mirror_tube(nz), nvz=16, nvp=6)
+    full = TransientDVM(
+        geometry=_dvm_mirror_tube(nz, doubled=True), nvz=16, nvp=6
+    )
+    mirror = half.mirror
+    one_sided = half.M_cold * (half.g.vz > 0.0)[:, None]
+    f_c = np.zeros((nz, half.g.nvz, half.g.nvp))
+    f_a = np.zeros_like(f_c)
+    f_c[-3:] = np.array([1.0e12, 2.0e12, 3.0e12])[:, None, None] * one_sided
+    f_a[-3:] = np.array([3.0e11, 2.0e11, 1.0e11])[:, None, None] * one_sided
+    half.f_c, half.f_a = f_c.copy(), f_a.copy()
+    full.f_c = np.concatenate([f_c, f_c[::-1][:, mirror, :]])
+    full.f_a = np.concatenate([f_a, f_a[::-1][:, mirror, :]])
+    # Measured: the half/doubled rel L-inf is at most 1.7e-16 (f_a) with the
+    # plane and 4.0e-01 (f_c, first tick) when the right end is an end wall
+    # instead; the net energy row is at most 2.4e-16 of the outflow energy
+    # and the net particle row 0.0; the closure residuals at most 1.0e-16.
+    for tick in range(3):
+        ledger = _dvm_mirror_tick(half, dt)
+        _dvm_mirror_tick(full, dt)
+        # The reference is itself mirror-symmetric across its middle face.
+        for zone in ("f_c", "f_a"):
+            whole = getattr(full, zone)
+            sym = _rel_linf(whole[nz:][::-1][:, mirror, :], whole[:nz])
+            assert sym <= 1.0e-12, (tick, zone, sym)
+            err = _rel_linf(getattr(half, zone), whole[:nz])
+            assert err <= 1.0e-12, (
+                f"tick {tick}: the half tube's {zone} is not the doubled "
+                f"tube's left half (rel L-inf {err:.3e}): the plane did not "
+                "reflect specularly"
+            )
+        energy = ledger["energy"]
+        out_R = ledger["loss_end_out_R"]
+        assert out_R > 0.0, (tick, out_R)
+        assert abs(out_R - ledger["birth_end_return_R"]) <= 1.0e-14 * out_R, (
+            tick, out_R, ledger["birth_end_return_R"]
+        )
+        assert abs(energy["net_surface_end_R"]) <= 1.0e-13 * (
+            energy["loss_end_out_R"]
+        ), (tick, energy["net_surface_end_R"], energy["loss_end_out_R"])
+        assert ledger["loss_pump_R"] == 0.0
+        assert energy["loss_pump_R"] == 0.0
+        assert energy["pending_after_R"] == 0.0
+        particles = kinetic_dvm_ledger_residual(ledger)
+        energies = ledger_energy_residual(ledger)
+        for label, value in (
+            ("particle distribution", particles["distribution_rel"]),
+            ("particle domain", particles["domain_rel"]),
+            ("energy distribution", energies["distribution_rel"]),
+            ("energy domain", energies["domain_rel"]),
+        ):
+            assert abs(value) <= 1.0e-13, (tick, label, value)
+
+
+# --------------------------------------------------------------------
+# dvm-mirror-no-lagged-buffer
+# --------------------------------------------------------------------
+@_case("dvm-mirror-no-lagged-buffer")
+def _case_dvm_mirror_no_lagged_buffer():
+    """Under a mirror plane the right-end lagged return buffers stay zero.
+
+    A half tube filled with wall-temperature gas at rest runs four ticks.
+    After every one ``pend_R_c`` and ``pend_R_a`` are exactly zero, and the
+    right-end return the ledger books is THIS tick's outflow (not the last
+    tick's), because the plane returns it inside the march. The same tube
+    with no mirror face fills its right buffers on the first tick, which is
+    what the case would see if the plane were an end wall. The engine then
+    refuses, at construction, every end wall setting a mirror plane cannot
+    carry, and at update a non-zero end wall return count.
+    """
+    from cablp.solvers._sim1d.physics.kinetic_dvm import TransientDVM
+
+    nz = 6
+    dt = 5.0e-5
+    fill = np.linspace(1.0e12, 2.0e12, nz)[:, None, None]
+    half = TransientDVM(geometry=_dvm_mirror_tube(nz), nvz=16, nvp=6)
+    half.seed_from_density(fill[:, 0, 0], 0.3 * fill[:, 0, 0])
+    for tick in range(4):
+        ledger = _dvm_mirror_tick(half, dt)
+        assert not np.any(half.pend_R_c), (tick, np.abs(half.pend_R_c).max())
+        assert not np.any(half.pend_R_a), (tick, np.abs(half.pend_R_a).max())
+        out_R = ledger["loss_end_out_R"]
+        assert out_R > 0.0
+        assert abs(ledger["birth_end_return_R"] - out_R) <= 1.0e-14 * out_R
+        assert ledger["energy"]["pending_after_R"] == 0.0
+    # The control: the same tube ending in an end plane buffers its return.
+    plain = _dvm_mirror_tube(nz)
+    plain.mirror_face_indices = None
+    wall = TransientDVM(geometry=plain, nvz=16, nvp=6)
+    wall.seed_from_density(fill[:, 0, 0], 0.3 * fill[:, 0, 0])
+    _dvm_mirror_tick(wall, dt)
+    assert wall.mirror_plane is False
+    assert np.any(wall.pend_R_c) and np.any(wall.pend_R_a)
+
+    # Construction refuses every end wall setting at a mirror plane.
+    end_wall_jet = {
+        "R_N": 0.5, "R_E": 0.5, "T_launch_eV": None, "sheath_Te_multiple": 3.0,
+    }
+    for kwargs, says in (
+        ({"s_R": 0.1}, "s_R=0.0 (got 0.1)"),
+        ({"end_wall_jet": end_wall_jet}, "end_wall_jet=None (got a spec)"),
+        ({"end_wall_launch_band_eV": (1.0, 2.0)},
+         "end_wall_launch_band_eV=None (got (1.0, 2.0))"),
+        ({"annulus_flights": "bounded_chord"},
+         "annulus_flights='rates' (got 'bounded_chord': its end exits "
+         "return through the lagged end buffer, not the march)"),
+    ):
+        try:
+            TransientDVM(
+                geometry=_dvm_mirror_tube(nz), nvz=16, nvp=6, **kwargs
+            )
+        except ValueError as exc:
+            assert "specular MIRROR plane" in str(exc), str(exc)
+            assert says in str(exc), (says, str(exc))
+        else:
+            raise AssertionError(f"{kwargs} ACCEPTED at a mirror plane")
+    misplaced = _dvm_mirror_tube(nz)
+    misplaced.mirror_face_indices = np.array([nz - 1])
+    try:
+        TransientDVM(geometry=misplaced, nvz=16, nvp=6)
+    except ValueError as exc:
+        assert f"must be face {nz} alone" in str(exc), str(exc)
+    else:
+        raise AssertionError("a mirror face inside the domain ACCEPTED")
+    # And an update refuses a non-zero end wall return count.
+    try:
+        half.update(
+            dt,
+            n_i=np.zeros(nz),
+            Ti_eV=np.ones(nz),
+            u_i=np.zeros(nz),
+            nu_ion=np.zeros(nz),
+            source_counts={"end_wall_face": np.eye(nz)[-1] * 1.0e10},
+        )
+    except ValueError as exc:
+        assert "no end wall to recycle from" in str(exc), str(exc)
+    else:
+        raise AssertionError("an end_wall_face count ACCEPTED at a mirror")

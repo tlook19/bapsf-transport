@@ -51,10 +51,14 @@ def validate_far_end_configuration(input_dict, flags):
       face treats it as a wall;
     * ``neutral_energy`` -- the end-face energy accommodation and the hot
       channel's end-plane landing treat the far face as a wall;
-    * ``neutral_model = "kinetic_dvm"``,
-      ``neutral_kinetic_dvm_end_wall_jet`` and
-      ``neutral_kinetic_dvm_annulus_flights = "bounded_chord"`` -- the
-      kinetic closure's far plane is a wall;
+    * ``neutral_kinetic_dvm_end_wall_jet`` -- the kinetic closure's
+      energetic end wall return, and a mirror has no end wall;
+    * ``neutral_kinetic_dvm_annulus_flights = "bounded_chord"`` -- that
+      annulus is carried as flights rather than marched, and returns its
+      end-plane exits through the lagged end buffer a tick later, so it
+      cannot reflect specularly at the mirror plane inside the march the
+      way the marched ``"rates"`` annulus does (``neutral_model =
+      "kinetic_dvm"`` itself runs at a mirror, its far plane specular);
     * ``S_pump_R != 0`` -- the right pump sits on the end wall cell, which a
       half column does not have;
     * a non-default ``end_wall_length_cm`` -- the half column has no end wall
@@ -73,17 +77,19 @@ def validate_far_end_configuration(input_dict, flags):
     ):
         if bool(flags.get(flag)):
             conflicts.append(f"{flag}=False (got True)")
-    if input_dict.get("neutral_model") == "kinetic_dvm":
-        conflicts.append("neutral_model='moment' (got 'kinetic_dvm')")
     if bool(input_dict.get("neutral_kinetic_dvm_end_wall_jet")):
         conflicts.append(
-            "neutral_kinetic_dvm_end_wall_jet=False (got True)"
+            "neutral_kinetic_dvm_end_wall_jet=False (got True: a mirror has "
+            "no end wall to return from)"
         )
     flights = input_dict.get("neutral_kinetic_dvm_annulus_flights")
     if flights == "bounded_chord":
         conflicts.append(
             "neutral_kinetic_dvm_annulus_flights='rates' "
-            "(got 'bounded_chord')"
+            "(got 'bounded_chord': its annulus is flown, not marched, and "
+            "returns its end-plane exits through the lagged end buffer a "
+            "tick later, so it cannot reflect specularly at the mirror "
+            "plane)"
         )
     S_pump_R = float(input_dict.get("S_pump_R", 0.0))
     if S_pump_R != 0.0:
@@ -102,7 +108,7 @@ def validate_far_end_configuration(input_dict, flags):
             "wall or cannot yet run at a mirror. Incompatible with "
             "far_end='mirror' (the complete set): TwinCathode, "
             "cathode_coupling, neutral_momentum, neutral_energy, "
-            "neutral_model='kinetic_dvm', neutral_kinetic_dvm_end_wall_jet, "
+            "neutral_kinetic_dvm_end_wall_jet, "
             "neutral_kinetic_dvm_annulus_flights='bounded_chord', "
             "S_pump_R != 0, end_wall_length_cm != "
             f"{end_wall_default!r}. Set: " + "; ".join(conflicts)

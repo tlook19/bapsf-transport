@@ -118,7 +118,9 @@ solver.
 `verify_sim1d_*.py` is the registered gate of one build (its cases are cited
 by name in the campaign record), alongside the wall-return reference corpus's
 builder, verifier and bench (`build_wall_return_reference.py`,
-`verify_wall_return_reference.py`, `bench_wall_return.py`). The rest split
+`verify_wall_return_reference.py`, `bench_wall_return.py`) and the DVM
+mirror-plane corpus's capture/verify script (`dvm_mirror_plane_reference.py`,
+pinning `scripts/data/dvm_mirror_plane_reference.npz`). The rest split
 into four kinds: read-only audits/censuses of a saved run or build
 (`audit_sim1d_afterglow_ion_channel.py`, `census_afterglow_tail_handoff.py`,
 `t23c_pairwise_audit.py`); a lane-equivalence check
@@ -130,7 +132,8 @@ into four kinds: read-only audits/censuses of a saved run or build
 `verify_phase3_source_capture.py`,
 `verify_twin_mirror_equivalence.py` — the `far_end = "mirror"` half column
 marched against the full two-source `TwinCathode` column on a symmetric
-state,
+state (fluid neutrals by default, the kinetic closure with
+`--neutral-model kinetic_dvm`),
 `verify_fill_spreading.py` — the initial fill's spreading members. The
 registered member is a finite-volume Knudsen diffusion of the foot inventory
 from the puff row, with a continuous source over the foot, gap-coupled

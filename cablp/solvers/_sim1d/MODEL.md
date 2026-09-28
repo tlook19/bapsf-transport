@@ -141,19 +141,29 @@ closed and not absorbing: no particle, energy or heat crosses it, nothing is
 recycled there, the right pump does not exist, and nothing armed by the end
 wall role (the end wall's sheath-climb row, its surface-power line) is
 present. Its momentum flux is the mirror-ghost face flux of
-[`NUMERICS.md`](NUMERICS.md). The mirror is a first-stage apparatus: a
+[`NUMERICS.md`](NUMERICS.md). Under the kinetic neutral closure the same
+plane ends the neutral domain as a SPECULAR mirror: every atom reaching it
+returns with $v_\parallel\to-v_\parallel$ and its $c_\perp$ unchanged, so the
+distribution there satisfies $f(-v_\parallel,c_\perp)=f(v_\parallel,c_\perp)$
+in both the column and the annulus, with no pumping, no accommodation, no
+sticking and no end-wall return; nothing crosses it net in particles or
+energy. The mirror is a first-stage apparatus: a
 configuration pairing it with anything that presumes the end wall or cannot
 yet run at a mirror — the second cathode layout, the cathode circuit (whose
 beam and tail walk march to the far face), the evolved neutral momentum and
-energy, the kinetic neutral closure and its far-end options, a right pump
-speed, or an end wall length — is refused at construction, in one message
-naming the complete set. The mirror is verified against the whole machine it
+energy, the kinetic closure's end wall jet, its bounded-chord annulus (which
+returns its end-plane exits a tick late rather than within the transport
+step, and so cannot reflect specularly), a right pump speed, or an end wall
+length — is refused at construction, in one message naming the complete set.
+The mirror is verified against the whole machine it
 stands in for: the second cathode layout (`TwinCathode`) meshes the half
 column reflected about $L_m/2$, its near half equal to the half column edge
 for edge, and `scripts/verify/verify_twin_mirror_equivalence.py` marches the
 two from one mirror-symmetric state with the circuit off, the full column
 replaying the half column's timesteps, comparing $n$, $T_e$, $T_i$ and $n_n$
-on the half domain at every save.
+on the half domain at every save. With `--neutral-model kinetic_dvm` it runs
+both under the kinetic closure and also reports the kinetic mirror plane's
+ledger rows at every neutral tick.
 
 Under the reference configuration's prescribed area geometry the flux-tube
 area expands from roughly 60 cm upstream of port 53 into the end chamber,
@@ -1133,7 +1143,9 @@ non-accommodated share $1-\alpha_\text{acc}$, returned on the same cosine
 shape at the temperature carrying the retained share's own incident mean
 energy per atom.
 **The two end planes take the same accommodation**, their non-accommodated
-share returned $v_\parallel$-mirrored.
+share returned $v_\parallel$-mirrored. At a mirror far end the right end
+plane is the specular mirror plane of the geometry section instead, and takes
+no accommodation and no pumping.
 
 The **surface jets** split a counted stream by a particle reflection fraction
 $R_N$ and a **total** reflected energy fraction $R_E$, so the $R_N$

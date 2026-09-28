@@ -295,11 +295,15 @@ def geometry_defaults():
         ``cathode_coupling`` (every cathode solve launches the CSDA beam and
         its tail walk, which march to the far face), ``neutral_momentum`` and
         ``neutral_energy`` (their far-face wall sinks and the hot channel's
-        end-plane landing), ``neutral_model = "kinetic_dvm"``,
-        ``neutral_kinetic_dvm_end_wall_jet``,
-        ``neutral_kinetic_dvm_annulus_flights = "bounded_chord"``,
-        ``S_pump_R != 0`` (there is no right pump) and a non-default
-        ``end_wall_length_cm``.
+        end-plane landing), ``neutral_kinetic_dvm_end_wall_jet`` (there is
+        no end wall to return from),
+        ``neutral_kinetic_dvm_annulus_flights = "bounded_chord"`` (its
+        flown annulus returns its end exits through the lagged end buffer,
+        so it cannot reflect specularly at the plane), ``S_pump_R != 0``
+        (there is no right pump) and a non-default ``end_wall_length_cm``.
+        ``neutral_model = "kinetic_dvm"`` runs at a mirror: its velocity
+        distributions reflect specularly there, ``f(-v_z) = f(v_z)``,
+        within each march.
     """
     return {
         "Lm": 2117.8,
