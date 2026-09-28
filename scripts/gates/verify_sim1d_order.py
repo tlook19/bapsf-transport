@@ -61,10 +61,17 @@ labelled PRE-ASYMPTOTIC, its slope printed but NOT QUOTED, when any of:
    below.
 
 The bounds are set from the method, not from any case's reading. Criterion 3
-does not catch every departure from one power law: a local slope that drifts
-monotonically across the levels can fit with a small standard error. The
-successive-level ("local") slopes are printed beside every fit so that drift
-is visible.
+does not catch every departure from one power law: a four-level fit has two
+residual degrees of freedom and is blind to monotone curvature, so a local
+slope that drifts across the levels can fit with a small standard error.
+
+DRIFTING (:func:`drift_label`). A fit that is not PRE-ASYMPTOTIC but whose
+successive-level ("local") slopes are monotone and span more than
+``DRIFT_SPAN_BOUND`` (0.2) is printed as ``NOT QUOTED, DRIFTING``: a crossover
+band, not an order. This label was added after the first results, from that
+blindness of the four-level fit. It does not enter the exit code. Slopes that
+alternate about a steady value are a wobble, not a drift, and are left to the
+standard-error bound. The local slopes are printed beside every fit.
 
 RESOLUTION IS A PRECONDITION, not a detail. The seeded state's fastest
 conduction mode has lambda_max ~ 1.5e8 s^-1, so at 8 base-steps the coarsest
@@ -81,32 +88,39 @@ printed.
 
 Measured at 72 cells, t_end = 1e-6 s, levels 128 / 256 / 512 / 1024 steps
 (dt*lambda_max = 1.15 / 0.58 / 0.29 / 0.14), reference 16384 steps, as the
-envelope order, the range over the five fields n, nn, u, Te, Ti:
+envelope order, the range over the quoted fields of n, nn, u, Te, Ti. A
+"band a->b" is a DRIFTING fit, given as its first and last local slope; PA is
+PRE-ASYMPTOTIC; neither is an order:
 
-    picard  splitting   backward_euler  shifted     crank_nicolson  tr_bdf2
-    ------  ---------   --------------  ----------  --------------  ----------
-      0       lie        1.00           1.00        1.00            0.94-1.00
-      4       lie        1.00           1.00        0.98-1.00       0.90-1.00
-      0       strang     0.98-1.03      0.89-1.21   1.40-1.60 (*)   1.42-1.63 (*)
-      4       strang     0.97-1.04      0.82-1.20   2.00            1.99-2.00
+    picard splitting backward_euler shifted          crank_nicolson     tr_bdf2
+    ------ --------- -------------- ---------------  -----------------  -----------------
+      0     lie      1.00           1.00             1.00               0.94-1.00
+      4     lie      1.00           1.00             0.98-1.00          0.90-1.00
+      0     strang   0.98-1.03      0.89-1.13;       n,nn,u band        n,nn,u band
+                                    Ti band          1.57->1.24;        1.59->1.27;
+                                    1.38->1.06       Ti band            Ti band
+                                                     1.76->1.44; Te PA  1.76->1.48; Te PA
+      2     strang   0.97-1.04      1.17 (n,nn,u);   2.00               1.99-2.00
+                                    Te band
+                                    0.66->0.93, Ti
+                                    band 1.46->1.02
+      4     strang   as Picard 2 (identical to the printed digits)
 
-    (*) Te PRE-ASYMPTOTIC (slope standard error 0.18 and 0.14): not quoted.
-
-Second order needs all three of a second-order substep scheme, a non-frozen
-conductivity, and Strang splitting. Each of the first-order terms caps the step
-on its own: every Lie row sits at ~1.0 whatever the substep scheme is, and on
-the picard-0 Strang row the frozen conductivity caps crank_nicolson and
-tr_bdf2 -- their local slopes fall across the levels (about 1.6 to 1.25 on n)
-toward first order, so the 1.4-1.6 there is a crossover band, not an order.
-The bottom row is the shipped production package, and both second-order
-substeps reach second order in it; tr_bdf2 is the shipped choice because it is
-the only one that is second-order AND L-stable.
+Picard 2 with Strang is the production package. Second order needs all three
+of a second-order substep scheme, a non-frozen conductivity, and Strang
+splitting. Each of the first-order terms caps the step on its own: every Lie
+row sits at ~1.0 whatever the substep scheme is, and on the Picard-0 Strang
+row the frozen conductivity caps crank_nicolson and tr_bdf2, whose local
+slopes fall across the levels toward first order -- bands, not orders. With
+Picard 2 or 4 and Strang both second-order substeps reach second order;
+tr_bdf2 is the production choice because it is the only one that is
+second-order AND L-stable.
 
 backward_euler is the negative control: theta = 1 cannot be second-order at any
 dt, so if it reaches 2.0 the harness is wrong rather than good. shifted is
-theta = 0.6, first-order for the same reason; on the Strang rows its local
-slopes drift toward 1 across the levels (its leading first-order coefficient
-is (theta - 1/2) = 0.1 of backward Euler's, so the second-order term still
+theta = 0.6, first-order for the same reason; on the Strang rows its Te and Ti
+fits drift toward 1 across the levels (its leading first-order coefficient is
+(theta - 1/2) = 0.1 of backward Euler's, so the second-order term still
 contributes at these dt). Read shifted as a scale check.
 
 EXIT CODE. 0 when ALL THREE preconditions hold -- floors inert in every run
@@ -119,7 +133,7 @@ anything at all is not.
 
 Usage:
     python scripts/gates/verify_sim1d_order.py
-    python scripts/gates/verify_sim1d_order.py --picard 4 --splitting strang
+    python scripts/gates/verify_sim1d_order.py --picard 2 --splitting strang
     python scripts/gates/verify_sim1d_order.py --schemes crank_nicolson tr_bdf2
     python scripts/gates/verify_sim1d_order.py --levels 6 --ref-factor 32
     python scripts/gates/verify_sim1d_order.py --t-end 2e-6 --base-steps 8
@@ -186,9 +200,10 @@ REF_RESOLVE_FACTOR = 10.0
 #: The largest standard error of the fitted slope at which the slope is
 #: quoted. At 0.10 the two-sigma band (+/- 0.2) separates first from second
 #: order with room to spare; a larger error means the levels do not lie on
-#: one power law. Measured at the default levels, the largest quoted standard
-#: error is 0.07 (shifted Ti, Picard 4 and Picard 2 Strang) and the smallest
-#: flagged one is 0.14 (tr_bdf2 Te, Picard 0 Strang), either side of 0.10.
+#: one power law. Measured at the default levels, the largest standard error
+#: this bound passes is 0.07 (shifted Ti, Picard 4 and Picard 2 Strang) and the
+#: smallest it flags is 0.14 (tr_bdf2 Te, Picard 0 Strang), either side of
+#: 0.10.
 ORDER_SE_BOUND = 0.10
 
 #: The widest span (max - min) of monotone successive-level slopes at which
