@@ -2324,7 +2324,8 @@ def _case_mirror_refusals():
     complete = (
         "Incompatible with far_end='mirror' (the complete set): TwinCathode, "
         "heating_anomalous_transport='plateau_multigroup' with "
-        "cathode_coupling, neutral_momentum, neutral_energy, "
+        "cathode_coupling under anode_tail_booking='lagged_current', "
+        "neutral_momentum, neutral_energy, "
         "neutral_kinetic_dvm_end_wall_jet, "
         "neutral_kinetic_dvm_annulus_flights='bounded_chord', "
         "S_pump_R != 0, end_wall_length_cm != 7.8."
@@ -2361,10 +2362,14 @@ def _case_mirror_refusals():
          "through the lagged end buffer a tick later, so it cannot reflect "
          "specularly at the mirror plane)"),
         ("params", "heating_anomalous_transport", "plateau_multigroup",
-         "heating_anomalous_transport='local' (got 'plateau_multigroup': at "
-         "a mirror the walked tail has no absorbing face once the anode "
-         "sheath repels every walker, and the leg cap then books most of its "
-         "power as residual)"),
+         "anode_tail_booking='emission_fraction' (got 'lagged_current' with "
+         "heating_anomalous_transport='plateau_multigroup': the lagged "
+         "booking counts the primary's full flux at the anode plane on top "
+         "of the walkers launched upstream of it, so the anode books more "
+         "fast electrons than the cathode emits, its sheath then repels "
+         "every walker, the walkers stay trapped between the two faces, and "
+         "the leg-cap residual (10-46 % of the tail power at 64 legs) raises "
+         "the run-time residual bound)"),
         ("params", "S_pump_R", 3000.0, "S_pump_R=0.0 (got 3000.0)"),
         ("params", "end_wall_length_cm", 10.0,
          "end_wall_length_cm=7.8 (got 10.0)"),
