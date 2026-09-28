@@ -2203,7 +2203,7 @@ def _case_mirror_half_column_mesh():
     The column ends at Lm/2 = 1058.9 cm (the template's Lm = 2117.8 cm) with
     no end wall cell; the fixed source region (5 cells of 10 cm, 53.25 cm to
     103.25 cm) is unchanged and the far section is re-cut into nx uniform
-    cells of (1058.9 - 103.25)/nx cm. At nx = 121 that is 7.897933884297521
+    cells of (1058.9 - 103.25)/nx cm. At nx = 128 that is 7.466015625000001
     cm. The only absorbing face is the cathode face; the mirror face is the
     last face, closed, not absorbing, heat-opaque, and there is no right pump.
     """
@@ -2216,7 +2216,7 @@ def _case_mirror_half_column_mesh():
     params, flags = default_config()
     assert params["far_end"] == "end_wall"
     assert FAR_END_VALUES == ("end_wall", "mirror")
-    params["nx"] = 121
+    params["nx"] = 128
     wall = build_geometry(params, flags)
     params["far_end"] = "mirror"
     geom = build_geometry(params, flags)
@@ -2230,20 +2230,20 @@ def _case_mirror_half_column_mesh():
         geom.z_edges_cm[-1]
     )
     assert abs(float(wall.z_edges_cm[-1]) - 2117.8) <= 1.0e-9
-    # 1 plenum + 5 gap + 5 source + 121 far = 132; the end wall mesh has one
-    # more cell (its end wall) and the far column's other 121 cells.
-    assert cells == 132, cells
-    assert int(wall.cells) == 133
+    # 1 plenum + 5 gap + 5 source + 128 far = 139; the end wall mesh has one
+    # more cell (its end wall) and the far column's other 128 cells.
+    assert cells == 139, cells
+    assert int(wall.cells) == 140
     roles = [str(role) for role in geom.cell_role]
     assert "end_wall" not in roles
     assert roles[-1] == "column"
     assert str(wall.cell_role[-1]) == "end_wall"
-    far = np.asarray(geom.length_cm[-121:], dtype=float)
+    far = np.asarray(geom.length_cm[-128:], dtype=float)
     assert np.all(far == far[0]), far
-    assert math.isclose(float(far[0]), 7.897933884297521, rel_tol=1e-14)
-    assert float(geom.length_cm[-122]) == 10.0  # the source region's last
+    assert math.isclose(float(far[0]), 7.466015625000001, rel_tol=1e-14)
+    assert float(geom.length_cm[-129]) == 10.0  # the source region's last
     assert math.isclose(
-        float(np.sum(geom.length_cm[-121:])), 1058.9 - 103.25, rel_tol=1e-13
+        float(np.sum(geom.length_cm[-128:])), 1058.9 - 103.25, rel_tol=1e-13
     )
     # The absorbing faces are the cathode face alone.
     assert list(np.flatnonzero(geom.plasma_absorbing)) == list(
