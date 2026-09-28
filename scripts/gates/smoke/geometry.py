@@ -2451,3 +2451,121 @@ def _case_twin_mirror_mesh_identity():
     assert cathode_sample_indices(half) == (near_cathode, None)
     assert cathode_sample_indices(wall) == (near_cathode, int(wall.cells) - 1)
     assert cathode_sample_indices(twin) == (near_cathode, int(twin.cells) - 2)
+
+
+# --------------------------------------------------------------------
+# mirror-puff-row-reflection
+# --------------------------------------------------------------------
+@_case("mirror-puff-row-reflection")
+def _case_mirror_puff_row_reflection():
+    """Under far_end = "mirror" the puff row reflects at the mirror plane.
+
+    (a) On the two-source machine (Lm = 1965.4 cm, nx = 118) the half
+    column's puff deposition [particles/s per cell] equals the left half of
+    the full TwinCathode column's deposition from BOTH puffs, to roundoff:
+    rays the half column's source sends past Lm/2 land in their image cells,
+    where the image source's rays land in the whole column. (b) A port next
+    to the plane on a small grid: without the mirror its rays past the last
+    edge fold into the last cell; with it none is clipped, a positive share
+    is reflected, and the row equals the one-source row on the doubled grid
+    folded about the plane. (c) The end wall and twin rows take the
+    unmirrored path.
+    """
+    from cablp.solvers._sim1d.core.geometry import build_geometry
+    from cablp.solvers._sim1d.physics import puff_orifice
+    from cablp.solvers._sim1d.physics.neutrals import gas_puff_rate_profile
+
+    params, flags = default_config()
+    params.update(Lm=1965.4, nx=118)
+    half = build_geometry(dict(params, far_end="mirror"), flags)
+    twin = build_geometry(params, dict(flags, TwinCathode=True))
+    cells = int(half.cells)
+    puff_kwargs = dict(
+        z_cm=params["gas_puff_z_cm"],
+        delivery_fraction=params["gas_puff_delivery_fraction"],
+        orifice_id_cm=params["gas_puff_orifice_id_cm"],
+        orifice_length_cm=params["gas_puff_orifice_length_cm"],
+    )
+    sccm, valves = params["S_gp"], params["gas_puff_valves"]
+    half_particles = gas_puff_rate_profile(
+        half, sccm, valves, end=0, **puff_kwargs
+    ) * np.asarray(half.neutral_volume_cm3)
+    twin_particles = (
+        gas_puff_rate_profile(twin, sccm, valves, end=0, **puff_kwargs)
+        + gas_puff_rate_profile(twin, sccm, valves, end=-1, **puff_kwargs)
+    ) * np.asarray(twin.neutral_volume_cm3)
+    scale = float(np.max(half_particles))
+    assert scale > 0.0
+    defect = float(
+        np.max(np.abs(twin_particles[:cells] - half_particles)) / scale
+    )
+    assert defect <= 1.0e-12, defect
+    # Non-vacuity: the rays past the plane are a real share, so folding them
+    # into the last cell (the unmirrored rule) misses the twin by far more.
+    edges = np.ascontiguousarray(half.z_edges_cm, dtype=float)
+    i_port = int(np.searchsorted(edges, params["gas_puff_z_cm"]) - 1)
+    row_kwargs = dict(
+        pipe_id_cm=params["gas_puff_orifice_id_cm"],
+        aspect_ratio=(
+            params["gas_puff_orifice_length_cm"]
+            / params["gas_puff_orifice_id_cm"]
+        ),
+        r_wall_cm=float(half.Rm_cm[i_port]),
+        r_edge_cm=float(half.Rp_cm[i_port]),
+        z_port_cm=params["gas_puff_z_cm"],
+    )
+    folded, folded_meta = puff_orifice.launch_row(edges, **row_kwargs)
+    mirrored, mirrored_meta = puff_orifice.launch_row(
+        edges, mirror_far_edge=True, **row_kwargs
+    )
+    assert mirrored_meta["reflected_fraction"] > 0.0
+    assert mirrored_meta["clipped_fraction"] < folded_meta["clipped_fraction"]
+    assert float(folded[-1]) > float(mirrored[-1])
+    # Both rows are mass fractions summing to 1, so the total is the rate.
+    folded_particles = float(np.sum(half_particles)) * folded
+    assert float(
+        np.max(np.abs(twin_particles[:cells] - folded_particles)) / scale
+    ) > 1.0e3 * max(defect, 1.0e-16)
+
+    # (b) A ray past the plane lands in its image cell.
+    small = np.linspace(0.0, 40.0, 41)
+    small_kwargs = dict(
+        pipe_id_cm=3.95, aspect_ratio=2.0, r_wall_cm=50.0, r_edge_cm=18.0,
+        z_port_cm=36.5,
+    )
+    small_folded, small_folded_meta = puff_orifice.launch_row(
+        small, **small_kwargs
+    )
+    small_mirror, small_mirror_meta = puff_orifice.launch_row(
+        small, mirror_far_edge=True, **small_kwargs
+    )
+    assert small_folded_meta["clipped_fraction"] > 0.0
+    assert small_mirror_meta["reflected_fraction"] > 0.0
+    assert small_mirror_meta["clipped_fraction"] < (
+        small_folded_meta["clipped_fraction"]
+    )
+    doubled = np.concatenate((small, 80.0 - small[-2::-1]))
+    full, _ = puff_orifice.launch_row(doubled, **small_kwargs)
+    image = full[:40] + full[40:][::-1]
+    assert np.allclose(small_mirror, image, rtol=0.0, atol=1.0e-12), float(
+        np.max(np.abs(small_mirror - image))
+    )
+    assert math.isclose(float(np.sum(small_mirror)), 1.0, rel_tol=1e-12)
+
+    # (c) The end wall and twin geometries take the unmirrored row.
+    wall = build_geometry(params, flags)
+    wall_edges = np.ascontiguousarray(wall.z_edges_cm, dtype=float)
+    wall_kwargs = dict(
+        row_kwargs,
+        r_wall_cm=float(wall.Rm_cm[i_port]),
+        r_edge_cm=float(wall.Rp_cm[i_port]),
+    )
+    assert np.array_equal(
+        puff_orifice.launch_row_for_grid(
+            wall,
+            pipe_id_cm=params["gas_puff_orifice_id_cm"],
+            pipe_length_cm=params["gas_puff_orifice_length_cm"],
+            z_port_cm=params["gas_puff_z_cm"],
+        ),
+        puff_orifice.launch_row(wall_edges, **wall_kwargs)[0],
+    )

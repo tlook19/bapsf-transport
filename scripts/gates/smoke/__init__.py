@@ -203,6 +203,7 @@ _CASE_ORDER = (
     "mirror-face-flux-unit",
     "mirror-fluid-march",
     "twin-mirror-mesh-identity",
+    "mirror-puff-row-reflection",
 )
 
 

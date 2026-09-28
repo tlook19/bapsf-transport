@@ -249,6 +249,7 @@ def launch_row(
     r_edge_cm,
     z_port_cm=PORT_CENTER_Z_CM,
     quadrature=QUADRATURE,
+    mirror_far_edge=False,
 ):
     """Per-cell axial launch weights on ``z_edges_cm``, summing to 1.
 
@@ -263,6 +264,15 @@ def launch_row(
     cells so no fuel is deleted) and ``missed`` (rays whose closest approach
     stays outside the column, placed at their perigee) -- plus the aspect
     ratio and the direct-cone half-angle actually used.
+
+    ``mirror_far_edge`` (default ``False``) makes the last edge a MIRROR
+    plane, the symmetry plane of a column carrying an identical second
+    source beyond it: a ray landing past that plane at ``z`` lands instead
+    at its image ``2 z_m - z``, which is where the image source's image ray
+    lands in the whole column. ``meta["reflected_fraction"]`` reports the
+    share so placed; an image still off the grid at the near end folds into
+    the first cell as before. ``False`` folds every off-grid ray into its
+    end cell.
 
     Raises ``ValueError`` on a grid that is not increasing, on a non-positive
     aperture or radius, on a plasma radius that is not inside the wall, and on
@@ -324,6 +334,7 @@ def launch_row(
     total = 0.0
     clipped = 0.0
     missed = 0.0
+    reflected = 0.0
     disc_w = 1.0 / a_y.size
     for th, dth, ft in zip(thetas, d_theta, f_theta):
         w = ft * np.sin(th) * dth * (2.0 * np.pi / n_phi) * disc_w
@@ -341,6 +352,10 @@ def launch_row(
         )
         z_flat = np.ravel(z_land)
         n_ray = z_flat.size
+        if mirror_far_edge:
+            past = z_flat > edges[-1]
+            reflected += w * float(np.count_nonzero(past))
+            z_flat = np.where(past, 2.0 * edges[-1] - z_flat, z_flat)
         idx = np.searchsorted(edges, z_flat, side="right") - 1
         off = (idx < 0) | (idx >= row.size)
         clipped += w * float(np.count_nonzero(off))
@@ -360,6 +375,7 @@ def launch_row(
         "theta_o_deg": float(np.degrees(theta_o)),
         "clipped_fraction": clipped / total,
         "missed_fraction": missed / total,
+        "reflected_fraction": reflected / total,
         "pipe_id_cm": d,
         "r_wall_cm": r_wall,
         "r_edge_cm": r_edge,
@@ -414,7 +430,8 @@ def launch_row_bracket(
 
 @functools.lru_cache(maxsize=8)
 def _launch_row_cached(
-    edges_bytes, pipe_id_cm, aspect_ratio, r_wall_cm, r_edge_cm, z_port_cm
+    edges_bytes, pipe_id_cm, aspect_ratio, r_wall_cm, r_edge_cm, z_port_cm,
+    mirror_far_edge=False,
 ):
     """Memoised :func:`launch_row`, keyed on the raw bytes of the cell edges.
 
@@ -428,6 +445,7 @@ def _launch_row_cached(
         r_wall_cm=r_wall_cm,
         r_edge_cm=r_edge_cm,
         z_port_cm=z_port_cm,
+        mirror_far_edge=mirror_far_edge,
     )
     row.setflags(write=False)
     return row
@@ -448,6 +466,10 @@ def launch_row_for_grid(
     Every input is run-constant, so the result is MEMOISED and returned
     read-only; the quadrature behind it costs a fraction of a second and the
     puff row is otherwise rebuilt on every right-hand side.
+
+    A geometry ending in a mirror face (``far_end = "mirror"``) reflects the
+    rays that land past it into their image cells (see :func:`launch_row`);
+    every other geometry folds off-grid rays into its end cells.
 
     Raises ``ValueError`` on a non-positive pipe diameter or length, and
     carries every refusal of :func:`launch_row` and
@@ -472,7 +494,8 @@ def launch_row_for_grid(
     z0 = float(z_port_cm)
     i_port = int(np.searchsorted(edges, z0) - 1)
     i_port = min(max(i_port, 0), int(np.asarray(geometry.Rm_cm).size) - 1)
-    return _launch_row_cached(
+    mirror = np.asarray(getattr(geometry, "mirror_face_indices", ())).size > 0
+    args = (
         edges.tobytes(),
         d,
         length / d,
@@ -480,6 +503,9 @@ def launch_row_for_grid(
         float(np.asarray(geometry.Rp_cm)[i_port]),
         z0,
     )
+    if mirror:
+        return _launch_row_cached(*args, mirror_far_edge=True)
+    return _launch_row_cached(*args)
 
 
 # ---------------------------------------------------------------- reporting
