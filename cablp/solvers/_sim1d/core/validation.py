@@ -45,16 +45,21 @@ def validate_far_end_configuration(input_dict, flags):
 
     * ``TwinCathode`` -- a different far end;
     * ``heating_anomalous_transport = "plateau_multigroup"`` together with
-      ``cathode_coupling`` -- the walked tail. The deposition module turns its
-      walkers round at the mirror plane and reflects them at the cathode
-      sheath, and the anode mesh is what removes them; when the anode sheath
-      solve repels every walker (its drop driven far above the plateau, as
-      at breakdown) nothing removes them, the walkers bounce between the two
-      faces splitting at every mesh crossing, and the leg cap then books most
-      of the tail power as residual. A walked tail at a mirror waits for that
-      regime's treatment. The cathode circuit itself -- the CSDA primary,
-      which turns round at the plane, and the ``"local"`` anomalous heating
-      -- runs at a mirror;
+      ``cathode_coupling`` under ``anode_tail_booking = "lagged_current"`` --
+      the walked tail with the lagged absolute tail current. The deposition
+      module turns its walkers round at the mirror plane and reflects them at
+      the cathode sheath, and the anode mesh is what removes them. The lagged
+      booking counts the primary's full flux at the anode plane on top of the
+      walkers its drag launched upstream of it, so at breakdown the anode
+      books more fast electrons than the cathode emits, its sheath drop is
+      driven far above the plateau and repels every walker, and nothing
+      removes them: the walkers stay trapped between the two faces and the
+      leg-cap residual (10-46 % of the tail power at 64 legs) raises the
+      run-time residual bound. ``anode_tail_booking = "emission_fraction"``
+      books the anode's direct collection per emitted electron and the
+      walked tail constructs under it. The cathode circuit itself -- the CSDA
+      primary, which turns round at the plane, and the ``"local"`` anomalous
+      heating -- runs at a mirror;
     * ``neutral_momentum`` -- the neutral wind's wall-momentum sink at the far
       face treats it as a wall;
     * ``neutral_energy`` -- the end-face energy accommodation and the hot
@@ -98,16 +103,23 @@ def validate_far_end_configuration(input_dict, flags):
             "tick later, so it cannot reflect specularly at the mirror "
             "plane)"
         )
+    booking = input_dict.get("anode_tail_booking", "lagged_current")
     if (
         bool(flags.get("cathode_coupling"))
         and input_dict.get("heating_anomalous_transport")
         == "plateau_multigroup"
+        and booking != "emission_fraction"
     ):
         conflicts.append(
-            "heating_anomalous_transport='local' (got 'plateau_multigroup': "
-            "at a mirror the walked tail has no absorbing face once the "
-            "anode sheath repels every walker, and the leg cap then books "
-            "most of its power as residual)"
+            f"anode_tail_booking='emission_fraction' (got {booking!r} with "
+            "heating_anomalous_transport='plateau_multigroup': the lagged "
+            "booking counts the primary's full flux at the anode plane on "
+            "top of the walkers launched upstream of it, so the anode books "
+            "more fast electrons than the cathode emits, its sheath then "
+            "repels every walker, the "
+            "walkers stay trapped between the two faces, and the leg-cap "
+            "residual (10-46 % of the tail power at 64 legs) raises the "
+            "run-time residual bound)"
         )
     S_pump_R = float(input_dict.get("S_pump_R", 0.0))
     if S_pump_R != 0.0:
@@ -126,7 +138,7 @@ def validate_far_end_configuration(input_dict, flags):
             "wall or cannot yet run at a mirror. Incompatible with "
             "far_end='mirror' (the complete set): TwinCathode, "
             "heating_anomalous_transport='plateau_multigroup' with "
-            "cathode_coupling, "
+            "cathode_coupling under anode_tail_booking='lagged_current', "
             "neutral_momentum, neutral_energy, "
             "neutral_kinetic_dvm_end_wall_jet, "
             "neutral_kinetic_dvm_annulus_flights='bounded_chord', "
