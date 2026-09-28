@@ -18,76 +18,127 @@ not:
   which would make a run's result depend on its step history and break
   self-convergence.
 
-Order is estimated from a grid triplet (Richardson), which needs no reference
-solution:
+THE QUOTED ORDER IS THE SLOPE OF AN ERROR ENVELOPE. Each scheme runs at
+``--levels`` (at least four) step counts ``N, 2N, 4N, ...``; each level's
+error, per field, is its relative L-inf distance from a converged reference;
+and the quoted order is the least-squares slope of ``log(error)`` against
+``log(dt)`` over all the levels, printed with the slope's standard error and
+the largest residual about the fitted line (:func:`envelope_fit`).
 
-    order = log2( ||u_N - u_2N|| / ||u_2N - u_4N|| )
+The reference is the Picard-4 second-order package (``tr_bdf2``, Picard 4,
+Strang) at the finest level's dt divided by ``--ref-factor`` (default 16).
+Every scheme, splitting and Picard count the levels measure converges to the
+same semi-discrete solution, so one reference serves them all. At its nominal
+second order the reference's error is 16**-2 = 1/256 of a comparable
+second-order scheme's finest-level error, and smaller still against a
+first-order one. That margin is CHECKED on every run: a second reference at
+half the reference dt gives ``d = |ref - check|``, and for any reference order
+``q >= 1`` the reference's own error is ``d / (1 - 2**-q) <= 2d``, the bound
+printed per field.
 
-A reference-based estimate against a much finer run is reported alongside it as
-a cross-check; the two should agree.
+A Richardson triplet ratio, ``log2(|u_N - u_2N| / |u_2N - u_4N|)``, is still
+printed for every consecutive level triple, labelled a SCREEN, and is never the
+quoted order. It needs no reference, but on a state whose error is not smooth
+in dt -- a limited electron heat flux whose gradient changes sign inside the
+window, where the step that crosses the change carries a phase-dependent
+O(dt**2) residual -- a triplet reads erratically at ANY dt (0.88 on one such
+state) while the envelope against a converged reference keeps a clean slope
+(1.96 over eight halvings). A screen that disagrees with its envelope says to
+look; it never replaces the envelope.
+
+PRE-ASYMPTOTIC (:func:`pre_asymptotic_reasons`). A field's envelope is
+labelled PRE-ASYMPTOTIC, its slope printed but NOT QUOTED, when any of:
+
+1. an error is zero or non-finite at some level (no slope to fit);
+2. the smallest level error is below ``REF_RESOLVE_FACTOR`` (10) times the
+   reference's error bound -- the level is not resolved above the reference,
+   and the slope would read the reference;
+3. the slope's standard error exceeds ``ORDER_SE_BOUND`` (0.10) -- the errors
+   do not lie on one power law over the levels, whether from curvature or
+   from a wobble the levels taken have not averaged down; a two-sigma band of
+   +/- 0.2 is the widest that still separates first from second order;
+4. the coarsest ``dt * lambda_max`` exceeds ``DT_LAMBDA_FLAG`` (4) -- see
+   below.
+
+The bounds are set from the method, not from any case's reading. Criterion 3
+does not catch every departure from one power law: a four-level fit has two
+residual degrees of freedom and is blind to monotone curvature, so a local
+slope that drifts across the levels can fit with a small standard error.
+
+DRIFTING (:func:`drift_label`). A fit that is not PRE-ASYMPTOTIC but whose
+successive-level ("local") slopes are monotone and span more than
+``DRIFT_SPAN_BOUND`` (0.2) is printed as ``NOT QUOTED, DRIFTING``: a crossover
+band, not an order. This label was added after the first results, from that
+blindness of the four-level fit. It does not enter the exit code. Slopes that
+alternate about a steady value are a wobble, not a drift, and are left to the
+standard-error bound. The local slopes are printed beside every fit.
 
 RESOLUTION IS A PRECONDITION, not a detail. The seeded state's fastest
-conduction mode has lambda_max ~ 1.5e8 s^-1, so at the harness's old default of
-8 base-steps the coarsest step ran at dt*lambda_max ~ 18. Nothing about a
-scheme's TRUNCATION error is observable there: a Richardson triplet at large
-|z| measures the substep's stability function instead, and the two are not the
-same ranking. Crank-Nicolson is the trap -- its Strang equilibrium error is
-exactly -z^2/16, a clean power law, so it returns 2.00 at EVERY |z| however
-unresolved, while the L-stable schemes beside it read ~1. A table built there
-says tr_bdf2 is not second order, and that reading is an artefact of the
-sampling, not a property of the scheme.
+conduction mode has lambda_max ~ 1.5e8 s^-1, so at 8 base-steps the coarsest
+step would run at dt*lambda_max ~ 18. Nothing about a scheme's TRUNCATION
+error is observable there: the error at large |z| measures the substep's
+stability function instead, and the two are not the same ranking.
+Crank-Nicolson is the trap -- its Strang equilibrium error is exactly -z^2/16,
+a clean power law, so it returns 2.00 at EVERY |z| however unresolved, while
+the L-stable schemes beside it read ~1. So ``--base-steps`` DEFAULTS to a
+value derived from the seed's own conduction operator (see
+:func:`resolved_base_steps`), chosen so the coarsest dt satisfies ``dt *
+lambda_max <= DT_LAMBDA_RESOLVED``, and every level's ``dt * lambda_max`` is
+printed.
 
-So ``--base-steps`` now DEFAULTS to a value derived from the seed's own
-conduction operator (see :func:`resolved_base_steps`), chosen so the coarsest
-dt satisfies ``dt * lambda_max <= DT_LAMBDA_RESOLVED``. Every reading is
-printed with its ``dt * lambda_max``, a triplet coarser than
-``DT_LAMBDA_FLAG`` is flagged PRE-ASYMPTOTIC, and the closing line reports
-both preconditions -- floors inert AND the stiff mode resolved.
+Measured at 72 cells, t_end = 1e-6 s, levels 128 / 256 / 512 / 1024 steps
+(dt*lambda_max = 1.15 / 0.58 / 0.29 / 0.14), reference 16384 steps, as the
+envelope order, the range over the quoted fields of n, nn, u, Te, Ti. A
+"band a->b" is a DRIFTING fit, given as its first and last local slope; PA is
+PRE-ASYMPTOTIC; neither is an order:
 
-Measured at 72 cells, t_end = 1e-6 s, in the RESOLVED regime the default now
-selects (base-steps 128, dt*lambda_max = 1.15 / 0.58 / 0.29), as the
-reference-free triplet order:
+    picard splitting backward_euler shifted          crank_nicolson     tr_bdf2
+    ------ --------- -------------- ---------------  -----------------  -----------------
+      0     lie      1.00           1.00             1.00               0.94-1.00
+      4     lie      1.00           1.00             0.98-1.00          0.90-1.00
+      0     strang   0.98-1.03      0.89-1.13;       bands:             bands:
+                                    Ti band          n 1.57->1.25,      n, nn, u each
+                                    1.38->1.06       nn 1.56->1.25,     1.59->1.27,
+                                                     u 1.56->1.24,      Ti 1.76->1.48;
+                                                     Ti 1.76->1.44;     Te PA
+                                                     Te PA
+      2     strang   0.97-1.04      1.17 (n,nn,u);   2.00               1.99-2.00
+                                    Te band
+                                    0.66->0.93, Ti
+                                    band 1.46->1.02
+      4     strang   as Picard 2 (identical to the printed digits)
 
-    picard  splitting   backward_euler  shifted  crank_nicolson  tr_bdf2
-    ------  ---------   --------------  -------  --------------  -------
-      0       lie            0.99         1.00        1.00         0.95
-      4       lie            0.99         1.00        1.00         0.95
-      0       strang         0.82         1.45        1.79         1.74
-      4       strang         0.81         1.45        2.00         1.98
-
-Second order needs all three of a second-order substep scheme, a non-frozen
-conductivity, and Strang splitting. Each of the first-order terms caps the step
-on its own, so knocking out only one changes nothing: --picard alone is still
-capped by Lie splitting, which is why every Lie row sits at ~1.0 whatever the
-substep scheme is, and --splitting strang alone is still capped by the frozen
-conductivity, which is the 1.74-1.79 of the picard-0 Strang row.
-
-The bottom row is the shipped production package, and both second-order
-L-stable-or-symmetric substeps reach second order in it: crank_nicolson 2.00
-(2.00 -> 2.02 against the reference) and tr_bdf2 1.98 (1.99 -> 2.02). tr_bdf2
-is the shipped choice because it is the only one that is second-order AND
-L-stable.
+Picard 2 with Strang is the production package. Second order needs all three
+of a second-order substep scheme, a non-frozen conductivity, and Strang
+splitting. Each of the first-order terms caps the step on its own: every Lie
+row sits at ~1.0 whatever the substep scheme is, and on the Picard-0 Strang
+row the frozen conductivity caps crank_nicolson and tr_bdf2, whose local
+slopes fall across the levels toward first order -- bands, not orders. With
+Picard 2 or 4 and Strang both second-order substeps reach second order;
+tr_bdf2 is the production choice because it is the only one that is
+second-order AND L-stable.
 
 backward_euler is the negative control: theta = 1 cannot be second-order at any
 dt, so if it reaches 2.0 the harness is wrong rather than good. shifted is
-theta = 0.6, first-order for the same reason, and its 1.45 on the Strang rows
-is the same band effect described above rather than an order claim -- its
-leading first-order coefficient is (theta - 1/2) = 0.1 of backward Euler's, so
-the second-order term still contributes at these dt. Read shifted as a scale
-check.
+theta = 0.6, first-order for the same reason; its DRIFTING fits (Te and Ti on
+the Picard 2 and 4 Strang rows, Ti on the Picard-0 Strang row) have local
+slopes approaching 1 across the levels (its leading first-order coefficient is
+(theta - 1/2) = 0.1 of backward Euler's, so the second-order term still
+contributes at these dt). Read shifted as a scale check.
 
-EXIT CODE. 0 when BOTH preconditions hold -- floors inert in every run and the
-stiffest conduction mode resolved at every dt of the triplet -- and 1 when
-either fails, in which case the orders printed are not measurements and the
-closing lines say which precondition failed. The exit code gates the
-PRECONDITIONS only: which order value counts as passing depends on the scheme,
-the splitting and the Picard count being asked about, and is the caller's
-question. Whether the numbers mean anything at all is not.
+EXIT CODE. 0 when ALL THREE preconditions hold -- floors inert in every run
+(the reference included), the stiffest conduction mode resolved at every
+level, and no envelope PRE-ASYMPTOTIC -- and 1 when any fails; the closing
+lines say which. The exit code gates the PRECONDITIONS only: which order value
+counts as passing depends on the scheme, the splitting and the Picard count
+being asked about, and is the caller's question. Whether the numbers mean
+anything at all is not.
 
 Usage:
     python scripts/gates/verify_sim1d_order.py
-    python scripts/gates/verify_sim1d_order.py --picard 4 --splitting strang
+    python scripts/gates/verify_sim1d_order.py --picard 2 --splitting strang
     python scripts/gates/verify_sim1d_order.py --schemes crank_nicolson tr_bdf2
+    python scripts/gates/verify_sim1d_order.py --levels 6 --ref-factor 32
     python scripts/gates/verify_sim1d_order.py --t-end 2e-6 --base-steps 8
 """
 
@@ -113,16 +164,61 @@ from cablp.constants import ev_to_erg
 
 FLOOR_RTOL = 1e-9
 
-#: The coarsest ``dt * lambda_max`` at which a Richardson triplet is inside the
-#: asymptotic regime, and the value the default ``--base-steps`` is derived to
-#: satisfy. Above it the stiff conduction modes are not resolved and the
-#: measured order is a property of each scheme's stability function at large
+#: The largest ``dt * lambda_max`` at the coarsest level for which the stiffest
+#: conduction mode counts as resolved at every level, and the value the
+#: default ``--base-steps`` is derived to satisfy. Above it the error at the
+#: coarse levels is a property of each scheme's stability function at large
 #: ``|z|``, not of its truncation error.
 DT_LAMBDA_RESOLVED = 2.0
 
-#: The coarsest ``dt * lambda_max`` beyond which a triplet is reported as
-#: PRE-ASYMPTOTIC and its orders as not meaningful.
+#: The coarsest level's ``dt * lambda_max`` beyond which every envelope is
+#: labelled PRE-ASYMPTOTIC and its slope is not quoted.
 DT_LAMBDA_FLAG = 4.0
+
+#: The fewest dt levels an envelope order is fitted over.
+MIN_LEVELS = 4
+
+#: The reference and its check run the Picard-4 second-order package, which
+#: converges to the same semi-discrete solution as every scheme, splitting and
+#: Picard count the levels measure, so one reference serves them all.
+REF_SCHEME = "tr_bdf2"
+REF_PICARD = 4
+REF_SPLITTING = "strang"
+
+#: Default reference margin: the reference runs at the finest level's dt
+#: divided by this. At the reference's nominal second order its error is then
+#: 16**-2 = 1/256 of a second-order level's finest error of comparable
+#: constant, and far less against a first-order level. The margin is CHECKED,
+#: not assumed: a second reference at half the reference dt bounds the
+#: reference's own error (see :func:`pre_asymptotic_reasons`).
+DEFAULT_REF_FACTOR = 16
+
+#: The smallest level error must exceed the reference's error bound by this
+#: factor. Below it, a tenth or more of the measured error may be the
+#: reference's own, and the slope is not the scheme's. Measured at the default
+#: levels, the smallest margin over every scheme and field is 81x
+#: (crank_nicolson Ti, Picard 4 and Picard 2 Strang), against this 10x.
+REF_RESOLVE_FACTOR = 10.0
+
+#: The largest standard error of the fitted slope at which the slope is
+#: quoted. At 0.10 the two-sigma band (+/- 0.2) separates first from second
+#: order with room to spare; a larger error means the levels do not lie on
+#: one power law. Measured at the default levels, the largest standard error
+#: this bound passes is 0.07 (shifted Ti, Picard 4 and Picard 2 Strang) and the
+#: smallest it flags is 0.14 (tr_bdf2 Te, Picard 0 Strang), either side of
+#: 0.10.
+ORDER_SE_BOUND = 0.10
+
+#: The widest span (max - min) of monotone successive-level slopes at which
+#: a fit is still quoted as an ORDER; wider, it is labelled DRIFTING. Added
+#: after the first results: a four-level fit has two residual degrees of
+#: freedom and is blind to monotone curvature, so a slope still drifting
+#: across the levels can fit with a small standard error. The bound was set
+#: after those results. Measured at the default levels, the widest monotone
+#: span still quoted as an ORDER is 0.18 (shifted n, nn, u, Picard 2 and 4
+#: Strang, 1.27 -> 1.09) and the narrowest labelled DRIFTING is 0.27 (shifted
+#: Te, the same rows, 0.66 -> 0.93), either side of 0.2.
+DRIFT_SPAN_BOUND = 0.2
 
 #: Neutral temperature [K] the seed puts the optional ``En`` row at. The ``En``
 #: floor clips up to the vessel wall, so a seed AT the wall would sit on its own
@@ -339,7 +435,8 @@ def seed_conduction_lambda_max(scheme, amplitude, picard, splitting):
     if not np.isfinite(dt_bound) or dt_bound <= 0.0:
         raise RuntimeError(
             "the seeded state has no finite explicit heat bound, so the "
-            f"resolution of the triplet cannot be established (got {dt_bound})"
+            "resolution of the stiffest mode at the levels cannot be "
+            f"established (got {dt_bound})"
         )
     return HEAT_DT_FRACTION / float(dt_bound)
 
@@ -347,9 +444,9 @@ def seed_conduction_lambda_max(scheme, amplitude, picard, splitting):
 def resolved_base_steps(t_end, lambda_max):
     """Return the smallest power-of-two base-steps that resolves the seed.
 
-    "Resolves" means the COARSEST dt of the triplet satisfies
+    "Resolves" means the COARSEST level's dt satisfies
     ``dt * lambda_max <= DT_LAMBDA_RESOLVED``. A power of two is used so the
-    triplet's successive halvings and the reference multiple all land on
+    levels' successive halvings and the reference multiple all land on
     exactly representable steps.
     """
     need = t_end * float(lambda_max) / DT_LAMBDA_RESOLVED
@@ -367,8 +464,136 @@ def rel_diff(a, b):
     return float(np.max(np.abs(a - b)) / scale)
 
 
-def combined(fa, fb):
-    return max(rel_diff(fa[k], fb[k]) for k in FIELDS)
+def envelope_fit(dts, errors):
+    """Fit the error envelope ``error = C * dt**order`` by least squares.
+
+    The fit is linear in ``log2(error)`` against ``log2(dt)`` over every level
+    at once, so a phase-dependent wobble in the error at one level moves the
+    slope by its share of the whole span instead of setting it outright, as a
+    triplet ratio does.
+
+    Returns a dict with ``order`` (the fitted slope), ``se`` (its standard
+    error, from the fit residuals with ``n - 2`` degrees of freedom),
+    ``max_resid`` (the largest ``|log2|`` residual about the fitted line) and
+    ``local`` (the successive-level slopes ``log2(e_i / e_{i+1})``, a
+    diagnostic only). ``order`` is NaN when any error is not finite and
+    positive, because a zero or non-finite error has no logarithm to fit.
+
+    Raises ``ValueError`` for fewer than :data:`MIN_LEVELS` levels or for
+    arrays that are not 1-D and of one length.
+    """
+    dts = np.asarray(dts, dtype=float)
+    errors = np.asarray(errors, dtype=float)
+    if dts.shape != errors.shape or dts.ndim != 1:
+        raise ValueError(
+            f"dts and errors must be 1-D and the same length "
+            f"(got {dts.shape} and {errors.shape})"
+        )
+    if dts.size < MIN_LEVELS:
+        raise ValueError(
+            f"an envelope order needs at least {MIN_LEVELS} dt levels "
+            f"(got {dts.size})"
+        )
+    nan = float("nan")
+    if not (np.all(np.isfinite(errors)) and np.all(errors > 0.0)):
+        return {"order": nan, "se": nan, "max_resid": nan, "local": []}
+    x = np.log2(dts)
+    y = np.log2(errors)
+    xc = x - x.mean()
+    order = float(np.sum(xc * (y - y.mean())) / np.sum(xc * xc))
+    resid = y - (y.mean() + order * xc)
+    se = float(np.sqrt(np.sum(resid * resid) / (x.size - 2) / np.sum(xc * xc)))
+    local = [
+        float((y[i] - y[i + 1]) / (x[i] - x[i + 1])) for i in range(x.size - 1)
+    ]
+    return {
+        "order": order,
+        "se": se,
+        "max_resid": float(np.max(np.abs(resid))),
+        "local": local,
+    }
+
+
+def pre_asymptotic_reasons(fit, errors, ref_error_bound, z_coarse):
+    """Return why an envelope is PRE-ASYMPTOTIC; an empty list quotes it.
+
+    The envelope is PRE-ASYMPTOTIC when any of these holds:
+
+    1. The fit has no slope (an error at some level is zero or non-finite).
+    2. The smallest level error is not resolved above the reference: it is
+       below :data:`REF_RESOLVE_FACTOR` times the reference's own error
+       bound. The measured error is then partly the reference's, and the
+       slope reads the reference, not the scheme.
+    3. The slope's standard error exceeds :data:`ORDER_SE_BOUND`: the errors
+       do not lie on one power law over the levels, whether from curvature
+       (the coarse levels still outside the asymptotic range) or from a
+       wobble that the levels taken have not averaged down.
+    4. The coarsest ``dt * lambda_max`` exceeds :data:`DT_LAMBDA_FLAG`: the
+       stiffest conduction mode is unresolved and the error measures each
+       substep's stability function at large ``|z|``.
+    """
+    reasons = []
+    if not np.isfinite(fit["order"]):
+        reasons.append("error not positive and finite at every level")
+    elif min(errors) < REF_RESOLVE_FACTOR * ref_error_bound:
+        reasons.append(
+            f"smallest level error {min(errors):.2e} not resolved above "
+            f"{REF_RESOLVE_FACTOR:.0f}x the reference error bound "
+            f"{ref_error_bound:.2e}"
+        )
+    if np.isfinite(fit["se"]) and fit["se"] > ORDER_SE_BOUND:
+        reasons.append(
+            f"slope standard error {fit['se']:.2f} > {ORDER_SE_BOUND:.2f}"
+        )
+    if z_coarse > DT_LAMBDA_FLAG:
+        reasons.append(
+            f"coarsest dt*lambda_max {z_coarse:.2f} > {DT_LAMBDA_FLAG:.0f}"
+        )
+    return reasons
+
+
+def drift_label(fit):
+    """Return the DRIFTING label for a fit whose local slope drifts, else None.
+
+    A fit drifts when its successive-level slopes are monotone across the
+    levels and span more than :data:`DRIFT_SPAN_BOUND`: the error is still
+    bending between power laws (a crossover band), and the fitted slope is a
+    band, not an order. Only MONOTONE drift is labelled: slopes that alternate
+    about a steady value are the phase-dependent wobble the envelope averages
+    out, and the standard-error bound already judges those. The label is
+    printed in place of ORDER and does not enter the exit code.
+    """
+    local = fit["local"]
+    if len(local) < 2 or not np.all(np.isfinite(local)):
+        return None
+    steps = np.diff(local)
+    monotone = bool(np.all(steps >= 0.0) or np.all(steps <= 0.0))
+    if monotone and max(local) - min(local) > DRIFT_SPAN_BOUND:
+        return (
+            f"DRIFTING: local slopes {local[0]:.2f} -> {local[-1]:.2f} "
+            "(band, not an order)"
+        )
+    return None
+
+
+def triplet_screens(solutions):
+    """Return the Richardson triplet ratio of each consecutive level triple.
+
+    ``log2(max|u_N - u_2N| / max|u_2N - u_4N|)`` over the levels in order,
+    NaN where either difference is zero. A SCREEN only, never a quoted order:
+    on a state where the error is not smooth in dt (a limited-flux gradient
+    changing sign inside the window) a triplet reads erratically at any dt
+    while the envelope against a converged reference stays clean.
+    """
+    out = []
+    for i in range(len(solutions) - 2):
+        num = float(np.max(np.abs(solutions[i] - solutions[i + 1])))
+        den = float(np.max(np.abs(solutions[i + 1] - solutions[i + 2])))
+        out.append(
+            float(np.log2(num / den)) if den > 0.0 and num > 0.0
+            else float("nan")
+        )
+    return out
 
 
 def main(argv=None):
@@ -380,9 +605,18 @@ def main(argv=None):
         type=int,
         default=None,
         help=(
-            "coarsest step count of the triplet; default is DERIVED from the "
-            "seed's own conduction rate so the coarsest dt*lambda_max is at "
-            "or below the resolved bound"
+            "coarsest step count of the refinement levels; default is DERIVED "
+            "from the seed's own conduction rate so the coarsest "
+            "dt*lambda_max is at or below the resolved bound"
+        ),
+    )
+    parser.add_argument(
+        "--levels",
+        type=int,
+        default=MIN_LEVELS,
+        help=(
+            f"number of dt levels, each halving the last (at least "
+            f"{MIN_LEVELS}; default {MIN_LEVELS})"
         ),
     )
     parser.add_argument("--amplitude", type=float, default=0.3)
@@ -396,10 +630,18 @@ def main(argv=None):
     parser.add_argument(
         "--ref-factor",
         type=int,
-        default=8,
-        help="reference run uses base-steps*4*ref-factor steps",
+        default=DEFAULT_REF_FACTOR,
+        help=(
+            "the reference runs at the finest level's steps times this "
+            "factor, and its check at twice that (default "
+            f"{DEFAULT_REF_FACTOR})"
+        ),
     )
     args = parser.parse_args(argv)
+    if args.levels < MIN_LEVELS:
+        parser.error(f"--levels must be at least {MIN_LEVELS} (got {args.levels})")
+    if args.ref_factor < 2:
+        parser.error(f"--ref-factor must be at least 2 (got {args.ref_factor})")
 
     lambda_max = seed_conduction_lambda_max(
         args.schemes[0], args.amplitude, args.picard, args.splitting
@@ -410,18 +652,18 @@ def main(argv=None):
     else:
         N = args.base_steps
         base_steps_origin = "given"
-    counts = (N, 2 * N, 4 * N)
-    ref_steps = 4 * N * args.ref_factor
-    z_coarse = args.t_end / counts[0] * lambda_max
+    counts = tuple(N * 2**i for i in range(args.levels))
+    dts = [args.t_end / n for n in counts]
+    ref_steps = counts[-1] * args.ref_factor
+    z_coarse = dts[0] * lambda_max
     resolved = z_coarse <= DT_LAMBDA_RESOLVED
-    pre_asymptotic = z_coarse > DT_LAMBDA_FLAG
 
     print("=" * 76)
-    print("sim1d SPLIT-STEP TEMPORAL ORDER")
+    print("sim1d SPLIT-STEP TEMPORAL ORDER (error envelope vs a converged reference)")
     print("=" * 76)
-    print(f"t_end={args.t_end:.2e} s   steps={counts}   reference={ref_steps} steps")
+    print(f"t_end={args.t_end:.2e} s   levels={counts}")
     print(f"heat_picard_iterations={args.picard}  operator_splitting={args.splitting}")
-    print(f"dt from {args.t_end/counts[0]:.3e} s down to {args.t_end/counts[-1]:.3e} s")
+    print(f"dt from {dts[0]:.3e} s down to {dts[-1]:.3e} s")
     print("regime: fixed dt, floors inert, single phase, autonomous RHS, no cathode")
     print(
         f"seed conduction lambda_max = {lambda_max:.4e} s^-1 "
@@ -429,19 +671,45 @@ def main(argv=None):
     )
     print(
         f"base-steps={N} ({base_steps_origin}); dt*lambda_max = "
-        + ", ".join(f"{args.t_end/n*lambda_max:.2f}" for n in counts)
+        + ", ".join(f"{dt*lambda_max:.2f}" for dt in dts)
         + f"   [resolved bound {DT_LAMBDA_RESOLVED:.0f}, "
         f"flag above {DT_LAMBDA_FLAG:.0f}]"
     )
-    if pre_asymptotic:
-        print(
-            f"  *** PRE-ASYMPTOTIC: coarsest dt*lambda_max = {z_coarse:.2f} > "
-            f"{DT_LAMBDA_FLAG:.0f}. ORDERS BELOW ARE NOT MEANINGFUL -- at this "
-            "stiffness each\n      scheme reports its stability function at "
-            "large |z|, not its truncation error."
-        )
+    print(
+        f"reference: {REF_SCHEME}, heat_picard_iterations={REF_PICARD}, "
+        f"{REF_SPLITTING}, {ref_steps} steps (finest level x {args.ref_factor}); "
+        f"check: the same at {2 * ref_steps} steps"
+    )
+    print(
+        f"PRE-ASYMPTOTIC when: smallest level error < {REF_RESOLVE_FACTOR:.0f}x "
+        f"the reference error bound, OR slope standard error > "
+        f"{ORDER_SE_BOUND:.2f}, OR coarsest dt*lambda_max > {DT_LAMBDA_FLAG:.0f}"
+    )
+    print(
+        f"DRIFTING when: local slopes monotone and spanning > "
+        f"{DRIFT_SPAN_BOUND:.1f} (not quoted; exit code unaffected)"
+    )
 
-    any_dirty = False
+    ref, ref_clips = run_fixed_dt(
+        REF_SCHEME, ref_steps, args.t_end, args.amplitude, REF_PICARD,
+        REF_SPLITTING,
+    )
+    ref_check, c = run_fixed_dt(
+        REF_SCHEME, 2 * ref_steps, args.t_end, args.amplitude, REF_PICARD,
+        REF_SPLITTING,
+    )
+    ref_clips += c
+    # For a reference of observed order q >= 1, its own error is
+    # d / (1 - 2**-q) <= 2d, where d is its distance to the check at half dt.
+    ref_bound = {k: 2.0 * rel_diff(ref[k], ref_check[k]) for k in FIELDS}
+    print("reference error bound (2 x |ref - check|, relative L-inf):")
+    print("  " + "  ".join(f"{k}={ref_bound[k]:.2e}" for k in FIELDS))
+    any_dirty = ref_clips > 0
+    if ref_clips:
+        print(f"  <-- INVALID reference: {ref_clips} floor activations")
+
+    any_pre = False
+    n_drift = 0
     for scheme in args.schemes:
         runs, clips = {}, 0
         for n in counts:
@@ -449,95 +717,98 @@ def main(argv=None):
                 scheme, n, args.t_end, args.amplitude, args.picard, args.splitting
             )
             clips += c
-        ref, c = run_fixed_dt(
-            scheme, ref_steps, args.t_end, args.amplitude, args.picard,
-            args.splitting,
-        )
-        clips += c
-
-        # Richardson triplet: needs no reference solution.
-        d1 = combined(runs[counts[0]], runs[counts[1]])
-        d2 = combined(runs[counts[1]], runs[counts[2]])
-        triplet = np.log2(d1 / d2) if d2 > 0 else float("nan")
-
-        # Reference-based cross-check.
-        e = [combined(runs[n], ref) for n in counts]
-        ref_rates = [
-            np.log2(e[i] / e[i + 1]) if e[i + 1] > 0 else float("nan")
-            for i in range(len(e) - 1)
-        ]
 
         flag = ""
         if clips:
             flag = f"   <-- INVALID: {clips} floor activations"
             any_dirty = True
-        if pre_asymptotic:
-            flag += (
-                f"   <-- PRE-ASYMPTOTIC (dt*lambda_max={z_coarse:.2f}): "
-                "orders not meaningful"
-            )
         print(f"\n--- {scheme} ---{flag}")
-        print(
-            f"  triplet order            : {triplet:.2f}"
-            f"   [coarsest dt*lambda_max = {z_coarse:.2f}]"
-        )
-        print(f"  vs reference, per field  :")
         for k in FIELDS:
-            ek = [rel_diff(runs[n][k], ref[k]) for n in counts]
-            rk = [
-                np.log2(ek[i] / ek[i + 1]) if ek[i + 1] > 0 else float("nan")
-                for i in range(len(ek) - 1)
-            ]
-            print(
-                f"    {k:3} err={[f'{x:.2e}' for x in ek]} "
-                f"order={[f'{x:.2f}' for x in rk]}"
+            errs = [rel_diff(runs[n][k], ref[k]) for n in counts]
+            fit = envelope_fit(dts, errs)
+            screen = triplet_screens([runs[n][k] for n in counts])
+            reasons = pre_asymptotic_reasons(fit, errs, ref_bound[k], z_coarse)
+            drift = drift_label(fit)
+            if reasons:
+                any_pre = True
+                quoted = (
+                    f"slope {fit['order']:.2f} +/- {fit['se']:.2f}  "
+                    "NOT QUOTED, PRE-ASYMPTOTIC: " + "; ".join(reasons)
+                )
+            elif drift:
+                n_drift += 1
+                quoted = (
+                    f"slope {fit['order']:.2f} +/- {fit['se']:.2f}  "
+                    f"NOT QUOTED, {drift}"
+                )
+            else:
+                quoted = (
+                    f"ORDER {fit['order']:.2f} +/- {fit['se']:.2f}"
+                    f"  (max |log2 resid| {fit['max_resid']:.2f})"
+                )
+            margin = (
+                f"{min(errs) / ref_bound[k]:.1e}" if ref_bound[k] > 0.0
+                else "inf"
             )
-        print(f"  combined ref order       : {[f'{r:.2f}' for r in ref_rates]}")
+            print(f"  {k:3} {quoted}")
+            print(
+                f"      err={[f'{x:.2e}' for x in errs]}"
+                f"  smallest/ref-bound={margin}"
+            )
+            print(
+                f"      local slopes={[f'{x:.2f}' for x in fit['local']]}"
+                f"  triplet SCREEN (not an order)="
+                f"{[f'{x:.2f}' for x in screen]}"
+            )
 
     print("\n" + "-" * 76)
-    # BOTH preconditions have to hold. Floors are a non-smooth projection and
-    # break order wherever they bind; an unresolved stiff mode replaces the
-    # truncation error with the substep's large-|z| stability behaviour. Either
-    # one alone leaves the orders unreadable, so the closing line states both.
+    # All three preconditions have to hold. Floors are a non-smooth projection
+    # and break order wherever they bind; an unresolved stiff mode replaces the
+    # truncation error with the substep's large-|z| stability behaviour; and a
+    # PRE-ASYMPTOTIC envelope has no order to quote.
     print(f"precondition 1, floors inert                  : "
           f"{'no' if any_dirty else 'yes'}")
     print(f"precondition 2, coarsest dt*lambda_max <= "
           f"{DT_LAMBDA_RESOLVED:.0f} : "
           f"{'yes' if resolved else 'no'} ({z_coarse:.2f})")
-    if any_dirty and not resolved:
-        print("NEITHER precondition holds: the orders above are not meaningful.")
-        print("Raise --amplitude headroom, and raise --base-steps.")
-    elif any_dirty:
+    print(f"precondition 3, no envelope PRE-ASYMPTOTIC    : "
+          f"{'no' if any_pre else 'yes'}")
+    if any_dirty:
         print("At least one run activated a floor: those orders are meaningless.")
         print("Raise --amplitude headroom or shorten --t-end.")
-    elif not resolved:
+    if not resolved:
         print(
             "The stiffest conduction mode is UNRESOLVED at the coarsest dt: the "
             "orders above are\nnot meaningful. Raise --base-steps (the default "
             "derives one that resolves it)."
         )
-    else:
+    if any_pre:
         print(
-            "Floors stayed inert in every run AND the stiffest conduction mode "
-            "is resolved at\nevery dt of the triplet: the orders above are "
-            "meaningful."
+            "At least one envelope is PRE-ASYMPTOTIC: its slope is printed "
+            "but not quoted.\nAdd --levels, or raise --base-steps or "
+            "--ref-factor, as its stated reason indicates."
+        )
+    if n_drift:
+        print(
+            f"{n_drift} field fit(s) DRIFTING: a band, not an order, and not "
+            "quoted. The label does not\nenter the exit code."
+        )
+    ok = not any_dirty and resolved and not any_pre
+    if ok:
+        print(
+            "Floors stayed inert in every run, the stiffest conduction mode is "
+            "resolved at every\nlevel, and no envelope is PRE-ASYMPTOTIC: the "
+            "ORDERs above are measurements."
         )
     print("-" * 76)
-    # THE EXIT CODE CARRIES THE PRECONDITIONS. This harness exited 0 whichever
-    # way the two lines above read, so a run whose orders it had just declared
-    # NOT MEANINGFUL was indistinguishable, to anything reading exit codes,
-    # from one whose orders it stood behind. The labelled output says which it
-    # was; the exit code now says the same thing.
-    #
-    # It is the PRECONDITIONS this gates on, not the order values: what number
-    # counts as passing is the caller's question and depends on the scheme,
-    # the splitting and the Picard count being asked about. What is not the
-    # caller's question is whether the numbers mean anything at all.
-    ok = not any_dirty and resolved
+    # THE EXIT CODE CARRIES THE PRECONDITIONS, not the order values: what
+    # number counts as passing is the caller's question and depends on the
+    # scheme, the splitting and the Picard count being asked about. What is
+    # not the caller's question is whether the numbers mean anything at all.
     if not ok:
         print(
-            "EXIT 1: at least one precondition failed, so the orders above "
-            "are not measurements."
+            "EXIT 1: at least one precondition failed, so not every order "
+            "above is a measurement."
         )
     return 0 if ok else 1
 

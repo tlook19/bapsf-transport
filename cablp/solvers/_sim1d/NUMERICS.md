@@ -288,54 +288,105 @@ Second order in the whole split step requires **all three** of a second-order
 `operator_splitting = "strang"`: the frozen conductivity and the Lie splitting
 are independent first-order error terms, so each caps the step on its own.
 `scripts/gates/verify_sim1d_order.py` is the harness that measures the observed
-order by fixed-$\Delta t$ Richardson refinement, in a regime with floors inert
-and watched, a single phase, an autonomous RHS and no cathode.
+order at fixed $\Delta t$, in a regime with floors inert and watched, a single
+phase, an autonomous RHS and no cathode.
 
-**Measured order.** At 72 cells and $t_\text{end}=10^{-6}$ s, with the triplet
-$(128,256,512)$ base-steps chosen so the stiffest conduction mode is resolved at
-every member — $\Delta t\lambda_\text{max}=1.15,\ 0.58,\ 0.29$, floors inert
-in every run — the reference-free triplet order is
+**Order verification: the error envelope.** An order is quoted only as the
+least-squares slope of $\log e$ against $\log\Delta t$ over at least four
+$\Delta t$ levels, per field, where $e$ is each level's relative $L_\infty$
+error against a converged reference; the slope is quoted with its standard
+error. The reference is the Picard-4 second-order package (`tr_bdf2`, Picard 4,
+`strang`) at the finest level's $\Delta t/16$ — every scheme, splitting and
+Picard count converges to the same semi-discrete solution, so one reference
+serves them all, and at its nominal second order its error is $16^{-2}=1/256$
+of a comparable second-order level's finest error. The margin is checked on
+every run: a second reference at half the reference's $\Delta t$ gives
+$d=\lvert u_\text{ref}-u_\text{check}\rvert$, which bounds the reference's own
+error by $d/(1-2^{-q})\le 2d$ for any reference order $q\ge1$.
+
+A Richardson triplet ratio $\log_2(\lVert u_N-u_{2N}\rVert/\lVert u_{2N}-u_{4N}\rVert)$
+needs no reference, and the harness still prints it for every consecutive level
+triple — as a **screen** only, never as the quoted order. Where the gradient of
+the limited electron heat flux changes sign inside the window, the step that
+crosses the change carries a phase-dependent $O(\Delta t^2)$ residual (under
+the shared-midpoint conductivity), so the error is not smooth in $\Delta t$: a
+triplet then reads an erratic order at any $\Delta t$ (0.88 for `tr_bdf2` on
+one such state), while the envelope against a converged reference falls with
+slope 1.96 over eight halvings.
+
+**PRE-ASYMPTOTIC.** A field's envelope is PRE-ASYMPTOTIC, and its slope is
+printed but not quoted, when any of these holds:
+
+1. an error is zero or non-finite at some level;
+2. the smallest level error is below 10 times the reference's error bound $2d$
+   — the level is not resolved above the reference, and the slope would read
+   the reference rather than the scheme;
+3. the slope's standard error exceeds 0.10 — the errors do not lie on one power
+   law over the levels, whether from curvature or from a wobble the levels
+   taken have not averaged down (a two-sigma band of $\pm0.2$ is the widest
+   that still separates first from second order);
+4. the coarsest $\Delta t\lambda_\text{max}$ exceeds 4 (below).
+
+The harness exits 1 when any envelope is PRE-ASYMPTOTIC, as it does when a
+floor binds or the stiff mode is unresolved.
+
+**DRIFTING.** Criterion 3 does not catch every departure from one power law: a
+four-level fit has two residual degrees of freedom and is blind to monotone
+curvature, so a local slope that drifts across the levels can fit with a small
+standard error. A fit that passes the four criteria, and whose successive-level
+slopes are monotone and span more than 0.2, is therefore printed as DRIFTING, a
+crossover band and not an order, and is not quoted. This label was added after
+the first results, from that blindness of the four-level fit, and it does not
+enter the exit code. Local slopes that alternate about a steady value are the
+wobble the envelope averages out, not a drift, and the standard-error bound
+judges them.
+
+**Measured order.** At 72 cells and $t_\text{end}=10^{-6}$ s, with levels of
+$128, 256, 512, 1024$ steps chosen so the stiffest conduction mode is resolved
+at every level — $\Delta t\lambda_\text{max}=1.15,\ 0.58,\ 0.29,\ 0.14$, floors
+inert in every run, the reference at 16384 steps and its error bound at least
+81 times below every level's error — the envelope order, as its range over the
+quoted fields of $n, n_n, u, T_e, T_i$, is given below. A band $a\to b$ is a
+DRIFTING fit, given as its first and last local slope, and neither a band nor
+a PRE-ASYMPTOTIC fit is an order.
 
 | `heat_picard_iterations` | `operator_splitting` | `backward_euler` | `shifted` | `crank_nicolson` | `tr_bdf2` |
 |---|---|---|---|---|---|
-| 0 | `lie` | 0.99 | 1.00 | 1.00 | 0.95 |
-| 4 | `lie` | 0.99 | 1.00 | 1.00 | 0.95 |
-| 0 | `strang` | 0.82 | 1.45 | 1.79 | 1.74 |
-| 4 | `strang` | 0.81 | 1.45 | 2.00 | 1.98 |
+| 0 | `lie` | 1.00 | 1.00 | 1.00 | 0.94–1.00 |
+| 4 | `lie` | 1.00 | 1.00 | 0.98–1.00 | 0.90–1.00 |
+| 0 | `strang` | 0.98–1.03 | 0.89–1.13; $T_i$ band 1.38→1.06 | bands $n$ 1.57→1.25, $n_n$ 1.56→1.25, $u$ 1.56→1.24, $T_i$ 1.76→1.44; $T_e$ PRE-ASYMPTOTIC | bands $n$, $n_n$, $u$ each 1.59→1.27, $T_i$ 1.76→1.48; $T_e$ PRE-ASYMPTOTIC |
+| 2 (production) | `strang` | 0.97–1.04 | 1.17 ($n, n_n, u$); $T_e$ band 0.66→0.93; $T_i$ band 1.46→1.02 | 2.00 | 1.99–2.00 |
+| 4 | `strang` | 0.97–1.04 | 1.17 ($n, n_n, u$); $T_e$ band 0.66→0.93; $T_i$ band 1.46→1.02 | 2.00 | 1.99–2.00 |
 
-Only the last row carries all three second-order ingredients, and both
-second-order substeps reach second order there. Knocking out one ingredient is
-enough to cap the step: every `lie` row sits at ~1 whatever the substep scheme
-is, and the 1.74–1.79 of the picard-0 `strang` row is the frozen conductivity
-capping it alone. `backward_euler` is the negative control — $\theta=1$ cannot
-be second-order at any $\Delta t$, so a 2.0 there would indict the harness
-rather than commend the scheme. `shifted` is $\theta=0.6$ and first-order for
-the same reason; its 1.45 is a band effect, not an order claim, because its
-leading first-order coefficient is $(\theta-\tfrac12)=0.1$ of backward Euler's
-and the second-order term still contributes at these $\Delta t$. Read it as a
-scale check.
+Picard 2 with `strang` is the production package. The two Picard ≥ 1 `strang`
+rows carry all three second-order ingredients, and both second-order substeps
+reach second order there. Knocking out one ingredient is enough to cap the
+step: every `lie` row sits at ~1 whatever the substep scheme is, and on the
+Picard-0 `strang` row the frozen conductivity alone caps `crank_nicolson` and
+`tr_bdf2`, whose local slopes fall across the levels toward first order, so
+those entries are bands, not orders. `backward_euler` is the negative control:
+$\theta=1$ cannot be second-order at any $\Delta t$, so a 2.0 there would
+indict the harness rather than commend the scheme. `shifted` is $\theta=0.6$
+and first-order for the same reason; its DRIFTING fits (the $T_e$ and $T_i$
+fits on the Picard 2 and 4 `strang` rows, the $T_i$ fit on the Picard-0
+`strang` row) have local slopes approaching 1 across the levels, because its
+leading first-order
+coefficient is $(\theta-\tfrac12)=0.1$ of backward Euler's and the
+second-order term still contributes at these $\Delta t$. Read it as a scale
+check.
 
-**The triplet must be resolved to read an order at all.** Above
-$\Delta t\lambda_\text{max}\approx4$ a Richardson triplet measures each
+**Stiff-mode resolution.** No order is readable while the stiffest conduction
+mode is unresolved. Above $\Delta t\lambda_\text{max}\approx4$ the refinement error measures each
 substep's stability function at large $|z|$ rather than its truncation error,
 and there every L-stable substep reads first order because the Strang
 composition's stiff-mode equilibrium error saturates. Crank–Nicolson is the
 trap: its Strang equilibrium error is exactly $-z^2/16$, a clean power law that
 returns 2.00 at every $|z|$ however unresolved, so an unresolved table ranks it
 above `tr_bdf2` as an artefact of the sampling. The harness therefore derives
-its base-steps from the seed's own conduction operator, prints
-$\Delta t\lambda_\text{max}$ beside every reading, flags a coarser triplet
-PRE-ASYMPTOTIC, and closes on both preconditions — floors inert AND the stiff
-mode resolved.
-
-**Limited-flux sign change.** A reference-free Richardson triplet taken over
-a window where the gradient of the limited electron heat flux changes sign
-can read an erratic order at any
-$\Delta t$: under the shared-midpoint conductivity, the step that crosses the
-sign change carries a phase-dependent $O(\Delta t^2)$ residual. The
-PRE-ASYMPTOTIC flag is keyed on $\Delta t\lambda_\text{max}$ and cannot detect
-this. There, read the order from the error envelope against a converged
-reference over at least four refinement levels.
+its coarsest level from the seed's own conduction operator, prints
+$\Delta t\lambda_\text{max}$ at every level, labels an envelope whose coarsest
+level exceeds 4 PRE-ASYMPTOTIC, and closes on its preconditions — floors inert,
+the stiff mode resolved, and no envelope PRE-ASYMPTOTIC.
 
 A discharge does not show that order: floors bind and phase transitions are
 threshold-triggered, so the step degrades to first order wherever those engage.

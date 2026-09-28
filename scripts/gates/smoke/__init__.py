@@ -204,6 +204,7 @@ _CASE_ORDER = (
     "mirror-fluid-march",
     "twin-mirror-mesh-identity",
     "mirror-puff-row-reflection",
+    "order-gate-envelope-fit",
 )
 
 
