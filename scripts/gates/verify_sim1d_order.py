@@ -124,6 +124,35 @@ DT_LAMBDA_RESOLVED = 2.0
 #: PRE-ASYMPTOTIC and its orders as not meaningful.
 DT_LAMBDA_FLAG = 4.0
 
+#: The fewest dt levels an envelope order is fitted over.
+MIN_LEVELS = 4
+
+#: The reference and its check run the shipped second-order package, which
+#: converges to the same semi-discrete solution as every scheme, splitting and
+#: Picard count the levels measure, so one reference serves them all.
+REF_SCHEME = "tr_bdf2"
+REF_PICARD = 4
+REF_SPLITTING = "strang"
+
+#: Default reference margin: the reference runs at the finest level's dt
+#: divided by this. At the reference's nominal second order its error is then
+#: 16**-2 = 1/256 of a second-order level's finest error of comparable
+#: constant, and far less against a first-order level. The margin is CHECKED,
+#: not assumed: a second reference at half the reference dt bounds the
+#: reference's own error (see :func:`pre_asymptotic_reasons`).
+DEFAULT_REF_FACTOR = 16
+
+#: The smallest level error must exceed the reference's error bound by this
+#: factor. Below it, a tenth or more of the measured error may be the
+#: reference's own, and the slope is not the scheme's.
+REF_RESOLVE_FACTOR = 10.0
+
+#: The largest standard error of the fitted slope at which the slope is
+#: quoted. At 0.10 the two-sigma band (+/- 0.2) separates first from second
+#: order with room to spare; a larger error means the levels do not lie on
+#: one power law.
+ORDER_SE_BOUND = 0.10
+
 #: Neutral temperature [K] the seed puts the optional ``En`` row at. The ``En``
 #: floor clips up to the vessel wall, so a seed AT the wall would sit on its own
 #: floor from the first step and any cooling would clip; this leaves the same
@@ -367,8 +396,112 @@ def rel_diff(a, b):
     return float(np.max(np.abs(a - b)) / scale)
 
 
-def combined(fa, fb):
-    return max(rel_diff(fa[k], fb[k]) for k in FIELDS)
+def envelope_fit(dts, errors):
+    """Fit the error envelope ``error = C * dt**order`` by least squares.
+
+    The fit is linear in ``log2(error)`` against ``log2(dt)`` over every level
+    at once, so a phase-dependent wobble in the error at one level moves the
+    slope by its share of the whole span instead of setting it outright, as a
+    triplet ratio does.
+
+    Returns a dict with ``order`` (the fitted slope), ``se`` (its standard
+    error, from the fit residuals with ``n - 2`` degrees of freedom),
+    ``max_resid`` (the largest ``|log2|`` residual about the fitted line) and
+    ``local`` (the successive-level slopes ``log2(e_i / e_{i+1})``, a
+    diagnostic only). ``order`` is NaN when any error is not finite and
+    positive, because a zero or non-finite error has no logarithm to fit.
+
+    Raises ``ValueError`` for fewer than :data:`MIN_LEVELS` levels or for
+    arrays that are not 1-D and of one length.
+    """
+    dts = np.asarray(dts, dtype=float)
+    errors = np.asarray(errors, dtype=float)
+    if dts.shape != errors.shape or dts.ndim != 1:
+        raise ValueError(
+            f"dts and errors must be 1-D and the same length "
+            f"(got {dts.shape} and {errors.shape})"
+        )
+    if dts.size < MIN_LEVELS:
+        raise ValueError(
+            f"an envelope order needs at least {MIN_LEVELS} dt levels "
+            f"(got {dts.size})"
+        )
+    nan = float("nan")
+    if not (np.all(np.isfinite(errors)) and np.all(errors > 0.0)):
+        return {"order": nan, "se": nan, "max_resid": nan, "local": []}
+    x = np.log2(dts)
+    y = np.log2(errors)
+    xc = x - x.mean()
+    order = float(np.sum(xc * (y - y.mean())) / np.sum(xc * xc))
+    resid = y - (y.mean() + order * xc)
+    se = float(np.sqrt(np.sum(resid * resid) / (x.size - 2) / np.sum(xc * xc)))
+    local = [
+        float((y[i] - y[i + 1]) / (x[i] - x[i + 1])) for i in range(x.size - 1)
+    ]
+    return {
+        "order": order,
+        "se": se,
+        "max_resid": float(np.max(np.abs(resid))),
+        "local": local,
+    }
+
+
+def pre_asymptotic_reasons(fit, errors, ref_error_bound, z_coarse):
+    """Return why an envelope is PRE-ASYMPTOTIC; an empty list quotes it.
+
+    The envelope is PRE-ASYMPTOTIC when any of these holds:
+
+    1. The fit has no slope (an error at some level is zero or non-finite).
+    2. The smallest level error is not resolved above the reference: it is
+       below :data:`REF_RESOLVE_FACTOR` times the reference's own error
+       bound. The measured error is then partly the reference's, and the
+       slope reads the reference, not the scheme.
+    3. The slope's standard error exceeds :data:`ORDER_SE_BOUND`: the errors
+       do not lie on one power law over the levels, whether from curvature
+       (the coarse levels still outside the asymptotic range) or from a
+       wobble that the levels taken have not averaged down.
+    4. The coarsest ``dt * lambda_max`` exceeds :data:`DT_LAMBDA_FLAG`: the
+       stiffest conduction mode is unresolved and the error measures each
+       substep's stability function at large ``|z|``.
+    """
+    reasons = []
+    if not np.isfinite(fit["order"]):
+        reasons.append("error not positive and finite at every level")
+    elif min(errors) < REF_RESOLVE_FACTOR * ref_error_bound:
+        reasons.append(
+            f"smallest level error {min(errors):.2e} not resolved above "
+            f"{REF_RESOLVE_FACTOR:.0f}x the reference error bound "
+            f"{ref_error_bound:.2e}"
+        )
+    if np.isfinite(fit["se"]) and fit["se"] > ORDER_SE_BOUND:
+        reasons.append(
+            f"slope standard error {fit['se']:.2f} > {ORDER_SE_BOUND:.2f}"
+        )
+    if z_coarse > DT_LAMBDA_FLAG:
+        reasons.append(
+            f"coarsest dt*lambda_max {z_coarse:.2f} > {DT_LAMBDA_FLAG:.0f}"
+        )
+    return reasons
+
+
+def triplet_screens(solutions):
+    """Return the Richardson triplet ratio of each consecutive level triple.
+
+    ``log2(max|u_N - u_2N| / max|u_2N - u_4N|)`` over the levels in order,
+    NaN where either difference is zero. A SCREEN only, never a quoted order:
+    on a state where the error is not smooth in dt (a limited-flux gradient
+    changing sign inside the window) a triplet reads erratically at any dt
+    while the envelope against a converged reference stays clean.
+    """
+    out = []
+    for i in range(len(solutions) - 2):
+        num = float(np.max(np.abs(solutions[i] - solutions[i + 1])))
+        den = float(np.max(np.abs(solutions[i + 1] - solutions[i + 2])))
+        out.append(
+            float(np.log2(num / den)) if den > 0.0 and num > 0.0
+            else float("nan")
+        )
+    return out
 
 
 def main(argv=None):
@@ -380,9 +513,18 @@ def main(argv=None):
         type=int,
         default=None,
         help=(
-            "coarsest step count of the triplet; default is DERIVED from the "
-            "seed's own conduction rate so the coarsest dt*lambda_max is at "
-            "or below the resolved bound"
+            "coarsest step count of the refinement levels; default is DERIVED "
+            "from the seed's own conduction rate so the coarsest "
+            "dt*lambda_max is at or below the resolved bound"
+        ),
+    )
+    parser.add_argument(
+        "--levels",
+        type=int,
+        default=MIN_LEVELS,
+        help=(
+            f"number of dt levels, each halving the last (at least "
+            f"{MIN_LEVELS}; default {MIN_LEVELS})"
         ),
     )
     parser.add_argument("--amplitude", type=float, default=0.3)
@@ -396,10 +538,18 @@ def main(argv=None):
     parser.add_argument(
         "--ref-factor",
         type=int,
-        default=8,
-        help="reference run uses base-steps*4*ref-factor steps",
+        default=DEFAULT_REF_FACTOR,
+        help=(
+            "the reference runs at the finest level's steps times this "
+            "factor, and its check at twice that (default "
+            f"{DEFAULT_REF_FACTOR})"
+        ),
     )
     args = parser.parse_args(argv)
+    if args.levels < MIN_LEVELS:
+        parser.error(f"--levels must be at least {MIN_LEVELS} (got {args.levels})")
+    if args.ref_factor < 2:
+        parser.error(f"--ref-factor must be at least 2 (got {args.ref_factor})")
 
     lambda_max = seed_conduction_lambda_max(
         args.schemes[0], args.amplitude, args.picard, args.splitting
@@ -410,18 +560,18 @@ def main(argv=None):
     else:
         N = args.base_steps
         base_steps_origin = "given"
-    counts = (N, 2 * N, 4 * N)
-    ref_steps = 4 * N * args.ref_factor
-    z_coarse = args.t_end / counts[0] * lambda_max
+    counts = tuple(N * 2**i for i in range(args.levels))
+    dts = [args.t_end / n for n in counts]
+    ref_steps = counts[-1] * args.ref_factor
+    z_coarse = dts[0] * lambda_max
     resolved = z_coarse <= DT_LAMBDA_RESOLVED
-    pre_asymptotic = z_coarse > DT_LAMBDA_FLAG
 
     print("=" * 76)
-    print("sim1d SPLIT-STEP TEMPORAL ORDER")
+    print("sim1d SPLIT-STEP TEMPORAL ORDER (error envelope vs a converged reference)")
     print("=" * 76)
-    print(f"t_end={args.t_end:.2e} s   steps={counts}   reference={ref_steps} steps")
+    print(f"t_end={args.t_end:.2e} s   levels={counts}")
     print(f"heat_picard_iterations={args.picard}  operator_splitting={args.splitting}")
-    print(f"dt from {args.t_end/counts[0]:.3e} s down to {args.t_end/counts[-1]:.3e} s")
+    print(f"dt from {dts[0]:.3e} s down to {dts[-1]:.3e} s")
     print("regime: fixed dt, floors inert, single phase, autonomous RHS, no cathode")
     print(
         f"seed conduction lambda_max = {lambda_max:.4e} s^-1 "
@@ -429,19 +579,40 @@ def main(argv=None):
     )
     print(
         f"base-steps={N} ({base_steps_origin}); dt*lambda_max = "
-        + ", ".join(f"{args.t_end/n*lambda_max:.2f}" for n in counts)
+        + ", ".join(f"{dt*lambda_max:.2f}" for dt in dts)
         + f"   [resolved bound {DT_LAMBDA_RESOLVED:.0f}, "
         f"flag above {DT_LAMBDA_FLAG:.0f}]"
     )
-    if pre_asymptotic:
-        print(
-            f"  *** PRE-ASYMPTOTIC: coarsest dt*lambda_max = {z_coarse:.2f} > "
-            f"{DT_LAMBDA_FLAG:.0f}. ORDERS BELOW ARE NOT MEANINGFUL -- at this "
-            "stiffness each\n      scheme reports its stability function at "
-            "large |z|, not its truncation error."
-        )
+    print(
+        f"reference: {REF_SCHEME}, heat_picard_iterations={REF_PICARD}, "
+        f"{REF_SPLITTING}, {ref_steps} steps (finest level x {args.ref_factor}); "
+        f"check: the same at {2 * ref_steps} steps"
+    )
+    print(
+        f"PRE-ASYMPTOTIC when: smallest level error < {REF_RESOLVE_FACTOR:.0f}x "
+        f"the reference error bound, OR slope standard error > "
+        f"{ORDER_SE_BOUND:.2f}, OR coarsest dt*lambda_max > {DT_LAMBDA_FLAG:.0f}"
+    )
 
-    any_dirty = False
+    ref, ref_clips = run_fixed_dt(
+        REF_SCHEME, ref_steps, args.t_end, args.amplitude, REF_PICARD,
+        REF_SPLITTING,
+    )
+    ref_check, c = run_fixed_dt(
+        REF_SCHEME, 2 * ref_steps, args.t_end, args.amplitude, REF_PICARD,
+        REF_SPLITTING,
+    )
+    ref_clips += c
+    # For a reference of observed order q >= 1, its own error is
+    # d / (1 - 2**-q) <= 2d, where d is its distance to the check at half dt.
+    ref_bound = {k: 2.0 * rel_diff(ref[k], ref_check[k]) for k in FIELDS}
+    print("reference error bound (2 x |ref - check|, relative L-inf):")
+    print("  " + "  ".join(f"{k}={ref_bound[k]:.2e}" for k in FIELDS))
+    any_dirty = ref_clips > 0
+    if ref_clips:
+        print(f"  <-- INVALID reference: {ref_clips} floor activations")
+
+    any_pre = False
     for scheme in args.schemes:
         runs, clips = {}, 0
         for n in counts:
@@ -449,95 +620,86 @@ def main(argv=None):
                 scheme, n, args.t_end, args.amplitude, args.picard, args.splitting
             )
             clips += c
-        ref, c = run_fixed_dt(
-            scheme, ref_steps, args.t_end, args.amplitude, args.picard,
-            args.splitting,
-        )
-        clips += c
-
-        # Richardson triplet: needs no reference solution.
-        d1 = combined(runs[counts[0]], runs[counts[1]])
-        d2 = combined(runs[counts[1]], runs[counts[2]])
-        triplet = np.log2(d1 / d2) if d2 > 0 else float("nan")
-
-        # Reference-based cross-check.
-        e = [combined(runs[n], ref) for n in counts]
-        ref_rates = [
-            np.log2(e[i] / e[i + 1]) if e[i + 1] > 0 else float("nan")
-            for i in range(len(e) - 1)
-        ]
 
         flag = ""
         if clips:
             flag = f"   <-- INVALID: {clips} floor activations"
             any_dirty = True
-        if pre_asymptotic:
-            flag += (
-                f"   <-- PRE-ASYMPTOTIC (dt*lambda_max={z_coarse:.2f}): "
-                "orders not meaningful"
-            )
         print(f"\n--- {scheme} ---{flag}")
-        print(
-            f"  triplet order            : {triplet:.2f}"
-            f"   [coarsest dt*lambda_max = {z_coarse:.2f}]"
-        )
-        print(f"  vs reference, per field  :")
         for k in FIELDS:
-            ek = [rel_diff(runs[n][k], ref[k]) for n in counts]
-            rk = [
-                np.log2(ek[i] / ek[i + 1]) if ek[i + 1] > 0 else float("nan")
-                for i in range(len(ek) - 1)
-            ]
-            print(
-                f"    {k:3} err={[f'{x:.2e}' for x in ek]} "
-                f"order={[f'{x:.2f}' for x in rk]}"
+            errs = [rel_diff(runs[n][k], ref[k]) for n in counts]
+            fit = envelope_fit(dts, errs)
+            screen = triplet_screens([runs[n][k] for n in counts])
+            reasons = pre_asymptotic_reasons(fit, errs, ref_bound[k], z_coarse)
+            if reasons:
+                any_pre = True
+                quoted = (
+                    f"slope {fit['order']:.2f} +/- {fit['se']:.2f}  "
+                    "NOT QUOTED, PRE-ASYMPTOTIC: " + "; ".join(reasons)
+                )
+            else:
+                quoted = (
+                    f"ORDER {fit['order']:.2f} +/- {fit['se']:.2f}"
+                    f"  (max |log2 resid| {fit['max_resid']:.2f})"
+                )
+            margin = (
+                f"{min(errs) / ref_bound[k]:.1e}" if ref_bound[k] > 0.0
+                else "inf"
             )
-        print(f"  combined ref order       : {[f'{r:.2f}' for r in ref_rates]}")
+            print(f"  {k:3} {quoted}")
+            print(
+                f"      err={[f'{x:.2e}' for x in errs]}"
+                f"  smallest/ref-bound={margin}"
+            )
+            print(
+                f"      local slopes={[f'{x:.2f}' for x in fit['local']]}"
+                f"  triplet SCREEN (not an order)="
+                f"{[f'{x:.2f}' for x in screen]}"
+            )
 
     print("\n" + "-" * 76)
-    # BOTH preconditions have to hold. Floors are a non-smooth projection and
-    # break order wherever they bind; an unresolved stiff mode replaces the
-    # truncation error with the substep's large-|z| stability behaviour. Either
-    # one alone leaves the orders unreadable, so the closing line states both.
+    # All three preconditions have to hold. Floors are a non-smooth projection
+    # and break order wherever they bind; an unresolved stiff mode replaces the
+    # truncation error with the substep's large-|z| stability behaviour; and a
+    # PRE-ASYMPTOTIC envelope has no order to quote.
     print(f"precondition 1, floors inert                  : "
           f"{'no' if any_dirty else 'yes'}")
     print(f"precondition 2, coarsest dt*lambda_max <= "
           f"{DT_LAMBDA_RESOLVED:.0f} : "
           f"{'yes' if resolved else 'no'} ({z_coarse:.2f})")
-    if any_dirty and not resolved:
-        print("NEITHER precondition holds: the orders above are not meaningful.")
-        print("Raise --amplitude headroom, and raise --base-steps.")
-    elif any_dirty:
+    print(f"precondition 3, no envelope PRE-ASYMPTOTIC    : "
+          f"{'no' if any_pre else 'yes'}")
+    if any_dirty:
         print("At least one run activated a floor: those orders are meaningless.")
         print("Raise --amplitude headroom or shorten --t-end.")
-    elif not resolved:
+    if not resolved:
         print(
             "The stiffest conduction mode is UNRESOLVED at the coarsest dt: the "
             "orders above are\nnot meaningful. Raise --base-steps (the default "
             "derives one that resolves it)."
         )
-    else:
+    if any_pre:
         print(
-            "Floors stayed inert in every run AND the stiffest conduction mode "
-            "is resolved at\nevery dt of the triplet: the orders above are "
-            "meaningful."
+            "At least one envelope is PRE-ASYMPTOTIC: its slope is printed "
+            "but not quoted.\nAdd --levels, or raise --base-steps or "
+            "--ref-factor, as its stated reason indicates."
+        )
+    ok = not any_dirty and resolved and not any_pre
+    if ok:
+        print(
+            "Floors stayed inert in every run, the stiffest conduction mode is "
+            "resolved at every\nlevel, and every envelope is asymptotic: the "
+            "ORDERs above are measurements."
         )
     print("-" * 76)
-    # THE EXIT CODE CARRIES THE PRECONDITIONS. This harness exited 0 whichever
-    # way the two lines above read, so a run whose orders it had just declared
-    # NOT MEANINGFUL was indistinguishable, to anything reading exit codes,
-    # from one whose orders it stood behind. The labelled output says which it
-    # was; the exit code now says the same thing.
-    #
-    # It is the PRECONDITIONS this gates on, not the order values: what number
-    # counts as passing is the caller's question and depends on the scheme,
-    # the splitting and the Picard count being asked about. What is not the
-    # caller's question is whether the numbers mean anything at all.
-    ok = not any_dirty and resolved
+    # THE EXIT CODE CARRIES THE PRECONDITIONS, not the order values: what
+    # number counts as passing is the caller's question and depends on the
+    # scheme, the splitting and the Picard count being asked about. What is
+    # not the caller's question is whether the numbers mean anything at all.
     if not ok:
         print(
-            "EXIT 1: at least one precondition failed, so the orders above "
-            "are not measurements."
+            "EXIT 1: at least one precondition failed, so not every order "
+            "above is a measurement."
         )
     return 0 if ok else 1
 
