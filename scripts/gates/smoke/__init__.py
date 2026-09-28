@@ -207,6 +207,13 @@ _CASE_ORDER = (
     "order-gate-envelope-fit",
     "dvm-mirror-plane-specular",
     "dvm-mirror-no-lagged-buffer",
+    "mirror-tail-per-face-rule",
+    "mirror-tail-full-window-fold",
+    "mirror-tail-cull-rearmed",
+    "mirror-tail-leg-cap-residual",
+    "mirror-beam-smoothing-fold",
+    "mirror-csda-primary-turn",
+    "mirror-cathode-coupling-constructs",
 )
 
 
