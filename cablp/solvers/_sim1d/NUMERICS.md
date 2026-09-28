@@ -78,6 +78,27 @@ Bohm operator books nothing at a mirror, and conduction carries none: the ghost
 temperature equals the live cell's, so $\Delta T=0$ and $q=0$ (the face's heat
 transmission is zero, as at any closed face).
 
+**The kinetic mirror plane.** Under the kinetic neutral closure the same face
+ends the neutral domain as a specular plane
+(`kinetic_dvm.TransientDVM._march`, presence-gated on the geometry's mirror
+face). The implicit upwind march runs its $+z$ sweep first; the particles per
+bin it carries out through the plane over the tick, in each zone,
+
+$$N_k=f^{n+1}_{L,k}\,\lvert v_k\rvert\,A_f\,\Delta t,\qquad v_k>0,$$
+
+are bin-mirrored onto $-v_k$ and entered as the $-z$ sweep's inflow ghost
+density at the same face, $F_{-k}=N_k/(\lvert v_{-k}\rvert A_f\Delta t)$, in
+the SAME march. So the $-z$ sweep reads $f(-v)=f^{n+1}_L(v)$ at the plane:
+the reflection is implicit within the step, exactly what the full column's
+$-z$ sweep receives from its image cell, and no lagged buffer is used (the
+end walls' next-tick return is not). The ledger books the plane's gross
+traffic $\sum N_k$ as `loss_end_out_R` and the same-tick return as
+`birth_end_return_R`, with `loss_pump_R`, the right-end pending and the
+right-end wall channels zero; the net particle and energy rows through the
+plane vanish to rounding (the velocity axis is antisymmetric to rounding, so
+mirrored bins carry equal kinetic energy to an ulp), and the tick's particle
+and energy closure hold with no mirror term.
+
 **Energy-consistent hyperbolic core.** The convective momentum flux is the
 kinetic-energy-preserving $\lbrace u\rbrace\lbrace M\rbrace$ form, and the
 Rusanov $(n,M)$ numerical kinetic-energy dissipation is deposited into $E_i$ as
@@ -885,6 +906,7 @@ bookkeeping.
 | Cell-centred physical fluxes; wall closure | `physics/flux.py:physical_fluxes`, `_apply_plasma_walls` |
 | KEP single-face flux (boundary) | `physics/flux.py:kep_rusanov_face_scalar` |
 | Mirror-face ghost and flux | `physics/flux.py:mirror_ghost_states`, `mirror_face_flux`, `_apply_mirror_faces` |
+| Kinetic mirror plane (specular, same-march) | `physics/kinetic_dvm.py:TransientDVM._configure_mirror_plane`, `_march`, `update` |
 | Material-face physical flux (boundary) | `physics/flux.py:physical_face_scalar` |
 | Flux divergence | `physics/flux.py:_flux_divergence` |
 | Ghost-cell Bohm outflow | `physics/sources.py:characteristic_boundary_rhs` |
