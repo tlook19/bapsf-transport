@@ -483,6 +483,29 @@ or a non-numeric one, is refused at construction — a fraction that arms this
 bound while placing its own limiting step outside the stability interval would
 defeat the bound's purpose.
 
+That analysis covers the uniform mode. The grid-scale mode, alternating in sign
+from cell to cell (wavelength $2\Delta z$), also carries the Rusanov
+dissipation: on that mode the dissipation term of the face flux adds
+$-2a_\text{max}/\Delta z$ to the $E_i$ eigenvalue, beside the exchange's own
+share. `plasma_cfl` holds $a_\text{max}\Delta t/\Delta z$ at or below `cfl`, so
+the dissipation contributes at most $2\,\text{cfl}$ to $\lvert z\rvert$ per
+step, and with the exchange bounded at $c$ the odd–even mode sits at
+
+$$z\ge-\left(2\,\text{cfl}+c+\Delta t\,\nu_\text{other}\right),$$
+
+$\nu_\text{other}$ the step's other cell-local explicit rates. SSPRK2 keeps the
+mode stable while that sum stays below 2; at `cfl` 0.4 and $c=0.5$ the first
+two terms give $z\ge-1.3$. With the bound withdrawn ($c$ unset, the template
+default) nothing caps the exchange's share, and a column whose $T_e$ is pinned
+at its floor while the step runs at the CFL limit leaves the interval. In one
+measured case the exchange's share of the $E_i$ eigenvalue,
+$1.45\times10^5$ s$^{-1}$, and the Rusanov term, $7.5\times10^4$ s$^{-1}$, give
+$z=-2.26$ at $\Delta t=1.02\times10^{-5}$ s, and the odd–even mode grows at
+about $2.5\times10^4$ s$^{-1}$. That is why a configuration running the explicit
+exchange with $T_e$ at its floor arms `energy_exchange_rate_fraction`. On the
+production reference runs, which arm it, the most negative explicit $z$
+measured is $-0.75$.
+
 **A bound must describe something the step applies.** The kinetic neutral arm
 zeroes whole contributions of the fluid terms and carries them in its own
 coupling term, so
@@ -564,11 +587,11 @@ floored density and $M$ rebuilt from it, which leaves $M$ unchanged to roundoff
 and bit-identical on every state probed, though $(m n)(M/(m n))$ carries no IEEE
 guarantee of exactness. Each accepted repair books its exact extensive debit in
 `floor_ledger`; `scripts/gates/audit_sim1d_floor_activation.py` instruments the
-clip sites at run time, which cannot be done post-hoc. Beyond roughly 22 ms
-of the discharge cycle the far third of the column sits AT the
-electron-temperature floor and develops a grid-scale odd–even pattern there,
-so the comparison to data quotes nothing from the afterglow beyond the
-20–21.5 ms decay window.
+clip sites at run time, which cannot be done post-hoc. Between about 22 and
+24 ms of the discharge cycle, depending on the drive, the far column reaches
+the 0.1 eV electron-temperature floor, and it reaches it smoothly. Because of
+that floor contact the comparison to data quotes nothing from the afterglow
+beyond the 20–21.5 ms decay window.
 
 ## The cathode solve
 
