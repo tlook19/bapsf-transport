@@ -44,11 +44,17 @@ def validate_far_end_configuration(input_dict, flags):
     value each would have to take:
 
     * ``TwinCathode`` -- a different far end;
-    * ``heating_anomalous_tail_cathode_boundary = "escape"`` under the walked
-      plateau closure (``heating_anomalous_transport = "plateau_multigroup"``)
-      -- at a mirror the tail walkers turn round at the plane and REFLECT at
-      the cathode sheath, the two faces of the symmetric machine's half; a
-      free-escape cathode would book the image walkers' return as leaving;
+    * ``heating_anomalous_transport = "plateau_multigroup"`` together with
+      ``cathode_coupling`` -- the walked tail. The deposition module turns its
+      walkers round at the mirror plane and reflects them at the cathode
+      sheath, and the anode mesh is what removes them; when the anode sheath
+      solve repels every walker (its drop driven far above the plateau, as
+      at breakdown) nothing removes them, the walkers bounce between the two
+      faces splitting at every mesh crossing, and the leg cap then books most
+      of the tail power as residual. A walked tail at a mirror waits for that
+      regime's treatment. The cathode circuit itself -- the CSDA primary,
+      which turns round at the plane, and the ``"local"`` anomalous heating
+      -- runs at a mirror;
     * ``neutral_momentum`` -- the neutral wind's wall-momentum sink at the far
       face treats it as a wall;
     * ``neutral_energy`` -- the end-face energy accommodation and the hot
@@ -93,14 +99,15 @@ def validate_far_end_configuration(input_dict, flags):
             "plane)"
         )
     if (
-        input_dict.get("heating_anomalous_transport") == "plateau_multigroup"
-        and input_dict.get("heating_anomalous_tail_cathode_boundary")
-        == "escape"
+        bool(flags.get("cathode_coupling"))
+        and input_dict.get("heating_anomalous_transport")
+        == "plateau_multigroup"
     ):
         conflicts.append(
-            "heating_anomalous_tail_cathode_boundary='reflect' (got "
-            "'escape': at a mirror the walked tail reflects at the cathode "
-            "sheath and turns round at the plane)"
+            "heating_anomalous_transport='local' (got 'plateau_multigroup': "
+            "at a mirror the walked tail has no absorbing face once the "
+            "anode sheath repels every walker, and the leg cap then books "
+            "most of its power as residual)"
         )
     S_pump_R = float(input_dict.get("S_pump_R", 0.0))
     if S_pump_R != 0.0:
@@ -118,8 +125,8 @@ def validate_far_end_configuration(input_dict, flags):
             "no end wall; this configuration sets keys that presume the end "
             "wall or cannot yet run at a mirror. Incompatible with "
             "far_end='mirror' (the complete set): TwinCathode, "
-            "heating_anomalous_tail_cathode_boundary='escape' under "
-            "heating_anomalous_transport='plateau_multigroup', "
+            "heating_anomalous_transport='plateau_multigroup' with "
+            "cathode_coupling, "
             "neutral_momentum, neutral_energy, "
             "neutral_kinetic_dvm_end_wall_jet, "
             "neutral_kinetic_dvm_annulus_flights='bounded_chord', "

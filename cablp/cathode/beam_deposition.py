@@ -729,6 +729,17 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # series (the anode mesh removes ``eta`` of a walker's flux on each return
 # from the mirror), not an arm. Only a mirror far end reads it; an end wall
 # ray never bounces past two legs and never meets it.
+#
+# MEASURED on recorded half-column deposition rays at breakdown with the
+# cathode drop at its 1000 V ceiling (walkers up to ~1 keV at n_e ~ 1e9 cm^-3,
+# the longest-lived tail the model launches), the residual as a fraction of
+# the launched tail power: 1.0e-2 to 2.0e-2 at 16 legs (fails a 1 % bar),
+# 8.2e-4 to 2.9e-3 at 24, 3.9e-5 to 3.9e-4 at 32, at most 6.9e-6 at 48 and at
+# most 1.1e-7 at 64. The series converges only while the anode mesh ABSORBS:
+# where the anode sheath repels every walker (its drop driven to hundreds or
+# thousands of volts) the same rays keep 70 % at 64 legs and 60 % at 4096, so
+# no cap bounds that regime, and the solver refuses the walked tail at a
+# mirror for that reason.
 MIRROR_MAX_LEGS = 64
 
 # --- Compiled CSDA march (opt-in; see cablp.cathode.kernels) ------------------
