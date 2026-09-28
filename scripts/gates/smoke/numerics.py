@@ -2232,3 +2232,196 @@ def _case_numerics_retired_keys_refuse():
             assert next(iter(_nr_bad)) in str(_nr_exc), str(_nr_exc)
         else:
             raise AssertionError(f"{_nr_bad} ACCEPTED")
+
+
+# ----------------------------------------------------------------------
+# mirror-face-flux-unit
+# ----------------------------------------------------------------------
+def _mirror_sim(**overrides):
+    """A half-column (far_end = "mirror") sim on the operator-algebra stance."""
+    # Copies: the fixture hands every caller the SAME two dicts.
+    params, flags = (dict(part) for part in _base_config())
+    params["far_end"] = "mirror"
+    params["S_pump_R"] = 0.0
+    params["initial_neutral_state"] = "fill"
+    params.update(overrides)
+    return LAPDSim1D(params, flags)
+
+
+@_case("mirror-face-flux-unit", historical_stance=True)
+def _case_mirror_face_flux_unit():
+    """The mirror face flux, pinned where the formula is the claim.
+
+    (a) Against the mirror ghost (n, -M, Ee, Ei) the face kernel gives
+        F_n = F_Ee = F_Ei = 0 and F_M = p_L + a_max M_L with
+        a_max = |u_L| + sqrt((5/3)(Te+Ti)/m_i), exactly; at the live state
+        n = 2e12 cm^-3, u = 1.5e5 cm/s, Te = 4 eV, Ti = 1 eV that is
+        p_L = 16.02176634 and F_M = 19.14691966571864 (erg cm^-3). The
+        pressure-only closed-face rule would give p_L, so the dissipation
+        a_max M_L = 3.12515332... is what the mirror adds.
+    (b) Well balanced at rest: u = 0 gives F_M = p_L exactly.
+    (c) q = 0 at the mirror: the conductive face flux vanishes there against
+        a temperature gradient that drives the interior faces.
+    (d) No total energy crosses the mirror: in the mirror cell,
+        V d(K + Ee + Ei)/dt from the hyperbolic rows (advective flux,
+        pressure work and the dissipation deposit) equals the inflow G through
+        its one open face -- which holds only because the deposit returns the
+        a_max M_L dissipation to Ei.
+    """
+    from cablp.solvers._sim1d.physics.conduction import conductive_face_flux
+    from cablp.solvers._sim1d.physics.flux import (
+        plasma_wave_speed,
+        rusanov_fluxes,
+    )
+
+    sim = _mirror_sim()
+    geom = sim._plasma_geometry()
+    cells = int(geom.cells)
+    face = int(geom.mirror_face_indices[0])
+    assert face == cells
+    live = cells - 1
+    mass = sim.ion_mass_g
+    z = np.asarray(geom.z_cm, dtype=float)
+    ramp = z / z[-1]
+    n = 1.0e12 * (1.0 + ramp)
+    u = 1.5e5 * ramp
+    Te = 2.0 + 2.0 * ramp
+    Ti = 0.5 + 0.5 * ramp
+    n[live], u[live], Te[live], Ti[live] = 2.0e12, 1.5e5, 4.0, 1.0
+    state = dataclasses.replace(
+        sim.state,
+        n=n.copy(),
+        M=mass * n * u,
+        Ee=1.5 * n * Te * ev_to_erg,
+        Ei=1.5 * n * Ti * ev_to_erg,
+    )
+    derived = derive_state(state, floors=sim.floors, ion_mass_g=mass)
+
+    # (a)
+    faces = rusanov_fluxes(state, sim.floors, mass, geom)
+    assert faces.n[face] == 0.0, faces.n[face]
+    assert faces.Ee[face] == 0.0, faces.Ee[face]
+    assert faces.Ei[face] == 0.0, faces.Ei[face]
+    p_L = float(derived.p[live])
+    a_max = abs(float(derived.u[live])) + float(
+        plasma_wave_speed(derived.Te[live], derived.Ti[live], mass)
+    )
+    assert faces.M[face] == p_L + a_max * float(state.M[live]), (
+        faces.M[face], p_L, a_max
+    )
+    assert math.isclose(p_L, 16.02176634, rel_tol=1e-12), p_L
+    assert math.isclose(float(faces.M[face]), 19.14691966571864, rel_tol=1e-12)
+    assert faces.M[face] - p_L > 3.1, "the mirror dissipation is the claim"
+
+    # (b)
+    rest = dataclasses.replace(state, M=np.zeros(cells))
+    rest_faces = rusanov_fluxes(rest, sim.floors, mass, geom)
+    rest_p = float(derive_state(rest, sim.floors, mass).p[live])
+    assert rest_faces.M[face] == rest_p, (rest_faces.M[face], rest_p)
+    assert rest_faces.n[face] == 0.0
+
+    # (c)
+    q = conductive_face_flux(Te, np.full(cells, 1.0e20), geom)
+    assert q[face] == 0.0, q[face]
+    assert abs(q[face - 1]) > 0.0, "the interior face must carry heat"
+
+    # (d)
+    terms = sim.rhs_terms(y=pack_state(state))
+    adv = terms["plasma_advective_flux"]
+    pw = terms["pressure_work"]
+    diss = terms["hyperbolic_dissipation_heating"]
+    assert "flux_tube_geometry" not in terms  # a uniform column
+    volume = np.asarray(geom.plasma_volume_cm3, dtype=float)
+    area = np.asarray(geom.plasma_face_area_cm2, dtype=float)
+    uu = derived.u
+    rate = volume[live] * (
+        uu[live] * adv.M[live]
+        - 0.5 * mass * uu[live] ** 2 * adv.n[live]
+        + adv.Ee[live] + pw.Ee[live]
+        + adv.Ei[live] + pw.Ei[live] + diss.Ei[live]
+    )
+    left = face - 1
+    g_in = area[left] * (
+        faces.Ee[left] + faces.Ei[left]
+        + 0.5 * (state.M[live - 1] + state.M[live])
+        * 0.5 * uu[live - 1] * uu[live]
+        + 0.5 * (uu[live - 1] * derived.p[live] + derived.p[live - 1] * uu[live])
+    )
+    tol = 1.0e-11 * float(np.max(np.abs(volume * (pw.Ee + pw.Ei))))
+    assert abs(rate - g_in) <= tol, (rate, g_in, tol)
+    # Non-vacuity: the kinetic energy the mirror dissipation removes, which
+    # the deposit must return, is far above the tolerance -- a deposit blind
+    # to the mirror face would leave exactly this residual.
+    guard = a_max * float(state.M[live]) * float(uu[live]) * area[face]
+    assert abs(guard) >= 1.0e6 * tol, (guard, tol)
+
+
+# ----------------------------------------------------------------------
+# mirror-fluid-march
+# ----------------------------------------------------------------------
+@_case("mirror-fluid-march", historical_stance=True)
+def _case_mirror_fluid_march():
+    """A short fluid march on the half column stays finite and conserving.
+
+    Circuit off, fluid neutrals, the default template on the operator-algebra
+    stance, a flow driven at the mirror (u0 = 2e5 cm/s toward it). With the
+    puff and the pump off, nothing but the booked boundary rows exchanges
+    particles, and all of them recycle: the plasma-plus-neutral inventory is
+    conserved to roundoff over 200 steps, with no floor addition. The mirror
+    cell's flow is braked by the face (its u falls below the cell behind it),
+    and the saved result carries the mirror face in its geometry group and no
+    end wall surface-power line.
+    """
+    sim = _mirror_sim(
+        ne0=1.0e12, Te0=3.0, Ti0=1.0, u0=2.0e5,
+        gas_puff_enabled=False, pump_enabled=False,
+    )
+    geom = sim._plasma_geometry()
+    col, ann = sim._zone_volumes
+    volume = np.asarray(geom.plasma_volume_cm3, dtype=float)
+
+    def inventory(state):
+        return math.fsum(
+            (state.n * volume).tolist()
+            + (state.nn * col).tolist()
+            + (state.nn_a * ann).tolist()
+        )
+
+    before = inventory(sim.state)
+    for _ in range(200):
+        sim.advance_one_step()
+    after = sim.state
+    for name in ("n", "nn", "nn_a", "M", "Ee", "Ei"):
+        assert np.all(np.isfinite(getattr(after, name))), name
+    assert abs(inventory(after) - before) <= 1.0e-13 * before, (
+        inventory(after), before
+    )
+    assert all(value == 0.0 for value in sim._floor_ledger.values()), (
+        sim._floor_ledger
+    )
+    u_after = after.M / (sim.ion_mass_g * after.n)
+    assert u_after[-1] < u_after[-2] < 2.0e5, u_after[-3:]
+
+    # The saved result: the mirror face is written, the end wall line is not.
+    run_sim = _mirror_sim(dt_save=0.0)
+    result = run_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert "end_wall_surface_power_W" not in result.cathode_diagnostics
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "mirror.h5"
+        run_sim.save_result(path, result)
+        loaded = load_result_hdf5(path)
+    assert list(loaded.mirror_face_indices) == [int(geom.cells)]
+    assert abs(float(loaded.mirror_face_z_cm[0]) - 1058.9) <= 1.0e-9
+    wall_params, wall_flags = _base_config()
+    wall_sim = LAPDSim1D(
+        dict(wall_params, dt_save=0.0, initial_neutral_state="fill"),
+        wall_flags,
+    )
+    wall_result = wall_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    assert "end_wall_surface_power_W" in wall_result.cathode_diagnostics
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "wall.h5"
+        wall_sim.save_result(path, wall_result)
+        wall_loaded = load_result_hdf5(path)
+    assert not hasattr(wall_loaded, "mirror_face_indices")
+    assert not hasattr(wall_loaded, "mirror_face_z_cm")

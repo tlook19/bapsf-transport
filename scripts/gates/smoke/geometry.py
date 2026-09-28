@@ -2175,3 +2175,205 @@ def _case_mirror_field_loader_refusals():
             assert "solve_lapd_coil_field_census.py" in str(exc), str(exc)
         else:
             raise AssertionError("a map missing its Bz array must be refused")
+
+
+# --------------------------------------------------------------------
+# mirror-half-column-mesh
+# --------------------------------------------------------------------
+def _mirror_base_config():
+    """(params, flags): the operator-algebra stance on the half column.
+
+    The mirror refuses the cathode circuit, the evolved neutral momentum and
+    energy and a right pump speed; the historical operator-algebra stance
+    already holds the first three off, so only the far end and the right pump
+    move here.
+    """
+    # Copies: the fixture hands every caller the SAME two dicts.
+    params, flags = (dict(part) for part in _base_config())
+    params["far_end"] = "mirror"
+    params["S_pump_R"] = 0.0
+    params["initial_neutral_state"] = "fill"
+    return params, flags
+
+
+@_case("mirror-half-column-mesh")
+def _case_mirror_half_column_mesh():
+    """far_end = "mirror": the half column's mesh facts, on the template.
+
+    The column ends at Lm/2 = 1058.9 cm (the template's Lm = 2117.8 cm) with
+    no end wall cell; the fixed source region (5 cells of 10 cm, 53.25 cm to
+    103.25 cm) is unchanged and the far section is re-cut into nx uniform
+    cells of (1058.9 - 103.25)/nx cm. At nx = 121 that is 7.897933884297521
+    cm. The only absorbing face is the cathode face; the mirror face is the
+    last face, closed, not absorbing, heat-opaque, and there is no right pump.
+    """
+    from cablp.solvers._sim1d.core.geometry import (
+        FAR_END_VALUES,
+        build_geometry,
+        mirror_plane_z_cm,
+    )
+
+    params, flags = default_config()
+    assert params["far_end"] == "end_wall"
+    assert FAR_END_VALUES == ("end_wall", "mirror")
+    params["nx"] = 121
+    wall = build_geometry(params, flags)
+    params["far_end"] = "mirror"
+    geom = build_geometry(params, flags)
+    cells = int(geom.cells)
+
+    assert params["Lm"] == 2117.8
+    assert mirror_plane_z_cm(params["Lm"]) == 1058.9
+    # The last edge sits on Lm/2 to the cumulative-sum roundoff of the
+    # lengths; the end-wall mesh's own far edge carries the same kind.
+    assert abs(float(geom.z_edges_cm[-1]) - 1058.9) <= 1.0e-9, (
+        geom.z_edges_cm[-1]
+    )
+    assert abs(float(wall.z_edges_cm[-1]) - 2117.8) <= 1.0e-9
+    # 1 plenum + 5 gap + 5 source + 121 far = 132; the end wall mesh has one
+    # more cell (its end wall) and the far column's other 121 cells.
+    assert cells == 132, cells
+    assert int(wall.cells) == 133
+    roles = [str(role) for role in geom.cell_role]
+    assert "end_wall" not in roles
+    assert roles[-1] == "column"
+    assert str(wall.cell_role[-1]) == "end_wall"
+    far = np.asarray(geom.length_cm[-121:], dtype=float)
+    assert np.all(far == far[0]), far
+    assert math.isclose(float(far[0]), 7.897933884297521, rel_tol=1e-14)
+    assert float(geom.length_cm[-122]) == 10.0  # the source region's last
+    assert math.isclose(
+        float(np.sum(geom.length_cm[-121:])), 1058.9 - 103.25, rel_tol=1e-13
+    )
+    # The absorbing faces are the cathode face alone.
+    assert list(np.flatnonzero(geom.plasma_absorbing)) == list(
+        geom.cathode_face_indices
+    )
+    assert list(np.flatnonzero(wall.plasma_absorbing)) == list(
+        wall.cathode_face_indices
+    ) + [int(wall.cells)]
+    # The mirror face.
+    assert list(geom.mirror_face_indices) == [cells]
+    assert list(np.flatnonzero(geom.plasma_mirror)) == [cells]
+    assert not bool(geom.plasma_open[cells])
+    assert not bool(geom.plasma_absorbing[cells])
+    assert float(geom.heat_transmission[cells]) == 0.0
+    assert float(geom.plasma_transmission[cells]) == 0.0
+    assert int(geom.plasma_face_live_cell[cells]) == cells - 1
+    assert float(geom.plasma_face_area_cm2[cells]) == float(
+        geom.plasma_area_cm2[cells - 1]
+    )
+    # The end wall mesh carries no mirror.
+    assert wall.mirror_face_indices.size == 0
+    assert not np.any(wall.plasma_mirror)
+    # No right pump under mirror; the end wall's is its end wall cell.
+    assert pump_cell_indices(geom) == (0, None)
+    assert pump_cell_indices(wall) == (0, int(wall.cells) - 1)
+    # An unknown far end is refused, naming the accepted set.
+    bad = dict(params, far_end="wall")
+    try:
+        build_geometry(bad, flags)
+    except ValueError as exc:
+        assert "far_end must be one of ['end_wall', 'mirror']" in str(exc), (
+            str(exc)
+        )
+    else:
+        raise AssertionError("far_end='wall' ACCEPTED")
+
+
+# --------------------------------------------------------------------
+# mirror-refusals
+# --------------------------------------------------------------------
+@_case("mirror-refusals", historical_stance=True)
+def _case_mirror_refusals():
+    """Every key a mirror cannot carry is refused, in ONE complete message.
+
+    The mirror-valid base constructs. Each conflicting setting alone raises
+    with the complete incompatible set in the message and its own required
+    value under "Set:"; all of them together raise once, listing each.
+    """
+    from cablp.solvers._sim1d.core.validation import (
+        validate_far_end_configuration,
+    )
+
+    complete = (
+        "Incompatible with far_end='mirror' (the complete set): TwinCathode, "
+        "cathode_coupling, neutral_momentum, neutral_energy, "
+        "neutral_model='kinetic_dvm', neutral_kinetic_dvm_end_wall_jet, "
+        "neutral_kinetic_dvm_annulus_flights='bounded_chord', "
+        "S_pump_R != 0, end_wall_length_cm != 7.8."
+    )
+    params, flags = _mirror_base_config()
+    sim = LAPDSim1D(params, flags)
+    assert sim.geometry.mirror_face_indices.size == 1
+    # The end wall template passes the refusal untouched, its S_pump_R and
+    # all.
+    default_params, default_flags = default_config()
+    assert validate_far_end_configuration(default_params, default_flags) is None
+
+    conflicts = (
+        ("flags", "TwinCathode", True, "TwinCathode=False (got True)"),
+        ("flags", "cathode_coupling", True,
+         "cathode_coupling=False (got True)"),
+        ("flags", "neutral_momentum", True,
+         "neutral_momentum=False (got True)"),
+        ("flags", "neutral_energy", True, "neutral_energy=False (got True)"),
+        ("params", "neutral_model", "kinetic_dvm",
+         "neutral_model='moment' (got 'kinetic_dvm')"),
+        ("params", "neutral_kinetic_dvm_end_wall_jet", True,
+         "neutral_kinetic_dvm_end_wall_jet=False (got True)"),
+        ("params", "neutral_kinetic_dvm_annulus_flights", "bounded_chord",
+         "neutral_kinetic_dvm_annulus_flights='rates' (got 'bounded_chord')"),
+        ("params", "S_pump_R", 3000.0, "S_pump_R=0.0 (got 3000.0)"),
+        ("params", "end_wall_length_cm", 10.0,
+         "end_wall_length_cm=7.8 (got 10.0)"),
+    )
+    all_params, all_flags = dict(params), dict(flags)
+    for space, key, value, wanted in conflicts:
+        bad_params, bad_flags = dict(params), dict(flags)
+        target = bad_flags if space == "flags" else bad_params
+        target[key] = value
+        (all_flags if space == "flags" else all_params)[key] = value
+        # The refusal itself, on the resolved pair.
+        try:
+            validate_far_end_configuration(bad_params, bad_flags)
+        except ValueError as exc:
+            assert complete in str(exc), str(exc)
+            assert str(exc).endswith("Set: " + wanted), str(exc)
+        else:
+            raise AssertionError(f"{key}={value!r} ACCEPTED under mirror")
+    try:
+        validate_far_end_configuration(all_params, all_flags)
+    except ValueError as exc:
+        assert complete in str(exc), str(exc)
+        assert str(exc).endswith(
+            "Set: " + "; ".join(item[3] for item in conflicts)
+        ), str(exc)
+    else:
+        raise AssertionError("the full conflicting set ACCEPTED under mirror")
+    # And construction reaches it: the default template under mirror raises
+    # the one message, naming each of its own conflicts.
+    template_params, template_flags = default_config()
+    template_params["far_end"] = "mirror"
+    try:
+        LAPDSim1D(template_params, template_flags)
+    except ValueError as exc:
+        assert complete in str(exc), str(exc)
+        for item in (
+            "cathode_coupling=False (got True)",
+            "neutral_momentum=False (got True)",
+            "neutral_energy=False (got True)",
+            "S_pump_R=0.0 (got 3000.0)",
+        ):
+            assert item in str(exc), (item, str(exc))
+    else:
+        raise AssertionError("the template ACCEPTED under mirror")
+    # Construction under an unknown far end names the accepted set.
+    try:
+        LAPDSim1D(dict(params, far_end="collector"), flags)
+    except ValueError as exc:
+        assert "far_end must be one of ['end_wall', 'mirror']" in str(exc), (
+            str(exc)
+        )
+    else:
+        raise AssertionError("far_end='collector' ACCEPTED")

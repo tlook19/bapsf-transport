@@ -198,6 +198,10 @@ _CASE_ORDER = (
     "beam-tail-retired-keys-refuse",
     "neutral-retired-keys-refuse",
     "beam-l-b-profile-at-fed-back-cross",
+    "mirror-half-column-mesh",
+    "mirror-refusals",
+    "mirror-face-flux-unit",
+    "mirror-fluid-march",
 )
 
 
