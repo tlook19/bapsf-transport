@@ -77,6 +77,7 @@ from .core.validation import (
     resolve_neutral_jet_config,
     resolve_parallel_momentum_sink,
     validate_equilibration_gas_puff_on,
+    validate_far_end_configuration,
     validate_gas_puff_config,
     validate_neutral_seed_cache_config,
     validate_operator_splitting,
@@ -1072,6 +1073,7 @@ class LAPDSim1D:
         self._mu = 4
         self._mu_neutral = 4
         self._I_ion = I_ion
+        validate_far_end_configuration(self._input_dict, self._flags)
         self._geometry = build_geometry(self._input_dict, self._flags)
         # Whether the plasma flux tube has a varying cross-section, and so
         # whether the quasi-1D p*dA/dz momentum source that pairs with the
@@ -4073,6 +4075,9 @@ class LAPDSim1D:
                 (pump_left_index, source_kwargs["S_pump_L"]),
                 (pump_right_index, source_kwargs["S_pump_R"]),
             ):
+                if index is None:
+                    # No right pump: the column ends in a mirror face.
+                    continue
                 rate = pump_rate(
                     _effective_pump_speed(
                         speed,
@@ -9014,13 +9019,17 @@ class LAPDSim1D:
                 self._ion_mass_g
                 * np.maximum(state.nn_a, self._floors["nn"])
             )
-        cathode_diagnostics = {
-            **self._cathode_diagnostic_snapshot(time=time),
+        cathode_diagnostics = self._cathode_diagnostic_snapshot(time=time)
+        if not self._geometry.mirror_face_indices.size:
             # R5.4: end wall surface-power ledger line (diagnostic-only).
-            "end_wall_surface_power_W": self._end_wall_surface_power_W(
-                rhs_terms, derived
-            ),
-        }
+            # ABSENT on a half column (far_end = "mirror"): its far face is a
+            # symmetry plane, not a surface, so there is no line to report.
+            cathode_diagnostics = {
+                **cathode_diagnostics,
+                "end_wall_surface_power_W": self._end_wall_surface_power_W(
+                    rhs_terms, derived
+                ),
+            }
         ignition_diagnostics = self._ignition_diagnostic_snapshot(
             time=time,
             phase=phase,
@@ -9456,6 +9465,15 @@ class LAPDSim1D:
                 else float(self._t_breakdown_trigger)
             ),
         )
+        if self._geometry.mirror_face_indices.size:
+            # Presence-gated: only a half column (far_end = "mirror") carries
+            # its mirror face, so an end-wall result is unchanged.
+            result.mirror_face_indices = (
+                self._geometry.mirror_face_indices.copy()
+            )
+            result.mirror_face_z_cm = np.asarray(
+                self._geometry.z_edges_cm, dtype=float
+            )[self._geometry.mirror_face_indices]
         if getattr(self, "_run_id", None) is not None:
             result.run_id = self._run_id
         # WHICH configuration this run was, when it named one. Always set (it

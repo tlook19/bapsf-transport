@@ -273,6 +273,32 @@ def geometry_defaults():
         ``nx``; the region length minus the anode gap must be an integer
         multiple of it (1e-9 relative tolerance). Required on the
         single-cathode layout; must be ``None`` under ``TwinCathode``.
+    far_end:
+        What ends the column at the far machine end, one of
+        ``"end_wall"`` (default) and ``"mirror"``; any other value raises.
+        ``"end_wall"``: the column runs to ``Lm - end_wall_length_cm`` and
+        the end wall cell closes the machine, its outer face plasma-absorbing.
+        ``"mirror"``: the HALF column. The mesh stops at the mid-plane
+        ``z = Lm/2`` in a MIRROR face -- the symmetry plane of a machine with
+        a second, identical cathode-anode source at ``z = Lm`` -- with no end
+        wall cell; ``Lm`` stays the whole machine's length and ``nx`` counts
+        the far column cells between the fixed source region and ``Lm/2``.
+        The mirror face is closed and not absorbing: its fluid face flux is
+        the ordinary face kernel against the mirror ghost state
+        ``(n, -M, Ee, Ei)`` of the cell beside it, so it carries no particle
+        or energy flux and the momentum flux ``p + a_max M`` (see
+        ``NUMERICS.md``), and no heat crosses it. Nothing armed by the end
+        wall role exists under it. Construction raises, naming the complete
+        set, when ``"mirror"`` is combined with anything that presumes the end
+        wall or cannot yet run at a mirror: ``TwinCathode``,
+        ``cathode_coupling`` (every cathode solve launches the CSDA beam and
+        its tail walk, which march to the far face), ``neutral_momentum`` and
+        ``neutral_energy`` (their far-face wall sinks and the hot channel's
+        end-plane landing), ``neutral_model = "kinetic_dvm"``,
+        ``neutral_kinetic_dvm_end_wall_jet``,
+        ``neutral_kinetic_dvm_annulus_flights = "bounded_chord"``,
+        ``S_pump_R != 0`` (there is no right pump) and a non-default
+        ``end_wall_length_cm``.
     """
     return {
         "Lm": 2117.8,
@@ -302,6 +328,7 @@ def geometry_defaults():
         "neutral_baffle_clear_radii_cm": None,
         "source_region_length_cm": 103.25,
         "source_region_dz_cm": 10.0,
+        "far_end": "end_wall",
     }
 
 

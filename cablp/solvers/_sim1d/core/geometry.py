@@ -115,6 +115,14 @@ class Sim1DGeometry:
     # restricts only the surrounding neutral annulus.
     neutral_baffle_face_indices: np.ndarray
     neutral_baffle_clear_radius_cm: np.ndarray
+    # The MIRROR face (``far_end = "mirror"``): the symmetry plane that ends
+    # the half column. ``plasma_mirror`` is true there and nowhere else, and
+    # ``mirror_face_indices`` lists it; both are empty/false on every other
+    # layout. A mirror face is closed (``plasma_open`` false) and NOT
+    # absorbing: nothing crosses it, and the fluid face flux there is the
+    # ordinary face kernel evaluated against the mirror ghost state.
+    plasma_mirror: np.ndarray
+    mirror_face_indices: np.ndarray
 
     @property
     def cells(self):
@@ -149,9 +157,15 @@ def pump_cell_indices(geometry):
     The pump belongs on the plenum behind a cathode; the non-cathode end
     keeps its own pump on the end wall. Resolving by role keeps this correct if
     the layout changes.
+
+    A column ending in a MIRROR face has no right pump: its far end is a
+    symmetry plane, not a chamber end, so ``right`` is ``None`` and callers
+    book no right-hand sink at all.
     """
     roles = np.asarray(geometry.cell_role)
     left = np.flatnonzero(roles == "plenum")
+    if np.asarray(getattr(geometry, "mirror_face_indices", ())).size:
+        return (int(left[0]) if left.size else 0), None
     right = np.flatnonzero((roles == "plenum") | (roles == "end_wall"))
     left_index = int(left[0]) if left.size else 0
     right_index = int(right[-1]) if right.size else geometry.cells - 1
@@ -316,6 +330,16 @@ def _build_resolved_geometry(input_dict, flags):
         [plenum, (obstruction)] |cathode  [cathode..gap x nx_gap]  anode|
         [puff, column x (nx-1)] [end wall]
 
+    Half column (``far_end = "mirror"``) stops at the mid-plane ``z = Lm/2``
+    in a MIRROR face instead of the end wall: the symmetric half of a machine
+    with a second, identical cathode-anode source at ``z = Lm``. No end wall
+    cell is appended, the fixed source region is unchanged, and the far
+    column's ``nx`` uniform cells end at ``Lm/2``; ``Lm`` stays the whole
+    machine's length::
+
+        [plenum, (obstruction)] |cathode  [cathode..gap x nx_gap]  anode|
+        [source region, puff] [column x nx] |mirror
+
     Twin cathode (``TwinCathode``) mirrors the source end instead of the
     end wall, putting its cathode surface at ``z = Lm``. Which column cell
     carries the ``puff`` role depends on the layout: on the single-cathode
@@ -355,6 +379,13 @@ def _build_resolved_geometry(input_dict, flags):
 
     total_length = float(input_dict.get("Lm", 2000.0))
     twin = bool(flags.get("TwinCathode", False))
+    mirror = _far_end_is_mirror(input_dict)
+    if mirror and twin:
+        raise ValueError(
+            "far_end='mirror' and TwinCathode are two different far ends; "
+            "the mirror face replaces the second source, so the two cannot "
+            "be combined"
+        )
     prescribed = _prescribed_area_geometry_spec(input_dict)
 
     plenum_length = float(input_dict.get("plenum_length_cm", 100.0))
@@ -390,6 +421,10 @@ def _build_resolved_geometry(input_dict, flags):
 
     if twin:
         column_length = total_length - 2.0 * gap_length
+    elif mirror:
+        # The half machine: the column runs from the anode face to the
+        # mid-plane Lm/2, and no end wall cell is appended.
+        column_length = mirror_plane_z_cm(total_length) - gap_length
     else:
         if end_wall_length <= 0.0:
             raise ValueError(
@@ -408,6 +443,7 @@ def _build_resolved_geometry(input_dict, flags):
         total_length=total_length,
         end_wall_length=end_wall_length,
         twin=twin,
+        mirror=mirror,
     )
     if twin:
         # The TwinCathode layout's own column: nx uniform cells, a puff cell
@@ -425,7 +461,8 @@ def _build_resolved_geometry(input_dict, flags):
         if outer_length <= 0.0:
             raise ValueError(
                 "the fixed source region leaves no far column between it "
-                f"and the end wall (outer_length={outer_length} cm)"
+                f"and the {'mirror face' if mirror else 'end wall'} "
+                f"(outer_length={outer_length} cm)"
             )
         column_roles = ["column"] * (n_fixed + nx)
         column_roles[source_grid["puff_offset"]] = "puff"
@@ -438,7 +475,7 @@ def _build_resolved_geometry(input_dict, flags):
     if twin:
         roles += list(reversed(gap_roles)) + list(reversed(behind_roles))
         lengths += list(reversed(gap_lengths)) + list(reversed(behind_lengths))
-    else:
+    elif not mirror:
         roles += ["end_wall"]
         lengths += [end_wall_length]
 
@@ -465,7 +502,15 @@ def _build_resolved_geometry(input_dict, flags):
     far_end_z = (
         z_edges_cm[cathode_faces[-1]] if twin else z_edges_cm[-1]
     )
-    if not np.isclose(far_end_z, total_length):
+    if mirror:
+        # The half column spans the cathode surface to the mid-plane.
+        if not np.isclose(far_end_z, mirror_plane_z_cm(total_length)):
+            raise ValueError(
+                "resolved mirror geometry must span Lm/2 from the cathode "
+                f"surface (got {far_end_z} cm vs "
+                f"{mirror_plane_z_cm(total_length)} cm)"
+            )
+    elif not np.isclose(far_end_z, total_length):
         raise ValueError(
             "resolved geometry must span Lm from the cathode surface "
             f"(got {far_end_z} cm vs {total_length} cm)"
@@ -604,15 +649,47 @@ def _build_resolved_geometry(input_dict, flags):
         anode_neutral_transparency=_anode_neutral_transparency(input_dict),
         # Plasma-terminating surfaces: every cathode, plus the end wall's outer
         # face when there is one (a twin machine ends in plenums instead, whose
-        # back walls are closed and see no plasma).
+        # back walls are closed and see no plasma; a half column ends in its
+        # mirror face, which terminates nothing).
         absorbing_face_indices=(
-            list(cathode_faces) if twin else list(cathode_faces) + [cells]
+            list(cathode_faces)
+            if (twin or mirror)
+            else list(cathode_faces) + [cells]
         ),
+        mirror_face_indices=[cells] if mirror else None,
     )
 
 
+#: Accepted values of the ``far_end`` apparatus selector.
+FAR_END_VALUES = ("end_wall", "mirror")
+
+
+def _far_end_is_mirror(input_dict):
+    """Return True when ``far_end`` selects the half-column mirror face.
+
+    Raises ``ValueError`` naming the accepted set for any other value than
+    :data:`FAR_END_VALUES`.
+    """
+    far_end = input_dict.get("far_end", "end_wall")
+    if far_end not in FAR_END_VALUES:
+        raise ValueError(
+            f"far_end must be one of {list(FAR_END_VALUES)} (got {far_end!r})"
+        )
+    return far_end == "mirror"
+
+
+def mirror_plane_z_cm(total_length_cm):
+    """Return the mirror plane's position ``Lm / 2`` [cm from the cathode face].
+
+    The half column models one half of a machine carrying a second, identical
+    cathode-anode source at ``z = Lm``, so the symmetry plane is the mid-plane.
+    """
+    return 0.5 * float(total_length_cm)
+
+
 def _source_fixed_grid_spec(
-    input_dict, *, gap_length, total_length, end_wall_length, twin
+    input_dict, *, gap_length, total_length, end_wall_length, twin,
+    mirror=False,
 ):
     """Validate and return the single-cathode fixed-cell source region.
 
@@ -627,6 +704,10 @@ def _source_fixed_grid_spec(
     layout, whose mesh is its own uniform column, both parameters are
     forbidden (nothing would read them) and ``None`` is returned. Raises
     ``ValueError`` on every misconfiguration, at construction.
+
+    Under ``mirror`` (``far_end = "mirror"``) the column ends at the mirror
+    plane ``Lm / 2`` instead of the end wall block, and the region must lie
+    strictly before that plane.
     """
     keys = ("source_region_length_cm", "source_region_dz_cm")
     raw = {key: input_dict.get(key) for key in keys}
@@ -660,13 +741,21 @@ def _source_fixed_grid_spec(
             "source_region_length_cm must lie strictly beyond the anode face "
             f"(got {region_length} cm vs cathode_anode_gap_cm={gap_length} cm)"
         )
-    column_end = total_length - end_wall_length
-    if region_length >= column_end:
-        raise ValueError(
-            "source_region_length_cm must lie strictly before the end wall "
-            f"block (got {region_length} cm vs Lm - end_wall_length_cm = "
-            f"{column_end} cm)"
-        )
+    if mirror:
+        column_end = mirror_plane_z_cm(total_length)
+        if region_length >= column_end:
+            raise ValueError(
+                "source_region_length_cm must lie strictly before the mirror "
+                f"plane (got {region_length} cm vs Lm/2 = {column_end} cm)"
+            )
+    else:
+        column_end = total_length - end_wall_length
+        if region_length >= column_end:
+            raise ValueError(
+                "source_region_length_cm must lie strictly before the end "
+                f"wall block (got {region_length} cm vs Lm - "
+                f"end_wall_length_cm = {column_end} cm)"
+            )
 
     span = region_length - gap_length
     cells_float = span / dz
@@ -924,6 +1013,7 @@ def _assemble_geometry(
     anode_transparency=1.0,
     anode_neutral_transparency=None,
     absorbing_face_indices=None,
+    mirror_face_indices=None,
 ):
     """Derive the face arrays from the cell arrays and pack a ``Sim1DGeometry``.
 
@@ -965,6 +1055,19 @@ def _assemble_geometry(
         plasma_open[face] = False
         plasma_transmission[face] = 0.0
         heat_transmission[face] = 0.0
+    # The mirror face is an EXTERNAL face, so it is already closed above: no
+    # particle, energy or heat crosses it. It is never absorbing.
+    mirror_faces = np.asarray(
+        [] if mirror_face_indices is None else mirror_face_indices, dtype=int
+    )
+    plasma_mirror = np.zeros(cells + 1, dtype=bool)
+    for face in mirror_faces:
+        if int(face) not in (0, cells) or plasma_absorbing[int(face)]:
+            raise ValueError(
+                f"mirror face {int(face)} must be an external, non-absorbing "
+                "face of the mesh"
+            )
+        plasma_mirror[int(face)] = True
     plasma_face_live_cell = np.full(cells + 1, -1, dtype=int)
     for face in np.flatnonzero(~plasma_open):
         adjacent = []
@@ -1072,6 +1175,8 @@ def _assemble_geometry(
         ),
         neutral_baffle_face_indices=baffle_faces,
         neutral_baffle_clear_radius_cm=baffle_radii,
+        plasma_mirror=plasma_mirror,
+        mirror_face_indices=mirror_faces,
     )
 
 
