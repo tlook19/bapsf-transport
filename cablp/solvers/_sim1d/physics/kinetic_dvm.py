@@ -102,7 +102,10 @@ after the march, so the returning particles are held in a per-end pending
 buffer and injected on the next update. The buffer is part of the
 inventory: closure is stated over ``sum(f V) + pending``. The recycle
 faces are not lagged -- the plasma tells the arm what it removed before
-the march runs, so those particles are injected in the same update.
+the march runs, so those particles are injected in the same update. A
+MIRROR PLANE ending the domain (``far_end = "mirror"``) is not lagged
+either: it reflects specularly between the two sweeps of the same march,
+and its buffer stays empty (see :class:`TransientDVM`).
 
 Sign and unit conventions: CGS throughout, distributions in cm^-3 per
 bin (the bin sum IS the density), ledger entries in PARTICLES (not
@@ -943,6 +946,24 @@ class TransientDVM:
     See :meth:`_configure_baffles` for the transparency and its refusals, and
     ``momentum_baffle_absorbed``, which is presence-gated on the baffles
     themselves rather than on the anode jet.
+
+    THE MIRROR PLANE. A geometry whose ``mirror_face_indices`` names the
+    right domain end (``far_end = "mirror"``, the half column of a symmetric
+    two-source machine) ends the neutral domain in a SPECULAR plane instead
+    of the end wall. What the ``+z`` sweep carries out through that face
+    returns in the ``-z`` sweep of the SAME march as ``f(-v_z)`` -- the
+    outgoing particles per bin, bin-mirrored by :attr:`mirror` and entered
+    as a ghost density (:func:`_ghost_density`) -- in both zones. There is no
+    pumping, accommodation, sticking or lagged buffer there: ``pend_R_c`` and
+    ``pend_R_a`` stay zero, ``loss_end_out_R`` and ``birth_end_return_R``
+    are the gross traffic through the plane and its same-tick return, and
+    ``loss_pump_R`` and ``net_surface_end_R`` book what the plane keeps. The
+    end wall channels have no role there: a non-zero right pump, an
+    ``end_wall_jet``, an end wall launch band or the ``bounded_chord``
+    annulus (whose end exits are re-launched from the lagged buffer rather
+    than marched) is refused at construction, and a non-zero
+    ``end_wall_face`` count is refused at :meth:`update`. Any other
+    geometry leaves the engine exactly as it was.
     """
 
     def __init__(
@@ -1078,6 +1099,7 @@ class TransientDVM:
             if by_role.get("end_wall"):
                 self.coll_cell = int(by_role["end_wall"][0])
         self._configure_closed_faces(geometry)
+        self._configure_mirror_plane(geometry, end_wall_launch_band_eV)
         Rp = np.asarray(geometry.Rp_cm, dtype=float)
         Rm = np.asarray(geometry.Rm_cm, dtype=float)
         self._configure_baffles(baffle_faces, baffle_clear_radius_cm, Rp)
@@ -1568,6 +1590,59 @@ class TransientDVM:
                 emitters.append((face, d_in, cell, cell in self.cath_cells))
         self.closed_faces = faces
         self._closed_emitters = tuple(emitters)
+
+    def _configure_mirror_plane(self, geometry, end_wall_launch_band_eV):
+        """Resolve whether the right domain end is a specular mirror plane.
+
+        Sets ``mirror_plane``: true when the geometry's
+        ``mirror_face_indices`` names face ``nz`` (``far_end = "mirror"``),
+        false when it names nothing or the geometry carries no such field --
+        the synthetic tubes of the gate suite, and every end wall layout.
+        A mirror face anywhere else raises: the plane is a domain END.
+
+        Under a mirror plane, raises a ``ValueError`` naming every setting
+        that presumes an end wall there: a non-zero right sticking ``s_R``
+        (the right pump), an ``end_wall_jet`` or an end wall launch band
+        (the end wall's energetic return), and ``annulus_flights =
+        "bounded_chord"``, whose annulus is not marched -- its end-plane
+        exits are re-launched off the lagged end buffer a tick later, which
+        the plane does not have, so its reflection could not be specular
+        within the march.
+        """
+        faces = getattr(geometry, "mirror_face_indices", None)
+        faces = np.asarray(() if faces is None else faces, dtype=int)
+        self.mirror_plane = bool(faces.size)
+        if not self.mirror_plane:
+            return
+        if faces.tolist() != [self.nz]:
+            raise ValueError(
+                "the DVM mirror plane ends the neutral domain, so the "
+                f"geometry's mirror face must be face {self.nz} alone (got "
+                f"{faces.tolist()}). Accepted: mirror_face_indices == "
+                f"[{self.nz}], or no mirror face"
+            )
+        conflicts = []
+        if self.s_R != 0.0:
+            conflicts.append(f"s_R=0.0 (got {self.s_R!r})")
+        if self.end_wall_jet is not None:
+            conflicts.append("end_wall_jet=None (got a spec)")
+        if end_wall_launch_band_eV is not None:
+            conflicts.append(
+                "end_wall_launch_band_eV=None (got "
+                f"{end_wall_launch_band_eV!r})"
+            )
+        if self.annulus_flights == "bounded_chord":
+            conflicts.append(
+                "annulus_flights='rates' (got 'bounded_chord': its end "
+                "exits return through the lagged end buffer, not the march)"
+            )
+        if conflicts:
+            raise ValueError(
+                "the DVM's right end is a specular MIRROR plane (the "
+                "geometry's mirror face): no pumping, no end wall return and "
+                "no lagged buffer there, so settings that presume an end wall "
+                "are refused. Set: " + "; ".join(conflicts)
+            )
 
     def _closed_face_spectra(self, T_s_K):
         """Return ``{(surface, emit_direction): spectrum}`` for this update.
@@ -2565,7 +2640,11 @@ class TransientDVM:
         ``nu_c_loss`` / ``nu_a_loss`` are the per-(cell, bin) NON-zone loss
         frequencies of each zone; the zone-exchange rates are added here so
         the 2x2 coupling stays exactly antisymmetric. ``inflow_*`` are
-        boundary ghost DENSITIES keyed ``(-1, +1)`` by domain end.
+        boundary ghost DENSITIES keyed ``(-1, +1)`` by domain end. Under a
+        MIRROR PLANE the ``+1`` entries are not read: the ``-z`` sweep's
+        inflow at the right end is the ``+z`` sweep's outgoing particles
+        there, bin-mirrored and converted by :func:`_ghost_density`, so the
+        plane reflects specularly within this march.
 
         ``column_only`` marches the COLUMN alone, with the zone-escape rate
         still on its diagonal but no annulus row to couple to: the
@@ -2672,8 +2751,20 @@ class TransientDVM:
             P_all = None if P_bin is None else P_bin[sel]
             P_sel = P_all if mesh_momentum else None
             P_baf = P_all if baffle_momentum else None
-            F_c_prev = inflow_c[end_in][sel]
-            F_a_prev = None if column_only else inflow_a[end_in][sel]
+            if direction < 0 and self.mirror_plane:
+                # The MIRROR PLANE: what the +z sweep just carried out
+                # through the right face returns now, bin-mirrored, as the
+                # -z inflow there -- f(-v_z) = f(v_z) at the plane, within
+                # this march and in both zones.
+                F_c_prev = _ghost_density(
+                    out[("c", +1)][self.mirror], self.face_c[-1], dt, g
+                )[sel]
+                F_a_prev = _ghost_density(
+                    out[("a", +1)][self.mirror], self.face_a[-1], dt, g
+                )[sel]
+            else:
+                F_c_prev = inflow_c[end_in][sel]
+                F_a_prev = None if column_only else inflow_a[end_in][sel]
             for i in order:
                 # Upstream face carries the inflow, downstream face the
                 # outflow; both are throat areas, so what leaves one cell
@@ -3035,6 +3126,14 @@ class TransientDVM:
         anode = channel("anode")
         cath = channel("cathode_face")
         coll = channel("end_wall_face")
+        if self.mirror_plane and np.any(coll):
+            raise ValueError(
+                "the DVM's right end is a MIRROR plane, which has no end wall "
+                "to recycle from, yet the 'end_wall_face' channel carries "
+                f"{float(np.sum(coll))!r} particles this tick. Accepted: no "
+                "end_wall_face count (or an all-zero one) under a mirror "
+                "plane"
+            )
         # The cathode-side energetic recycle splits the counted recycle
         # stream: ``R_N`` backscatters (a volume birth in substep B, below)
         # and the remainder keeps the thermal face inflow. Absent the jet
@@ -3385,14 +3484,23 @@ class TransientDVM:
             out[("a", -1)], self.s_L, alpha, self.mirror,
             g.half_flux_spectrum(T_s_K, +1),
         )
-        self.pend_R_c = _end_return(
-            out[("c", +1)], self.s_R, alpha, self.mirror,
-            g.half_flux_spectrum(self.T_wall_K, -1),
-        )
-        self.pend_R_a = _end_return(
-            out[("a", +1)], self.s_R, alpha, self.mirror,
-            g.half_flux_spectrum(self.T_wall_K, -1),
-        )
+        if self.mirror_plane:
+            # The mirror plane returned its outflow inside the march, as the
+            # bin-mirrored -z inflow: that return is this tick's birth, and
+            # the right-end buffers are never written.
+            refl_c = out[("c", +1)][self.mirror]
+            refl_a = out[("a", +1)][self.mirror]
+            birth_return_R = float(refl_c.sum() + refl_a.sum())
+            e_return_R = self._energy_of(refl_c) + self._energy_of(refl_a)
+        else:
+            self.pend_R_c = _end_return(
+                out[("c", +1)], self.s_R, alpha, self.mirror,
+                g.half_flux_spectrum(self.T_wall_K, -1),
+            )
+            self.pend_R_a = _end_return(
+                out[("a", +1)], self.s_R, alpha, self.mirror,
+                g.half_flux_spectrum(self.T_wall_K, -1),
+            )
 
         self.f_c = f_c
         self.f_a = f_a
@@ -4024,7 +4132,9 @@ class TransientDVM:
 
         ``surface_end_*`` is what the end wall KEPT -- the outflow less the
         pumped share, which is its own loss row, less the buffered return,
-        which is still inside the inventory.
+        which is still inside the inventory. At a MIRROR PLANE the right end
+        buffers nothing and its return is born in the same tick, so
+        ``net_surface_end_R`` is the outflow less that return.
         """
         # Losses, from the arrays substep A actually removed.
         e_loss_ionization = self._energy_of(L_ion)
@@ -4084,6 +4194,11 @@ class TransientDVM:
         e_pending_R = self._energy_of(self.pend_R_c) + self._energy_of(
             self.pend_R_a
         )
+        net_surface_end_R = e_loss_end_R - e_loss_pump_R - e_pending_R
+        if self.mirror_plane:
+            # A mirror plane keeps nothing: its return is born this tick
+            # rather than buffered, so it is netted here, not as pending.
+            net_surface_end_R = net_surface_end_R - e_return_R
         return {
             "loss_ionization": e_loss_ionization,
             "loss_cx": e_loss_cx,
@@ -4138,7 +4253,7 @@ class TransientDVM:
             # temperature. Booked exactly like the other surface channels.
             "net_surface_closed_face": e_closed_blocked - e_closed_reemit,
             "net_surface_end_L": e_loss_end_L - e_loss_pump_L - e_pending_L,
-            "net_surface_end_R": e_loss_end_R - e_loss_pump_R - e_pending_R,
+            "net_surface_end_R": net_surface_end_R,
             "net_exchange_cx": e_loss_cx - e_birth_cx,
             "net_exchange_elastic": e_loss_elastic - e_birth_elastic,
             "inventory_before": e_inv_before,
