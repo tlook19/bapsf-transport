@@ -715,6 +715,22 @@ TAIL_ANODE_RIDER_MIN_ENERGY_EV = 50.0
 # convergent series, not an arm.
 TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 
+# How many CSDA legs one electron population may march under a MIRROR far end
+# (``mirror_face``) before what it still carries is booked as the leg-cap
+# RESIDUAL. At the mirror plane every population turns round, and at the
+# cathode face the sheath turns it back, so a population that has not stopped
+# bounces between the two faces; each leg ends at a face, and the cap bounds
+# how many there are. For a tail walker the budget is shared by the walker and
+# every rider and sheath walker it spawns (one tree); for the primary it
+# counts the primary's own legs, its first march included. The residual is
+# never dropped: its flux and power are booked to their own rows
+# (``tail_leg_cap_residual_*`` / ``primary_mirror_residual_*``) and leave the
+# ray's ledger there. Not a config key: it is the length of a convergent
+# series (the anode mesh removes ``eta`` of a walker's flux on each return
+# from the mirror), not an arm. Only a mirror far end reads it; an end wall
+# ray never bounces past two legs and never meets it.
+MIRROR_MAX_LEGS = 64
+
 # --- Compiled CSDA march (opt-in; see cablp.cathode.kernels) ------------------
 # The cost read of 2026-08-02 measured the substep march at ~61% numpy SCALAR
 # dispatch and Python call overhead -- ~873 sub-calls per ``deposit_beam``
