@@ -73,6 +73,11 @@ _CONFIGURATION_JSON_ATTRS = (
 #: not touched, and no other role is rewritten.
 LEGACY_CELL_ROLE_ALIASES = {"collector": "end_wall"}
 
+#: The half column's mirror face in the ``geometry`` group: its face index and
+#: its position [cm from the cathode face]. PRESENCE-GATED -- written and read
+#: only for a ``far_end = "mirror"`` result; an end-wall file has neither.
+MIRROR_GEOMETRY_FIELDS = ("mirror_face_indices", "mirror_face_z_cm")
+
 #: Set on every loaded result: ``True`` when :data:`LEGACY_CELL_ROLE_ALIASES`
 #: actually rewrote at least one role on this file, ``False`` otherwise. It
 #: says what the LOAD did, not what the file is, so a reader can tell a
@@ -542,6 +547,9 @@ def load_result_hdf5(path):
                 "plasma_active",
             ),
         )
+        for name in MIRROR_GEOMETRY_FIELDS:
+            if name in h5["geometry"]:
+                geometry[name] = np.asarray(h5["geometry"][name])
         geometry["cell_role"], _cell_role_shim = _apply_cell_role_aliases(
             _read_string_array(h5["geometry/cell_role"])
         )
@@ -723,6 +731,9 @@ def _write_geometry(group, result):
         "plasma_active",
     )
     _write_arrays(group, result, numeric_names)
+    # The mirror face of a half column (far_end = "mirror"), written only when
+    # the result carries one: an end-wall result writes nothing new here.
+    _write_arrays(group, result, MIRROR_GEOMETRY_FIELDS)
     str_dtype = h5py.string_dtype(encoding="utf-8")
     group.create_dataset(
         "cell_role",

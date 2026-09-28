@@ -126,6 +126,26 @@ carries the outflow below. In the code that map is `plasma_active[cell]` and
 `plasma_face_live_cell[face]`, and it is the single authority the fluxes and
 the source terms both read.
 
+The far end is a selector, **`far_end`**. `"end_wall"`, the default and the
+model described throughout this document, is the layout above. `"mirror"` is
+the HALF column: the same machine from the cathode to the mid-plane
+$z=L_m/2$, where the column ends in a MIRROR face instead of the end wall —
+the symmetry plane of a machine carrying a second, identical cathode–anode
+source at $z=L_m$. The fixed near-source cells are unchanged, the far column's
+`nx` uniform cells are re-cut to end exactly at $L_m/2$, no end wall cell is
+appended, and $L_m$ remains the whole machine's length. The mirror face is
+closed and not absorbing: no particle, energy or heat crosses it, nothing is
+recycled there, the right pump does not exist, and nothing armed by the end
+wall role (the end wall's sheath-climb row, its surface-power line) is
+present. Its momentum flux is the mirror-ghost face flux of
+[`NUMERICS.md`](NUMERICS.md). The mirror is a first-stage apparatus: a
+configuration pairing it with anything that presumes the end wall or cannot
+yet run at a mirror — the second cathode layout, the cathode circuit (whose
+beam and tail walk march to the far face), the evolved neutral momentum and
+energy, the kinetic neutral closure and its far-end options, a right pump
+speed, or an end wall length — is refused at construction, in one message
+naming the complete set.
+
 Under the reference configuration's prescribed area geometry the flux-tube
 area expands from roughly 60 cm upstream of port 53 into the end chamber,
 reaching about sixteen times the mid-machine plateau area some 3 m past port

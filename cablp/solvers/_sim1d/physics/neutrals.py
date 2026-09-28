@@ -973,6 +973,7 @@ def neutral_source_sink_rhs(
     two_zone = state.nn_a is not None
     dnn_a = np.zeros(geometry.cells, dtype=float) if two_zone else None
     pump_left_index, pump_right_index = pump_cell_indices(geometry)
+    right_pump = pump_right_index is not None
     if gas_puff_enabled:
         puff = gas_puff_rate_profile(
             geometry,
@@ -1019,25 +1020,33 @@ def neutral_source_sink_rhs(
             pump_elbow_conductance_lps if is_plenum_cell(geometry, pump_left_index)
             else None,
         )
-        S_right = _effective_pump_speed(
-            S_pump_R,
-            pump_elbow_conductance_lps if is_plenum_cell(geometry, pump_right_index)
-            else None,
-        )
         rate_left = pump_rate(S_left, geometry.neutral_volume_cm3[pump_left_index])
-        rate_right = pump_rate(
-            S_right, geometry.neutral_volume_cm3[pump_right_index]
-        )
         dnn[pump_left_index] -= rate_left * state.nn[pump_left_index]
-        dnn[pump_right_index] -= rate_right * state.nn[pump_right_index]
         if dEn is not None:
             dEn[pump_left_index] -= rate_left * state.En[pump_left_index]
-            dEn[pump_right_index] -= rate_right * state.En[pump_right_index]
         if two_zone:
             dnn_a[pump_left_index] -= rate_left * state.nn_a[pump_left_index]
-            dnn_a[pump_right_index] -= (
-                rate_right * state.nn_a[pump_right_index]
+        # A column ending in a mirror face has no right pump
+        # (``pump_cell_indices`` returns None there): no sink is booked.
+        if right_pump:
+            S_right = _effective_pump_speed(
+                S_pump_R,
+                pump_elbow_conductance_lps
+                if is_plenum_cell(geometry, pump_right_index)
+                else None,
             )
+            rate_right = pump_rate(
+                S_right, geometry.neutral_volume_cm3[pump_right_index]
+            )
+            dnn[pump_right_index] -= rate_right * state.nn[pump_right_index]
+            if dEn is not None:
+                dEn[pump_right_index] -= (
+                    rate_right * state.En[pump_right_index]
+                )
+            if two_zone:
+                dnn_a[pump_right_index] -= (
+                    rate_right * state.nn_a[pump_right_index]
+                )
     zeros = np.zeros(geometry.cells, dtype=float)
     # An evolved neutral wind (state carries M_n) leaves through the pump at
     # the same rate as the gas, so the pumped-out neutrals take their
@@ -1049,16 +1058,20 @@ def neutral_source_sink_rhs(
         dM_n = zeros.copy()
         if pump_enabled:
             dM_n[pump_left_index] -= rate_left * state.M_n[pump_left_index]
-            dM_n[pump_right_index] -= rate_right * state.M_n[pump_right_index]
+            if right_pump:
+                dM_n[pump_right_index] -= (
+                    rate_right * state.M_n[pump_right_index]
+                )
     if state.M_n_a is not None:
         dM_n_a = zeros.copy()
         if pump_enabled:
             dM_n_a[pump_left_index] -= (
                 rate_left * state.M_n_a[pump_left_index]
             )
-            dM_n_a[pump_right_index] -= (
-                rate_right * state.M_n_a[pump_right_index]
-            )
+            if right_pump:
+                dM_n_a[pump_right_index] -= (
+                    rate_right * state.M_n_a[pump_right_index]
+                )
     return ConservativeState1D(
         n=zeros.copy(),
         nn=dnn,

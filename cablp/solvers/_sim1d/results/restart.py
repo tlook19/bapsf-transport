@@ -42,6 +42,8 @@ STRUCTURAL_FLAG_KEYS = (
 STRUCTURAL_PARAM_KEYS = (
     "neutral_model",
     "phase_transition_mode",
+    # The far end decides the mesh and what its last face means.
+    "far_end",
 )
 
 #: Neutral models whose evolving state is a distribution function this payload

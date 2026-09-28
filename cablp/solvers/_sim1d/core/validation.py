@@ -21,9 +21,10 @@ import numpy as np
 from cablp.atomic.adas import he_rate_temperature_range_eV
 
 from .config import (
+    geometry_defaults,
     parallel_momentum_sink_defaults,
 )
-from .geometry import _anode_neutral_transparency
+from .geometry import _anode_neutral_transparency, _far_end_is_mirror
 from ..physics.sources import (
     ANODE_JET_ENERGY_CONVENTIONS,
     CATHODE_JET_ENERGY_CONVENTIONS,
@@ -31,6 +32,81 @@ from ..physics.sources import (
 
 #: Implemented operator-splitting compositions.
 OPERATOR_SPLITTINGS = ("lie", "strang")
+
+
+def validate_far_end_configuration(input_dict, flags):
+    """Refuse, in ONE message, everything a mirror far end cannot carry.
+
+    Returns ``None``. Under ``far_end = "end_wall"`` it reads nothing else and
+    returns at once. Under ``far_end = "mirror"`` it collects every setting
+    that presumes the end wall or cannot yet run at a mirror face and raises a
+    single ``ValueError`` listing the complete incompatible set with the
+    value each would have to take:
+
+    * ``TwinCathode`` -- a different far end;
+    * ``cathode_coupling`` -- every cathode solve launches the CSDA beam
+      (and, under the walked plateau closure, its tail walkers), and both
+      march to the far face and book what reaches it as leaving the machine;
+    * ``neutral_momentum`` -- the neutral wind's wall-momentum sink at the far
+      face treats it as a wall;
+    * ``neutral_energy`` -- the end-face energy accommodation and the hot
+      channel's end-plane landing treat the far face as a wall;
+    * ``neutral_model = "kinetic_dvm"``,
+      ``neutral_kinetic_dvm_end_wall_jet`` and
+      ``neutral_kinetic_dvm_annulus_flights = "bounded_chord"`` -- the
+      kinetic closure's far plane is a wall;
+    * ``S_pump_R != 0`` -- the right pump sits on the end wall cell, which a
+      half column does not have;
+    * a non-default ``end_wall_length_cm`` -- the half column has no end wall
+      cell to give that length to.
+
+    An invalid ``far_end`` value raises naming the accepted set.
+    """
+    if not _far_end_is_mirror(input_dict):
+        return
+    conflicts = []
+    for flag in (
+        "TwinCathode",
+        "cathode_coupling",
+        "neutral_momentum",
+        "neutral_energy",
+    ):
+        if bool(flags.get(flag)):
+            conflicts.append(f"{flag}=False (got True)")
+    if input_dict.get("neutral_model") == "kinetic_dvm":
+        conflicts.append("neutral_model='moment' (got 'kinetic_dvm')")
+    if bool(input_dict.get("neutral_kinetic_dvm_end_wall_jet")):
+        conflicts.append(
+            "neutral_kinetic_dvm_end_wall_jet=False (got True)"
+        )
+    flights = input_dict.get("neutral_kinetic_dvm_annulus_flights")
+    if flights == "bounded_chord":
+        conflicts.append(
+            "neutral_kinetic_dvm_annulus_flights='rates' "
+            "(got 'bounded_chord')"
+        )
+    S_pump_R = float(input_dict.get("S_pump_R", 0.0))
+    if S_pump_R != 0.0:
+        conflicts.append(f"S_pump_R=0.0 (got {S_pump_R!r})")
+    end_wall_default = geometry_defaults()["end_wall_length_cm"]
+    end_wall_length = input_dict.get("end_wall_length_cm", end_wall_default)
+    if end_wall_length != end_wall_default:
+        conflicts.append(
+            f"end_wall_length_cm={end_wall_default!r} (got "
+            f"{end_wall_length!r})"
+        )
+    if conflicts:
+        raise ValueError(
+            "far_end='mirror' ends the column in a mirror face at Lm/2, with "
+            "no end wall; this configuration sets keys that presume the end "
+            "wall or cannot yet run at a mirror. Incompatible with "
+            "far_end='mirror' (the complete set): TwinCathode, "
+            "cathode_coupling, neutral_momentum, neutral_energy, "
+            "neutral_model='kinetic_dvm', neutral_kinetic_dvm_end_wall_jet, "
+            "neutral_kinetic_dvm_annulus_flights='bounded_chord', "
+            "S_pump_R != 0, end_wall_length_cm != "
+            f"{end_wall_default!r}. Set: " + "; ".join(conflicts)
+        )
 
 
 class _RawStageError(ValueError):
