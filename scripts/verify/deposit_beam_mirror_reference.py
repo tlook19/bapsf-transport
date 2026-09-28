@@ -3,8 +3,9 @@
 The corpus ``scripts/data/deposit_beam_mirror_reference.npz`` pins the CSDA
 module's MIRROR branch -- ``deposit_beam(mirror_face=...)`` turning the
 primary and the tail walkers round at the mirror plane, the mirror chains of
-``_tail_mirror_chains`` (the re-armed anode cull, the wire sheath, the shared
-leg budget and its booked residual), the returning primary's hand-off of its
+``_tail_mirror_chains`` (the re-armed anode cull, the wire sheath and the
+merge of its turned share with its parent at the anode plane, the shared leg
+budget and its booked residual), the returning primary's hand-off of its
 anomalous drag (``anomalous_bank_eV``), and the beam smoothing's fold about
 the mirror face -- at raw float64, so the branch is pinned by data rather than
 by a second implementation of it. It is a SEPARATE corpus from

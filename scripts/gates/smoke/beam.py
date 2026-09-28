@@ -4011,3 +4011,87 @@ def _case_mirror_residual_bound_raises():
         + ", ".join(f"{k}={v:.3e}" for k, v in shares.items())
         + f"; eta=0.358 primary returns at {conv_share:.3e}"
     )
+
+
+# --------------------------------------------------------------------
+# mirror-tail-sheath-share-merged
+# --------------------------------------------------------------------
+@_case("mirror-tail-sheath-share-merged")
+def _case_mirror_tail_sheath_share_merged():
+    """The sheath-turned share rejoins its parent at the anode plane.
+
+    In the reflecting regime (the wires' sheath repels every walker) a walker
+    crossing the anode plane toward the cathode splits: the sheath turns
+    ``eta`` of it back at the plane and the rest walks on to the cathode,
+    which turns it back through the gap. The two are superposed at the plane
+    (fluxes summed, energy flux-weighted) into ONE walker, so each launched
+    walker is a single chain and not a tree. On a column with no neutrals and
+    almost no plasma nothing is lost: each launched walker marches one chain, the
+    gap return carries ``(1 - eta)`` of the flux to the plane, the merged
+    walker reaches the mirror carrying the whole launched flux (1e-12) at the
+    launch energy (1e-9, the column's Coulomb loss), and the leg cap books the
+    whole launch.
+    NEGATIVE CONTROL: a crossing toward the MIRROR (a gap-born walker) has no
+    parent coming back through the same plane, so its turned share is still
+    a walker of its own -- that launch holds a second chain entry.
+    """
+    cells = 20
+    nn = np.zeros(cells)
+    ne = np.full(cells, 1.0e2)
+    Te = np.full(cells, 1.0)
+    dz = np.full(cells, 10.0)
+    f0 = 1.0e18
+    E0 = 100.0
+    cull = (8, _MIRROR_ETA, 0.0, 0.0, 1.0e4)  # the sheath repels at 1e4 eV
+    flux = np.zeros(cells)
+    flux[12] = f0
+    layout, ledger = _beam_deposition_mod._tail_mirror_chains(
+        [(E0, flux, flux.copy(), True)], nn, ne, Te, dz,
+        _mirror_march_kwargs(), 0, cells - 1, -1, 1.0e9, 1, cull=cull,
+    )
+    # One marched chain per launched walker. A turned share still held when
+    # the leg budget runs out is released and capped at once, which leaves an
+    # empty chain and no legs.
+    chains = [chain for chain in layout[0] if chain]
+    assert len(chains) == 2, [len(c) for c in layout[0]]
+    assert len(layout[0]) <= 4, [len(c) for c in layout[0]]
+    assert ledger["sheath_flux"] > 0.0
+    merges = 0
+    for chain in chains:
+        dirs = [leg[3] for leg in chain]
+        for k in range(len(chain) - 2):
+            # crossing leg to the cathode face, the gap return, then the
+            # merged walker from the plane to the mirror
+            if dirs[k] == -1 and dirs[k + 1] == 1 and dirs[k + 2] == 1:
+                merges += 1
+                assert math.isclose(
+                    chain[k + 1][1], (1.0 - _MIRROR_ETA) * f0, rel_tol=1e-12
+                ), (chain[k + 1][1], f0)
+                gap_banks = np.concatenate(chain[k + 1][0])
+                assert np.all(gap_banks.reshape(5, cells)[:, 8:] == 0.0)
+                assert math.isclose(chain[k + 2][1], f0, rel_tol=1e-12), (
+                    chain[k + 2][1], f0
+                )
+                # The column's Coulomb loss is ~1e-11 of E per leg here.
+                assert math.isclose(chain[k + 2][2], E0, rel_tol=1e-9)
+    assert merges >= 2, merges
+    assert math.isclose(ledger["cap_flux"], 2.0 * f0, rel_tol=1e-12), (
+        ledger["cap_flux"]
+    )
+    assert ledger["escape_low_eV"] == 0.0 and ledger["escape_high_eV"] == 0.0
+    # NEGATIVE CONTROL: a gap-born walker heading for the mirror.
+    gap_flux = np.zeros(cells)
+    gap_flux[4] = f0
+    control, _ledger = _beam_deposition_mod._tail_mirror_chains(
+        [(E0, gap_flux, None, True)], nn, ne, Te, dz,
+        _mirror_march_kwargs(), 0, cells - 1, -1, 1.0e9, 1, cull=cull,
+    )
+    # The launch holds its own chain and the turned share's (which the shared
+    # budget, spent by the parent's bounces, caps at once).
+    assert len(control[0]) == 2, [len(c) for c in control[0]]
+    assert len(control[0][0]) == _beam_deposition_mod.MIRROR_MAX_LEGS
+    print(
+        f"mirror-tail-sheath-share-merged: {merges} merges in "
+        f"{sum(len(c) for c in chains)} legs on two chains; the gap-born "
+        f"control holds {len(control[0])} chain entries"
+    )

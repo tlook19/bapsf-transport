@@ -735,11 +735,15 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # the longest-lived tail the model launches), the residual as a fraction of
 # the launched tail power: 1.0e-2 to 2.0e-2 at 16 legs (fails a 1 % bar),
 # 8.2e-4 to 2.9e-3 at 24, 3.9e-5 to 3.9e-4 at 32, at most 6.9e-6 at 48 and at
-# most 1.1e-7 at 64. The series converges only while the anode mesh ABSORBS:
-# where the anode sheath repels every walker (its drop driven to hundreds or
-# thousands of volts) the trapped rays keep 70-89 % at 64 legs (the one
-# scanned further, 60 % at 4096), so no cap bounds that regime, and the solver
-# refuses the walked tail at a mirror for that reason.
+# most 1.1e-7 at 64. Where the anode sheath repels every walker (its drop
+# driven to hundreds or thousands of volts) nothing absorbs them and the series
+# converges only by their thermalizing. On the two recorded rays of that kind,
+# with the sheath-turned share merged back into its parent at the anode plane
+# (see _tail_mirror_chains), the residual is 0.61 and 0.83 at 16 legs, 0.098
+# and 0.46 at 64, 1.8e-3 and 5.6e-2 at 256, and 0 at 1024 (every walker
+# stopped); without the merge the split walkers grew as a tree and kept 70-89 %
+# at 64 legs and 60 % at 4096. The cap therefore does not bound that regime at
+# 64 legs, and the solver refuses the walked tail at a mirror for that reason.
 MIRROR_MAX_LEGS = 64
 
 # The largest share of a mirrored ray's launched power (``Gamma0 * E0``) the
@@ -2118,7 +2122,18 @@ def _tail_mirror_chains(
     and at or above it escapes to the tail end ledger. Everything else --
     the legs (one ``deposit_beam`` march each, in ``march_kwargs``), the
     first-crossing cull, the wire sheath, the reversed-walker rider -- is the
-    end wall walk's convention unchanged.
+    end wall walk's convention unchanged, with one exception: where the
+    sheath turns back ``eta`` of a walker crossing the plane toward the
+    cathode, that share and the rest of the walker -- which walks on through
+    the openings, is turned back at the cathode and returns through the gap
+    -- coincide at the plane, and they are superposed there (fluxes summed,
+    energy flux-weighted) after the rest's gap legs are marched, so the one
+    walker walks on. Without that merge every return from the mirror would
+    split each walker in two and the legs would grow as a tree; with it, a
+    walker in the reflecting regime is a chain. The turned share walks alone
+    only where the rest does not come back to it (stopped in the gap,
+    escaping at the cathode, or out of legs), and a crossing toward the
+    mirror keeps its turned share as its own walker.
 
     A walker that has not stopped therefore bounces between the two faces.
     Each LAUNCHED walker and every rider and sheath walker it spawns share one
@@ -2146,15 +2161,81 @@ def _tail_mirror_chains(
     n_w = tail_hi - tail_lo + 1
     face_cell = {-1: 0, 1: n_w - 1}
 
+    # The gap between the cathode face and the anode plane, in window cells:
+    # the side of the plane the reflecting face is on.
+    if reflect_face is None or cull is None:
+        gap = None
+    elif reflect_face < 0:
+        gap = slice(0, cull_local)
+    else:
+        gap = slice(cull_local, n_w)
+
+    def _leg_record(leg, leg_dir, on=None):
+        """One marched leg in the chain form; ``on`` pads a sliced march."""
+        banks = (
+            leg.ionization_events,
+            leg.excitation_events,
+            leg.ionization_cost_erg_s,
+            leg.radiated_erg_s,
+            leg.plasma_heating_erg_s,
+        )
+        if on is not None:
+            padded = []
+            for bank in banks:
+                full = np.zeros(n_w)
+                full[on] = bank
+                padded.append(full)
+            banks = tuple(padded)
+        return (
+            banks,
+            float(leg.transmitted_flux),
+            float(leg.transmitted_energy_eV),
+            leg_dir,
+        )
+
     def _walk(launch, leg_dir, flux, E, armed, depth, budget, children):
-        """March one walker leg by leg until it stops, escapes or is capped."""
+        """March one walker leg by leg until it stops, escapes or is capped.
+
+        In the reflecting regime a crossing heading for the cathode splits
+        the walker: the wires' sheath turns ``eta`` of it back at the plane,
+        and the rest walks on through the openings. That rest is HELD against
+        the turned share: if the cathode turns it back, its return through
+        the gap is marched to the plane alone and the two are superposed
+        there (fluxes summed, energy flux-weighted) into the one walker that
+        walks on. Otherwise -- the rest stops in the gap, escapes at the
+        cathode or runs out of legs -- the turned share walks as a walker of
+        its own, as it would unmerged.
+        """
         legs = []
+        held = None
+        gap_return = False
         while True:
             if budget[0] <= 0:
                 ledger["cap_flux"] += flux
                 ledger["cap_eV"] += flux * E
                 break
             budget[0] -= 1
+            if gap_return:
+                # The held walker's return through the gap, cathode face to
+                # the plane, unarmed like the whole-window return it replaces.
+                leg = deposit_beam(
+                    E, flux, nn_w[gap], ne_w[gap], Te_w[gap],
+                    0 if leg_dir > 0 else gap.stop - gap.start - 1, leg_dir,
+                    dz_w[gap], **march_kwargs,
+                )
+                legs.append(_leg_record(leg, leg_dir, on=gap))
+                t_flux = float(leg.transmitted_flux)
+                t_E = float(leg.transmitted_energy_eV)
+                h_launch, h_dir, h_flux, h_E, _h_armed, _h_depth = held
+                if t_flux > 0.0:
+                    flux = h_flux + t_flux
+                    E = (h_flux * h_E + t_flux * t_E) / flux
+                else:
+                    flux, E = h_flux, h_E
+                held = None
+                gap_return = False
+                launch, leg_dir = h_launch, h_dir
+                continue
             cell = cull_local if leg_dir > 0 else cull_local - 1
             leg = deposit_beam(
                 E, flux, nn_w, ne_w, Te_w, int(launch), leg_dir, dz_w,
@@ -2167,20 +2248,7 @@ def _tail_mirror_chains(
                     ) if armed else {}
                 ),
             )
-            legs.append(
-                (
-                    (
-                        leg.ionization_events,
-                        leg.excitation_events,
-                        leg.ionization_cost_erg_s,
-                        leg.radiated_erg_s,
-                        leg.plasma_heating_erg_s,
-                    ),
-                    float(leg.transmitted_flux),
-                    float(leg.transmitted_energy_eV),
-                    leg_dir,
-                )
-            )
+            legs.append(_leg_record(leg, leg_dir))
             if armed and float(leg.anode_intercepted_erg_s) > 0.0:
                 armed = False
                 E_cross = float(leg.E_entry_eV[cell])
@@ -2207,11 +2275,15 @@ def _tail_mirror_chains(
                 else:
                     ledger["sheath_flux"] += f_cull
                     ledger["sheath_eV"] += f_cull * E_cross
-                    children.append(
-                        (cell - leg_dir, -leg_dir, f_cull, E_cross,
-                         depth + 1 < TAIL_ANODE_SHEATH_MAX_REFLECTIONS,
-                         depth + 1)
+                    turned = (
+                        cell - leg_dir, -leg_dir, f_cull, E_cross,
+                        depth + 1 < TAIL_ANODE_SHEATH_MAX_REFLECTIONS,
+                        depth + 1,
                     )
+                    if leg_dir == reflect_face:
+                        held = turned
+                    else:
+                        children.append(turned)
             t_flux = float(leg.transmitted_flux)
             t_E = float(leg.transmitted_energy_eV)
             if not t_flux > 0.0:
@@ -2226,9 +2298,13 @@ def _tail_mirror_chains(
                     t_flux * t_E
                 )
                 break
+            elif held is not None:
+                gap_return = True
             flux, E = t_flux, t_E
             launch = face_cell[leg_dir]
             leg_dir = -leg_dir
+        if held is not None:
+            children.append(held)
         return legs
 
     out = []
@@ -2938,11 +3014,17 @@ def deposit_beam(
       walkers for the anode cull on their return (see
       :func:`_tail_mirror_chains`); the cathode face keeps its own rule
       (``tail_reflect_face``, which must name the OTHER face -- one face turns
-      everything, the other turns what is below its sheath). Each launched
+      everything, the other turns what is below its sheath). Where the wires'
+      sheath turns a cathode-bound walker's ``eta`` share back at the anode
+      plane, that share rejoins the rest of the walker at the plane once the
+      cathode has turned the rest back through the gap. Each launched
       walker's tree marches at most :data:`MIRROR_MAX_LEGS` legs, the rest
       booked to ``tail_leg_cap_residual_*``, and the walker flux arriving at
       the plane is reported in ``tail_mirror_*``. ``end_loss_tail_*`` on the
       mirror side is identically 0.0.
+
+    A mirrored call raises a RuntimeError when the two residuals together
+    exceed :data:`MIRROR_RESIDUAL_MAX_FRACTION` of ``Gamma0 * E0``.
 
     Refused under a mirror, each for a stated reason: a walked tail without
     ``tail_ionization="on"`` and any population the K7b band reverts to the

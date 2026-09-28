@@ -714,7 +714,12 @@ carries more than the $e\phi_c$ it was launched with. A tail walker turns at
 the plane at unchanged energy, always, and returns as a NEW walker for the
 anode mesh: its first-crossing interception is re-armed and its sheath
 reflections count afresh. At the cathode face each walker keeps that face's
-own rule: turned back below $e\phi_c$, escaping at or above it. Nothing crosses
+own rule: turned back below $e\phi_c$, escaping at or above it. A
+cathode-bound walker whose share $\eta$ the wires' sheath turns back at the
+anode plane rejoins the rest of itself there: the rest crosses the gap, is
+turned back at the cathode and returns through the openings to the same
+plane, where the two are superposed (fluxes summed, energy flux-weighted)
+into one walker. Nothing crosses
 the plane, so the far-end transmitted power and both far-end escape rows are
 zero, and the flux and power arriving at the plane are saved per ray
 (`source_beam_mirror_primary_*`, `source_beam_mirror_tail_*`). A population
