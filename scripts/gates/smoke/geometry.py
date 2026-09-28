@@ -398,8 +398,7 @@ def _case_source_fixed_grid():
     # including the puff cell. Instead the column from the anode face to
     # source_region_length_cm is meshed at exactly source_region_dz_cm
     # regardless of nx, and the puff role follows gas_puff_z_cm. The
-    # TwinCathode layout keeps its own uniform column and reads neither
-    # source region parameter.
+    # TwinCathode layout carries the same region, mirrored onto its far end.
     #
     # The gap, the region end and the puff position are PINNED below rather
     # than inherited. They were inherited until the 2026-08-24 CAD-span gap
@@ -410,27 +409,34 @@ def _case_source_fixed_grid():
     # gap-agnostic, so it now states the round geometry its hard-coded edge
     # positions below describe.
     #
-    # (d) The TwinCathode layout takes its own branch: with both keys None the
-    # spec helper returns None for it. Both values are config defaults, so the
-    # twin base is constructed here rather than read off default_config().
+    # (d) The TwinCathode layout reads the same source region: its spec is
+    # the half column's (far_end = "mirror"), validated against the mid-plane.
+    # The twin base states the same round geometry as (a).
     resolved_params, resolved_flags = _resolved_config()
     twin_base_flags = dict(resolved_flags)
     twin_base_params = dict(
         resolved_params,
         cathode_anode_gap_cm=50.0,
-        source_region_length_cm=None,
-        source_region_dz_cm=None,
+        source_region_length_cm=100.0,
+        source_region_dz_cm=10.0,
+        gas_puff_z_cm=60.0,
     )
-    assert (
-        _source_fixed_grid_spec(
-            twin_base_params,
-            gap_length=twin_base_params["cathode_anode_gap_cm"],
-            total_length=twin_base_params["Lm"],
-            end_wall_length=twin_base_params["end_wall_length_cm"],
-            twin=True,
-        )
-        is None
+    _twin_spec_kwargs = dict(
+        gap_length=twin_base_params["cathode_anode_gap_cm"],
+        total_length=twin_base_params["Lm"],
+        end_wall_length=twin_base_params["end_wall_length_cm"],
     )
+    assert _source_fixed_grid_spec(
+        twin_base_params, twin=True, **_twin_spec_kwargs
+    ) == _source_fixed_grid_spec(
+        twin_base_params, twin=False, mirror=True, **_twin_spec_kwargs
+    ) == {
+        "cells": 5,
+        "dz_cm": 10.0,
+        "span_cm": 50.0,
+        "region_length_cm": 100.0,
+        "puff_offset": 1,
+    }
 
     srcgrid_flags = dict(resolved_flags)
 
@@ -514,8 +520,21 @@ def _case_source_fixed_grid():
     )
 
     # (c) Every misconfiguration raises loudly at construction; none falls back.
+    # Under TwinCathode the region is mirrored onto the far end, so it must
+    # stop short of the mid-plane Lm/2; this one reaches past it, rounded up
+    # to a whole number of source cells like the end wall row below.
     srcgrid_twin_params = _srcgrid_params(60)
-    srcgrid_twin_params["end_wall_length_cm"] = 100.0
+    srcgrid_twin_params["source_region_length_cm"] = float(
+        srcgrid_twin_params["cathode_anode_gap_cm"]
+        + 10.0
+        * np.ceil(
+            (
+                0.5 * resolved_params["Lm"]
+                - srcgrid_twin_params["cathode_anode_gap_cm"]
+            )
+            / 10.0
+        )
+    )
     # A source region reaching PAST the end wall block start, derived from the
     # machine rather than hardcoded (the G1 end wall is 7.8 cm, so a fixed
     # 1900 cm would now be comfortably inside the column) and rounded up to a
@@ -545,9 +564,9 @@ def _case_source_fixed_grid():
             "requires all source region parameters",
         ),
         (
-            {**twin_base_params, "source_region_dz_cm": 10.0},
+            {**twin_base_params, "source_region_dz_cm": None},
             {**twin_base_flags, "TwinCathode": True},
-            "defined only for the single-cathode layout",
+            "the TwinCathode mesh requires all source region parameters",
         ),
         (
             {**_srcgrid_params(60), "source_region_length_cm": 50.0},
@@ -585,7 +604,7 @@ def _case_source_fixed_grid():
         (
             srcgrid_twin_params,
             {**srcgrid_flags, "TwinCathode": True},
-            "single-cathode layout",
+            "strictly before the mid-plane of the TwinCathode machine",
         ),
     ):
         try:
@@ -618,10 +637,9 @@ def _case_variable_area_well_balancedness(
     resolved_geom = _resolved_geometry()
 
     # Twin cathode mirrors the source end: its cathode
-    # surface sits at z = Lm, with that plenum beyond it. It builds on its own
-    # uniform column, with both source region parameters cleared, because the
-    # fixed source region is not mirrored onto a second cathode end (the
-    # geometry refuses the pair; checked in the source-fixed-grid table).
+    # surface sits at z = Lm, with that plenum beyond it. Its fixed source
+    # region and puff cell are mirrored onto that end (the mesh identity with
+    # the half column is pinned in twin-mirror-mesh-identity).
     twin_resolved_flags = dict(twin_base_flags)
     twin_resolved_flags["TwinCathode"] = True
     twin_resolved_flags["cathode_coupling"] = False
