@@ -2040,6 +2040,97 @@ def _case_implicit_ee_sink_substep_order():
 
 
 # ----------------------------------------------------------------------
+# order-gate-envelope-fit
+# ----------------------------------------------------------------------
+@_case("order-gate-envelope-fit")
+def _case_order_gate_envelope_fit():
+    # The order gate quotes the least-squares slope of log(error) against
+    # log(dt); the triplet ratio is a screen. Pinned on synthetic error
+    # sequences whose slope is known exactly.
+    from verify_sim1d_order import (
+        DT_LAMBDA_FLAG,
+        MIN_LEVELS,
+        ORDER_SE_BOUND,
+        REF_RESOLVE_FACTOR,
+        envelope_fit,
+        pre_asymptotic_reasons,
+        triplet_screens,
+    )
+
+    # A clean power law: the slope is returned exactly, with no spread, and
+    # the triplet screen on solutions u = u* + C dt**p reads the same p.
+    dts = 1.0e-8 * 2.0 ** -np.arange(6, dtype=float)
+    clean = 3.0e-2 * (dts / dts[0]) ** 1.7
+    fit = envelope_fit(dts, clean)
+    assert abs(fit["order"] - 1.7) < 1e-12, fit
+    assert fit["se"] < 1e-12 and fit["max_resid"] < 1e-12, fit
+    assert np.allclose(fit["local"], 1.7, rtol=0.0, atol=1e-12), fit
+    assert pre_asymptotic_reasons(fit, clean, 0.0, 1.0) == []
+    exact = np.array([1.0, 2.0])
+    shape = np.array([1.0, -0.5])
+    solutions = [exact + 0.1 * (dt / dts[0]) ** 1.7 * shape for dt in dts]
+    assert np.allclose(triplet_screens(solutions), 1.7, rtol=0.0, atol=1e-9)
+
+    # Fewer than MIN_LEVELS levels is refused, not fitted.
+    try:
+        envelope_fit(dts[: MIN_LEVELS - 1], clean[: MIN_LEVELS - 1])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("envelope_fit accepted fewer than MIN_LEVELS levels")
+
+    # A phase-dependent wobble of +/-0.3 in log2 about slope 2. Over four
+    # levels the slope's standard error exceeds the bound: PRE-ASYMPTOTIC.
+    # Over nine levels the same wobble averages out -- the slope is 2 exactly
+    # (the alternation is orthogonal to log dt over an odd count) and is
+    # quoted -- while the triplet screens on the same sequence read erratically.
+    def wobbled(levels):
+        d = 1.0e-8 * 2.0 ** -np.arange(levels, dtype=float)
+        sign = (-1.0) ** np.arange(levels)
+        return d, (d / d[0]) ** 2 * 2.0 ** (0.3 * sign)
+
+    d4, e4 = wobbled(4)
+    fit4 = envelope_fit(d4, e4)
+    assert fit4["se"] > ORDER_SE_BOUND, fit4
+    reasons4 = pre_asymptotic_reasons(fit4, e4, 0.0, 1.0)
+    assert len(reasons4) == 1 and "standard error" in reasons4[0], reasons4
+    d9, e9 = wobbled(9)
+    fit9 = envelope_fit(d9, e9)
+    assert abs(fit9["order"] - 2.0) < 1e-12, fit9
+    assert fit9["se"] < ORDER_SE_BOUND, fit9
+    assert pre_asymptotic_reasons(fit9, e9, 0.0, 1.0) == []
+    screens9 = triplet_screens([np.array([e]) for e in e9])
+    assert max(screens9) - min(screens9) > 1.0, screens9
+
+    # The smallest level error must clear the reference's error bound by
+    # REF_RESOLVE_FACTOR; below it the envelope is PRE-ASYMPTOTIC.
+    floor = float(np.min(clean))
+    unresolved = pre_asymptotic_reasons(
+        fit, clean, 2.0 * floor / REF_RESOLVE_FACTOR, 1.0
+    )
+    assert len(unresolved) == 1 and "not resolved" in unresolved[0], unresolved
+    assert pre_asymptotic_reasons(
+        fit, clean, 0.5 * floor / REF_RESOLVE_FACTOR, 1.0
+    ) == []
+
+    # An unresolved stiff mode, and a level with no error, are PRE-ASYMPTOTIC.
+    stiff = pre_asymptotic_reasons(fit, clean, 0.0, 1.5 * DT_LAMBDA_FLAG)
+    assert len(stiff) == 1 and "dt*lambda_max" in stiff[0], stiff
+    zeroed = clean.copy()
+    zeroed[-1] = 0.0
+    fit0 = envelope_fit(dts, zeroed)
+    assert not np.isfinite(fit0["order"]), fit0
+    assert pre_asymptotic_reasons(fit0, zeroed, 0.0, 1.0), fit0
+    print(
+        "  order-gate envelope: clean slope %.2f; wobbled slope %.2f +/- %.2f "
+        "(4 levels, PRE-ASYMPTOTIC), %.2f +/- %.2f (9 levels, quoted); "
+        "triplet screens %s"
+        % (fit["order"], fit4["order"], fit4["se"], fit9["order"], fit9["se"],
+           ", ".join(f"{s:.2f}" for s in screens9))
+    )
+
+
+# ----------------------------------------------------------------------
 # dt-not-bound-by-anode-row
 # ----------------------------------------------------------------------
 @_case("dt-not-bound-by-anode-row")

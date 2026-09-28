@@ -18,76 +18,110 @@ not:
   which would make a run's result depend on its step history and break
   self-convergence.
 
-Order is estimated from a grid triplet (Richardson), which needs no reference
-solution:
+THE QUOTED ORDER IS THE SLOPE OF AN ERROR ENVELOPE. Each scheme runs at
+``--levels`` (at least four) step counts ``N, 2N, 4N, ...``; each level's
+error, per field, is its relative L-inf distance from a converged reference;
+and the quoted order is the least-squares slope of ``log(error)`` against
+``log(dt)`` over all the levels, printed with the slope's standard error and
+the largest residual about the fitted line (:func:`envelope_fit`).
 
-    order = log2( ||u_N - u_2N|| / ||u_2N - u_4N|| )
+The reference is the shipped second-order package (``tr_bdf2``, Picard 4,
+Strang) at the finest level's dt divided by ``--ref-factor`` (default 16).
+Every scheme, splitting and Picard count the levels measure converges to the
+same semi-discrete solution, so one reference serves them all. At its nominal
+second order the reference's error is 16**-2 = 1/256 of a comparable
+second-order scheme's finest-level error, and smaller still against a
+first-order one. That margin is CHECKED on every run: a second reference at
+half the reference dt gives ``d = |ref - check|``, and for any reference order
+``q >= 1`` the reference's own error is ``d / (1 - 2**-q) <= 2d``, the bound
+printed per field.
 
-A reference-based estimate against a much finer run is reported alongside it as
-a cross-check; the two should agree.
+A Richardson triplet ratio, ``log2(|u_N - u_2N| / |u_2N - u_4N|)``, is still
+printed for every consecutive level triple, labelled a SCREEN, and is never the
+quoted order. It needs no reference, but on a state whose error is not smooth
+in dt -- a limited electron heat flux whose gradient changes sign inside the
+window, where the step that crosses the change carries a phase-dependent
+O(dt**2) residual -- a triplet reads erratically at ANY dt (0.88 on one such
+state) while the envelope against a converged reference keeps a clean slope
+(1.96 over eight halvings). A screen that disagrees with its envelope says to
+look; it never replaces the envelope.
+
+PRE-ASYMPTOTIC (:func:`pre_asymptotic_reasons`). A field's envelope is
+labelled PRE-ASYMPTOTIC, its slope printed but NOT QUOTED, when any of:
+
+1. an error is zero or non-finite at some level (no slope to fit);
+2. the smallest level error is below ``REF_RESOLVE_FACTOR`` (10) times the
+   reference's error bound -- the level is not resolved above the reference,
+   and the slope would read the reference;
+3. the slope's standard error exceeds ``ORDER_SE_BOUND`` (0.10) -- the errors
+   do not lie on one power law over the levels, whether from curvature or
+   from a wobble the levels taken have not averaged down; a two-sigma band of
+   +/- 0.2 is the widest that still separates first from second order;
+4. the coarsest ``dt * lambda_max`` exceeds ``DT_LAMBDA_FLAG`` (4) -- see
+   below.
+
+The bounds are set from the method, not from any case's reading. Criterion 3
+does not catch every departure from one power law: a local slope that drifts
+monotonically across the levels can fit with a small standard error. The
+successive-level ("local") slopes are printed beside every fit so that drift
+is visible.
 
 RESOLUTION IS A PRECONDITION, not a detail. The seeded state's fastest
-conduction mode has lambda_max ~ 1.5e8 s^-1, so at the harness's old default of
-8 base-steps the coarsest step ran at dt*lambda_max ~ 18. Nothing about a
-scheme's TRUNCATION error is observable there: a Richardson triplet at large
-|z| measures the substep's stability function instead, and the two are not the
-same ranking. Crank-Nicolson is the trap -- its Strang equilibrium error is
-exactly -z^2/16, a clean power law, so it returns 2.00 at EVERY |z| however
-unresolved, while the L-stable schemes beside it read ~1. A table built there
-says tr_bdf2 is not second order, and that reading is an artefact of the
-sampling, not a property of the scheme.
+conduction mode has lambda_max ~ 1.5e8 s^-1, so at 8 base-steps the coarsest
+step would run at dt*lambda_max ~ 18. Nothing about a scheme's TRUNCATION
+error is observable there: the error at large |z| measures the substep's
+stability function instead, and the two are not the same ranking.
+Crank-Nicolson is the trap -- its Strang equilibrium error is exactly -z^2/16,
+a clean power law, so it returns 2.00 at EVERY |z| however unresolved, while
+the L-stable schemes beside it read ~1. So ``--base-steps`` DEFAULTS to a
+value derived from the seed's own conduction operator (see
+:func:`resolved_base_steps`), chosen so the coarsest dt satisfies ``dt *
+lambda_max <= DT_LAMBDA_RESOLVED``, and every level's ``dt * lambda_max`` is
+printed.
 
-So ``--base-steps`` now DEFAULTS to a value derived from the seed's own
-conduction operator (see :func:`resolved_base_steps`), chosen so the coarsest
-dt satisfies ``dt * lambda_max <= DT_LAMBDA_RESOLVED``. Every reading is
-printed with its ``dt * lambda_max``, a triplet coarser than
-``DT_LAMBDA_FLAG`` is flagged PRE-ASYMPTOTIC, and the closing line reports
-both preconditions -- floors inert AND the stiff mode resolved.
+Measured at 72 cells, t_end = 1e-6 s, levels 128 / 256 / 512 / 1024 steps
+(dt*lambda_max = 1.15 / 0.58 / 0.29 / 0.14), reference 16384 steps, as the
+envelope order, the range over the five fields n, nn, u, Te, Ti:
 
-Measured at 72 cells, t_end = 1e-6 s, in the RESOLVED regime the default now
-selects (base-steps 128, dt*lambda_max = 1.15 / 0.58 / 0.29), as the
-reference-free triplet order:
+    picard  splitting   backward_euler  shifted     crank_nicolson  tr_bdf2
+    ------  ---------   --------------  ----------  --------------  ----------
+      0       lie        1.00           1.00        1.00            0.94-1.00
+      4       lie        1.00           1.00        0.98-1.00       0.90-1.00
+      0       strang     0.98-1.03      0.89-1.21   1.40-1.60 (*)   1.42-1.63 (*)
+      4       strang     0.97-1.04      0.82-1.20   2.00            1.99-2.00
 
-    picard  splitting   backward_euler  shifted  crank_nicolson  tr_bdf2
-    ------  ---------   --------------  -------  --------------  -------
-      0       lie            0.99         1.00        1.00         0.95
-      4       lie            0.99         1.00        1.00         0.95
-      0       strang         0.82         1.45        1.79         1.74
-      4       strang         0.81         1.45        2.00         1.98
+    (*) Te PRE-ASYMPTOTIC (slope standard error 0.18 and 0.14): not quoted.
 
 Second order needs all three of a second-order substep scheme, a non-frozen
 conductivity, and Strang splitting. Each of the first-order terms caps the step
-on its own, so knocking out only one changes nothing: --picard alone is still
-capped by Lie splitting, which is why every Lie row sits at ~1.0 whatever the
-substep scheme is, and --splitting strang alone is still capped by the frozen
-conductivity, which is the 1.74-1.79 of the picard-0 Strang row.
-
+on its own: every Lie row sits at ~1.0 whatever the substep scheme is, and on
+the picard-0 Strang row the frozen conductivity caps crank_nicolson and
+tr_bdf2 -- their local slopes fall across the levels (about 1.6 to 1.25 on n)
+toward first order, so the 1.4-1.6 there is a crossover band, not an order.
 The bottom row is the shipped production package, and both second-order
-L-stable-or-symmetric substeps reach second order in it: crank_nicolson 2.00
-(2.00 -> 2.02 against the reference) and tr_bdf2 1.98 (1.99 -> 2.02). tr_bdf2
-is the shipped choice because it is the only one that is second-order AND
-L-stable.
+substeps reach second order in it; tr_bdf2 is the shipped choice because it is
+the only one that is second-order AND L-stable.
 
 backward_euler is the negative control: theta = 1 cannot be second-order at any
 dt, so if it reaches 2.0 the harness is wrong rather than good. shifted is
-theta = 0.6, first-order for the same reason, and its 1.45 on the Strang rows
-is the same band effect described above rather than an order claim -- its
-leading first-order coefficient is (theta - 1/2) = 0.1 of backward Euler's, so
-the second-order term still contributes at these dt. Read shifted as a scale
-check.
+theta = 0.6, first-order for the same reason; on the Strang rows its local
+slopes drift toward 1 across the levels (its leading first-order coefficient
+is (theta - 1/2) = 0.1 of backward Euler's, so the second-order term still
+contributes at these dt). Read shifted as a scale check.
 
-EXIT CODE. 0 when BOTH preconditions hold -- floors inert in every run and the
-stiffest conduction mode resolved at every dt of the triplet -- and 1 when
-either fails, in which case the orders printed are not measurements and the
-closing lines say which precondition failed. The exit code gates the
-PRECONDITIONS only: which order value counts as passing depends on the scheme,
-the splitting and the Picard count being asked about, and is the caller's
-question. Whether the numbers mean anything at all is not.
+EXIT CODE. 0 when ALL THREE preconditions hold -- floors inert in every run
+(the reference included), the stiffest conduction mode resolved at every
+level, and no envelope PRE-ASYMPTOTIC -- and 1 when any fails; the closing
+lines say which. The exit code gates the PRECONDITIONS only: which order value
+counts as passing depends on the scheme, the splitting and the Picard count
+being asked about, and is the caller's question. Whether the numbers mean
+anything at all is not.
 
 Usage:
     python scripts/gates/verify_sim1d_order.py
     python scripts/gates/verify_sim1d_order.py --picard 4 --splitting strang
     python scripts/gates/verify_sim1d_order.py --schemes crank_nicolson tr_bdf2
+    python scripts/gates/verify_sim1d_order.py --levels 6 --ref-factor 32
     python scripts/gates/verify_sim1d_order.py --t-end 2e-6 --base-steps 8
 """
 
