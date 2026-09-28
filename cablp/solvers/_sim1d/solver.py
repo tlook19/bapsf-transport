@@ -2354,7 +2354,24 @@ class LAPDSim1D:
             # plasma-active window's mirror face; a geometry where the two do
             # not coincide is refused here rather than on the first solve.
             # None (no mirror) on every other layout.
-            tail_mirror_face(self._geometry)
+            if tail_mirror_face(self._geometry) is not None:
+                # The CSDA primary bounces between the cathode sheath and the
+                # plane, and the anode mesh takes eta of it on every return:
+                # without a mesh that absorbs, its legs run to the cap.
+                _anode_faces = np.asarray(
+                    getattr(self._geometry, "anode_face_indices", ()),
+                    dtype=int,
+                )
+                _eta = float(self._input_dict.get("eta", 0.0))
+                if _anode_faces.size == 0 or not _eta > 0.0:
+                    raise ValueError(
+                        "far_end='mirror' with cathode_coupling marches the "
+                        "CSDA primary back and forth between the cathode "
+                        "sheath and the mirror plane, and the leg series "
+                        "converges only while the anode mesh absorbs: it "
+                        "needs an anode face and eta > 0 (got eta="
+                        f"{_eta!r}, {_anode_faces.size} anode face(s))"
+                    )
         # --- A2a: the anode-mesh cull of the QL tail, and its rider --------
         # Duplicated from the deposition module's own guards for the standing
         # reason: a misconfiguration must fail at construction, not on the

@@ -3364,6 +3364,22 @@ def _mirror_march_kwargs():
     )
 
 
+def _mirror_residual_bound_lifted():
+    """Lift the run-time mirror residual bound for a synthetic ray.
+
+    The mirror cases below that exercise a configuration where nothing
+    removes the walkers (a reflecting cathode and no absorbing anode) do so
+    to test a per-face rule or the capped branch itself, which
+    ``MIRROR_RESIDUAL_MAX_FRACTION`` refuses on a solver-facing call; the
+    bound tests the result and changes no float the march produces.
+    """
+    from unittest import mock
+
+    return mock.patch.object(
+        _beam_deposition_mod, "MIRROR_RESIDUAL_MAX_FRACTION", math.inf
+    )
+
+
 # --------------------------------------------------------------------
 # mirror-tail-per-face-rule
 # --------------------------------------------------------------------
@@ -3385,9 +3401,12 @@ def _case_mirror_tail_per_face_rule():
     nn, ne, Te, dz = _mirror_column(cells)
     args = (200.0, 1.0e20, nn, ne, Te, 0, 1, dz)
     reflect = dict(tail_reflect_face=-1, tail_reflect_threshold_eV=200.0)
-    turned = _deposit_beam_ray(
-        *args, **_mirror_mg_kwargs(cells, mirror_face=1, **reflect)
-    )
+    # Nothing removes these walkers (both faces turn them), so the residual
+    # bound is lifted for this one call; mirror-residual-bound-raises owns it.
+    with _mirror_residual_bound_lifted():
+        turned = _deposit_beam_ray(
+            *args, **_mirror_mg_kwargs(cells, mirror_face=1, **reflect)
+        )
     assert turned.tail_power_erg_s > 0.0
     assert turned.tail_mirror_erg_s > 0.0
     assert turned.tail_mirror_flux_per_s > 0.0
@@ -3596,10 +3615,13 @@ def _case_mirror_tail_leg_cap_residual():
         tail_anode_cross_index=5, tail_anode_eta=_MIRROR_ETA,
         tail_anode_phi_eV=1.0e4, plateau_groups=2,
     )
-    res = _deposit_beam_ray(
-        200.0, 1.0e20, nn, ne, Te, 0, 1, dz,
-        **_mirror_mg_kwargs(cells, mirror_face=1, **trap),
-    )
+    # The capped branch itself: the residual bound is lifted so the budget's
+    # booking can be read (mirror-residual-bound-raises owns the bound).
+    with _mirror_residual_bound_lifted():
+        res = _deposit_beam_ray(
+            200.0, 1.0e20, nn, ne, Te, 0, 1, dz,
+            **_mirror_mg_kwargs(cells, mirror_face=1, **trap),
+        )
 
     def tail_gap(r):
         bank = r.tail_power_erg_s + r.plateau_wave_power_erg_s
@@ -3864,4 +3886,212 @@ def _case_mirror_cathode_coupling_constructs():
     assert not any(
         "mirror" in name or "leg_cap" in name
         for name in wall.cathode_diagnostics
+    )
+
+
+# --------------------------------------------------------------------
+# mirror-primary-needs-absorbing-anode
+# --------------------------------------------------------------------
+@_case("mirror-primary-needs-absorbing-anode")
+def _case_mirror_primary_needs_absorbing_anode():
+    """A mirror with the circuit on is refused without a mesh that absorbs.
+
+    Under ``far_end = "mirror"`` with ``cathode_coupling`` the CSDA primary
+    bounces between the cathode sheath and the plane, and the leg series
+    converges only because the anode mesh takes ``eta`` of it on every
+    return. Both ways of losing that are refused at construction, each
+    exercised: ``eta = 0`` and a geometry with no anode face.
+    NEGATIVE CONTROL: the same settings construct where no primary is walked
+    at a mirror -- ``eta = 0`` on the end wall, and ``eta = 0`` at a mirror
+    with the circuit off -- and the mirror with the circuit on and the
+    shipped ``eta`` constructs, so the refusal is the combination's.
+    """
+    from unittest import mock
+
+    from cablp.solvers._sim1d import solver as _solver_mod
+
+    needle = "converges only while the anode mesh absorbs"
+    params, flags = _mirror_circuit_config("mirror")
+    assert float(params["eta"]) > 0.0
+    try:
+        LAPDSim1D(dict(params, eta=0.0), flags)
+    except ValueError as exc:
+        assert needle in str(exc), str(exc)
+        assert "eta=0.0" in str(exc), str(exc)
+    else:
+        raise AssertionError("eta = 0 ACCEPTED at a mirror with the circuit")
+    real_build = _solver_mod.build_geometry
+
+    def no_anode(*args, **kwargs):
+        geometry = real_build(*args, **kwargs)
+        return dataclasses.replace(
+            geometry, anode_face_indices=np.zeros(0, dtype=int)
+        )
+
+    with mock.patch.object(_solver_mod, "build_geometry", no_anode):
+        try:
+            LAPDSim1D(params, flags)
+        except ValueError as exc:
+            assert needle in str(exc), str(exc)
+            assert "0 anode face(s)" in str(exc), str(exc)
+        else:
+            raise AssertionError("no anode face ACCEPTED at a mirror")
+    # NEGATIVE CONTROL.
+    LAPDSim1D(params, flags)
+    wall_params, wall_flags = _mirror_circuit_config("end_wall")
+    LAPDSim1D(dict(wall_params, eta=0.0), wall_flags)
+    LAPDSim1D(dict(params, eta=0.0), dict(flags, cathode_coupling=False))
+
+
+# --------------------------------------------------------------------
+# mirror-residual-bound-raises
+# --------------------------------------------------------------------
+@_case("mirror-residual-bound-raises")
+def _case_mirror_residual_bound_raises():
+    """A mirrored ray whose leg budget leaves power unmarched is refused.
+
+    ``deposit_beam(mirror_face=...)`` raises when the tail leg-cap residual
+    plus the primary's residual exceeds ``MIRROR_RESIDUAL_MAX_FRACTION`` of
+    the ray's launched power ``Gamma0 * E0``. Both components are exercised:
+    (a) a primary bouncing on a near-vacuum column behind a thin mesh
+    (``eta = 0.05``: ``0.95**33`` of it is left after 64 legs), and
+    (b) walkers between a reflecting cathode and the mirror with no anode
+    to remove them. Each raises a RuntimeError naming the bound.
+    NEGATIVE CONTROL: with the bound lifted -- the pre-bound behaviour -- the
+    same two calls return and book a residual above the bound, so the
+    refusal is the bound's; and the primary behind the shipped mesh
+    (``eta = 0.358``) converges under the bound and returns.
+    """
+    cells = 30
+    dz = np.linspace(8.0, 12.0, cells)
+    thin = (np.zeros(cells), np.full(cells, 1.0e2), np.full(cells, 1.0))
+    window = dict(tail_walk_window=(0, cells - 1), mirror_face=1)
+    bound = _beam_deposition_mod.MIRROR_RESIDUAL_MAX_FRACTION
+    assert bound == 1.0e-4, bound
+    primary = (
+        (150.0, 1.0e18, *thin, 0, 1, dz),
+        dict(window, anode_cross_index=5, anode_eta=0.05),
+    )
+    walker_cells = 24
+    nn, ne, Te, wdz = _mirror_column(walker_cells)
+    walkers = (
+        (200.0, 1.0e20, nn, ne, Te, 0, 1, wdz),
+        _mirror_mg_kwargs(
+            walker_cells, mirror_face=1, tail_reflect_face=-1,
+            tail_reflect_threshold_eV=200.0,
+        ),
+    )
+    shares = {}
+    for label, (args, kwargs), row in (
+        ("primary", primary, "primary_mirror_residual_erg_s"),
+        ("walkers", walkers, "tail_leg_cap_residual_erg_s"),
+    ):
+        try:
+            _deposit_beam_ray(*args, **kwargs)
+        except RuntimeError as exc:
+            assert "MIRROR_RESIDUAL_MAX_FRACTION" in str(exc), str(exc)
+        else:
+            raise AssertionError(f"{label}: an unconverged mirror ray RETURNED")
+        # NEGATIVE CONTROL: the pre-bound behaviour.
+        with _mirror_residual_bound_lifted():
+            res = _deposit_beam_ray(*args, **kwargs)
+        share = getattr(res, row) / (args[0] * args[1] * ev_to_erg)
+        assert share > bound, (label, share)
+        shares[label] = share
+    converged = _deposit_beam_ray(
+        150.0, 1.0e18, *thin, 0, 1, dz,
+        **dict(window, anode_cross_index=5, anode_eta=_MIRROR_ETA),
+    )
+    conv_share = converged.primary_mirror_residual_erg_s / (
+        150.0 * 1.0e18 * ev_to_erg
+    )
+    assert 0.0 < conv_share < bound, conv_share
+    print(
+        "mirror-residual-bound-raises: refused at residual shares "
+        + ", ".join(f"{k}={v:.3e}" for k, v in shares.items())
+        + f"; eta=0.358 primary returns at {conv_share:.3e}"
+    )
+
+
+# --------------------------------------------------------------------
+# mirror-tail-sheath-share-merged
+# --------------------------------------------------------------------
+@_case("mirror-tail-sheath-share-merged")
+def _case_mirror_tail_sheath_share_merged():
+    """The sheath-turned share rejoins its parent at the anode plane.
+
+    In the reflecting regime (the wires' sheath repels every walker) a walker
+    crossing the anode plane toward the cathode splits: the sheath turns
+    ``eta`` of it back at the plane and the rest walks on to the cathode,
+    which turns it back through the gap. The two are superposed at the plane
+    (fluxes summed, energy flux-weighted) into ONE walker, so each launched
+    walker is a single chain and not a tree. On a column with no neutrals and
+    almost no plasma nothing is lost: each launched walker marches one chain, the
+    gap return carries ``(1 - eta)`` of the flux to the plane, the merged
+    walker reaches the mirror carrying the whole launched flux (1e-12) at the
+    launch energy (1e-9, the column's Coulomb loss), and the leg cap books the
+    whole launch.
+    NEGATIVE CONTROL: a crossing toward the MIRROR (a gap-born walker) has no
+    parent coming back through the same plane, so its turned share is still
+    a walker of its own -- that launch holds a second chain entry.
+    """
+    cells = 20
+    nn = np.zeros(cells)
+    ne = np.full(cells, 1.0e2)
+    Te = np.full(cells, 1.0)
+    dz = np.full(cells, 10.0)
+    f0 = 1.0e18
+    E0 = 100.0
+    cull = (8, _MIRROR_ETA, 0.0, 0.0, 1.0e4)  # the sheath repels at 1e4 eV
+    flux = np.zeros(cells)
+    flux[12] = f0
+    layout, ledger = _beam_deposition_mod._tail_mirror_chains(
+        [(E0, flux, flux.copy(), True)], nn, ne, Te, dz,
+        _mirror_march_kwargs(), 0, cells - 1, -1, 1.0e9, 1, cull=cull,
+    )
+    # One marched chain per launched walker. A turned share still held when
+    # the leg budget runs out is released and capped at once, which leaves an
+    # empty chain and no legs.
+    chains = [chain for chain in layout[0] if chain]
+    assert len(chains) == 2, [len(c) for c in layout[0]]
+    assert len(layout[0]) <= 4, [len(c) for c in layout[0]]
+    assert ledger["sheath_flux"] > 0.0
+    merges = 0
+    for chain in chains:
+        dirs = [leg[3] for leg in chain]
+        for k in range(len(chain) - 2):
+            # crossing leg to the cathode face, the gap return, then the
+            # merged walker from the plane to the mirror
+            if dirs[k] == -1 and dirs[k + 1] == 1 and dirs[k + 2] == 1:
+                merges += 1
+                assert math.isclose(
+                    chain[k + 1][1], (1.0 - _MIRROR_ETA) * f0, rel_tol=1e-12
+                ), (chain[k + 1][1], f0)
+                gap_banks = np.concatenate(chain[k + 1][0])
+                assert np.all(gap_banks.reshape(5, cells)[:, 8:] == 0.0)
+                assert math.isclose(chain[k + 2][1], f0, rel_tol=1e-12), (
+                    chain[k + 2][1], f0
+                )
+                # The column's Coulomb loss is ~1e-11 of E per leg here.
+                assert math.isclose(chain[k + 2][2], E0, rel_tol=1e-9)
+    assert merges >= 2, merges
+    assert math.isclose(ledger["cap_flux"], 2.0 * f0, rel_tol=1e-12), (
+        ledger["cap_flux"]
+    )
+    assert ledger["escape_low_eV"] == 0.0 and ledger["escape_high_eV"] == 0.0
+    # NEGATIVE CONTROL: a gap-born walker heading for the mirror.
+    gap_flux = np.zeros(cells)
+    gap_flux[4] = f0
+    control, _ledger = _beam_deposition_mod._tail_mirror_chains(
+        [(E0, gap_flux, None, True)], nn, ne, Te, dz,
+        _mirror_march_kwargs(), 0, cells - 1, -1, 1.0e9, 1, cull=cull,
+    )
+    # The launch holds its own chain and the turned share's (which the shared
+    # budget, spent by the parent's bounces, caps at once).
+    assert len(control[0]) == 2, [len(c) for c in control[0]]
+    assert len(control[0][0]) == _beam_deposition_mod.MIRROR_MAX_LEGS
+    print(
+        f"mirror-tail-sheath-share-merged: {merges} merges in "
+        f"{sum(len(c) for c in chains)} legs on two chains; the gap-born "
+        f"control holds {len(control[0])} chain entries"
     )

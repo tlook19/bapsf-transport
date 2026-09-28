@@ -115,12 +115,21 @@ alternate between the plane and the cathode face until the population stops;
 a walker tree (a launched walker and every rider and sheath walker it spawns)
 and the primary each march at most `MIRROR_MAX_LEGS` = 64 legs, and the flux
 and power a leg the budget cannot pay for would have carried are booked to the
-leg-cap residual rows. While the anode mesh absorbs, the budget converges
+leg-cap residual rows. The rows are diagnostics, not a sink: a call whose tail
+and primary residuals together exceed `MIRROR_RESIDUAL_MAX_FRACTION` =
+$10^{-4}$ of the ray's launched power $\Gamma_0E_0$ raises. While the anode mesh absorbs, the budget converges
 geometrically (measured on breakdown rays at the 1000 V cathode ceiling: at
 most $1.1\times10^{-7}$ of the launched tail power left at 64 legs, 1-2 %
 at 16); where the anode sheath repels every walker nothing absorbs them and
-no budget bounds the residual (70 % at 64 legs, 60 % at 4096), which is why
-the solver refuses the walked tail with the circuit at a mirror. Each leg is a
+the series converges only by their thermalizing. There the wire sheath turns
+$\eta$ of each cathode-bound walker back at the anode plane while the rest
+crosses the gap, is turned at the cathode and returns; the two coincide at the
+plane and are superposed there (fluxes summed, energy flux-weighted) after the
+rest's gap leg, so a walker stays one chain instead of splitting into a tree
+on every return from the mirror. On the two recorded breakdown rays of that
+regime the residual is then 10-46 % at 64 legs, 0.2-6 % at 256 and zero at
+1024 (every walker stopped); the cap does not bound that regime at 64 legs,
+which is why the solver refuses the walked tail with the circuit at a mirror. Each leg is a
 `deposit_beam` march and takes the compiled CSDA kernel whenever it is loaded,
 so the mirror branch adds no kernel code; the batched lane march is not
 offered mirror chains, which bounce an unbounded number of times. The beam

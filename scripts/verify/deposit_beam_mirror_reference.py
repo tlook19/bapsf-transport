@@ -3,8 +3,9 @@
 The corpus ``scripts/data/deposit_beam_mirror_reference.npz`` pins the CSDA
 module's MIRROR branch -- ``deposit_beam(mirror_face=...)`` turning the
 primary and the tail walkers round at the mirror plane, the mirror chains of
-``_tail_mirror_chains`` (the re-armed anode cull, the wire sheath, the shared
-leg budget and its booked residual), the returning primary's hand-off of its
+``_tail_mirror_chains`` (the re-armed anode cull, the wire sheath and the
+merge of its turned share with its parent at the anode plane, the shared leg
+budget and its booked residual), the returning primary's hand-off of its
 anomalous drag (``anomalous_bank_eV``), and the beam smoothing's fold about
 the mirror face -- at raw float64, so the branch is pinned by data rather than
 by a second implementation of it. It is a SEPARATE corpus from
@@ -56,7 +57,8 @@ smoke suite's compiled-equivalence case compares the two paths on these arms
 directly. ``--impl perturbed`` is the NEGATIVE CONTROL: it moves the launch
 energy of every leg the mirror branch marches (every ``deposit_beam`` call
 made without a mirror face) and the smoothing width by one ulp and nothing
-else; every arm must then report a non-zero count and the script exits 1.
+else; every arm must then report a non-zero count. The control exits 0 when
+every arm moved (the control passed) and 1 when an arm did not.
 ``--capture`` rewrites the corpus and is a recapture-class event.
 """
 
@@ -190,12 +192,23 @@ def _smoothing_arm(sigma):
 
 
 def _replay(sigma=50.0):
-    """Replay every arm; return ``{key: array}`` in the corpus layout."""
+    """Replay every arm; return ``{key: array}`` in the corpus layout.
+
+    The run-time residual bound (``MIRROR_RESIDUAL_MAX_FRACTION``) is lifted
+    for the ray arms: the arms whose walkers nothing removes exist to pin the
+    capped branch and its booked residual, which a solver-facing call refuses.
+    The bound tests the result; it changes no float the march produces.
+    """
     out = {}
-    for name, (args, kwargs) in _ray_arms().items():
-        res = bd.deposit_beam(*args, **kwargs)
-        for field, value in _result_arrays(res).items():
-            out[f"{name}/{field}"] = value
+    bound = bd.MIRROR_RESIDUAL_MAX_FRACTION
+    bd.MIRROR_RESIDUAL_MAX_FRACTION = float("inf")
+    try:
+        for name, (args, kwargs) in _ray_arms().items():
+            res = bd.deposit_beam(*args, **kwargs)
+            for field, value in _result_arrays(res).items():
+                out[f"{name}/{field}"] = value
+    finally:
+        bd.MIRROR_RESIDUAL_MAX_FRACTION = bound
     for key, value in _chains_arm().items():
         out[f"chains_rearm/{key}"] = value
     for key, value in _smoothing_arm(sigma).items():
@@ -275,7 +288,7 @@ def verify(path, impl="live"):
             "negative control: every arm differs"
             if ok else "NEGATIVE CONTROL FAILED: an arm did not move"
         )
-        return 1
+        return 0 if ok else 1
     return 0 if total_diff == 0 else 1
 
 

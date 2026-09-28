@@ -39,8 +39,9 @@ Usage (from the repo root, PYTHONPATH set to the repo root)::
 array -- float64 bit patterns compared as integers, so a one-ulp move is a
 difference. The bar is zero. ``--impl perturbed`` is the NEGATIVE CONTROL: it
 moves the last value of every ghost density the march receives by one ulp and
-nothing else; every arm must then report a non-zero count and the script
-exits 1. ``--capture`` rewrites the corpus and is a recapture-class event.
+nothing else; every arm must then report a non-zero count. The control
+exits 0 when every arm moved (the control passed) and 1 when an arm did not.
+``--capture`` rewrites the corpus and is a recapture-class event.
 """
 
 import argparse
@@ -221,7 +222,7 @@ def verify(path, impl="live"):
             "negative control: every arm differs"
             if ok else "NEGATIVE CONTROL FAILED: an arm did not move"
         )
-        return 1
+        return 0 if ok else 1
     return 0 if total_diff == 0 else 1
 
 

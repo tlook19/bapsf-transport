@@ -714,7 +714,12 @@ carries more than the $e\phi_c$ it was launched with. A tail walker turns at
 the plane at unchanged energy, always, and returns as a NEW walker for the
 anode mesh: its first-crossing interception is re-armed and its sheath
 reflections count afresh. At the cathode face each walker keeps that face's
-own rule: turned back below $e\phi_c$, escaping at or above it. Nothing crosses
+own rule: turned back below $e\phi_c$, escaping at or above it. A
+cathode-bound walker whose share $\eta$ the wires' sheath turns back at the
+anode plane rejoins the rest of itself there: the rest crosses the gap, is
+turned back at the cathode and returns through the openings to the same
+plane, where the two are superposed (fluxes summed, energy flux-weighted)
+into one walker. Nothing crosses
 the plane, so the far-end transmitted power and both far-end escape rows are
 zero, and the flux and power arriving at the plane are saved per ray
 (`source_beam_mirror_primary_*`, `source_beam_mirror_tail_*`). A population
@@ -722,7 +727,10 @@ that does not stop bounces between the two faces; each walker together with
 everything it spawns, and the primary, march at most a fixed number of legs
 (`MIRROR_MAX_LEGS`), and what they still carry then is booked to the leg-cap
 residual rows (`source_beam_mirror_primary_residual_*`,
-`source_beam_tail_leg_cap_residual_*`) and leaves the ray's ledger there.
+`source_beam_tail_leg_cap_residual_*`) and leaves the ray's ledger there;
+a ray that would leave more than $10^{-4}$ of its launched power there is
+refused at run time, and the two residual rows count in the ignition
+monitor's beam end-loss total.
 Under a mirror the per-ray identity is therefore
 
 $$\Gamma_0E_0=\text{heating}+\text{radiated}+\text{cost}+\text{anode-intercepted}+P_\text{tail,cathode}+P_\text{residual},$$
@@ -730,7 +738,9 @@ $$\Gamma_0E_0=\text{heating}+\text{radiated}+\text{cost}+\text{anode-intercepted
 $P_\text{tail,cathode}$ the tail escaping at the cathode face. The series
 converges only while the anode mesh absorbs; where its sheath repels every
 walker nothing removes them, so the walked plateau tail is refused together
-with the cathode circuit at a mirror (see Geometry and state). The
+with the cathode circuit at a mirror (see Geometry and state), and a mirror
+with the cathode circuit on and no anode face or $\eta=0$ is refused at
+construction, since nothing then removes the returning primary either. The
 beam-smoothing Gaussian is folded about the plane as it is about the cathode
 face, so the smoothed deposit is the two-source machine's on the half.
 
