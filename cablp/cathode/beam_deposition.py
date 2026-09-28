@@ -742,8 +742,9 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # (see _tail_mirror_chains), the residual is 0.61 and 0.83 at 16 legs, 0.098
 # and 0.46 at 64, 1.8e-3 and 5.6e-2 at 256, and 0 at 1024 (every walker
 # stopped); without the merge the split walkers grew as a tree and kept 70-89 %
-# at 64 legs and 60 % at 4096. The cap therefore does not bound that regime at
-# 64 legs, and the solver refuses the walked tail at a mirror for that reason.
+# at 64 legs and 60-87 % at 4096. The cap therefore does not bound that regime
+# at 64 legs: a ray in it raises the run-time residual bound below rather than
+# booking the residual.
 MIRROR_MAX_LEGS = 64
 
 # The largest share of a mirrored ray's launched power (``Gamma0 * E0``) the
@@ -2592,6 +2593,15 @@ class BeamDepositionResult:
                           flux. It LEAVES the ray's ledger here (booked, never
                           dropped), enters no RHS row, and closes the tail
                           identity under a mirror beside the end ledger.
+    tail_gap_born_flux_per_s: the tail WALKER flux [1/s] launched in cells on
+                          the cathode side of the anode plane (the cells the
+                          ray crosses before ``anode_cross_index``), in both
+                          directions and summed over the launched populations:
+                          the flux the anomalous drag re-launched from the
+                          primary before it reached the plane. 0.0 without
+                          ``anode_cross_index`` and whenever no tail is
+                          walked. A particle-count instrument read by the
+                          circuit's anode booking; it enters no bank.
     E_entry_eV          : diagnostic: primary energy entering each cell [eV]
                           (0 for cells the ray never reaches)
     end_loss_low_erg_s  : END LEDGER, low-index end [erg/s]. Identically 0.0
@@ -2728,6 +2738,7 @@ class BeamDepositionResult:
     tail_mirror_erg_s: float = 0.0
     tail_leg_cap_residual_flux_per_s: float = 0.0
     tail_leg_cap_residual_erg_s: float = 0.0
+    tail_gap_born_flux_per_s: float = 0.0
 
 
 def deposit_beam(
@@ -3646,6 +3657,8 @@ def deposit_beam(
     tail_mirror_erg = 0.0
     tail_cap_flux = 0.0
     tail_cap_erg = 0.0
+    # The walker flux launched on the cathode side of the anode plane.
+    tail_gap_born_flux = 0.0
     # The march withholds the anomalous drag from the local banks when the
     # ray walks its own tail, and when a caller hands it a bank to fill
     # (``anomalous_bank_eV``); the two never coincide.
@@ -4295,6 +4308,16 @@ def deposit_beam(
                                 "be silently dropped"
                             )
                 tail_plans.append((E_walk, flux_fwd, flux_bwd, ionize_walk))
+                if anode_cross_index is not None:
+                    # Cathode side of the plane: the cells the ray crosses
+                    # before it enters ``anode_cross_index``.
+                    gap = (
+                        slice(0, anode_cross_index)
+                        if direction > 0
+                        else slice(anode_cross_index + 1, cells)
+                    )
+                    for _, launched in _tail_launch_legs(flux_fwd, flux_bwd):
+                        tail_gap_born_flux += float(launched[gap].sum())
 
             # K6: the walkers attenuate INELASTICALLY on the column gas as well
             # as Coulomb-slowing, so the closed-form integral above (which
@@ -4790,4 +4813,5 @@ def deposit_beam(
         tail_mirror_erg_s=tail_mirror_erg,
         tail_leg_cap_residual_flux_per_s=tail_cap_flux,
         tail_leg_cap_residual_erg_s=tail_cap_erg,
+        tail_gap_born_flux_per_s=tail_gap_born_flux,
     )
