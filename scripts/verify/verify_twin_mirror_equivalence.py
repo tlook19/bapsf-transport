@@ -386,6 +386,25 @@ def main(argv=None):
             t_end=args.t_end, progress_tracker=twin_dt, progress_interval_s=0.0
         )
 
+    # The half column's own mirror-plane ledger needs no comparison, so it is
+    # banked before the replay and save-lattice checks can refuse one.
+    if mirror_ledger is not None:
+        with open(outdir / "twin_mirror_dvm_ledger.tsv", "w") as fh:
+            fh.write("tick\t" + "\t".join(mirror_ledger.FIELDS) + "\n")
+            for k, row in enumerate(mirror_ledger.rows):
+                fh.write(f"{k}\t" + "\t".join(
+                    repr(float(row[name])) for name in mirror_ledger.FIELDS
+                ) + "\n")
+        ledger_summary = mirror_ledger.summary()
+        print(
+            "DVM mirror plane, worst over the half column's "
+            f"{ledger_summary['ticks']} neutral ticks: "
+            + ", ".join(
+                f"{k} {v:.3e}" for k, v in ledger_summary.items()
+                if k != "ticks"
+            )
+        )
+
     hdt = np.asarray([row[1] for row in half_dt.rows])
     tdt = np.asarray([row[1] for row in twin_dt.rows])
     dt_identical = hdt.shape == tdt.shape and np.array_equal(hdt, tdt)
@@ -492,23 +511,6 @@ def main(argv=None):
                 f"{row['sym_' + name]:>10.3e}" for name in GATE_FIELDS
             )
             + f"  {'PASS' if row['pass'] else 'FAIL'}"
-        )
-
-    if mirror_ledger is not None:
-        with open(outdir / "twin_mirror_dvm_ledger.tsv", "w") as fh:
-            fh.write("tick\t" + "\t".join(mirror_ledger.FIELDS) + "\n")
-            for k, row in enumerate(mirror_ledger.rows):
-                fh.write(f"{k}\t" + "\t".join(
-                    repr(float(row[name])) for name in mirror_ledger.FIELDS
-                ) + "\n")
-        ledger_summary = mirror_ledger.summary()
-        print(
-            "DVM mirror plane, worst over the half column's "
-            f"{ledger_summary['ticks']} neutral ticks: "
-            + ", ".join(
-                f"{k} {v:.3e}" for k, v in ledger_summary.items()
-                if k != "ticks"
-            )
         )
 
     passed = all(row["pass"] for row in rows) and bool(rows)
