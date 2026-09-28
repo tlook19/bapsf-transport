@@ -292,8 +292,10 @@ def geometry_defaults():
         wall role exists under it. Construction raises, naming the complete
         set, when ``"mirror"`` is combined with anything that presumes the end
         wall or cannot yet run at a mirror: ``TwinCathode``,
-        ``cathode_coupling`` (every cathode solve launches the CSDA beam and
-        its tail walk, which march to the far face), ``neutral_momentum`` and
+        ``heating_anomalous_transport = "plateau_multigroup"`` together with
+        ``cathode_coupling`` (the walkers bounce between the cathode sheath
+        and the plane, and once the anode sheath repels them all nothing
+        removes them), ``neutral_momentum`` and
         ``neutral_energy`` (their far-face wall sinks and the hot channel's
         end-plane landing), ``neutral_kinetic_dvm_end_wall_jet`` (there is
         no end wall to return from),
@@ -303,7 +305,12 @@ def geometry_defaults():
         (there is no right pump) and a non-default ``end_wall_length_cm``.
         ``neutral_model = "kinetic_dvm"`` runs at a mirror: its velocity
         distributions reflect specularly there, ``f(-v_z) = f(v_z)``,
-        within each march.
+        within each march. ``cathode_coupling`` runs at a mirror: the CSDA
+        primary that reaches the plane turns round there, marches back with
+        the anode interception re-armed, is turned back by the cathode
+        sheath, and is booked to a leg-cap residual row if it has not stopped
+        within the module's leg budget; the beam smoothing folds about the
+        plane.
     """
     return {
         "Lm": 2117.8,
