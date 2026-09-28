@@ -2052,10 +2052,13 @@ def _case_order_gate_envelope_fit():
         MIN_LEVELS,
         ORDER_SE_BOUND,
         REF_RESOLVE_FACTOR,
+        drift_label,
         envelope_fit,
         pre_asymptotic_reasons,
         triplet_screens,
     )
+
+    assert MIN_LEVELS == 4, MIN_LEVELS
 
     # A clean power law: the slope is returned exactly, with no spread, and
     # the triplet screen on solutions u = u* + C dt**p reads the same p.
@@ -2066,7 +2069,8 @@ def _case_order_gate_envelope_fit():
     assert fit["se"] < 1e-12 and fit["max_resid"] < 1e-12, fit
     assert np.allclose(fit["local"], 1.7, rtol=0.0, atol=1e-12), fit
     assert pre_asymptotic_reasons(fit, clean, 0.0, 1.0) == []
-    exact = np.array([1.0, 2.0])
+    assert drift_label(fit) is None, fit
+    exact =np.array([1.0, 2.0])
     shape = np.array([1.0, -0.5])
     solutions = [exact + 0.1 * (dt / dts[0]) ** 1.7 * shape for dt in dts]
     assert np.allclose(triplet_screens(solutions), 1.7, rtol=0.0, atol=1e-9)
@@ -2091,6 +2095,9 @@ def _case_order_gate_envelope_fit():
 
     d4, e4 = wobbled(4)
     fit4 = envelope_fit(d4, e4)
+    # Analytic: 0.3 * sqrt(0.32) with n - 2 degrees of freedom; n - 1 and n
+    # would read 0.14 and 0.12.
+    assert abs(fit4["se"] - 0.3 * math.sqrt(0.32)) < 1e-9, fit4
     assert fit4["se"] > ORDER_SE_BOUND, fit4
     reasons4 = pre_asymptotic_reasons(fit4, e4, 0.0, 1.0)
     assert len(reasons4) == 1 and "standard error" in reasons4[0], reasons4
@@ -2099,8 +2106,22 @@ def _case_order_gate_envelope_fit():
     assert abs(fit9["order"] - 2.0) < 1e-12, fit9
     assert fit9["se"] < ORDER_SE_BOUND, fit9
     assert pre_asymptotic_reasons(fit9, e9, 0.0, 1.0) == []
-    screens9 = triplet_screens([np.array([e]) for e in e9])
+    # The alternating local slopes are a wobble, not a drift.
+    assert drift_label(fit9) is None, fit9
+    screens9 =triplet_screens([np.array([e]) for e in e9])
     assert max(screens9) - min(screens9) > 1.0, screens9
+
+    # A monotone drift of the local slope (1.6 -> 1.4 -> 1.2, a crossover band)
+    # fits with a small standard error, is not PRE-ASYMPTOTIC, and is labelled
+    # DRIFTING instead of quoted.
+    drift_local = np.array([1.6, 1.4, 1.2])
+    e_drift = 1.0e-3 * 2.0 ** -np.concatenate(([0.0], np.cumsum(drift_local)))
+    fit_drift = envelope_fit(dts[:4], e_drift)
+    assert np.allclose(fit_drift["local"], drift_local, rtol=0.0, atol=1e-12)
+    assert fit_drift["se"] < ORDER_SE_BOUND, fit_drift
+    assert pre_asymptotic_reasons(fit_drift, e_drift, 0.0, 1.0) == []
+    label = drift_label(fit_drift)
+    assert label is not None and label.startswith("DRIFTING"), label
 
     # The smallest level error must clear the reference's error bound by
     # REF_RESOLVE_FACTOR; below it the envelope is PRE-ASYMPTOTIC.

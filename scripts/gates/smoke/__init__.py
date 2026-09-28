@@ -186,7 +186,6 @@ _CASE_ORDER = (
     "implicit-ee-sink-substep-identity",
     "implicit-ee-sink-pure-decay-exact",
     "implicit-ee-sink-substep-order",
-    "order-gate-envelope-fit",
     "anode-e-sheath-realised-equals-booked",
     "cathode-e-climb-realised-equals-booked",
     "anode-cells-no-within-step-sawtooth",
@@ -205,6 +204,7 @@ _CASE_ORDER = (
     "mirror-fluid-march",
     "twin-mirror-mesh-identity",
     "mirror-puff-row-reflection",
+    "order-gate-envelope-fit",
 )
 
 
