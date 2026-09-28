@@ -485,26 +485,46 @@ defeat the bound's purpose.
 
 That analysis covers the uniform mode. The grid-scale mode, alternating in sign
 from cell to cell (wavelength $2\Delta z$), also carries the Rusanov
-dissipation: on that mode the dissipation term of the face flux adds
-$-2a_\text{max}/\Delta z$ to the $E_i$ eigenvalue, beside the exchange's own
-share. `plasma_cfl` holds $a_\text{max}\Delta t/\Delta z$ at or below `cfl`, so
-the dissipation contributes at most $2\,\text{cfl}$ to $\lvert z\rvert$ per
-step, and with the exchange bounded at $c$ the odd–even mode sits at
+dissipation, which adds onto the exchange. With $T_e$ free the exchange's share
+on that mode is the difference mode above, $-2\nu_\text{eq}\Delta t\ge-2c$. On
+a stretch of equal cells of equal cross-section the dissipation term of the
+face flux adds $-2a_\text{max}/\Delta z$ to the eigenvalue, and `plasma_cfl`
+holds $a_\text{max}\Delta t/\Delta z$ at or below `cfl`, so the dissipation
+contributes about $2\,\text{cfl}$ to $\lvert z\rvert$. The two are not written
+alike: `plasma_cfl` bounds the face-averaged speed
+$\tfrac12(\lvert u_L\rvert+\lvert u_R\rvert+c_L+c_R)$ over the cell-centre
+distance, while the Rusanov term uses
+$a_\text{max}=\max(\lvert u_L\rvert+c_L,\ \lvert u_R\rvert+c_R)$ with the face
+areas over the cell volume. Where the cell length or the cross-section steps,
+the dissipation's contribution grows: on the reference mesh it reaches
+$2.17\,\text{cfl}$ where the cell length steps from 10.0 to 7.488 cm and
+$2.32\,\text{cfl}$ at the cross-section step near the far end. Writing that
+contribution $2\,\text{cfl}_\text{mesh}$, the odd–even mode sits at
 
-$$z\ge-\left(2\,\text{cfl}+c+\Delta t\,\nu_\text{other}\right),$$
+$$z\ge-\left(2\,\text{cfl}_\text{mesh}+2c+\Delta t\,\nu_\text{other}\right),$$
 
-$\nu_\text{other}$ the step's other cell-local explicit rates. SSPRK2 keeps the
-mode stable while that sum stays below 2; at `cfl` 0.4 and $c=0.5$ the first
-two terms give $z\ge-1.3$. With the bound withdrawn ($c$ unset, the template
-default) nothing caps the exchange's share, and a column whose $T_e$ is pinned
-at its floor while the step runs at the CFL limit leaves the interval. In one
-measured case the exchange's share of the $E_i$ eigenvalue,
-$1.45\times10^5$ s$^{-1}$, and the Rusanov term, $7.5\times10^4$ s$^{-1}$, give
-$z=-2.26$ at $\Delta t=1.02\times10^{-5}$ s, and the odd–even mode grows at
-about $2.5\times10^4$ s$^{-1}$. That is why a configuration running the explicit
+$\nu_\text{other}$ the step's other cell-local explicit rates, and SSPRK2 keeps
+the mode stable while that sum stays below 2. At `cfl` 0.4 and $c=0.5$ on
+equal cells the first two terms give $z\ge-1.8$. In a column whose $T_e$ is
+held at its floor only $E_i$ relaxes, at $\nu_\text{eq}$, and the bound there
+is $z\ge-(2\,\text{cfl}_\text{mesh}+c+\Delta t\,\nu_\text{other})$, which is
+$-1.3$ at the same settings. The uniform-mode analysis admits
+`energy_exchange_rate_fraction` up to 1, but at a step where the CFL and
+exchange bounds both bind, the odd–even difference mode needs about
+$2\,\text{cfl}_\text{mesh}+2c+\Delta t\,\nu_\text{other}<2$, so at `cfl` 0.4
+the fraction must stay near or below 0.5 for that mode; the reference setting,
+0.5, sits at the edge of that worst-case estimate.
+
+With the bound withdrawn ($c$ unset, the template default) nothing caps the
+exchange's share, and a column whose $T_e$ is pinned at its floor while the
+step runs at the CFL limit leaves the interval. In one measured case the
+exchange's share of the $E_i$ eigenvalue, $1.45\times10^5$ s$^{-1}$, and the
+Rusanov term, $7.5\times10^4$ s$^{-1}$, give $z=-2.26$ at
+$\Delta t=1.02\times10^{-5}$ s, and the linearized growth rate is about
+$2.5\times10^4$ s$^{-1}$. That is why a configuration running the explicit
 exchange with $T_e$ at its floor arms `energy_exchange_rate_fraction`. On the
-production reference runs, which arm it, the most negative explicit $z$
-measured is $-0.75$.
+production reference runs, which arm it at 0.5, the most negative $z$ of the
+coupled $(E_e,E_i)$ odd–even mode is $-1.22$.
 
 **A bound must describe something the step applies.** The kinetic neutral arm
 zeroes whole contributions of the fluid terms and carries them in its own
