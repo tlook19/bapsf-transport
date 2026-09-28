@@ -119,7 +119,8 @@ leg-cap residual rows. While the anode mesh absorbs, the budget converges
 geometrically (measured on breakdown rays at the 1000 V cathode ceiling: at
 most $1.1\times10^{-7}$ of the launched tail power left at 64 legs, 1-2 %
 at 16); where the anode sheath repels every walker nothing absorbs them and
-no budget bounds the residual (70 % at 64 legs, 60 % at 4096), which is why
+no budget bounds the residual (70-89 % at 64 legs, 60 % at 4096 on the ray
+scanned that far), which is why
 the solver refuses the walked tail with the circuit at a mirror. Each leg is a
 `deposit_beam` march and takes the compiled CSDA kernel whenever it is loaded,
 so the mirror branch adds no kernel code; the batched lane march is not

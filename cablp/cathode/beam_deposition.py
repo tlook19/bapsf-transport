@@ -737,9 +737,9 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # 8.2e-4 to 2.9e-3 at 24, 3.9e-5 to 3.9e-4 at 32, at most 6.9e-6 at 48 and at
 # most 1.1e-7 at 64. The series converges only while the anode mesh ABSORBS:
 # where the anode sheath repels every walker (its drop driven to hundreds or
-# thousands of volts) the same rays keep 70 % at 64 legs and 60 % at 4096, so
-# no cap bounds that regime, and the solver refuses the walked tail at a
-# mirror for that reason.
+# thousands of volts) the trapped rays keep 70-89 % at 64 legs (the one
+# scanned further, 60 % at 4096), so no cap bounds that regime, and the solver
+# refuses the walked tail at a mirror for that reason.
 MIRROR_MAX_LEGS = 64
 
 # --- Compiled CSDA march (opt-in; see cablp.cathode.kernels) ------------------
