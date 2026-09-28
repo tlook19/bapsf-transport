@@ -128,6 +128,9 @@ into four kinds: read-only audits/censuses of a saved run or build
 `k2_dvm_exchange_measure.py`,
 `verify_beam_deposition.py`,
 `verify_phase3_source_capture.py`,
+`verify_twin_mirror_equivalence.py` — the `far_end = "mirror"` half column
+marched against the full two-source `TwinCathode` column on a symmetric
+state,
 `verify_fill_spreading.py` — the initial fill's spreading members. The
 registered member is a finite-volume Knudsen diffusion of the foot inventory
 from the puff row, with a continuous source over the foot, gap-coupled

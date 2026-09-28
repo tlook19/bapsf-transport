@@ -2395,3 +2395,59 @@ def _case_mirror_refusals():
         )
     else:
         raise AssertionError("far_end='collector' ACCEPTED")
+
+
+# --------------------------------------------------------------------
+# twin-mirror-mesh-identity
+# --------------------------------------------------------------------
+@_case("twin-mirror-mesh-identity")
+def _case_twin_mirror_mesh_identity():
+    """The TwinCathode mesh is the half column's mesh reflected about Lm/2.
+
+    On the template at nx = 128 the half column (far_end = "mirror") has 139
+    cells and the twin 278. The twin's cell edges from its first cell to
+    Lm/2 EQUAL the half column's, bit for bit: both prefix-sum the same
+    length values in the same order from the same origin, so exact equality
+    is the claim, not a tolerance. The twin's lengths and roles are
+    palindromes, it carries the fixed source region and the puff cell at
+    both ends, and its far cathode face sits on Lm to the prefix-sum
+    roundoff. The half column's cathode sample has no end slot; the end wall
+    and twin layouts keep theirs.
+    """
+    from cablp.solvers._sim1d.core.geometry import build_geometry
+
+    params, flags = default_config()
+    params["nx"] = 128
+    half = build_geometry(dict(params, far_end="mirror"), flags)
+    twin = build_geometry(params, dict(flags, TwinCathode=True))
+    wall = build_geometry(params, flags)
+    cells = int(half.cells)
+    assert cells == 139, cells
+    assert int(twin.cells) == 2 * cells, twin.cells
+    assert np.array_equal(twin.z_edges_cm[: cells + 1], half.z_edges_cm)
+    assert float(twin.z_edges_cm[cells]) == float(half.z_edges_cm[-1])
+    assert abs(float(half.z_edges_cm[-1]) - 1058.9) <= 1.0e-9
+    assert np.array_equal(twin.length_cm, twin.length_cm[::-1])
+    assert np.array_equal(twin.length_cm[:cells], half.length_cm)
+    roles = [str(role) for role in twin.cell_role]
+    assert roles == roles[::-1]
+    assert roles[:cells] == [str(role) for role in half.cell_role]
+    # The fixed source region (5 cells of 10 cm) and the puff cell at both
+    # ends; 2 x 128 uniform far cells meet at Lm/2.
+    near_cathode, far_cathode = (int(f) for f in twin.cathode_face_indices)
+    near_anode, far_anode = (int(f) for f in twin.anode_face_indices)
+    assert np.all(twin.length_cm[near_anode : near_anode + 5] == 10.0)
+    assert np.all(twin.length_cm[far_anode - 5 : far_anode] == 10.0)
+    far = np.asarray(twin.length_cm[near_anode + 5 : far_anode - 5])
+    assert far.size == 256 and np.all(far == half.length_cm[-1]), far.size
+    puff_near, puff_far = puff_cell_indices(twin)
+    assert puff_near == puff_cell_indices(half)[0]
+    assert puff_far == int(twin.cells) - 1 - puff_near
+    assert roles.count("puff") == 2
+    assert abs(float(twin.z_edges_cm[far_cathode]) - params["Lm"]) <= 1.0e-9
+    assert near_cathode == int(half.cathode_face_indices[0])
+    # The cathode sample: no end slot at a mirror; the end wall and twin
+    # layouts keep theirs.
+    assert cathode_sample_indices(half) == (near_cathode, None)
+    assert cathode_sample_indices(wall) == (near_cathode, int(wall.cells) - 1)
+    assert cathode_sample_indices(twin) == (near_cathode, int(twin.cells) - 2)

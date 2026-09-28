@@ -202,6 +202,7 @@ _CASE_ORDER = (
     "mirror-refusals",
     "mirror-face-flux-unit",
     "mirror-fluid-march",
+    "twin-mirror-mesh-identity",
 )
 
 
