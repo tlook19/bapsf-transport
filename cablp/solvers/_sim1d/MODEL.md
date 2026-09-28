@@ -730,7 +730,9 @@ $$\Gamma_0E_0=\text{heating}+\text{radiated}+\text{cost}+\text{anode-intercepted
 $P_\text{tail,cathode}$ the tail escaping at the cathode face. The series
 converges only while the anode mesh absorbs; where its sheath repels every
 walker nothing removes them, so the walked plateau tail is refused together
-with the cathode circuit at a mirror (see Geometry and state). The
+with the cathode circuit at a mirror (see Geometry and state), and a mirror
+with the cathode circuit on and no anode face or $\eta=0$ is refused at
+construction, since nothing then removes the returning primary either. The
 beam-smoothing Gaussian is folded about the plane as it is about the cathode
 face, so the smoothed deposit is the two-source machine's on the half.
 

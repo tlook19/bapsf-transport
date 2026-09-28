@@ -215,6 +215,7 @@ _CASE_ORDER = (
     "mirror-csda-primary-turn",
     "mirror-cathode-coupling-constructs",
     "mirror-compiled-equivalence",
+    "mirror-primary-needs-absorbing-anode",
 )
 
 

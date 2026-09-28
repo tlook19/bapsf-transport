@@ -3865,3 +3865,57 @@ def _case_mirror_cathode_coupling_constructs():
         "mirror" in name or "leg_cap" in name
         for name in wall.cathode_diagnostics
     )
+
+
+# --------------------------------------------------------------------
+# mirror-primary-needs-absorbing-anode
+# --------------------------------------------------------------------
+@_case("mirror-primary-needs-absorbing-anode")
+def _case_mirror_primary_needs_absorbing_anode():
+    """A mirror with the circuit on is refused without a mesh that absorbs.
+
+    Under ``far_end = "mirror"`` with ``cathode_coupling`` the CSDA primary
+    bounces between the cathode sheath and the plane, and the leg series
+    converges only because the anode mesh takes ``eta`` of it on every
+    return. Both ways of losing that are refused at construction, each
+    exercised: ``eta = 0`` and a geometry with no anode face.
+    NEGATIVE CONTROL: the same settings construct where no primary is walked
+    at a mirror -- ``eta = 0`` on the end wall, and ``eta = 0`` at a mirror
+    with the circuit off -- and the mirror with the circuit on and the
+    shipped ``eta`` constructs, so the refusal is the combination's.
+    """
+    from unittest import mock
+
+    from cablp.solvers._sim1d import solver as _solver_mod
+
+    needle = "converges only while the anode mesh absorbs"
+    params, flags = _mirror_circuit_config("mirror")
+    assert float(params["eta"]) > 0.0
+    try:
+        LAPDSim1D(dict(params, eta=0.0), flags)
+    except ValueError as exc:
+        assert needle in str(exc), str(exc)
+        assert "eta=0.0" in str(exc), str(exc)
+    else:
+        raise AssertionError("eta = 0 ACCEPTED at a mirror with the circuit")
+    real_build = _solver_mod.build_geometry
+
+    def no_anode(*args, **kwargs):
+        geometry = real_build(*args, **kwargs)
+        return dataclasses.replace(
+            geometry, anode_face_indices=np.zeros(0, dtype=int)
+        )
+
+    with mock.patch.object(_solver_mod, "build_geometry", no_anode):
+        try:
+            LAPDSim1D(params, flags)
+        except ValueError as exc:
+            assert needle in str(exc), str(exc)
+            assert "0 anode face(s)" in str(exc), str(exc)
+        else:
+            raise AssertionError("no anode face ACCEPTED at a mirror")
+    # NEGATIVE CONTROL.
+    LAPDSim1D(params, flags)
+    wall_params, wall_flags = _mirror_circuit_config("end_wall")
+    LAPDSim1D(dict(wall_params, eta=0.0), wall_flags)
+    LAPDSim1D(dict(params, eta=0.0), dict(flags, cathode_coupling=False))
