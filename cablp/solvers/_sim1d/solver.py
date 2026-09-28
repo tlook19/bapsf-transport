@@ -201,6 +201,7 @@ from .physics.sources import (
 )
 from cablp.atomic.adas import he_rate_temperature_range_eV
 from cablp.cathode.beam_deposition import ANOMALOUS_MODELS
+from cablp.cathode.circuit_common import ANODE_TAIL_BOOKINGS
 from cablp.cathode.kernels import PROVENANCE as KERNEL_PROVENANCE
 from cablp.constants import (
     I_ion,
@@ -2089,6 +2090,13 @@ class LAPDSim1D:
         # coupling is lagged; this member is written ONLY where the accepted
         # solve writes its caches, so a rejected attempt cannot move it.
         self._cathode_tail_anode_I = 0.0
+        # Its ``anode_tail_booking = "emission_fraction"`` successors, on the
+        # same acceptance-committed discipline: the collected tail current per
+        # emitted electron and the gap-born walker flux per emitted electron
+        # the last accepted deposition measured. Both stay 0.0 under the
+        # default booking.
+        self._cathode_tail_anode_coef = 0.0
+        self._cathode_anode_gap_walker_frac = 0.0
         # Last accepted sheath solve's current, used only by the measured-tail
         # phase gate. The evolved loop state itself is _circuit_I_loop.
         self._circuit_I_prev = 0.0
@@ -2408,6 +2416,29 @@ class LAPDSim1D:
                 "(heating_anomalous_transport='plateau_multigroup'); without "
                 "one there is nothing intercepted and the pair would be a "
                 "silent no-op"
+            )
+        # The anode's fast-electron booking. Its domain is checked
+        # unconditionally; the non-default value is read only where the
+        # circuit runs with a walked tail, and is a no-op anywhere else.
+        _booking = self._input_dict.get("anode_tail_booking")
+        if _booking not in ANODE_TAIL_BOOKINGS:
+            raise ValueError(
+                "anode_tail_booking must be 'lagged_current' or "
+                f"'emission_fraction' (got {_booking!r})"
+            )
+        if _booking == "emission_fraction" and not (
+            _tail_walking and bool(self._flags.get("cathode_coupling"))
+        ):
+            raise ValueError(
+                "anode_tail_booking='emission_fraction' books the walked "
+                "tail's collection per emitted electron and the primary net "
+                "of the walkers born before the anode plane; it is read only "
+                "with cathode_coupling and "
+                "heating_anomalous_transport='plateau_multigroup' (got "
+                f"cathode_coupling={bool(self._flags.get('cathode_coupling'))},"
+                " heating_anomalous_transport="
+                f"{self._input_dict.get('heating_anomalous_transport')!r}), "
+                "and without both the setting would be a silent no-op"
             )
         _fc = float(self._input_dict.get("beam_clump_fraction"))
         if not 0.0 <= _fc < 1.0:
@@ -3826,6 +3857,10 @@ class LAPDSim1D:
             cathode_beam_cross=self._cathode_beam_cross.copy(),
             cathode_solve=self._cathode_solve,
             cathode_tail_anode_I=float(self._cathode_tail_anode_I),
+            cathode_tail_anode_coef=float(self._cathode_tail_anode_coef),
+            cathode_anode_gap_walker_frac=float(
+                self._cathode_anode_gap_walker_frac
+            ),
         )
 
     def _restore_step_cache(self, snapshot):
@@ -3837,6 +3872,10 @@ class LAPDSim1D:
         ).copy()
         self._cathode_solve = snapshot.cathode_solve
         self._cathode_tail_anode_I = float(snapshot.cathode_tail_anode_I)
+        self._cathode_tail_anode_coef = float(snapshot.cathode_tail_anode_coef)
+        self._cathode_anode_gap_walker_frac = float(
+            snapshot.cathode_anode_gap_walker_frac
+        )
 
     def _attempt_step(self, dt=None, operator_split=None):
         """Return a candidate step without committing state, time, or caches."""
@@ -5001,6 +5040,12 @@ class LAPDSim1D:
                 vdis_of_I=vdis,
                 C_bank_F=None if bank_off else C_bank_id,
                 V_cap_prev_V=self._circuit_V_cap,
+                # The stages' I = 0 bracket probe: the one evaluation at which
+                # an anode balance with no floating solution keeps its floored
+                # endpoint value rather than raising.
+                vdis_bracket_probe=lambda I_A: vdis(
+                    I_A, anode_balance_probe=True
+                ),
             )
             self._circuit_I_loop = I_new
             self._circuit_V_dis_step = float(V_dis_step)
@@ -5153,6 +5198,18 @@ class LAPDSim1D:
         # inventory above so a payload taken before the cull existed stays
         # readable: it restores to 0.0, which is what an unarmed run carries.
         cathode["_cathode_tail_anode_I"] = float(self._cathode_tail_anode_I)
+        # The emission-fraction booking's lagged pair, presence-gated on the
+        # selector so a default payload keeps exactly its historical keys.
+        if (
+            self._input_dict.get("anode_tail_booking")
+            == "emission_fraction"
+        ):
+            cathode["_cathode_tail_anode_coef"] = float(
+                self._cathode_tail_anode_coef
+            )
+            cathode["_cathode_anode_gap_walker_frac"] = float(
+                self._cathode_anode_gap_walker_frac
+            )
         cathode["energy_ledger_J"] = None
         # Cathode-jet arming latch, presence-gated on the criterion being
         # DECLARED. ``_jet_armed`` decides whether the next step's jets launch
@@ -5338,6 +5395,12 @@ class LAPDSim1D:
             setattr(self, name, _copy_cache_value(cathode[name]))
         self._cathode_tail_anode_I = float(
             cathode.get("_cathode_tail_anode_I", 0.0)
+        )
+        self._cathode_tail_anode_coef = float(
+            cathode.get("_cathode_tail_anode_coef", 0.0)
+        )
+        self._cathode_anode_gap_walker_frac = float(
+            cathode.get("_cathode_anode_gap_walker_frac", 0.0)
         )
         # Cathode-jet arming latch, presence-gated on THIS solver's criterion:
         # with none declared the latch is permanently armed and restoring a
@@ -7903,6 +7966,8 @@ class LAPDSim1D:
             # Two calls at one (y, t) with different lag values are different
             # solves and must not be served for one another.
             _memo_key_part(self._cathode_tail_anode_I),
+            _memo_key_part(self._cathode_tail_anode_coef),
+            _memo_key_part(self._cathode_anode_gap_walker_frac),
             _memo_key_part(self._cathode_x0),
             _memo_key_part(self._cathode_x0_twin),
             _memo_key_part(self._cathode_Ts_K),
@@ -7981,6 +8046,10 @@ class LAPDSim1D:
             input_flags=input_flags,
             beam_cross_prev=self._cathode_beam_cross,
             tail_anode_current_prev_A=self._cathode_tail_anode_I,
+            tail_anode_coefficient_prev=self._cathode_tail_anode_coef,
+            anode_gap_walker_fraction_prev=(
+                self._cathode_anode_gap_walker_frac
+            ),
             I_ion=self._I_ion,
             x0=self._cathode_x0,
             x0_twin=self._cathode_x0_twin,
@@ -8004,6 +8073,12 @@ class LAPDSim1D:
             # A2a: the lag advances on the SAME acceptance-committed write as
             # sigma_b above. Rejected attempts never reach this branch.
             self._cathode_tail_anode_I = float(result.tail_anode_current_A)
+            self._cathode_tail_anode_coef = float(
+                result.tail_anode_coefficient
+            )
+            self._cathode_anode_gap_walker_frac = float(
+                result.anode_gap_walker_fraction
+            )
             # Clamp census (see _init_run_machinery). Same branch, same
             # reason: a rejected attempt is not a solve this run performed.
             self._update_cathode_clamp_census(result)

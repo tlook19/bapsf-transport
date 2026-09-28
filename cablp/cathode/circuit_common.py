@@ -372,6 +372,66 @@ def beam_launched_current_A(result):
     return result.I_eth_star
 
 
+#: How the anode sheath balance books the fast electrons the mesh collects
+#: directly. ``"lagged_current"`` subtracts ``eta * beta * J_star`` for the
+#: primary and the previous accepted step's absolute tail-walker current.
+#: ``"emission_fraction"`` subtracts ``eta * beta * (1 - w_gap) * J_star`` for
+#: the primary, net of the walker flux born upstream of the anode plane, and
+#: ``c_tail * J_star`` for the tail, ``c_tail`` being the previous deposition's
+#: collected tail current per emitted electron.
+ANODE_TAIL_BOOKINGS = ("lagged_current", "emission_fraction")
+
+
+def resolve_anode_tail_booking(
+    booking,
+    tail_anode_current_A,
+    tail_anode_coefficient,
+    anode_gap_walker_fraction,
+):
+    """Validate one solve's anode fast-electron booking; return the booking.
+
+    ``"lagged_current"`` reads ``tail_anode_current_A`` only, and refuses a
+    non-zero coefficient or gap fraction. ``"emission_fraction"`` reads the
+    per-emission coefficient ``tail_anode_coefficient`` (``c_tail``) and the
+    gap-born walker fraction ``anode_gap_walker_fraction`` (``w_gap``, in
+    ``[0, 1]``), and refuses a non-zero absolute tail current. Raises
+    ``ValueError`` naming the accepted values otherwise.
+    """
+    booking = str(booking)
+    if booking not in ANODE_TAIL_BOOKINGS:
+        raise ValueError(
+            "anode_tail_booking must be 'lagged_current' or "
+            f"'emission_fraction' (got {booking!r})"
+        )
+    c_tail = float(tail_anode_coefficient)
+    w_gap = float(anode_gap_walker_fraction)
+    if booking == "lagged_current":
+        if c_tail != 0.0 or w_gap != 0.0:
+            raise ValueError(
+                "anode_tail_booking='lagged_current' books the tail as the "
+                "lagged absolute current tail_anode_current_A; a tail "
+                f"coefficient ({c_tail!r}) or gap walker fraction ({w_gap!r}) "
+                "belongs to 'emission_fraction'"
+            )
+        return booking
+    if float(tail_anode_current_A) != 0.0:
+        raise ValueError(
+            "anode_tail_booking='emission_fraction' books the tail as a "
+            "coefficient on this solve's emission; an absolute "
+            f"tail_anode_current_A ({tail_anode_current_A!r} A) belongs to "
+            "'lagged_current'"
+        )
+    if not (math.isfinite(c_tail) and c_tail >= 0.0):
+        raise ValueError(
+            f"the tail coefficient must be finite and >= 0 (got {c_tail!r})"
+        )
+    if not (math.isfinite(w_gap) and 0.0 <= w_gap <= 1.0):
+        raise ValueError(
+            f"the gap walker fraction must be in [0, 1] (got {w_gap!r})"
+        )
+    return booking
+
+
 @dataclass(slots=True)
 class BeamResult:
     """Beam quantities of a solved cathode sheath, per cell.
