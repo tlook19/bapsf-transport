@@ -56,6 +56,28 @@ the surface to average across. Every plasma-terminating face is a material
 surface and is treated this way; the two-state kernel
 (`flux.kep_rusanov_face_scalar`) is the INTERIOR's.
 
+**The mirror face.** Under `far_end = "mirror"` the half column ends at
+$z=L_m/2$ in a MIRROR face, the symmetry plane of a machine with a second,
+identical source at $z=L_m$. It is closed and not absorbing, but the
+pressure-only closed-face rule above is wrong for it: that rule drops the
+dissipation on the momentum jump across the plane. The mirror face instead
+runs the interior kernel (`flux.kep_rusanov_face_scalar`, through
+`flux.mirror_face_flux`) between the live cell $L$ and its mirror GHOST
+$(n_L,-M_L,E_{e,L},E_{i,L})$, whose velocity is $-u_L$ and whose pressure and
+temperatures are the live cell's. Every odd term cancels, leaving exactly
+
+$$\Gamma_n=\Gamma_{E_e}=\Gamma_{E_i}=0,\qquad \Gamma_M=p_L+a_\text{max}M_L,\qquad a_\text{max}=\lvert u_L\rvert+c_L,$$
+
+$c_L$ the signal speed above. At rest the face carries the pressure alone, so a
+uniform stationary state stays well balanced. The face velocity of
+$\nabla_\parallel\cdot u$ there is $\tfrac12(u_L-u_L)=0$ and
+$\Pi_f=\tfrac12(p_L(-u_L)+u_Lp_L)=0$, so the pressure work crosses nothing,
+and the dissipative momentum flux $a_\text{max}M_L$ is returned to $E_i$ by
+`hyperbolic_dissipation_heating` like every interior face's. The ghost-cell
+Bohm operator books nothing at a mirror, and conduction carries none: the ghost
+temperature equals the live cell's, so $\Delta T=0$ and $q=0$ (the face's heat
+transmission is zero, as at any closed face).
+
 **Energy-consistent hyperbolic core.** The convective momentum flux is the
 kinetic-energy-preserving $\lbrace u\rbrace\lbrace M\rbrace$ form, and the
 Rusanov $(n,M)$ numerical kinetic-energy dissipation is deposited into $E_i$ as
@@ -811,6 +833,7 @@ bookkeeping.
 | Rusanov / LLF face flux | `physics/flux.py:_rusanov_raw_faces`, `_rusanov_face` |
 | Cell-centred physical fluxes; wall closure | `physics/flux.py:physical_fluxes`, `_apply_plasma_walls` |
 | KEP single-face flux (boundary) | `physics/flux.py:kep_rusanov_face_scalar` |
+| Mirror-face ghost and flux | `physics/flux.py:mirror_ghost_states`, `mirror_face_flux`, `_apply_mirror_faces` |
 | Material-face physical flux (boundary) | `physics/flux.py:physical_face_scalar` |
 | Flux divergence | `physics/flux.py:_flux_divergence` |
 | Ghost-cell Bohm outflow | `physics/sources.py:characteristic_boundary_rhs` |
