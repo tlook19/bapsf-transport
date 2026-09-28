@@ -128,12 +128,15 @@ the source terms both read.
 
 The far end is a selector, **`far_end`**. `"end_wall"`, the default and the
 model described throughout this document, is the layout above. `"mirror"` is
-the HALF column: the same machine from the cathode to the mid-plane
+the HALF column of a two-source machine: from the cathode to the mid-plane
 $z=L_m/2$, where the column ends in a MIRROR face instead of the end wall —
-the symmetry plane of a machine carrying a second, identical cathode–anode
-source at $z=L_m$. The fixed near-source cells are unchanged, the far column's
-`nx` uniform cells are re-cut to end exactly at $L_m/2$, no end wall cell is
-appended, and $L_m$ remains the whole machine's length. The mirror face is
+the symmetry plane of a machine whose image cathode–anode source sits at
+$z=L_m$ of the mirror configuration. Under it $L_m$ is that configuration's
+own length, cathode to image cathode, not the end wall machine's. The fixed
+near-source cells are unchanged, the far column's `nx` uniform cells are
+re-cut to end exactly at $L_m/2$, and no end wall cell is appended. Gas-puff
+rays that would land past the mirror plane land in their image cells, where
+the image source's rays land in the whole column. The mirror face is
 closed and not absorbing: no particle, energy or heat crosses it, nothing is
 recycled there, the right pump does not exist, and nothing armed by the end
 wall role (the end wall's sheath-climb row, its surface-power line) is

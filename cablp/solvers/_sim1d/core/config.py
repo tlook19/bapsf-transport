@@ -279,10 +279,11 @@ def geometry_defaults():
         ``"end_wall"``: the column runs to ``Lm - end_wall_length_cm`` and
         the end wall cell closes the machine, its outer face plasma-absorbing.
         ``"mirror"``: the HALF column. The mesh stops at the mid-plane
-        ``z = Lm/2`` in a MIRROR face -- the symmetry plane of a machine with
-        a second, identical cathode-anode source at ``z = Lm`` -- with no end
-        wall cell; ``Lm`` stays the whole machine's length and ``nx`` counts
-        the far column cells between the fixed source region and ``Lm/2``.
+        ``z = Lm/2`` in a MIRROR face -- the symmetry plane of a two-source
+        machine whose image cathode-anode source sits at ``z = Lm`` -- with
+        no end wall cell; under it ``Lm`` is the mirror configuration's own
+        length, cathode to image cathode, and ``nx`` counts the far column
+        cells between the fixed source region and ``Lm/2``.
         The mirror face is closed and not absorbing: its fluid face flux is
         the ordinary face kernel against the mirror ghost state
         ``(n, -M, Ee, Ei)`` of the cell beside it, so it carries no particle

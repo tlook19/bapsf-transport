@@ -331,11 +331,12 @@ def _build_resolved_geometry(input_dict, flags):
         [puff, column x (nx-1)] [end wall]
 
     Half column (``far_end = "mirror"``) stops at the mid-plane ``z = Lm/2``
-    in a MIRROR face instead of the end wall: the symmetric half of a machine
-    with a second, identical cathode-anode source at ``z = Lm``. No end wall
-    cell is appended, the fixed source region is unchanged, and the far
-    column's ``nx`` uniform cells end at ``Lm/2``; ``Lm`` stays the whole
-    machine's length::
+    in a MIRROR face instead of the end wall: the symmetric half of a
+    two-source machine whose image cathode-anode source sits at ``z = Lm``
+    of the mirror configuration. ``Lm`` is that configuration's own length,
+    cathode to image cathode, not the end wall machine's. No end wall cell is
+    appended, the fixed source region is unchanged, and the far column's
+    ``nx`` uniform cells end at ``Lm/2``::
 
         [plenum, (obstruction)] |cathode  [cathode..gap x nx_gap]  anode|
         [source region, puff] [column x nx] |mirror
@@ -687,8 +688,9 @@ def _far_end_is_mirror(input_dict):
 def mirror_plane_z_cm(total_length_cm):
     """Return the mirror plane's position ``Lm / 2`` [cm from the cathode face].
 
-    The half column models one half of a machine carrying a second, identical
-    cathode-anode source at ``z = Lm``, so the symmetry plane is the mid-plane.
+    The half column models one half of a two-source machine whose image
+    cathode-anode source sits at ``z = Lm`` of the mirror configuration
+    (cathode to image cathode), so the symmetry plane is the mid-plane.
     """
     return 0.5 * float(total_length_cm)
 
