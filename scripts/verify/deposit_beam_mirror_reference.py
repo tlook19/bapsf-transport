@@ -56,7 +56,8 @@ smoke suite's compiled-equivalence case compares the two paths on these arms
 directly. ``--impl perturbed`` is the NEGATIVE CONTROL: it moves the launch
 energy of every leg the mirror branch marches (every ``deposit_beam`` call
 made without a mirror face) and the smoothing width by one ulp and nothing
-else; every arm must then report a non-zero count and the script exits 1.
+else; every arm must then report a non-zero count. The control exits 0 when
+every arm moved (the control passed) and 1 when an arm did not.
 ``--capture`` rewrites the corpus and is a recapture-class event.
 """
 
@@ -275,7 +276,7 @@ def verify(path, impl="live"):
             "negative control: every arm differs"
             if ok else "NEGATIVE CONTROL FAILED: an arm did not move"
         )
-        return 1
+        return 0 if ok else 1
     return 0 if total_diff == 0 else 1
 
 
