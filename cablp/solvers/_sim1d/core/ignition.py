@@ -116,9 +116,13 @@ IGNITION_POWER_GROUPS = {
 # WP-D / WP-E end ledger keys (cathode diagnostics). Beam energy that leaves
 # the column axially without thermalizing; never booked into any RHS row.
 # The first four are the WP-D event-product ledger (identically zero: the
-# CSDA ray's products are banked in their birth cell); the last four are the
+# CSDA ray's products are banked in their birth cell); the next four are the
 # WP-E QL tail ledger (identically zero under
-# heating_anomalous_transport="local"). Adding a zero row is exact.
+# heating_anomalous_transport="local"). The last two are the mirror far
+# end's leg-cap residuals, the power a mirrored ray's capped legs would still
+# have carried, which leaves the ray's ledger there (a mirror has one cathode,
+# so only the source prefix exists); a run without a mirror face saves
+# neither row and each reads as 0.0. Adding a zero row is exact.
 IGNITION_BEAM_END_LOSS_KEYS = (
     "source_beam_end_loss_low_W",
     "source_beam_end_loss_high_W",
@@ -128,6 +132,8 @@ IGNITION_BEAM_END_LOSS_KEYS = (
     "source_beam_end_loss_tail_high_W",
     "end_beam_end_loss_tail_low_W",
     "end_beam_end_loss_tail_high_W",
+    "source_beam_tail_leg_cap_residual_W",
+    "source_beam_mirror_primary_residual_W",
 )
 
 
