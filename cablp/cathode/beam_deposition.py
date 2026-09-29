@@ -752,7 +752,10 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # puff), where the anode mesh still absorbs but the column is thin: at 64 legs
 # the tail left 2.4e-3 to 3.4e-3 of the ray's launched power unmarched, above
 # the bound below; at 256 every walker tree stopped, the longest at 217 legs,
-# and no residual was booked. Hence 256.
+# and no residual was booked. At a quarter of the reference puff and a 250 V
+# bank, 256 legs left 3.8e-4 of an 88.4 kW breakdown ray unmarched; at 1024
+# the run completed with no residual booked, the longest tree at 273 legs
+# (three rays past 256, all in breakdown). Hence 1024.
 MIRROR_MAX_LEGS = 1024
 
 # The largest share of a mirrored ray's launched power (``Gamma0 * E0``) the
@@ -761,7 +764,7 @@ MIRROR_MAX_LEGS = 1024
 # The residual rows are diagnostics, never a sink, so the bound keeps what
 # leaves the ledger through them below the rows' own significance. Converged
 # rays sit far under it (at most 1.1e-7 of the launched TAIL power at 64 legs
-# in the breakdown scans above, none at 256 in the reduced-puff runs). Not a
+# in the breakdown scans above, none at 1024 in the reduced-puff runs). Not a
 # config key: it is a validity bound on the
 # truncation, not an arm.
 MIRROR_RESIDUAL_MAX_FRACTION = 1.0e-4

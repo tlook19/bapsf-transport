@@ -123,6 +123,8 @@ at the 1000 V cathode ceiling: at
 most $1.1\times10^{-7}$ of the launched tail power left at 64 legs, 1-2 %
 at 16; on the half column at reduced gas puff, $2.4$-$3.4\times10^{-3}$ of
 the launched power left at 64 legs and none at 256, the longest tree 217
+legs; at a quarter of the reference puff with a 250 V bank,
+$3.8\times10^{-4}$ left at 256 legs and none at 1024, the longest tree 273
 legs); where the anode sheath repels every walker nothing absorbs them and
 the series converges only by their thermalizing. There the wire sheath turns
 $\eta$ of each cathode-bound walker back at the anode plane while the rest
