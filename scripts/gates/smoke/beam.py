@@ -4370,14 +4370,14 @@ def _case_anode_balance_floor_probe_vs_dispatched():
     try:
         solve_idriven(cfg, plasma, I_tot_A=0.0,
                       anode_tail_booking="emission_fraction",
-                      tail_anode_coefficient=0.99, **common)
+                      tail_anode_coefficient=0.9, **common)
     except ValueError as exc:
         assert "anode sheath balance is infeasible" in str(exc), str(exc)
     else:
         raise AssertionError("an infeasible dispatched balance RETURNED")
     probe = solve_idriven(cfg, plasma, I_tot_A=0.0,
                           anode_tail_booking="emission_fraction",
-                          tail_anode_coefficient=0.99,
+                          tail_anode_coefficient=0.9,
                           anode_balance_probe=True, **common)
     assert probe.phi_a == floored, (probe.phi_a, floored)
     # NEGATIVE CONTROL.
