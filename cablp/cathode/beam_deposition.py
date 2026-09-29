@@ -742,9 +742,11 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # (see _tail_mirror_chains), the residual is 0.61 and 0.83 at 16 legs, 0.098
 # and 0.46 at 64, 1.8e-3 and 5.6e-2 at 256, and 0 at 1024 (every walker
 # stopped); without the merge the split walkers grew as a tree and kept 70-89 %
-# at 64 legs and 60-87 % at 4096. The cap therefore does not bound that regime
-# at 256 legs: a ray in it raises the run-time residual bound below rather than
-# booking the residual.
+# at 64 legs and 60-87 % at 4096. On a synthetic trapped column (twelve cells
+# at n_e 1-2e10 cm^-3 behind a 1e4 V anode sheath, the fixture corpus's
+# trapped_walkers arm) 0.41 of the launched power is left at 1024 legs. The cap
+# therefore does not bound that regime: a ray in it raises the run-time
+# residual bound below rather than booking the residual.
 #
 # MEASURED on the half column at reduced gas puff (below half the reference
 # puff), where the anode mesh still absorbs but the column is thin: at 64 legs

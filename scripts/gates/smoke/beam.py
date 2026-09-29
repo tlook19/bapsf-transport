@@ -4472,7 +4472,10 @@ def _case_anode_tail_booking_mirror_walked_tail():
             "with heating_anomalous_transport='plateau_multigroup'"
             in str(exc)
         ), str(exc)
-        assert "0.2-6 % of the tail power at 256 legs" in str(exc), str(exc)
+        assert (
+            "41 % of the launched power at 1024 legs on a synthetic trapped "
+            "column" in str(exc)
+        ), str(exc)
     else:
         raise AssertionError("the lagged walked tail ACCEPTED at a mirror")
     import tempfile
