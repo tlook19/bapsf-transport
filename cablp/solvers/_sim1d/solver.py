@@ -10428,11 +10428,15 @@ class LAPDSim1D:
                 self._input_dict.get("anode_tail_booking")
                 == "emission_fraction"
             ):
-                # The share of the primary's direct interception the anode
-                # booked (1 where the beam clears the anode sheath, 0 where it
-                # cannot, between where the sheath is pinned at the beam
-                # energy). Presence-gated on the booking that computes it.
+                # The share of the whole fast term (the primary's direct
+                # interception, its net return interception and the tail) the
+                # anode booked (1 where the beam clears the anode sheath, 0
+                # where it cannot, between where the sheath is pinned at the
+                # beam energy), and the branch that set it (0 booked, 1
+                # pinned, 2 none). Presence-gated on the booking that
+                # computes them.
                 diag[f"{prefix}_anode_direct_collected_fraction"] = np.nan
+                diag[f"{prefix}_anode_fast_branch"] = np.nan
 
         cathode_solve = self._cathode_solve
         if (
@@ -10634,6 +10638,9 @@ class LAPDSim1D:
             # Presence-gated with the seed.
             diag[f"{prefix}_anode_direct_collected_fraction"] = float(
                 result.anode_direct_collected_fraction
+            )
+            diag[f"{prefix}_anode_fast_branch"] = float(
+                result.anode_fast_branch
             )
 
     def _stack_trajectory_cathode_diagnostics(self, saved):

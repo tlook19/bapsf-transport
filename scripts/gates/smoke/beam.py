@@ -4340,16 +4340,18 @@ def _case_anode_tail_booking_conservation_assert():
 # --------------------------------------------------------------------
 @_case("anode-balance-floor-probe-vs-dispatched")
 def _case_anode_balance_floor_probe_vs_dispatched():
-    """Under ``"emission_fraction"`` an infeasible balance raises, except at
-    the circuit's I = 0 probe; the default floors it and reports it.
+    """Under ``"emission_fraction"`` a balance with no floating solution
+    raises, except at the circuit's I = 0 probe; the default floors it and
+    reports it.
 
     A solve at ``I_tot = 0`` whose directly collected tail exceeds what the
-    anode sheath can pass has no floating solution: under
-    ``"emission_fraction"`` a dispatched ``solve_idriven`` raises ValueError
-    naming the balance; flagged ``anode_balance_probe=True`` it returns the
-    floored endpoint ``phi_a = T_e,a ln(I_e,sat / 1e-300)``. The circuit
-    advance's stages evaluate their ``I = 0`` endpoint through
-    ``vdis_bracket_probe`` only.
+    anode sheath can pass books none of the fast term under
+    ``"emission_fraction"``, dispatched or probe alike, at
+    ``phi_a = T_e,a ln(I_e,sat / I_i,a)``. The balance helper handed a
+    non-positive current with no fast electron taken out raises ValueError
+    naming the balance, and under ``probe`` returns the floored value
+    ``T_e,a ln(I_e,sat / 1e-300)``. The circuit advance's stages evaluate
+    their ``I = 0`` endpoint through ``vdis_bracket_probe`` only.
     NEGATIVE CONTROL: under the default the same infeasible dispatched solve
     returns the floored value with ``anode_floor_fired == 1`` (the probe with
     0), on the current-driven and the prescribed solve alike; a feasible solve
@@ -4367,20 +4369,33 @@ def _case_anode_balance_floor_probe_vs_dispatched():
         anode_current_A=I_i_a, anode_T_e=plasma.T_e,
         anode_electron_saturation_A=I_e_sat,
     )
+    from cablp.cathode.circuit_common import (
+        ANODE_FAST_BRANCH_NONE, emission_fraction_anode_balance,
+    )
+
     floored = math.log(I_e_sat / 1e-300) * plasma.T_e
+    without = plasma.T_e * math.log(I_e_sat / I_i_a)
+    for flag in (False, True):
+        r = solve_idriven(cfg, plasma, I_tot_A=0.0,
+                          anode_tail_booking="emission_fraction",
+                          tail_anode_coefficient=0.9,
+                          anode_balance_probe=flag, **common)
+        assert r.anode_fast_branch == ANODE_FAST_BRANCH_NONE, flag
+        assert r.anode_direct_collected_fraction == 0.0, flag
+        assert abs(r.phi_a - without) <= 1e-12 * without, (r.phi_a, without)
     try:
-        solve_idriven(cfg, plasma, I_tot_A=0.0,
-                      anode_tail_booking="emission_fraction",
-                      tail_anode_coefficient=0.9, **common)
+        emission_fraction_anode_balance(
+            0.0, 1.0, I_e_sat, plasma.T_e, 10.0, False, lambda: "unit"
+        )
     except ValueError as exc:
         assert "anode sheath balance is infeasible" in str(exc), str(exc)
     else:
         raise AssertionError("an infeasible dispatched balance RETURNED")
-    probe = solve_idriven(cfg, plasma, I_tot_A=0.0,
-                          anode_tail_booking="emission_fraction",
-                          tail_anode_coefficient=0.9,
-                          anode_balance_probe=True, **common)
-    assert probe.phi_a == floored, (probe.phi_a, floored)
+    phi_p, f_p, branch_p = emission_fraction_anode_balance(
+        0.0, 1.0, I_e_sat, plasma.T_e, 10.0, True, lambda: "unit"
+    )
+    assert phi_p == floored and f_p == 0.0, (phi_p, floored)
+    assert branch_p == ANODE_FAST_BRANCH_NONE
     # NEGATIVE CONTROL.
     tail = 10.0 * I_i_a
     default = solve_idriven(cfg, plasma, I_tot_A=0.0,
@@ -4552,13 +4567,13 @@ def _case_anode_direct_booking_sheath_rule():
     I_esat, T = 1000.0, 3.0
     I_rest = I_esat * math.exp(-10.0 / T)  # phi_a = 10 V without the term
     I_direct = 0.5 * I_rest
-    phi, f = emission_fraction_anode_balance(
+    phi, f, _ = emission_fraction_anode_balance(
         I_rest, I_direct, I_esat, T, 11.0, False, lambda: ""
     )
     assert phi == 11.0 and 0.0 < f < 1.0, (phi, f)
     back = T * math.log(I_esat / (I_rest - f * I_direct))
     assert abs(back - 11.0) < 1e-12, back
-    phi_c, f_c = emission_fraction_anode_balance(
+    phi_c, f_c, _ = emission_fraction_anode_balance(
         I_rest, I_direct, I_esat, T, 20.0, False, lambda: ""
     )
     assert f_c == 1.0
@@ -4821,16 +4836,17 @@ def _case_walker_fate_assert_negative_control():
 @_case("anode-booking-diagnostics-saved")
 def _case_anode_booking_diagnostics_saved():
     """Under ``"emission_fraction"`` the saved file carries the anode floor
-    census and the direct term's collected fraction.
+    census, the fast term's collected fraction and its branch.
 
     A walked-tail half column run under the booking saves
     ``cathode_diagnostics/anode_floor_dispatched_solves`` (the as-of-save
-    count, zero: the balance raises rather than floors) and
+    count, zero: the balance raises rather than floors),
     ``cathode_diagnostics/source_anode_direct_collected_fraction`` (in
-    ``[0, 1]`` on every frame), and the run-level attribute
-    ``anode_floor_dispatched_solves``.
+    ``[0, 1]`` on every frame) and
+    ``cathode_diagnostics/source_anode_fast_branch`` (0, 1 or 2 on every
+    frame), and the run-level attribute ``anode_floor_dispatched_solves``.
     NEGATIVE CONTROL: the same walked tail at the end wall under the default
-    booking saves none of the three.
+    booking saves none of the four.
     """
     import tempfile
 
@@ -4846,7 +4862,8 @@ def _case_anode_booking_diagnostics_saved():
                 return (
                     {name: diag[name][()] for name in diag
                      if name.endswith("anode_floor_dispatched_solves")
-                     or name.endswith("anode_direct_collected_fraction")},
+                     or name.endswith("anode_direct_collected_fraction")
+                     or name.endswith("anode_fast_branch")},
                     h5.attrs.get("anode_floor_dispatched_solves"),
                 )
 
@@ -4858,10 +4875,13 @@ def _case_anode_booking_diagnostics_saved():
     assert set(rows) == {
         "anode_floor_dispatched_solves",
         "source_anode_direct_collected_fraction",
+        "source_anode_fast_branch",
     }, sorted(rows)
     assert np.all(rows["anode_floor_dispatched_solves"] == 0.0)
     fraction = rows["source_anode_direct_collected_fraction"]
     assert fraction.size > 1 and np.all((fraction >= 0.0) & (fraction <= 1.0))
+    branch = rows["source_anode_fast_branch"]
+    assert branch.size == fraction.size and np.all(np.isin(branch, (0, 1, 2)))
     assert attr == 0, attr
     # NEGATIVE CONTROL.
     wall_params, wall_flags = _mirror_circuit_config("end_wall")
@@ -5000,3 +5020,107 @@ def _case_anode_outbound_primary_sheath_rule():
         whole.anode_intercepted_erg_s, want,
     )
     assert whole.primary_net_direct_flux_per_s > 0.0
+
+
+# --------------------------------------------------------------------
+# anode-fast-term-sheath-rule
+# --------------------------------------------------------------------
+@_case("anode-fast-term-sheath-rule")
+def _case_anode_fast_term_sheath_rule():
+    """Under ``"emission_fraction"`` the whole fast term the anode books
+    (direct, return and tail together) passes one sheath rule at the
+    applying solve's own ``phi_c``.
+
+    (a) A solve whose sheath without the term sits at or above ``phi_c``
+    books none of it: branch NONE, collected fraction 0,
+    ``phi_a = T_e,a ln(I_e,sat / (I_i,a + I_tot)) >= phi_c`` and no tail
+    sheath-fall power. (b) THE RAISING STATE, synthetic: a virtual-cathode
+    solve at ``phi_c`` ~ 81 V whose emission exceeds the loop current, with
+    ``c_tail = 0.88`` and ``w_gap = 0.977``, takes the pinned branch:
+    ``phi_a = phi_c``, the fraction in ``[0, 1)`` and a positive current
+    ``I_i,a + I_tot - f (eta beta (1 - w_gap) + c_tail) I_star`` that
+    reproduces ``phi_a``. (c) The recorded step-18 circuit-advance solve of
+    the half-column twin (the balance's own inputs: ``I_i,a`` 8.7313 A,
+    ``I_tot`` 129.1288 A, ``I_star`` 165.5871 A, ``c_direct`` 8.3214e-9,
+    ``c_tail`` 0.88073, ``phi_c`` 80.9525 V, ``T_e,a`` 37.8942 eV,
+    ``I_e,sat`` 490.556 A) replayed through the balance returns the pinned
+    branch with a positive sheath current.
+    NEGATIVE CONTROL: (b) and (c) under the pre-change split -- the return
+    and tail subtracted before the rule, the rule applied to the direct term
+    alone -- raise the infeasible-balance error.
+    """
+    from cablp.cathode import circuit_common as _cc
+    from cablp.cathode.circuit_idriven import solve_idriven
+
+    cfg, _, _, _ = _booking_unit_solve_inputs()
+    T_ea, I_esat, I_ia = 37.89, 490.56, 8.73
+    common = dict(
+        anode_current_A=I_ia, anode_T_e=T_ea,
+        anode_electron_saturation_A=I_esat,
+        anode_tail_booking="emission_fraction",
+        tail_anode_coefficient=0.88, anode_gap_walker_fraction=0.977,
+    )
+    # (a) no booking.
+    r = solve_idriven(
+        cfg, _cc.PlasmaState(T_e=38.75, n_e=2.12e10, n_n=0.0, sigma_b=0.0),
+        I_tot_A=50.0, **common,
+    )
+    assert r.anode_fast_branch == _cc.ANODE_FAST_BRANCH_NONE
+    assert r.anode_direct_collected_fraction == 0.0
+    without = T_ea * math.log(I_esat / (I_ia + r.I_tot))
+    assert abs(r.phi_a - without) <= 1e-12 * without, (r.phi_a, without)
+    assert r.phi_a >= r.phi_c, (r.phi_a, r.phi_c)
+    assert r.P_tail_phi == 0.0, r.P_tail_phi
+    # (b) the raising state.
+    r = solve_idriven(
+        cfg, _cc.PlasmaState(T_e=38.75, n_e=3.7e10, n_n=0.0, sigma_b=0.0),
+        I_tot_A=129.13, **common,
+    )
+    assert r.regime == "virtual_cathode" and 80.0 < r.phi_c < 82.0, (
+        r.regime, r.phi_c,
+    )
+    assert r.I_eth_star > r.I_tot, (r.I_eth_star, r.I_tot)
+    assert r.anode_fast_branch == _cc.ANODE_FAST_BRANCH_PINNED
+    f = r.anode_direct_collected_fraction
+    assert 0.0 <= f < 1.0 and r.phi_a == r.phi_c, (f, r.phi_a, r.phi_c)
+    c_fast = cfg.eta * r.beam_bypass_fraction * (1.0 - 0.977) + 0.88
+    I_e_a = I_ia + r.I_tot - f * c_fast * r.I_eth_star
+    assert I_e_a > 0.0, I_e_a
+    back = T_ea * math.log(I_esat / I_e_a)
+    assert abs(back - r.phi_a) <= 1e-9 * r.phi_a, (back, r.phi_a)
+    assert abs(
+        r.P_tail_phi - r.phi_a * f * 0.88 * r.I_eth_star
+    ) <= 1e-12 * r.P_tail_phi
+    # (c) the recorded step-18 advance solve, through the balance.
+    I_ia18, I_tot18, I_star18 = 8.731328467152306, 129.12876566786295, (
+        165.58705846843623
+    )
+    c_dir18, c_tail18 = 8.321426379939418e-09, 0.8807342998848132
+    phi_c18, T_ea18, I_esat18 = 80.95249107818451, 37.89423544883266, (
+        490.5564117505911
+    )
+    phi18, f18, branch18 = _cc.emission_fraction_anode_balance(
+        I_ia18 + I_tot18, (c_dir18 + c_tail18) * I_star18, I_esat18, T_ea18,
+        phi_c18, False, lambda: "step 18",
+    )
+    assert branch18 == _cc.ANODE_FAST_BRANCH_PINNED and phi18 == phi_c18
+    assert 0.0 <= f18 < 1.0, f18
+    assert I_ia18 + I_tot18 - f18 * (c_dir18 + c_tail18) * I_star18 > 0.0
+    # NEGATIVE CONTROL: the pre-change split.
+    for rest, direct, E, T, sat in (
+        (I_ia + r.I_tot - 0.88 * r.I_eth_star,
+         cfg.eta * r.beam_bypass_fraction * (1.0 - 0.977) * r.I_eth_star,
+         r.phi_c, T_ea, I_esat),
+        (I_ia18 + I_tot18 - c_tail18 * I_star18, c_dir18 * I_star18,
+         phi_c18, T_ea18, I_esat18),
+    ):
+        try:
+            _cc.emission_fraction_anode_balance(
+                rest, direct, sat, T, E, False, lambda: "pre-change split"
+            )
+        except ValueError as exc:
+            assert "anode sheath balance is infeasible" in str(exc), str(exc)
+        else:
+            raise AssertionError(
+                f"the pre-change split RETURNED at I_rest={rest!r} A"
+            )
