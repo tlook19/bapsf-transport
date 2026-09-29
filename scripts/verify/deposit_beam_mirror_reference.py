@@ -12,7 +12,7 @@ by a second implementation of it. It is a SEPARATE corpus from
 ``deposit_beam_reference.npz``: no entry of that corpus passes a mirror face,
 and none of its entries is touched here.
 
-WHAT IS IN IT. Eight arms on synthetic half columns:
+WHAT IS IN IT. Nine arms on synthetic half columns:
 
 ``fold_walkers``
     the walked plateau tail (quasilinear drag, eight groups, ionizing),
@@ -33,6 +33,11 @@ WHAT IS IN IT. Eight arms on synthetic half columns:
 ``primary_bank``
     a primary reaching the plane under weak quasilinear drag with the walked
     tail on: its returning legs hand their drag to the walked bank;
+``primary_net_basis``
+    the primary's particle ledger on the net basis (``primary_net_basis``)
+    with the walked tail, the wires' sheath at 40 V and half of the
+    outbound interception collected: the outbound turned share, the returns'
+    sheath rule, the outbound-only gap-born count and the net rows;
 ``chains_rearm``
     ``_tail_mirror_chains`` called directly on one gap-side walker: its legs'
     banks, directions and transmitted flux/energy, and the chain ledger;
@@ -145,6 +150,15 @@ def _ray_arms():
         _mg(cells, tail_reflect_face=-1, tail_reflect_threshold_eV=200.0,
             anode_cross_index=5, anode_eta=ETA, tail_anode_cross_index=5,
             tail_anode_eta=ETA),
+    )
+    arms["primary_net_basis"] = (
+        (60.0, 1.0e18, np.full(cells, 3.0e12),
+         np.full(cells, 3.0e11) * np.linspace(1.0, 2.0, cells), Te,
+         0, 1, dz),
+        _mg(cells, tail_reflect_face=-1, tail_reflect_threshold_eV=60.0,
+            anode_cross_index=5, anode_eta=ETA, tail_anode_cross_index=5,
+            tail_anode_eta=ETA, tail_anode_phi_eV=40.0,
+            primary_net_basis=True, primary_anode_collected_fraction=0.5),
     )
     return arms
 

@@ -224,6 +224,11 @@ _CASE_ORDER = (
     "anode-tail-booking-mirror-walked-tail",
     "anode-direct-booking-sheath-rule",
     "anode-booking-evaluators-plumbed",
+    "anode-gap-born-outbound-only",
+    "anode-booking-consumer-assert",
+    "walker-fate-assert-negative-control",
+    "anode-booking-diagnostics-saved",
+    "anode-outbound-primary-sheath-rule",
 )
 
 
