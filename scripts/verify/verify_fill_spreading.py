@@ -138,7 +138,7 @@ Usage (from the repo root, PYTHONPATH set to the repo root):
 
     python scripts/verify/verify_fill_spreading.py
     python scripts/verify/verify_fill_spreading.py --fast
-    python scripts/verify/verify_fill_spreading.py \
+    python scripts/verify/verify_fill_spreading.py \\
         --stance scripts/stances/examples/g1atrim_twin_half_base.toml
     python scripts/verify/verify_fill_spreading.py --tpmc-record RECORD.npz
     python scripts/verify/verify_fill_spreading.py \\

@@ -351,6 +351,16 @@ reference cell containing the half mesh's cell centre.
    --base-from-h5 <base.h5>`, which builds the registered Knudsen member at
    the registered foot on this file's mesh and writes the `nn0_profile` /
    `nn0_annulus_profile` rows.
+4. The PRODUCTION half column,
+   `scripts/stances/examples/g1atrim_twin_half.toml`, which the chain ends
+   in. It names `base = "g1atrim"` and moves the base's geometry and
+   apparatus keys by value (`far_end`, `Lm`, `nx`, `S_pump_R`,
+   `anode_tail_booking` and the two radius rows). It takes the profile
+   route exactly as the reference configuration states it:
+   `initial_neutral_state = "profile"`, the 27 ms puff window, the seed
+   cache off and `nn0` null, with `nn0_profile` / `nn0_annulus_profile` set
+   to step 3's rows at full `repr` precision. Against the reference its
+   deltas are the base's, less the route keys, plus the two fill rows.
 
 At a mirror face the fill builder's wall-limited operator is zero-flux at the
 plane by construction. The builder asserts it (the mirror face is the mesh's

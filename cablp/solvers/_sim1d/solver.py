@@ -6327,11 +6327,13 @@ class LAPDSim1D:
         # changes no configuration that constructed before: every config this
         # touches is one that raised, so the equilibrated seed, its cache
         # signature and every existing trajectory are bit-identical. The OUTER
-        # run is untouched: both are input_dict keys, and `params` is the COPY
-        # `get_config()` returned, so these two lines reach the inner sim only.
+        # run is untouched: the two jets and the booking selector below are
+        # input_dict keys, and `params` is the COPY `get_config()` returned,
+        # so these three lines reach the inner sim only.
         params["neutral_kinetic_dvm_cathode_jet"] = False
         params["neutral_kinetic_dvm_anode_jet"] = False
-        # No cathode coupling here, so the anode booking selector has nothing to govern.
+        # No cathode coupling here, so the anode booking selector has nothing
+        # to govern.
         params["anode_tail_booking"] = "lagged_current"
         # The end wall channel is cleared for the same reason and, unlike the
         # two above, its four numbers with it: they are refused outright while
