@@ -225,6 +225,7 @@ _CASE_ORDER = (
     "anode-direct-booking-sheath-rule",
     "anode-booking-evaluators-plumbed",
     "anode-gap-born-outbound-only",
+    "anode-booking-consumer-assert",
 )
 
 

@@ -289,8 +289,10 @@ def solve_idriven(
     intercepted at the anode plane net of the walker flux born upstream of
     it, booked only where the beam (at energy ``phi_c``) clears the anode
     sheath (``circuit_common.emission_fraction_anode_balance``); it refuses a
-    non-zero ``tail_anode_current_A``, and a balance with no floating
-    solution raises ``ValueError``.
+    non-zero ``tail_anode_current_A``, a balance with no floating
+    solution raises ``ValueError``, and a total
+    ``eta * beta * (1 - w_gap) + c_ret + c_tail`` above 1 at THIS solve's
+    ``beta`` raises ``RuntimeError``.
     ``anode_balance_probe`` marks the circuit advance's bracket probe at the
     lower endpoint ``I = 0``, which keeps the floored endpoint value under
     either booking and is never counted.
@@ -645,6 +647,19 @@ def solve_idriven(
         # applied to this solve's emission. The direct term is booked only
         # where the beam, at the launch energy phi_c, clears the anode sheath
         # it books (three branches, no root-find; see the helper).
+        # The coefficients were checked against the PRODUCING solve's beta;
+        # this solve applies them with its own, so the bound is re-asserted
+        # here.
+        _booked = eta * beam_bypass_fraction * (1.0 - w_gap) + c_ret + c_tail
+        if not _booked <= 1.0:
+            raise RuntimeError(
+                "the anode's direct fast-electron collection exceeds the "
+                "emission in the solve that applies it: "
+                "eta*beta*(1 - w_gap) + c_ret + c_tail = "
+                f"{_booked!r} (eta={eta!r}, beta={beam_bypass_fraction!r}, "
+                f"w_gap={w_gap!r}, c_ret={c_ret!r}, c_tail={c_tail!r}); the "
+                "booking requires a total of at most 1"
+            )
         _I_star = J_star * T_e / R_p
         _I_rest = I_i_a + J_tot * T_e / R_p - (c_ret + c_tail) * _I_star
         _I_direct = eta * beam_bypass_fraction * (1.0 - w_gap) * _I_star

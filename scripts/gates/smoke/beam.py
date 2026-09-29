@@ -4697,3 +4697,60 @@ def _case_anode_gap_born_outbound_only():
     w_all = gross.tail_gap_born_flux_per_s / G0
     assert w_all > w_gap * (1.0 + 1e-3), (w_all, w_gap)
     assert abs(_MIRROR_ETA * (1.0 - w_all) - direct) > 1e-6, (w_all, direct)
+
+
+# --------------------------------------------------------------------
+# anode-booking-consumer-assert
+# --------------------------------------------------------------------
+@_case("anode-booking-consumer-assert")
+def _case_anode_booking_consumer_assert():
+    """The solve that APPLIES the lagged coefficients re-asserts the bound at
+    its own ``beta``.
+
+    Coefficients the producing deposition admitted at a smaller ``beta``
+    (``eta*beta_prod*(1 - w_gap) + c_ret + c_tail <= 1``) exceed 1 at the
+    consuming solve's ``beta``, and ``solve_idriven`` raises a
+    ``RuntimeError`` naming the total.
+    NEGATIVE CONTROL: the same ``w_gap`` and ``c_ret`` with an admissible
+    tail coefficient solve at the same ``beta``.
+    """
+    from cablp.cathode.circuit_idriven import solve_idriven
+    from cablp.solvers._sim1d.physics.cathode import (
+        anode_tail_booking_coefficients,
+    )
+
+    cfg, plasma, I_i_a, I_e_sat = _booking_unit_solve_inputs()
+    common = dict(
+        anode_current_A=I_i_a, anode_T_e=plasma.T_e,
+        anode_electron_saturation_A=I_e_sat, I_tot_A=3000.0,
+        anode_tail_booking="emission_fraction",
+    )
+    beta = solve_idriven(cfg, plasma, **common).beam_bypass_fraction
+    assert beta > 0.05, beta
+    w_gap, c_ret = 0.37, 0.05
+    direct = cfg.eta * beta * (1.0 - w_gap)
+    c_tail = 1.0 - c_ret - 0.5 * direct
+    # The producer, at half this beta, admits them.
+    I_emit = 10.0
+    anode_tail_booking_coefficients(
+        c_tail * I_emit, I_emit, w_gap * I_emit / qe_SI, cfg.eta, 0.5 * beta,
+        c_ret * I_emit / qe_SI,
+    )
+    try:
+        solve_idriven(
+            cfg, plasma, tail_anode_coefficient=c_tail,
+            anode_gap_walker_fraction=w_gap, primary_return_coefficient=c_ret,
+            **common,
+        )
+    except RuntimeError as exc:
+        assert "in the solve that applies it" in str(exc), str(exc)
+    else:
+        raise AssertionError("consumer-side over-count ACCEPTED")
+    # NEGATIVE CONTROL.
+    r = solve_idriven(
+        cfg, plasma, tail_anode_coefficient=0.21,
+        anode_gap_walker_fraction=w_gap, primary_return_coefficient=c_ret,
+        **common,
+    )
+    assert r.beam_bypass_fraction == beta
+    assert direct + c_ret + 0.21 <= 1.0
