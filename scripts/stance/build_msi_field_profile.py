@@ -149,10 +149,24 @@ mesh cells fall outside the span at each end and whether the cap binds there,
 which is what decides whether either hold is observable at all.
 
 THE MESH AND THE VESSEL ARE NOT REBUILT. Both come from
-``g1_build_profiles.py`` unchanged: its ``_g1_config`` mesh probe resolves the
-stance's 280-cell mesh (1 plenum + 5 gap + 5 fixed source + 268 far column +
-1 end wall) and its ``build_vessel_profile`` gives the measured
-``machine_radius_profile_cm`` staircase. This script changes ONE array.
+``g1_build_profiles.py`` unchanged: its ``mesh_config`` probe resolves the
+configuration's mesh -- for the reference configuration, the 280-cell mesh
+(1 plenum + 5 gap + 5 fixed source + 268 far column + 1 end wall) -- and its
+``build_vessel_profile`` gives the measured ``machine_radius_profile_cm``
+staircase. This script changes ONE array.
+
+WHICH MESH -- ``--stance``. The row is sized to, and registered on, the mesh
+of the configuration ``--stance`` names (a committed name or a file path),
+the reference configuration by default, so an invocation that names nothing
+builds exactly what it always built. On any other configuration the probe is
+that configuration's own mesh (see ``g1_build_profiles.mesh_config``) and the
+row is the SAME measured shape evaluated at its cell centres -- no re-fit and
+no new measurement. A half column that stops at its mirror plane
+(``far_end = "mirror"``, ``z = Lm/2``) ends upstream of the departure, so its
+row is ``RP_CM`` in every cell. The p50/p41 flux-ratio gate reads two
+stations; on a mesh that does not reach both it is reported NOT APPLICABLE
+rather than passed, because a nearest-cell read past the far end would compare
+the last cell with itself.
 
 Inputs
 ------
@@ -162,9 +176,10 @@ Inputs
     The measured-census field re-solve, an out-of-repo table, handed to
     ``g1_build_profiles`` for the two census plasma profiles the comparison
     is made against.
-``scripts/stances/g1atrim.toml``
-    The LAPD reference configuration, read through ``g1_build_profiles`` for
-    the mesh and the vessel profile.
+``--stance NAME_OR_PATH``
+    The configuration the row is registered on, read through
+    ``g1_build_profiles`` for the mesh and the vessel profile; the LAPD
+    reference configuration ``scripts/stances/g1atrim.toml`` by default.
 
 Outputs (all in ``--outdir``, which must lie outside the repository)
 -------------------------------------------------------------------
@@ -652,6 +667,17 @@ def _parse_args(argv=None):
             "outside the repository, which holds code only"
         ),
     )
+    parser.add_argument(
+        "--stance",
+        metavar="NAME_OR_PATH",
+        default=census_build.REFERENCE_STANCE,
+        help=(
+            "the configuration whose mesh the row is sized to and registered "
+            "on: a committed configuration name or the path of a "
+            "configuration file (default "
+            f"{census_build.REFERENCE_STANCE!r}, the reference build)"
+        ),
+    )
     args = parser.parse_args(argv)
     args.census_npz = os.path.abspath(args.census_npz)
     if not os.path.isfile(args.census_npz):
@@ -680,10 +706,17 @@ def main(argv=None):
     say("=== MSI measured-field plasma radius profile build ===")
     say(f"data     : {MSI_DATA_DIR}")
     say(f"census   : {census_build.CENSUS_NPZ}")
-    say(
-        f"reference: configuration {census_build.REFERENCE_STANCE} "
-        f"(mesh-sized package dropped)"
-    )
+    reference = census_build.is_reference_configuration(args.stance)
+    if reference:
+        say(
+            f"reference: configuration {census_build.REFERENCE_STANCE} "
+            f"(mesh-sized package dropped)"
+        )
+    else:
+        say(
+            f"configuration: {args.stance} (mesh-sized package dropped; its "
+            "OWN mesh, the reference grid constants not applied)"
+        )
     say(f"outdir   : {outdir}")
     say(
         f"rules    : plateau = median over z in {PLATEAU_WINDOW_CM} cm; flat "
@@ -988,8 +1021,9 @@ def main(argv=None):
     say()
 
     # --- mesh + vessel, inherited unchanged ---------------------------------
-    ref_params, ref_flags = census_build._reference_config()
-    mesh_params, mesh_flags = census_build._g1_config(ref_params, ref_flags)
+    _ref_params, _ref_flags, mesh_params, mesh_flags = census_build.mesh_config(
+        args.stance
+    )
     mesh = build_geometry(mesh_params, mesh_flags)
     vessel = census_build.build_vessel_profile(mesh.z_cm, mesh.cell_role)
     say("--- mesh and vessel (from g1_build_profiles.py, UNCHANGED) ---")
@@ -1021,7 +1055,13 @@ def main(argv=None):
     say(
         f"flat cells (r == {RP_CM} exactly): "
         f"{int(np.sum(profile == RP_CM))} of {mesh.cells}; flared cells: "
-        f"{flared.size}, first index {flared[0]} at z = {mesh.z_cm[flared[0]]:.3f} cm"
+        + (
+            f"{flared.size}, first index {flared[0]} at z = "
+            f"{mesh.z_cm[flared[0]]:.3f} cm"
+            if flared.size
+            else f"0 -- the mesh ends at z = {mesh.z_edges_cm[-1]:.3f} cm, "
+            f"upstream of the departure at {z_departure:.3f} cm"
+        )
     )
     say(
         f"{'i':>4} {'z[cm]':>10} {'B_hat':>8} {'raw[cm]':>9} {'cap[cm]':>9} "
@@ -1078,8 +1118,6 @@ def main(argv=None):
     say()
 
     throat = int(np.argmin(profile))
-    widest_flux = int(np.argmax(raw[flared[0] : binds[0] if binds.size else mesh.cells]))
-    widest_flux += flared[0]
     say("--- headline geometry of the new profile ---")
     say(
         f"NO THROAT: the minimum radius over the whole mesh is "
@@ -1095,26 +1133,45 @@ def main(argv=None):
             "state does not admit -- investigate before shipping."
         )
     )
+    if flared.size:
+        widest_flux = int(
+            np.argmax(raw[flared[0] : binds[0] if binds.size else mesh.cells])
+        )
+        widest_flux += flared[0]
+        say(
+            f"FLARE: the widest cell the cap does NOT touch is {widest_flux} at "
+            f"z = {mesh.z_cm[widest_flux]:.3f} cm, r = {raw[widest_flux]:.4f} cm = "
+            f"{raw[widest_flux] / RP_CM:.4f} x Rp; past it the flux ratio would "
+            f"reach {raw.max():.4f} cm and the cap takes over"
+        )
+    else:
+        say(
+            "FLARE: none on this mesh -- every cell centre is at or upstream "
+            "of the departure, so the flat rule holds the whole row at Rp"
+        )
+    mirror = np.asarray(getattr(mesh, "mirror_face_indices", ())).size > 0
     say(
-        f"FLARE: the widest cell the cap does NOT touch is {widest_flux} at "
-        f"z = {mesh.z_cm[widest_flux]:.3f} cm, r = {raw[widest_flux]:.4f} cm = "
-        f"{raw[widest_flux] / RP_CM:.4f} x Rp; past it the flux ratio would "
-        f"reach {raw.max():.4f} cm and the cap takes over"
-    )
-    say(
-        f"END WALL (terminal cell {mesh.cells - 1}, z = "
+        ("MIRROR-ADJACENT CELL" if mirror else "END WALL")
+        + f" (terminal cell {mesh.cells - 1}, z = "
         f"{mesh.z_cm[-1]:.3f} cm): r = {profile[-1]:.4f} cm "
         f"(cap {cap[-1]:.4f} cm, uncapped ratio would give {raw[-1]:.4f} cm); "
         f"census droop_min gave {census_profiles['droop_min'][-1]:.4f} cm"
     )
+    reaches_p50 = port_z_cm(50) <= float(mesh.z_edges_cm[-1])
     say(
         f"p50 IS IN THE FLAT COLUMN: at z = {port_z_cm(50):.2f} cm the "
         f"measured B_hat is "
         f"{float(np.interp(port_z_cm(50), z_grid_cm, b_hat)):.4f} and the "
         f"departure is {z_departure - port_z_cm(50):.2f} cm downstream of it, "
-        f"so the emitted r there is exactly {RP_CM} cm -- the same as p11-p41. "
-        "The spurious p50 flare of the mis-oriented build was the SOURCE-SIDE "
-        "dip reflected onto the far column."
+        + (
+            f"so the emitted r there is exactly {RP_CM} cm -- the same as "
+            "p11-p41. "
+            if reaches_p50
+            else f"and this mesh ends at z = {mesh.z_edges_cm[-1]:.2f} cm, "
+            "upstream of it, so the row carries no p50 cell. "
+        )
+        + "The spurious p50 flare of the mis-oriented build was the "
+        "SOURCE-SIDE dip reflected onto the far column."
     )
     say(
         "PROFILE IS MONOTONE THROUGH THE FALL-OFF, unlike the mis-oriented "
@@ -1236,13 +1293,27 @@ def main(argv=None):
     )
 
     # The flux-tube ratio between the two stations the measurement resolves.
+    unreached = [
+        port for port in (41, 50) if port_z_cm(port) > float(mesh.z_edges_cm[-1])
+    ]
+    if unreached:
+        say(
+            "GATE -- p50/p41 flux-tube area ratio: NOT APPLICABLE on this "
+            f"mesh. It ends at z = {mesh.z_edges_cm[-1]:.3f} cm, upstream of "
+            + ", ".join(f"p{port} (z = {port_z_cm(port):.2f} cm)" for port in unreached)
+            + ", so a nearest-cell read there would compare the last cell with "
+            "itself. The gate is decided on a mesh that reaches both stations "
+            "(the reference build); the measured shape this row is evaluated "
+            "from is the same one."
+        )
     port_cells = {
         port: int(np.argmin(np.abs(mesh.z_cm - port_z_cm(port)))) for port in (41, 50)
     }
     implied_ratio = (profile[port_cells[50]] / profile[port_cells[41]]) ** 2
     deviation = abs(implied_ratio - MEASURED_P50_P41_FLUX_RATIO)
     say(
-        "GATE -- p50/p41 flux-tube area ratio. The emitted profile reads "
+        ("(not applied) " if unreached else "")
+        + "GATE -- p50/p41 flux-tube area ratio. The emitted profile reads "
         f"r(p50) = {profile[port_cells[50]]:.4f} cm (cell {port_cells[50]}, "
         f"z = {mesh.z_cm[port_cells[50]]:.3f} cm) and r(p41) = "
         f"{profile[port_cells[41]]:.4f} cm (cell {port_cells[41]}, z = "
@@ -1251,14 +1322,17 @@ def main(argv=None):
         f"{MEASURED_P50_P41_FLUX_RATIO_SIGMA}. Deviation {deviation:.4f} = "
         f"{deviation / MEASURED_P50_P41_FLUX_RATIO_SIGMA:.2f} sigma."
     )
-    if deviation > MEASURED_P50_P41_FLUX_RATIO_SIGMA:
+    if unreached:
+        pass
+    elif deviation > MEASURED_P50_P41_FLUX_RATIO_SIGMA:
         raise AssertionError(
             f"the emitted p50/p41 flux-tube area ratio {implied_ratio:.6f} is "
             f"{deviation / MEASURED_P50_P41_FLUX_RATIO_SIGMA:.2f} sigma from "
             f"the measured {MEASURED_P50_P41_FLUX_RATIO} +/- "
             f"{MEASURED_P50_P41_FLUX_RATIO_SIGMA}"
         )
-    say("ASSERT the implied ratio is within one sigma of the measurement: PASS")
+    if not unreached:
+        say("ASSERT the implied ratio is within one sigma of the measurement: PASS")
 
     # Reported, not applied: the source-side anchors of the corrected frame.
     peak_value, peak_z, peak_edge = _extremum(z_grid_cm, b_hat, PEAK_WINDOW_CM, "max")
@@ -1274,11 +1348,13 @@ def main(argv=None):
         "the far column as a p50 flare and a sub-Rp throat."
     )
 
-    params, flags = census_build._g1_config(ref_params, ref_flags)
+    params, flags = dict(mesh_params), dict(mesh_flags)
     params["plasma_radius_profile_cm"] = [float(v) for v in profile]
     params["machine_radius_profile_cm"] = [float(v) for v in vessel]
-    params["neutral_baffle_positions_cm"] = list(census_build.BAFFLE_POSITIONS_CM)
-    params["neutral_baffle_clear_radii_cm"] = list(census_build.BAFFLE_CLEAR_RADII_CM)
+    if reference:
+        # Another configuration's baffles are its own keys, already carried.
+        params["neutral_baffle_positions_cm"] = list(census_build.BAFFLE_POSITIONS_CM)
+        params["neutral_baffle_clear_radii_cm"] = list(census_build.BAFFLE_CLEAR_RADII_CM)
     geometry = build_geometry(params, flags)
     say("build_geometry with the new profile: OK (no ValueError)")
     annulus = geometry.neutral_volume_cm3 - geometry.plasma_volume_cm3
