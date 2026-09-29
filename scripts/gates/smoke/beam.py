@@ -3724,8 +3724,9 @@ def _case_mirror_csda_primary_turn():
     identity closes to 1e-12.
     (b) On a column with no neutrals and almost no plasma the primary
     bounces between the cathode sheath and the plane; the anode mesh is
-    re-armed on every return from the plane (33 interceptions in 64 legs),
-    so the residual flux is exactly ``(1 - eta)**33`` of the launch, booked
+    re-armed on every return from the plane (``1 + MIRROR_MAX_LEGS // 2``
+    interceptions in ``MIRROR_MAX_LEGS`` legs), so the residual flux is
+    exactly ``(1 - eta)**(1 + MIRROR_MAX_LEGS // 2)`` of the launch, booked
     in its row, and the identity still closes.
     NEGATIVE CONTROL: without ``mirror_face`` the half ray transmits the
     surviving flux out of the far end and is intercepted once.
@@ -3778,7 +3779,7 @@ def _case_mirror_csda_primary_turn():
         anode_cross_index=5, anode_eta=_MIRROR_ETA, **window,
     )
     expected = 1.0e18
-    for _ in range(33):
+    for _ in range(1 + _beam_deposition_mod.MIRROR_MAX_LEGS // 2):
         expected *= 1.0 - _MIRROR_ETA
     assert bounce.primary_mirror_residual_flux_per_s == expected, (
         bounce.primary_mirror_residual_flux_per_s, expected
@@ -3956,7 +3957,8 @@ def _case_mirror_residual_bound_raises():
     plus the primary's residual exceeds ``MIRROR_RESIDUAL_MAX_FRACTION`` of
     the ray's launched power ``Gamma0 * E0``. Both components are exercised:
     (a) a primary bouncing on a near-vacuum column behind a thin mesh
-    (``eta = 0.05``: ``0.95**33`` of it is left after 64 legs), and
+    (``eta = 0.05``: ``0.95**(1 + MIRROR_MAX_LEGS // 2)`` of it is left
+    after ``MIRROR_MAX_LEGS`` legs), and
     (b) walkers between a reflecting cathode and the mirror with no anode
     to remove them. Each raises a RuntimeError naming the bound.
     NEGATIVE CONTROL: with the bound lifted -- the pre-bound behaviour -- the
@@ -4470,7 +4472,7 @@ def _case_anode_tail_booking_mirror_walked_tail():
             "with heating_anomalous_transport='plateau_multigroup'"
             in str(exc)
         ), str(exc)
-        assert "10-46 % of the tail power at 64 legs" in str(exc), str(exc)
+        assert "0.2-6 % of the tail power at 256 legs" in str(exc), str(exc)
     else:
         raise AssertionError("the lagged walked tail ACCEPTED at a mirror")
     import tempfile
