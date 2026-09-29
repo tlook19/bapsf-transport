@@ -2097,6 +2097,12 @@ class LAPDSim1D:
         # default booking.
         self._cathode_tail_anode_coef = 0.0
         self._cathode_anode_gap_walker_frac = 0.0
+        self._cathode_primary_return_coef = 0.0
+        # Census of sheath solves (the per-step and stage solves this solver
+        # dispatches, memo hits excluded) whose anode balance had no floating
+        # solution and was floored under anode_tail_booking="lagged_current".
+        # A diagnostic: it changes no value.
+        self._anode_floor_dispatched_count = 0
         # Last accepted sheath solve's current, used only by the measured-tail
         # phase gate. The evolved loop state itself is _circuit_I_loop.
         self._circuit_I_prev = 0.0
@@ -2425,6 +2431,19 @@ class LAPDSim1D:
             raise ValueError(
                 "anode_tail_booking must be 'lagged_current' or "
                 f"'emission_fraction' (got {_booking!r})"
+            )
+        if (
+            _booking == "emission_fraction"
+            and self._input_dict.get("cathode_solver_model")
+            == "prescribed_measured"
+        ):
+            raise ValueError(
+                "anode_tail_booking='emission_fraction' books the primary's "
+                "direct interception only where the beam, at the cathode "
+                "drop phi_c, clears the anode sheath; "
+                "cathode_solver_model='prescribed_measured' solves phi_c FROM "
+                "the anode sheath, so the rule has no fixed beam energy there. "
+                "Use cathode_solver_model='current_driven'"
             )
         if _booking == "emission_fraction" and not (
             _tail_walking and bool(self._flags.get("cathode_coupling"))
@@ -3861,6 +3880,9 @@ class LAPDSim1D:
             cathode_anode_gap_walker_frac=float(
                 self._cathode_anode_gap_walker_frac
             ),
+            cathode_primary_return_coef=float(
+                self._cathode_primary_return_coef
+            ),
         )
 
     def _restore_step_cache(self, snapshot):
@@ -3875,6 +3897,9 @@ class LAPDSim1D:
         self._cathode_tail_anode_coef = float(snapshot.cathode_tail_anode_coef)
         self._cathode_anode_gap_walker_frac = float(
             snapshot.cathode_anode_gap_walker_frac
+        )
+        self._cathode_primary_return_coef = float(
+            snapshot.cathode_primary_return_coef
         )
 
     def _attempt_step(self, dt=None, operator_split=None):
@@ -4782,6 +4807,7 @@ class LAPDSim1D:
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
+                **self._evaluator_booking_kwargs(),
             )(honest_I_A)
         # B5: the backscatter row of the surface energy ledger, booked on
         # EVERY accepted step the channel counted on -- not only on the ones
@@ -5021,6 +5047,7 @@ class LAPDSim1D:
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
                 phi_wf_override_eV=self._cathode_phi_wf_eff(),
+                **self._evaluator_booking_kwargs(),
             )
             I_new, V_cap_new, V_dis_step = advance_circuit_current_driven(
                 I_prev_A=self._circuit_I_loop,
@@ -5209,6 +5236,9 @@ class LAPDSim1D:
             )
             cathode["_cathode_anode_gap_walker_frac"] = float(
                 self._cathode_anode_gap_walker_frac
+            )
+            cathode["_cathode_primary_return_coef"] = float(
+                self._cathode_primary_return_coef
             )
         cathode["energy_ledger_J"] = None
         # Cathode-jet arming latch, presence-gated on the criterion being
@@ -5401,6 +5431,9 @@ class LAPDSim1D:
         )
         self._cathode_anode_gap_walker_frac = float(
             cathode.get("_cathode_anode_gap_walker_frac", 0.0)
+        )
+        self._cathode_primary_return_coef = float(
+            cathode.get("_cathode_primary_return_coef", 0.0)
         )
         # Cathode-jet arming latch, presence-gated on THIS solver's criterion:
         # with none declared the latch is permanently armed and restoring a
@@ -7940,6 +7973,28 @@ class LAPDSim1D:
         )
         return np.where(self._plasma_active_mask(), row, 0.0)
 
+    def _evaluator_booking_kwargs(self):
+        """The lagged booking the circuit advance and the re-solve book.
+
+        Under ``anode_tail_booking = "emission_fraction"`` the two evaluators
+        book the anode exactly as the dispatched solve does, from the same
+        three lagged coefficients. Under ``"lagged_current"`` nothing is
+        passed: both evaluators then book the anode with no tail current
+        while the dispatched solve reads the lagged one (a standing
+        difference of that booking, kept so its trajectories do not move).
+        """
+        if self._input_dict.get("anode_tail_booking") != "emission_fraction":
+            return {}
+        return dict(
+            tail_anode_coefficient_prev=self._cathode_tail_anode_coef,
+            anode_gap_walker_fraction_prev=(
+                self._cathode_anode_gap_walker_frac
+            ),
+            primary_return_coefficient_prev=(
+                self._cathode_primary_return_coef
+            ),
+        )
+
     def _cathode_solve_memo_key(
         self,
         state,
@@ -7968,6 +8023,7 @@ class LAPDSim1D:
             _memo_key_part(self._cathode_tail_anode_I),
             _memo_key_part(self._cathode_tail_anode_coef),
             _memo_key_part(self._cathode_anode_gap_walker_frac),
+            _memo_key_part(self._cathode_primary_return_coef),
             _memo_key_part(self._cathode_x0),
             _memo_key_part(self._cathode_x0_twin),
             _memo_key_part(self._cathode_Ts_K),
@@ -8050,6 +8106,9 @@ class LAPDSim1D:
             anode_gap_walker_fraction_prev=(
                 self._cathode_anode_gap_walker_frac
             ),
+            primary_return_coefficient_prev=(
+                self._cathode_primary_return_coef
+            ),
             I_ion=self._I_ion,
             x0=self._cathode_x0,
             x0_twin=self._cathode_x0_twin,
@@ -8061,6 +8120,10 @@ class LAPDSim1D:
         )
         if memo_key is not None:
             self._cathode_solve_memo = (memo_key, result)
+        if result.beam_result is not None and float(
+            result.beam_result.result.anode_floor_fired
+        ):
+            self._anode_floor_dispatched_count += 1
         if update_cache:
             self._warn_beam_gap_ledger(result)
             self._cathode_solve = result
@@ -8078,6 +8141,9 @@ class LAPDSim1D:
             )
             self._cathode_anode_gap_walker_frac = float(
                 result.anode_gap_walker_fraction
+            )
+            self._cathode_primary_return_coef = float(
+                result.primary_return_coefficient
             )
             # Clamp census (see _init_run_machinery). Same branch, same
             # reason: a rejected attempt is not a solve this run performed.

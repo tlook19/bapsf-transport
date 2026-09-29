@@ -292,6 +292,16 @@ def solve_prescribed(
         )
 
     phi_a, l_b, beam_bypass_fraction = _anode_state(phi_c)
+    # Census only: whether the balance at the solved sheath (not a trial
+    # sheath of the root-find) was floored. It changes no value.
+    anode_floor_fired = (
+        1.0
+        if 1e-300 > I_i_a + (
+            I_tot - eta * beam_bypass_fraction * I_eth_star
+            - float(tail_anode_current_A)
+        )
+        else 0.0
+    )
     long_mfp = l_b > 0.0 and l_b > config.L_cath
     # No emission solve, hence no space-charge barrier to report: the whole
     # cathode fall is classical.
@@ -439,6 +449,7 @@ def solve_prescribed(
         beam_bypass_fraction=beam_bypass_fraction,
         l_b=l_b,
         T_e_anode=T_e_anode,
+        anode_floor_fired=anode_floor_fired,
     )
 
 

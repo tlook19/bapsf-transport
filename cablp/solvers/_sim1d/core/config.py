@@ -1646,22 +1646,29 @@ def cathode_defaults():
         survival times the emission -- and the tail as the absolute collected
         walker current the previous accepted step's deposition measured.
 
-        ``"emission_fraction"``: the primary as
+        ``"emission_fraction"``: every population on the primary's NET flux,
+        per emitted electron. The primary as
         ``eta * beta * (1 - w_gap) * J_star``, with ``w_gap`` the walker flux
         the anomalous drag launched on the cathode side of the anode plane per
-        emitted electron -- the primary's flux at the plane net of what the
-        drag re-launched as walkers upstream of it -- and the tail as
-        ``c_tail * J_star``, with ``c_tail`` the collected walker current per
-        emitted electron, both from the previous accepted deposition and
-        applied to THIS solve's emission. Each deposition asserts
-        ``eta * beta * (1 - w_gap) + c_tail <= 1`` (a ``RuntimeError``
-        otherwise), so the anode never books more fast electrons than the
-        cathode emits. The deposition's energy ledger is the same under both
-        values. Requires ``cathode_coupling`` and
+        emitted electron, booked only where the beam (at ``phi_c``) clears the
+        anode sheath -- whole, not at all, or the share that pins ``phi_a`` at
+        ``phi_c``; its net interception on later crossings of the plane as
+        ``c_ret * J_star``; and the tail as ``c_tail * J_star``, with
+        ``c_tail`` the collected walker current per emitted electron. The
+        three coefficients come from the previous accepted deposition and are
+        applied to THIS solve's emission, in the dispatched solve, the circuit
+        advance and the accepted-state re-solve alike. Each deposition
+        asserts ``eta * beta * (1 - w_gap) + c_ret + c_tail <= 1`` (a
+        ``RuntimeError`` otherwise), so the anode never books more fast
+        electrons than the cathode emits. The primary's returns meet the
+        wires' sheath as the walkers do. An anode balance with no floating
+        solution raises ``ValueError`` (the default floors it and counts the
+        dispatched solves that do). Requires ``cathode_coupling``,
         ``heating_anomalous_transport = "plateau_multigroup"`` (with no walked
-        tail both ``w_gap`` and ``c_tail`` are zero and the value is a no-op);
-        refused otherwise. The walked tail with the circuit at a
-        ``far_end = "mirror"`` plane constructs only under this value.
+        tail every coefficient is zero and the value is a no-op) and
+        ``cathode_solver_model = "current_driven"``; refused otherwise. The
+        walked tail with the circuit at a ``far_end = "mirror"`` plane
+        constructs only under this value.
     beam_anomalous_model:
         Anomalous (beam-plasma instability) drag for the CSDA deposition
         module (``cathode/beam_deposition.deposit_beam``). A declared closure

@@ -160,6 +160,10 @@ class CathodeSolve1D:
     # solve, committed on acceptance like ``tail_anode_current_A``.
     tail_anode_coefficient: float = 0.0
     anode_gap_walker_fraction: float = 0.0
+    # The primary's net interception on its returns to the anode plane per
+    # emitted electron, ``c_ret``, on the same terms (``"emission_fraction"``
+    # only; 0.0 otherwise).
+    primary_return_coefficient: float = 0.0
 
 
 def anode_circuit_sample(state, derived, geometry, ion_mass_g, input_dict, end=0):
@@ -447,35 +451,45 @@ def validate_cathode_solver_model(input_dict, input_flags):
 
 
 def anode_tail_booking_coefficients(
-    tail_anode_current_A, emitted_current_A, gap_born_flux_per_s, eta, beta
+    tail_anode_current_A,
+    emitted_current_A,
+    gap_born_flux_per_s,
+    eta,
+    beta,
+    primary_return_flux_per_s=0.0,
 ):
-    """Return ``(c_tail, w_gap)`` for ``anode_tail_booking="emission_fraction"``.
+    """Return ``(c_tail, w_gap, c_ret)`` for ``anode_tail_booking="emission_fraction"``.
 
     ``c_tail = I_tail / I_emit`` is the collected tail-walker current per
-    emitted electron and ``w_gap = e * gap_born_flux / I_emit`` the walker flux
-    launched on the cathode side of the anode plane per emitted electron, both
-    from one deposition; ``(0.0, 0.0)`` when nothing is emitted. The circuit
-    books ``eta * beta * (1 - w_gap) + c_tail`` of the emission as collected
-    directly by the anode, which cannot exceed the emission: raises
+    emitted electron, ``w_gap = e * gap_born_flux / I_emit`` the walker flux
+    launched on the cathode side of the anode plane per emitted electron, and
+    ``c_ret = e * primary_return_flux / I_emit`` the primary's net
+    interception on its returns to the plane per emitted electron, all from
+    one deposition; zeros when nothing is emitted. The circuit books at most
+    ``eta * beta * (1 - w_gap) + c_ret + c_tail`` of the emission as
+    collected directly by the anode, which cannot exceed the emission: raises
     ``RuntimeError`` when it does, or when ``w_gap`` leaves ``[0, 1]``.
     """
     emitted = float(emitted_current_A)
     if not emitted > 0.0:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     c_tail = float(tail_anode_current_A) / emitted
     w_gap = qe_SI * float(gap_born_flux_per_s) / emitted
-    booked = float(eta) * float(beta) * (1.0 - w_gap) + c_tail
+    c_ret = qe_SI * float(primary_return_flux_per_s) / emitted
+    booked = float(eta) * float(beta) * (1.0 - w_gap) + c_ret + c_tail
     if not (0.0 <= w_gap <= 1.0 and booked <= 1.0):
         raise RuntimeError(
             "the anode's direct fast-electron collection exceeds the "
-            f"emission: eta*beta*(1 - w_gap) + c_tail = {booked!r} (eta="
-            f"{float(eta)!r}, beta={float(beta)!r}, w_gap={w_gap!r}, "
-            f"c_tail={c_tail!r}; emitted {emitted!r} A, collected tail "
-            f"{float(tail_anode_current_A)!r} A, gap-born walker flux "
-            f"{float(gap_born_flux_per_s)!r} /s); the booking requires "
+            "emission: eta*beta*(1 - w_gap) + c_ret + c_tail = "
+            f"{booked!r} (eta={float(eta)!r}, beta={float(beta)!r}, "
+            f"w_gap={w_gap!r}, c_ret={c_ret!r}, c_tail={c_tail!r}; emitted "
+            f"{emitted!r} A, collected tail {float(tail_anode_current_A)!r} "
+            f"A, gap-born walker flux {float(gap_born_flux_per_s)!r} /s, "
+            f"primary net return interception "
+            f"{float(primary_return_flux_per_s)!r} /s); the booking requires "
             "w_gap in [0, 1] and a total of at most 1"
         )
-    return c_tail, w_gap
+    return c_tail, w_gap, c_ret
 
 
 def idriven_result_evaluator(
@@ -490,6 +504,9 @@ def idriven_result_evaluator(
     T_s_override_K=None,
     phi_wf_override_eV=None,
     tail_anode_current_prev_A=0.0,
+    tail_anode_coefficient_prev=0.0,
+    anode_gap_walker_fraction_prev=0.0,
+    primary_return_coefficient_prev=0.0,
 ):
     """Return an ``I [A] -> SolverResult`` evaluator at this frozen state.
 
@@ -501,6 +518,15 @@ def idriven_result_evaluator(
     ``_cathode_solve`` holds the last internal-stage solve of the step, whose
     P_cathode_i differs from the accepted-state value at the same frozen
     current (the stage state sits on the other side of the knee).
+
+    The anode's fast-electron booking follows ``anode_tail_booking``. Under
+    ``"emission_fraction"`` the evaluator books the three lagged coefficients
+    the caller passes, exactly as the dispatched solve does. Under
+    ``"lagged_current"`` it books ``tail_anode_current_prev_A``, whose
+    default is 0.0, and the solver's two callers (the circuit advance and the
+    accepted-state re-solve) do not pass it: under that booking both evaluate
+    the anode with NO tail current, while the dispatched solve reads the
+    lagged one.
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     anode_A, anode_Te, anode_e_sat = anode_circuit_sample(
@@ -530,6 +556,20 @@ def idriven_result_evaluator(
         state, derived, geometry, idx, ion_mass_g, input_dict
     )
 
+    if input_dict.get("anode_tail_booking") == "emission_fraction":
+        booking_kwargs = dict(
+            anode_tail_booking="emission_fraction",
+            tail_anode_coefficient=float(tail_anode_coefficient_prev),
+            anode_gap_walker_fraction=float(anode_gap_walker_fraction_prev),
+            primary_return_coefficient=float(
+                primary_return_coefficient_prev
+            ),
+        )
+    else:
+        booking_kwargs = dict(
+            tail_anode_current_A=float(tail_anode_current_prev_A),
+        )
+
     def solve_at(I_A, anode_balance_probe=False):
         return solve_idriven(
             device_config,
@@ -541,10 +581,7 @@ def idriven_result_evaluator(
             schottky=True,
             phi_c_cap_V=cap,
             alpha_sheath=alpha_sheath,
-            # A2a: the SAME lagged tail current the dispatched solve reads, so
-            # the loop equation's V_dis(I) and the per-step sheath solve
-            # cannot disagree about what the anode is collecting.
-            tail_anode_current_A=float(tail_anode_current_prev_A),
+            **booking_kwargs,
             anode_balance_probe=bool(anode_balance_probe),
         )
 
@@ -563,6 +600,9 @@ def idriven_vdis_evaluator(
     T_s_override_K=None,
     phi_wf_override_eV=None,
     tail_anode_current_prev_A=0.0,
+    tail_anode_coefficient_prev=0.0,
+    anode_gap_walker_fraction_prev=0.0,
+    primary_return_coefficient_prev=0.0,
 ):
     """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
 
@@ -583,6 +623,9 @@ def idriven_vdis_evaluator(
         T_s_override_K=T_s_override_K,
         phi_wf_override_eV=phi_wf_override_eV,
         tail_anode_current_prev_A=tail_anode_current_prev_A,
+        tail_anode_coefficient_prev=tail_anode_coefficient_prev,
+        anode_gap_walker_fraction_prev=anode_gap_walker_fraction_prev,
+        primary_return_coefficient_prev=primary_return_coefficient_prev,
     )
 
     # Internal series drop on the plasma side of the V_dis probe (R5 ES1 tuning
@@ -759,6 +802,7 @@ def solve_cathode_boundary(
     prescribed_drive=None,
     tail_anode_coefficient_prev=0.0,
     anode_gap_walker_fraction_prev=0.0,
+    primary_return_coefficient_prev=0.0,
 ):
     """Call the cathode/beam solver and return raw diagnostics only.
 
@@ -773,8 +817,9 @@ def solve_cathode_boundary(
 
     ``anode_tail_booking`` (read from ``input_dict``) selects which lagged
     inputs the circuit reads: ``tail_anode_current_prev_A`` under
-    ``"lagged_current"``, or ``tail_anode_coefficient_prev`` and
-    ``anode_gap_walker_fraction_prev`` under ``"emission_fraction"``, whose
+    ``"lagged_current"``, or ``tail_anode_coefficient_prev``,
+    ``anode_gap_walker_fraction_prev`` and
+    ``primary_return_coefficient_prev`` under ``"emission_fraction"``, whose
     successors this solve's deposition produces (see
     :func:`anode_tail_booking_coefficients`).
     """
@@ -845,6 +890,7 @@ def solve_cathode_boundary(
             anode_tail_booking=booking,
             tail_anode_coefficient=float(tail_anode_coefficient_prev),
             anode_gap_walker_fraction=float(anode_gap_walker_fraction_prev),
+            primary_return_coefficient=float(primary_return_coefficient_prev),
         )
     else:
         circuit_tail_kwargs = dict(
@@ -887,7 +933,9 @@ def solve_cathode_boundary(
                 ion_mass_g, input_dict,
             ),
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
-            **circuit_tail_kwargs,
+            # The prescribed drive books the lagged absolute tail current
+            # only; ``"emission_fraction"`` is refused with it at construction.
+            tail_anode_current_A=float(tail_anode_current_prev_A),
         )
     else:
         # The circuit is explicit solver state: no inductive fold, no
@@ -973,9 +1021,11 @@ def solve_cathode_boundary(
     # the booked direct collection does not exceed the emission.
     tail_anode_coefficient = 0.0
     anode_gap_walker_fraction = 0.0
+    primary_return_coefficient = 0.0
     if booking == "emission_fraction" and beam_deposition is not None:
         emitted_A = 0.0
         gap_born = 0.0
+        returned = 0.0
         for _end, _dep in beam_deposition.items():
             if _dep is None:
                 continue
@@ -984,14 +1034,18 @@ def solve_cathode_boundary(
             )
             emitted_A += beam_launched_current_A(_res)
             gap_born += float(_dep.tail_gap_born_flux_per_s)
-        tail_anode_coefficient, anode_gap_walker_fraction = (
-            anode_tail_booking_coefficients(
-                tail_anode_current_A,
-                emitted_A,
-                gap_born,
-                device_config.eta,
-                beam_result.result.beam_bypass_fraction,
-            )
+            returned += float(_dep.primary_net_return_flux_per_s)
+        (
+            tail_anode_coefficient,
+            anode_gap_walker_fraction,
+            primary_return_coefficient,
+        ) = anode_tail_booking_coefficients(
+            tail_anode_current_A,
+            emitted_A,
+            gap_born,
+            device_config.eta,
+            beam_result.result.beam_bypass_fraction,
+            returned,
         )
     return CathodeSolve1D(
         boundary=boundary,
@@ -1018,6 +1072,7 @@ def solve_cathode_boundary(
         tail_anode_current_A=tail_anode_current_A,
         tail_anode_coefficient=tail_anode_coefficient,
         anode_gap_walker_fraction=anode_gap_walker_fraction,
+        primary_return_coefficient=primary_return_coefficient,
     )
 
 
@@ -1133,6 +1188,10 @@ def _sum_beam_deposition(a, b):
             float(a.tail_gap_born_flux_per_s)
             + float(b.tail_gap_born_flux_per_s)
         ),
+        **{
+            name: float(getattr(a, name)) + float(getattr(b, name))
+            for name in _NET_LEDGER_FIELDS
+        },
         # Mirror far end: both rays meet the same plane and the same leg
         # budget, so their arrivals and residuals add like the end ledger.
         **{
@@ -1140,6 +1199,16 @@ def _sum_beam_deposition(a, b):
             for name in _MIRROR_DEPOSITION_FIELDS
         },
     )
+
+
+#: The ``BeamDepositionResult`` scalars the primary's net-basis ledger fills
+#: (0.0 unless ``primary_net_basis``); flux rows, so a clumping split adds them.
+_NET_LEDGER_FIELDS = (
+    "primary_births_flux_per_s",
+    "primary_net_direct_flux_per_s",
+    "primary_net_return_flux_per_s",
+    "primary_net_remnant_flux_per_s",
+)
 
 
 #: The ``BeamDepositionResult`` scalars a mirror far end fills (0.0 on every
@@ -1310,6 +1379,10 @@ def _csda_beam_deposition(
     # the primary's interception is AND the closure actually walks a tail.
     # With no walked tail there are no walkers to cull.
     tail_interception = multigroup
+    net_basis = (
+        str(input_dict.get("anode_tail_booking", "lagged_current"))
+        == "emission_fraction"
+    )
     tail_R_e = float(
         input_dict.get("beam_tail_anode_reflected_particles", 0.0)
     )
@@ -1505,6 +1578,11 @@ def _csda_beam_deposition(
                     tail_anode_reflected_particles=tail_R_e,
                     tail_anode_reflected_energy=tail_eta_E,
                 )
+                if net_basis:
+                    # The primary's particle ledger on the net basis and the
+                    # wire-sheath test on its returns, for the booking that
+                    # reads them.
+                    interception_kwargs["primary_net_basis"] = True
         clump_kwargs = (
             {**ray_kwargs, "nn": np.asarray(ray_nn) * chi_clump}
             if clumping
