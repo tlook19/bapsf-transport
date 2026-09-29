@@ -3957,7 +3957,7 @@ def _case_mirror_residual_bound_raises():
     plus the primary's residual exceeds ``MIRROR_RESIDUAL_MAX_FRACTION`` of
     the ray's launched power ``Gamma0 * E0``. Both components are exercised:
     (a) a primary bouncing on a near-vacuum column behind a thin mesh
-    (``eta = 0.05``: ``0.95**(1 + MIRROR_MAX_LEGS // 2)`` of it is left
+    (``eta = 0.01``: ``0.99**(1 + MIRROR_MAX_LEGS // 2)`` of it is left
     after ``MIRROR_MAX_LEGS`` legs), and
     (b) walkers between a reflecting cathode and the mirror with no anode
     to remove them. Each raises a RuntimeError naming the bound.
@@ -3974,7 +3974,7 @@ def _case_mirror_residual_bound_raises():
     assert bound == 1.0e-4, bound
     primary = (
         (150.0, 1.0e18, *thin, 0, 1, dz),
-        dict(window, anode_cross_index=5, anode_eta=0.05),
+        dict(window, anode_cross_index=5, anode_eta=0.01),
     )
     walker_cells = 24
     nn, ne, Te, wdz = _mirror_column(walker_cells)
