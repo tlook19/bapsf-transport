@@ -4640,3 +4640,60 @@ def _case_anode_booking_evaluators_plumbed():
         )
     assert any(c.get("tail_anode_current_A", 0.0) > 0.0 for c, _ in calls)
     assert any(c.get("tail_anode_current_A", 0.0) == 0.0 for c, _ in calls)
+
+
+def _returning_mirror_ray(phi, **extra):
+    """A mirrored walked-tail primary whose returns reach the anode plane.
+
+    ``(args, kwargs)`` for ``deposit_beam``: a 60 eV primary on a dense
+    synthetic half column with the plane at cell 5, a reflecting cathode face
+    and the wires' sheath at ``phi``. ``extra`` joins the keywords.
+    """
+    cells = 24
+    _nn, _ne, Te, dz = _mirror_column(cells)
+    nn = np.full(cells, 3.0e12)
+    ne = np.full(cells, 3.0e11) * np.linspace(1.0, 2.0, cells)
+    args = (60.0, 1.0e18, nn, ne, Te, 0, 1, dz)
+    kwargs = _mirror_mg_kwargs(
+        cells, mirror_face=1, tail_reflect_face=-1,
+        tail_reflect_threshold_eV=60.0, anode_cross_index=5,
+        anode_eta=_MIRROR_ETA, tail_anode_cross_index=5,
+        tail_anode_eta=_MIRROR_ETA, tail_anode_phi_eV=phi,
+    )
+    kwargs.update(extra)
+    return args, kwargs
+
+
+# --------------------------------------------------------------------
+# anode-gap-born-outbound-only
+# --------------------------------------------------------------------
+@_case("anode-gap-born-outbound-only")
+def _case_anode_gap_born_outbound_only():
+    """Under ``primary_net_basis`` the gap-born walker count is the OUTBOUND
+    leg's, so the circuit's direct term and the deposition's agree.
+
+    On a mirrored ray whose returns cross the anode plane into the gap (an
+    attracting anode, so the returns are intercepted and their transmitted
+    share walks the gap), the circuit's ``eta * (1 - w_gap)`` with
+    ``w_gap = tail_gap_born_flux / Gamma0`` equals the deposition's net
+    direct interception ``primary_net_direct_flux / Gamma0`` to roundoff,
+    while the returns do add births in the gap.
+    NEGATIVE CONTROL: the same ray without the net basis counts every walker
+    born in the gap, the returns' included, and that count misses the net
+    direct interception by far more than roundoff.
+    """
+    args, kwargs = _returning_mirror_ray(0.0)
+    G0 = args[1]
+    net = _deposit_beam_ray(*args, primary_net_basis=True, **kwargs)
+    assert net.primary_net_return_flux_per_s > 0.0
+    assert net.primary_net_direct_flux_per_s > 0.0
+    w_gap = net.tail_gap_born_flux_per_s / G0
+    direct = net.primary_net_direct_flux_per_s / G0
+    assert abs(_MIRROR_ETA * (1.0 - w_gap) - direct) <= 1e-15, (
+        _MIRROR_ETA * (1.0 - w_gap), direct,
+    )
+    # NEGATIVE CONTROL.
+    gross = _deposit_beam_ray(*args, **kwargs)
+    w_all = gross.tail_gap_born_flux_per_s / G0
+    assert w_all > w_gap * (1.0 + 1e-3), (w_all, w_gap)
+    assert abs(_MIRROR_ETA * (1.0 - w_all) - direct) > 1e-6, (w_all, direct)

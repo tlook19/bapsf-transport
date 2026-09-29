@@ -852,9 +852,11 @@ flux gross, counting the walkers born upstream of the anode plane twice. Here
 
 $$J_\text{anode}=J_\text{tot}-f_\text{sh}\,\eta\beta_\text{bypass}(1-w_\text{gap})J^\star-c_\text{ret}J^\star-c_\text{tail}J^\star,$$
 
-with $w_\text{gap}=\Gamma_\text{gap-born}/G_0$ the walker flux the deposition
-launched on the cathode side of the plane per emitted electron
-($G_0=I_\text{eth}^\star/e$), $c_\text{ret}$ the primary's net interception on its
+with $w_\text{gap}=\Gamma_\text{gap-born}/G_0$ the walker flux the primary's
+outbound leg launched on the cathode side of the plane per emitted electron
+($G_0=I_\text{eth}^\star/e$; a return's births in the gap lie downstream of
+its own crossing and are not counted, so $\eta(1-w_\text{gap})G_0$ is the
+deposition's net direct interception to roundoff), $c_\text{ret}$ the primary's net interception on its
 later crossings of the plane (a mirror's returns),
 $\eta\sum_k\Gamma_k(1-F_k)/G_0$, and $c_\text{tail}=I_{\text{tail},a}/(eG_0)$ the
 collected tail current per emitted electron. The three come from the previous

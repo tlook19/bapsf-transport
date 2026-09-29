@@ -2598,9 +2598,15 @@ class BeamDepositionResult:
                           ray crosses before ``anode_cross_index``), in both
                           directions and summed over the launched populations:
                           the flux the anomalous drag re-launched from the
-                          primary before it reached the plane. 0.0 without
-                          ``anode_cross_index`` and whenever no tail is
-                          walked. A particle-count instrument read by the
+                          primary before it reached the plane. Under
+                          ``primary_net_basis`` with a returning primary (a
+                          mirror), only the OUTBOUND leg's walkers: a return's
+                          births in the gap lie downstream of its own
+                          crossing, and the count then agrees with
+                          ``primary_net_direct_flux_per_s`` as
+                          ``anode_eta * (Gamma0 - count)`` to roundoff. 0.0
+                          without ``anode_cross_index`` and whenever no tail
+                          is walked. A particle-count instrument read by the
                           circuit's anode booking; it enters no bank.
     tail_launched_flux_per_s: the total tail WALKER flux [1/s] the ray
                           launched, both directions, every population (the
@@ -4080,8 +4086,14 @@ def deposit_beam(
             net_F += (net_births - _b_up) / net_g
         else:
             net_F = net_births / _G0
+        # The outbound leg's bank, before any return adds to it: the share of
+        # each cell's walkers the outbound leg launched is read off it below.
+        _bank_outbound = np.array(anom_power_eV, dtype=float)
 
     net_mirror_done = False
+    # Per cell, the outbound leg's share of the withheld bank once a primary
+    # leg of the net-basis tree has added to it (None while none has).
+    _gap_outbound_share = None
     # --- The primary at a mirror plane ---------------------------------------
     # Placed between the march and everything that reads the march's banks, so
     # the returning legs' deposition is part of this ray before the anomalous
@@ -4290,6 +4302,12 @@ def deposit_beam(
         # stopped inside the window or is in the residual row.
         absorbed = True
         net_mirror_done = True
+        if net_basis:
+            _bank_all = np.asarray(anom_power_eV, dtype=float)
+            _gap_outbound_share = np.divide(
+                _bank_outbound, _bank_all,
+                out=np.zeros(cells), where=_bank_all > 0.0,
+            )
     if net_basis and not net_mirror_done:
         net_remnant = net_g * (1.0 - net_F)
 
@@ -4520,7 +4538,17 @@ def deposit_beam(
                         else slice(anode_cross_index + 1, cells)
                     )
                     for _, launched in _tail_launch_legs(flux_fwd, flux_bwd):
-                        tail_gap_born_flux += float(launched[gap].sum())
+                        if _gap_outbound_share is None:
+                            tail_gap_born_flux += float(launched[gap].sum())
+                        else:
+                            # The net basis at a mirror: the OUTBOUND leg's
+                            # walkers only. A returning leg's births in the
+                            # gap are downstream of its own crossing; the
+                            # split below is per-cell multiplicative, so the
+                            # share read before it holds for the walkers.
+                            tail_gap_born_flux += float((
+                                launched[gap] * _gap_outbound_share[gap]
+                            ).sum())
 
             # K6: the walkers attenuate INELASTICALLY on the column gas as well
             # as Coulomb-slowing, so the closed-form integral above (which
