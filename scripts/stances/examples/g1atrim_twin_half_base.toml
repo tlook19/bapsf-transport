@@ -12,11 +12,12 @@
 # cathode to image cathode: 1965.4 cm puts the plane at 982.7 cm, the
 # magnet-array symmetry plane. nx counts the far column cells between the
 # fixed source region and the plane; 118 keeps the far-column cell size within
-# 0.5 % of the reference mesh's (7.453 cm against 7.488 cm). The mesh is 129 cells: 1 plenum + 5 gap + 5 fixed source + 118
-# far column, with no end wall cell. A half column has no end wall for the
-# right pump to sit on, so S_pump_R is 0 (the solver refuses anything else at
-# a mirror). The walked anomalous tail constructs at a mirror only under the
-# emission-fraction anode booking, so that selector moves with it.
+# 0.5 % of the reference mesh's (7.453 cm against 7.488 cm). The mesh is 129
+# cells: 1 plenum + 5 gap + 5 fixed source + 118 far column, with no end wall
+# cell. A half column has no end wall for the right pump to sit on, so
+# S_pump_R is 0 (the solver refuses anything else at a mirror). The walked
+# anomalous tail constructs at a mirror only under the emission-fraction anode
+# booking, so that selector moves with it.
 #
 # THE PER-CELL ROWS are the reference rows' own values over [0, Lm/2] on this
 # mesh -- no re-fit and no new measurement. They are emitted by the reference
