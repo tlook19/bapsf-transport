@@ -287,10 +287,12 @@ def solve_idriven(
     electron, applied to THIS solve's emission -- and
     ``eta * beta * (1 - anode_gap_walker_fraction) * J_star``, the primary
     intercepted at the anode plane net of the walker flux born upstream of
-    it, booked only where the beam (at energy ``phi_c``) clears the anode
-    sheath (``circuit_common.emission_fraction_anode_balance``); it refuses a
-    non-zero ``tail_anode_current_A``, a balance with no floating
-    solution raises ``ValueError``, and a total
+    it; the three together are booked only where this solve's beam (at
+    energy ``phi_c``) clears the anode sheath
+    (``circuit_common.emission_fraction_anode_balance``), which reports the
+    collected share and the branch as ``anode_direct_collected_fraction`` and
+    ``anode_fast_branch``; it refuses a non-zero ``tail_anode_current_A``, a
+    balance with no floating solution raises ``ValueError``, and a total
     ``eta * beta * (1 - w_gap) + c_ret + c_tail`` above 1 at THIS solve's
     ``beta`` raises ``RuntimeError``.
     ``anode_balance_probe`` marks the circuit advance's bracket probe at the
@@ -639,14 +641,16 @@ def solve_idriven(
 
     anode_floor_fired = 0.0
     anode_direct_collected_fraction = float("nan")
+    anode_fast_branch = float("nan")
     if booking == "emission_fraction":
         # Every directly collected population per emitted electron: the
         # primary at the anode plane net of the walker flux its anomalous drag
         # launched upstream of the plane, its net interception on returns,
         # and the tail -- the latter two from the previous deposition and
-        # applied to this solve's emission. The direct term is booked only
-        # where the beam, at the launch energy phi_c, clears the anode sheath
-        # it books (three branches, no root-find; see the helper).
+        # applied to this solve's emission. A fast electron of this solve's
+        # beam carries at most e*phi_c, so the whole term is booked only where
+        # the beam, at this solve's launch energy phi_c, clears the anode
+        # sheath it books (three branches, no root-find; see the helper).
         # The coefficients were checked against the PRODUCING solve's beta;
         # this solve applies them with its own, so the bound is re-asserted
         # here.
@@ -661,11 +665,11 @@ def solve_idriven(
                 "booking requires a total of at most 1"
             )
         _I_star = J_star * T_e / R_p
-        _I_rest = I_i_a + J_tot * T_e / R_p - (c_ret + c_tail) * _I_star
-        _I_direct = eta * beam_bypass_fraction * (1.0 - w_gap) * _I_star
-        phi_a, anode_direct_collected_fraction = (
+        _I_rest = I_i_a + J_tot * T_e / R_p
+        _I_fast = _booked * _I_star
+        phi_a, anode_direct_collected_fraction, anode_fast_branch = (
             emission_fraction_anode_balance(
-                _I_rest, _I_direct, I_e_sat_a, T_e_anode, phi_c,
+                _I_rest, _I_fast, I_e_sat_a, T_e_anode, phi_c,
                 anode_balance_probe,
                 lambda: (
                     f"I_i_a={I_i_a!r} A; loop current "
@@ -769,10 +773,13 @@ def solve_idriven(
     # ``I_tail_a`` is LAGGED -- the deposition is solved after the circuit
     # within a step, so this reads the previous accepted step's cull. Under
     # ``anode_tail_booking="emission_fraction"`` it is the booked
-    # ``c_tail * I_eth_star``; the primary's return interception is booked as
+    # ``c_tail * I_eth_star`` times the share of the fast term the anode
+    # sheath collected; the primary's return interception is booked as
     # current there but carries no row of its own here.
     if booking == "emission_fraction":
-        P_tail_phi = max(phi_a, 0.0) * (c_tail * I_eth_star)
+        P_tail_phi = max(phi_a, 0.0) * (
+            anode_direct_collected_fraction * c_tail * I_eth_star
+        )
     else:
         P_tail_phi = max(phi_a, 0.0) * float(tail_anode_current_A)
     P_anode_i = P_ion(phi_a, T_e_anode, I_i_a)
@@ -907,6 +914,7 @@ def solve_idriven(
         T_e_anode=T_e_anode,
         anode_floor_fired=anode_floor_fired,
         anode_direct_collected_fraction=anode_direct_collected_fraction,
+        anode_fast_branch=anode_fast_branch,
     )
 
 
