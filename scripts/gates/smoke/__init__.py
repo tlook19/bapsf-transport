@@ -231,6 +231,8 @@ _CASE_ORDER = (
     "anode-outbound-primary-sheath-rule",
     "half-column-base-equilibration-constructs",
     "anode-fast-term-sheath-rule",
+    "anode-pinned-share-knife-edge",
+    "anode-pinned-share-tolerance-decades",
 )
 
 

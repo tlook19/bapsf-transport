@@ -2438,9 +2438,10 @@ class LAPDSim1D:
             == "prescribed_measured"
         ):
             raise ValueError(
-                "anode_tail_booking='emission_fraction' books the primary's "
-                "direct interception only where the beam, at the cathode "
-                "drop phi_c, clears the anode sheath; "
+                "anode_tail_booking='emission_fraction' books the anode's "
+                "whole fast term (the primary's direct interception, its "
+                "net return interception and the tail) only where the beam, "
+                "at the cathode drop phi_c, clears the anode sheath; "
                 "cathode_solver_model='prescribed_measured' solves phi_c FROM "
                 "the anode sheath, so the rule has no fixed beam energy there. "
                 "Use cathode_solver_model='current_driven'"

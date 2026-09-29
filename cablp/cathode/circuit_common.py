@@ -26,6 +26,7 @@ Scaled (dimensionless) quantities:
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -298,9 +299,14 @@ class SolverResult:
     # the CIRCUIT pays and the mesh receives, never routed through the plasma
     # thermal store, exactly like the primary's bypass convention. Identically
     # 0.0 at a non-positive ``phi_a`` (an attracting anode charges no fall)
-    # and whenever no tail current is handed in. ``I_tail_a`` is the LAGGED
-    # net culled current: the deposition is solved after the circuit within a
-    # step, so this solve reads the previous accepted step's cull.
+    # and whenever no tail current is handed in. Under
+    # ``anode_tail_booking="lagged_current"`` ``I_tail_a`` is the LAGGED net
+    # culled current: the deposition is solved after the circuit within a
+    # step, so this solve reads the previous accepted step's cull. Under
+    # ``"emission_fraction"`` it is the collected share of the booked tail,
+    # ``phi_a * f * c_tail * I_eth_star``, with ``f`` the
+    # ``anode_direct_collected_fraction`` of this solve and ``c_tail`` the
+    # previous accepted deposition's collected tail per emitted electron.
     P_tail_phi: float = 0.0
     P_anode_i_thermal: float = 0.0
     P_anode_i_phi: float = 0.0
@@ -363,9 +369,11 @@ class SolverResult:
     # solution, kept for that booking), 0.0 otherwise.
     # ``anode_direct_collected_fraction`` is the share of the whole fast term
     # (the primary's direct interception, its net return interception and the
-    # tail) the anode booked under ``"emission_fraction"`` (1 where the beam
-    # clears the anode sheath, 0 where it cannot, between where the sheath is
-    # pinned at the beam energy), the same share of each part; NaN under
+    # tail) the anode booked under ``"emission_fraction"``, not the primary's
+    # direct interception alone despite the name: 1 where the beam clears the
+    # anode sheath, 0 where it cannot, and in ``(0, 1]`` where the sheath is
+    # pinned at the beam energy (returned within ``[0, 1]``), the same share
+    # of each part; NaN under
     # ``"lagged_current"``. ``anode_fast_branch`` is the branch that set it
     # (``ANODE_FAST_BRANCH_BOOKED`` 0, ``_PINNED`` 1, ``_NONE`` 2); NaN under
     # ``"lagged_current"``.
@@ -465,6 +473,42 @@ ANODE_FAST_BRANCH_PINNED = 1.0
 ANODE_FAST_BRANCH_NONE = 2.0
 
 
+def pinned_share_within_bounds(
+    share, I_rest_A, I_fast_A, E_beam_eV, T_e_anode
+):
+    """Return the pinned branch's collected ``share`` within ``[0, 1]``.
+
+    A ``share`` inside ``[0, 1]`` is returned unchanged. At the knife-edges
+    (``phi_a`` with or without the fast term equal to ``E_beam``) roundoff
+    places it outside by up to about
+    ``eps * max(1, |I_rest| / I_fast) * max(1, E_beam / T_e,a)``: the
+    rounding of the argument ``E_beam / T_e,a`` is amplified by that
+    argument through the ``exp`` and ``log`` that set the branch and the
+    pinned current, and the difference ``I_rest - I_pinned`` is divided by
+    ``I_fast``. An excess of at most
+    ``64 * eps * max(1, |I_rest| / I_fast) * max(1, E_beam / T_e,a)`` is
+    clamped to the nearer bound. A larger excess, or a NaN share, raises
+    ``ValueError``.
+    """
+    if 0.0 <= share <= 1.0:
+        return share
+    tolerance = (
+        64.0 * sys.float_info.epsilon
+        * max(1.0, abs(float(I_rest_A)) / float(I_fast_A))
+        * max(1.0, float(E_beam_eV) / float(T_e_anode))
+    )
+    excess = -share if share < 0.0 else share - 1.0
+    if not excess <= tolerance:
+        raise ValueError(
+            "the anode sheath's pinned branch set the fast term's collected "
+            f"share to {share!r}, outside [0, 1] by more than the roundoff "
+            f"tolerance {tolerance!r} (I_rest={I_rest_A!r} A, "
+            f"I_fast={I_fast_A!r} A, E_beam={E_beam_eV!r} eV, "
+            f"T_e,a={T_e_anode!r} eV)"
+        )
+    return 0.0 if share < 0.0 else 1.0
+
+
 def emission_fraction_anode_balance(
     I_rest_A, I_fast_A, I_e_sat_A, T_e_anode, E_beam_eV, probe, describe
 ):
@@ -481,7 +525,12 @@ def emission_fraction_anode_balance(
     it clears the sheath it books, by three branches and no root-find: with
     the term, accepted if ``phi_a < E_beam``; else without it, accepted if
     ``phi_a >= E_beam``; else ``phi_a`` pinned at ``E_beam`` with the
-    balance setting the collected share of the term in ``[0, 1)``.
+    balance setting the collected share of the term in ``(0, 1]`` (1 where
+    ``phi_a`` with the term equals ``E_beam`` exactly). The pinned share is
+    returned within ``[0, 1]`` by ``pinned_share_within_bounds``: knife-edge
+    roundoff up to
+    ``64 * eps * max(1, |I_rest| / I_fast) * max(1, E_beam / T_e,a)`` is
+    clamped to the nearer bound, and a larger excess raises ``ValueError``.
     Returns ``(phi_a, collected_fraction, branch)`` with ``branch`` one of
     ``ANODE_FAST_BRANCH_BOOKED``, ``ANODE_FAST_BRANCH_PINNED`` and
     ``ANODE_FAST_BRANCH_NONE``.
@@ -516,11 +565,14 @@ def emission_fraction_anode_balance(
             )
         return phi_without, 0.0, ANODE_FAST_BRANCH_NONE
     I_pinned = I_e_sat_A * math.exp(-E_beam_eV / T_e_anode)
-    return (
-        float(E_beam_eV),
-        (float(I_rest_A) - I_pinned) / float(I_fast_A),
-        ANODE_FAST_BRANCH_PINNED,
-    )
+    share = (float(I_rest_A) - I_pinned) / float(I_fast_A)
+    try:
+        share = pinned_share_within_bounds(
+            share, I_rest_A, I_fast_A, E_beam_eV, T_e_anode
+        )
+    except ValueError as exc:
+        raise ValueError(f"{exc} ({describe()})") from None
+    return float(E_beam_eV), share, ANODE_FAST_BRANCH_PINNED
 
 
 @dataclass(slots=True)

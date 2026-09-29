@@ -898,7 +898,17 @@ simplification that can only book the term where the degraded beam would not
 clear the sheath: with the term ($f_\text{sh}=1$), accepted if
 $\phi_a<\phi_c$; else without it ($f_\text{sh}=0$), accepted if
 $\phi_a\ge\phi_c$; else $\phi_a$ pinned at $\phi_c$, the balance setting
-$f_\text{sh}$ in $[0,1)$. Without the term the sheath passes
+$f_\text{sh}$ in $(0,1]$ ($f_\text{sh}=1$ where $\phi_a$ with the term equals
+$\phi_c$ exactly), returned within $[0,1]$. At a knife-edge roundoff can place
+it outside by up to about
+$\epsilon\max(1,|I_\text{rest}|/I_\text{fast})\max(1,e\phi_c/T_{e,a})$, with
+$\epsilon$ the machine epsilon, $I_\text{rest}=I_{i,a}+I_\text{tot}$ and
+$I_\text{fast}$ the whole fast term: the rounding of the argument
+$e\phi_c/T_{e,a}$ is amplified by that argument through the $\exp$ and $\ln$
+that set the branch and the pinned current, and the share divides
+$I_\text{rest}$ less the pinned current by $I_\text{fast}$. An excess of at
+most 64 times that bound is clamped to the nearer bound of $[0,1]$, and a
+larger excess or a NaN share raises a `ValueError`. Without the term the sheath passes
 $I_{i,a}+I_\text{tot}>0$, so the balance always has a floating solution. A
 virtual-cathode beam of a few eV thus books nothing against a sheath of
 $\sim4T_{e,a}$. The deposition takes $f_\text{sh}$ from the dispatched solve

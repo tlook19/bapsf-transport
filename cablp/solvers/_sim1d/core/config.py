@@ -1650,14 +1650,17 @@ def cathode_defaults():
         per emitted electron. The primary as
         ``eta * beta * (1 - w_gap) * J_star``, with ``w_gap`` the walker flux
         the anomalous drag launched on the cathode side of the anode plane per
-        emitted electron, booked only where the beam (at ``phi_c``) clears the
-        anode sheath -- whole, not at all, or the share that pins ``phi_a`` at
-        ``phi_c``; its net interception on later crossings of the plane as
-        ``c_ret * J_star``; and the tail as ``c_tail * J_star``, with
+        emitted electron; its net interception on later crossings of the plane
+        as ``c_ret * J_star``; and the tail as ``c_tail * J_star``, with
         ``c_tail`` the collected walker current per emitted electron. The
-        three coefficients come from the previous accepted deposition and are
-        applied to THIS solve's emission, in the dispatched solve, the circuit
-        advance and the accepted-state re-solve alike. Each deposition
+        whole term ``(eta * beta * (1 - w_gap) + c_ret + c_tail) * J_star``
+        is booked only where the beam (at this solve's ``phi_c``) clears the
+        anode sheath: whole, not at all, or the share in ``(0, 1]`` that pins
+        ``phi_a`` at ``phi_c``, the same share of each part. The tail's
+        sheath-fall power scales by that share. The three coefficients come
+        from the previous accepted deposition and are applied to THIS solve's
+        emission, in the dispatched solve, the circuit advance and the
+        accepted-state re-solve alike. Each deposition
         asserts ``eta * beta * (1 - w_gap) + c_ret + c_tail <= 1`` (a
         ``RuntimeError`` otherwise), so the anode never books more fast
         electrons than the cathode emits. The primary's returns meet the
