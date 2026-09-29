@@ -105,7 +105,6 @@ from cablp.cathode.circuit_common import (
     compute_beam_bypass_fraction,
     compute_l_b,
     exp_clamped,
-    resolve_anode_tail_booking,
 )
 from cablp.plasma.params import (
     LN_LAMBDA_MIN,
@@ -137,9 +136,6 @@ def solve_prescribed(
     alpha_sheath_anode: float | None = None,
     tail_anode_current_A: float = 0.0,
     anode_electron_saturation_A: float | None = None,
-    anode_tail_booking: str = "lagged_current",
-    tail_anode_coefficient: float = 0.0,
-    anode_gap_walker_fraction: float = 0.0,
 ) -> SolverResult:
     """Solve the cathode sheath for a MEASURED current and device voltage.
 
@@ -164,12 +160,6 @@ def solve_prescribed(
     member is carried because it states the cap as what it is, an electron
     random flux on the wire area, and because a caller whose ``I_i_a`` is not
     that analytic form has no other way to say so.
-    ``anode_tail_booking`` / ``tail_anode_coefficient`` /
-    ``anode_gap_walker_fraction`` select and carry the anode's fast-electron
-    booking exactly as in ``solve_idriven``. The phi_c root-find evaluates the
-    anode balance at trial sheaths and keeps the floored value there; the
-    balance at the solved sheath raises ``ValueError`` when it has no floating
-    solution.
 
     Returns a ``SolverResult`` field-for-field compatible with the
     current-driven solve's; see the module docstring for the ``I_eth``, ``regime`` and
@@ -226,14 +216,6 @@ def solve_prescribed(
     Lambda_anode = config.Lambda + lam_shift_anode
     eta = config.eta
     I_e = I_i * math.exp(Lambda)
-    booking = resolve_anode_tail_booking(
-        anode_tail_booking,
-        tail_anode_current_A,
-        tail_anode_coefficient,
-        anode_gap_walker_fraction,
-    )
-    c_tail = float(tail_anode_coefficient)
-    w_gap = float(anode_gap_walker_fraction)
 
     # THE MEASURED DRIVE. The loop current is the trace's, and the emitted
     # current is what the ions did not supply (see the module docstring).
@@ -271,37 +253,15 @@ def solve_prescribed(
             "sheath solution"
         )
 
-    def _anode_state(phi_c, probe=True):
+    def _anode_state(phi_c):
         l_b = compute_l_b(phi_c, T_e, n_e, plasma.n_n, plasma.sigma_b)
         bypass = compute_beam_bypass_fraction(l_b, config.L_cath)
-        if booking == "emission_fraction":
-            I_anode = (
-                I_tot
-                - eta * bypass * (1.0 - w_gap) * I_eth_star
-                - c_tail * I_eth_star
-            )
-        else:
-            I_anode = I_tot - eta * bypass * I_eth_star - float(
-                tail_anode_current_A
-            )
-        # phi_a = T_e,a ln(I_e,sat / I_e,a), I_e,a = I_i,a + I_anode. A trial
-        # sheath of the root-find (``probe``) keeps the floored value; the
-        # solved sheath refuses a balance with no floating solution.
-        I_e_a = I_i_a + I_anode
-        if 1e-300 > I_e_a and not probe:
-            raise ValueError(
-                "the anode sheath balance is infeasible: the electron current "
-                f"it must pass, I_i_a + I_anode = {I_e_a!r} A, is not positive "
-                f"(I_i_a={I_i_a!r} A; loop current {I_tot!r} A; emitted "
-                f"current {I_eth_star!r} A; anode_tail_booking={booking!r}, "
-                f"eta={eta!r}, beta={bypass!r}, "
-                f"tail_anode_current_A={float(tail_anode_current_A)!r}, "
-                f"tail coefficient={c_tail!r}, gap walker fraction={w_gap!r}). "
-                "The directly collected fast electrons exceed what the loop "
-                "delivers to the anode"
-            )
+        I_anode = I_tot - eta * bypass * I_eth_star - float(
+            tail_anode_current_A
+        )
+        # phi_a = T_e,a ln(I_e,sat / I_e,a), I_e,a = I_i,a + I_anode.
         psi_a = math.log(
-            I_e_sat_a / max(I_e_a, 1e-300)
+            I_e_sat_a / max(I_i_a + I_anode, 1e-300)
         )
         return psi_a * T_e_anode, l_b, bypass
 
@@ -331,7 +291,7 @@ def solve_prescribed(
             full_output=False,
         )
 
-    phi_a, l_b, beam_bypass_fraction = _anode_state(phi_c, probe=False)
+    phi_a, l_b, beam_bypass_fraction = _anode_state(phi_c)
     long_mfp = l_b > 0.0 and l_b > config.L_cath
     # No emission solve, hence no space-charge barrier to report: the whole
     # cathode fall is classical.
@@ -377,13 +337,8 @@ def solve_prescribed(
     # tail, exactly as the primary's bypass convention already pays for the
     # flux that streams through the mesh. Zero at a non-positive ``phi_a``.
     # ``I_tail_a`` is LAGGED -- the deposition is solved after the circuit
-    # within a step, so this reads the previous accepted step's cull. Under
-    # ``anode_tail_booking="emission_fraction"`` it is the booked
-    # ``c_tail * I_eth_star``.
-    if booking == "emission_fraction":
-        P_tail_phi = max(phi_a, 0.0) * (c_tail * I_eth_star)
-    else:
-        P_tail_phi = max(phi_a, 0.0) * float(tail_anode_current_A)
+    # within a step, so this reads the previous accepted step's cull.
+    P_tail_phi = max(phi_a, 0.0) * float(tail_anode_current_A)
     P_anode_i = P_ion(phi_a, T_e_anode, I_i_a)
     P_anode_i_thermal = I_i_a * (T_e_anode / 2.0)
     P_anode_i_phi = P_anode_i - P_anode_i_thermal
@@ -505,9 +460,6 @@ def solve_beam_system_prescribed(
     alpha_sheath_anode: float | None = None,
     tail_anode_current_A: float = 0.0,
     anode_electron_saturation_A: float | None = None,
-    anode_tail_booking: str = "lagged_current",
-    tail_anode_coefficient: float = 0.0,
-    anode_gap_walker_fraction: float = 0.0,
 ) -> BeamResult:
     """Prescribed-measured counterpart of ``solve_beam_system_idriven``.
 
@@ -534,9 +486,6 @@ def solve_beam_system_prescribed(
         alpha_sheath_anode=alpha_sheath_anode,
         tail_anode_current_A=tail_anode_current_A,
         anode_electron_saturation_A=anode_electron_saturation_A,
-        anode_tail_booking=anode_tail_booking,
-        tail_anode_coefficient=tail_anode_coefficient,
-        anode_gap_walker_fraction=anode_gap_walker_fraction,
     )
     return assemble_beam_arrays(
         result=result,
