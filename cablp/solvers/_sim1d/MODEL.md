@@ -840,40 +840,60 @@ $\phi_c\le0$), and $J_{\text{tail},a}$ the deposition module's collected
 tail-walker current, lagged one step. This is the default booking,
 `anode_tail_booking = "lagged_current"`.
 
-`anode_tail_booking = "emission_fraction"` books the same two populations per
-emitted electron instead:
+`anode_tail_booking = "emission_fraction"` books every directly collected
+population per emitted electron, on the primary's NET flux. The deposition
+conserves fast electrons: the multi-group plateau launches exactly $1/E_b$
+walkers per unit withheld quasilinear power ($E_b=e\phi_c$ the plateau top),
+so the walkers born per emitted electron equal the fraction $F$ of the launch
+energy the primary has lost to the anomalous channel, and the primary read at
+$E(z)$ with flux $\Gamma$ is the energy-equivalent of a beam whose net flux
+$\Gamma(1-F)$ is what remains of the emission. The lagged booking reads that
+flux gross, counting the walkers born upstream of the anode plane twice. Here
 
-$$J_\text{anode}=J^\star\left(1-\eta\beta_\text{bypass}(1-w_\text{gap})-c_\text{tail}\right)+J_{i,c}-J_{e,\text{ret}},$$
+$$J_\text{anode}=J_\text{tot}-f_\text{sh}\,\eta\beta_\text{bypass}(1-w_\text{gap})J^\star-c_\text{ret}J^\star-c_\text{tail}J^\star,$$
 
-the same $J_\text{tot}$ less $\eta\beta_\text{bypass}(1-w_\text{gap})J^\star$ and
-$c_\text{tail}J^\star$. The CSDA primary keeps its full flux across the gap while
-its anomalous drag re-launches energy as plateau walkers, so the lagged booking
-counts the walkers born upstream of the anode plane twice, once in the
-primary's interception and once in the tail. Here
-$w_\text{gap}=\Gamma_\text{gap-born}/G_0$ is the walker flux the deposition
-launched on the cathode side of the anode plane per emitted electron
-($G_0=I_\text{eth}^\star/e$), so the primary is intercepted at the plane net of
-it, and $c_\text{tail}=I_{\text{tail},a}/(eG_0)$ is the collected tail current per
-emitted electron. Both come from the previous accepted deposition and are
-applied to THIS solve's $J^\star$, so a lagged coefficient follows the emission
-through the ceiling and virtual-cathode switches where a lagged absolute
-current does not. Each deposition asserts
+with $w_\text{gap}=\Gamma_\text{gap-born}/G_0$ the walker flux the deposition
+launched on the cathode side of the plane per emitted electron
+($G_0=I_\text{eth}^\star/e$), $c_\text{ret}$ the primary's net interception on its
+later crossings of the plane (a mirror's returns),
+$\eta\sum_k\Gamma_k(1-F_k)/G_0$, and $c_\text{tail}=I_{\text{tail},a}/(eG_0)$ the
+collected tail current per emitted electron. The three come from the previous
+accepted deposition and are applied to THIS solve's $J^\star$, so a lagged
+coefficient follows the emission through the ceiling and virtual-cathode
+switches where a lagged absolute current does not. The deposition keeps the
+ledger (`primary_net_basis`): walker births, the net direct and return
+interceptions and the net remnant sum to $G_0$ to roundoff, and each deposition
+asserts
 
-$$\eta\beta_\text{bypass}(1-w_\text{gap})+c_\text{tail}\le1,\qquad0\le w_\text{gap}\le1,$$
+$$\eta\beta_\text{bypass}(1-w_\text{gap})+c_\text{ret}+c_\text{tail}\le1,\qquad0\le w_\text{gap}\le1,$$
 
-and raises a `RuntimeError` otherwise: the anode never books more fast
-electrons than the cathode emits. The sheath-fall moment of the tail is
+raising a `RuntimeError` otherwise: the anode never books more fast electrons
+than the cathode emits. The primary's return crossings meet the wires' sheath
+as the walkers do: a return below $e\phi_a$ is not intercepted there.
+
+The direct term is booked only where the beam clears the anode sheath it books.
+$f_\text{sh}$ follows from three branches and no root-find, taking the beam
+energy at the anode as the launch energy $e\phi_c$ (the gap loss is not
+subtracted): with the term ($f_\text{sh}=1$), accepted if $\phi_a<\phi_c$; else
+without it ($f_\text{sh}=0$), accepted if $\phi_a\ge\phi_c$; else $\phi_a$ pinned
+at $\phi_c$, the balance setting $f_\text{sh}$ between 0 and 1. A
+virtual-cathode beam of a few eV thus books nothing against a sheath of
+$\sim4T_{e,a}$. The sheath-fall moment of the tail is
 $P_{\text{tail},\phi}=\max(\phi_a,0)\,c_\text{tail}I_\text{eth}^\star$. The
-deposition's energy ledger is the same under both values. The selection
-requires `cathode_coupling` and the walked tail
-(`heating_anomalous_transport = "plateau_multigroup"`).
+selection requires `cathode_coupling` and the walked tail
+(`heating_anomalous_transport = "plateau_multigroup"`), and the current-driven
+solve (the prescribed drive solves $\phi_c$ from $\phi_a$, so the rule has no
+fixed beam energy there). The circuit advance and the accepted-state re-solve
+book the same three coefficients as the dispatched solve. Under
+`"lagged_current"` those two evaluations book no tail current while the
+dispatched solve reads the lagged one.
 
 The anode current's one consumer is the anode sheath, so both subtracted
 populations raise $\phi_a$ logarithmically:
 
 $$\psi_a=\ln\left(\frac{I_{e,\text{sat}}}{I_{i,a}\left(1+\dfrac{J_\text{anode}}{J_{i,a}}\right)}\right),\qquad \phi_a=\psi_aT_{e,\text{anode}}$$
 
-with $I_{e,\text{sat}}=\tfrac{1}{4}n\langle v_e\rangle\cdot2\eta A\cdot e$ the electron saturation current the wires can draw — the electron random flux on the wire area the two anode faces present — evaluated at the anode sample's own $n$ and $T_{e}$, i.e. on the same samples as $I_{i,a}$. The electron current the sheath passes, $I_{i,a}(1+J_\text{anode}/J_{i,a})$, must be positive: where it is below $10^{-300}$ A the balance has no floating solution and the solve raises a `ValueError` naming the balance terms. The one exception is the circuit advance's bracket probe at the stage's lower endpoint $I=0$ (and the prescribed solve's trial sheaths), which keeps the historical floored value $\psi_a=\ln(I_{e,\text{sat}}/10^{-300})$ so the bracket is unchanged.
+with $I_{e,\text{sat}}=\tfrac{1}{4}n\langle v_e\rangle\cdot2\eta A\cdot e$ the electron saturation current the wires can draw — the electron random flux on the wire area the two anode faces present — evaluated at the anode sample's own $n$ and $T_{e}$, i.e. on the same samples as $I_{i,a}$. The electron current the sheath passes, $I_{i,a}(1+J_\text{anode}/J_{i,a})$, must be positive: where it is below $10^{-300}$ A the balance has no floating solution. Under `"emission_fraction"` the solve then raises a `ValueError` naming the balance terms. Under `"lagged_current"` it keeps the floored value $\psi_a=\ln(I_{e,\text{sat}}/10^{-300})$ and reports the solve (`anode_floor_fired`; the solver counts the dispatched ones). The circuit advance's bracket probe at the stage's lower endpoint $I=0$ keeps the floored value under either booking and is never counted.
 
 This is a Boltzmann floating-sheath balance evaluated at the mesh, with $J_{i,a}$ the $\eta$-scaled Bohm ion flux collected there (the same current `anode_collection_rhs` removes from the fluid): $I_{e,\text{sat}}/I_{i,a}=e^{\Lambda_\text{anode}}$ on that area, so $\Lambda_\text{anode}T_{e,\text{anode}}$ is the value of $\phi_a$ at $J_\text{anode}=0$, a negative $J_\text{anode}$ — the subtracted beam-bypass and tail-walker populations above — raises $\phi_a$ above it, and a positive $J_\text{anode}$ lowers it, through zero, into an attracting drop; the sign is an output of the balance either way, entering $V_b$ through $\phi_a$ and thereby the beam launch drop $\phi_c$ and, downstream of it, $P_\text{prim}$. The two couplings to the tail walkers run on opposite sides of the step: the sheath test that decides which intercepted walkers the wires turn back reads THIS solve's $\phi_a$, because the circuit is solved before the deposition, while $J_{\text{tail},a}$ above is the current the PREVIOUS accepted step's deposition measured.
 

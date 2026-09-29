@@ -666,11 +666,12 @@ times and carrying a plateau tolerance of $64\epsilon$. The prescribed-drive
 form roots $\phi_c+V_p-\phi_a(\phi_c)-V_b$ on
 $[10^{-8}\ \mathrm{V},\ \phi_{c,\text{cap}}]$ at the same tight tolerances; a
 residual already non-negative at the bottom returns $10^{-8}$ V UNTAGGED.
-Uniqueness rests on each residual's monotonicity. An anode balance with no
-floating solution raises at the solved sheath; the prescribed form's trial
-sheaths, and the loop advance's TR-BDF2 stages at their bracket's lower
-endpoint $I=0$ (evaluated once through an explicit probe flag and handed back
-to `brentq` at that endpoint), keep the floored value instead.
+Uniqueness rests on each residual's monotonicity. The loop advance's TR-BDF2
+stages evaluate their bracket's lower endpoint $I=0$ once, through an explicit
+probe flag, and hand that value back to `brentq` at the endpoint; the probe
+keeps a floored anode balance where a dispatched solve under
+`anode_tail_booking = "emission_fraction"` raises (MODEL.md, the anode
+sheath).
 
 **A demand past the ceiling `cathode_phi_c_cap_V` is CLAMPED, not raised.**
 The solve returns the ceiling value and TAGS itself `capability_limited`; no error is raised and the run
