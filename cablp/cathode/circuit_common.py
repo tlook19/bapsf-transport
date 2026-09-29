@@ -472,9 +472,41 @@ ANODE_FAST_BRANCH_BOOKED = 0.0
 ANODE_FAST_BRANCH_PINNED = 1.0
 ANODE_FAST_BRANCH_NONE = 2.0
 
-#: The largest excess outside ``[0, 1]`` of the pinned branch's collected
-#: share that is taken as knife-edge roundoff and clamped.
-_PINNED_SHARE_ROUNDOFF = 64.0 * sys.float_info.epsilon
+
+def pinned_share_within_bounds(
+    share, I_rest_A, I_fast_A, E_beam_eV, T_e_anode
+):
+    """Return the pinned branch's collected ``share`` within ``[0, 1]``.
+
+    A ``share`` inside ``[0, 1]`` is returned unchanged. At the knife-edges
+    (``phi_a`` with or without the fast term equal to ``E_beam``) roundoff
+    places it outside by up to about
+    ``eps * max(1, |I_rest| / I_fast) * max(1, E_beam / T_e,a)``: the
+    rounding of the argument ``E_beam / T_e,a`` is amplified by that
+    argument through the ``exp`` and ``log`` that set the branch and the
+    pinned current, and the difference ``I_rest - I_pinned`` is divided by
+    ``I_fast``. An excess of at most
+    ``64 * eps * max(1, |I_rest| / I_fast) * max(1, E_beam / T_e,a)`` is
+    clamped to the nearer bound. A larger excess, or a NaN share, raises
+    ``ValueError``.
+    """
+    if 0.0 <= share <= 1.0:
+        return share
+    tolerance = (
+        64.0 * sys.float_info.epsilon
+        * max(1.0, abs(float(I_rest_A)) / float(I_fast_A))
+        * max(1.0, float(E_beam_eV) / float(T_e_anode))
+    )
+    excess = -share if share < 0.0 else share - 1.0
+    if not excess <= tolerance:
+        raise ValueError(
+            "the anode sheath's pinned branch set the fast term's collected "
+            f"share to {share!r}, outside [0, 1] by more than the roundoff "
+            f"tolerance {tolerance!r} (I_rest={I_rest_A!r} A, "
+            f"I_fast={I_fast_A!r} A, E_beam={E_beam_eV!r} eV, "
+            f"T_e,a={T_e_anode!r} eV)"
+        )
+    return 0.0 if share < 0.0 else 1.0
 
 
 def emission_fraction_anode_balance(
@@ -495,9 +527,10 @@ def emission_fraction_anode_balance(
     ``phi_a >= E_beam``; else ``phi_a`` pinned at ``E_beam`` with the
     balance setting the collected share of the term in ``(0, 1]`` (1 where
     ``phi_a`` with the term equals ``E_beam`` exactly). The pinned share is
-    returned within ``[0, 1]``: a share outside it by at most
-    ``64 * eps`` (roundoff at a knife-edge) is clamped to the nearer bound,
-    and a larger excess raises ``ValueError``.
+    returned within ``[0, 1]`` by ``pinned_share_within_bounds``: knife-edge
+    roundoff up to
+    ``64 * eps * max(1, |I_rest| / I_fast) * max(1, E_beam / T_e,a)`` is
+    clamped to the nearer bound, and a larger excess raises ``ValueError``.
     Returns ``(phi_a, collected_fraction, branch)`` with ``branch`` one of
     ``ANODE_FAST_BRANCH_BOOKED``, ``ANODE_FAST_BRANCH_PINNED`` and
     ``ANODE_FAST_BRANCH_NONE``.
@@ -533,20 +566,12 @@ def emission_fraction_anode_balance(
         return phi_without, 0.0, ANODE_FAST_BRANCH_NONE
     I_pinned = I_e_sat_A * math.exp(-E_beam_eV / T_e_anode)
     share = (float(I_rest_A) - I_pinned) / float(I_fast_A)
-    if not 0.0 <= share <= 1.0:
-        # At the knife-edges (phi_with or phi_without equal to E_beam)
-        # roundoff in the log/exp pair can place the share a few ulp outside
-        # [0, 1]; that is clamped. A larger excess is not roundoff.
-        excess = -share if share < 0.0 else share - 1.0
-        if not excess <= _PINNED_SHARE_ROUNDOFF:
-            raise ValueError(
-                "the anode sheath's pinned branch set the fast term's "
-                f"collected share to {share!r}, outside [0, 1] by more than "
-                f"{_PINNED_SHARE_ROUNDOFF!r} ({describe()}; the pinned "
-                f"current {I_pinned!r} A, the fast term {I_fast_A!r} A, "
-                f"E_beam={E_beam_eV!r} eV)"
-            )
-        share = 0.0 if share < 0.0 else 1.0
+    try:
+        share = pinned_share_within_bounds(
+            share, I_rest_A, I_fast_A, E_beam_eV, T_e_anode
+        )
+    except ValueError as exc:
+        raise ValueError(f"{exc} ({describe()})") from None
     return float(E_beam_eV), share, ANODE_FAST_BRANCH_PINNED
 
 

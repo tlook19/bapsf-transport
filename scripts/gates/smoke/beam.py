@@ -5141,9 +5141,12 @@ def _case_anode_pinned_share_knife_edge():
     clamped to exactly 1.0. (b) A share already inside ``[0, 1]`` is the raw
     balance, bit for bit. (c) An ill-conditioned balance (the fast term
     3e-12 of the current the sheath passes) at the knife-edge puts the raw
-    share ~2.7e-4 above 1, beyond the clamp: it raises ``ValueError``.
+    share ~2.7e-4 above 1 by roundoff alone, inside the conditioned
+    tolerance: it is clamped to exactly 1.0. (d) The guard raises
+    ``ValueError`` on a share of 1.5, of -0.5 and on NaN, which no
+    consistent balance produces.
     NEGATIVE CONTROL: the raw balance itself exceeds 1 at the swept
-    knife-edges and at (c), so the clamp and the raise are exercised.
+    knife-edges and at (c), so the clamp is exercised.
     """
     import sys as _sys
 
@@ -5151,6 +5154,7 @@ def _case_anode_pinned_share_knife_edge():
         ANODE_FAST_BRANCH_BOOKED,
         ANODE_FAST_BRANCH_PINNED,
         emission_fraction_anode_balance,
+        pinned_share_within_bounds,
     )
 
     eps = _sys.float_info.epsilon
@@ -5188,11 +5192,61 @@ def _case_anode_pinned_share_knife_edge():
     E = T * math.log(I_esat / (I_rest - I_fast))
     r = raw(I_rest, I_fast, E)
     assert r - 1.0 > 1e-4, r
-    try:
-        emission_fraction_anode_balance(
-            I_rest, I_fast, I_esat, T, E, False, lambda: "fixture"
+    phi, f, b = emission_fraction_anode_balance(
+        I_rest, I_fast, I_esat, T, E, False, lambda: "fixture"
+    )
+    assert b == ANODE_FAST_BRANCH_PINNED and phi == E and f == 1.0, (b, f)
+    # (d) the guard on a share no consistent balance produces.
+    for bad in (1.5, -0.5, float("nan")):
+        try:
+            pinned_share_within_bounds(bad, I_rest, I_fast, E, T)
+        except ValueError as exc:
+            assert "outside [0, 1]" in str(exc), str(exc)
+        else:
+            raise AssertionError(f"a share of {bad!r} did not raise")
+    for inside in (0.0, 0.25, 1.0):
+        assert pinned_share_within_bounds(inside, I_rest, I_fast, E, T) == inside
+
+
+# --------------------------------------------------------------------
+# anode-pinned-share-tolerance-decades
+# --------------------------------------------------------------------
+@_case("anode-pinned-share-tolerance-decades")
+def _case_anode_pinned_share_tolerance_decades():
+    """The pinned share's roundoff tolerance carries the ``E_beam / T_e,a``
+    amplification: knife-edge balances at large ``E_beam / T_e,a`` clamp.
+
+    One worst-case knife-edge input from a randomized probe in each decade
+    of ``E_beam / T_e,a`` above 10 (~88 and ~686), each a consistent balance
+    whose raw share lies outside ``[0, 1]`` by roundoff alone, is clamped to
+    exactly 1.0 on the pinned branch.
+    NEGATIVE CONTROL: each input's excess is larger than
+    ``64 * eps * max(1, I_rest / I_fast)``, the tolerance without the
+    ``E_beam / T_e,a`` factor, so that tolerance would have raised.
+    """
+    import sys as _sys
+
+    from cablp.cathode.circuit_common import (
+        ANODE_FAST_BRANCH_PINNED,
+        emission_fraction_anode_balance,
+    )
+
+    eps = _sys.float_info.epsilon
+    # (I_rest, I_fast, I_e,sat, T_e,a, E_beam), probe worst cases.
+    cases = (
+        (1.1036950994811837e-37, 5.140930695156814e-44,
+         14.376661121924785, 3.0, 263.28777393354903),
+        (2.82974997989427e-298, 6.68898138571736e-309,
+         2.0417648068998195, 3.0, 2057.5319516583513),
+    )
+    for I_rest, I_fast, I_esat, T, E in cases:
+        assert 10.0 <= E / T < 1000.0, E / T
+        r = (I_rest - I_esat * math.exp(-E / T)) / I_fast
+        excess = max(-r, r - 1.0)
+        # NEGATIVE CONTROL.
+        assert excess > 64.0 * eps * max(1.0, I_rest / I_fast), (E / T, r)
+        phi, f, b = emission_fraction_anode_balance(
+            I_rest, I_fast, I_esat, T, E, False, lambda: ""
         )
-    except ValueError as exc:
-        assert "outside [0, 1]" in str(exc), str(exc)
-    else:
-        raise AssertionError(f"a share of {r!r} did not raise")
+        assert b == ANODE_FAST_BRANCH_PINNED and phi == E, (b, phi)
+        assert f == 1.0, (E / T, f)
