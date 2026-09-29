@@ -743,8 +743,14 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # and 0.46 at 64, 1.8e-3 and 5.6e-2 at 256, and 0 at 1024 (every walker
 # stopped); without the merge the split walkers grew as a tree and kept 70-89 %
 # at 64 legs and 60-87 % at 4096. The cap therefore does not bound that regime
-# at 64 legs: a ray in it raises the run-time residual bound below rather than
+# at 256 legs: a ray in it raises the run-time residual bound below rather than
 # booking the residual.
+#
+# MEASURED on the half column at reduced gas puff (below half the reference
+# puff), where the anode mesh still absorbs but the column is thin: at 64 legs
+# the tail left 2.4e-3 to 3.4e-3 of the ray's launched power unmarched, above
+# the bound below; at 256 every walker tree stopped, the longest at 217 legs,
+# and no residual was booked. Hence 256.
 MIRROR_MAX_LEGS = 256
 
 # The largest share of a mirrored ray's launched power (``Gamma0 * E0``) the
@@ -753,7 +759,8 @@ MIRROR_MAX_LEGS = 256
 # The residual rows are diagnostics, never a sink, so the bound keeps what
 # leaves the ledger through them below the rows' own significance. Converged
 # rays sit far under it (at most 1.1e-7 of the launched TAIL power at 64 legs
-# in the scans above). Not a config key: it is a validity bound on the
+# in the breakdown scans above, none at 256 in the reduced-puff runs). Not a
+# config key: it is a validity bound on the
 # truncation, not an arm.
 MIRROR_RESIDUAL_MAX_FRACTION = 1.0e-4
 

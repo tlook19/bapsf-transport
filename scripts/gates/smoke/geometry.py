@@ -2368,7 +2368,7 @@ def _case_mirror_refusals():
          "of the walkers launched upstream of it, so the anode books more "
          "fast electrons than the cathode emits, its sheath then repels "
          "every walker, the walkers stay trapped between the two faces, and "
-         "the leg-cap residual (10-46 % of the tail power at 64 legs) raises "
+         "the leg-cap residual (0.2-6 % of the tail power at 256 legs) raises "
          "the run-time residual bound)"),
         ("params", "S_pump_R", 3000.0, "S_pump_R=0.0 (got 3000.0)"),
         ("params", "end_wall_length_cm", 10.0,
