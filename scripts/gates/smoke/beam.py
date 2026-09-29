@@ -4223,10 +4223,17 @@ def _case_anode_tail_booking_conservation_assert():
     an otherwise admissible total over one) or when ``w_gap`` leaves
     ``[0, 1]``. On a walked ray with the net-basis ledger, births + net
     interceptions + net remnant equal ``Gamma0`` to roundoff, and the
-    primary-side births equal the launched walker flux.
+    primary-side births equal the launched walker flux. THE RETURN RULE: a
+    mirrored primary whose returns reach the anode plane below the wires'
+    sheath has every return's eta share turned back rather than booked -- no
+    net return interception, the anode row carries the outbound crossing
+    alone, more flux reaches the mirror -- and the ledger and the ray's power
+    identity still close.
     NEGATIVE CONTROL: netted inputs pass and return the three coefficients,
-    no emission returns zeros, and the same ray without ``primary_net_basis``
-    leaves the four net rows at zero with every other row bit-identical.
+    no emission returns zeros, the same ray without ``primary_net_basis``
+    leaves the net rows at zero with every other row bit-identical, and the
+    mirrored primary against an attracting anode (``phi = 0``) books its
+    returns.
     """
     import dataclasses as _dc
 
@@ -4286,6 +4293,45 @@ def _case_anode_tail_booking_conservation_assert():
         assert np.array_equal(np.asarray(a), np.asarray(b)), field.name
     no_plane = _deposit_beam_ray(*args, **_mirror_mg_kwargs(cells))
     assert no_plane.tail_gap_born_flux_per_s == 0.0
+    # THE RETURN RULE, on a mirrored primary that stops within its budget.
+    m_nn, m_ne = np.full(cells, 3.0e12), np.full(cells, 3.0e11) * np.linspace(
+        1.0, 2.0, cells
+    )
+    m_args = (60.0, 1.0e18, m_nn, m_ne, Te, 0, 1, dz)
+
+    def mirrored(phi):
+        return _deposit_beam_ray(*m_args, **_mirror_mg_kwargs(
+            cells, mirror_face=1, tail_reflect_face=-1,
+            tail_reflect_threshold_eV=60.0, anode_cross_index=5,
+            anode_eta=_MIRROR_ETA, tail_anode_cross_index=5,
+            tail_anode_eta=_MIRROR_ETA, tail_anode_phi_eV=phi,
+            primary_net_basis=True,
+        ))
+
+    turned, kept = mirrored(1.0e4), mirrored(0.0)
+    for res in (turned, kept):
+        total = (
+            res.primary_births_flux_per_s + res.primary_net_direct_flux_per_s
+            + res.primary_net_return_flux_per_s
+            + res.primary_net_remnant_flux_per_s
+        )
+        assert abs(total - m_args[1]) <= 1e-12 * m_args[1], total
+        booked = (
+            math.fsum((res.plasma_heating_erg_s + res.radiated_erg_s
+                       + res.ionization_cost_erg_s).tolist())
+            + res.anode_intercepted_erg_s
+            + res.end_loss_low_erg_s + res.end_loss_high_erg_s
+            + res.end_loss_tail_low_erg_s + res.end_loss_tail_high_erg_s
+            + res.primary_mirror_residual_erg_s
+            + res.tail_leg_cap_residual_erg_s
+        )
+        power = m_args[0] * m_args[1] * ev_to_erg
+        assert abs(booked - power) <= 1e-12 * power, (booked, power)
+    assert turned.primary_net_return_flux_per_s == 0.0
+    assert turned.primary_mirror_flux_per_s > kept.primary_mirror_flux_per_s
+    assert turned.anode_intercepted_erg_s < kept.anode_intercepted_erg_s
+    # NEGATIVE CONTROL.
+    assert kept.primary_net_return_flux_per_s > 0.0
 
 
 # --------------------------------------------------------------------
