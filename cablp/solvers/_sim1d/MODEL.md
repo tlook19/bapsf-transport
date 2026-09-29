@@ -873,7 +873,10 @@ raising a `RuntimeError` otherwise: the anode never books more fast electrons
 than the cathode emits. One sheath rule holds for every fast electron at the
 anode plane: at a crossing below $e\phi_a$ the wires' sheath turns the $\eta$
 share back at unchanged energy while $1-\eta$ crosses, for the walkers and for
-the primary's returns alike; the turned share is never booked as anode current
+the primary's returns alike, and the outbound primary's $\eta$ share is
+collected in the fraction $f_\text{sh}$ the circuit's balance below sets for
+the same solve, the rest turned back into the gap as a primary leg of its own;
+the turned share is never booked as anode current
 (each deposition asserts that the walkers' kept tail plus the leg-cap residual
 does not exceed the walkers launched).
 
@@ -885,7 +888,13 @@ book the direct term where the degraded beam would not clear the sheath: with th
 without it ($f_\text{sh}=0$), accepted if $\phi_a\ge\phi_c$; else $\phi_a$ pinned
 at $\phi_c$, the balance setting $f_\text{sh}$ between 0 and 1. A
 virtual-cathode beam of a few eV thus books nothing against a sheath of
-$\sim4T_{e,a}$. The sheath-fall moment of the tail is
+$\sim4T_{e,a}$. The deposition takes $f_\text{sh}$ from the dispatched solve
+that launched its ray (not lagged): the anode's power row carries $f_\text{sh}$
+of the outbound $\eta$ interception, and the turned $(1-f_\text{sh})\eta$ share
+walks back through the gap, is turned round by the cathode sheath and crosses
+the plane unarmed (the interception re-arms only on a return from a mirror),
+so the circuit and the energy ledger book one fraction and the net ledger
+still closes to roundoff. The sheath-fall moment of the tail is
 $P_{\text{tail},\phi}=\max(\phi_a,0)\,c_\text{tail}I_\text{eth}^\star$. The
 selection requires `cathode_coupling` and the walked tail
 (`heating_anomalous_transport = "plateau_multigroup"`), and the current-driven

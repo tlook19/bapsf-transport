@@ -228,6 +228,7 @@ _CASE_ORDER = (
     "anode-booking-consumer-assert",
     "walker-fate-assert-negative-control",
     "anode-booking-diagnostics-saved",
+    "anode-outbound-primary-sheath-rule",
 )
 
 

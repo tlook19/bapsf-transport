@@ -4268,7 +4268,8 @@ def _case_anode_tail_booking_conservation_assert():
     nn, ne, Te, dz = _mirror_column(cells)
     args = (300.0, 1.0e18, nn, ne, Te, 0, 1, dz)
     kwargs = _mirror_mg_kwargs(cells, anode_cross_index=6, anode_eta=_MIRROR_ETA)
-    net = _deposit_beam_ray(*args, primary_net_basis=True, **kwargs)
+    net = _deposit_beam_ray(*args, primary_net_basis=True,
+                            primary_anode_collected_fraction=1.0, **kwargs)
     G0 = args[1]
     total = (
         net.primary_births_flux_per_s + net.primary_net_direct_flux_per_s
@@ -4305,7 +4306,7 @@ def _case_anode_tail_booking_conservation_assert():
             tail_reflect_threshold_eV=60.0, anode_cross_index=5,
             anode_eta=_MIRROR_ETA, tail_anode_cross_index=5,
             tail_anode_eta=_MIRROR_ETA, tail_anode_phi_eV=phi,
-            primary_net_basis=True,
+            primary_net_basis=True, primary_anode_collected_fraction=1.0,
         ))
 
     turned, kept = mirrored(1.0e4), mirrored(0.0)
@@ -4684,7 +4685,8 @@ def _case_anode_gap_born_outbound_only():
     """
     args, kwargs = _returning_mirror_ray(0.0)
     G0 = args[1]
-    net = _deposit_beam_ray(*args, primary_net_basis=True, **kwargs)
+    net = _deposit_beam_ray(*args, primary_net_basis=True,
+                            primary_anode_collected_fraction=1.0, **kwargs)
     assert net.primary_net_return_flux_per_s > 0.0
     assert net.primary_net_direct_flux_per_s > 0.0
     w_gap = net.tail_gap_born_flux_per_s / G0
@@ -4782,7 +4784,7 @@ def _case_walker_fate_assert_negative_control():
         tail_reflect_threshold_eV=60.0, anode_cross_index=5,
         anode_eta=_MIRROR_ETA, tail_anode_cross_index=5,
         tail_anode_eta=_MIRROR_ETA, tail_anode_phi_eV=30.0,
-        primary_net_basis=True,
+        primary_net_basis=True, primary_anode_collected_fraction=1.0,
     )
     real = _beam_deposition_mod._tail_mirror_chains
 
@@ -4867,3 +4869,134 @@ def _case_anode_booking_diagnostics_saved():
         wall_params, heating_anomalous_transport="plateau_multigroup",
     ), wall_flags)
     assert rows == {} and attr is None, (sorted(rows), attr)
+
+
+
+# --------------------------------------------------------------------
+# anode-outbound-primary-sheath-rule
+# --------------------------------------------------------------------
+@_case("anode-outbound-primary-sheath-rule")
+def _case_anode_outbound_primary_sheath_rule():
+    """Under the net basis the outbound primary's anode interception follows
+    the circuit's sheath rule: the anode collects the fraction the balance
+    sets, and the sheath turns the rest back into the gap.
+
+    (a) THE FIXTURE: the anode-sink fixture's first dispatched solve under
+    ``"emission_fraction"`` -- a virtual-cathode beam at ``phi_c`` ~ 4.3 V
+    against the ~12.1 V sheath the balance sets -- collects none of the
+    direct term, and its beam, below the ionization energy, launches no
+    deposition ray. (b) That
+    verdict on a marching walked-tail ray (300 eV, end wall, no tail cull):
+    the anode row is 0, the net direct interception is 0, the turned share is
+    in the column and in the transmitted flux, and the ray's power identity
+    and the net ledger (births + direct + return + remnant = Gamma0) close to
+    roundoff; a pinned fraction books exactly that share of the whole
+    interception. (c) The net basis refuses a missing or out-of-range
+    fraction, and the fraction without the net basis.
+    NEGATIVE CONTROL: the same ray at fraction 1 books the whole
+    ``anode_eta * Gamma0 * E`` interception at the plane.
+    """
+    from unittest import mock
+
+    from cablp.cathode import circuit_idriven as _ci
+    from ._harness import _anode_sink_config
+
+    captured = []
+    real = _ci.solve_idriven
+
+    def spy(config, plasma, *args, **kwargs):
+        if not captured and not kwargs.get("anode_balance_probe", False):
+            captured.append((config, plasma, dict(kwargs)))
+        return real(config, plasma, *args, **kwargs)
+
+    params, flags = _anode_sink_config()
+    with mock.patch.object(_ci, "solve_idriven", spy):
+        LAPDSim1D(params, flags).advance_one_step()
+    config, plasma, kwargs = captured[0]
+    fixture = real(config, plasma, **dict(
+        kwargs, anode_tail_booking="emission_fraction",
+    ))
+    assert 3.5 < fixture.phi_c < 5.0 and 11.5 < fixture.phi_a < 12.7, (
+        fixture.phi_c, fixture.phi_a,
+    )
+    f_sh = fixture.anode_direct_collected_fraction
+    assert f_sh == 0.0, f_sh
+    cells = 24
+    nn, ne, Te, dz = _mirror_column(cells)
+    ray_kwargs = _mirror_mg_kwargs(
+        cells, anode_cross_index=6, anode_eta=_MIRROR_ETA,
+        primary_net_basis=True,
+    )
+    # The fixture's own beam is below the ionization energy, where the
+    # cathode solve launches no deposition ray at all: nothing reaches the
+    # anode from it on either side.
+    assert fixture.phi_c <= I_ion, fixture.phi_c
+
+    # (b) the verdict on a marching ray.
+    args = (300.0, 1.0e18, nn, ne, Te, 0, 1, dz)
+
+    def ray(f):
+        res = _deposit_beam_ray(
+            *args, primary_anode_collected_fraction=f, **ray_kwargs,
+        )
+        power = args[0] * args[1] * ev_to_erg
+        booked = (
+            math.fsum((res.plasma_heating_erg_s + res.radiated_erg_s
+                       + res.ionization_cost_erg_s).tolist())
+            + res.anode_intercepted_erg_s
+            + res.end_loss_low_erg_s + res.end_loss_high_erg_s
+            + res.end_loss_tail_low_erg_s + res.end_loss_tail_high_erg_s
+            + res.primary_mirror_residual_erg_s
+            + res.tail_leg_cap_residual_erg_s
+            + res.transmitted_flux * res.transmitted_energy_eV * ev_to_erg
+        )
+        assert abs(booked - power) <= 1e-12 * power, (f, booked, power)
+        total = math.fsum((
+            res.primary_births_flux_per_s, res.primary_net_direct_flux_per_s,
+            res.primary_net_return_flux_per_s,
+            res.primary_net_remnant_flux_per_s,
+        ))
+        assert abs(total - args[1]) <= 1e-12 * args[1], (f, total)
+        return res
+
+    turned, pinned, whole = ray(f_sh), ray(0.5), ray(1.0)
+    assert turned.anode_intercepted_erg_s == 0.0
+    assert turned.primary_net_direct_flux_per_s == 0.0
+    assert turned.transmitted_flux > whole.transmitted_flux
+    assert math.fsum(turned.plasma_heating_erg_s.tolist()) > math.fsum(
+        whole.plasma_heating_erg_s.tolist()
+    )
+    assert pinned.anode_intercepted_erg_s == 0.5 * whole.anode_intercepted_erg_s
+    assert pinned.primary_net_direct_flux_per_s == (
+        0.5 * whole.primary_net_direct_flux_per_s
+    )
+    # (c) the refusals.
+    for extra, needle in (
+        ({}, "give primary_anode_collected_fraction"),
+        ({"primary_anode_collected_fraction": 1.5}, "must be in [0, 1]"),
+        ({"primary_anode_collected_fraction": float("nan")},
+         "must be in [0, 1]"),
+    ):
+        try:
+            _deposit_beam_ray(*args, **ray_kwargs, **extra)
+        except ValueError as exc:
+            assert needle in str(exc), str(exc)
+        else:
+            raise AssertionError(f"{extra} ACCEPTED")
+    gross_kwargs = dict(ray_kwargs, primary_net_basis=False)
+    try:
+        _deposit_beam_ray(
+            *args, primary_anode_collected_fraction=0.0, **gross_kwargs,
+        )
+    except ValueError as exc:
+        assert "belongs to primary_net_basis" in str(exc), str(exc)
+    else:
+        raise AssertionError("fraction without the net basis ACCEPTED")
+    # NEGATIVE CONTROL.
+    E_cross = float(whole.E_entry_eV[6])
+    assert E_cross > 0.0
+    want = _MIRROR_ETA * args[1] * E_cross * ev_to_erg
+    assert abs(whole.anode_intercepted_erg_s - want) <= 1e-12 * want, (
+        whole.anode_intercepted_erg_s, want,
+    )
+    assert whole.primary_net_direct_flux_per_s > 0.0

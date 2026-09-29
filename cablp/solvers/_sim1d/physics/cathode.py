@@ -1583,6 +1583,16 @@ def _csda_beam_deposition(
                     # wire-sheath test on its returns, for the booking that
                     # reads them.
                     interception_kwargs["primary_net_basis"] = True
+                    # The same rule for the outbound primary at the plane:
+                    # the share of its eta interception THIS solve's anode
+                    # balance collected (1 where the beam at phi_c clears
+                    # the sheath, 0 where it cannot, between where phi_a is
+                    # pinned at phi_c). Read from the solve that launched
+                    # the ray, like the wires' barrier above, so the circuit
+                    # and the deposition book one fraction.
+                    interception_kwargs[
+                        "primary_anode_collected_fraction"
+                    ] = float(result.anode_direct_collected_fraction)
         clump_kwargs = (
             {**ray_kwargs, "nn": np.asarray(ray_nn) * chi_clump}
             if clumping
