@@ -745,7 +745,7 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # at 64 legs and 60-87 % at 4096. The cap therefore does not bound that regime
 # at 64 legs: a ray in it raises the run-time residual bound below rather than
 # booking the residual.
-MIRROR_MAX_LEGS = 64
+MIRROR_MAX_LEGS = 256
 
 # The largest share of a mirrored ray's launched power (``Gamma0 * E0``) the
 # leg budget may leave unmarched: ``deposit_beam(mirror_face=...)`` raises when
