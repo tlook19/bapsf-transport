@@ -5124,3 +5124,75 @@ def _case_anode_fast_term_sheath_rule():
             raise AssertionError(
                 f"the pre-change split RETURNED at I_rest={rest!r} A"
             )
+
+
+# --------------------------------------------------------------------
+# anode-pinned-share-knife-edge
+# --------------------------------------------------------------------
+@_case("anode-pinned-share-knife-edge")
+def _case_anode_pinned_share_knife_edge():
+    """The pinned branch returns its collected share within ``[0, 1]`` at
+    the knife-edge, and a gross excess raises.
+
+    (a) With ``E_beam`` equal to ``phi_a`` with the term exactly, and one ulp
+    either side of it, over a sweep of balances: every share is in
+    ``[0, 1]``, the ulp above is booked whole, and at least one exact
+    knife-edge share, which the raw balance puts above 1 by roundoff, is
+    clamped to exactly 1.0. (b) A share already inside ``[0, 1]`` is the raw
+    balance, bit for bit. (c) An ill-conditioned balance (the fast term
+    3e-12 of the current the sheath passes) at the knife-edge puts the raw
+    share ~2.7e-4 above 1, beyond the clamp: it raises ``ValueError``.
+    NEGATIVE CONTROL: the raw balance itself exceeds 1 at the swept
+    knife-edges and at (c), so the clamp and the raise are exercised.
+    """
+    import sys as _sys
+
+    from cablp.cathode.circuit_common import (
+        ANODE_FAST_BRANCH_BOOKED,
+        ANODE_FAST_BRANCH_PINNED,
+        emission_fraction_anode_balance,
+    )
+
+    eps = _sys.float_info.epsilon
+    I_esat, T = 1000.0, 3.0
+
+    def raw(I_rest, I_fast, E):
+        return (I_rest - I_esat * math.exp(-E / T)) / I_fast
+
+    clamped = 0
+    for k in range(1, 401):
+        I_rest = I_esat * math.exp(-10.0 / T) * (1.0 + k * 1e-5)
+        I_fast = 0.5 * I_rest
+        E = T * math.log(I_esat / (I_rest - I_fast))
+        up, down = math.nextafter(E, math.inf), math.nextafter(E, -math.inf)
+        _, f_up, b_up = emission_fraction_anode_balance(
+            I_rest, I_fast, I_esat, T, up, False, lambda: ""
+        )
+        assert b_up == ANODE_FAST_BRANCH_BOOKED and f_up == 1.0, (k, f_up)
+        for E_beam in (E, down):
+            phi, f, b = emission_fraction_anode_balance(
+                I_rest, I_fast, I_esat, T, E_beam, False, lambda: ""
+            )
+            assert b == ANODE_FAST_BRANCH_PINNED and phi == E_beam, (k, b)
+            assert 0.0 <= f <= 1.0, (k, E_beam, f)
+            r = raw(I_rest, I_fast, E_beam)
+            if 0.0 <= r <= 1.0:
+                assert f == r, (k, f, r)
+            else:
+                assert abs(r - f) <= 64.0 * eps, (k, f, r)
+                clamped += 1
+    # NEGATIVE CONTROL: roundoff did put raw shares outside [0, 1].
+    assert clamped > 0, clamped
+    # (c) the ill-conditioned knife-edge.
+    I_rest, I_fast = 1.0, 3e-12
+    E = T * math.log(I_esat / (I_rest - I_fast))
+    r = raw(I_rest, I_fast, E)
+    assert r - 1.0 > 1e-4, r
+    try:
+        emission_fraction_anode_balance(
+            I_rest, I_fast, I_esat, T, E, False, lambda: "fixture"
+        )
+    except ValueError as exc:
+        assert "outside [0, 1]" in str(exc), str(exc)
+    else:
+        raise AssertionError(f"a share of {r!r} did not raise")

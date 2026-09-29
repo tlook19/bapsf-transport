@@ -898,7 +898,10 @@ simplification that can only book the term where the degraded beam would not
 clear the sheath: with the term ($f_\text{sh}=1$), accepted if
 $\phi_a<\phi_c$; else without it ($f_\text{sh}=0$), accepted if
 $\phi_a\ge\phi_c$; else $\phi_a$ pinned at $\phi_c$, the balance setting
-$f_\text{sh}$ in $[0,1)$. Without the term the sheath passes
+$f_\text{sh}$ in $(0,1]$ ($f_\text{sh}=1$ where $\phi_a$ with the term equals
+$\phi_c$ exactly), returned within $[0,1]$: a knife-edge share outside it
+by at most 64 machine epsilons of roundoff is clamped to the nearer bound, and a
+larger excess raises a `ValueError`. Without the term the sheath passes
 $I_{i,a}+I_\text{tot}>0$, so the balance always has a floating solution. A
 virtual-cathode beam of a few eV thus books nothing against a sheath of
 $\sim4T_{e,a}$. The deposition takes $f_\text{sh}$ from the dispatched solve
