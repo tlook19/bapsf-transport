@@ -230,6 +230,7 @@ _CASE_ORDER = (
     "anode-booking-diagnostics-saved",
     "anode-outbound-primary-sheath-rule",
     "half-column-base-equilibration-constructs",
+    "anode-fast-term-sheath-rule",
 )
 
 
