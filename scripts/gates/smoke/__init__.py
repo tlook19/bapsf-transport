@@ -222,6 +222,8 @@ _CASE_ORDER = (
     "anode-tail-booking-conservation-assert",
     "anode-balance-floor-probe-vs-dispatched",
     "anode-tail-booking-mirror-walked-tail",
+    "anode-direct-booking-sheath-rule",
+    "anode-booking-evaluators-plumbed",
 )
 
 

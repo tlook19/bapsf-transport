@@ -4130,76 +4130,78 @@ def _booking_unit_solve_inputs():
 def _case_anode_tail_booking_identity():
     """``anode_tail_booking = "emission_fraction"`` books what it states.
 
-    On a synthetic solve with a known gap walker fraction ``w_gap`` and tail
-    coefficient ``c_tail``, the anode sheath passes
-    ``I_i,a + I_tot - eta*beta*(1 - w_gap)*I_star - c_tail*I_star`` and
-    ``phi_a = T_e,a ln(I_e,sat / that)``, on both circuits; ``P_tail_phi`` is
-    ``phi_a * c_tail * I_star``. The circuits refuse mixed or out-of-range
+    On a synthetic solve with known ``w_gap``, ``c_ret`` and ``c_tail``, where
+    the beam clears the anode sheath (``phi_a < phi_c``), the anode sheath
+    passes ``I_i,a + I_tot - (eta*beta*(1 - w_gap) + c_ret + c_tail)*I_star``,
+    ``phi_a = T_e,a ln(I_e,sat / that)``, the whole direct term is booked
+    (``anode_direct_collected_fraction == 1``), and ``P_tail_phi`` is
+    ``phi_a * c_tail * I_star``. The circuit refuses mixed or out-of-range
     booking inputs.
-    NEGATIVE CONTROL: at ``w_gap = 0`` the booking equals the default
-    ``"lagged_current"`` fed ``c_tail * I_star`` as its absolute tail current,
-    and the default path with no booking arguments is bit-identical to an
-    explicit ``"lagged_current"``; a non-zero ``w_gap`` moves ``phi_a``.
+    NEGATIVE CONTROL: the default path with no booking arguments is
+    bit-identical to an explicit ``"lagged_current"``, carries no collected
+    fraction, and at ``w_gap = c_ret = 0`` the booking equals it fed
+    ``c_tail * I_star`` as its absolute tail current; a non-zero ``w_gap`` or
+    ``c_ret`` moves ``phi_a``.
     """
     from cablp.cathode.circuit_idriven import solve_idriven
-    from cablp.cathode.circuit_prescribed import solve_prescribed
 
     cfg, plasma, I_i_a, I_e_sat = _booking_unit_solve_inputs()
     common = dict(
         anode_current_A=I_i_a, anode_T_e=plasma.T_e,
-        anode_electron_saturation_A=I_e_sat,
+        anode_electron_saturation_A=I_e_sat, I_tot_A=3000.0,
     )
-    c_tail, w_gap = 0.21, 0.37
-    for name, solve, extra in (
-        ("idriven", solve_idriven, dict(I_tot_A=3000.0)),
-        ("prescribed", solve_prescribed,
-         dict(I_tot_A=3000.0, V_dis_V=60.0)),
-    ):
-        r = solve(
-            cfg, plasma, anode_tail_booking="emission_fraction",
-            tail_anode_coefficient=c_tail, anode_gap_walker_fraction=w_gap,
-            **common, **extra,
-        )
-        beta = r.beam_bypass_fraction
-        assert beta > 0.05, (name, beta)
-        I_e_a = I_i_a + r.I_tot - (
-            cfg.eta * beta * (1.0 - w_gap) + c_tail
-        ) * r.I_eth_star
-        assert I_e_a > 0.0, (name, I_e_a)
-        want = plasma.T_e * math.log(I_e_sat / I_e_a)
-        assert abs(r.phi_a - want) <= 1e-9 * abs(want), (name, r.phi_a, want)
-        assert abs(
-            r.P_tail_phi - max(r.phi_a, 0.0) * c_tail * r.I_eth_star
-        ) <= 1e-12 * abs(r.P_tail_phi), name
-        # NEGATIVE CONTROL.
-        base = solve(cfg, plasma, **common, **extra)
-        explicit = solve(
-            cfg, plasma, anode_tail_booking="lagged_current", **common, **extra
-        )
-        assert base.phi_a == explicit.phi_a and base.V_b == explicit.V_b
-        at_zero = solve(
-            cfg, plasma, anode_tail_booking="emission_fraction",
-            tail_anode_coefficient=c_tail, **common, **extra,
-        )
-        lagged = solve(
-            cfg, plasma,
-            tail_anode_current_A=c_tail * at_zero.I_eth_star,
-            **common, **extra,
-        )
-        assert abs(at_zero.phi_a - lagged.phi_a) <= 1e-9 * abs(lagged.phi_a), (
-            name, at_zero.phi_a, lagged.phi_a,
-        )
-        assert abs(r.phi_a - at_zero.phi_a) > 1e-6 * abs(at_zero.phi_a), name
+    c_tail, w_gap, c_ret = 0.21, 0.37, 0.05
+    r = solve_idriven(
+        cfg, plasma, anode_tail_booking="emission_fraction",
+        tail_anode_coefficient=c_tail, anode_gap_walker_fraction=w_gap,
+        primary_return_coefficient=c_ret, **common,
+    )
+    beta = r.beam_bypass_fraction
+    assert beta > 0.05, beta
+    I_e_a = I_i_a + r.I_tot - (
+        cfg.eta * beta * (1.0 - w_gap) + c_ret + c_tail
+    ) * r.I_eth_star
+    assert I_e_a > 0.0, I_e_a
+    want = plasma.T_e * math.log(I_e_sat / I_e_a)
+    assert r.phi_a < r.phi_c, (r.phi_a, r.phi_c)
+    assert abs(r.phi_a - want) <= 1e-9 * abs(want), (r.phi_a, want)
+    assert r.anode_direct_collected_fraction == 1.0
+    assert abs(
+        r.P_tail_phi - max(r.phi_a, 0.0) * c_tail * r.I_eth_star
+    ) <= 1e-12 * abs(r.P_tail_phi)
+    # NEGATIVE CONTROL.
+    base = solve_idriven(cfg, plasma, **common)
+    explicit = solve_idriven(
+        cfg, plasma, anode_tail_booking="lagged_current", **common
+    )
+    assert base.phi_a == explicit.phi_a and base.V_b == explicit.V_b
+    assert math.isnan(base.anode_direct_collected_fraction)
+    at_zero = solve_idriven(
+        cfg, plasma, anode_tail_booking="emission_fraction",
+        tail_anode_coefficient=c_tail, **common,
+    )
+    lagged = solve_idriven(
+        cfg, plasma, tail_anode_current_A=c_tail * at_zero.I_eth_star,
+        **common,
+    )
+    assert abs(at_zero.phi_a - lagged.phi_a) <= 1e-9 * abs(lagged.phi_a), (
+        at_zero.phi_a, lagged.phi_a,
+    )
+    assert abs(r.phi_a - at_zero.phi_a) > 1e-6 * abs(at_zero.phi_a)
     for kwargs, needle in (
         (dict(anode_tail_booking="bogus"), "must be 'lagged_current' or"),
         (dict(tail_anode_coefficient=0.1), "belongs to 'emission_fraction'"),
+        (dict(primary_return_coefficient=0.1),
+         "belongs to 'emission_fraction'"),
         (dict(anode_tail_booking="emission_fraction",
               tail_anode_current_A=1.0), "belongs to 'lagged_current'"),
         (dict(anode_tail_booking="emission_fraction",
               anode_gap_walker_fraction=1.5), "must be in [0, 1]"),
+        (dict(anode_tail_booking="emission_fraction",
+              primary_return_coefficient=-0.1), "finite and >= 0"),
     ):
         try:
-            solve_idriven(cfg, plasma, I_tot_A=3000.0, **common, **kwargs)
+            solve_idriven(cfg, plasma, **common, **kwargs)
         except ValueError as exc:
             assert needle in str(exc), str(exc)
         else:
@@ -4213,54 +4215,75 @@ def _case_anode_tail_booking_identity():
 def _case_anode_tail_booking_conservation_assert():
     """The booked direct collection may not exceed the emission.
 
-    ``anode_tail_booking_coefficients`` forms ``c_tail = I_tail / I_emit`` and
-    ``w_gap = e * gap_born_flux / I_emit`` and raises a RuntimeError when
-    ``eta*beta*(1 - w_gap) + c_tail > 1`` (an over-counting input: the tail
-    collects 0.9 of the emission beside an un-netted primary) or when
-    ``w_gap`` leaves ``[0, 1]``. The deposition reports the gap-born flux: a
-    walked ray with the anode plane inside the column reports a positive
-    flux, no more than its streaming power carried at the plateau edge.
-    NEGATIVE CONTROL: the same tail with the gap-born walkers netted from the
-    primary (``w_gap = 0.8``) passes and returns the two coefficients, no
-    emission returns ``(0, 0)``, and the same ray without an anode plane
-    reports no gap-born flux.
+    ``anode_tail_booking_coefficients`` forms ``c_tail = I_tail / I_emit``,
+    ``w_gap = e * gap_born_flux / I_emit`` and
+    ``c_ret = e * primary_net_return_flux / I_emit`` and raises a RuntimeError
+    when ``eta*beta*(1 - w_gap) + c_ret + c_tail > 1`` (over-counting inputs:
+    the tail beside an un-netted primary, and a return interception pushing
+    an otherwise admissible total over one) or when ``w_gap`` leaves
+    ``[0, 1]``. On a walked ray with the net-basis ledger, births + net
+    interceptions + net remnant equal ``Gamma0`` to roundoff, and the
+    primary-side births equal the launched walker flux.
+    NEGATIVE CONTROL: netted inputs pass and return the three coefficients,
+    no emission returns zeros, and the same ray without ``primary_net_basis``
+    leaves the four net rows at zero with every other row bit-identical.
     """
+    import dataclasses as _dc
+
     from cablp.solvers._sim1d.physics.cathode import (
         anode_tail_booking_coefficients,
     )
 
     eta, beta, I_emit = 0.358, 1.0, 10.0
-    for tail_A, gap_flux, needle in (
-        (9.0, 0.0, "exceeds the emission"),
-        (1.0, 11.0 / qe_SI, "w_gap in [0, 1]"),
+    for args, needle in (
+        ((9.0, I_emit, 0.0, eta, beta), "exceeds the emission"),
+        ((1.0, I_emit, 11.0 / qe_SI, eta, beta), "w_gap in [0, 1]"),
+        ((9.0, I_emit, 8.0 / qe_SI, eta, beta, 0.4 / qe_SI),
+         "exceeds the emission"),
     ):
         try:
-            anode_tail_booking_coefficients(tail_A, I_emit, gap_flux, eta, beta)
+            anode_tail_booking_coefficients(*args)
         except RuntimeError as exc:
             assert needle in str(exc), str(exc)
         else:
-            raise AssertionError(f"over-count ({tail_A}, {gap_flux}) ACCEPTED")
+            raise AssertionError(f"over-count {args} ACCEPTED")
     # NEGATIVE CONTROL.
-    c_tail, w_gap = anode_tail_booking_coefficients(
-        9.0, I_emit, 8.0 / qe_SI, eta, beta
+    c_tail, w_gap, c_ret = anode_tail_booking_coefficients(
+        9.0, I_emit, 8.0 / qe_SI, eta, beta, 0.02 / qe_SI
     )
     assert abs(c_tail - 0.9) < 1e-15 and abs(w_gap - 0.8) < 1e-12
-    assert eta * beta * (1.0 - w_gap) + c_tail <= 1.0
+    assert abs(c_ret - 0.002) < 1e-12
+    assert eta * beta * (1.0 - w_gap) + c_ret + c_tail <= 1.0
     assert anode_tail_booking_coefficients(0.0, 0.0, 0.0, eta, beta) == (
-        0.0, 0.0,
+        0.0, 0.0, 0.0,
     )
     cells = 24
     nn, ne, Te, dz = _mirror_column(cells)
     args = (300.0, 1.0e18, nn, ne, Te, 0, 1, dz)
-    ray = _deposit_beam_ray(
-        *args, **_mirror_mg_kwargs(cells, anode_cross_index=6, anode_eta=0.0)
+    kwargs = _mirror_mg_kwargs(cells, anode_cross_index=6, anode_eta=_MIRROR_ETA)
+    net = _deposit_beam_ray(*args, primary_net_basis=True, **kwargs)
+    G0 = args[1]
+    total = (
+        net.primary_births_flux_per_s + net.primary_net_direct_flux_per_s
+        + net.primary_net_return_flux_per_s
+        + net.primary_net_remnant_flux_per_s
     )
-    assert ray.tail_power_erg_s > 0.0
-    assert ray.tail_gap_born_flux_per_s > 0.0
-    # Every group launches above the plateau edge (30 eV in the kwargs).
-    assert (
-        ray.tail_gap_born_flux_per_s * 30.0 * ev_to_erg <= ray.tail_power_erg_s
-    )
+    assert abs(total - G0) <= 1e-12 * G0, (total, G0)
+    assert net.primary_net_direct_flux_per_s > 0.0
+    assert abs(
+        net.primary_births_flux_per_s - net.tail_launched_flux_per_s
+    ) <= 1e-9 * net.tail_launched_flux_per_s
+    assert 0.0 < net.tail_gap_born_flux_per_s <= net.tail_launched_flux_per_s
+    # NEGATIVE CONTROL.
+    gross = _deposit_beam_ray(*args, **kwargs)
+    for field in _dc.fields(gross):
+        a, b = getattr(gross, field.name), getattr(net, field.name)
+        if field.name.startswith("primary_births") or field.name.startswith(
+            "primary_net_"
+        ):
+            assert a == 0.0, field.name
+            continue
+        assert np.array_equal(np.asarray(a), np.asarray(b)), field.name
     no_plane = _deposit_beam_ray(*args, **_mirror_mg_kwargs(cells))
     assert no_plane.tail_gap_born_flux_per_s == 0.0
 
@@ -4270,19 +4293,21 @@ def _case_anode_tail_booking_conservation_assert():
 # --------------------------------------------------------------------
 @_case("anode-balance-floor-probe-vs-dispatched")
 def _case_anode_balance_floor_probe_vs_dispatched():
-    """An infeasible anode balance raises except at the circuit's I = 0 probe.
+    """Under ``"emission_fraction"`` an infeasible balance raises, except at
+    the circuit's I = 0 probe; the default floors it and reports it.
 
-    A solve at ``I_tot = 0`` whose directly collected tail current exceeds
-    what the anode sheath can pass has no floating solution: a dispatched
-    ``solve_idriven`` raises ValueError naming the balance, and the prescribed
-    solve raises at its solved sheath. The circuit advance's stages evaluate
-    their ``I = 0`` bracket endpoint through ``vdis_bracket_probe`` only,
-    never through ``vdis_of_I``.
-    NEGATIVE CONTROL: the same solve flagged ``anode_balance_probe=True``
-    returns the historical floored endpoint,
-    ``phi_a = T_e,a ln(I_e,sat / 1e-300)``; a feasible solve is the same
-    number with or without the flag; and the routed advance lands on the
-    same current as the unrouted one.
+    A solve at ``I_tot = 0`` whose directly collected tail exceeds what the
+    anode sheath can pass has no floating solution: under
+    ``"emission_fraction"`` a dispatched ``solve_idriven`` raises ValueError
+    naming the balance; flagged ``anode_balance_probe=True`` it returns the
+    floored endpoint ``phi_a = T_e,a ln(I_e,sat / 1e-300)``. The circuit
+    advance's stages evaluate their ``I = 0`` endpoint through
+    ``vdis_bracket_probe`` only.
+    NEGATIVE CONTROL: under the default the same infeasible dispatched solve
+    returns the floored value with ``anode_floor_fired == 1`` (the probe with
+    0), on the current-driven and the prescribed solve alike; a feasible solve
+    is the same number with or without the flag, reports no firing; the
+    routed advance lands on the same current as the unrouted one.
     """
     from cablp.cathode.circuit_idriven import solve_idriven
     from cablp.cathode.circuit_prescribed import solve_prescribed
@@ -4295,29 +4320,38 @@ def _case_anode_balance_floor_probe_vs_dispatched():
         anode_current_A=I_i_a, anode_T_e=plasma.T_e,
         anode_electron_saturation_A=I_e_sat,
     )
-    tail = 10.0 * I_i_a
+    floored = math.log(I_e_sat / 1e-300) * plasma.T_e
     try:
-        solve_idriven(cfg, plasma, I_tot_A=0.0, tail_anode_current_A=tail,
-                      **common)
+        solve_idriven(cfg, plasma, I_tot_A=0.0,
+                      anode_tail_booking="emission_fraction",
+                      tail_anode_coefficient=0.99, **common)
     except ValueError as exc:
         assert "anode sheath balance is infeasible" in str(exc), str(exc)
     else:
         raise AssertionError("an infeasible dispatched balance RETURNED")
-    try:
-        solve_prescribed(cfg, plasma, I_tot_A=0.0, V_dis_V=40.0,
-                         tail_anode_current_A=tail, **common)
-    except ValueError as exc:
-        assert "anode sheath balance is infeasible" in str(exc), str(exc)
-    else:
-        raise AssertionError("an infeasible prescribed balance RETURNED")
-    # NEGATIVE CONTROL.
-    probe = solve_idriven(cfg, plasma, I_tot_A=0.0, tail_anode_current_A=tail,
+    probe = solve_idriven(cfg, plasma, I_tot_A=0.0,
+                          anode_tail_booking="emission_fraction",
+                          tail_anode_coefficient=0.99,
                           anode_balance_probe=True, **common)
-    assert probe.phi_a == math.log(I_e_sat / 1e-300) * plasma.T_e
+    assert probe.phi_a == floored, (probe.phi_a, floored)
+    # NEGATIVE CONTROL.
+    tail = 10.0 * I_i_a
+    default = solve_idriven(cfg, plasma, I_tot_A=0.0,
+                            tail_anode_current_A=tail, **common)
+    assert default.phi_a == floored and default.anode_floor_fired == 1.0
+    default_probe = solve_idriven(cfg, plasma, I_tot_A=0.0,
+                                  tail_anode_current_A=tail,
+                                  anode_balance_probe=True, **common)
+    assert default_probe.phi_a == floored
+    assert default_probe.anode_floor_fired == 0.0
+    presc = solve_prescribed(cfg, plasma, I_tot_A=0.0, V_dis_V=40.0,
+                             tail_anode_current_A=tail, **common)
+    assert presc.anode_floor_fired == 1.0
     a = solve_idriven(cfg, plasma, I_tot_A=3000.0, **common)
     b = solve_idriven(cfg, plasma, I_tot_A=3000.0, anode_balance_probe=True,
                       **common)
     assert a.phi_a == b.phi_a and a.V_b == b.V_b
+    assert a.anode_floor_fired == 0.0
     # The stage probe routing.
     seen = []
 
@@ -4351,9 +4385,9 @@ def _case_anode_tail_booking_mirror_walked_tail():
     ``far_end = "mirror"`` with ``cathode_coupling`` and
     ``heating_anomalous_transport = "plateau_multigroup"`` constructs and
     steps under ``anode_tail_booking = "emission_fraction"``, committing the
-    lagged pair; under ``"lagged_current"`` it is refused, naming the booking
-    and the trapped residual. ``"emission_fraction"`` without the walked tail
-    is refused as a no-op.
+    three lagged coefficients; under ``"lagged_current"`` it is refused,
+    naming the booking and the trapped residual. ``"emission_fraction"``
+    without the walked tail, or with the prescribed drive, is refused.
     NEGATIVE CONTROL: the same walked tail under ``"lagged_current"`` on the
     end wall constructs, so the refusal is the mirror's.
     """
@@ -4365,6 +4399,7 @@ def _case_anode_tail_booking_mirror_walked_tail():
         sim.advance_one_step()
     assert 0.0 <= sim._cathode_anode_gap_walker_frac <= 1.0
     assert sim._cathode_tail_anode_coef >= 0.0
+    assert sim._cathode_primary_return_coef >= 0.0
     try:
         LAPDSim1D(walked, flags)
     except ValueError as exc:
@@ -4376,15 +4411,186 @@ def _case_anode_tail_booking_mirror_walked_tail():
         assert "10-46 % of the tail power at 64 legs" in str(exc), str(exc)
     else:
         raise AssertionError("the lagged walked tail ACCEPTED at a mirror")
-    try:
-        LAPDSim1D(dict(params, anode_tail_booking="emission_fraction"), flags)
-    except ValueError as exc:
-        assert "silent no-op" in str(exc), str(exc)
-    else:
-        raise AssertionError("emission_fraction without a walked tail ACCEPTED")
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "trace.npz"
+        np.savez(
+            trace,
+            discharge_time_ms=np.linspace(0.0, 10.0, 11),
+            discharge_current_mean_a=np.full(11, 3000.0),
+            discharge_voltage_positive_mean_v=np.full(11, 60.0),
+        )
+        prescribed = dict(
+            walked, anode_tail_booking="emission_fraction",
+            cathode_solver_model="prescribed_measured",
+            cathode_prescribed_trace_path=str(trace),
+            cathode_prescribed_t0_s=1.0e-3,
+            cathode_prescribed_start_s=2.0e-3,
+        )
+        for bad, needle in (
+            (dict(params, anode_tail_booking="emission_fraction"),
+             "silent no-op"),
+            (prescribed,
+             "cathode_solver_model='prescribed_measured' solves phi_c FROM"),
+        ):
+            try:
+                LAPDSim1D(bad, flags)
+            except ValueError as exc:
+                assert needle in str(exc), str(exc)
+            else:
+                raise AssertionError(f"{needle}: ACCEPTED")
     # NEGATIVE CONTROL.
     wall_params, wall_flags = _mirror_circuit_config("end_wall")
     LAPDSim1D(
         dict(wall_params, heating_anomalous_transport="plateau_multigroup"),
         wall_flags,
     )
+
+
+# --------------------------------------------------------------------
+# anode-direct-booking-sheath-rule
+# --------------------------------------------------------------------
+@_case("anode-direct-booking-sheath-rule")
+def _case_anode_direct_booking_sheath_rule():
+    """The primary's direct interception is booked only where the beam
+    clears the anode sheath: three branches, no root-find.
+
+    (a) THE FIXTURE STATE: the first dispatched solve of the anode-sink
+    fixture -- a virtual-cathode beam at ``phi_c`` ~ 4.3 V, all of its
+    ~496 A emission returned, the loop at zero current -- re-solved under
+    ``"emission_fraction"`` books none of the direct term (a 4.3 eV beam
+    cannot climb the ~12.1 V sheath the balance without it sets):
+    ``phi_a = T_e,a ln(I_e,sat / I_i,a)`` and the collected fraction is 0,
+    no raise. (b) The pinned branch: with the term the sheath would sit above
+    the beam energy and without it below, so ``phi_a`` equals the beam energy
+    and the collected share is strictly between 0 and 1, reproducing it.
+    (c) A beam that clears the sheath is booked whole.
+    NEGATIVE CONTROL: the same fixture solve under the default booking books
+    the whole term, floors the balance and reports the firing.
+    """
+    from unittest import mock
+
+    from cablp.cathode import circuit_idriven as _ci
+    from cablp.cathode.circuit_common import emission_fraction_anode_balance
+    from ._harness import _anode_sink_config
+
+    captured = []
+    real = _ci.solve_idriven
+
+    def spy(config, plasma, *args, **kwargs):
+        if not captured and not kwargs.get("anode_balance_probe", False):
+            captured.append((config, plasma, dict(kwargs)))
+        return real(config, plasma, *args, **kwargs)
+
+    params, flags = _anode_sink_config()
+    with mock.patch.object(_ci, "solve_idriven", spy):
+        LAPDSim1D(params, flags).advance_one_step()
+    config, plasma, kwargs = captured[0]
+    assert kwargs["I_tot_A"] == 0.0 and kwargs["tail_anode_current_A"] == 0.0
+    r = real(config, plasma, **dict(
+        kwargs, anode_tail_booking="emission_fraction",
+    ))
+    I_i_a = kwargs["anode_current_A"]
+    I_e_sat = kwargs["anode_electron_saturation_A"]
+    T_ea = kwargs["anode_T_e"]
+    assert r.regime == "virtual_cathode" and 3.5 < r.phi_c < 5.0, r.phi_c
+    assert r.I_eth_star > 400.0 and r.beam_bypass_fraction > 0.2
+    without = T_ea * math.log(I_e_sat / (I_i_a + r.I_tot))
+    assert 11.5 < without < 12.7, without
+    assert abs(r.phi_a - without) <= 1e-9 * without, (r.phi_a, without)
+    assert r.anode_direct_collected_fraction == 0.0
+    # (b) the pinned branch, and (c) the cleared branch.
+    I_esat, T = 1000.0, 3.0
+    I_rest = I_esat * math.exp(-10.0 / T)  # phi_a = 10 V without the term
+    I_direct = 0.5 * I_rest
+    phi, f = emission_fraction_anode_balance(
+        I_rest, I_direct, I_esat, T, 11.0, False, lambda: ""
+    )
+    assert phi == 11.0 and 0.0 < f < 1.0, (phi, f)
+    back = T * math.log(I_esat / (I_rest - f * I_direct))
+    assert abs(back - 11.0) < 1e-12, back
+    phi_c, f_c = emission_fraction_anode_balance(
+        I_rest, I_direct, I_esat, T, 20.0, False, lambda: ""
+    )
+    assert f_c == 1.0
+    assert abs(phi_c - T * math.log(I_esat / (I_rest - I_direct))) < 1e-12
+    # NEGATIVE CONTROL.
+    d = real(config, plasma, **kwargs)
+    assert d.anode_floor_fired == 1.0 and d.phi_a > 1000.0, d.phi_a
+
+
+# --------------------------------------------------------------------
+# anode-booking-evaluators-plumbed
+# --------------------------------------------------------------------
+@_case("anode-booking-evaluators-plumbed")
+def _case_anode_booking_evaluators_plumbed():
+    """The circuit advance and the accepted-state re-solve book the anode as
+    the dispatched solve does under ``"emission_fraction"``.
+
+    On a walked-tail half column stepped under ``"emission_fraction"``, every
+    sheath solve -- dispatched, circuit-advance and accepted-state -- carries
+    the booking and the solver's committed lagged coefficients at the moment
+    of the call, and none carries an absolute tail current.
+    NEGATIVE CONTROL: under the default booking (the end wall) the evaluators
+    keep their standing behaviour -- no booking keywords, a zero tail current
+    -- while the dispatched solve carries the lagged one.
+    """
+    from unittest import mock
+
+    from cablp.cathode import circuit_idriven as _ci
+    from cablp.solvers._sim1d.physics import cathode as _pc
+
+    real = _ci.solve_idriven
+
+    def run(params, flags, steps):
+        calls = []
+        holder = {}
+
+        def spy(config, plasma, *args, **kwargs):
+            calls.append((dict(kwargs), holder["lag"]()))
+            return real(config, plasma, *args, **kwargs)
+
+        sim = LAPDSim1D(params, flags)
+        for _ in range(steps):
+            sim.advance_one_step()
+        def lag():
+            return (sim._cathode_tail_anode_coef,
+                    sim._cathode_anode_gap_walker_frac,
+                    sim._cathode_primary_return_coef, sim._cathode_tail_anode_I)
+
+        holder["lag"] = lag
+        with mock.patch.object(_ci, "solve_idriven", spy), \
+                mock.patch.object(_pc, "solve_idriven", spy):
+            before = lag()
+            sim.advance_one_step()
+        return calls, before, lag()
+
+    params, flags = _mirror_circuit_config("mirror")
+    calls, coef, _ = run(dict(
+        params, heating_anomalous_transport="plateau_multigroup",
+        anode_tail_booking="emission_fraction",
+    ), flags, 4)
+    assert coef[0] > 0.0, coef
+    assert len(calls) > 3, len(calls)
+    for c, now in calls:
+        assert c.get("anode_tail_booking") == "emission_fraction", c
+        assert (
+            c["tail_anode_coefficient"], c["anode_gap_walker_fraction"],
+            c["primary_return_coefficient"],
+        ) == now[:3], (c, now)
+        assert c.get("tail_anode_current_A", 0.0) == 0.0
+    # NEGATIVE CONTROL.
+    wall_params, wall_flags = _mirror_circuit_config("end_wall")
+    calls, coef, _ = run(dict(
+        wall_params, heating_anomalous_transport="plateau_multigroup",
+    ), wall_flags, 4)
+    assert coef[3] > 0.0, coef
+    for c, now in calls:
+        assert c.get("tail_anode_current_A", 0.0) in (0.0, now[3]), (c, now)
+        assert c.get("anode_tail_booking", "lagged_current") == (
+            "lagged_current"
+        )
+    assert any(c.get("tail_anode_current_A", 0.0) > 0.0 for c, _ in calls)
+    assert any(c.get("tail_anode_current_A", 0.0) == 0.0 for c, _ in calls)
