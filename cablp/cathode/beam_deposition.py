@@ -751,7 +751,7 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # the tail left 2.4e-3 to 3.4e-3 of the ray's launched power unmarched, above
 # the bound below; at 256 every walker tree stopped, the longest at 217 legs,
 # and no residual was booked. Hence 256.
-MIRROR_MAX_LEGS = 256
+MIRROR_MAX_LEGS = 1024
 
 # The largest share of a mirrored ray's launched power (``Gamma0 * E0``) the
 # leg budget may leave unmarched: ``deposit_beam(mirror_face=...)`` raises when
