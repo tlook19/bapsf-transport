@@ -9751,6 +9751,14 @@ class LAPDSim1D:
             "first_t_s": float(self._cathode_clamp_first_t_s),
             "last_t_s": float(self._cathode_clamp_last_t_s),
         }
+        # The run's count of dispatched sheath solves whose anode balance was
+        # floored, PRESENCE-GATED on the conserving booking (under which the
+        # balance raises rather than floors) so a default run's result and
+        # file carry nothing new.
+        if self._input_dict.get("anode_tail_booking") == "emission_fraction":
+            result.anode_floor_dispatched_solves = int(
+                self._anode_floor_dispatched_count
+            )
         # Cathode-jet arming census, presence-gated on the CRITERION rather
         # than on either jet channel: a run that declared no criterion carries
         # no such attribute and its saved file no such group, so an
@@ -10270,6 +10278,15 @@ class LAPDSim1D:
         diag["anode_attracting_last_time_s"] = float(
             self._anode_attracting_last_time_s
         )
+        if self._input_dict.get("anode_tail_booking") == "emission_fraction":
+            # The dispatched sheath solves whose anode balance was floored,
+            # as of this save. PRESENCE-GATED on the conserving booking so a
+            # default run's saved structure is unchanged; under it the
+            # balance raises instead of flooring, so a non-zero count says
+            # that guarantee failed.
+            diag["anode_floor_dispatched_solves"] = float(
+                self._anode_floor_dispatched_count
+            )
         if self._plateau_multigroup:
             # Multi-group plateau closure, PRESENCE-GATED so an unarmed run's
             # saved diagnostic structure -- the golden included -- is
@@ -10403,6 +10420,15 @@ class LAPDSim1D:
             # saved before 2026-08-09 lack the datasets and readers must
             # default them.
             diag[f"{prefix}_phi_c_at_cap"] = np.nan
+            if (
+                self._input_dict.get("anode_tail_booking")
+                == "emission_fraction"
+            ):
+                # The share of the primary's direct interception the anode
+                # booked (1 where the beam clears the anode sheath, 0 where it
+                # cannot, between where the sheath is pinned at the beam
+                # energy). Presence-gated on the booking that computes it.
+                diag[f"{prefix}_anode_direct_collected_fraction"] = np.nan
 
         cathode_solve = self._cathode_solve
         if (
@@ -10600,6 +10626,11 @@ class LAPDSim1D:
         diag[f"{prefix}_phi_c_at_cap"] = float(
             str(result.regime) == "capability_limited"
         )
+        if f"{prefix}_anode_direct_collected_fraction" in diag:
+            # Presence-gated with the seed.
+            diag[f"{prefix}_anode_direct_collected_fraction"] = float(
+                result.anode_direct_collected_fraction
+            )
 
     def _stack_trajectory_cathode_diagnostics(self, saved):
         if not saved:

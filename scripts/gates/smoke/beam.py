@@ -4810,3 +4810,60 @@ def _case_walker_fate_assert_negative_control():
         r.tail_anode_culled_flux_per_s - r.tail_anode_returned_flux_per_s
         + r.tail_leg_cap_residual_flux_per_s
     ) <= r.tail_launched_flux_per_s
+
+
+
+# --------------------------------------------------------------------
+# anode-booking-diagnostics-saved
+# --------------------------------------------------------------------
+@_case("anode-booking-diagnostics-saved")
+def _case_anode_booking_diagnostics_saved():
+    """Under ``"emission_fraction"`` the saved file carries the anode floor
+    census and the direct term's collected fraction.
+
+    A walked-tail half column run under the booking saves
+    ``cathode_diagnostics/anode_floor_dispatched_solves`` (the as-of-save
+    count, zero: the balance raises rather than floors) and
+    ``cathode_diagnostics/source_anode_direct_collected_fraction`` (in
+    ``[0, 1]`` on every frame), and the run-level attribute
+    ``anode_floor_dispatched_solves``.
+    NEGATIVE CONTROL: the same walked tail at the end wall under the default
+    booking saves none of the three.
+    """
+    import tempfile
+
+    import h5py
+
+    def saved(params, flags):
+        sim = LAPDSim1D(params, flags)
+        result = sim.run(t_end=3.0e-9, dt=1.0e-9)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = sim.save_result(f"{tmpdir}/booking.h5", result)
+            with h5py.File(path, "r") as h5:
+                diag = h5["cathode_diagnostics"]
+                return (
+                    {name: diag[name][()] for name in diag
+                     if name.endswith("anode_floor_dispatched_solves")
+                     or name.endswith("anode_direct_collected_fraction")},
+                    h5.attrs.get("anode_floor_dispatched_solves"),
+                )
+
+    params, flags = _mirror_circuit_config("mirror")
+    rows, attr = saved(dict(
+        params, heating_anomalous_transport="plateau_multigroup",
+        anode_tail_booking="emission_fraction",
+    ), flags)
+    assert set(rows) == {
+        "anode_floor_dispatched_solves",
+        "source_anode_direct_collected_fraction",
+    }, sorted(rows)
+    assert np.all(rows["anode_floor_dispatched_solves"] == 0.0)
+    fraction = rows["source_anode_direct_collected_fraction"]
+    assert fraction.size > 1 and np.all((fraction >= 0.0) & (fraction <= 1.0))
+    assert attr == 0, attr
+    # NEGATIVE CONTROL.
+    wall_params, wall_flags = _mirror_circuit_config("end_wall")
+    rows, attr = saved(dict(
+        wall_params, heating_anomalous_transport="plateau_multigroup",
+    ), wall_flags)
+    assert rows == {} and attr is None, (sorted(rows), attr)

@@ -311,6 +311,12 @@ def save_result_hdf5(path, result, params=None, flags=None):
             h5.attrs["cathode_clamp_first_t_s"] = float(
                 clamp_census["first_t_s"]
             )
+        # ANODE FLOOR CENSUS: the dispatched sheath solves whose anode balance
+        # was floored. PRESENCE-GATED: only a run under
+        # anode_tail_booking="emission_fraction" carries it.
+        anode_floor = getattr(result, "anode_floor_dispatched_solves", None)
+        if anode_floor is not None:
+            h5.attrs["anode_floor_dispatched_solves"] = int(anode_floor)
         # Presence-gated execution identity. Ordinary runs and their files do
         # not acquire an identity implicitly; qualified Phase 3 runs supply it
         # before solver construction and preserve it here.

@@ -227,6 +227,7 @@ _CASE_ORDER = (
     "anode-gap-born-outbound-only",
     "anode-booking-consumer-assert",
     "walker-fate-assert-negative-control",
+    "anode-booking-diagnostics-saved",
 )
 
 
