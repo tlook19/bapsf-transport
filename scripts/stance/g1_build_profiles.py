@@ -81,6 +81,28 @@ the first gap cell) against the 18.415 cm column. The plenum cell sits at
 negative z inside the first bore stage, so it carries the measured source
 chamber's 40.0 cm directly.
 
+WHICH MESH -- ``--stance``
+-------------------------
+The rows are sized to, and registered on, ONE named configuration's mesh.
+``--stance NAME_OR_PATH`` names it -- a committed configuration name or the
+path of a configuration file, derived or not -- and defaults to the reference
+configuration :data:`REFERENCE_STANCE`, so an invocation that names nothing
+builds exactly what it always built.
+
+On the reference configuration the mesh probe is :func:`_g1_config`: the grid
+constants below restate that configuration's own values, and the mesh report
+compares the two. On any OTHER configuration the probe is that
+configuration's own resolved mesh -- its ``Lm``, ``nx``, ``far_end`` and
+source-region keys -- with the mesh-sized package dropped, and the reference
+grid constants are NOT applied, because they describe the reference mesh and
+would silently re-grid the named one. The rows are then the SAME rules
+evaluated at that mesh's own cell centres: the bore staircase and the box
+stages by cell centre, and the census flux ratio past the flat span. Nothing
+is re-fitted and nothing is re-measured; a configuration whose far end is a
+mirror face (``far_end = "mirror"``, the half column that stops at ``Lm/2``)
+simply carries the rows' values over ``[0, Lm/2]``, where the flat span holds
+the plasma radius at ``RP_CM`` in every cell.
+
 Outputs (all in ``--outdir``, which must lie outside the repository)
 -------------------------------------------------------------------
 ``g1_profiles.npz``  the two plasma profiles, the vessel profile, the mesh.
@@ -107,7 +129,9 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         sys.path.insert(0, _dir)
 
 from stance_config import (  # noqa: E402
-    stance_config,
+    STANCE_DIR,
+    SUFFIX,
+    load_configuration,
     without_mesh_sized_package,
 )
 
@@ -182,17 +206,49 @@ PLENUM_VOLUME_CM3 = np.pi * 40.0**2 * PLENUM_LENGTH_CM
 CASES = ("droop_min", "off")
 
 
-def _reference_config():
-    """Return the reference configuration's (params, flags) pair, mesh only.
+def _reference_config(spec=REFERENCE_STANCE):
+    """Return a configuration's (params, flags) pair, mesh only.
 
-    The committed stance named by :data:`REFERENCE_STANCE`, resolved on top of
-    ``default_config()``, with the MESH-SIZED PACKAGE dropped: the two radius
-    profiles and the flags that require them are exactly what this script
-    emits, so carrying them into the mesh probe would feed the build its own
-    previous output. Every mesh-independent key is kept, so the grid this pair
-    resolves is the configuration's own.
+    The configuration ``spec`` names -- a committed configuration name or the
+    path of a configuration file, :data:`REFERENCE_STANCE` by default --
+    resolved on top of ``default_config()``, with the MESH-SIZED PACKAGE
+    dropped: the two radius profiles and the flags that require them are
+    exactly what this script emits, so carrying them into the mesh probe
+    would feed the build its own previous output. Every mesh-independent key
+    is kept, so the grid this pair resolves is the configuration's own.
     """
-    return without_mesh_sized_package(*stance_config(REFERENCE_STANCE))
+    params, flags, _lineage = load_configuration(spec)
+    return without_mesh_sized_package(params, flags)
+
+
+def is_reference_configuration(spec):
+    """Return True when ``spec`` names the reference configuration's own file.
+
+    By committed name or by a path that resolves to that same file; a derived
+    file of the reference is a different configuration and returns False.
+    """
+    text = str(spec)
+    if text == REFERENCE_STANCE:
+        return True
+    reference = (STANCE_DIR / f"{REFERENCE_STANCE}{SUFFIX}").resolve()
+    return os.path.isfile(text) and os.path.realpath(text) == str(reference)
+
+
+def mesh_config(spec=REFERENCE_STANCE):
+    """Return ``(params, flags, mesh_params, mesh_flags)`` for ``spec``.
+
+    ``(params, flags)`` is :func:`_reference_config` of ``spec``. The mesh
+    pair is the probe the rows are evaluated on: :func:`_g1_config` on the
+    reference configuration, whose grid constants restate that configuration's
+    own values, and the configuration's own resolved pair on any other, whose
+    mesh the reference grid constants must not overwrite.
+    """
+    params, flags = _reference_config(spec)
+    if is_reference_configuration(spec):
+        mesh_params, mesh_flags = _g1_config(params, flags)
+    else:
+        mesh_params, mesh_flags = dict(params), dict(flags)
+    return params, flags, mesh_params, mesh_flags
 
 
 def _g1_config(params, flags):
@@ -264,79 +320,8 @@ def build_plasma_profile(case, z_cm, vessel_radius_cm, census):
     return capped, radius, cap, reference_m, trace_end_m
 
 
-def _fmt_array(values):
-    """Compact JSON for a --extra value: full float repr, no spaces."""
-    return json.dumps([float(v) for v in values], separators=(",", ":"))
-
-
-def _parse_args(argv=None):
-    """Return the parsed CLI: the out-of-repo census table and output dir."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--census-npz",
-        required=True,
-        help="path to the measured-census field re-solve (not in the repo)",
-    )
-    parser.add_argument(
-        "--outdir",
-        required=True,
-        help=(
-            "directory the build writes its report, tables and payloads to; "
-            "it must lie outside the repository, which holds code only"
-        ),
-    )
-    args = parser.parse_args(argv)
-    args.census_npz = os.path.abspath(args.census_npz)
-    if not os.path.isfile(args.census_npz):
-        parser.error(f"--census-npz is not a file: {args.census_npz}")
-    args.outdir = os.path.abspath(args.outdir)
-    if os.path.commonpath([args.outdir, REPO_ROOT]) == REPO_ROOT:
-        parser.error(
-            f"--outdir {args.outdir} is inside the repository {REPO_ROOT}; "
-            "run artifacts belong outside it"
-        )
-    os.makedirs(args.outdir, exist_ok=True)
-    return args
-
-
-def main(argv=None):
-    global CENSUS_NPZ
-
-    args = _parse_args(argv)
-    CENSUS_NPZ = args.census_npz
-    outdir = args.outdir
-    census = np.load(CENSUS_NPZ, allow_pickle=True)
-    ref_params, ref_flags = _reference_config()
-    ref_geometry = build_geometry(ref_params, ref_flags)
-
-    mesh_params, mesh_flags = _g1_config(ref_params, ref_flags)
-    mesh = build_geometry(mesh_params, mesh_flags)
-
-    lines = []
-
-    def say(text=""):
-        lines.append(text)
-        print(text)
-
-    say("=== G1 prescribed-geometry profile build ===")
-    say(f"census   : {CENSUS_NPZ}")
-    say(f"reference: configuration {REFERENCE_STANCE} (mesh-sized package dropped)")
-    say(f"outdir   : {outdir}")
-    say(
-        f"grid     : Lm {ref_params['Lm']} -> {LM_CM} cm, end wall "
-        f"{ref_params['end_wall_length_cm']} -> {END_WALL_LENGTH_CM} cm, "
-        f"nx {ref_params['nx']} -> {NX} (the rrr grid of record: the outer "
-        f"column extends at its own dz through 2110 cm; terminal cell "
-        f"{END_WALL_LENGTH_CM} cm at the flange)"
-    )
-    say(
-        f"source   : Rcs {ref_params['Rcs']} -> {RCS_CM}, Lcs "
-        f"{ref_params['Lcs']} -> {LCS_CM}, plenum_length_cm "
-        f"{ref_params['plenum_length_cm']} -> {PLENUM_LENGTH_CM} "
-        f"(the sss fidelity package)"
-    )
-    say()
-
+def _report_reference_mesh(say, ref_params, ref_geometry, mesh_params, mesh):
+    """Report the probe mesh against the reference configuration's own mesh."""
     # --- mesh comparison against the reference configuration ----------------
     # The comparison is REPORTED, never asserted to an identity. The grid
     # constants above restate the reference configuration's own machine
@@ -433,6 +418,158 @@ def main(argv=None):
     )
     say()
 
+
+def _report_configuration_mesh(say, spec, mesh_params, mesh):
+    """Report a named (non-reference) configuration's own mesh.
+
+    The rows are evaluated on this mesh as it resolves, so there is no second
+    mesh to compare against; the block states what the rows are registered on
+    -- the cell count, the far end and where it sits -- and asserts the one
+    structural fact the vessel rule reads, that the plenum is the only cell
+    behind the cathode face.
+    """
+    say(
+        f"--- mesh of configuration {spec} (its own; the reference grid "
+        f"constants are not applied) ---"
+    )
+    far_end = mesh_params.get("far_end", "end_wall")
+    mirror_faces = np.asarray(
+        getattr(mesh, "mirror_face_indices", ()), dtype=int
+    ).reshape(-1)
+    say(
+        f"cells {mesh.cells}; Lm = {mesh_params['Lm']} cm, nx = "
+        f"{mesh_params['nx']}, far_end = {far_end!r}; cell edges "
+        f"{mesh.z_edges_cm[0]:.6g} .. {mesh.z_edges_cm[-1]:.6g} cm"
+    )
+    if mirror_faces.size:
+        say(
+            f"mirror face(s) {mirror_faces.tolist()} at z = "
+            f"{[float(mesh.z_edges_cm[i]) for i in mirror_faces]} cm "
+            f"(= Lm/2 = {0.5 * float(mesh_params['Lm']):.6g} cm): the rows "
+            "below carry the reference rules' values over [0, Lm/2]"
+        )
+    behind = np.flatnonzero(mesh.z_cm < 0.0)
+    roles_behind = [str(r) for r in np.asarray(mesh.cell_role)[behind]]
+    say(f"behind-cathode cells: {roles_behind} lengths "
+        f"{mesh.length_cm[behind].tolist()} cm")
+    if roles_behind != ["plenum"]:
+        raise AssertionError(
+            "behind-cathode cells must be the plenum alone (Lcs = 0 omits "
+            "the obstruction cell)"
+        )
+    end = np.flatnonzero(
+        np.isin(np.asarray(mesh.cell_role), np.asarray(["end", "end_wall"], dtype=object))
+    )
+    say(
+        f"n_end = {end.size}; column dz (far column) = "
+        f"{mesh.length_cm[mesh.cells - end.size - 1]:.6g} cm; last column "
+        f"cell centre = {mesh.z_cm[mesh.cells - end.size - 1]:.6g} cm"
+    )
+    say()
+
+
+def _fmt_array(values):
+    """Compact JSON for a --extra value: full float repr, no spaces."""
+    return json.dumps([float(v) for v in values], separators=(",", ":"))
+
+
+def _parse_args(argv=None):
+    """Return the parsed CLI: the out-of-repo census table and output dir."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--census-npz",
+        required=True,
+        help="path to the measured-census field re-solve (not in the repo)",
+    )
+    parser.add_argument(
+        "--outdir",
+        required=True,
+        help=(
+            "directory the build writes its report, tables and payloads to; "
+            "it must lie outside the repository, which holds code only"
+        ),
+    )
+    parser.add_argument(
+        "--stance",
+        metavar="NAME_OR_PATH",
+        default=REFERENCE_STANCE,
+        help=(
+            "the configuration whose mesh the rows are sized to and "
+            "registered on: a committed configuration name or the path of a "
+            f"configuration file (default {REFERENCE_STANCE!r}, the reference "
+            "build). On any other configuration its own mesh is used and the "
+            "reference grid constants are not applied"
+        ),
+    )
+    args = parser.parse_args(argv)
+    args.census_npz = os.path.abspath(args.census_npz)
+    if not os.path.isfile(args.census_npz):
+        parser.error(f"--census-npz is not a file: {args.census_npz}")
+    args.outdir = os.path.abspath(args.outdir)
+    if os.path.commonpath([args.outdir, REPO_ROOT]) == REPO_ROOT:
+        parser.error(
+            f"--outdir {args.outdir} is inside the repository {REPO_ROOT}; "
+            "run artifacts belong outside it"
+        )
+    os.makedirs(args.outdir, exist_ok=True)
+    return args
+
+
+def main(argv=None):
+    global CENSUS_NPZ
+
+    args = _parse_args(argv)
+    CENSUS_NPZ = args.census_npz
+    outdir = args.outdir
+    census = np.load(CENSUS_NPZ, allow_pickle=True)
+    reference = is_reference_configuration(args.stance)
+    ref_params, ref_flags, mesh_params, mesh_flags = mesh_config(args.stance)
+    ref_geometry = build_geometry(ref_params, ref_flags)
+    mesh = build_geometry(mesh_params, mesh_flags)
+
+    lines = []
+
+    def say(text=""):
+        lines.append(text)
+        print(text)
+
+    say("=== G1 prescribed-geometry profile build ===")
+    say(f"census   : {CENSUS_NPZ}")
+    if reference:
+        say(f"reference: configuration {REFERENCE_STANCE} (mesh-sized package dropped)")
+        say(f"outdir   : {outdir}")
+        say(
+            f"grid     : Lm {ref_params['Lm']} -> {LM_CM} cm, end wall "
+            f"{ref_params['end_wall_length_cm']} -> {END_WALL_LENGTH_CM} cm, "
+            f"nx {ref_params['nx']} -> {NX} (the rrr grid of record: the outer "
+            f"column extends at its own dz through 2110 cm; terminal cell "
+            f"{END_WALL_LENGTH_CM} cm at the flange)"
+        )
+        say(
+            f"source   : Rcs {ref_params['Rcs']} -> {RCS_CM}, Lcs "
+            f"{ref_params['Lcs']} -> {LCS_CM}, plenum_length_cm "
+            f"{ref_params['plenum_length_cm']} -> {PLENUM_LENGTH_CM} "
+            f"(the sss fidelity package)"
+        )
+    else:
+        say(
+            f"configuration: {args.stance} (mesh-sized package dropped; its "
+            f"OWN mesh, the reference grid constants not applied)"
+        )
+        say(f"outdir   : {outdir}")
+        say(
+            f"grid     : Lm {mesh_params['Lm']} cm, nx {mesh_params['nx']}, "
+            f"far_end {mesh_params.get('far_end', 'end_wall')!r}, Rcs "
+            f"{mesh_params['Rcs']}, Lcs {mesh_params['Lcs']}, "
+            f"plenum_length_cm {mesh_params['plenum_length_cm']}"
+        )
+    say()
+
+    if reference:
+        _report_reference_mesh(say, ref_params, ref_geometry, mesh_params, mesh)
+    else:
+        _report_configuration_mesh(say, args.stance, mesh_params, mesh)
+
     # --- vessel profile -----------------------------------------------------
     vessel = build_vessel_profile(mesh.z_cm, mesh.cell_role)
     say("--- machine_radius_profile_cm (measured bore + box encoding) ---")
@@ -524,48 +661,65 @@ def main(argv=None):
         # end wall at the flange (the rrr grid of record), so a centre
         # sample and a volume average of the same profile should now nearly
         # agree. Both are stated; the arms carry the centre sample.
-        fine_z_cm = np.linspace(
-            mesh.z_edges_cm[terminal], mesh.z_edges_cm[terminal + 1], 4001
-        )
-        fine_raw = RP_CM * (
-            np.interp(
-                np.minimum(fine_z_cm / 100.0, trace_end_m),
-                np.asarray(census[f"{case}_z_flux_m"], dtype=float),
-                np.asarray(census[f"{case}_flux_radius_m"], dtype=float),
+        # Only where the terminal cell lies past the flat span: inside it the
+        # emitted radius is RP_CM by the flat rule, and the raw flux ratio
+        # this samples does not describe the row (a half column that stops at
+        # its mirror plane ends there).
+        if mesh.z_edges_cm[terminal] > FLAT_THROUGH_Z_CM:
+            fine_z_cm = np.linspace(
+                mesh.z_edges_cm[terminal], mesh.z_edges_cm[terminal + 1], 4001
             )
-            / reference_m
-        )
-        fine_cap = np.sqrt(AREA_CAP_FRACTION) * vessel[terminal]
-        fine_r = np.minimum(fine_raw, fine_cap)
-        fine_area = np.pi * fine_r**2
-        binding = np.flatnonzero(fine_raw > fine_cap)
-        say(
-            f"  [report-only] volume-averaged area over the terminal cell = "
-            f"{np.trapezoid(fine_area, fine_z_cm) / (fine_z_cm[-1] - fine_z_cm[0]):.4f} "
-            f"cm^2 = {np.trapezoid(fine_area, fine_z_cm) / (fine_z_cm[-1] - fine_z_cm[0]) / (np.pi * RP_CM**2):.3f}"
-            f" x column (centre sample gives {area_terminal / (np.pi * RP_CM**2):.3f} x)"
-        )
-        say(
-            "  [report-only] the 0.95 cap would start binding at z = "
-            + (
-                f"{fine_z_cm[binding[0]]:.2f} cm"
-                if binding.size
-                else "nowhere inside the terminal cell"
+            fine_raw = RP_CM * (
+                np.interp(
+                    np.minimum(fine_z_cm / 100.0, trace_end_m),
+                    np.asarray(census[f"{case}_z_flux_m"], dtype=float),
+                    np.asarray(census[f"{case}_flux_radius_m"], dtype=float),
+                )
+                / reference_m
             )
-            + f"; area at the flange (z = {mesh.z_edges_cm[terminal + 1]:.1f} cm) = "
-            f"{fine_area[-1]:.4f} cm^2 = {fine_area[-1] / (np.pi * RP_CM**2):.3f} x column"
-        )
+            fine_cap = np.sqrt(AREA_CAP_FRACTION) * vessel[terminal]
+            fine_r = np.minimum(fine_raw, fine_cap)
+            fine_area = np.pi * fine_r**2
+            binding = np.flatnonzero(fine_raw > fine_cap)
+            say(
+                f"  [report-only] volume-averaged area over the terminal cell = "
+                f"{np.trapezoid(fine_area, fine_z_cm) / (fine_z_cm[-1] - fine_z_cm[0]):.4f} "
+                f"cm^2 = {np.trapezoid(fine_area, fine_z_cm) / (fine_z_cm[-1] - fine_z_cm[0]) / (np.pi * RP_CM**2):.3f}"
+                f" x column (centre sample gives {area_terminal / (np.pi * RP_CM**2):.3f} x)"
+            )
+            say(
+                "  [report-only] the 0.95 cap would start binding at z = "
+                + (
+                    f"{fine_z_cm[binding[0]]:.2f} cm"
+                    if binding.size
+                    else "nowhere inside the terminal cell"
+                )
+                + f"; area at the flange (z = {mesh.z_edges_cm[terminal + 1]:.1f} cm) = "
+                f"{fine_area[-1]:.4f} cm^2 = {fine_area[-1] / (np.pi * RP_CM**2):.3f} x column"
+            )
+        else:
+            say(
+                f"  [report-only] the terminal cell (z "
+                f"{mesh.z_edges_cm[terminal]:.3f} .. "
+                f"{mesh.z_edges_cm[terminal + 1]:.3f} cm) lies inside the "
+                f"flat span (z <= {FLAT_THROUGH_Z_CM} cm): no sub-cell flux "
+                "diagnostic"
+            )
         say()
 
     # --- construction validation -------------------------------------------
     say("--- construction validation (build_geometry with the profiles) ---")
     arm_configs = {}
     for case, arm in (("droop_min", "G1a"), ("off", "G1b")):
-        params, flags = _g1_config(ref_params, ref_flags)
+        params, flags = dict(mesh_params), dict(mesh_flags)
         params["plasma_radius_profile_cm"] = [float(v) for v in profiles[case]]
         params["machine_radius_profile_cm"] = [float(v) for v in vessel]
-        params["neutral_baffle_positions_cm"] = list(BAFFLE_POSITIONS_CM)
-        params["neutral_baffle_clear_radii_cm"] = list(BAFFLE_CLEAR_RADII_CM)
+        if reference:
+            # The reference build states its baffles from this script's own
+            # constants; another configuration's baffles are its own keys,
+            # which its mesh pair already carries.
+            params["neutral_baffle_positions_cm"] = list(BAFFLE_POSITIONS_CM)
+            params["neutral_baffle_clear_radii_cm"] = list(BAFFLE_CLEAR_RADII_CM)
         arm_configs[arm] = (params, flags)
         geometry = build_geometry(params, flags)
         say(f"[{arm} / {case}] build_geometry: OK (no ValueError)")
@@ -655,8 +809,19 @@ def main(argv=None):
         say()
 
     # --- emitted arm arguments ---------------------------------------------
+    # The --extra payloads restate the REFERENCE grid constants, so they are
+    # written for the reference build only. Another configuration carries its
+    # own grid; its rows are read from the .npz and the report.
     say("--- --extra payloads ---")
-    for arm, case in (("G1a", "droop_min"), ("G1b", "off")):
+    if not reference:
+        say(
+            f"not written: the payloads restate the reference grid, and "
+            f"{args.stance} carries its own; take the rows from "
+            "g1_profiles.npz or the report"
+        )
+    for arm, case in (
+        (("G1a", "droop_min"), ("G1b", "off")) if reference else ()
+    ):
         payload = [
             f"Lm={LM_CM}",
             f"end_wall_length_cm={END_WALL_LENGTH_CM}",
@@ -687,13 +852,13 @@ def main(argv=None):
         machine_radius_profile_cm=vessel,
         plasma_radius_profile_cm_droop_min=profiles["droop_min"],
         plasma_radius_profile_cm_off=profiles["off"],
-        Lm_cm=LM_CM,
-        end_wall_length_cm=END_WALL_LENGTH_CM,
-        nx=NX,
-        gas_puff_z_cm=GAS_PUFF_Z_CM,
-        Rcs_cm=RCS_CM,
-        Lcs_cm=LCS_CM,
-        plenum_length_cm=PLENUM_LENGTH_CM,
+        Lm_cm=mesh_params["Lm"],
+        end_wall_length_cm=mesh_params["end_wall_length_cm"],
+        nx=mesh_params["nx"],
+        gas_puff_z_cm=mesh_params["gas_puff_z_cm"],
+        Rcs_cm=mesh_params["Rcs"],
+        Lcs_cm=mesh_params["Lcs"],
+        plenum_length_cm=mesh_params["plenum_length_cm"],
         area_cap_fraction=AREA_CAP_FRACTION,
         flat_through_z_cm=FLAT_THROUGH_Z_CM,
         flux_reference_z_m=FLUX_REFERENCE_Z_M,

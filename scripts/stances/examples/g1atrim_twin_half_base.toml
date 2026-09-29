@@ -1,0 +1,135 @@
+# g1atrim_twin_half_base -- the HALF-COLUMN BASE: the reference configuration
+# cut at the mid-plane mirror face, with the equilibrate route that produces
+# the equilibrated base run the half column's shaped initial fill is built on.
+#
+# A derived configuration: g1atrim plus only the keys this file moves. See
+# cablp/solvers/_sim1d/CONFIG_DECLARATIONS.md ("Derived configurations -- a
+# base and what it moves", and "The half column and its fill chain").
+#
+# THE GEOMETRY. far_end = "mirror" ends the mesh at z = Lm/2 in a closed
+# mirror face, the symmetry plane of a two-source machine whose image source
+# sits at z = Lm. Under it Lm is the mirror configuration's own length,
+# cathode to image cathode: 1965.4 cm puts the plane at 982.7 cm, the
+# magnet-array symmetry plane. nx counts the far column cells between the
+# fixed source region and the plane; 118 keeps the far-column cell size within
+# 0.5 % of the reference mesh's (7.453 cm against 7.488 cm). The mesh is 129 cells: 1 plenum + 5 gap + 5 fixed source + 118
+# far column, with no end wall cell. A half column has no end wall for the
+# right pump to sit on, so S_pump_R is 0 (the solver refuses anything else at
+# a mirror). The walked anomalous tail constructs at a mirror only under the
+# emission-fraction anode booking, so that selector moves with it.
+#
+# THE PER-CELL ROWS are the reference rows' own values over [0, Lm/2] on this
+# mesh -- no re-fit and no new measurement. They are emitted by the reference
+# configuration's two builders run with --stance naming this file:
+# machine_radius_profile_cm by scripts/stance/g1_build_profiles.py (the bore
+# staircase and the cathode-box stages, by cell centre) and
+# plasma_radius_profile_cm by scripts/stance/build_msi_field_profile.py (the
+# measured-field flux tube, whose flat hold reaches past this mesh's far end,
+# so every cell is at the column radius 18.415 cm). Every entry equals the
+# reference row's value in the reference cell containing this mesh's cell
+# centre. The neutral baffle keys are the reference's own and are inherited.
+#
+# THE INITIAL NEUTRAL STATE. The reference's shaped fill rows are sized to
+# its own mesh and cannot travel, so this file drops them and takes the
+# equilibrate route: start_simulation() runs the puff/off accumulation at the
+# reference's 27 ms puff window and seeds the plasma run's t = 0 frame from
+# it. That t = 0 frame is the base scripts/stance/sp3_build_nn0.py
+# --base-from-h5 reads, so a plasma run as short as the solver allows is
+# enough; "equilibrate_only" would save the accumulation's own start frame at
+# t = 0 instead. The seed cache stays off. nn0 is the direct-run fill the
+# equilibrate route requires to be set; the equilibration does not read it.
+base = "g1atrim"
+
+[input_dict]
+far_end = "mirror"
+Lm = 1965.4
+nx = 118
+S_pump_R = 0.0
+anode_tail_booking = "emission_fraction"
+plasma_radius_profile_cm = [
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415, 18.415, 18.415, 18.415,
+  18.415,
+]
+machine_radius_profile_cm = [
+  40.0, 27.728368187412972, 30.45031314638934, 40.0,
+  40.0, 40.0, 40.0, 40.0,
+  40.0, 40.0, 40.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0, 50.0, 50.0, 50.0,
+  50.0,
+]
+
+
+[models.initial_neutral_state]
+
+# The equilibrate route with the reference's cycle count, step and 27 ms puff
+# window; the shaped fill rows, the seed cache directory and the restart
+# payload are unused routes.
+initial_neutral_state = "equilibrate"
+neutral_equilibration_cycles = 100
+neutral_equilibration_dt = 0.01
+equilibration_gas_puff_on_s = 0.027
+use_cached_neutral_seed = false
+nn0 = 2.0e13
+none_valued = [
+  "neutral_seed_cache_dir", "nn0_profile", "nn0_annulus_profile",
+  "restart_from",
+]

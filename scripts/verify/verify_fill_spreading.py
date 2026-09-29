@@ -56,6 +56,29 @@ DEFAULT RUN (no arguments) -- everything decidable inside this repository:
     runs on the production configuration, whose per-cell radius profile is
     sized to one mesh and is not this script's to re-grid.
 
+``G6 mirror face`` -- run only when the production configuration ends in a
+mirror face (``far_end = "mirror"``, the half column), so the default run on
+the reference configuration does not carry it.
+    The fill builder's far face must be the mirror's closed plane. Four
+    legs: the builder's own structural assertion
+    (``sp3.mirror_face_closure``: the plane is the mesh's last face, the cell
+    beside it is carried, no operator conductance sits on it); the INVENTORY
+    LEDGER of the registered member on the real lobe over the registered ES1
+    foot -- the lobe's grid inventory against the as-applied throughput (the
+    lobe reflects rays that land past the plane, so none is lost there) and
+    the solve's held inventory against the deposit, both to
+    ``MIRROR_LEDGER_REL_TOL``; the ZERO MIRROR-FACE FLUX, measured as the
+    share of an inventory placed in the mirror-adjacent cell that one
+    sourceless substep keeps on the grid, which must be 1 to
+    ``MIRROR_RETAINED_REL_TOL``; and the builder's two refusals at a mirror --
+    a far pump (``S_pump_R != 0``) and a matrix kernel -- each of which must
+    raise, beside the registered member, which must not.
+
+WHICH CONFIGURATION -- ``--stance NAME_OR_PATH``. The production legs of G1,
+G2 and G5 and the G6 gate run on this configuration (a committed name or a
+file path, :data:`PRODUCTION_STANCE` by default, so the default run is what it
+always was). A configuration whose far end is a mirror face also runs G6.
+
 OPTIONAL MODES -- each reads data that does not live in this repository, so
 neither the default run nor the smoke suite depends on it:
 
@@ -115,6 +138,8 @@ Usage (from the repo root, PYTHONPATH set to the repo root):
 
     python scripts/verify/verify_fill_spreading.py
     python scripts/verify/verify_fill_spreading.py --fast
+    python scripts/verify/verify_fill_spreading.py \
+        --stance scripts/stances/examples/g1atrim_twin_half_base.toml
     python scripts/verify/verify_fill_spreading.py --tpmc-record RECORD.npz
     python scripts/verify/verify_fill_spreading.py \\
         --tpmc-production PROFILES.npz \\
@@ -138,12 +163,13 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import sp3_build_nn0 as sp3  # noqa: E402
-from stance_config import stance_config  # noqa: E402
+from stance_config import load_configuration  # noqa: E402
 
 from cablp.constants import m_He_cgs  # noqa: E402
 from cablp.solvers._sim1d import LAPDSim1D  # noqa: E402
 from cablp.solvers._sim1d.physics.neutrals import (  # noqa: E402
     gas_puff_rate_profile,
+    puff_rate,
 )
 
 #: The configuration the production legs of G1, G2 and G5 run on.
@@ -204,6 +230,16 @@ GATE_TN_K = 300.0
 #: Foot duration the transport gates integrate over [s]. Any positive time
 #: states the same properties; this is the ES1 registered foot's order.
 GATE_DT_S = 5.83e-3
+
+#: G6 bar on the two inventory-ledger closures at a mirror face: the lobe's
+#: grid inventory against the as-applied throughput, and the solve's held
+#: inventory against the deposit [1].
+MIRROR_LEDGER_REL_TOL = 1.0e-10
+#: G6 bar on the share of an inventory placed beside the mirror face that one
+#: sourceless substep keeps on the grid, as ``|retained - 1|`` [1].
+MIRROR_RETAINED_REL_TOL = 1.0e-13
+#: G6: the far pump the refusal leg offers the builder at a mirror [L/s].
+MIRROR_REFUSAL_PUMP_LPS = 3000.0
 
 #: G1 bar on ``(max - min) / mean`` of the added density over the active set
 #: for a source uniform per unit volume [1].
@@ -386,9 +422,13 @@ def _spread_relative(values):
     return float((values.max() - values.min()) / values.mean())
 
 
-def _production_mesh(nx=None):
-    """Return the production configuration's geometry, optionally re-meshed."""
-    params, flags = stance_config(PRODUCTION_STANCE)
+def _production_mesh(nx=None, spec=PRODUCTION_STANCE):
+    """Return a configuration's geometry, optionally re-meshed.
+
+    ``spec`` is a committed configuration name or a configuration file path,
+    the production configuration by default.
+    """
+    params, flags, _lineage = load_configuration(spec)
     if nx is not None:
         params["nx"] = int(nx)
     return LAPDSim1D(dict(params), dict(flags)).geometry, params, flags
@@ -420,14 +460,14 @@ def _total_variation(first, second):
 # ----------------------------------------------------------------------
 # G1 -- uniform-source control, with the legacy route as negative control
 # ----------------------------------------------------------------------
-def gate_uniform_source(vbar_cm_s, production=True):
+def gate_uniform_source(vbar_cm_s, production=True, spec=PRODUCTION_STANCE):
     """Return ``(ok, lines)`` for the uniform-source density-continuity gate."""
     lines = []
     ok = True
     meshes = [("bore-step tube", _bore_step_tube(), True)]
     if production:
-        geometry, _, _ = _production_mesh()
-        meshes.append((f"{PRODUCTION_STANCE} mesh", geometry, False))
+        geometry, _, _ = _production_mesh(spec=spec)
+        meshes.append((f"{spec} mesh", geometry, False))
     for label, mesh, is_tube in meshes:
         for gap_coupling in (False, True):
             active = sp3.knudsen_active_mask(mesh.cell_role, gap_coupling)
@@ -497,7 +537,7 @@ def gate_uniform_source(vbar_cm_s, production=True):
 # ----------------------------------------------------------------------
 # G2 -- equilibrium limit
 # ----------------------------------------------------------------------
-def gate_equilibrium(vbar_cm_s, production=True):
+def gate_equilibrium(vbar_cm_s, production=True, spec=PRODUCTION_STANCE):
     """Return ``(ok, lines)`` for the long-time uniformity gate."""
     lines = []
     ok = True
@@ -506,9 +546,9 @@ def gate_equilibrium(vbar_cm_s, production=True):
         np.asarray(mesh.cell_role, dtype=object) == "puff", 1.0, 0.0
     ))]
     if production:
-        geometry, params, _ = _production_mesh()
+        geometry, params, _ = _production_mesh(spec=spec)
         cases.append((
-            f"{PRODUCTION_STANCE} mesh, real lobe",
+            f"{spec} mesh, real lobe",
             geometry,
             _lobe(geometry, params, GATE_DT_S),
         ))
@@ -662,7 +702,7 @@ def _solve_for(geometry, params, substeps, vbar_cm_s):
     return _probe_density(geometry, accumulated)
 
 
-def gate_convergence(vbar_cm_s):
+def gate_convergence(vbar_cm_s, spec=PRODUCTION_STANCE):
     """Return ``(ok, lines)`` for the mesh and substep convergence gate."""
     lines = []
     ok = True
@@ -695,7 +735,7 @@ def gate_convergence(vbar_cm_s):
     lines.append("      fine   " + " ".join(f"{v:.6g}" for v in fine))
     # SUBSTEP LEG, on the production mesh. The mesh does not move here, so the
     # two readings agree and only the interpolated one is printed.
-    geometry, params, _ = _production_mesh()
+    geometry, params, _ = _production_mesh(spec=spec)
     base_rows, _ = _solve_for(geometry, params,
                               sp3.KNUDSEN_SUBSTEPS_DEFAULT, vbar_cm_s)
     doubled_rows, _ = _solve_for(geometry, params,
@@ -706,12 +746,130 @@ def gate_convergence(vbar_cm_s):
     lines.append(
         f"  [{'ok' if good else 'FAIL'}] substeps "
         f"{sp3.KNUDSEN_SUBSTEPS_DEFAULT} -> "
-        f"{2 * sp3.KNUDSEN_SUBSTEPS_DEFAULT} on the {PRODUCTION_STANCE} "
+        f"{2 * sp3.KNUDSEN_SUBSTEPS_DEFAULT} on the {spec} "
         f"mesh: probe rows move {moved:.3e} (bar "
         f"{SUBSTEP_CONVERGENCE_REL:g})"
     )
     lines.append("      base    " + " ".join(f"{v:.6g}" for v in base_rows))
     lines.append("      doubled " + " ".join(f"{v:.6g}" for v in doubled_rows))
+    return ok, lines
+
+
+# ----------------------------------------------------------------------
+# G6 -- the mirror face of a half column
+# ----------------------------------------------------------------------
+def has_mirror_face(geometry):
+    """Return True when ``geometry`` ends in a mirror face."""
+    return np.asarray(
+        getattr(geometry, "mirror_face_indices", ()), dtype=int
+    ).size > 0
+
+
+def gate_mirror_face(vbar_cm_s, spec):
+    """Return ``(ok, lines)`` for the mirror-face gate on ``spec``'s mesh.
+
+    Four legs, each printed with its numbers: the builder's structural
+    assertion, the inventory ledger of the registered member on the real lobe
+    over the registered ES1 foot, the retained share of an inventory placed
+    beside the plane over one sourceless substep, and the builder's two
+    refusals at a mirror beside the registered member's acceptance.
+    """
+    lines = []
+    ok = True
+    geometry, params, _ = _production_mesh(spec=spec)
+    gap_coupling = sp3.KNUDSEN_GAP_COUPLING_REGISTERED
+    active = sp3.knudsen_active_mask(geometry.cell_role, gap_coupling)
+
+    # (a) the builder's own structural assertion.
+    entry = sp3.mirror_face_closure(geometry, active)
+    lines.append(
+        f"  [ok] structure: mirror face {entry['mirror_face_index']} at z = "
+        f"{entry['mirror_face_z_cm']:.6g} cm is the mesh's last face, the "
+        f"adjacent cell {entry['mirror_adjacent_cell']} is carried, and no "
+        "operator conductance sits on it"
+    )
+
+    # (b) the inventory ledger of the registered member on the real lobe.
+    foot = sp3.registered_foot_s(1)
+    deposit = _lobe(geometry, params, foot)
+    throughput = puff_rate(params["S_gp"], params["gas_puff_valves"], 1.0) * foot
+    lobe_rel = abs(float(np.sum(deposit)) - throughput) / throughput
+    accumulated, report = sp3.knudsen_spread(
+        geometry.z_cm, geometry.length_cm, geometry.neutral_volume_cm3,
+        geometry.neutral_face_area_cm2, active, deposit, foot, vbar_cm_s,
+    )
+    held_rel = abs(float(np.sum(accumulated)) - float(np.sum(deposit))) / float(
+        np.sum(deposit)
+    )
+    good = lobe_rel < MIRROR_LEDGER_REL_TOL and held_rel < MIRROR_LEDGER_REL_TOL
+    ok = ok and good
+    lines.append(
+        f"  [{'ok' if good else 'FAIL'}] inventory ledger, registered member "
+        f"(kappa {sp3.KNUDSEN_KAPPA_REFERENCE:.6g}, gap-coupled, continuous "
+        f"source) over the ES1 foot {foot:.6g} s: throughput x foot "
+        f"{throughput:.9e} atoms, lobe on grid {float(np.sum(deposit)):.9e} "
+        f"(rel {lobe_rel:.3e}), held after the solve "
+        f"{float(np.sum(accumulated)):.9e} (rel {held_rel:.3e}); re-homed "
+        f"share {report['rehomed_fraction']:.3e} (bar "
+        f"{MIRROR_LEDGER_REL_TOL:.0e})"
+    )
+    density = accumulated / np.asarray(geometry.neutral_volume_cm3, dtype=float)
+    lines.append(
+        f"      added density: mirror-adjacent cell {density[-1]:.6g} cm^-3, "
+        f"peak {float(np.max(density)):.6g} cm^-3 at z = "
+        f"{float(geometry.z_cm[int(np.argmax(density))]):.6g} cm; reach "
+        f"z90 = {sp3.knudsen_added_rows(geometry.z_cm, geometry.length_cm, geometry.neutral_volume_cm3, accumulated, active)['added_z90_cm']:.6g} cm"
+    )
+
+    # (c) the zero mirror-face flux, measured: one sourceless substep of the
+    # registered operator from an inventory placed beside the plane.
+    one_atom = np.zeros(int(geometry.cells), dtype=float)
+    one_atom[-1] = 1.0
+    retained, _ = sp3.knudsen_spread(
+        geometry.z_cm, geometry.length_cm, geometry.neutral_volume_cm3,
+        geometry.neutral_face_area_cm2, active, one_atom,
+        foot / sp3.KNUDSEN_SUBSTEPS_DEFAULT, vbar_cm_s, substeps=1,
+        source_convention="deposit_t0",
+    )
+    miss = abs(float(np.sum(retained)) - 1.0)
+    left = 1.0 - float(retained[-1])
+    good = miss < MIRROR_RETAINED_REL_TOL and left > 0.0
+    ok = ok and good
+    lines.append(
+        f"  [{'ok' if good else 'FAIL'}] zero mirror-face flux: an inventory "
+        f"placed in the mirror-adjacent cell keeps {float(np.sum(retained)):.16f} "
+        f"of itself on the grid over one sourceless substep (|miss| "
+        f"{miss:.3e}, bar {MIRROR_RETAINED_REL_TOL:.0e}) while "
+        f"{left:.6e} of it moved upstream, so the operator is live beside the "
+        "plane and nothing crosses it"
+    )
+
+    # (d) the builder's refusals at a mirror, beside the accepted member.
+    refusals = (
+        ("far pump S_pump_R = "
+         f"{MIRROR_REFUSAL_PUMP_LPS:g}", dict(params, S_pump_R=MIRROR_REFUSAL_PUMP_LPS),
+         sp3.KNUDSEN_KERNEL),
+        ("--kernel ballistic", dict(params), "ballistic"),
+        ("--kernel diffusive", dict(params), "diffusive"),
+    )
+    for label, trial, kernel in refusals:
+        try:
+            sp3.refuse_at_mirror(trial, kernel)
+        except ValueError as error:
+            lines.append(f"  [ok] refused at the mirror: {label} -- {error}")
+        else:
+            ok = False
+            lines.append(f"  [FAIL] NOT refused at the mirror: {label}")
+    try:
+        sp3.refuse_at_mirror(dict(params), sp3.KNUDSEN_KERNEL)
+    except ValueError as error:
+        ok = False
+        lines.append(f"  [FAIL] the registered member was refused: {error}")
+    else:
+        lines.append(
+            f"  [ok] the registered member ({sp3.KNUDSEN_KERNEL!r}, "
+            f"S_pump_R = {float(params['S_pump_R']):g}) is accepted"
+        )
     return ok, lines
 
 
@@ -1242,20 +1400,27 @@ def fast_gates():
     return results
 
 
-def default_gates():
-    """Return ``[(name, ok, lines), ...]`` for every in-repo gate."""
+def default_gates(spec=PRODUCTION_STANCE):
+    """Return ``[(name, ok, lines), ...]`` for every in-repo gate.
+
+    The production legs run on ``spec``; G6 is added when its mesh ends in a
+    mirror face.
+    """
     vbar = sp3.mean_speed_cm_s(GATE_TN_K, m_He_cgs)
     results = []
-    ok, lines = gate_uniform_source(vbar, production=True)
+    ok, lines = gate_uniform_source(vbar, production=True, spec=spec)
     results.append(("G1 uniform-source control", ok, lines))
-    ok, lines = gate_equilibrium(vbar, production=True)
+    ok, lines = gate_equilibrium(vbar, production=True, spec=spec)
     results.append(("G2 equilibrium limit", ok, lines))
     ok, lines = gate_reciprocity(vbar)
     results.append(("G3 volume reciprocity", ok, lines))
     ok, lines = gate_free_space(vbar)
     results.append(("G4 free-space variance", ok, lines))
-    ok, lines = gate_convergence(vbar)
+    ok, lines = gate_convergence(vbar, spec=spec)
     results.append(("G5 convergence", ok, lines))
+    if has_mirror_face(_production_mesh(spec=spec)[0]):
+        ok, lines = gate_mirror_face(vbar, spec)
+        results.append(("G6 mirror face", ok, lines))
     return results
 
 
@@ -1266,6 +1431,14 @@ def main(argv=None):
         help="run only the in-repo subset that needs no configuration build "
              "(the subset the smoke suite runs); the optional modes below "
              "still run if they are named",
+    )
+    parser.add_argument(
+        "--stance", metavar="NAME_OR_PATH", default=PRODUCTION_STANCE,
+        help="the configuration the production legs of G1, G2 and G5 run on "
+             "-- a committed configuration name or a configuration file path "
+             f"(default {PRODUCTION_STANCE!r}); one whose far end is a mirror "
+             "face also runs G6. Not read under --fast, which builds no "
+             "configuration",
     )
     parser.add_argument(
         "--legacy-rows", type=Path, default=None,
@@ -1317,7 +1490,7 @@ def main(argv=None):
 
     # --fast chooses which of the IN-REPO gates run; the optional modes below
     # are selected by their own arguments and compose with either subset.
-    results = fast_gates() if args.fast else default_gates()
+    results = fast_gates() if args.fast else default_gates(args.stance)
 
     if args.legacy_rows is not None:
         if args.base_h5 is None or args.legacy_geometry_npz is None:
