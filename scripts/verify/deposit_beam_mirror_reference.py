@@ -22,9 +22,9 @@ WHAT IS IN IT. Nine arms on synthetic half columns:
     cull armed and the wire sheath turning back the walkers below a 60 eV
     drop. The leg budget binds here: walkers that thermalize below the 60 V
     sheath are turned back at the anode plane on every return from the
-    mirror, so nothing removes them and every walker tree spends its
-    ``MIRROR_MAX_LEGS`` legs, the residual rows filling (5.9e-2 of the
-    launched power at 64 legs, 4.0e-2 at 256);
+    mirror, so only their thermalizing removes them and walker trees spend
+    their ``MIRROR_MAX_LEGS`` legs, the residual rows filling (5.9e-2 of the
+    launched power at 64 legs, 4.0e-2 at 256, 1.9e-3 at 1024);
 ``trapped_walkers``
     the anode sheath repelling every walker (a 1e4 eV drop), two groups: the
     leg budget binds and the residual rows fill;

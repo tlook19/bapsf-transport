@@ -3957,7 +3957,7 @@ def _case_mirror_residual_bound_raises():
     plus the primary's residual exceeds ``MIRROR_RESIDUAL_MAX_FRACTION`` of
     the ray's launched power ``Gamma0 * E0``. Both components are exercised:
     (a) a primary bouncing on a near-vacuum column behind a thin mesh
-    (``eta = 0.05``: ``0.95**(1 + MIRROR_MAX_LEGS // 2)`` of it is left
+    (``eta = 0.01``: ``0.99**(1 + MIRROR_MAX_LEGS // 2)`` of it is left
     after ``MIRROR_MAX_LEGS`` legs), and
     (b) walkers between a reflecting cathode and the mirror with no anode
     to remove them. Each raises a RuntimeError naming the bound.
@@ -3974,7 +3974,7 @@ def _case_mirror_residual_bound_raises():
     assert bound == 1.0e-4, bound
     primary = (
         (150.0, 1.0e18, *thin, 0, 1, dz),
-        dict(window, anode_cross_index=5, anode_eta=0.05),
+        dict(window, anode_cross_index=5, anode_eta=0.01),
     )
     walker_cells = 24
     nn, ne, Te, wdz = _mirror_column(walker_cells)
@@ -4020,6 +4020,45 @@ def _case_mirror_residual_bound_raises():
 # --------------------------------------------------------------------
 # mirror-tail-sheath-share-merged
 # --------------------------------------------------------------------
+# The Coulomb drag the merged walker accumulates per leg marched on the
+# mirror-tail-sheath-share-merged column (no neutrals, n_e = 1e2 cm^-3,
+# Te = 1 eV, 100 eV walkers), as a fraction of the launch energy. MEASURED on
+# the case's own chains: the worst |E/E0 - 1| / L over every merge after a
+# chain's first, with L the legs marched before the merged leg, is 3.44e-12
+# (at L = 6), settling to 3.08e-12 over later legs, and it is the same at 256
+# and 1024 legs. A later merge is checked to twice this per leg; a chain's
+# first merge, before any drag has built up, to 1e-9.
+_SHEATH_MERGE_DRAG_PER_LEG = 3.5e-12
+_SHEATH_MERGE_DRAG_SAFETY = 2.0
+
+
+def _sheath_merge_energy_violations(chains, E0):
+    """[(chain, L, E, rel_tol)] of every merge whose energy misses E0.
+
+    A merge is a crossing leg to the cathode face, the gap return, then the
+    merged walker from the plane to the mirror; L = k + 2 is the legs marched
+    before the merged leg. A chain's first merge is held to 1e-9; a later one
+    to ``_SHEATH_MERGE_DRAG_SAFETY * _SHEATH_MERGE_DRAG_PER_LEG * L``, the
+    column's Coulomb drag over the legs marched before it.
+    """
+    violations = []
+    for ci, chain in enumerate(chains):
+        dirs = [leg[3] for leg in chain]
+        first = True
+        for k in range(len(chain) - 2):
+            if dirs[k] == -1 and dirs[k + 1] == 1 and dirs[k + 2] == 1:
+                legs_before = k + 2
+                rel_tol = 1.0e-9 if first else (
+                    _SHEATH_MERGE_DRAG_SAFETY * _SHEATH_MERGE_DRAG_PER_LEG
+                    * legs_before
+                )
+                first = False
+                energy = chain[k + 2][2]
+                if not math.isclose(energy, E0, rel_tol=rel_tol):
+                    violations.append((ci, legs_before, energy, rel_tol))
+    return violations
+
+
 @_case("mirror-tail-sheath-share-merged")
 def _case_mirror_tail_sheath_share_merged():
     """The sheath-turned share rejoins its parent at the anode plane.
@@ -4033,11 +4072,14 @@ def _case_mirror_tail_sheath_share_merged():
     almost no plasma nothing is lost: each launched walker marches one chain, the
     gap return carries ``(1 - eta)`` of the flux to the plane, the merged
     walker reaches the mirror carrying the whole launched flux (1e-12) at the
-    launch energy (1e-9, the column's Coulomb loss), and the leg cap books the
-    whole launch.
+    launch energy (1e-9 at a chain's first merge, then the column's Coulomb
+    drag over the legs marched before the merge; see
+    ``_SHEATH_MERGE_DRAG_PER_LEG``), and the leg cap books the whole launch.
     NEGATIVE CONTROL: a crossing toward the MIRROR (a gap-born walker) has no
     parent coming back through the same plane, so its turned share is still
     a walker of its own -- that launch holds a second chain entry.
+    NEGATIVE CONTROL: a 1e-6 relative energy error injected into the last
+    merge, where the drag tolerance is loosest, is caught.
     """
     cells = 20
     nn = np.zeros(cells)
@@ -4061,7 +4103,8 @@ def _case_mirror_tail_sheath_share_merged():
     assert len(layout[0]) <= 4, [len(c) for c in layout[0]]
     assert ledger["sheath_flux"] > 0.0
     merges = 0
-    for chain in chains:
+    last_merge = None
+    for ci, chain in enumerate(chains):
         dirs = [leg[3] for leg in chain]
         for k in range(len(chain) - 2):
             # crossing leg to the cathode face, the gap return, then the
@@ -4076,9 +4119,18 @@ def _case_mirror_tail_sheath_share_merged():
                 assert math.isclose(chain[k + 2][1], f0, rel_tol=1e-12), (
                     chain[k + 2][1], f0
                 )
-                # The column's Coulomb loss is ~1e-11 of E per leg here.
-                assert math.isclose(chain[k + 2][2], E0, rel_tol=1e-9)
+                last_merge = (ci, k + 2)
     assert merges >= 2, merges
+    violations = _sheath_merge_energy_violations(chains, E0)
+    assert not violations, violations[:5]
+    # NEGATIVE CONTROL: a 1e-6 relative energy error in the last merge.
+    ci, leg_index = last_merge
+    injected = [list(chain) for chain in chains]
+    leg = list(injected[ci][leg_index])
+    leg[2] *= 1.0 + 1.0e-6
+    injected[ci][leg_index] = tuple(leg)
+    caught = _sheath_merge_energy_violations(injected, E0)
+    assert [(v[0], v[1]) for v in caught] == [(ci, leg_index)], caught
     assert math.isclose(ledger["cap_flux"], 2.0 * f0, rel_tol=1e-12), (
         ledger["cap_flux"]
     )
@@ -4097,7 +4149,8 @@ def _case_mirror_tail_sheath_share_merged():
     print(
         f"mirror-tail-sheath-share-merged: {merges} merges in "
         f"{sum(len(c) for c in chains)} legs on two chains; the gap-born "
-        f"control holds {len(control[0])} chain entries"
+        f"control holds {len(control[0])} chain entries; a 1e-6 energy error "
+        f"at leg {leg_index} caught against rel_tol {caught[0][3]:.3e}"
     )
 
 
@@ -4472,7 +4525,10 @@ def _case_anode_tail_booking_mirror_walked_tail():
             "with heating_anomalous_transport='plateau_multigroup'"
             in str(exc)
         ), str(exc)
-        assert "0.2-6 % of the tail power at 256 legs" in str(exc), str(exc)
+        assert (
+            "41 % of the launched power at 1024 legs on a synthetic trapped "
+            "column" in str(exc)
+        ), str(exc)
     else:
         raise AssertionError("the lagged walked tail ACCEPTED at a mirror")
     import tempfile

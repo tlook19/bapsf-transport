@@ -113,7 +113,7 @@ straight into the ray's withheld bank (`anomalous_bank_eV`, the march's own
 withholding branch), so the walked tail carries it with the rest. Legs
 alternate between the plane and the cathode face until the population stops;
 a walker tree (a launched walker and every rider and sheath walker it spawns)
-and the primary each march at most `MIRROR_MAX_LEGS` = 256 legs, and the flux
+and the primary each march at most `MIRROR_MAX_LEGS` = 1024 legs, and the flux
 and power a leg the budget cannot pay for would have carried are booked to the
 leg-cap residual rows. The rows are diagnostics, not a sink: a call whose tail
 and primary residuals together exceed `MIRROR_RESIDUAL_MAX_FRACTION` =
@@ -123,6 +123,8 @@ at the 1000 V cathode ceiling: at
 most $1.1\times10^{-7}$ of the launched tail power left at 64 legs, 1-2 %
 at 16; on the half column at reduced gas puff, $2.4$-$3.4\times10^{-3}$ of
 the launched power left at 64 legs and none at 256, the longest tree 217
+legs; at a quarter of the reference puff with a 250 V bank,
+$3.8\times10^{-4}$ left at 256 legs and none at 1024, the longest tree 273
 legs); where the anode sheath repels every walker nothing absorbs them and
 the series converges only by their thermalizing. There the wire sheath turns
 $\eta$ of each cathode-bound walker back at the anode plane while the rest
@@ -131,10 +133,12 @@ plane and are superposed there (fluxes summed, energy flux-weighted) after the
 rest's gap leg, so a walker stays one chain instead of splitting into a tree
 on every return from the mirror. On the two recorded breakdown rays of that
 regime the residual is then 10-46 % at 64 legs, 0.2-6 % at 256 and zero at
-1024 (every walker stopped); the cap does not bound that regime at 256 legs,
-and a ray in it raises the residual bound. The anode sheath reaches that
-regime when the circuit books more fast electrons at the anode than the
-cathode emits, which is why the walked tail with the circuit at a mirror
+1024 (every walker stopped), and on a synthetic trapped column (twelve
+cells at $n_e$ 1-2 $\times10^{10}$ cm$^{-3}$ behind a $10^4$ V anode
+sheath) 41 % of the launched power is left at 1024 legs; the cap does not
+bound that regime, and a ray in it raises the residual bound. The anode
+sheath reaches that regime when the circuit books more fast electrons at
+the anode than the cathode emits, which is why the walked tail with the circuit at a mirror
 constructs only under `anode_tail_booking = "emission_fraction"` (MODEL.md,
 the anode sheath). Each leg is a
 `deposit_beam` march and takes the compiled CSDA kernel whenever it is loaded,

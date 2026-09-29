@@ -54,10 +54,11 @@ def validate_far_end_configuration(input_dict, flags):
       books more fast electrons than the cathode emits, its sheath drop is
       driven far above the plateau and repels every walker, and nothing
       removes them: the walkers stay trapped between the two faces and the
-      leg-cap residual (0.2-6 % of the tail power at 256 legs) raises the
-      run-time residual bound. ``anode_tail_booking = "emission_fraction"``
-      books the anode's direct collection per emitted electron and the
-      walked tail constructs under it. The cathode circuit itself -- the CSDA
+      leg-cap residual (41 % of the launched power at 1024 legs on a
+      synthetic trapped column) raises the run-time residual bound.
+      ``anode_tail_booking = "emission_fraction"`` books the anode's direct
+      collection per emitted electron and the walked tail constructs under
+      it. The cathode circuit itself -- the CSDA
       primary, which turns round at the plane, and the ``"local"`` anomalous
       heating -- runs at a mirror;
     * ``neutral_momentum`` -- the neutral wind's wall-momentum sink at the far
@@ -118,8 +119,8 @@ def validate_far_end_configuration(input_dict, flags):
             "more fast electrons than the cathode emits, its sheath then "
             "repels every walker, the "
             "walkers stay trapped between the two faces, and the leg-cap "
-            "residual (0.2-6 % of the tail power at 256 legs) raises the "
-            "run-time residual bound)"
+            "residual (41 % of the launched power at 1024 legs on a "
+            "synthetic trapped column) raises the run-time residual bound)"
         )
     S_pump_R = float(input_dict.get("S_pump_R", 0.0))
     if S_pump_R != 0.0:
