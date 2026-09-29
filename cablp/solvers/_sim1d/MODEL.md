@@ -868,13 +868,18 @@ asserts
 $$\eta\beta_\text{bypass}(1-w_\text{gap})+c_\text{ret}+c_\text{tail}\le1,\qquad0\le w_\text{gap}\le1,$$
 
 raising a `RuntimeError` otherwise: the anode never books more fast electrons
-than the cathode emits. The primary's return crossings meet the wires' sheath
-as the walkers do: a return below $e\phi_a$ is not intercepted there.
+than the cathode emits. One sheath rule holds for every fast electron at the
+anode plane: at a crossing below $e\phi_a$ the wires' sheath turns the $\eta$
+share back at unchanged energy while $1-\eta$ crosses, for the walkers and for
+the primary's returns alike; the turned share is never booked as anode current
+(each deposition asserts that the walkers' kept tail plus the leg-cap residual
+does not exceed the walkers launched).
 
 The direct term is booked only where the beam clears the anode sheath it books.
 $f_\text{sh}$ follows from three branches and no root-find, taking the beam
-energy at the anode as the launch energy $e\phi_c$ (the gap loss is not
-subtracted): with the term ($f_\text{sh}=1$), accepted if $\phi_a<\phi_c$; else
+energy at the anode as the launch energy $e\phi_c$: the beam's energy loss
+across the gap is NOT subtracted, a disclosed simplification that can only
+book the direct term where the degraded beam would not clear the sheath: with the term ($f_\text{sh}=1$), accepted if $\phi_a<\phi_c$; else
 without it ($f_\text{sh}=0$), accepted if $\phi_a\ge\phi_c$; else $\phi_a$ pinned
 at $\phi_c$, the balance setting $f_\text{sh}$ between 0 and 1. A
 virtual-cathode beam of a few eV thus books nothing against a sheath of
