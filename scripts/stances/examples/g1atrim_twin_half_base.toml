@@ -1,0 +1,8 @@
+base = "g1atrim"
+
+[input_dict]
+far_end = "mirror"
+Lm = 1965.4
+nx = 118
+S_pump_R = 0.0
+anode_tail_booking = "emission_fraction"
