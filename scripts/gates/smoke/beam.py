@@ -4754,3 +4754,59 @@ def _case_anode_booking_consumer_assert():
     )
     assert r.beam_bypass_fraction == beta
     assert direct + c_ret + 0.21 <= 1.0
+
+
+# --------------------------------------------------------------------
+# walker-fate-assert-negative-control
+# --------------------------------------------------------------------
+@_case("walker-fate-assert-negative-control")
+def _case_walker_fate_assert_negative_control():
+    """The walker-fate assertion fires when the wires' sheath-turned share is
+    booked into the anode's kept row.
+
+    On a mirrored walked-tail ray under ``primary_net_basis`` whose wire
+    sheath turns part of the walkers back, a wrapped
+    ``_tail_mirror_chains`` adds the turned flux to the culled (kept) flux,
+    the over-count the assertion exists to catch; ``deposit_beam`` raises
+    the fate ``RuntimeError``.
+    NEGATIVE CONTROL: the unwrapped ray runs, turns a share back, and its
+    kept tail plus leg-cap residual stays within the walkers launched.
+    """
+    from unittest import mock
+
+    cells = 24
+    nn, ne, Te, dz = _mirror_column(cells)
+    args = (60.0, 1.0e18, 3.0 * nn, 3.0 * ne, Te, 0, 1, dz)
+    kwargs = _mirror_mg_kwargs(
+        cells, mirror_face=1, tail_reflect_face=-1,
+        tail_reflect_threshold_eV=60.0, anode_cross_index=5,
+        anode_eta=_MIRROR_ETA, tail_anode_cross_index=5,
+        tail_anode_eta=_MIRROR_ETA, tail_anode_phi_eV=30.0,
+        primary_net_basis=True,
+    )
+    real = _beam_deposition_mod._tail_mirror_chains
+
+    def booked_as_kept(*a, **k):
+        chains, ledger = real(*a, **k)
+        ledger = dict(ledger)
+        ledger["culled_flux"] = ledger["culled_flux"] + ledger["sheath_flux"]
+        return chains, ledger
+
+    with mock.patch.object(
+        _beam_deposition_mod, "_tail_mirror_chains", booked_as_kept
+    ):
+        try:
+            _deposit_beam_ray(*args, **kwargs)
+        except RuntimeError as exc:
+            assert "the walkers' fates exceed their births" in str(exc), (
+                str(exc)
+            )
+        else:
+            raise AssertionError("turned share booked as kept ACCEPTED")
+    # NEGATIVE CONTROL.
+    r = _deposit_beam_ray(*args, **kwargs)
+    assert r.tail_anode_sheath_reflected_flux_per_s > 0.0
+    assert (
+        r.tail_anode_culled_flux_per_s - r.tail_anode_returned_flux_per_s
+        + r.tail_leg_cap_residual_flux_per_s
+    ) <= r.tail_launched_flux_per_s
