@@ -229,6 +229,7 @@ _CASE_ORDER = (
     "walker-fate-assert-negative-control",
     "anode-booking-diagnostics-saved",
     "anode-outbound-primary-sheath-rule",
+    "half-column-base-equilibration-constructs",
 )
 
 

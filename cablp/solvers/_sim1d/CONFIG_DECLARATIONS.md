@@ -346,10 +346,7 @@ reference cell containing the half mesh's cell centre.
    allows is enough (`scripts/run/run_sim1d.py --config <this file> --t-end
    2e-5 --output <base.h5>`). `"equilibrate_only"` does not serve here: it
    saves the accumulation's own start frame at `t = 0`. The seed cache is
-   off, so the cache is neither read nor written. The accumulation's inner
-   sim runs with `cathode_coupling` off, and `anode_tail_booking =
-   "emission_fraction"` is refused without it, so on the current solver the
-   base run stops at that refusal before the accumulation starts.
+   off, so the cache is neither read nor written.
 3. `scripts/stance/sp3_build_nn0.py --stance <this file> --sgp 9010
    --base-from-h5 <base.h5>`, which builds the registered Knudsen member at
    the registered foot on this file's mesh and writes the `nn0_profile` /

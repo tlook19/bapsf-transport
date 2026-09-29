@@ -1469,3 +1469,34 @@ def _case_configuration_file_value_typed_to_template():
             and type(_ct_val) is not type(_ct_tpl[_ct_key])
         ]
         assert not _ct_spelled, _ct_spelled
+
+
+@_case("half-column-base-equilibration-constructs")
+def _case_half_column_base_equilibration_constructs():
+    # The half-column base configuration arms the equilibrate route with
+    # anode_tail_booking = "emission_fraction", which the OUTER sim needs at a
+    # mirror with the walked tail. The equilibration's inner neutral-only sim
+    # runs without cathode coupling, where that booking is refused, so the
+    # inner sim is handed "lagged_current" -- the selector has nothing to
+    # govern there. This is the case the solver used to refuse: the inner sim
+    # must construct and run one puff/off cycle, and the outer sim's own key
+    # must be untouched.
+    import numpy as np
+    from stance_config import load_configuration
+
+    _hb_path = (
+        Path(__file__).resolve().parents[2]
+        / "stances" / "examples" / "g1atrim_twin_half_base.toml"
+    )
+    _hb_params, _hb_flags, _hb_lineage = load_configuration(str(_hb_path))
+    assert _hb_params["anode_tail_booking"] == "emission_fraction"
+    assert _hb_params["initial_neutral_state"] == "equilibrate"
+    _hb_sim = LAPDSim1D(
+        dict(_hb_params), dict(_hb_flags), configuration=_hb_lineage
+    )
+    _hb_result = _hb_sim.run_neutral_equilibration(cycles=1)
+    _hb_nn = np.asarray(_hb_result.nn[-1], dtype=float)
+    assert _hb_nn.size == _hb_sim.geometry.cells == 129, _hb_nn.size
+    assert np.all(np.isfinite(_hb_nn)) and np.all(_hb_nn > 0.0)
+    assert float(_hb_result.neutral_equilibration_summary.final_time) == 3.0
+    assert _hb_sim.get_config()[0]["anode_tail_booking"] == "emission_fraction"

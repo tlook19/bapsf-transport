@@ -6331,6 +6331,8 @@ class LAPDSim1D:
         # `get_config()` returned, so these two lines reach the inner sim only.
         params["neutral_kinetic_dvm_cathode_jet"] = False
         params["neutral_kinetic_dvm_anode_jet"] = False
+        # No cathode coupling here, so the anode booking selector has nothing to govern.
+        params["anode_tail_booking"] = "lagged_current"
         # The end wall channel is cleared for the same reason and, unlike the
         # two above, its four numbers with it: they are refused outright while
         # the channel is off, so clearing the flag alone would turn a legal
