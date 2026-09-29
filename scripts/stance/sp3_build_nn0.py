@@ -175,6 +175,34 @@ The kernels are stated, not assumed to be right:
   nearest active cell before the solve, and the ledger reports the share.
   The domain ends are zero-flux: end pumping is not represented here.
 
+  AT A MIRROR FACE (``far_end = "mirror"``, the half column that stops at the
+  symmetry plane ``z = Lm/2``) that zero-flux end IS the boundary condition:
+  the plane is closed to the gas, which is what a symmetry plane of a
+  two-source machine is. The build asserts it -- the mirror face is the mesh's
+  last face, the cell beside it is carried, and no conductance of the operator
+  sits on it -- and records it in the ledger. Two things cannot be honoured
+  there and are REFUSED with a ``ValueError`` before anything is built: a far
+  pump (``S_pump_R != 0``: a half column has no end wall for it to sit on, and
+  a pumped plane is not a symmetry plane), and the two MATRIX kernels, whose
+  column normalization returns off-grid gas to the reachable cells in
+  proportion to their length rather than folding it through the plane into its
+  image cells, which is not the mirror's reflection. The puff lobe needs no
+  special case: the repo's own row already reflects rays that land past the
+  plane into their image cells.
+
+WHICH CONFIGURATION. With no ``--stance`` the builder assembles the shared
+production package (``compare_sim1d_es1.PARAM_OVERRIDES`` over the template)
+at ``--nx`` -- what it has always built, so such an invocation writes the same
+bytes. ``--stance NAME_OR_PATH`` names a configuration instead -- a committed
+name or the path of a configuration file, derived or not -- and the builder
+then stands on that configuration WHOLE: its mesh, its per-cell geometry rows,
+its puff keys and its far end, so the rows it writes are sized to and
+registered on that configuration's own mesh. ``--nx`` is then taken from the
+configuration, and a different ``--nx`` is refused, because the
+configuration's per-cell rows are sized to its own mesh. ``--sgp`` and the
+rung's ``V_bank`` are applied on top in both routes, and ``--extra`` still
+layers last.
+
 THE STANCE IS OVERRIDABLE. ``--extra k=v`` / ``--extra-flag k=v`` carry
 arbitrary ``input_dict`` / ``input_flags`` overrides into the stance the
 builder assembles -- the same passthrough ``run_m6_point.py`` gives the RUN,
@@ -224,6 +252,7 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 from compare_sim1d_es1 import PRODUCTION_NX, PARAM_OVERRIDES, FLAG_OVERRIDES
 from extra_overrides import parse_extra_overrides
 from run_mechanism_ladder import ES_OPERATING
+from stance_config import load_configuration
 
 from cablp.solvers._sim1d import LAPDSim1D, default_config, load_result_hdf5
 from cablp.solvers._sim1d.core.config import resolve_nn0
@@ -468,8 +497,17 @@ def parse_npz_overrides(items):
     return values, provenance
 
 
-def stance_config(es, nx, sgp, extra_params=None, extra_flags=None):
+def stance_config(es, nx, sgp, extra_params=None, extra_flags=None,
+                  configuration=None):
     """Return (params, flags) for the production stance, as run_model builds it.
+
+    ``configuration`` -- ``None`` assembles the shared production package over
+    the template at ``nx``, as this builder always has. A committed
+    configuration name or a configuration file path stands on that
+    configuration WHOLE instead, its mesh and per-cell rows included; ``nx``
+    is then the configuration's own, and a different ``nx`` raises
+    ``ValueError``, because the rows the configuration carries are sized to
+    its mesh. ``nx = None`` takes the configuration's.
 
     ``extra_params`` and ``extra_flags`` are applied LAST, after the stance is
     fully assembled, so every consumer downstream of this function -- the
@@ -478,11 +516,20 @@ def stance_config(es, nx, sgp, extra_params=None, extra_flags=None):
     ordering is the point: a geometry override that arrived earlier could be
     overwritten by the stance itself.
     """
-    params, flags = default_config()
-    params.update(PARAM_OVERRIDES)
-    flags.update(FLAG_OVERRIDES)
     op = ES_OPERATING[es]
-    params["nx"] = nx
+    if configuration is None:
+        params, flags = default_config()
+        params.update(PARAM_OVERRIDES)
+        flags.update(FLAG_OVERRIDES)
+        params["nx"] = nx
+    else:
+        params, flags, _lineage = load_configuration(configuration)
+        if nx is not None and int(nx) != int(params["nx"]):
+            raise ValueError(
+                f"--nx {nx} disagrees with configuration {configuration!r}, "
+                f"whose mesh is nx = {params['nx']}: its per-cell rows are "
+                "sized to that mesh. Drop --nx to take the configuration's"
+            )
     params["S_gp"] = float(sgp)
     params["V_bank"] = op["V_bank"]
     if extra_params:
@@ -493,6 +540,74 @@ def stance_config(es, nx, sgp, extra_params=None, extra_flags=None):
     # that decide it are already set. Equilibration is a start_simulation()
     # behaviour and never runs at construction, so this costs one build.
     return params, flags
+
+
+def refuse_at_mirror(params, kernel):
+    """Refuse what a MIRROR far end cannot carry, before anything is built.
+
+    Returns ``None``; does nothing unless ``far_end = "mirror"``. There the
+    plane is closed to the gas, so a far pump (``S_pump_R != 0``) is refused,
+    and so is any spreading member other than :data:`KNUDSEN_KERNEL`: the
+    matrix kernels' column normalization returns off-grid gas to the reachable
+    cells in proportion to their length rather than folding it through the
+    plane into its image cells. Raises ``ValueError`` naming the offender.
+    """
+    if params.get("far_end", "end_wall") != "mirror":
+        return
+    s_pump_r = float(params.get("S_pump_R", 0.0))
+    if s_pump_r != 0.0:
+        raise ValueError(
+            f"far_end='mirror' ends the half column in a closed symmetry "
+            f"plane, and this configuration pumps its far end (S_pump_R = "
+            f"{s_pump_r!r}); a half column has no end wall for that pump and "
+            "the fill builder's far face is zero-flux there. Set S_pump_R = 0"
+        )
+    if kernel != KNUDSEN_KERNEL:
+        raise ValueError(
+            f"--kernel {kernel} cannot build a fill at a mirror face "
+            "(far_end='mirror'): its column normalization returns off-grid gas "
+            "to the reachable cells by length instead of folding it through "
+            "the plane into its image cells. Use the registered "
+            f"{KNUDSEN_KERNEL!r} member, whose far face is zero-flux"
+        )
+
+
+def mirror_face_closure(geometry, active):
+    """Return the mirror face's ledger entry, or ``None`` without one.
+
+    Asserts the three structural facts that make the wall-limited operator's
+    far face the mirror's zero-flux plane: the geometry's one mirror face is
+    its LAST face, the cell beside it is in the active set, and none of the
+    operator's conductances -- which sit on the faces between consecutive
+    active cells -- is on it. Raises ``ValueError`` if any fails.
+    """
+    mirror_faces = np.asarray(
+        getattr(geometry, "mirror_face_indices", ()), dtype=int
+    ).reshape(-1)
+    if mirror_faces.size == 0:
+        return None
+    cells = int(geometry.cells)
+    index = np.flatnonzero(np.asarray(active, dtype=bool))
+    operator_faces = index[1:]
+    if mirror_faces.tolist() != [cells]:
+        raise ValueError(
+            f"the mirror face must be the mesh's last face {cells}; this "
+            f"geometry names {mirror_faces.tolist()}"
+        )
+    if index[-1] != cells - 1:
+        raise ValueError(
+            f"the cell beside the mirror face ({cells - 1}) is not carried by "
+            f"the wall-limited operator (its active set ends at {index[-1]}), "
+            "so the plane would not be the chain's closed end"
+        )
+    if np.any(operator_faces == cells):
+        raise ValueError("a conductance of the operator sits on the mirror face")
+    return {
+        "mirror_face_index": cells,
+        "mirror_face_z_cm": float(np.asarray(geometry.z_edges_cm)[cells]),
+        "mirror_face_conductance_cm3_s": 0.0,
+        "mirror_adjacent_cell": cells - 1,
+    }
 
 
 def base_profiles_from_h5(path, cells):
@@ -914,10 +1029,13 @@ def build(args):
     extra_params = dict(npz_params)
     extra_params.update(inline_params)
     extra_flags = parse_extra_overrides(args.extra_flag, "--extra-flag")
+    configuration = getattr(args, "stance", None)
     params, flags = stance_config(
         args.es, args.nx, args.sgp,
         extra_params=extra_params, extra_flags=extra_flags,
+        configuration=configuration,
     )
+    refuse_at_mirror(params, args.kernel)
     geometry = LAPDSim1D(dict(params), dict(flags)).geometry
     cells = int(geometry.cells)
 
@@ -1031,6 +1149,10 @@ def build(args):
             source_convention=args.knudsen_source_convention,
         )
         knudsen_report["gap_coupling"] = gap_coupling
+        # Presence-gated: only a geometry with a mirror face carries the entry.
+        mirror_entry = mirror_face_closure(geometry, active)
+        if mirror_entry is not None:
+            knudsen_report["mirror"] = mirror_entry
         knudsen_report.update(
             knudsen_added_rows(
                 geometry.z_cm, geometry.length_cm, V_chamber, accumulated,
@@ -1096,7 +1218,7 @@ def build(args):
 
     ledger = {
         "es": args.es,
-        "nx": args.nx,
+        "nx": int(params["nx"]),
         "cells": cells,
         "S_gp_sccm": float(params["S_gp"]),
         "gas_puff_valves": int(params["gas_puff_valves"]),
@@ -1152,6 +1274,10 @@ def build(args):
     # always wrote, and so exactly the same output bytes.
     if knudsen_report is not None:
         ledger["knudsen"] = knudsen_report
+    # The named configuration, PRESENCE-GATED the same way: an invocation that
+    # names none writes exactly the ledger it always wrote.
+    if configuration is not None:
+        ledger["stance"] = str(configuration)
     if inline_params:
         ledger["extra_params"] = inline_params
     if npz_provenance:
@@ -1175,6 +1301,8 @@ def print_ledger(
         f"bore {ledger['gas_puff_orifice_id_cm']:g} cm x "
         f"{ledger['gas_puff_orifice_length_cm']:g} cm"
     )
+    if "stance" in ledger:
+        print(f"configuration: {ledger['stance']}")
     # Presence-gated exactly as the ledger entries are: an invocation that
     # overrides nothing prints what it always printed.
     for label, key in (
@@ -1244,6 +1372,13 @@ def print_ledger(
             f"min cell {k['min_cell_particles']:.6g} atoms; "
             f"inventory rel err {k['conservation_rel']:.3e}"
         )
+        if "mirror" in k:
+            print(
+                f"  mirror face {k['mirror']['mirror_face_index']} at "
+                f"z={k['mirror']['mirror_face_z_cm']:.6g} cm: zero-flux (no "
+                "operator conductance on it; the adjacent cell "
+                f"{k['mirror']['mirror_adjacent_cell']} is carried)"
+            )
         print(
             f"  added inventory reach: z50={k['added_z50_cm']:.6g} "
             f"z90={k['added_z90_cm']:.6g} z99={k['added_z99_cm']:.6g} cm"
@@ -1313,7 +1448,16 @@ def main(argv=None):
         description="Build the sp3 shaped initial neutral profile npz."
     )
     p.add_argument("--es", type=int, choices=(1, 2, 3), default=1)
-    p.add_argument("--nx", type=int, default=PRODUCTION_NX)
+    p.add_argument("--nx", type=int, default=None,
+                   help=f"far-column cell count; default {PRODUCTION_NX} "
+                        "without --stance, the configuration's own with it "
+                        "(a different value is refused there)")
+    p.add_argument("--stance", metavar="NAME_OR_PATH", default=None,
+                   help="build on this configuration WHOLE -- a committed "
+                        "configuration name or a configuration file path -- "
+                        "so the rows are sized to and registered on its own "
+                        "mesh; omitted, the builder assembles the shared "
+                        "production package at --nx as it always has")
     p.add_argument("--sgp", type=float, required=True,
                    help="gas puff level [sccm]; must match the verdict run's")
     p.add_argument("--zone", choices=("chamber", "annulus", "column"),
@@ -1466,6 +1610,8 @@ def main(argv=None):
                         "file-sourced one")
     p.add_argument("--out", required=True, help="output .npz path")
     args = p.parse_args(argv)
+    if args.stance is None and args.nx is None:
+        args.nx = PRODUCTION_NX
 
     # The default foot is the requested rung's registered one, so it cannot be
     # an argparse default (it is not known until --es is read).
