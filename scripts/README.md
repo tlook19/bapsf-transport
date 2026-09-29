@@ -105,8 +105,17 @@ an h5 and says how the model did.
 path; `g1_build_profiles.py`,
 `build_msi_field_profile.py`, `sp3_build_nn0.py`, `puff_orifice.py` and the
 coil-field solvers build the per-cell profiles and rows the stance names; the
-circuit fits pin the drive constants. A file belongs here when
-changing it would change what the production configuration means.
+circuit fits pin the drive constants. The three row builders take `--stance
+NAME_OR_PATH` (a committed configuration name or a configuration file path),
+which sizes their rows to, and registers them on, that configuration's own
+mesh; with no `--stance` each builds the reference rows exactly as before.
+`g1_build_profiles.py` and `build_msi_field_profile.py` then evaluate the same
+rules at the named mesh's cell centres (a half column ending in a mirror face
+carries the reference rows' values over `[0, Lm/2]`), and `sp3_build_nn0.py`
+builds on the named configuration whole, taking its `nx`, asserting a mirror
+face zero-flux and refusing a far pump or a matrix kernel there. A file
+belongs here when changing it would change what the production configuration
+means.
 
 **`atomic/`** — cross sections, rate tables and the ADAS comparisons. Table
 generators (`generate_eii_tables.py`, `generate_he_ion_rate_table.py`) write
@@ -144,7 +153,10 @@ three named members, and the matrix kernels the builder also offers are
 retained to reproduce earlier rows. The in-repo gates are density continuity
 across a bore step against the length-weighted route as negative control, the
 equilibrium and free-space limits, propagator reciprocity in volume, and
-convergence; three optional modes read data from outside the repo — a
+convergence, with `--stance NAME_OR_PATH` choosing the configuration the
+production legs run on and adding a mirror-face gate (inventory ledger, zero
+mirror-face flux, the builder's refusals) when that configuration ends in a
+mirror face; three optional modes read data from outside the repo — a
 two-leg row bit-identity check, and comparisons against a banked
 test-particle record and against one on the production geometry). These
 differ from `gates/` in cadence, not

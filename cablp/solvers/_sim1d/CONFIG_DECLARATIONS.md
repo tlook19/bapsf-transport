@@ -303,3 +303,64 @@ borrow one's name. `results/io.py` writes `configuration_name` on every file
 lineage exists. Reading is presence-gated attribute by attribute: a file
 written before 2026-09-03 reports `None` for each, meaning "this file does not
 say" — never "unnamed", and never an identity reconstructed from `params_json`.
+
+### The half column and its fill chain
+
+`scripts/stances/examples/g1atrim_twin_half_base.toml` is the reference
+configuration cut at the mid-plane mirror face: the HALF COLUMN of a
+two-source machine, and the base its shaped initial fill is built on. It lives
+in `examples/` and names `base = "g1atrim"`, which resolves in
+`scripts/stances/` as every base does. It moves:
+
+| key | value | why |
+|---|---|---|
+| `far_end` | `"mirror"` | the mesh stops at `z = Lm/2` in a closed mirror face |
+| `Lm` | `1965.4` | the mirror configuration's own length, cathode to image cathode, so the plane sits at 982.7 cm |
+| `nx` | `118` | the far-column cells between the fixed source region and the plane |
+| `S_pump_R` | `0.0` | a half column has no end wall for the right pump |
+| `anode_tail_booking` | `"emission_fraction"` | the walked tail constructs at a mirror only under it |
+| `plasma_radius_profile_cm`, `machine_radius_profile_cm` | 129 entries each | the reference rows on the half mesh |
+| `[models.initial_neutral_state]` | the equilibrate route | the reference's shaped fill rows are sized to its own mesh |
+
+The mesh is 129 cells (1 plenum, 5 gap, 5 fixed source, 118 far column) with
+no end wall cell. The reference's neutral baffle keys are inherited unchanged.
+
+The per-cell rows are the reference rows' own values over `[0, Lm/2]`.
+The reference configuration's two geometry builders take `--stance
+NAME_OR_PATH`, which sizes their output to that configuration's own mesh; with
+no `--stance` they build the reference rows exactly as before. Run against
+this file they evaluate the same rules at its cell centres, with no re-fit and
+no new measurement: `g1_build_profiles.py` gives the bore staircase and the
+cathode-box stages, and `build_msi_field_profile.py` gives the measured-field
+flux tube, whose flat hold reaches past the plane, so every plasma radius is
+the column's 18.415 cm. Every entry equals the reference row's value in the
+reference cell containing the half mesh's cell centre.
+
+**The fill chain** repeats the reference configuration's on this geometry:
+
+1. The two radius rows, from the two builders above with `--stance` naming
+   this file.
+2. An equilibrated BASE run of this file. The equilibrate route runs the
+   puff/off accumulation at the reference's 27 ms puff window and seeds the
+   plasma run's `t = 0` frame from it, so a plasma run as short as the solver
+   allows is enough (`scripts/run/run_sim1d.py --config <this file> --t-end
+   2e-5 --output <base.h5>`). `"equilibrate_only"` does not serve here: it
+   saves the accumulation's own start frame at `t = 0`. The seed cache is
+   off, so the cache is neither read nor written. The accumulation's inner
+   sim runs with `cathode_coupling` off, and `anode_tail_booking =
+   "emission_fraction"` is refused without it, so on the current solver the
+   base run stops at that refusal before the accumulation starts.
+3. `scripts/stance/sp3_build_nn0.py --stance <this file> --sgp 9010
+   --base-from-h5 <base.h5>`, which builds the registered Knudsen member at
+   the registered foot on this file's mesh and writes the `nn0_profile` /
+   `nn0_annulus_profile` rows.
+
+At a mirror face the fill builder's wall-limited operator is zero-flux at the
+plane by construction. The builder asserts it (the mirror face is the mesh's
+last face, the cell beside it is carried, and no operator conductance sits on
+it) and records it in its ledger. It refuses a far pump (`S_pump_R != 0`) and
+the two matrix kernels, whose column normalization is not an image fold
+through the plane. `scripts/verify/verify_fill_spreading.py --stance <this
+file>` runs its production legs on this mesh and adds the mirror-face gate:
+the inventory ledger of the registered member on the real lobe, the zero
+mirror-face flux, and the two refusals.
