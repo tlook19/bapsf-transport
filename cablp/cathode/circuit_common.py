@@ -357,6 +357,16 @@ class SolverResult:
     phi_c_ceiling_V: float = float("nan")
     circuit_V_avail_V: float = float("nan")
     bound_active: float = float("nan")
+    # Anode balance census. ``anode_floor_fired`` is 1.0 when a non-probe
+    # solve under ``anode_tail_booking="lagged_current"`` floored the anode
+    # sheath's electron current at 1e-300 A (a balance with no floating
+    # solution, kept for that booking), 0.0 otherwise.
+    # ``anode_direct_collected_fraction`` is the share of the primary's direct
+    # interception the anode booked under ``"emission_fraction"`` (1 where the
+    # beam clears the anode sheath, 0 where it cannot, between where the
+    # sheath is pinned at the beam energy); NaN under ``"lagged_current"``.
+    anode_floor_fired: float = 0.0
+    anode_direct_collected_fraction: float = float("nan")
 
 
 def beam_launched_current_A(result):
@@ -370,6 +380,123 @@ def beam_launched_current_A(result):
     two launched fluxes.
     """
     return result.I_eth_star
+
+
+#: How the anode sheath balance books the fast electrons the mesh collects
+#: directly. ``"lagged_current"`` subtracts ``eta * beta * J_star`` for the
+#: primary and the previous accepted step's absolute tail-walker current.
+#: ``"emission_fraction"`` subtracts ``eta * beta * (1 - w_gap) * J_star`` for
+#: the primary, net of the walker flux born upstream of the anode plane (and
+#: only where the beam clears the anode sheath), ``c_ret * J_star`` for the
+#: primary's net interception on its returns, and ``c_tail * J_star`` for the
+#: tail, both coefficients per emitted electron from the previous deposition.
+ANODE_TAIL_BOOKINGS = ("lagged_current", "emission_fraction")
+
+
+def resolve_anode_tail_booking(
+    booking,
+    tail_anode_current_A,
+    tail_anode_coefficient,
+    anode_gap_walker_fraction,
+    primary_return_coefficient=0.0,
+):
+    """Validate one solve's anode fast-electron booking; return the booking.
+
+    ``"lagged_current"`` reads ``tail_anode_current_A`` only, and refuses a
+    non-zero coefficient or gap fraction. ``"emission_fraction"`` reads the
+    per-emission coefficients ``tail_anode_coefficient`` (``c_tail``) and
+    ``primary_return_coefficient`` (``c_ret``, both ``>= 0``) and the
+    gap-born walker fraction ``anode_gap_walker_fraction`` (``w_gap``, in
+    ``[0, 1]``), and refuses a non-zero absolute tail current. Raises
+    ``ValueError`` naming the accepted values otherwise.
+    """
+    booking = str(booking)
+    if booking not in ANODE_TAIL_BOOKINGS:
+        raise ValueError(
+            "anode_tail_booking must be 'lagged_current' or "
+            f"'emission_fraction' (got {booking!r})"
+        )
+    c_tail = float(tail_anode_coefficient)
+    w_gap = float(anode_gap_walker_fraction)
+    c_ret = float(primary_return_coefficient)
+    if booking == "lagged_current":
+        if c_tail != 0.0 or w_gap != 0.0 or c_ret != 0.0:
+            raise ValueError(
+                "anode_tail_booking='lagged_current' books the tail as the "
+                "lagged absolute current tail_anode_current_A; a tail "
+                f"coefficient ({c_tail!r}), return coefficient ({c_ret!r}) or "
+                f"gap walker fraction ({w_gap!r}) belongs to "
+                "'emission_fraction'"
+            )
+        return booking
+    if float(tail_anode_current_A) != 0.0:
+        raise ValueError(
+            "anode_tail_booking='emission_fraction' books the tail as a "
+            "coefficient on this solve's emission; an absolute "
+            f"tail_anode_current_A ({tail_anode_current_A!r} A) belongs to "
+            "'lagged_current'"
+        )
+    if not (math.isfinite(c_tail) and c_tail >= 0.0):
+        raise ValueError(
+            f"the tail coefficient must be finite and >= 0 (got {c_tail!r})"
+        )
+    if not (math.isfinite(c_ret) and c_ret >= 0.0):
+        raise ValueError(
+            f"the return coefficient must be finite and >= 0 (got {c_ret!r})"
+        )
+    if not (math.isfinite(w_gap) and 0.0 <= w_gap <= 1.0):
+        raise ValueError(
+            f"the gap walker fraction must be in [0, 1] (got {w_gap!r})"
+        )
+    return booking
+
+
+def emission_fraction_anode_balance(
+    I_rest_A, I_direct_A, I_e_sat_A, T_e_anode, E_beam_eV, probe, describe
+):
+    """The anode sheath under ``anode_tail_booking="emission_fraction"``.
+
+    ``I_rest_A`` is the electron current the anode sheath must pass with
+    every directly collected population but the primary's direct
+    interception taken out (``I_i,a + I_tot - (c_ret + c_tail) I_star``),
+    ``I_direct_A`` that interception (``eta * beta * (1 - w_gap) I_star``)
+    and ``E_beam_eV`` the beam energy at the anode, and
+    ``phi_a(I) = T_e,a ln(I_e,sat / I)``. The direct term is booked only
+    where the beam clears the sheath it books, by three branches and no
+    root-find: with the term, accepted if ``phi_a < E_beam``; else without
+    it, accepted if ``phi_a >= E_beam``; else ``phi_a`` pinned at
+    ``E_beam`` with the balance setting the collected share of the term.
+    Returns ``(phi_a, collected_fraction)``.
+
+    A balance with no floating solution (``I_rest_A`` below 1e-300 A on the
+    without-term branch) raises ``ValueError`` quoting ``describe()``,
+    except under ``probe``, which keeps the floored value
+    ``T_e,a ln(I_e,sat / 1e-300)``.
+    """
+    def phi(current):
+        if current > 0.0:
+            return T_e_anode * math.log(I_e_sat_A / current)
+        return math.inf
+
+    with_term = float(I_rest_A) - float(I_direct_A)
+    phi_with = phi(with_term)
+    if phi_with < E_beam_eV:
+        return phi_with, 1.0
+    phi_without = phi(I_rest_A)
+    if phi_without >= E_beam_eV:
+        if 1e-300 > I_rest_A:
+            if not probe:
+                raise ValueError(
+                    "the anode sheath balance is infeasible: the electron "
+                    "current it must pass without the primary's direct "
+                    f"interception, {I_rest_A!r} A, is not positive "
+                    f"({describe()}). The directly collected fast electrons "
+                    "exceed what the loop delivers to the anode"
+                )
+            return T_e_anode * math.log(I_e_sat_A / 1e-300), 0.0
+        return phi_without, 0.0
+    I_pinned = I_e_sat_A * math.exp(-E_beam_eV / T_e_anode)
+    return float(E_beam_eV), (float(I_rest_A) - I_pinned) / float(I_direct_A)
 
 
 @dataclass(slots=True)

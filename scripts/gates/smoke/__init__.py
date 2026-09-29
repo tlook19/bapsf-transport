@@ -218,6 +218,12 @@ _CASE_ORDER = (
     "mirror-primary-needs-absorbing-anode",
     "mirror-residual-bound-raises",
     "mirror-tail-sheath-share-merged",
+    "anode-tail-booking-identity",
+    "anode-tail-booking-conservation-assert",
+    "anode-balance-floor-probe-vs-dispatched",
+    "anode-tail-booking-mirror-walked-tail",
+    "anode-direct-booking-sheath-rule",
+    "anode-booking-evaluators-plumbed",
 )
 
 

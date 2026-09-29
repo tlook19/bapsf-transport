@@ -742,8 +742,9 @@ TAIL_ANODE_SHEATH_MAX_REFLECTIONS = 4
 # (see _tail_mirror_chains), the residual is 0.61 and 0.83 at 16 legs, 0.098
 # and 0.46 at 64, 1.8e-3 and 5.6e-2 at 256, and 0 at 1024 (every walker
 # stopped); without the merge the split walkers grew as a tree and kept 70-89 %
-# at 64 legs and 60 % at 4096. The cap therefore does not bound that regime at
-# 64 legs, and the solver refuses the walked tail at a mirror for that reason.
+# at 64 legs and 60-87 % at 4096. The cap therefore does not bound that regime
+# at 64 legs: a ray in it raises the run-time residual bound below rather than
+# booking the residual.
 MIRROR_MAX_LEGS = 64
 
 # The largest share of a mirrored ray's launched power (``Gamma0 * E0``) the
@@ -2592,6 +2593,44 @@ class BeamDepositionResult:
                           flux. It LEAVES the ray's ledger here (booked, never
                           dropped), enters no RHS row, and closes the tail
                           identity under a mirror beside the end ledger.
+    tail_gap_born_flux_per_s: the tail WALKER flux [1/s] launched in cells on
+                          the cathode side of the anode plane (the cells the
+                          ray crosses before ``anode_cross_index``), in both
+                          directions and summed over the launched populations:
+                          the flux the anomalous drag re-launched from the
+                          primary before it reached the plane. 0.0 without
+                          ``anode_cross_index`` and whenever no tail is
+                          walked. A particle-count instrument read by the
+                          circuit's anode booking; it enters no bank.
+    tail_launched_flux_per_s: the total tail WALKER flux [1/s] the ray
+                          launched, both directions, every population (the
+                          births). 0.0 whenever no tail is walked.
+    primary_births_flux_per_s: ``primary_net_basis`` only (0.0 otherwise) --
+                          the walker births the primary's legs produced,
+                          counted on the primary's side as the withheld QL
+                          power over the plateau top ``E0`` per cell and leg
+                          (the multi-group plateau launches exactly ``1/E0``
+                          walkers per unit withheld power, so this equals
+                          ``tail_launched_flux_per_s`` to roundoff).
+    primary_net_direct_flux_per_s: ``primary_net_basis`` only -- the primary's
+                          NET flux the mesh intercepts at the outbound
+                          crossing, ``anode_eta * Gamma0 * (1 - F_plane)``
+                          with ``F_plane`` the births upstream of the plane
+                          per emitted electron (0 where the primary stops
+                          before the plane).
+    primary_net_return_flux_per_s: ``primary_net_basis`` only -- the same net
+                          interception summed over every later crossing of
+                          the plane by the returning primary,
+                          ``anode_eta * Gamma_k * (1 - F_k)`` with ``F_k`` the
+                          births per particle carried to that crossing.
+    primary_net_remnant_flux_per_s: ``primary_net_basis`` only -- the
+                          primary's net flux at the end of its last leg
+                          (stopped, transmitted or left in the leg-cap
+                          residual). ``births + direct + return + remnant``
+                          equals ``Gamma0`` to roundoff: the primary read at
+                          ``E(z)`` with flux ``Gamma`` is the energy
+                          equivalent of a beam whose NET flux
+                          ``Gamma * (1 - F)`` is what remains of the emission.
     E_entry_eV          : diagnostic: primary energy entering each cell [eV]
                           (0 for cells the ray never reaches)
     end_loss_low_erg_s  : END LEDGER, low-index end [erg/s]. Identically 0.0
@@ -2728,6 +2767,12 @@ class BeamDepositionResult:
     tail_mirror_erg_s: float = 0.0
     tail_leg_cap_residual_flux_per_s: float = 0.0
     tail_leg_cap_residual_erg_s: float = 0.0
+    tail_gap_born_flux_per_s: float = 0.0
+    tail_launched_flux_per_s: float = 0.0
+    primary_births_flux_per_s: float = 0.0
+    primary_net_direct_flux_per_s: float = 0.0
+    primary_net_return_flux_per_s: float = 0.0
+    primary_net_remnant_flux_per_s: float = 0.0
 
 
 def deposit_beam(
@@ -2768,6 +2813,7 @@ def deposit_beam(
     tail_anode_reflected_energy: float = 0.0,
     mirror_face: int | None = None,
     anomalous_bank_eV: np.ndarray | None = None,
+    primary_net_basis: bool = False,
 ) -> BeamDepositionResult:
     """Deposit one monoenergetic beam ray through the column (He only).
 
@@ -3034,6 +3080,19 @@ def deposit_beam(
     the plane), and ``anomalous_bank_eV`` (a returning leg is marched without
     a mirror of its own).
 
+    ``primary_net_basis`` (default False: nothing below changes) keeps the
+    primary's particle ledger on the NET basis -- the ``primary_births`` and
+    ``primary_net_*`` rows of the result -- and applies the anode wires'
+    sheath to the primary's RETURNS at a mirror by the walkers' rule: at a
+    crossing below ``tail_anode_phi_eV`` the ``anode_eta`` share is turned
+    back at unchanged energy (a primary leg of its own, re-entering the cell
+    it came from) while ``1 - anode_eta`` crosses; at or above it the share is
+    the anode's. The returns then form a tree under the one
+    ``MIRROR_MAX_LEGS`` budget. It also asserts, per ray, that the walkers'
+    fates counted once -- the anode's kept tail net of the rider's return,
+    plus the leg-cap residual -- do not exceed the walkers launched
+    (``RuntimeError``). Requires a walked tail.
+
     ``anomalous_bank_eV`` is a caller-owned array of shape ``(cells,)`` [eV/s]
     the march ADDS its anomalous drag into instead of banking it locally --
     the withholding the walked tail uses, with no walk of this ray's own. It
@@ -3161,6 +3220,13 @@ def deposit_beam(
     walk_tail = (
         anomalous_transport == "tail_walk" or branch_tail or multigroup
     )
+    net_basis = bool(primary_net_basis)
+    if net_basis and not walk_tail:
+        raise ValueError(
+            "primary_net_basis counts the walkers the primary's anomalous "
+            "drag launches; it needs a walked tail "
+            "(anomalous_transport='tail_walk' or 'plateau_multigroup')"
+        )
     _tail_sel = (
         "anomalous_disposal='landau_branched'" if branch_tail
         else "anomalous_transport='plateau_multigroup'" if multigroup
@@ -3646,6 +3712,11 @@ def deposit_beam(
     tail_mirror_erg = 0.0
     tail_cap_flux = 0.0
     tail_cap_erg = 0.0
+    # The walker flux launched on the cathode side of the anode plane.
+    tail_gap_born_flux = 0.0
+    tail_launched_flux = 0.0
+    # The primary's net-basis ledger (primary_net_basis only).
+    net_births = net_direct = net_return = net_remnant = 0.0
     # The march withholds the anomalous drag from the local banks when the
     # ray walks its own tail, and when a caller hands it a bank to fill
     # (``anomalous_bank_eV``); the two never coincide.
@@ -3981,6 +4052,36 @@ def deposit_beam(
         if absorbed:
             break
 
+    # --- The primary's net-basis ledger, outbound leg -------------------------
+    # Births per cell are the withheld QL power over the plateau top E0 (the
+    # multi-group plateau launches exactly 1/E0 walkers per unit withheld
+    # power); F is the births per particle the primary carries, so its net
+    # flux is gamma_gross * (1 - F), and every interception is taken on it.
+    if net_basis:
+        _E_b = float(E0_eV)
+        _births = np.asarray(anom_power_eV, dtype=float) / _E_b
+        net_births = float(_births.sum())
+        _G0 = float(Gamma0_per_s)
+        net_g = _G0
+        if (
+            anode_cross_index is not None
+            and anode_eta > 0.0
+            and E_entry[anode_cross_index] > 0.0
+        ):
+            _up = (
+                slice(0, anode_cross_index)
+                if direction > 0
+                else slice(anode_cross_index + 1, cells)
+            )
+            _b_up = float(_births[_up].sum())
+            net_F = _b_up / _G0
+            net_direct = anode_eta * _G0 * (1.0 - net_F)
+            net_g = _G0 * (1.0 - anode_eta)
+            net_F += (net_births - _b_up) / net_g
+        else:
+            net_F = net_births / _G0
+
+    net_mirror_done = False
     # --- The primary at a mirror plane ---------------------------------------
     # Placed between the march and everything that reads the march's banks, so
     # the returning legs' deposition is part of this ray before the anomalous
@@ -4024,60 +4125,173 @@ def deposit_beam(
             plane = (
                 anode_cross_index if direction > 0 else anode_cross_index + 1
             ) - tail_lo
-        leg_flux, leg_E, leg_dir = gamma, E, direction
-        legs_marched = 1
-        armed = False
-        while True:
-            if leg_dir == mirror:
-                primary_mirror_flux += leg_flux
-                primary_mirror_erg += leg_flux * leg_E * _ERG_PER_EV
-                armed = plane is not None
-            elif leg_E > E0_eV:
-                raise ValueError(
-                    f"the returning primary reached the cathode face at "
-                    f"{leg_E} eV, above its launch energy {E0_eV} eV; a CSDA "
-                    "march only loses energy, so this is unreachable"
+        if not net_basis:
+            leg_flux, leg_E, leg_dir = gamma, E, direction
+            legs_marched = 1
+            armed = False
+            while True:
+                if leg_dir == mirror:
+                    primary_mirror_flux += leg_flux
+                    primary_mirror_erg += leg_flux * leg_E * _ERG_PER_EV
+                    armed = plane is not None
+                elif leg_E > E0_eV:
+                    raise ValueError(
+                        f"the returning primary reached the cathode face at "
+                        f"{leg_E} eV, above its launch energy {E0_eV} eV; a "
+                        "CSDA march only loses energy, so this is unreachable"
+                    )
+                # Otherwise it is at the cathode face, below the sheath drop
+                # it was launched through (it only ever loses energy), and the
+                # sheath turns it back.
+                if legs_marched >= MIRROR_MAX_LEGS:
+                    primary_mirror_residual_flux += leg_flux
+                    primary_mirror_residual_erg += (
+                        leg_flux * leg_E * _ERG_PER_EV
+                    )
+                    break
+                launch_m = face_m[leg_dir]
+                leg_dir = -leg_dir
+                intercept_kwargs = {}
+                if armed:
+                    cell_m = plane if leg_dir > 0 else plane - 1
+                    intercept_kwargs = _leg_cull_kwargs(
+                        dict(anode_cross_index=int(cell_m),
+                             anode_eta=anode_eta),
+                        cell_m, launch_m,
+                    )
+                leg = deposit_beam(
+                    leg_E, leg_flux, nn[win_m], ne[win_m], Te[win_m],
+                    launch_m, leg_dir, dz_cm[win_m], **return_kwargs,
+                    **intercept_kwargs,
                 )
-            # Otherwise it is at the cathode face, below the sheath drop it
-            # was launched through (it only ever loses energy), and the
-            # sheath turns it back.
-            if legs_marched >= MIRROR_MAX_LEGS:
-                primary_mirror_residual_flux += leg_flux
-                primary_mirror_residual_erg += leg_flux * leg_E * _ERG_PER_EV
-                break
-            launch_m = face_m[leg_dir]
-            leg_dir = -leg_dir
-            intercept_kwargs = {}
-            if armed:
-                cell_m = plane if leg_dir > 0 else plane - 1
-                intercept_kwargs = _leg_cull_kwargs(
-                    dict(anode_cross_index=int(cell_m), anode_eta=anode_eta),
-                    cell_m, launch_m,
+                legs_marched += 1
+                ionization_events[win_m] += leg.ionization_events
+                excitation_events[win_m] += leg.excitation_events
+                heating[win_m] += leg.plasma_heating_erg_s
+                radiated[win_m] += leg.radiated_erg_s
+                ionization_cost[win_m] += leg.ionization_cost_erg_s
+                heat_coulomb[win_m] += leg.heating_coulomb_erg_s
+                heat_anomalous[win_m] += leg.heating_anomalous_erg_s
+                heat_secondary[win_m] += leg.heating_secondary_erg_s
+                heat_terminal[win_m] += leg.heating_terminal_erg_s
+                if float(leg.anode_intercepted_erg_s) > 0.0:
+                    anode_intercepted += float(leg.anode_intercepted_erg_s)
+                    armed = False
+                if not float(leg.transmitted_flux) > 0.0:
+                    break
+                leg_flux = float(leg.transmitted_flux)
+                leg_E = float(leg.transmitted_energy_eV)
+        else:
+            # THE NET BASIS, with one rule for every fast electron at the
+            # anode plane: a crossing at or above the wires' sheath
+            # (tail_anode_phi_eV) gives up its eta share to the anode; below
+            # it the sheath turns that share back at unchanged energy, as it
+            # does the walkers', while (1 - eta) crosses. The turned share is
+            # a primary leg of its own, so the returns form a tree under the
+            # one MIRROR_MAX_LEGS budget. A pending leg is
+            # (flux, E, launch cell or None, direction, armed, F): launch None
+            # means "arriving at the face in ``direction``" (the mirror plane
+            # turns it and arms the mesh, the cathode sheath turns it), a
+            # cell means "launched there" (a turned share, re-entering the
+            # cell it came from). F is the births per particle it carries.
+            _phi_wire = float(tail_anode_phi_eV)
+            pending = [(gamma, E, None, direction, False, net_F)]
+            legs_marched = 1
+            while pending:
+                leg_flux, leg_E, launch_m, leg_dir, armed, leg_F = (
+                    pending.pop()
                 )
-            leg = deposit_beam(
-                leg_E, leg_flux, nn[win_m], ne[win_m], Te[win_m], launch_m,
-                leg_dir, dz_cm[win_m], **return_kwargs, **intercept_kwargs,
-            )
-            legs_marched += 1
-            ionization_events[win_m] += leg.ionization_events
-            excitation_events[win_m] += leg.excitation_events
-            heating[win_m] += leg.plasma_heating_erg_s
-            radiated[win_m] += leg.radiated_erg_s
-            ionization_cost[win_m] += leg.ionization_cost_erg_s
-            heat_coulomb[win_m] += leg.heating_coulomb_erg_s
-            heat_anomalous[win_m] += leg.heating_anomalous_erg_s
-            heat_secondary[win_m] += leg.heating_secondary_erg_s
-            heat_terminal[win_m] += leg.heating_terminal_erg_s
-            if float(leg.anode_intercepted_erg_s) > 0.0:
-                anode_intercepted += float(leg.anode_intercepted_erg_s)
-                armed = False
-            if not float(leg.transmitted_flux) > 0.0:
-                break
-            leg_flux = float(leg.transmitted_flux)
-            leg_E = float(leg.transmitted_energy_eV)
+                if launch_m is None:
+                    if leg_dir == mirror:
+                        primary_mirror_flux += leg_flux
+                        primary_mirror_erg += leg_flux * leg_E * _ERG_PER_EV
+                        armed = plane is not None
+                    elif leg_E > E0_eV:
+                        raise ValueError(
+                            f"the returning primary reached the cathode face "
+                            f"at {leg_E} eV, above its launch energy {E0_eV} "
+                            "eV; a CSDA march only loses energy, so this is "
+                            "unreachable"
+                        )
+                    launch_m = face_m[leg_dir]
+                    leg_dir = -leg_dir
+                if legs_marched >= MIRROR_MAX_LEGS:
+                    primary_mirror_residual_flux += leg_flux
+                    primary_mirror_residual_erg += (
+                        leg_flux * leg_E * _ERG_PER_EV
+                    )
+                    net_remnant += leg_flux * (1.0 - leg_F)
+                    continue
+                cell_m = None
+                intercept_kwargs = {}
+                if armed:
+                    cell_m = plane if leg_dir > 0 else plane - 1
+                    intercept_kwargs = _leg_cull_kwargs(
+                        dict(anode_cross_index=int(cell_m),
+                             anode_eta=anode_eta),
+                        cell_m, launch_m,
+                    )
+                _bank_before = np.array(anom_power_eV[win_m], dtype=float)
+                leg = deposit_beam(
+                    leg_E, leg_flux, nn[win_m], ne[win_m], Te[win_m],
+                    launch_m, leg_dir, dz_cm[win_m], **return_kwargs,
+                    **intercept_kwargs,
+                )
+                legs_marched += 1
+                ionization_events[win_m] += leg.ionization_events
+                excitation_events[win_m] += leg.excitation_events
+                heating[win_m] += leg.plasma_heating_erg_s
+                radiated[win_m] += leg.radiated_erg_s
+                ionization_cost[win_m] += leg.ionization_cost_erg_s
+                heat_coulomb[win_m] += leg.heating_coulomb_erg_s
+                heat_anomalous[win_m] += leg.heating_anomalous_erg_s
+                heat_secondary[win_m] += leg.heating_secondary_erg_s
+                heat_terminal[win_m] += leg.heating_terminal_erg_s
+                _b_leg = (
+                    np.asarray(anom_power_eV[win_m], dtype=float)
+                    - _bank_before
+                ) / float(E0_eV)
+                _b_sum = float(_b_leg.sum())
+                net_births += _b_sum
+                if float(leg.anode_intercepted_erg_s) > 0.0:
+                    _before = (
+                        slice(0, cell_m) if leg_dir > 0
+                        else slice(cell_m + 1, n_m)
+                    )
+                    _b_before = float(_b_leg[_before].sum())
+                    _F_cross = leg_F + _b_before / leg_flux
+                    _g_after = leg_flux * (1.0 - anode_eta)
+                    _F_end = _F_cross + (_b_sum - _b_before) / _g_after
+                    if float(leg.E_entry_eV[cell_m]) < _phi_wire:
+                        # Turned back: the share is not the anode's; it
+                        # re-enters the cell it came from, travelling back.
+                        pending.append((
+                            anode_eta * leg_flux,
+                            float(leg.E_entry_eV[cell_m]),
+                            cell_m - leg_dir, -leg_dir, False, _F_cross,
+                        ))
+                    else:
+                        anode_intercepted += float(leg.anode_intercepted_erg_s)
+                        net_return += anode_eta * leg_flux * (1.0 - _F_cross)
+                    _armed_next = False
+                else:
+                    _g_after = leg_flux
+                    _F_end = leg_F + _b_sum / leg_flux
+                    _armed_next = armed
+                if float(leg.transmitted_flux) > 0.0:
+                    pending.append((
+                        float(leg.transmitted_flux),
+                        float(leg.transmitted_energy_eV),
+                        None, leg_dir, _armed_next, _F_end,
+                    ))
+                else:
+                    net_remnant += _g_after * (1.0 - _F_end)
         # Nothing leaves through the plane: every primary that reached it
         # stopped inside the window or is in the residual row.
         absorbed = True
+        net_mirror_done = True
+    if net_basis and not net_mirror_done:
+        net_remnant = net_g * (1.0 - net_F)
 
     if branch_tail:
         # --- pd1: the Landau/collisional branch ---------------------------
@@ -4295,6 +4509,18 @@ def deposit_beam(
                                 "be silently dropped"
                             )
                 tail_plans.append((E_walk, flux_fwd, flux_bwd, ionize_walk))
+                for _, launched in _tail_launch_legs(flux_fwd, flux_bwd):
+                    tail_launched_flux += float(launched.sum())
+                if anode_cross_index is not None:
+                    # Cathode side of the plane: the cells the ray crosses
+                    # before it enters ``anode_cross_index``.
+                    gap = (
+                        slice(0, anode_cross_index)
+                        if direction > 0
+                        else slice(anode_cross_index + 1, cells)
+                    )
+                    for _, launched in _tail_launch_legs(flux_fwd, flux_bwd):
+                        tail_gap_born_flux += float(launched[gap].sum())
 
             # K6: the walkers attenuate INELASTICALLY on the column gas as well
             # as Coulomb-slowing, so the closed-form integral above (which
@@ -4748,6 +4974,24 @@ def deposit_beam(
                 "stopping between the cathode face and the mirror plane"
             )
 
+    if net_basis and tail_launched_flux > 0.0:
+        # Walker fates, each walker counted once: what the anode keeps (net
+        # of the rider's return) and what the leg budget left cannot exceed
+        # what was launched. The wire sheath's turned-back flux is counted
+        # per TURN (a walker turned twice is two turns) and is never part of
+        # the kept row; a turned share booked into it would break this.
+        _fates = (
+            tail_anode_culled_flux - tail_anode_returned_flux + tail_cap_flux
+        )
+        if _fates > tail_launched_flux * (1.0 + 1.0e-9):
+            raise RuntimeError(
+                "the walkers' fates exceed their births: kept "
+                f"{tail_anode_culled_flux - tail_anode_returned_flux!r} + leg-cap "
+                f"residual {tail_cap_flux!r} > launched "
+                f"{tail_launched_flux!r} /s; the anode's kept tail must not "
+                "carry the sheath-turned share"
+            )
+
     return BeamDepositionResult(
         ionization_events=ionization_events,
         excitation_events=excitation_events,
@@ -4790,4 +5034,10 @@ def deposit_beam(
         tail_mirror_erg_s=tail_mirror_erg,
         tail_leg_cap_residual_flux_per_s=tail_cap_flux,
         tail_leg_cap_residual_erg_s=tail_cap_erg,
+        tail_gap_born_flux_per_s=tail_gap_born_flux,
+        tail_launched_flux_per_s=tail_launched_flux,
+        primary_births_flux_per_s=net_births,
+        primary_net_direct_flux_per_s=net_direct,
+        primary_net_return_flux_per_s=net_return,
+        primary_net_remnant_flux_per_s=net_remnant,
     )

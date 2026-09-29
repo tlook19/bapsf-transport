@@ -86,6 +86,8 @@ from cablp.cathode.circuit_common import (
     SolverResult,
     annular_emission_state,
     beam_launched_current_A,
+    emission_fraction_anode_balance,
+    resolve_anode_tail_booking,
     c_log_ei,
     compute_beam_bypass_fraction,
     compute_l_b,
@@ -242,6 +244,11 @@ def solve_idriven(
     alpha_sheath_anode: float | None = None,
     anode_electron_saturation_A: float | None = None,
     tail_anode_current_A: float = 0.0,
+    anode_tail_booking: str = "lagged_current",
+    tail_anode_coefficient: float = 0.0,
+    anode_gap_walker_fraction: float = 0.0,
+    anode_balance_probe: bool = False,
+    primary_return_coefficient: float = 0.0,
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
 
@@ -267,6 +274,26 @@ def solve_idriven(
     deposition that produces it is solved after this, so the coupling is
     lagged one step rather than iterated. 0.0 (the default) is an exact
     identity on every float here.
+    ``anode_tail_booking`` selects how the anode balance books the fast
+    electrons the mesh collects directly (see
+    ``circuit_common.ANODE_TAIL_BOOKINGS``). ``"lagged_current"`` (the
+    default) subtracts ``eta * beta * J_star`` and the lagged
+    ``tail_anode_current_A``, and floors the anode sheath's electron current
+    at 1e-300 A where the balance has no floating solution (reported as
+    ``anode_floor_fired`` on a non-probe solve). ``"emission_fraction"``
+    subtracts ``primary_return_coefficient * J_star`` and
+    ``tail_anode_coefficient * J_star`` -- the previous deposition's net
+    primary return interception and collected tail current per emitted
+    electron, applied to THIS solve's emission -- and
+    ``eta * beta * (1 - anode_gap_walker_fraction) * J_star``, the primary
+    intercepted at the anode plane net of the walker flux born upstream of
+    it, booked only where the beam (at energy ``phi_c``) clears the anode
+    sheath (``circuit_common.emission_fraction_anode_balance``); it refuses a
+    non-zero ``tail_anode_current_A``, and a balance with no floating
+    solution raises ``ValueError``.
+    ``anode_balance_probe`` marks the circuit advance's bracket probe at the
+    lower endpoint ``I = 0``, which keeps the floored endpoint value under
+    either booking and is never counted.
     ``anode_electron_saturation_A`` is the EXPLICIT electron saturation current
     the mesh wires can draw -- the electron random flux ``n <v_e> / 4`` on the
     wire area the two faces present, ``2 eta A``, at the anode sample's own
@@ -375,6 +402,16 @@ def solve_idriven(
     # few volts higher (logarithmically). 0.0 (the default) leaves every float
     # below exactly as it was.
     J_tail_a = float(tail_anode_current_A) * R_p / T_e
+    booking = resolve_anode_tail_booking(
+        anode_tail_booking,
+        tail_anode_current_A,
+        tail_anode_coefficient,
+        anode_gap_walker_fraction,
+        primary_return_coefficient,
+    )
+    c_tail = float(tail_anode_coefficient)
+    w_gap = float(anode_gap_walker_fraction)
+    c_ret = float(primary_return_coefficient)
     # THE ELECTRON SATURATION the wires can draw, stated EXPLICITLY as the
     # random flux on the mesh area where the caller sampled it. The relation
     # below used to reach it implicitly, as ``I_i_a * exp(Lambda_a)``, which
@@ -598,13 +635,45 @@ def solve_idriven(
     beam_bypass_fraction = compute_beam_bypass_fraction(l_b, config.L_cath)
     long_mfp = l_b > 0.0 and l_b > config.L_cath
 
-    J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
-    # Anode floating potential: the anode's own sheath, on its own presheath.
-    # phi_a = T_e,a ln(I_e,sat / I_e,a) with I_e,a = I_i,a + I_anode: the same
-    # relation, with the saturation cap named instead of reached through
-    # ``I_i_a e^Lambda_a``.
-    psi_a = math.log(I_e_sat_a / max(I_i_a * (1.0 + J_anode / J_i_a), 1e-300))
-    phi_a = psi_a * T_e_anode
+    anode_floor_fired = 0.0
+    anode_direct_collected_fraction = float("nan")
+    if booking == "emission_fraction":
+        # Every directly collected population per emitted electron: the
+        # primary at the anode plane net of the walker flux its anomalous drag
+        # launched upstream of the plane, its net interception on returns,
+        # and the tail -- the latter two from the previous deposition and
+        # applied to this solve's emission. The direct term is booked only
+        # where the beam, at the launch energy phi_c, clears the anode sheath
+        # it books (three branches, no root-find; see the helper).
+        _I_star = J_star * T_e / R_p
+        _I_rest = I_i_a + J_tot * T_e / R_p - (c_ret + c_tail) * _I_star
+        _I_direct = eta * beam_bypass_fraction * (1.0 - w_gap) * _I_star
+        phi_a, anode_direct_collected_fraction = (
+            emission_fraction_anode_balance(
+                _I_rest, _I_direct, I_e_sat_a, T_e_anode, phi_c,
+                anode_balance_probe,
+                lambda: (
+                    f"I_i_a={I_i_a!r} A; loop current "
+                    f"{J_tot * T_e / R_p!r} A; emitted current {_I_star!r} "
+                    f"A; return coefficient={c_ret!r}, tail "
+                    f"coefficient={c_tail!r}"
+                ),
+            )
+        )
+    else:
+        J_anode = J_tot - eta * beam_bypass_fraction * J_star - J_tail_a
+        # Anode floating potential: the anode's own sheath, on its own
+        # presheath. phi_a = T_e,a ln(I_e,sat / I_e,a) with
+        # I_e,a = I_i,a + I_anode: the same relation, with the saturation cap
+        # named instead of reached through ``I_i_a e^Lambda_a``. Where the
+        # sheath cannot pass a positive electron current the balance has no
+        # floating solution; this booking floors it, and a non-probe solve
+        # that does so is reported.
+        I_e_a = I_i_a * (1.0 + J_anode / J_i_a)
+        if 1e-300 > I_e_a and not anode_balance_probe:
+            anode_floor_fired = 1.0
+        psi_a = math.log(I_e_sat_a / max(I_e_a, 1e-300))
+        phi_a = psi_a * T_e_anode
 
     I_tot = J_tot * T_e / R_p
     I_eth_star = J_star * T_e / R_p
@@ -683,8 +752,14 @@ def solve_idriven(
     # tail, exactly as the primary's bypass convention already pays for the
     # flux that streams through the mesh. Zero at a non-positive ``phi_a``.
     # ``I_tail_a`` is LAGGED -- the deposition is solved after the circuit
-    # within a step, so this reads the previous accepted step's cull.
-    P_tail_phi = max(phi_a, 0.0) * float(tail_anode_current_A)
+    # within a step, so this reads the previous accepted step's cull. Under
+    # ``anode_tail_booking="emission_fraction"`` it is the booked
+    # ``c_tail * I_eth_star``; the primary's return interception is booked as
+    # current there but carries no row of its own here.
+    if booking == "emission_fraction":
+        P_tail_phi = max(phi_a, 0.0) * (c_tail * I_eth_star)
+    else:
+        P_tail_phi = max(phi_a, 0.0) * float(tail_anode_current_A)
     P_anode_i = P_ion(phi_a, T_e_anode, I_i_a)
     P_anode_i_thermal = I_i_a * (T_e_anode / 2.0)
     P_anode_i_phi = P_anode_i - P_anode_i_thermal
@@ -815,6 +890,8 @@ def solve_idriven(
         beam_bypass_fraction=beam_bypass_fraction,
         l_b=l_b,
         T_e_anode=T_e_anode,
+        anode_floor_fired=anode_floor_fired,
+        anode_direct_collected_fraction=anode_direct_collected_fraction,
     )
 
 
@@ -836,6 +913,10 @@ def solve_beam_system_idriven(
     alpha_sheath_anode: float | None = None,
     anode_electron_saturation_A: float | None = None,
     tail_anode_current_A: float = 0.0,
+    anode_tail_booking: str = "lagged_current",
+    tail_anode_coefficient: float = 0.0,
+    anode_gap_walker_fraction: float = 0.0,
+    primary_return_coefficient: float = 0.0,
 ) -> BeamResult:
     """Current-driven, single-cathode sheath solve plus its beam arrays.
 
@@ -861,6 +942,10 @@ def solve_beam_system_idriven(
         alpha_sheath_anode=alpha_sheath_anode,
         anode_electron_saturation_A=anode_electron_saturation_A,
         tail_anode_current_A=tail_anode_current_A,
+        anode_tail_booking=anode_tail_booking,
+        tail_anode_coefficient=tail_anode_coefficient,
+        anode_gap_walker_fraction=anode_gap_walker_fraction,
+        primary_return_coefficient=primary_return_coefficient,
     )
     return assemble_beam_arrays(
         result=result,
