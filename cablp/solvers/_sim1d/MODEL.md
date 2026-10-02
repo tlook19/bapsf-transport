@@ -800,8 +800,9 @@ with $P_\text{heater}$ pinned by the standby equilibrium (at the base
 temperature the heater exactly balances radiation, so it is not free),
 $P_\text{ion}$ the accepted solve's ion bombardment power,
 $P_\text{rad}=\varepsilon\sigma_{SB}A_c(T_s^4-T_\text{env}^4)$ gray-body
-radiation, $P_\text{emis}=I_\text{eth}^\star(\phi_\text{wf}+2k_BT_s)$
-evaporative emission cooling — each emitted electron removing the barrier plus
+radiation, $P_\text{emis}=I_\text{eth}^\star(\phi_\text{wf,eff}+2k_BT_s)$
+evaporative emission cooling, with the coverage-weighted work function
+$\phi_\text{wf,eff}$ of the next paragraph — each emitted electron removing the barrier plus
 its mean thermal energy over it, carried in every phase including the open
 circuit, where zero NET current is not zero emission; the energy the COLLECTED
 electrons deposit back on the surface is not carried at all, so this term is
