@@ -23,6 +23,9 @@ be reported, never a licence to adjust the rates):
 Nothing in this script is tunable against the result. It imports the committed
 driver and subclasses the engine; it does not modify either.
 
+Exit 0 = both criteria PASS; exit 1 = either is a MISS. The last line printed
+is the verdict line of the transcript.
+
 Usage:
 
     PYTHONPATH=<checkout>/cablp python scripts/verify/k2_dvm_exchange_acceptance.py \
@@ -220,7 +223,7 @@ def main(argv=None):
     tab_base = cell_table(rows_base, band)
     tab_geo = cell_table(rows_geo, band)
 
-    lines = build_report(
+    lines, verdict_line, accepted = build_report(
         args, cmdline, shared, bg, obj_base, obj_geo, band, tab_base, tab_geo,
         mc_meta, time.perf_counter() - t_all,
     )
@@ -228,11 +231,17 @@ def main(argv=None):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n")
     print(f"wrote {out_path}", flush=True)
-    return 0
+    print(f"K2 acceptance:{verdict_line}", flush=True)
+    return 0 if accepted else 1
 
 
 def build_report(args, cmdline, shared, bg, obj_base, obj_geo, band,
                  tab_base, tab_geo, mc_meta, wall_s):
+    """Return ``(report lines, verdict line, accepted)``.
+
+    ``accepted`` is True only when both registered criteria, (a) and (b),
+    PASS; the caller exits 1 otherwise.
+    """
     L = []
     W = 108
 
@@ -429,11 +438,13 @@ def build_report(args, cmdline, shared, bg, obj_base, obj_geo, band,
 
     hdr("VERDICT")
     L.append("")
-    L.append(
+    accepted = verdict_a and verdict_b
+    verdict_line = (
         f"  (a) {'PASS' if verdict_a else 'MISS'}    "
         f"(b) {'PASS' if verdict_b else 'MISS'}    "
-        f"=> acceptance {'PASSES' if verdict_a and verdict_b else 'is a NULL RESULT'}"
+        f"=> acceptance {'PASSES' if accepted else 'is a NULL RESULT'}"
     )
+    L.append(verdict_line)
     L.append("")
     L.append(
         "A miss is reported as measured. No rate, floor or threshold in this "
@@ -441,7 +452,7 @@ def build_report(args, cmdline, shared, bg, obj_base, obj_geo, band,
         "carries no free constant that could be."
     )
     L.append("")
-    return L
+    return L, verdict_line, accepted
 
 
 if __name__ == "__main__":

@@ -13,6 +13,8 @@ MODEL side of that chain from a saved production artifact — no reruns:
   (d) a no-rerun scaling read: the CX cooling time if the model's port nn
       were divided by the measured mid-column depletion bracket (x9-x20).
 
+The audit measures and asserts nothing, so its exit status carries no verdict.
+
 Usage:
   python audit_sim1d_afterglow_ion_channel.py --h5 es1_prod_25ms_nx240.h5 \
       [--early-ms 1.0] [--output out.txt]
@@ -151,6 +153,8 @@ def main() -> None:
     if args.output:
         Path(args.output).write_text("\n".join(out_lines) + "\n")
         print(f"\nwritten: {args.output}")
+    print("afterglow ion-channel audit: measurement only -- nothing was "
+          "asserted, so the exit status carries no verdict")
 
 
 if __name__ == "__main__":

@@ -25,6 +25,9 @@ Needs the settled M6 artifact, named with --h5: it is a run artifact under the
 artifacts root, not a file this repository carries.
 
 Usage:  python scripts/verify/verify_sim1d_r4_beam_and_birth_ledger.py --h5 PATH
+
+Exit 0 = the item-21 numbers are reproduced; exit 1 = they are not; exit 2 =
+the check did not run (the artifact is absent).
 """
 import argparse
 import sys
@@ -165,7 +168,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     f = _open(args.h5)
     if f is None:
-        return 0  # artifact absent: nothing to check, not a failure
+        print("R4 item-21 ledger re-check: DID NOT RUN (the artifact named by "
+              "--h5 is absent, so nothing was checked)")
+        return 2
     return 0 if analyze(f) else 1
 
 

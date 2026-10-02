@@ -29,7 +29,10 @@ the file records its own.
 which is the exact instrument. It names a configuration like every other run
 entry point.
 
-Exit 0 = the assertion holds (or none was asked for); exit 1 = it does not.
+Run without ``--assert-no-handoff-before-ms`` the census measures and asserts
+nothing, so its exit status carries no verdict. With the flag: exit 0 = the
+assertion holds; exit 1 = it does not; exit 2 = the record contains no
+afterglow, so the assertion examined nothing.
 """
 
 import argparse
@@ -132,11 +135,11 @@ def _report(times_s, floating, driven_tail, I_loop, V_dis, resolution,
         f"tail census: driven-tail entries={n_tail}, "
         f"open-circuit entries={n_float}"
     )
-    if n_tail == 0 and n_float == 0:
+    no_afterglow = n_tail == 0 and n_float == 0
+    if no_afterglow:
         print(
             "tail census NOTE: the record contains no afterglow at all, so it "
-            "says nothing about the hand-off -- the assertion below passes "
-            "vacuously"
+            "says nothing about the hand-off"
         )
     fired = np.flatnonzero(floating)
     if fired.size == 0:
@@ -169,7 +172,15 @@ def _report(times_s, floating, driven_tail, I_loop, V_dis, resolution,
                       f"{T_s[j]:12.7f}  {dT:+.3e}{star}")
     if assert_before_ms is None:
         print("tail census: no earliest-firing assertion requested")
+        print("tail census: measurement only -- nothing was asserted, so the "
+              "exit status carries no verdict")
         return 0
+    if no_afterglow:
+        print(
+            "tail census: DID NOT RUN -- the record contains no afterglow, so "
+            f"the assertion before {assert_before_ms:.4f} ms examined nothing"
+        )
+        return 2
     if first_ms is not None and first_ms < assert_before_ms:
         print(
             f"tail census: FAIL -- hand-off fired at {first_ms:.4f} ms, "
@@ -302,7 +313,8 @@ def _parse_args(argv):
     parser.add_argument(
         "--assert-no-handoff-before-ms", type=float, default=None,
         metavar="MS",
-        help="Fail (exit 1) if the hand-off fires before this time [ms]. The "
+        help="Fail (exit 1) if the hand-off fires before this time [ms]; exit "
+             "2 if the record contains no afterglow to examine. The "
              "registered value for the LAPD reference configuration is 21.5, "
              "the end of the scored window.",
     )
