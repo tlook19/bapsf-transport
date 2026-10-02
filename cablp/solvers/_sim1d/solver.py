@@ -6100,6 +6100,8 @@ class LAPDSim1D:
         # run: that is the presence gate for each resume branch below.
         resume = self._restart_run_loop
         self._restart_run_loop = None
+        # This run's saves are the particle receipt's frames.
+        self._receipt.start_run()
         if self._neutral_equilibration and not self._run_via_start_simulation:
             warnings.warn(
                 f"initial_neutral_state={self._initial_neutral_state!r} but "

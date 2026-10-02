@@ -440,6 +440,28 @@ azimuth integral costs is radial structure INSIDE the column — an atom enterin
 from the annulus is spread over the whole cross-section at once — and the
 two-zone split is this model's radial description.
 
+### What the conservation receipt certifies
+
+Every result carries a particle receipt (its layout and what is booked where
+are in [`NUMERICS.md`](NUMERICS.md), Output), and
+`scripts/gates/ledger_check.py` closes it. A pass certifies, for each pair of
+consecutive saves and to a roundoff bound fixed before any run, three
+statements. The change of the plasma inventory and of the neutral inventory
+(the fluid fields before engagement, the kinetic engine's own count after)
+equals the particles the booked terms moved in and out. Where two code sites
+each compute one side of an exchange (ionization, recombination, the recycle
+at each absorbing face, the anode return), the two sides agree once what one
+side has not yet settled is counted. And every term the right-hand side
+returns, and every change made outside it, is accounted for in the census.
+
+A pass does not certify that a term is physically right: a rate that is wrong
+moves particles that both its sides book. Nor does it see an error made the
+same way on both sides of an exchange, two sites wrong by the same amount,
+because the clearing account then closes on agreeing numbers. What it does
+catch is a term applied to the state but not booked, or booked but not
+applied, a volume or weight mismatch between a term's rows, and two sites
+that disagree on one exchange.
+
 ## Source and sink terms
 
 ### Ionization and recombination

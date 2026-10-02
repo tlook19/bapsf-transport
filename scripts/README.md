@@ -87,8 +87,11 @@ each leg in its own process on its own tree, and compares each pair;
 whether every account closes. It is written from the conservation laws in
 `MODEL.md` and the result file's layout alone and imports nothing from the
 solver, so it checks the receipt with arithmetic the solver did not supply.
-The solver does not write a receipt yet; `--self-test` builds synthetic files
-with planted closures and planted breaks and checks each verdict.
+It is a live gate: every result the solver writes carries a receipt for the
+`particles` stage (`results/receipt.py`; what is booked where is in
+`NUMERICS.md`, Output), and the smoke runs it on a fluid and a kinetic solve.
+`--self-test` builds synthetic files with planted closures and planted breaks
+and checks each verdict.
 
     python scripts/gates/ledger_check.py RUN.h5 [--stage particles|energy|momentum ...] \
         [--margin M] [--ceiling R]

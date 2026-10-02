@@ -429,6 +429,15 @@ class ParticleReceipt:
 
     # ------------------------------------------------------------ saves
 
+    def start_run(self):
+        """Begin a new trajectory: its saves are this receipt's frames.
+
+        The open interval's accumulators are kept; the run's first save
+        closes them into its first frame, which opens the receipt and is no
+        interval of its own.
+        """
+        self.frames = []
+
     def save(self, state_rows):
         """Close the interval at a save; ``state_rows`` is this save's state."""
         frame = {
