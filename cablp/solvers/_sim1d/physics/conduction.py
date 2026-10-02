@@ -286,6 +286,7 @@ def implicit_heat_conduction_step(
     ee_source=None,
     ee_sink_rate=None,
     ledger_out=None,
+    clip_out=None,
 ):
     """Return a state after one implicit heat step.
 
@@ -331,6 +332,13 @@ def implicit_heat_conduction_step(
     ``C*(Te_preclip - Te_old) == conduction + sink + source`` holds per cell to
     round-off whenever the floor is inactive. The last Picard iteration's
     values are the ones left in the dict.
+
+    ``clip_out``, when a dict is given, receives the per-cell energy the
+    substep's temperature floor added to each species [erg cm^-3]:
+    ``Ee_clip_erg_cm3`` and ``Ei_clip_erg_cm3``, each ``C*Te_clipped -
+    C*Te_preclip`` (non-negative, zero where the floor is inactive), from the
+    last Picard iteration, which is the one returned. Reading them leaves the
+    returned state unchanged.
 
     ``heat_picard_iterations`` controls how the Braginskii conductivity, which
     depends on temperature as roughly T^(5/2), is evaluated:
@@ -382,6 +390,14 @@ def implicit_heat_conduction_step(
                 zeros_ledger.copy()
                 if ee_source is None
                 else dt * np.asarray(ee_source, dtype=float)
+            )
+        if clip_out is not None:
+            # No temperature floor is applied on this path.
+            clip_out["Ee_clip_erg_cm3"] = np.zeros_like(
+                np.asarray(state.Ee, dtype=float)
+            )
+            clip_out["Ei_clip_erg_cm3"] = np.zeros_like(
+                np.asarray(state.Ei, dtype=float)
             )
         return ConservativeState1D(
             n=state.n.copy(),
@@ -447,6 +463,8 @@ def implicit_heat_conduction_step(
             source=ee_source,
             sink_rate=sink_rate,
             ledger_out=ledger_out,
+            clip_out=clip_out,
+            clip_key="Ee_clip_erg_cm3",
         )
         Ei = _implicit_species_energy(
             energy=state.Ei,
@@ -456,6 +474,8 @@ def implicit_heat_conduction_step(
             geometry=geometry,
             dt=dt,
             scheme=scheme,
+            clip_out=clip_out,
+            clip_key="Ei_clip_erg_cm3",
         )
         Te_next = Ee / capacity
         Ti_next = Ei / capacity
@@ -557,6 +577,8 @@ def _implicit_species_energy(
     source=None,
     sink_rate=None,
     ledger_out=None,
+    clip_out=None,
+    clip_key=None,
 ):
     energy = np.asarray(energy, dtype=float)
     kwargs = dict(
@@ -581,7 +603,15 @@ def _implicit_species_energy(
     # scripts/gates/audit_sim1d_floor_activation.py recovers the pre-clip temperature
     # by calling this function with temperature_floor=-inf, which only stays
     # valid while this remains the one place the floor is enforced.
+    preclip = temperature
     temperature = np.maximum(temperature, temperature_floor)
+    if clip_out is not None:
+        # The energy the clip added, from the pre-clip value; read-only.
+        clip_out[clip_key] = np.where(
+            temperature > preclip,
+            capacity * temperature - capacity * preclip,
+            0.0,
+        )
     return capacity * temperature
 
 

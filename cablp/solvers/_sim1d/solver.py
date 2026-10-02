@@ -2040,6 +2040,10 @@ class LAPDSim1D:
             "Ti": float(self._input_dict["Ti_floor"]),
         }
         self._floor_ledger = self._empty_floor_ledger()
+        # The current attempt's floor ledger while ``_attempt_step`` runs, into
+        # which the implicit heat substeps book their own clip; None outside
+        # an attempt, so a substep called directly books nothing.
+        self._heat_clip_attempt_ledger = None
         # Shaped initial neutral fill (default off, bit-exact off). Armed
         # HERE, before the initial condition is built, because the initial
         # condition is the only thing it touches.
@@ -2147,6 +2151,13 @@ class LAPDSim1D:
         # (time, integral) pair at the previous trajectory save anchors it.
         self._circuit_V_dis_time_integral = 0.0
         self._circuit_V_dis_prev_save = None
+        # The open-circuit hand-off sets the loop current to zero, and the
+        # inductor's stored energy 0.5*L*I^2 at that instant leaves the model
+        # unbooked by any plasma or electrode row. Recorded, not booked: the
+        # loop current on entry to the most recent hand-off that dropped one
+        # [A] (0.0 while none has), and the run-cumulative energy dropped [J].
+        self._circuit_handoff_I_A = 0.0
+        self._circuit_handoff_dropped_J = 0.0
 
     def _init_cathode_surface_state(self):
         """Arm the evolving cathode surface state.
@@ -2209,14 +2220,20 @@ class LAPDSim1D:
         self._cathode_theta = 1.0
         # Per-shot surface energy ledger [J]: running integrals of the
         # balance terms over accepted steps (the presence-gated backscatter
-        # row added just below has its own note). The net
-        # (heater + ion - rad - emis - cond) is the shot's unreturned
-        # energy into the emitting skin; cond is what the heater-held
-        # substrate absorbed -- the quantity the open-loop-heater drift
-        # hypothesis makes checkable against the ES1 trim cadence
-        # (a ~sub-kW net imbalance corresponds to ±8 K per 20-30 min).
+        # row added just below has its own note). The loss rows rad, emis
+        # and cond are booked at their linearised end-of-step values, the
+        # same linearisation the semi-implicit update uses, and ``clamp`` is
+        # the energy the floor at CATHODE_ENV_T_K adds when it fires, so the
+        # signed sum (heater + ion - rad - emis - cond - backscatter + clamp)
+        # is C_th times the surface temperature change over the steps the
+        # warming update runs. The net is the shot's unreturned energy into
+        # the emitting skin; cond is what the heater-held substrate
+        # absorbed -- the quantity the open-loop-heater drift hypothesis
+        # makes checkable against the ES1 trim cadence (a ~sub-kW net
+        # imbalance corresponds to ±8 K per 20-30 min).
         self._cathode_energy_ledger_J = {
             "heater": 0.0, "ion": 0.0, "rad": 0.0, "emis": 0.0, "cond": 0.0,
+            "clamp": 0.0,
         }
         if self._dvm_cathode_jet is not None:
             # The DVM cathode jet's own named loss row: the R_E share of the
@@ -3767,15 +3784,31 @@ class LAPDSim1D:
             neutral_energy=self._neutral_energy,
         )
 
-    @staticmethod
-    def _empty_floor_ledger():
+    #: The floor ledger's rows filled by the state floors
+    #: (``_floor_additions``), each booked at the weight with which the floor
+    #: call's addition enters the accepted state.
+    _FLOOR_CALL_LEDGER_KEYS = (
+        "n_particles_added",
+        "nn_particles_added",
+        "nn_a_particles_added",
+        "Ee_energy_added_erg",
+        "Ei_energy_added_erg",
+        "En_energy_added_erg",
+    )
+    #: The floor ledger's rows filled by the implicit heat substep's own
+    #: temperature clip, which acts before any state floor sees the substep's
+    #: result: the energy the clip added to the electron and ion stores [erg].
+    _HEAT_CLIP_LEDGER_KEYS = (
+        "Ee_heat_clip_energy_added_erg",
+        "Ei_heat_clip_energy_added_erg",
+    )
+
+    @classmethod
+    def _empty_floor_ledger(cls):
         return {
-            "n_particles_added": 0.0,
-            "nn_particles_added": 0.0,
-            "nn_a_particles_added": 0.0,
-            "Ee_energy_added_erg": 0.0,
-            "Ei_energy_added_erg": 0.0,
-            "En_energy_added_erg": 0.0,
+            name: 0.0
+            for name in cls._FLOOR_CALL_LEDGER_KEYS
+            + cls._HEAT_CLIP_LEDGER_KEYS
         }
 
     def _floor_additions(self, raw, floored):
@@ -3995,11 +4028,22 @@ class LAPDSim1D:
 
         starting_cache = self._step_cache_snapshot()
         attempt_floor_ledger = self._empty_floor_ledger()
+        # The implicit heat substeps book their own temperature clip into
+        # this same attempt ledger (see operator_split_step); armed here and
+        # dropped in the ``finally`` below, so only an accepted attempt's
+        # clip reaches the cumulative ledger.
+        self._heat_clip_attempt_ledger = attempt_floor_ledger
 
-        def floor_with_ledger(y):
+        def floor_with_ledger(y, weight=1.0):
+            # ``weight`` is the coefficient with which this call's additions
+            # enter the accepted state: 1/2 for SSPRK2's first stage, whose
+            # floored vector enters the second stage's combination at half
+            # weight, and 1 for every other floor call (SSPRK2's second
+            # stage, the implicit heat substeps' floors and the neutral-only
+            # step's). The floored vector itself does not depend on it.
             floored, additions = self._floor_vector_with_ledger(y)
-            for name in attempt_floor_ledger:
-                attempt_floor_ledger[name] += float(additions[name])
+            for name in self._FLOOR_CALL_LEDGER_KEYS:
+                attempt_floor_ledger[name] += weight * float(additions[name])
             return floored
 
         raw_rejection_reason = ""
@@ -4020,7 +4064,7 @@ class LAPDSim1D:
                 elif operator_split:
                     y_next = self.operator_split_step(
                         dt=dt,
-                        floor_func=floor_with_ledger,
+                        weighted_floor_func=floor_with_ledger,
                         raw_stage_func=self._validate_raw_stage,
                     )
                 else:
@@ -4028,7 +4072,7 @@ class LAPDSim1D:
                         y0=self._y,
                         dt=dt,
                         rhs_func=self._explicit_stage_rhs(dt),
-                        floor_func=floor_with_ledger,
+                        weighted_floor_func=floor_with_ledger,
                         time=self._time,
                         raw_stage_func=self._validate_raw_stage,
                     )
@@ -4038,6 +4082,7 @@ class LAPDSim1D:
                 raw_rejection_detail = error.detail
             candidate_cache = self._step_cache_snapshot()
         finally:
+            self._heat_clip_attempt_ledger = None
             self._restore_step_cache(starting_cache)
             attempt_ion_booking = self._dvm_ion_stage_accum
             self._dvm_ion_stage_accum = None
@@ -4896,21 +4941,24 @@ class LAPDSim1D:
             # + dt*dP_loss/dT). At production dt/tau ~ 5e-5 this is the
             # explicit update to 4 decimal places; for tiny C_th it
             # cannot overshoot the radiative equilibrium and ring.
+            # G_lin is the sum of the three loss rows' own linearisation
+            # coefficients [W/K]; each row is booked below at its
+            # linearised END-of-step value, row + G_row*dT, so C_th*dT
+            # equals the booked rows' sum.
             eps = float(self._input_dict.get("cathode_emissivity"))
             area = math.pi * float(self._input_dict["R_cath"]) ** 2
-            G_lin = (
+            G_rad = (
                 4.0
                 * eps
                 * 5.670374419e-12
                 * float(area)
                 * self._cathode_Ts_K**3
-                + max(I_emis, 0.0) * 2.0 * 8.617333262e-5
-                + float(
-                    self._input_dict.get(
-                        "cathode_conduction_W_per_K"
-                    )
-                )
             )
+            G_emis = max(I_emis, 0.0) * 2.0 * 8.617333262e-5
+            G_cond = float(
+                self._input_dict.get("cathode_conduction_W_per_K")
+            )
+            G_lin = G_rad + G_emis + G_cond
             # B5 BACKSCATTER DEBIT: the energy the R_E share left with,
             # formed from the counted (particles, incident energy) pair
             # this same accepted step committed -- NOT from a retention
@@ -4930,16 +4978,28 @@ class LAPDSim1D:
                 * (P_heat + P_ion - P_rad - P_emis - P_cond - P_back)
                 / (C_th + float(attempt.dt) * G_lin)
             )
-            self._cathode_Ts_K = max(
-                self._cathode_Ts_K + dT,
-                CATHODE_ENV_T_K,
-            )
+            T_unclamped = self._cathode_Ts_K + dT
+            self._cathode_Ts_K = max(T_unclamped, CATHODE_ENV_T_K)
+            # The book: heater and ion are sources independent of T_s and
+            # are booked as dt*P; the three loss rows at their linearised
+            # end-of-step values, the row at the old temperature plus its
+            # own G_row*dT, so that in exact arithmetic
+            #     C_th*dT = heater + ion - rad - emis - cond - dt*P_back.
+            # The backscatter row is booked above from the same
+            # step_backscatter_erg that P_back is formed from, so on every
+            # step this branch runs its increment is dt*P_back. The clamp
+            # row is the energy the floor at CATHODE_ENV_T_K adds when it
+            # fires (exactly zero otherwise), which closes
+            #     C_th*(T_s_new - T_s_old) = the signed sum of the rows.
+            dt_step = float(attempt.dt)
             ledger = self._cathode_energy_ledger_J
-            ledger["heater"] += float(attempt.dt) * P_heat
-            ledger["ion"] += float(attempt.dt) * P_ion
-            ledger["rad"] += float(attempt.dt) * P_rad
-            ledger["emis"] += float(attempt.dt) * P_emis
-            ledger["cond"] += float(attempt.dt) * P_cond
+            ledger["heater"] += dt_step * P_heat
+            ledger["ion"] += dt_step * P_ion
+            ledger["rad"] += dt_step * (P_rad + G_rad * dT)
+            ledger["emis"] += dt_step * (P_emis + G_emis * dT)
+            ledger["cond"] += dt_step * (P_cond + G_cond * dT)
+            if self._cathode_Ts_K != T_unclamped:
+                ledger["clamp"] += C_th * (self._cathode_Ts_K - T_unclamped)
         # Surface-state coverage, accepted steps only. Ion flux from the
         # honest accepted-state solve, which is now built in every phase; the
         # cached solve's I_i is the fallback for the phases that build none
@@ -4993,7 +5053,18 @@ class LAPDSim1D:
             time=step_start_time
         )
         if not step_phase["solve_enabled"] or step_phase["floating"]:
-            # Open circuit: no loop; the stored inductor energy is dropped.
+            # Open circuit: no loop; the stored inductor energy is dropped,
+            # and recorded (only a step entering with a nonzero loop current,
+            # the first open-circuit step after a driven or tail phase, drops
+            # any).
+            if self._circuit_I_loop != 0.0:
+                I_dropped = float(self._circuit_I_loop)
+                self._circuit_handoff_I_A = I_dropped
+                self._circuit_handoff_dropped_J += (
+                    0.5
+                    * float(self._input_dict.get("L_parasitic_H"))
+                    * I_dropped**2
+                )
             self._circuit_I_loop = 0.0
             self._circuit_V_dis_step = 0.0
             # An open circuit carries no measured discharge either, so the
@@ -5278,6 +5349,12 @@ class LAPDSim1D:
         circuit["V_dis_prev_save_integral"] = (
             None if prev_save is None else float(prev_save[1])
         )
+        # The hand-off record, outside the strict inventory so a payload
+        # written before it existed still loads (see the loader).
+        circuit["handoff_I_A"] = float(self._circuit_handoff_I_A)
+        circuit["handoff_dropped_inductor_J"] = float(
+            self._circuit_handoff_dropped_J
+        )
         triggers = {
             name: getattr(self, name) for name in self._RESTART_TRIGGER_ATTRS
         }
@@ -5498,6 +5575,12 @@ class LAPDSim1D:
         circuit = payload["circuit"]
         for name in self._RESTART_CIRCUIT_ATTRS:
             setattr(self, name, circuit[name])
+        # Defaulted, not required: a payload written before the hand-off
+        # record existed resumes with none recorded.
+        self._circuit_handoff_I_A = float(circuit.get("handoff_I_A", 0.0))
+        self._circuit_handoff_dropped_J = float(
+            circuit.get("handoff_dropped_inductor_J", 0.0)
+        )
         prev_save_t = circuit["V_dis_prev_save_t"]
         self._circuit_V_dis_prev_save = (
             None
@@ -5532,9 +5615,20 @@ class LAPDSim1D:
         ]
         monitor._stalled = bool(ignition["stalled"])
         ledgers = payload["ledgers"]
-        for name in self._floor_ledger:
+        for name in self._FLOOR_CALL_LEDGER_KEYS:
             self._floor_ledger[name] = float(ledgers[name])
+        for name in self._HEAT_CLIP_LEDGER_KEYS:
+            # Defaulted, not required: a payload written before the heat
+            # substep's clip was booked carries neither key.
+            self._floor_ledger[name] = float(ledgers.get(name, 0.0))
         for key in self._cathode_energy_ledger_J:
+            if key == "clamp":
+                # Defaulted, not required: a payload written before the
+                # clamp row existed carries no such key.
+                self._cathode_energy_ledger_J[key] = float(
+                    ledgers.get(f"cathode_energy_{key}_J", 0.0)
+                )
+                continue
             self._cathode_energy_ledger_J[key] = float(
                 ledgers[f"cathode_energy_{key}_J"]
             )
@@ -5594,6 +5688,7 @@ class LAPDSim1D:
         splitting=None,
         floor_func=None,
         raw_stage_func=None,
+        weighted_floor_func=None,
     ):
         """Return one explicit-nonheat plus implicit-heat split step.
 
@@ -5644,7 +5739,21 @@ class LAPDSim1D:
 
         Each is booked once either way. One read-only cathode solve per
         substep serves every builder.
+
+        ``floor_func(y)`` or ``weighted_floor_func(y, weight)`` (at most one;
+        neither means the solver's own floor) floors each sub-operator's
+        result. The weighted form is told the weight with which that call's
+        additions enter the returned vector: 1/2 for operator A's first
+        SSPRK2 stage and 1 for its second stage and for every heat substep,
+        whose floored result is the next sub-operator's input or the step's
+        result. Inside ``_attempt_step`` each heat substep also books its own
+        temperature clip into the attempt's floor ledger.
         """
+        if floor_func is not None and weighted_floor_func is not None:
+            raise ValueError(
+                "operator_split_step takes at most one of floor_func and "
+                "weighted_floor_func"
+            )
         y0 = self._y if y is None else np.asarray(y, dtype=float)
         if dt is None:
             dt = self.suggest_timestep(
@@ -5655,12 +5764,32 @@ class LAPDSim1D:
             splitting = self._operator_splitting()
         else:
             splitting = validate_operator_splitting(splitting)
-        if floor_func is None:
+        if floor_func is None and weighted_floor_func is None:
             floor_func = self.floor_state_vector
         if raw_stage_func is None:
             raw_stage_func = self._validate_raw_stage
+        clip_ledger = self._heat_clip_attempt_ledger
+
+        def heat_floor(raw):
+            if weighted_floor_func is not None:
+                return weighted_floor_func(raw, 1.0)
+            return floor_func(raw)
+
+        def book_heat_clip(clip):
+            # The energy the substep's own temperature clip added [erg],
+            # read-only: the clipped state is the substep's return value.
+            if clip_ledger is None:
+                return
+            Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+            clip_ledger["Ee_heat_clip_energy_added_erg"] += float(
+                np.sum(clip["Ee_clip_erg_cm3"] * Vp)
+            )
+            clip_ledger["Ei_heat_clip_energy_added_erg"] += float(
+                np.sum(clip["Ei_clip_erg_cm3"] * Vp)
+            )
 
         def heat(y_in, sub_dt, source_time=None):
+            clip = {} if clip_ledger is not None else None
             if self._heat_substep_terms or self._cathode_climb_in_heat_substep:
                 substep_state = self._unpack(y_in)
                 cathode_solve = None
@@ -5714,6 +5843,7 @@ class LAPDSim1D:
                     ee_source=ee_source,
                     ee_sink_rate=ee_sink_rate,
                     ledger_out=ledger,
+                    clip_out=clip,
                 )
                 if ledger is not None:
                     self._book_electrode_sink_substep(
@@ -5722,11 +5852,15 @@ class LAPDSim1D:
                         sub_dt=sub_dt,
                     )
             else:
-                state = self.implicit_heat_conduction_step(dt=sub_dt, y=y_in)
+                state = self.implicit_heat_conduction_step(
+                    dt=sub_dt, y=y_in, clip_out=clip
+                )
+            if clip is not None:
+                book_heat_clip(clip)
             raw = pack_state(state)
             if raw_stage_func is not None:
                 raw_stage_func(raw, "implicit_heat")
-            return floor_func(raw)
+            return heat_floor(raw)
 
         def explicit(y_in, sub_dt):
             # The explicit operator spans the WHOLE step under both splittings
@@ -5742,6 +5876,7 @@ class LAPDSim1D:
                 floor_func=floor_func,
                 time=self._time,
                 raw_stage_func=raw_stage_func,
+                weighted_floor_func=weighted_floor_func,
             )
 
         # The source times below matter only where the substep carries a
@@ -8302,16 +8437,16 @@ class LAPDSim1D:
 
     def implicit_heat_conduction_step(
         self, dt, y=None, state=None, ee_source=None, ee_sink_rate=None,
-        ledger_out=None,
+        ledger_out=None, clip_out=None,
     ):
         """Return state after one frozen-conductivity implicit heat substep.
 
         ``ee_source`` (default ``None``, the historical path) is an electron-
         energy source density held constant over the substep and solved with
         the conduction operator; ``ee_sink_rate`` is the matching per-cell
-        first-order electron-energy loss rate, and ``ledger_out`` collects the
-        substep's realised per-cell increments. See the module function of the
-        same name.
+        first-order electron-energy loss rate, ``ledger_out`` collects the
+        substep's realised per-cell increments and ``clip_out`` the energy its
+        temperature clip added. See the module function of the same name.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
@@ -8320,6 +8455,7 @@ class LAPDSim1D:
             ee_source=ee_source,
             ee_sink_rate=ee_sink_rate,
             ledger_out=ledger_out,
+            clip_out=clip_out,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             mu=self._mu,
@@ -8439,8 +8575,7 @@ class LAPDSim1D:
         # circuit. Both are read off the LAST ACCEPTED step, which is the
         # only circuit state a phase decision may consult:
         #
-        #   I_prev <= 1 A          -- the current has decayed to ~0.03% of
-        #                             peak, carrying negligible stored energy.
+        #   I_prev <= 1 A          -- the current has decayed to 1 A or below.
         #   V_dis_step <= 0        -- the device voltage the loop integrated
         #                             has turned non-positive, i.e. the load
         #                             would have to DRIVE the loop to keep the
@@ -8460,6 +8595,12 @@ class LAPDSim1D:
         # nor the freewheel diode's forward drop, each of which is larger and
         # of the opposite sign, so it is an artifact of what the loop model
         # omits rather than a prediction.
+        #
+        # Neither condition bounds the current at the hand-off: the tail can
+        # end on the second while the loop still carries well over 1 A. The
+        # inductor energy 0.5*L*I^2 that the hand-off drops is recorded in
+        # the circuit diagnostics (circuit_handoff_I_A,
+        # circuit_handoff_dropped_inductor_J), not booked.
         inductive_tail = (
             configured
             and floating
@@ -10181,10 +10322,19 @@ class LAPDSim1D:
             "circuit_V_dis_dt_integral": float(
                 self._circuit_V_dis_time_integral
             ),
+            # The open-circuit hand-off's dropped inductor energy, as of this
+            # save: the loop current on entry to the most recent hand-off
+            # that dropped one [A] (0.0 while none has) and the cumulative
+            # 0.5*L*I^2 dropped [J], which no plasma or electrode row books.
+            "circuit_handoff_I_A": float(self._circuit_handoff_I_A),
+            "circuit_handoff_dropped_inductor_J": float(
+                self._circuit_handoff_dropped_J
+            ),
             # Cumulative surface energy ledger [J]. The heater/ion/rad/emis/
-            # cond rows are booked by the power-balance warming update; the
-            # presence-gated backscatter row is booked on every accepted step
-            # the DVM cathode jet counted on. See _cathode_energy_ledger_J.
+            # cond/clamp rows are booked by the power-balance warming update;
+            # the presence-gated backscatter row is booked on every accepted
+            # step the DVM cathode jet counted on. See
+            # _cathode_energy_ledger_J.
             **{
                 f"warming_E_{k}_J": float(v)
                 for k, v in self._cathode_energy_ledger_J.items()
@@ -11931,13 +12081,14 @@ class LAPDSim1D:
 
         DISCLOSED CONVENTION, cathode jet armed. Only the ``R_E`` energy the
         BACKSCATTER carries is debited from the surface. The ``1 - R_N``
-        implanted share desorbs at the surface temperature and its
-        ``(3/2) k T_s`` per atom is NOT taken off the cathode's balance --
-        the same convention the fluid channel ships, and at the production
-        recycle rate it is tens of watts against a kilowatt-class
-        ``P_cathode_i``. It is a convention, not a measurement: the surface
-        energy ledger's ``backscatter`` row is what the surface actually gave
-        up, and this share is deliberately outside it.
+        implanted share is re-emitted on the cosine-wall spectrum at the
+        surface temperature, which carries ``2 k T_s`` of kinetic energy per
+        atom in the continuum limit (the spectrum's discrete mean on the
+        velocity grid differs from it at the grid's resolution), and that
+        energy is NOT taken off the cathode's balance -- the same convention
+        the fluid channel ships. It is a convention, not a measurement: the
+        surface energy ledger's ``backscatter`` row is what the surface
+        actually gave up, and this share is deliberately outside it.
         """
         state = self.state
         derived = self.derived

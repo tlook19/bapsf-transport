@@ -203,6 +203,10 @@ def install_probes(recorder):
         # already >= floor and the -inf call computes an identical right-hand
         # side. **kwargs forwards theta (and anything added later) untouched.
         recorder.bump_calls("conduction")
+        # The clip ledger is filled here, against the clip this probe applies,
+        # rather than by the -inf call below, which clips nothing.
+        clip_out = kwargs.pop("clip_out", None)
+        clip_key = kwargs.pop("clip_key", None)
         unclipped = orig_species(
             energy=energy,
             capacity=capacity,
@@ -237,7 +241,12 @@ def install_probes(recorder):
         # library's own capacity * np.maximum(T, floor) -- while dividing out
         # capacity and multiplying it back would round twice and inject ULP
         # perturbations into every conduction substep of an instrumented run.
-        return np.maximum(unclipped, capacity * temperature_floor)
+        result = np.maximum(unclipped, capacity * temperature_floor)
+        if clip_out is not None:
+            clip_out[clip_key] = np.where(
+                result > unclipped, result - unclipped, 0.0
+            )
+        return result
 
     state_mod.apply_state_floors = probed_apply_state_floors
     conduction_mod._implicit_species_energy = probed_implicit_species_energy

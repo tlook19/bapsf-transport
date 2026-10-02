@@ -236,6 +236,10 @@ _CASE_ORDER = (
     "anode-pinned-share-tolerance-decades",
     "phase-boundary-one-ulp-above-step",
     "handoff-surface-emission-solver-site",
+    "floor-ledger-stage-weights",
+    "heat-clip-booked-in-floor-ledger",
+    "cathode-surface-book-closes",
+    "circuit-handoff-dropped-inductor-energy",
 )
 
 

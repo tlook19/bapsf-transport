@@ -654,8 +654,19 @@ the optional fields, the neutral energy floor taken last against the
 already-floored $n_n$. Momenta are not clipped — $u$ is recovered with the
 floored density and $M$ rebuilt from it, which leaves $M$ unchanged to roundoff
 and bit-identical on every state probed, though $(m n)(M/(m n))$ carries no IEEE
-guarantee of exactness. Each accepted repair books its exact extensive debit in
-`floor_ledger`; `scripts/gates/audit_sim1d_floor_activation.py` instruments the
+guarantee of exactness. `floor_ledger` holds the plasma and neutral particles
+and the electron, ion and neutral energy the ACCEPTED state received from the
+floors and clips, at the weight with which each addition enters that state.
+Under SSPRK2 the first stage's floored vector enters the second stage's
+combination at half weight, so its additions are booked at $\tfrac12$; the
+second stage's floor acts on the result and is booked at 1. Every other floor
+call is booked at 1: the floors after each implicit heat substep (under Lie
+and under both Strang halves) and the floor after the neutral-only step, each
+of whose results is the next operator's input or the step's result. The
+implicit heat substep's own temperature clip acts before any of those floors
+sees its result and is booked separately, from its pre-clip value, as
+`Ee_heat_clip_energy_added_erg` and `Ei_heat_clip_energy_added_erg`. A
+rejected attempt books nothing. `scripts/gates/audit_sim1d_floor_activation.py` instruments the
 clip sites at run time, which cannot be done post-hoc. Between about 22 and
 24 ms of the discharge cycle, depending on the drive, the far column reaches
 the 0.1 eV electron-temperature floor, and it reaches it smoothly. Because of
@@ -689,6 +700,19 @@ as the root attributes `cathode_clamped_solves`, `cathode_total_solves` and
 `cathode_clamp_first_t_s`; the windowed share is read per save from
 `source_regime`.
 
+**The surface temperature update** (MODEL.md, the emitting surface) is
+semi-implicit in the linearised loss, once per accepted step:
+$\Delta T_s=\Delta t\,P_\text{net}/(C_\text{th}+\Delta t\,G)$, $P_\text{net}$
+the right-hand side at the step's old $T_s$ and
+$G=G_\text{rad}+G_\text{emis}+G_\text{cond}$ the three loss rows' own
+linearisation coefficients, followed by a floor at the 300 K environment. The
+surface ledger books the heater and ion rows as $\Delta t\,P$, each loss row at
+its linearised end-of-step value $\Delta t\,(P_k+G_k\Delta T_s)$, the
+backscatter row from the same counted energy $P_\text{back}$ is formed from,
+and a `clamp` row with the energy the 300 K floor adds when it fires, so
+$C_\text{th}$ times the change in $T_s$ equals the signed sum of the rows to
+round-off over the steps the update runs.
+
 The loop current is advanced by an L-stable TR-BDF2 stage split over
 $LdI/dt=V_\text{src}-IxR_\text{comp}-V_\text{dis}(I)$ — the external share
 of the compliance resistance only, the rest being inside $V_\text{dis}$ — with
@@ -713,7 +737,13 @@ the previous accepted step's loop current has fallen to $1$ A or below, or that
 step's step-integrated $V_\text{dis}$ is non-positive. Both readings are of the
 last ACCEPTED step, so the phase a step runs under is fixed before the step is
 attempted and no rejected attempt can move it; the loop current is set to
-exactly zero at the hand-off. An open circuit is solved as the CURRENT-DRIVEN
+exactly zero at the hand-off. The tail can end on the voltage criterion at a
+loop current well above 1 A, and the inductor's stored energy
+$\tfrac12LI^2$ at the hand-off leaves the model there, booked by no plasma or
+electrode row. It is recorded instead: the cathode diagnostics carry
+`circuit_handoff_I_A`, the loop current on entry to the most recent hand-off
+that dropped one, and `circuit_handoff_dropped_inductor_J`, the run's
+cumulative dropped energy. An open circuit is solved as the CURRENT-DRIVEN
 form at $I_\text{tot}=0$ — the same monotone root at the same tolerances,
 returning the same electrode power split — so no discretization changes across
 the hand-off and the electrode terms are the same formulas evaluated at zero

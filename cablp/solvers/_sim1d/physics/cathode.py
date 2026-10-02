@@ -2098,15 +2098,13 @@ def cathode_source_terms(
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     dN_loss = zeros.copy()
     # An absorbing cathode face already drains the plasma at the Bohm flux, the
-    # same criterion the circuit's I_i is built from (A_c*e*n*c_s*exp(-0.5) on
-    # this cell's n and Te), so applying this volumetric loss as well would
-    # remove the same population twice. The two books are NOT equal, however:
-    # the face removes particles through the face area with the face kernel,
-    # while I_i is that analytic expression on the emitting area, and the
-    # face's delivered current is the larger, by a factor of order 1.6 at the
-    # reference operating points -- a disclosed, unreconciled split (MODEL.md,
-    # "Two books for the cathode ion current"). The electron power loss below
-    # is a separate channel and still applies.
+    # same expression the circuit's I_i is built from (A*e*n*c_s*alpha_se on
+    # the same sheath-edge factor, sound speed and area, the emitting disc
+    # being the face), so applying this volumetric loss as well would remove
+    # the same population twice. The two numbers differ only by sampling: the
+    # face reads the live cell's raw state, the circuit the smoothed electrode
+    # sample (MODEL.md, "ONE book for the cathode ion current"). The electron
+    # power loss below is a separate channel and still applies.
     face_absorbs = bool(
         np.any(np.asarray(getattr(geometry, "plasma_absorbing", ()), dtype=bool))
     )
