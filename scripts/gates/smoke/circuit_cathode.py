@@ -36,6 +36,7 @@ from cablp.solvers._sim1d.core.state import (
     pack_state,
 )
 from cablp.solvers._sim1d.physics.cathode import (
+    cathode_circuit_alpha_sheath,
     cathode_emission_sheath_power_W,
     cathode_sample_indices,
 )
@@ -1982,15 +1983,10 @@ def _case_electrode_sample_smoothing(m3_params):
     # (n, Te) at the presheath transit time, accepted-steps only; the solve
     # reads the smoothed state.
     resolved_cathode_flags = _resolved_cathode_flags()
-    # The I_i-vs-n proportionality asserted below at rtol=1e-9 holds only in
-    # the near-vacuum limit: compute_l_b harmonically combines the beam's
-    # electron-ion MFP (l_bi ~ 1/n_e) with its electron-NEUTRAL MFP
-    # (l_bn = 1/(sigma_b*n_n)). While n_n is negligible l_b is a pure 1/n_e
-    # power law and the self-consistent phi_c leaves I_i exactly linear in n;
-    # at the realistic direct-run nn0 (2e13) the neutral leg is comparable, so
-    # I_i departs from exact linearity (measured ratio 3.00077 instead of 3).
-    # That coupling is physical -- pin the low fill this identity is stated in
-    # rather than loosening the tolerance.
+    # I_i is not exactly linear in the sampled n: the collisional presheath
+    # factor alpha_eff reads the sample's Ti through the ion-neutral
+    # collision frequency, so it moves with n when Ei is held. The tripling
+    # check below divides alpha_eff out.
     ss_sim = LAPDSim1D(
         dict(m3_params, nn0=1.0e9),
         resolved_cathode_flags,
@@ -2022,29 +2018,50 @@ def _case_electrode_sample_smoothing(m3_params):
         atol=0.0,
     )
     # The solve consumes the smoothed sample: with the EMA pinned at the
-    # unperturbed density, doubling the instantaneous cathode-cell density
-    # must NOT move the solve, and forcing the EMA must move it.
+    # unperturbed density, a state whose instantaneous cathode-cell density
+    # is far off the EMA, handed to the solve as the state it reads, must NOT
+    # move the solve, and forcing the EMA must move it.
     ss_sim._circuit_I_loop = 800.0
     ss_sim._sample_ema[ss_cath][0] = ss_n_old  # pin the EMA
     ss_res_b = ss_sim.solve_cathode_boundary(update_cache=False)
-    ss_sim._state.n[ss_cath] = ss_n_new * 4.0  # instantaneous state ignored
-    ss_res_b2 = ss_sim.solve_cathode_boundary(update_cache=False)
+    ss_state_far = ss_sim.state
+    ss_state_far.n[ss_cath] = ss_n_new * 4.0  # instantaneous state ignored
+    assert not ss_state_far.n[ss_cath] == ss_sim.state.n[ss_cath]
+    ss_res_b2 = ss_sim.solve_cathode_boundary(
+        state=ss_state_far, update_cache=False
+    )
     assert np.isclose(
         ss_res_b2.beam_result.result.I_i,
         ss_res_b.beam_result.result.I_i,
-        rtol=1e-12,
-        atol=0.0,
+        **_TOL_ROUNDOFF,
     )
+
+    def _ss_alpha_eff():
+        # The cathode presheath factor n_se/n at the sample the solve reads.
+        smoothed = ss_sim._smoothed_sample_state(ss_sim.state)
+        return cathode_circuit_alpha_sheath(
+            smoothed,
+            derive_state(smoothed, ss_sim.floors, ss_sim.ion_mass_g),
+            ss_sim.geometry,
+            ss_cath,
+            ss_sim.ion_mass_g,
+            ss_sim._input_dict,
+        )
+
+    ss_alpha_b = _ss_alpha_eff()
     ss_sim._sample_ema[ss_cath][0] = ss_n_old * 3.0  # the EMA moves the solve
     ss_res_c = ss_sim.solve_cathode_boundary(update_cache=False)
+    ss_alpha_c = _ss_alpha_eff()
+    # I_i = A_c e n c_s(Te) alpha_eff. Tripling the sampled n leaves Te (the
+    # EMA's) unchanged but divides the sample's Ti = Ei/(1.5 n) by three,
+    # since the smoothed sample keeps Ei; that moves the collisional
+    # presheath factor alpha_eff. Divided out, the remaining factors are
+    # linear in n.
+    assert not ss_alpha_c == ss_alpha_b
     assert np.isclose(
-        ss_res_c.beam_result.result.I_i,
-        3.0 * ss_res_b.beam_result.result.I_i,
-        rtol=1e-9,
-        # Unadjudicated: numpy's default atol, kept. The ratio holds to
-        # about 1.4e-8 relative here, not 1e-9; at I_i ~ 0.11 A the
-        # comparison passes on this atol, not on the rtol beside it.
-        atol=1e-8,
+        ss_res_c.beam_result.result.I_i / ss_alpha_c,
+        3.0 * ss_res_b.beam_result.result.I_i / ss_alpha_b,
+        **_TOL_ROUNDOFF,
     )
 
     # R1a: one authoritative active-plasma topology. Every closed face has at
