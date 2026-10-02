@@ -3355,6 +3355,12 @@ def _case_ionization_birth_neutral_temperature():
         ):
             _nb_term = _nb_terms[_nb_term_name]
             _nb_S = np.asarray(_nb_term.n, dtype=float)
+            _nb_puff = _nb_term_name == "gas_puff_local_ionization"
+            if _nb_puff:
+                # The puff-local channel is a permanent zero row: no births
+                # and no neutral-energy sink in either field read below.
+                assert np.all(_nb_S == 0.0), _nb_birth
+                assert np.all(np.asarray(_nb_term.En) == 0.0), _nb_birth
             _nb_en_W = np.asarray(_nb_term.En, dtype=float) * _nb_V_En * 1.0e-7
             _nb_ei_W = 1.5 * ev_to_erg * _nb_Ti_birth * _nb_S * _nb_Vp * 1.0e-7
             _nb_scale = np.abs(_nb_en_W) + np.abs(_nb_ei_W)
@@ -3366,10 +3372,9 @@ def _case_ionization_birth_neutral_temperature():
                 <= 1.0e-12 * _nb_scale
             ), (_nb_birth, _nb_term_name)
             _nb_hot = (_nb_Tn > _nb_sim.floors["Ti"]) & (_nb_S > 0.0)
-            if _nb_term_name in ("ionization_birth", "beam_ionization_birth"):
+            if not _nb_puff:
                 # The bulk and beam channels are exercised: they have births
-                # in gas hotter than the ion floor. (The puff-local channel
-                # is a permanent zero row, so its mask is always empty.)
+                # in gas hotter than the ion floor.
                 assert _nb_hot.any(), (_nb_birth, _nb_term_name)
             if _nb_birth == "neutral":
                 # (b) THE PAIR CLOSES. Booked at the neutral temperature the
@@ -3381,9 +3386,10 @@ def _case_ionization_birth_neutral_temperature():
                 assert np.all(
                     np.abs(_nb_rows[_nb_field]) * _nb_Vp <= 1.0e-12 * _nb_scale
                 ), _nb_term_name
-            else:
+            elif not _nb_puff:
                 # (c) ...and at the floor it is POSITIVE wherever the gas is
-                # hotter than the ion floor: energy leaving the model.
+                # hotter than the ion floor: energy leaving the model. (The
+                # puff-local row has no births, so nothing to check there.)
                 assert np.all(_nb_rows[_nb_field][_nb_hot] > 0.0), _nb_term_name
 
     # The two selectors are not the same run: "floor" really does delete power
