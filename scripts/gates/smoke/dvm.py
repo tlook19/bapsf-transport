@@ -1157,3 +1157,77 @@ def _case_dvm_mirror_no_lagged_buffer():
         assert "no end wall to recycle from" in str(exc), str(exc)
     else:
         raise AssertionError("an end_wall_face count ACCEPTED at a mirror")
+
+
+# --------------------------------------------------------------------
+# receipt-kinetic-particles-verdict
+# --------------------------------------------------------------------
+@_case("receipt-kinetic-particles-verdict", historical_stance=True)
+def _case_receipt_kinetic_particles_verdict(kd_flags, kd_params):
+    # A kinetic-neutral result carries a particle conservation receipt the
+    # independent checker (scripts/gates/ledger_check.py) closes against the
+    # saved plasma state and the engine's own inventory: the plasma's
+    # ionization, recombination, boundary recycle and anode return booked
+    # through clearing accounts whose other side is the engine's tick, with
+    # what the engine has not yet settled carried as each clearing account's
+    # state. A short solve on the dvm-particle-ledger-export geometry, from
+    # the fluid fill through engagement and several neutral ticks.
+    import ledger_check
+    from cablp.solvers._sim1d.results.io import save_result_hdf5
+
+    rk_params = dict(kd_params)
+    rk_params.update(
+        {
+            "Lm": 2000.0,
+            "plenum_length_cm": 100.0,
+            "end_wall_length_cm": 100.0,
+            "gas_puff_z_cm": 60.0,
+            "Rp": 15.0,
+            "R_cath": 15.0,
+            "Rcs": 40.0,
+            "Lcs": 25.0,
+            "Rsup": 0.0,
+            "cathode_anode_gap_cm": 50.0,
+            "source_region_length_cm": 100.0,
+            "source_region_dz_cm": 10.0,
+            "dt_save": 5.0e-9,
+        }
+    )
+    rk_sim = LAPDSim1D(rk_params, dict(kd_flags))
+    rk_result = rk_sim.run(t_end=4.0e-8, dt=1.0e-9)
+    assert rk_sim._dvm_engaged and rk_sim._dvm_tick_count > 0
+    with tempfile.TemporaryDirectory(prefix="receipt_kinetic_") as rk_tmp:
+        rk_path = str(Path(rk_tmp) / "kinetic.h5")
+        save_result_hdf5(rk_path, rk_result)
+        rk_lines = []
+        rk_code, rk_rep = ledger_check.run(
+            rk_path, ["particles"], out=rk_lines.append
+        )
+    rk_report = "\n".join(rk_lines)
+    # Every account closes but exchange:recombination, which fails in every
+    # interval on shipped code: a FINDING about the solver, not about the
+    # receipt. The counted recombination channel the engine births from is
+    # read off the recombination term's neutral row BEFORE the plasma-topology
+    # mask, while the plasma's n row is masked, so recombination at a
+    # plasma-inactive cell (the plenum, at the density floor) is born as gas
+    # that the plasma never lost. This case pins that verdict so the suite
+    # stays green and the finding stays visible; it flips when the source
+    # channel and the plasma row agree on which cells recombine.
+    assert rk_code == 1, rk_report
+    assert [(f[0], f[1]) for f in rk_rep.failures] == [
+        ("exchange", "particles/exchange:recombination")
+    ], rk_report
+    assert sorted(rk_rep.closed) == sorted(
+        [
+            "particles/plasma_particles",
+            "particles/neutral_particles",
+            "particles/exchange:anode_return",
+            "particles/exchange:cathode_face_recycle",
+            "particles/exchange:end_wall_recycle",
+            "particles/exchange:ionization",
+        ]
+    ), rk_report
+    assert rk_rep.not_tracked == [], rk_report
+    assert int(np.sum(rk_result.receipt["interval_steps"])) == (
+        rk_result.steps
+    )

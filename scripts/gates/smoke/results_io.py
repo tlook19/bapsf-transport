@@ -64,6 +64,7 @@ from ._harness import (
     _base_config,
     _base_sim,
     _case,
+    _pin_operator_algebra_stance,
 )
 
 
@@ -2473,3 +2474,68 @@ def _case_result_bitdiff_compare_synthetic():
                 capture_output=True, text=True,
             )
             assert proc.returncode == want, (name, proc.stdout, proc.stderr)
+
+
+# --------------------------------------------------------------------
+# receipt-fluid-particles-closes
+# --------------------------------------------------------------------
+@_case("receipt-fluid-particles-closes", historical_stance=True)
+def _case_receipt_fluid_particles_closes():
+    # A fluid-neutral result carries a particle conservation receipt that the
+    # independent checker (scripts/gates/ledger_check.py, which imports
+    # nothing from the solver) closes against the saved state. Two short
+    # solves on the operator-algebra stance, each written to a file and
+    # checked: one with the plasma integrated and the cathode on under the
+    # operator split (the explicit stages, the floors, puff, pumps,
+    # ionization, recombination, the boundary recycle and the anode return),
+    # and one with the plasma off, which runs the backward-Euler neutral-only
+    # step instead. The expected verdict and account lists are the model's
+    # accounts, not values read off this code: every account the route
+    # inventories closes and none is declared not tracked.
+    import ledger_check
+    from cablp.solvers._sim1d.results.io import save_result_hdf5
+
+    rc_params, rc_flags = _pin_operator_algebra_stance(*default_config())
+    rc_routes = {
+        "plasma, cathode, operator split": (
+            dict(rc_flags, cathode_coupling=True, implicit_heat_conduction=True),
+            2.0e-5,
+            [
+                "particles/plasma_particles",
+                "particles/neutral_particles",
+                "particles/exchange:anode_return",
+                "particles/exchange:cathode_face_recycle",
+                "particles/exchange:end_wall_recycle",
+                "particles/exchange:ionization",
+                "particles/exchange:recombination",
+            ],
+        ),
+        "plasma off, neutral-only step": (
+            dict(rc_flags, Plasma=False),
+            5.0e-5,
+            ["particles/plasma_particles", "particles/neutral_particles"],
+        ),
+    }
+    with tempfile.TemporaryDirectory(prefix="receipt_fluid_") as rc_tmp:
+        for rc_route, (rc_route_flags, rc_t_end, rc_closed) in rc_routes.items():
+            rc_sim = LAPDSim1D(
+                dict(rc_params, initial_neutral_state="fill"), rc_route_flags
+            )
+            rc_result = rc_sim.run(t_end=rc_t_end)
+            rc_path = os.path.join(rc_tmp, "fluid.h5")
+            save_result_hdf5(rc_path, rc_result)
+            rc_lines = []
+            rc_code, rc_rep = ledger_check.run(
+                rc_path, ["particles"], out=rc_lines.append
+            )
+            rc_report = "\n".join(rc_lines)
+            assert rc_code == 0, (rc_route, rc_report)
+            assert rc_rep.failures == [], (rc_route, rc_report)
+            assert sorted(rc_rep.closed) == sorted(rc_closed), (
+                rc_route, rc_report
+            )
+            assert rc_rep.not_tracked == [], (rc_route, rc_report)
+            # The intervals tile the saved trajectory and carry every step.
+            assert int(np.sum(rc_result.receipt["interval_steps"])) == (
+                rc_result.steps
+            ), rc_route
