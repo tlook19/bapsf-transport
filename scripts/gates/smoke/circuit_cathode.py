@@ -36,6 +36,7 @@ from cablp.solvers._sim1d.core.state import (
     pack_state,
 )
 from cablp.solvers._sim1d.physics.cathode import (
+    cathode_circuit_alpha_sheath,
     cathode_emission_sheath_power_W,
     cathode_sample_indices,
 )
@@ -59,7 +60,6 @@ from ._harness import (
     _CAPFIX_ESCAPE_KWARGS,
     _CAPFIX_ESCAPE_PLASMA,
     _TOL_ROUNDOFF,
-    _TOL_UNADJUDICATED,
     _anode_sink_config,
     _anode_sink_sim,
     _base_config,
@@ -571,9 +571,18 @@ def _case_cathode_boundary_beam_terms(cathode_face):
     assert np.all(
         np.isfinite(pack_state(afterglow_cathode_loss_terms.anode_rhs))
     )
-    assert not np.allclose(
-        pack_state(afterglow_cathode_loss_terms.rhs), 0.0, **_TOL_UNADJUDICATED
+    # Floor: at I_tot = 0 the cathode collects electrons I_i + I_eth* >= I_i,
+    # each debiting 2 Te from the cell, so |Ee row| >= 2 Te I_i / V_cell.
+    _ag_result = floating_cathode_solve.beam_result.result
+    _ag_Te_eV = float(cathode_sim.derived.Te[cathode_face])
+    _ag_floor_erg_cm3_s = (
+        2.0 * _ag_Te_eV * _ag_result.I_i * 1.0e7
+        / float(cathode_sim.geometry.plasma_volume_cm3[cathode_face])
     )
+    assert _ag_floor_erg_cm3_s > 0.0
+    assert (
+        afterglow_cathode_loss_terms.rhs.Ee[cathode_face] < -_ag_floor_erg_cm3_s
+    ), (afterglow_cathode_loss_terms.rhs.Ee[cathode_face], _ag_floor_erg_cm3_s)
     # Same row structure as the driven phase: disjoint Ee supports, and the
     # anode row carries Ee alone.
     _ag_cath_Ee = np.asarray(afterglow_cathode_loss_terms.rhs.Ee, dtype=float)
@@ -1207,9 +1216,10 @@ def _case_circuit_current_driven_integration():
     m3_sim._circuit_I_loop = 800.0
     m3_solve = m3_sim.solve_cathode_boundary(update_cache=False)
     assert m3_solve.metadata["cathode_solver_model"] == "current_driven"
-    assert np.isclose(
-        m3_solve.beam_result.result.I_tot, 800.0, rtol=1e-6, atol=0.0
-    ) or m3_solve.beam_result.result.regime == "capability_limited"
+    # 800 A is past what this unit cathode can carry: the solve returns the
+    # ceiling solution, tagged as such, at a current below the demand.
+    assert m3_solve.beam_result.result.regime == "capability_limited"
+    assert m3_solve.beam_result.result.I_tot < 800.0
     assert m3_solve.beam_result.result_twin is None
     m3_float = m3_sim.solve_cathode_boundary(floating=True, update_cache=False)
     # The open-circuit phase is the current-driven solve at I_tot = 0, so the
@@ -1376,7 +1386,11 @@ def _case_cathode_power_balance_under_current_drive(
             raise AssertionError(f"expected ValueError for {sf_bad}")
     # ads_des is the subject here; run it on the simple cathode/fluid stance
     # (the theta reproduction spies the exact evaluator call sequence) with the
-    # M3 circuit specifics.
+    # M3 circuit specifics. The cleaning cross section depletes theta by
+    # 4.7e-6 over the three steps (measured), six decades above the roundoff
+    # tolerance the hand reproduction is compared at; 1e-16 cm^2 gave 4.7e-12,
+    # below any tolerance a comparison of theta near 1 can resolve.
+    sf_sigma_cm2 = 1.0e-10
     sf_cu_params, sf_cu_flags = _cathode_unit_config()
     sf_params = dict(
         sf_cu_params,
@@ -1386,7 +1400,7 @@ def _case_cathode_power_balance_under_current_drive(
         cathode_solver_model="current_driven",
         dt_save=0.0,
         cathode_phiwf_clean_eV=2.75,
-        cathode_cleaning_sigma_cm2=1.0e-16,
+        cathode_cleaning_sigma_cm2=sf_sigma_cm2,
     )
     sf_flags = dict(
         sf_cu_flags, cathode_coupling=True,
@@ -1406,8 +1420,7 @@ def _case_cathode_power_balance_under_current_drive(
 
     # This coverage test spies the exact evaluator I_i CALL SEQUENCE and replays
     # the backward-Euler update once per call, so the exact match couples to the
-    # solver's internal call count; run it on the simple stance (sf_flags) and
-    # assert the backward-Euler FORM to 1e-11 rather than 1e-15.
+    # solver's internal call count; run it on the simple stance (sf_flags).
     _solver_mod.idriven_result_evaluator = _sf_spy
     try:
         sf_sim = LAPDSim1D(sf_params, sf_flags)
@@ -1424,17 +1437,21 @@ def _case_cathode_power_balance_under_current_drive(
     )
     assert np.all(np.isfinite(sf_theta)) and np.all(sf_theta <= 1.0)
     assert np.all(np.diff(sf_theta) <= 0.0)  # ion-stimulated cleaning only
-    # Reproduce the backward-Euler update exactly from the spy's honest
-    # I_i sequence (run() starts I_loop at 0, so the accepted honest
-    # solves carry the near-floating I_i -- the form is what's tested).
+    # The fluence limit (E_th = None, factor 1): reproduce the backward-Euler
+    # trajectory by hand from the spy's honest I_i sequence (run() starts
+    # I_loop at 0, so the accepted honest solves carry the near-floating I_i
+    # -- the form is what's tested), theta /= 1 + dt sigma I_i/(e pi R^2).
+    assert sf_params["cathode_cleaning_E_th_eV"] is None
     sf_area = np.pi * float(sf_params["R_cath"]) ** 2
-    sf_th = 1.0
+    assert len(sf_calls) == 3, len(sf_calls)  # one per accepted step
+    sf_expected = [1.0]
     for sf_Ii in sf_calls:
         sf_G = max(sf_Ii, 0.0) / (1.602176634e-19 * sf_area)
-        sf_loss = 1.0e-16 * sf_G
-        sf_th = sf_th / (1.0 + 1.0e-10 * sf_loss)
-    assert np.isclose(sf_theta[-1], sf_th, rtol=0.0, atol=1e-11), (
-        sf_theta[-1], sf_th
+        sf_expected.append(
+            sf_expected[-1] / (1.0 + 1.0e-10 * sf_sigma_cm2 * sf_G)
+        )
+    assert np.allclose(sf_theta, sf_expected, **_TOL_ROUNDOFF), (
+        sf_theta, sf_expected
     )
     assert np.allclose(
         sf_phieff,
@@ -1465,8 +1482,8 @@ def _case_cathode_power_balance_under_current_drive(
     # M5a' energy-dependent yield: with cathode_cleaning_E_th_eV set, the
     # coverage update scales sigma by the Bohdansky near-threshold factor
     # at E = P_cathode_i/I_i. Below threshold nothing cleans (theta
-    # frozen); with E_th = None the M5a fluence limit is reproduced
-    # bit-for-bit (default-compat gate).
+    # frozen); above it the factor is reproduced by hand below. The
+    # fluence limit (E_th = None) is the sf run's hand reproduction above.
     sfE_params = dict(sf_params, cathode_cleaning_E_th_eV=1.0e6)
     sfE_sim = LAPDSim1D(sfE_params, sf_flags)
     sfE_sim._circuit_I_loop = 800.0
@@ -1475,13 +1492,56 @@ def _case_cathode_power_balance_under_current_drive(
         sfE_result.cathode_diagnostics["surface_theta"], float
     )
     assert np.all(sfE_theta == 1.0), sfE_theta  # far below threshold
-    sfN_params = dict(sf_params, cathode_cleaning_E_th_eV=None)
-    sfN_sim = LAPDSim1D(sfN_params, sf_flags)
-    sfN_sim._circuit_I_loop = 800.0
-    sfN_result = sfN_sim.run(t_end=3.0e-10, dt=1.0e-10)
-    assert np.array_equal(
-        np.asarray(sfN_result.cathode_diagnostics["surface_theta"], float),
-        sf_theta,
+    # A finite threshold below the ion energy (E ~ 1 keV on this ceiling-bound
+    # solve), with a cross section that depletes theta by ~1e-6 over the run,
+    # six decades above the roundoff tolerance it is compared at.
+    sfT_E_th_eV = 300.0
+    sfT_sigma_cm2 = sf_sigma_cm2
+    sfT_calls = []
+
+    def _sfT_spy(**kw):
+        f = _sf_orig(**kw)
+
+        def g(I):
+            res = f(I)
+            sfT_calls.append((float(res.I_i), float(res.P_cathode_i)))
+            return res
+
+        return g
+
+    _solver_mod.idriven_result_evaluator = _sfT_spy
+    try:
+        sfT_sim = LAPDSim1D(
+            dict(
+                sf_params,
+                cathode_cleaning_E_th_eV=sfT_E_th_eV,
+                cathode_cleaning_sigma_cm2=sfT_sigma_cm2,
+            ),
+            sf_flags,
+        )
+        sfT_sim._circuit_I_loop = 800.0
+        sfT_result = sfT_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    finally:
+        _solver_mod.idriven_result_evaluator = _sf_orig
+    sfT_theta = np.asarray(
+        sfT_result.cathode_diagnostics["surface_theta"], float
+    )
+    # Hand reproduction from the documented form: per accepted step,
+    # theta /= 1 + dt sigma f(E) Gamma_i with Gamma_i = I_i/(e pi R_cath^2)
+    # and f(E) = (1 - (E_th/E)^(2/3)) (1 - E_th/E)^2 at E = P_cathode_i/I_i.
+    assert len(sfT_calls) == 3, len(sfT_calls)  # one per accepted step
+    sfT_expected = [1.0]
+    for sfT_Ii, sfT_Pi in sfT_calls:
+        sfT_E = max(sfT_Pi, 0.0) / sfT_Ii
+        assert sfT_E > sfT_E_th_eV, (sfT_E, sfT_E_th_eV)
+        sfT_r = sfT_E_th_eV / sfT_E
+        sfT_f = (1.0 - sfT_r ** (2.0 / 3.0)) * (1.0 - sfT_r) ** 2
+        sfT_G = max(sfT_Ii, 0.0) / (1.602176634e-19 * sf_area)
+        sfT_expected.append(
+            sfT_expected[-1] / (1.0 + 1.0e-10 * sfT_sigma_cm2 * sfT_f * sfT_G)
+        )
+    assert np.allclose(sfT_theta, sfT_expected, **_TOL_ROUNDOFF), (
+        sfT_theta, sfT_expected
     )
 
     # Saved diagnostics are refreshed post-accept, so the recorded solve
@@ -1982,15 +2042,10 @@ def _case_electrode_sample_smoothing(m3_params):
     # (n, Te) at the presheath transit time, accepted-steps only; the solve
     # reads the smoothed state.
     resolved_cathode_flags = _resolved_cathode_flags()
-    # The I_i-vs-n proportionality asserted below at rtol=1e-9 holds only in
-    # the near-vacuum limit: compute_l_b harmonically combines the beam's
-    # electron-ion MFP (l_bi ~ 1/n_e) with its electron-NEUTRAL MFP
-    # (l_bn = 1/(sigma_b*n_n)). While n_n is negligible l_b is a pure 1/n_e
-    # power law and the self-consistent phi_c leaves I_i exactly linear in n;
-    # at the realistic direct-run nn0 (2e13) the neutral leg is comparable, so
-    # I_i departs from exact linearity (measured ratio 3.00077 instead of 3).
-    # That coupling is physical -- pin the low fill this identity is stated in
-    # rather than loosening the tolerance.
+    # I_i is not exactly linear in the sampled n: the collisional presheath
+    # factor alpha_eff reads the sample's Ti through the ion-neutral
+    # collision frequency, so it moves with n when Ei is held. The tripling
+    # check below divides alpha_eff out.
     ss_sim = LAPDSim1D(
         dict(m3_params, nn0=1.0e9),
         resolved_cathode_flags,
@@ -2022,29 +2077,50 @@ def _case_electrode_sample_smoothing(m3_params):
         atol=0.0,
     )
     # The solve consumes the smoothed sample: with the EMA pinned at the
-    # unperturbed density, doubling the instantaneous cathode-cell density
-    # must NOT move the solve, and forcing the EMA must move it.
+    # unperturbed density, a state whose instantaneous cathode-cell density
+    # is far off the EMA, handed to the solve as the state it reads, must NOT
+    # move the solve, and forcing the EMA must move it.
     ss_sim._circuit_I_loop = 800.0
     ss_sim._sample_ema[ss_cath][0] = ss_n_old  # pin the EMA
     ss_res_b = ss_sim.solve_cathode_boundary(update_cache=False)
-    ss_sim._state.n[ss_cath] = ss_n_new * 4.0  # instantaneous state ignored
-    ss_res_b2 = ss_sim.solve_cathode_boundary(update_cache=False)
+    ss_state_far = ss_sim.state
+    ss_state_far.n[ss_cath] = ss_n_new * 4.0  # instantaneous state ignored
+    assert not ss_state_far.n[ss_cath] == ss_sim.state.n[ss_cath]
+    ss_res_b2 = ss_sim.solve_cathode_boundary(
+        state=ss_state_far, update_cache=False
+    )
     assert np.isclose(
         ss_res_b2.beam_result.result.I_i,
         ss_res_b.beam_result.result.I_i,
-        rtol=1e-12,
-        atol=0.0,
+        **_TOL_ROUNDOFF,
     )
+
+    def _ss_alpha_eff():
+        # The cathode presheath factor n_se/n at the sample the solve reads.
+        smoothed = ss_sim._smoothed_sample_state(ss_sim.state)
+        return cathode_circuit_alpha_sheath(
+            smoothed,
+            derive_state(smoothed, ss_sim.floors, ss_sim.ion_mass_g),
+            ss_sim.geometry,
+            ss_cath,
+            ss_sim.ion_mass_g,
+            ss_sim._input_dict,
+        )
+
+    ss_alpha_b = _ss_alpha_eff()
     ss_sim._sample_ema[ss_cath][0] = ss_n_old * 3.0  # the EMA moves the solve
     ss_res_c = ss_sim.solve_cathode_boundary(update_cache=False)
+    ss_alpha_c = _ss_alpha_eff()
+    # I_i = A_c e n c_s(Te) alpha_eff. Tripling the sampled n leaves Te (the
+    # EMA's) unchanged but divides the sample's Ti = Ei/(1.5 n) by three,
+    # since the smoothed sample keeps Ei; that moves the collisional
+    # presheath factor alpha_eff. Divided out, the remaining factors are
+    # linear in n.
+    assert not ss_alpha_c == ss_alpha_b
     assert np.isclose(
-        ss_res_c.beam_result.result.I_i,
-        3.0 * ss_res_b.beam_result.result.I_i,
-        rtol=1e-9,
-        # Unadjudicated: numpy's default atol, kept. The ratio holds to
-        # about 1.4e-8 relative here, not 1e-9; at I_i ~ 0.11 A the
-        # comparison passes on this atol, not on the rtol beside it.
-        atol=1e-8,
+        ss_res_c.beam_result.result.I_i / ss_alpha_c,
+        3.0 * ss_res_b.beam_result.result.I_i / ss_alpha_b,
+        **_TOL_ROUNDOFF,
     )
 
     # R1a: one authoritative active-plasma topology. Every closed face has at

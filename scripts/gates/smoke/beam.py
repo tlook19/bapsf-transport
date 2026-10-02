@@ -41,7 +41,6 @@ from cablp.solvers._sim1d.physics.reactions import reaction_rates
 
 from ._harness import (
     _TOL_ROUNDOFF,
-    _TOL_UNADJUDICATED,
     _base_config,
     _base_sim,
     _case,
@@ -935,8 +934,9 @@ def _case_beam_plateau_multigroup(k7_local_dep, k7_local_diag, k7_params):
             )
 
     # (b) THE DERIVED SPECTRUM. The edge solve is a genuine root of a MONOTONE
-    # residual, the E^2-uniform edges are equal-power by construction, and the
-    # two shares partition the bank exactly.
+    # residual, and the E^2-uniform edges are equal-power by construction.
+    # (That the wave and streaming shares partition the bank is checked on
+    # the solver's own deposit in (c).)
     _mg_ne, _mg_Te, _mg_Eb = 4.6e12, 9.6, 177.0
     _mg_E1, _mg_clamp = _beam_deposition_mod.plateau_edge_energy_eV(
         _mg_Eb, 1.17e19, _mg_ne, _mg_Te
@@ -976,10 +976,6 @@ def _case_beam_plateau_multigroup(k7_local_dep, k7_local_diag, k7_params):
     assert _mg_edges[0] == _mg_E1 and _mg_edges[-1] == _mg_Eb
     assert np.allclose(_mg_w, 1.0 / _mg_N, rtol=0.0, atol=1e-14), _mg_w
     assert np.all(_mg_edges[:-1] < _mg_mids) and np.all(_mg_mids < _mg_edges[1:])
-    assert (
-        (_mg_Eb + _mg_E1) / (2.0 * _mg_Eb)
-        + (_mg_Eb - _mg_E1) / (2.0 * _mg_Eb)
-    ) == 1.0
 
     # (c) THE CLOSURE THROUGH THE SOLVER: it conserves, and it carries BOTH
     # heirs. The withheld bank is measured independently as the anomalous
@@ -1605,9 +1601,16 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
             )
             # ...and the kernel is not quietly the identity: it MOVED the
             # deposit, so the conservation above is a real statement.
-            assert not np.allclose(
-                on_row, off_row, **_TOL_UNADJUDICATED
-            ), (mesh_label, smooth_term)
+            # Scale: sigma = 50 cm against live cells of 7.8-33.5 cm keeps at
+            # most dz/(sqrt(2 pi) sigma) ~ 0.27 of a cell's deposit in place
+            # (x2 beside the reflecting face), so a peaked profile moves by
+            # a fraction of order 0.1-1 of its peak; 0.05 is the floor.
+            # Measured: smallest passing value 0.190 over all rows and both
+            # meshes (largest 0.344); 0 under an identity kernel.
+            smooth_moved = np.max(np.abs(on_row - off_row)) / np.max(
+                np.abs(off_row)
+            )
+            assert smooth_moved > 0.05, (mesh_label, smooth_term, smooth_moved)
     return locals()
 
 
@@ -1665,9 +1668,18 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
     smoothkey_W_a = _beam_smoothing_matrix(smoothkey_geom_a, smooth_sigma_cm)
     smoothkey_W_b = _beam_smoothing_matrix(smoothkey_geom_b, smooth_sigma_cm)
     assert smoothkey_W_a is not smoothkey_W_b
-    assert not np.allclose(
-        smoothkey_W_a, smoothkey_W_b, **_TOL_UNADJUDICATED
+    # Scale: some cell centre moves by more than one kernel width between the
+    # meshes, so a Gaussian weight in that column changes by a fraction of
+    # order one of the largest weight; 0.1 is the floor. Measured: a 247.7 cm
+    # shift against sigma = 50 cm, and a passing value of 0.564; 0 when the
+    # cache aliases the two meshes.
+    assert np.max(
+        np.abs(smoothkey_geom_a.z_cm - smoothkey_geom_b.z_cm)
+    ) > smooth_sigma_cm
+    smoothkey_moved = np.max(np.abs(smoothkey_W_a - smoothkey_W_b)) / np.max(
+        np.abs(smoothkey_W_a)
     )
+    assert smoothkey_moved > 0.1, smoothkey_moved
 
     # (b) The cache still caches: two DISTINCT geometry objects with identical
     # content share the single O(cells^2) build. Guards the performance
@@ -1693,8 +1705,13 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
         smoothkey_geom_roles, smooth_sigma_cm
     )
     assert smoothkey_W_roles is not smoothkey_W_a
-    assert not np.allclose(
-        smoothkey_W_roles, smoothkey_W_a, **_TOL_UNADJUDICATED
+    # The flipped cell was live in W_a and is dead in W_roles: the kernel
+    # puts no weight on a dead row, so its row of W_roles is identically
+    # zero while W_a holds its own diagonal weight there (measured 0.532).
+    assert not smoothkey_active[-2]  # flipped to dead
+    assert smoothkey_W_a[-2, -2] > 0.0, smoothkey_W_a[-2, -2]
+    assert np.all(smoothkey_W_roles[-2, :] == 0.0), (
+        np.max(np.abs(smoothkey_W_roles[-2, :]))
     )
 
 
@@ -3272,7 +3289,11 @@ def _case_beam_l_b_profile_at_fed_back_cross(
     # the attenuation cross section the solve FEEDS BACK -- the launch cell's
     # beam_atten_cross after the CSDA gap-transmission inversion overwrote
     # it -- not at the ionization cross section the beam assembly started
-    # from. Same function, same inputs, so the comparison is exact.
+    # from. This is a SAVE-PATH check: it establishes that the saved field
+    # is compute_l_b of the solve's own inputs (phi_c, the smoothed sample,
+    # the fed-back cross section), not that compute_l_b is right; the
+    # expectation calls the same function on inputs read from the same
+    # result, so the comparison is exact.
     from cablp.cathode.circuit_common import compute_l_b
     from cablp.solvers._sim1d.core.state import derive_state
 

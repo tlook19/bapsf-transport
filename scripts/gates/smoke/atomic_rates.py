@@ -22,7 +22,6 @@ from cablp.solvers._sim1d.physics.sources import (
 
 from ._harness import (
     _TOL_ROUNDOFF,
-    _TOL_UNADJUDICATED,
     _base_config,
     _base_sim,
     _case,
@@ -226,22 +225,26 @@ def _case_helium_only_reaction_rates(dt_default):
     )
 
     split_dt = min(1.0e-10, 0.1 * heat_dt.dt_heat_conduction)
-    manual_explicit_y = ssprk2_step(
-        y0=pack_state(heat_state, neutral_two_zone=True),
-        dt=split_dt,
-        rhs_func=lambda yy: sim.rhs(yy, include_heat_conduction=False),
-        floor_func=sim.floor_state_vector,
+    assert sim._operator_splitting() == "strang"
+
+    def _manual_heat(y_in, sub_dt):
+        heated = sim.implicit_heat_conduction_step(dt=sub_dt, y=y_in)
+        return sim.floor_state_vector(pack_state(heated, neutral_two_zone=True))
+
+    # Strang by hand: heat over dt/2, one SSPRK2 step over dt with its two
+    # stages at (t, t + dt), heat over dt/2.
+    manual_split_y = _manual_heat(
+        ssprk2_step(
+            y0=_manual_heat(pack_state(heat_state, neutral_two_zone=True), 0.5 * split_dt),
+            dt=split_dt,
+            rhs_func=lambda yy, tt: sim.rhs(yy, time=tt, include_heat_conduction=False),
+            floor_func=sim.floor_state_vector,
+            time=sim._time,
+        ),
+        0.5 * split_dt,
     )
-    manual_heat_state = sim.implicit_heat_conduction_step(
-        dt=split_dt,
-        y=manual_explicit_y,
-    )
-    manual_split_y = sim.floor_state_vector(pack_state(manual_heat_state, neutral_two_zone=True))
     split_y = sim.operator_split_step(y=pack_state(heat_state, neutral_two_zone=True), dt=split_dt)
-    # Unadjudicated: the stance splits Strang (B/2, A, B/2) while the manual
-    # composition above is Lie (A, B); they agree to about 1e-9 relative in
-    # Ee at this dt, which this tolerance admits.
-    assert np.allclose(split_y, manual_split_y, **_TOL_UNADJUDICATED)
+    assert np.allclose(split_y, manual_split_y, **_TOL_ROUNDOFF)
 
     no_heat_bound_dt = sim.suggest_timestep(
         y=pack_state(heat_state, neutral_two_zone=True),
