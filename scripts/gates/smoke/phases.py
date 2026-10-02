@@ -24,7 +24,6 @@ from cablp.solvers._sim1d.core.state import STATE_NAMES_1D
 
 from ._harness import (
     _TOL_ROUNDOFF,
-    _TOL_UNADJUDICATED,
     _base_config,
     _base_sim,
     _case,
