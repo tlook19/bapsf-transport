@@ -709,7 +709,11 @@ linearisation coefficients, followed by a floor at the 300 K environment. The
 surface ledger books the heater and ion rows as $\Delta t\,P$, each loss row at
 its linearised end-of-step value $\Delta t\,(P_k+G_k\Delta T_s)$, the
 backscatter row from the same counted energy $P_\text{back}$ is formed from,
-and a `clamp` row with the energy the 300 K floor adds when it fires, so
+the `thermal_reemit` row from the energy the kinetic neutral tick fired
+inside the same accept launched from the cathode face at $T_s$ (the
+$P_\text{reemit}$ of the update is that energy over $\Delta t$; it is zero on
+an accept with no tick and on the fluid neutral route; like the backscatter
+row it is booked on every accepted step and is not linearised), and a `clamp` row with the energy the 300 K floor adds when it fires, so
 $C_\text{th}$ times the change in $T_s$ equals the signed sum of the rows to
 round-off over the steps the update runs.
 

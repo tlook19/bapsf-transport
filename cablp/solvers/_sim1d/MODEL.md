@@ -816,7 +816,7 @@ enhancement is exactly eaten by space charge.
 
 **The surface is not a constant.** Its temperature obeys
 
-$$C_\text{th}\frac{dT_s}{dt}=P_\text{heater}+P_\text{ion}-P_\text{rad}-P_\text{emis}-P_\text{cond}-P_\text{back},$$
+$$C_\text{th}\frac{dT_s}{dt}=P_\text{heater}+P_\text{ion}-P_\text{rad}-P_\text{emis}-P_\text{cond}-P_\text{back}-P_\text{reemit},$$
 
 with $P_\text{heater}$ pinned by the standby equilibrium (at the base
 temperature the heater exactly balances radiation, so it is not free),
@@ -833,6 +833,12 @@ $P_\text{cond}=G(T_s-T_\text{base})$
 conduction into the heater-held substrate, and $P_\text{back}$ the energy the
 backscattered atoms of the cathode jet carry away, the $R_E$ share of the
 incident ion energy that the gas receives and the surface therefore loses.
+$P_\text{reemit}$ is the energy the recycled atoms NOT backscattered carry
+away: implanted and re-emitted thermally on the cosine-wall spectrum at
+$T_s$ (about $2k_BT_s$ per atom), it is the kinetic neutral model's own
+counted launch energy from the cathode face, so the surface loses exactly
+what that gas receives. The fluid neutral closure launches no counted
+spectrum and carries $P_\text{reemit}=0$.
 
 The work function is not a constant either: an adsorbate coverage
 $\theta\in[0,1]$ obeys
@@ -1331,7 +1337,10 @@ launch builder REFUSES a counted launch at or below zero energy rather than
 silently dropping it. The remaining $1-R_N$ keeps the thermal re-emission.
 Each surface's energy book carries the reflected energy as a named loss term
 formed from the same counted (particles, incident energy) pair the birth is
-formed from, so what the surface gives up is what the gas receives.
+formed from, so what the surface gives up is what the gas receives. At the
+cathode the thermal re-emission is debited too, as its own term
+$P_\text{reemit}$ of the surface balance above, from the energy the launched
+spectrum carried.
 
 A monoenergetic launch has to be represented on a discrete grid: the spectrum
 is placed at a temperature tied to the axial bin containing the launch speed,
@@ -1348,8 +1357,10 @@ a signed coordinate — and their thermal remainder is a volume rebirth, a wire 
 hysteresis latch on the ion current the accepted step's cathode solve booked,
 arming at `neutral_jet_arm_current_A` and disarming below
 `neutral_jet_disarm_current_A`, starting disarmed — and below the arming
-current nothing is launched AND the surface is not debited, so the surface is
-never charged for atoms that were never born. The anode jets are driven by the
+current no backscatter is launched AND the surface is not debited for it, so
+the surface is never charged for atoms that were never born; the whole
+recycle stream is then thermal re-emission, debited through
+$P_\text{reemit}$. The anode jets are driven by the
 anode-collected current and carry no such latch.
 
 At an annular baffle the blocked share of the annulus flux crossing the face is

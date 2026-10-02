@@ -2231,16 +2231,23 @@ class LAPDSim1D:
         # and cond are booked at their linearised end-of-step values, the
         # same linearisation the semi-implicit update uses, and ``clamp`` is
         # the energy the floor at CATHODE_ENV_T_K adds when it fires, so the
-        # signed sum (heater + ion - rad - emis - cond - backscatter + clamp)
-        # is C_th times the surface temperature change over the steps the
-        # warming update runs. The net is the shot's unreturned energy into
+        # signed sum (heater + ion - rad - emis - cond - backscatter
+        # - thermal_reemit + clamp) is C_th times the surface temperature
+        # change over the steps the warming update runs.
+        #
+        # ``thermal_reemit`` is the kinetic energy the kinetic neutral engine
+        # launched from the cathode face as thermal re-emission at T_s (the
+        # recycled ions not backscattered), read from the engine's own
+        # energy ledger on the accepted step whose neutral tick launched it.
+        # The fluid neutral route launches no counted spectrum, so there the
+        # row is booked nothing and stays exactly zero. The net is the shot's unreturned energy into
         # the emitting skin; cond is what the heater-held substrate
         # absorbed -- the quantity the open-loop-heater drift hypothesis
         # makes checkable against the ES1 trim cadence (a ~sub-kW net
         # imbalance corresponds to ±8 K per 20-30 min).
         self._cathode_energy_ledger_J = {
             "heater": 0.0, "ion": 0.0, "rad": 0.0, "emis": 0.0, "cond": 0.0,
-            "clamp": 0.0,
+            "clamp": 0.0, "thermal_reemit": 0.0,
         }
         if self._dvm_cathode_jet is not None:
             # The DVM cathode jet's own named loss row: the R_E share of the
@@ -4734,6 +4741,11 @@ class LAPDSim1D:
         # something below, which is what keeps the surface power balance
         # untouched with the channel off.
         step_backscatter_erg = 0.0
+        # What the kinetic neutral engine launched from the cathode face as
+        # thermal re-emission at T_s on THIS step [erg]: the energy ledger's
+        # birth_cathode_face row of the neutral tick that fires inside this
+        # accept, zero on a step with no tick and on the fluid neutral route.
+        step_thermal_reemit_erg = 0.0
         # B4: what the anode's collected ions delivered to the wires this
         # step [erg]. Zero unless the DVM anode jet booked something below,
         # which is what keeps the anode book absent-and-empty off the channel.
@@ -4873,6 +4885,12 @@ class LAPDSim1D:
                 self._dvm_engage()
             elif self._time >= self._dvm_next_s:
                 self._dvm_advance(self._time - self._dvm_last_s)
+                # The tick's own counted launch, read from the ledger the
+                # engine just returned: the surface gives up exactly the
+                # energy the gas received on that spectrum.
+                step_thermal_reemit_erg = float(
+                    self._dvm.last_ledger["energy"]["birth_cathode_face"]
+                )
         # Retain the accepted solve current for the measured-tail phase gate.
         solve = self._cathode_solve
         if solve is not None and solve.beam_result is not None:
@@ -4996,6 +5014,13 @@ class LAPDSim1D:
             self._cathode_energy_ledger_J["backscatter"] += (
                 step_backscatter_erg * 1.0e-7
             )
+        # The thermal re-emission row, on the same discipline as the
+        # backscatter row: booked on every accepted step whose neutral tick
+        # launched from the cathode face, because what it measures left with
+        # the atoms whether or not the warming branch below runs.
+        self._cathode_energy_ledger_J["thermal_reemit"] += (
+            step_thermal_reemit_erg * 1.0e-7
+        )
         # B4: the anode's own two rows, on the same accepted-step discipline
         # and from the same committed pair. The anode has NO warming model at
         # all, so there is no branch here to be inside of and no temperature
@@ -5098,9 +5123,23 @@ class LAPDSim1D:
                 if attempt.dt > 0.0
                 else 0.0
             )
+            # THERMAL RE-EMISSION DEBIT: the energy the kinetic engine's tick
+            # in this accept launched from the cathode face on the surface
+            # spectrum at T_s, formed from that tick's own energy ledger and
+            # booked like P_back -- counted energy over the step, no
+            # linearisation -- so the surface gives up exactly what the gas
+            # received. Zero on steps with no tick and on the fluid route.
+            P_reemit = (
+                step_thermal_reemit_erg * 1.0e-7 / float(attempt.dt)
+                if attempt.dt > 0.0
+                else 0.0
+            )
             dT = (
                 float(attempt.dt)
-                * (P_heat + P_ion - P_rad - P_emis - P_cond - P_back)
+                * (
+                    P_heat + P_ion - P_rad - P_emis - P_cond - P_back
+                    - P_reemit
+                )
                 / (C_th + float(attempt.dt) * G_lin)
             )
             T_unclamped = self._cathode_Ts_K + dT
@@ -5109,10 +5148,12 @@ class LAPDSim1D:
             # are booked as dt*P; the three loss rows at their linearised
             # end-of-step values, the row at the old temperature plus its
             # own G_row*dT, so that in exact arithmetic
-            #     C_th*dT = heater + ion - rad - emis - cond - dt*P_back.
-            # The backscatter row is booked above from the same
-            # step_backscatter_erg that P_back is formed from, so on every
-            # step this branch runs its increment is dt*P_back. The clamp
+            #     C_th*dT = heater + ion - rad - emis - cond - dt*P_back
+            #               - dt*P_reemit.
+            # The backscatter and thermal_reemit rows are booked above from
+            # the same step_backscatter_erg and step_thermal_reemit_erg that
+            # P_back and P_reemit are formed from, so on every step this
+            # branch runs their increments are dt*P_back and dt*P_reemit. The clamp
             # row is the energy the floor at CATHODE_ENV_T_K adds when it
             # fires (exactly zero otherwise), which closes
             #     C_th*(T_s_new - T_s_old) = the signed sum of the rows.
@@ -5748,9 +5789,9 @@ class LAPDSim1D:
             # substep's clip was booked carries neither key.
             self._floor_ledger[name] = float(ledgers.get(name, 0.0))
         for key in self._cathode_energy_ledger_J:
-            if key == "clamp":
+            if key in ("clamp", "thermal_reemit"):
                 # Defaulted, not required: a payload written before the
-                # clamp row existed carries no such key.
+                # clamp or thermal_reemit row existed carries no such key.
                 self._cathode_energy_ledger_J[key] = float(
                     ledgers.get(f"cathode_energy_{key}_J", 0.0)
                 )
@@ -10539,7 +10580,9 @@ class LAPDSim1D:
             # Cumulative surface energy ledger [J]. The heater/ion/rad/emis/
             # cond/clamp rows are booked by the power-balance warming update;
             # the presence-gated backscatter row is booked on every accepted
-            # step the DVM cathode jet counted on. See
+            # step the DVM cathode jet counted on, and the thermal_reemit row
+            # on every accepted step whose kinetic neutral tick launched from
+            # the cathode face (zero on the fluid route). See
             # _cathode_energy_ledger_J.
             **{
                 f"warming_E_{k}_J": float(v)
@@ -12295,16 +12338,19 @@ class LAPDSim1D:
         driving, and the staleness is a step's worth of ``dT`` on a surface
         whose thermal time constant is many orders above the step.
 
-        DISCLOSED CONVENTION, cathode jet armed. Only the ``R_E`` energy the
-        BACKSCATTER carries is debited from the surface. The ``1 - R_N``
-        implanted share is re-emitted on the cosine-wall spectrum at the
-        surface temperature, which carries ``2 k T_s`` of kinetic energy per
-        atom in the continuum limit (the spectrum's discrete mean on the
-        velocity grid differs from it at the grid's resolution), and that
-        energy is NOT taken off the cathode's balance -- the same convention
-        the fluid channel ships. It is a convention, not a measurement: the
-        surface energy ledger's ``backscatter`` row is what the surface
-        actually gave up, and this share is deliberately outside it.
+        CATHODE SURFACE DEBITS. The ``R_E`` energy the BACKSCATTER carries
+        (cathode jet armed) is debited from the surface through the surface
+        energy ledger's ``backscatter`` row. The thermal share of the
+        cathode-face recycle -- the ``1 - R_N`` implanted share with the jet
+        armed, the whole recycle stream otherwise -- is re-emitted on the
+        cosine-wall spectrum at the surface temperature, carrying ``2 k T_s``
+        of kinetic energy per atom in the continuum limit (the spectrum's
+        discrete mean on the velocity grid differs from it at the grid's
+        resolution). The energy this tick launched on that spectrum, its
+        energy ledger's ``birth_cathode_face`` row, is debited from the
+        surface by the accept that fired the tick: it is booked into the
+        ledger's ``thermal_reemit`` row and, where that accept's warming
+        update runs, subtracted from the surface temperature increment.
         """
         state = self.state
         derived = self.derived

@@ -3676,7 +3676,7 @@ def _case_anode_e_sheath_row_reported_not_applied():
 #: Sign of each cathode surface ledger row in C_th dT_s/dt.
 _SURFACE_ROW_SIGNS = {
     "heater": 1.0, "ion": 1.0, "rad": -1.0, "emis": -1.0, "cond": -1.0,
-    "backscatter": -1.0, "clamp": 1.0,
+    "backscatter": -1.0, "thermal_reemit": -1.0, "clamp": 1.0,
 }
 
 
@@ -3721,11 +3721,65 @@ def _case_cathode_surface_book_closes():
     # (read off the surface state, not the ledger) equals the signed sum of
     # the booked row increments.
     sim = LAPDSim1D(*_anode_sink_config())
+    assert sim._dvm is None
     for _ in range(8):
         stored, signed, budget, increments = _surface_step_closure(sim)
         # Not vacuous: the surface moves and the loss rows are booked.
         assert stored != 0.0 and increments["rad"] > 0.0, increments
         assert abs(stored - signed) <= budget, (stored, signed, budget)
+        # The fluid neutral route launches no counted thermal spectrum from
+        # the cathode face, so the thermal re-emission row books nothing.
+        assert increments["thermal_reemit"] == 0.0, increments
+
+    # THE KINETIC ROUTE: the engine launches the cathode face's thermal
+    # recycle on the surface spectrum at T_s, and the surface pays for it.
+    # A cadence below every step, so each accepted step after the one that
+    # engages the engine fires one neutral tick.
+    kp, kf = default_config()
+    for space, key, value, _why in KINETIC_DVM_INCOMPATIBLE_DEFAULTS:
+        (kf if space == "flags" else kp)[key] = value
+    kp["initial_neutral_state"] = "fill"
+    kf["cathode_coupling"] = True
+    kp.update({
+        "neutral_model": "kinetic_dvm",
+        "neutral_kinetic_dvm_cadence_s": 1.0e-12,
+        # The shipped velocity grid, pinned wide enough to carry the launch
+        # band this jet's coefficients can produce.
+        "neutral_kinetic_dvm_vmax_cm_s": 3.0e7,
+        "neutral_kinetic_dvm_cathode_jet": True,
+        "max_steps_action": "stop",
+    })
+    kin = LAPDSim1D(kp, kf)
+    launched_key = "energy_birth_cathode_face"
+    tick_steps = 0
+    for _ in range(5):
+        ticks_before = int(kin._dvm_tick_count)
+        stored, signed, budget, increments = _surface_step_closure(kin)
+        # (a) The book closes with the row in it, on every step.
+        assert abs(stored - signed) <= budget, (stored, signed, budget)
+        if int(kin._dvm_tick_count) > ticks_before:
+            tick_steps += 1
+            # Liveness: the row on a ticking step stands well above the
+            # closure budget (a factor of ten; a row left out of dT leaves a
+            # residual of about the row itself, so any factor above one
+            # exposes it), so the omission could not hide in the budget.
+            assert increments["thermal_reemit"] > 10.0 * budget, (
+                increments["thermal_reemit"], budget,
+            )
+        else:
+            assert increments["thermal_reemit"] == 0.0, increments
+    assert tick_steps >= 3, tick_steps
+    # (b) The row is the engine's counted launch from the cathode face: the
+    # surface ledger's row [J] against the run's accumulated tick ledgers
+    # [erg], the per-save sums no frame has drained yet. Roundoff: the same
+    # per-tick values summed in the same order, one scaled by 1e-7 per term.
+    launched_erg = float(kin._dvm_particle_accum[launched_key])
+    assert launched_erg > 0.0, launched_erg
+    assert np.isclose(
+        kin._cathode_energy_ledger_J["thermal_reemit"] * 1.0e7,
+        launched_erg,
+        **_TOL_ROUNDOFF,
+    ), (kin._cathode_energy_ledger_J["thermal_reemit"], launched_erg)
 
     # The clamp forced to fire: the radiation row at the old temperature is
     # inflated by 1 GW, so the semi-implicit update falls below the 300 K
