@@ -127,16 +127,12 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 # relatively.
 _TOL_ROUNDOFF = {"rtol": 1e-12, "atol": 0.0}
 
-# Unadjudicated: numpy's defaults written out. Marks a comparison whose
-# tolerance has no stated numerical origin yet; it is the value the
-# comparison already ran at, kept so the assertion's strength is unchanged.
-_TOL_UNADJUDICATED = {"rtol": 1e-5, "atol": 1e-8}
-
 #: The classes a case module may unpack (``**NAME``) in place of explicit
-#: tolerances.
+#: tolerances. No class holds numpy's default tolerances: a comparison
+#: whose tolerance has no stated numerical origin writes its value on the
+#: call, where it can be seen and adjudicated.
 _TOLERANCE_CLASSES = {
     "_TOL_ROUNDOFF": _TOL_ROUNDOFF,
-    "_TOL_UNADJUDICATED": _TOL_UNADJUDICATED,
 }
 
 
