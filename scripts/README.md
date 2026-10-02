@@ -106,15 +106,20 @@ saved fields do not hold; and `census/<term>` with a `status` of `entered`,
 `zero` or `not_tracked` and a `reason`. Quantities are `particles`,
 `momentum` and `energy_e`, `energy_i`, `energy_k`, `energy_n` (units
 `particles`, `g cm/s`, `erg`), grouped into the stages `particles`, `energy`
-and `momentum`. An entry whose debit and credit are the same account books
-transport inside it: it adds nothing to the closure and its gross to the
-bound. An exchange computed at two code sites is booked as two ordinary
-entries through a clearing account `exchange:<name>`, each touching only the
-state its own site changed; the clearing account's inventory is
-`state/exchange_<name>` (a declared carried debt) or zero, so its closure is
-the agreement of the two sites. Neutral inventories come from the saved
-fields (`nn`, `M_n`, `En` and their annulus `_a` fields) before the kinetic
-neutrals engage and from `state/` after.
+and `momentum`. An entry whose debit and credit are the same plasma or
+neutral account books transport inside it: it adds nothing to the closure and
+its gross to the bound; on any other account it fails. An exchange computed at
+two code sites is booked as two ordinary entries through a clearing account
+`exchange:<name>`, each touching only the state its own site changed; the
+clearing account's inventory is `state/exchange_<name>` (a declared carried
+debt) or zero, so its closure is the agreement of the two sites. Neutral
+inventories come from the saved fields before the kinetic neutrals engage and
+from `state/` after: `nn` with `nn_a` on the column and annulus volumes (or
+`nn` alone on the neutral volume); `M_n` with `M_n_a` on the column and
+annulus volumes, or `M_n` alone as a chamber mean on the neutral volume; `En`,
+a column field, on the plasma volume in a two-zone file and on the neutral
+volume in a single-zone one. Neutral momentum and energy, the circuit and the
+cathode surface need an inventory or a `not_tracked` census declaration.
 
 Per stage the checker tests that each inventoried account's change, clearing
 accounts included, equals its entries in minus out, and that the stage's
@@ -125,7 +130,8 @@ state, and the census, including that a `zero` or `not_tracked` term books
 nothing. The bar is a roundoff bound `margin * count * 2**-53 * gross`, built
 from the entries' gross magnitudes, the inventories' summand magnitudes and
 the operations that produced each comparison, never from the net change; an
-account whose bound exceeds `--ceiling` (default 1e-9) of its inventory is
+account whose bound exceeds `--ceiling` (default 1e-9) of its inventory (for
+a clearing account with no carried debt, of its site accounts' inventories) is
 CANNOT CERTIFY. The account lists, the inventory rules, what the count
 assumes about the writer's arithmetic and the bound's derivation are in the
 module docstring. Exit 0 pass, 1 a failure or census gap, 2 the check could

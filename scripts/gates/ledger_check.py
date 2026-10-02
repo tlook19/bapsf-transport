@@ -44,10 +44,12 @@ RECEIPT SCHEMA (``receipt-v1``)::
   account: a positive amount raises the credit account's inventory and lowers
   the debit account's.
 * SELF-ENTRIES: an entry whose debit and credit are the same account books
-  movement inside that account (cell-to-cell transport). It is valid,
+  movement inside that account (cell-to-cell transport). It is valid only on
+  an account with a cell-resolved inventory (the plasma and neutral accounts),
   contributes zero to the account's closure, and contributes its gross to the
   account's bound: transport inside an account rounds relative to fluxes that
-  no boundary entry carries.
+  no boundary entry carries. On a clearing, circuit, cathode-surface or
+  external account it fails.
 * Every entry has its ``<quantity>_gross`` companion, and the bounds below use
   it rather than the entry's magnitude: an entry whose contributions cancel
   carries rounding of the size of its gross, not of its net. Every entry
@@ -85,10 +87,12 @@ RECEIPT SCHEMA (``receipt-v1``)::
   neutrals engage, ``state/neutral_particles_kinetic``,
   ``state/neutral_momentum`` and ``state/neutral_energy`` hold those
   inventories; before, the saved fields do (``nn``/``nn_a``, ``M_n``/``M_n_a``,
-  ``En``/``En_a``). Where a neutral momentum or energy field is absent, the
-  state dataset holds the inventory at every save; with neither, the account
-  must be declared ``not_tracked`` in the census or it fails.
-  ``state/circuit`` and ``state/cathode_surface`` hold those inventories.
+  ``En``). Where a neutral momentum or energy field is absent, the state
+  dataset holds the inventory at every save; with neither, the account must be
+  declared ``not_tracked`` in the census or it fails. ``state/circuit`` and
+  ``state/cathode_surface`` hold those inventories; when the energy stage is
+  checked and either has no state series, it must likewise be declared
+  ``not_tracked`` or it fails.
 * A census key may also name an inventoried account; ``not_tracked`` on it
   marks the account NOT TRACKED: it is reported, never counted as closed, and
   in its stage total it stands on the boundary like an external account.
@@ -103,7 +107,9 @@ WHAT IT CHECKS, per requested stage (default: every stage in
 2. Bound ceiling: an account whose bound exceeds ``CEILING`` times its
    inventory's summand magnitudes at the two saves is CANNOT CERTIFY; a bound
    that loose decides nothing, and the ceiling caps what an inflated gross or
-   step count can buy.
+   step count can buy. A clearing account with no carried debt is held against
+   the inventory magnitudes of its tracked site accounts, or, with none, its
+   entries' summed |net|.
 3. Stage total: summed over the stage's tracked inventoried accounts, the
    change equals the entries from accounts outside that set minus the entries
    to them. When every account is tracked this is the sum of the closures of
@@ -151,9 +157,12 @@ follows:
   inventory is ``nn*plasma_volume_cm3 + nn_a*(neutral_volume_cm3 -
   plasma_volume_cm3)`` summed over ALL cells; without ``nn_a`` they are
   single-zone and the inventory is ``nn*neutral_volume_cm3`` over all cells.
-  ``M_n``/``M_n_a`` (neutral momentum) and ``En``/``En_a`` (neutral energy)
-  sit on the same volumes; in a two-zone file a missing ``_a`` field
-  contributes nothing (A2a).
+  Neutral momentum: with ``M_n`` and ``M_n_a`` the inventory is
+  ``M_n*plasma_volume_cm3 + M_n_a*(neutral_volume_cm3 - plasma_volume_cm3)``;
+  with ``M_n`` alone, ``M_n`` is a chamber-mean field and the inventory is
+  ``M_n*neutral_volume_cm3``, whatever the density layout. Neutral energy:
+  ``En`` is a column field, ``En*plasma_volume_cm3`` in a two-zone file and
+  ``En*neutral_volume_cm3`` in a single-zone file. All over ALL cells.
 * A3 (field units): the saved fields are CGS per cm^3 (``n``, ``nn``,
   ``nn_a`` in cm^-3; ``momentum``, ``M_n`` in g cm^-2 s^-1; ``Ee``, ``Ei``,
   ``En`` in erg cm^-3), so a field times a volume in cm^3 is in the receipt's
@@ -207,6 +216,12 @@ CEILING = 1e-9
 GROSS_ULPS = 4
 
 EXCHANGE_PREFIX = "exchange:"
+# Accounts on which a self-entry (debit == credit, transport inside the
+# account) has a meaning: those inventoried from cell-resolved stores.
+SELF_ENTRY_ACCOUNTS = frozenset({
+    "plasma_particles", "neutral_particles", "electron_energy", "ion_energy",
+    "plasma_kinetic_energy", "plasma_momentum", "neutral_energy", "neutral_momentum",
+})
 SIGNS = ("one-signed", "signed")
 
 QUANTITY_STAGE = {
@@ -244,7 +259,7 @@ EXTERNAL = frozenset({
     "pump", "puff", "numerical_floors", "bank",
 })
 # Accounts that must have an inventory or be declared not_tracked.
-REQUIRED_INVENTORY = ("neutral_momentum", "neutral_energy")
+REQUIRED_INVENTORY = ("neutral_momentum", "neutral_energy", "circuit", "cathode_surface")
 CENSUS_STATUSES = ("entered", "zero", "not_tracked")
 
 
@@ -289,15 +304,30 @@ def _summed(parts, summands):
 
 
 def _neutral_field(f, name, vp, vn, two_zone, n_cells):
-    """A neutral inventory from the saved column (and annulus) field, or None (A2, A2a)."""
+    """A neutral inventory from the saved fields, or None (A2).
+
+    ``nn``: two-zone (``nn_a`` present) column plus annulus, else chamber.
+    ``M_n``: with ``M_n_a``, column plus annulus; without it, ``M_n`` is a
+    chamber-mean field on the neutral volume, whatever the density layout.
+    ``En``: a column field, on the plasma volume in a two-zone file and on the
+    neutral volume in a single-zone file; there is no annulus energy field.
+    """
     if name not in f:
         return None
-    if not two_zone:
-        return _summed(f[name][()] * vn, n_cells)
-    parts = [f[name][()] * vp]
-    if name + "_a" in f:
-        parts.append(f[name + "_a"][()] * (vn - vp))
-    return _summed(np.concatenate(parts, axis=1), n_cells * len(parts))
+    x = f[name][()]
+    if name == "nn":
+        if two_zone:
+            parts = np.concatenate([x * vp, f["nn_a"][()] * (vn - vp)], axis=1)
+            return _summed(parts, 2 * n_cells)
+        return _summed(x * vn, n_cells)
+    if name == "M_n":
+        if "M_n_a" in f:
+            parts = np.concatenate([x * vp, f["M_n_a"][()] * (vn - vp)], axis=1)
+            return _summed(parts, 2 * n_cells)
+        return _summed(x * vn, n_cells)  # chamber-mean M_n
+    if name == "En":
+        return _summed(x * (vp if two_zone else vn), n_cells)
+    raise ValueError(name)
 
 
 def _engaged_merge(field, state_vals, engaged, n_cells):
@@ -468,6 +498,9 @@ def _load_entries(rc, groups, failures, lines):
             for acct in (debit, credit):
                 if not _known_account(acct):
                     fail("account", label, f"unknown account {acct!r}")
+            if debit == credit and _known_account(debit) and debit not in SELF_ENTRY_ACCOUNTS:
+                fail("self-entry-invalid", label,
+                     f"self-entry on {debit!r}, which holds no cell-resolved inventory")
             units = _s(ds.attrs["units"]) if "units" in ds.attrs else None
             if units != QUANTITY_UNITS[quantity]:
                 fail("units", label, f"units {units!r}, quantity {quantity} is in "
@@ -577,11 +610,10 @@ def _closure(I, acct, touching, steps, n_sub, cells, updates, margin):
     return np.array(resid), np.array(bounds)
 
 
-def _ceiling(I, bounds, ceiling):
-    """Worst interval of bound / inventory magnitude and whether it exceeds the ceiling."""
-    inv_mag = I.gross[:-1] + I.gross[1:]
+def _ceiling(ref, bounds, ceiling):
+    """Worst interval of bound / reference magnitude and whether it exceeds the ceiling."""
     with np.errstate(divide="ignore", invalid="ignore"):
-        rel = np.where(inv_mag > 0, bounds / inv_mag, 0.0)
+        rel = np.where(ref > 0, bounds / ref, 0.0)
     worst = int(np.argmax(rel)) if rel.size else 0
     return worst, (rel[worst] if rel.size else 0.0), bool(np.any(rel > ceiling))
 
@@ -667,16 +699,18 @@ def check(path, stages=None, margin=MARGIN, ceiling=CEILING):
 
         tracked = []
 
-        def certify(acct, label, I, touching):
+        def certify(acct, label, I, touching, ref=None, ref_name="inventory magnitude"):
             name = f"{stage}/{acct}"
             resid, bounds = _closure(I, acct, touching, steps, n_sub, n_cells, updates, margin)
             rep.bounds[name] = bounds
             worst, n_fail, ratios = _verdict(resid, bounds)
-            cw, crel, over = _ceiling(I, bounds, ceiling)
+            if ref is None:
+                ref = I.gross[:-1] + I.gross[1:]
+            cw, crel, over = _ceiling(ref, bounds, ceiling)
             rep.lines.append(_fmt(n_fail == 0, label, worst, resid, bounds, ratios, n_fail))
             if over:
                 failures.append(("bound-ceiling", name, cw))
-                rep.lines.append(f"  CANNOT CERTIFY {acct}: bound / inventory magnitude {crel:.3e} "
+                rep.lines.append(f"  CANNOT CERTIFY {acct}: bound / {ref_name} {crel:.3e} "
                                  f"exceeds the ceiling {ceiling:g} (worst interval {cw})")
             return n_fail, over, worst
 
@@ -706,8 +740,11 @@ def check(path, stages=None, margin=MARGIN, ceiling=CEILING):
         for acct in sorted(a for a, sts in clearing_stages.items() if stage in sts):
             touching = [e for e in stage_entries if acct in (e.debit, e.credit)]
             sides = ", ".join(f"{e.term}: {e.debit} -> {e.credit}" for e in touching)
-            in_side = any(e.credit == acct for e in touching)
-            out_side = any(e.debit == acct for e in touching)
+            # A self-entry on a clearing account is invalid (reported with the
+            # entries) and never counts as a side.
+            sided = [e for e in touching if e.debit != e.credit]
+            in_side = any(e.credit == acct for e in sided)
+            out_side = any(e.debit == acct for e in sided)
             if not (in_side and out_side):
                 failures.append(("clearing-one-sided", f"{stage}/{acct}", None))
                 rep.lines.append(f"  FAIL exchange {acct}: entries on one side only ({sides})")
@@ -715,7 +752,24 @@ def check(path, stages=None, margin=MARGIN, ceiling=CEILING):
             tracked.append(acct)
             inv[acct] = I
             debt = "declared carried debt" if I.summands else "no carried debt"
-            n_fail, over, worst = certify(acct, f"exchange {acct} ({debt}; {sides})", I, touching)
+            ref, ref_name = None, "inventory magnitude"
+            if not I.summands:
+                # A zero-inventory clearing account has no inventory of its own to
+                # set the ceiling against: use the summed inventory magnitudes of
+                # the tracked site accounts on the other side of its entries. If
+                # every such account is not tracked or external, fall back to the
+                # entries' summed |net|: CANNOT CERTIFY only when the bound exceeds
+                # the ceiling times what the sites declared they moved.
+                sites = {e.debit if e.credit == acct else e.credit for e in sided}
+                sites = [s for s in sites if s in inv and s not in not_tracked and not _is_exchange(s)]
+                if sites:
+                    ref = sum(inv[s].gross[:-1] + inv[s].gross[1:] for s in sites)
+                    ref_name = f"site inventory magnitude ({', '.join(sorted(sites))})"
+                else:
+                    ref = sum(np.abs(e.values) for e in sided) if sided else np.zeros(len(groups))
+                    ref_name = "entries' summed |net| (no tracked site account)"
+            n_fail, over, worst = certify(acct, f"exchange {acct} ({debt}; {sides})", I, touching,
+                                          ref, ref_name)
             if n_fail:
                 failures.append(("exchange", f"{stage}/{acct}", worst))
             elif in_side and out_side and not over:
@@ -927,6 +981,9 @@ def _build(path, variant=None, seed=SEED):
 
     stages_present = v.get("stages", list(STAGES))
     terms = [t for t in _TERMS if QUANTITY_STAGE[t[1]] in stages_present]
+    if v.get("drop_account"):
+        # An account the run neither books nor stores: no entry touches it.
+        terms = [t for t in terms if v["drop_account"] not in (t[2], t[3])]
     if v.get("missing_term"):
         terms = terms + [_MISSING]
 
@@ -1056,21 +1113,32 @@ def _build(path, variant=None, seed=SEED):
     u = np.zeros_like(mom)
     u[:, act] = 2.0 * kdens[:, act] / mom[:, act]
     neutral_fields = {}
-    if v.get("neutral_fields"):
-        # M_n/M_n_a and En/En_a holding the neutral momentum and energy
-        # inventories split 40/60 between column and annulus over the cells.
+    layout = v.get("neutral_fields")
+    if layout:
+        # Saved neutral momentum or energy fields holding the inventory, spread
+        # over the cells with weights w, in one of the solver's layouts (this
+        # file is two-zone in density):
+        #   mn_split   M_n on the column volume + M_n_a on the annulus (40/60);
+        #   mn_chamber M_n alone, a chamber mean on the neutral volume;
+        #   en_column  En, a column field on the plasma volume.
+        # Any other volume than the layout's gives a different inventory
+        # (sum(w*vp/vn) != 1 and so on), so the wrong volume fails the closure.
         w = rng.uniform(0.5, 1.5, N_CELLS)
         w /= w.sum()
-        for acct, name in (("neutral_momentum", "M_n"), ("neutral_energy", "En")):
-            tot = np.array(ssnap[acct])[:, None]
-            col = 0.4 * w * tot / vp
-            ann = 0.6 * w * tot / va
+        acct = "neutral_energy" if layout == "en_column" else "neutral_momentum"
+        tot = np.array(ssnap[acct])[:, None]
+        if layout == "mn_split":
+            arrays = {"M_n": 0.4 * w * tot / vp, "M_n_a": 0.6 * w * tot / va}
+        elif layout == "mn_chamber":
+            arrays = {"M_n": w * tot / vn}
+        else:
+            arrays = {"En": w * tot / vp}
+        for name, a in arrays.items():
             # Republished after engagement: the receipt's state holds the inventory.
-            col[ENGAGE_SAVE:] *= 1.0 + 1e-6
-            ann[ENGAGE_SAVE:] *= 1.0 - 1e-6
-            neutral_fields[name], neutral_fields[name + "_a"] = col, ann
-            # Before engagement the state is not the inventory; the fields are.
-            ssnap[acct] = [s * (1.01 if j < ENGAGE_SAVE else 1.0) for j, s in enumerate(ssnap[acct])]
+            a[ENGAGE_SAVE:] *= 1.0 + 1e-6
+            neutral_fields[name] = a
+        # Before engagement the state is not the inventory; the fields are.
+        ssnap[acct] = [s * (1.01 if j < ENGAGE_SAVE else 1.0) for j, s in enumerate(ssnap[acct])]
 
     with h5py.File(path, "w") as f:
         f.attrs["format"] = "sim1d-hdf5-v1"
@@ -1109,7 +1177,8 @@ def _build(path, variant=None, seed=SEED):
         st["neutral_particles_kinetic"] = kin
         st["neutral_kinetic_engaged"] = engaged
         for key in scalar:
-            st[key] = np.array(ssnap[key])
+            if key != v.get("drop_account"):
+                st[key] = np.array(ssnap[key])
         if v.get("carried_debt"):
             st["exchange_cx_friction"] = np.array(debt_snap)
         if v.get("orphan_state"):
@@ -1214,8 +1283,15 @@ def _build_small(path, mode, factor=None):
         bs = b + D
         book("cx_plasma", "momentum", "plasma_momentum", "exchange:cx", "one-signed")[3:5] = [
             np.array([a]), np.array([a])]
-        book("cx_neutral", "momentum", "exchange:cx", "neutral_momentum", "one-signed")[3:5] = [
-            np.array([bs]), np.array([bs])]
+        if mode == "exchange_self":
+            # The second site is replaced by a self-entry on the clearing
+            # account, which must not pass for the missing side.
+            book("cx_self", "momentum", "exchange:cx", "exchange:cx", "one-signed")[3:5] = [
+                np.array([b]), np.array([b])]
+            bs = 0.0
+        else:
+            book("cx_neutral", "momentum", "exchange:cx", "neutral_momentum", "one-signed")[3:5] = [
+                np.array([bs]), np.array([bs])]
         snaps.append(P.copy())
         neutral.append(5.0 + bs)
     else:
@@ -1297,8 +1373,12 @@ def self_test(verbose=False):
          {"entered_zero": ["jet_rebirth"], "bound_check": PP2}),
         ("clean, step cadence", M({"cadence": "step"}), None, 0, [], {}),
         ("clean, single-zone neutrals", M({"single_zone": True}), None, 0, [], {}),
-        ("clean, neutral momentum and energy from saved fields before engagement",
-         M({"neutral_fields": True}), None, 0, [], {}),
+        ("clean, two-zone M_n with M_n_a (column + annulus) before engagement",
+         M({"neutral_fields": "mn_split"}), None, 0, [], {}),
+        ("clean, two-zone M_n with no M_n_a (chamber mean) before engagement",
+         M({"neutral_fields": "mn_chamber"}), None, 0, [], {}),
+        ("clean, two-zone En (column field) before engagement",
+         M({"neutral_fields": "en_column"}), None, 0, [], {}),
         ("clean, updates_per_step = 3", M({"updates_per_step": 3}), None, 0, [],
          {"bound_check": PP2}),
         ("clean, exchange with a carried debt", M({"carried_debt": True}), None, 0, [], {}),
@@ -1310,7 +1390,8 @@ def self_test(verbose=False):
          {"bound_check": (MX.replace(CX, "exchange:cx"), 0)}),
         # The stage total does not see this break: its gross carries the plasma
         # momentum inventory (130 cells of 10, ~1.3e3 times the exchange's
-        # gross of ~2) and its count the inventory terms, so its bound is ~1e4
+        # gross of ~2) and its count the inventory terms (1317 against 271 for
+        # the clearing account, gross 2613 against 2), so its bound is ~6.3e3
         # times the clearing bound and 100 x the clearing bound sits under it.
         # The clearing account's own bound is what decides two-site agreement.
         ("exchange sites differ by 100 x the clearing bound", SM("exchange_break", 100.0), None, 1,
@@ -1341,6 +1422,26 @@ def self_test(verbose=False):
           ("closure", "momentum/neutral_momentum", ANY)], {}),
         ("orphan clearing-account state (state/exchange_ghost)", M({"orphan_state": True}), None, 1,
          [("exchange-orphan-state", "exchange:ghost", None)], {}),
+        # The second site replaced by a self-entry on the clearing account: the
+        # self-entry is invalid, the account one-sided, and the plasma site's
+        # removal of ~1 is unmatched in both the clearing closure and the
+        # stage total (whose bound, ~1.5e-9, is far below 1).
+        ("self-entry on a clearing account standing in for its second site", SM("exchange_self"),
+         None, 1, [("self-entry-invalid", "cx_self/momentum", None),
+                   ("clearing-one-sided", "momentum/exchange:cx", None),
+                   ("exchange", "momentum/exchange:cx", 0), ("stage", "momentum", 0)], {}),
+        # An inflated signed gross on the neutral site of a clearing account
+        # with no carried debt: the clearing account is held against its site
+        # accounts' inventories and refused, as is neutral_momentum itself.
+        ("inflated signed gross on a clearing account (cx_friction_neutral)",
+         M({"inflate_gross": "cx_friction_neutral"}), None, 1,
+         [("bound-ceiling", MX, ANY), ("bound-ceiling", "momentum/neutral_momentum", ANY)], {}),
+        ("cathode_surface with no state series and no census declaration",
+         M({"drop_account": "cathode_surface"}), None, 1,
+         [("no-inventory", "energy/cathode_surface", None)], {}),
+        ("cathode_surface with no state series, declared not_tracked",
+         M({"drop_account": "cathode_surface", "not_tracked": "cathode_surface"}), None, 0, [],
+         {"not_tracked": ["cathode_surface"]}),
         ("signed term with gross understated to |entry|", SM("cancel_understated"), None, 1,
          [("closure", "momentum/plasma_momentum", ANY), ("stage", "momentum", ANY)], {}),
         ("entry with no gross (pump)", M({"gross_missing": "pump"}), None, 1,
@@ -1422,7 +1523,8 @@ def self_test(verbose=False):
             if verbose or not ok:
                 for line in lines:
                     print("      " + line)
-    print(f"SELF-TEST: {'PASS' if bad == 0 else f'FAIL ({bad} scenarios differ)'}")
+    print(f"SELF-TEST: PASS ({len(scenarios)} scenarios)" if bad == 0
+          else f"SELF-TEST: FAIL ({bad} of {len(scenarios)} scenarios differ)")
     return 0 if bad == 0 else 1
 
 
