@@ -46,6 +46,7 @@ from cablp.solvers._sim1d.physics.sources import velocity_divergence
 from cablp.solvers._sim1d.solver import _timestep_limiters
 
 from ._harness import (
+    _TOL_ROUNDOFF,
     _anode_sink_config,
     _anode_sink_sim,
     _base_config,
@@ -208,14 +209,15 @@ def _case_timestep_dt_growth_reapproach(growth_flags, growth_params):
     # HYSTERESIS, both halves. Engaging takes evidence: the first step is
     # capped by the phase boundary, so steps 2-4 must still ramp at the BASE
     # 1.25 while the streak of three growth-capped steps is being earned...
-    assert np.allclose(ramp_fast_dt[:4], ramp_base_dt[:4])
+    assert np.allclose(ramp_fast_dt[:4], ramp_base_dt[:4], **_TOL_ROUNDOFF)
     assert np.allclose(
         ramp_fast_dt[1:4],
         [ramp_fast_dt[0] * 1.25**k for k in (1, 2, 3)],
+        **_TOL_ROUNDOFF,
     )
     # ...and only the step AFTER patience is met jumps by the recovery factor.
-    assert np.isclose(ramp_fast_dt[4], ramp_fast_dt[3] * 4.0)
-    assert np.isclose(ramp_fast_dt[5], ramp_fast_dt[4] * 4.0)
+    assert np.isclose(ramp_fast_dt[4], ramp_fast_dt[3] * 4.0, **_TOL_ROUNDOFF)
+    assert np.isclose(ramp_fast_dt[5], ramp_fast_dt[4] * 4.0, **_TOL_ROUNDOFF)
     # It never weakens a bound -- every accepted step is still <= dt_max.
     assert max(ramp_fast_dt) <= ramp_params["dt_max"] * (1.0 + 1.0e-12)
     # DEFAULT ON and presence-gated. The shipped patience ARMS the mechanism,
@@ -239,8 +241,8 @@ def _case_timestep_dt_growth_reapproach(growth_flags, growth_params):
     # unaccelerated arm while a streak of four growth-capped steps is earned,
     # then the recovery factor -- one step later than the patience-3 arm, and
     # over the same horizon in fewer steps than the unaccelerated arm.
-    assert np.allclose(ramp_default_dt[:5], ramp_base_dt[:5])
-    assert np.isclose(ramp_default_dt[5], ramp_default_dt[4] * 4.0)
+    assert np.allclose(ramp_default_dt[:5], ramp_base_dt[:5], **_TOL_ROUNDOFF)
+    assert np.isclose(ramp_default_dt[5], ramp_default_dt[4] * 4.0, **_TOL_ROUNDOFF)
     assert ramp_default.steps < ramp_base.steps, (
         ramp_default.steps, ramp_base.steps
     )
@@ -607,7 +609,9 @@ def _case_dt_min_lock(no_source_params):
     ]
     assert below_summary.below_dt_min_step_count == 1
     assert below_summary.below_dt_min_known is True
-    assert np.isclose(below_summary.below_dt_min_min_accepted_dt, 5.0e-11)
+    assert np.isclose(
+        below_summary.below_dt_min_min_accepted_dt, 5.0e-11, **_TOL_ROUNDOFF,
+    )
     # It NAMES the cap responsible -- the diagnostic point of the category.
     assert below_summary.below_dt_min_step_cap_counts == {"t_end": 1}
     # DISTINCT, not folded into the clamp count: no step was clamped here.
@@ -2441,8 +2445,10 @@ def _case_mirror_face_flux_unit():
     assert faces.M[face] == p_L + a_max * float(state.M[live]), (
         faces.M[face], p_L, a_max
     )
-    assert math.isclose(p_L, 16.02176634, rel_tol=1e-12), p_L
-    assert math.isclose(float(faces.M[face]), 19.14691966571864, rel_tol=1e-12)
+    assert math.isclose(p_L, 16.02176634, rel_tol=1e-12, abs_tol=0.0), p_L
+    assert math.isclose(
+        float(faces.M[face]), 19.14691966571864, rel_tol=1e-12, abs_tol=0.0,
+    )
     assert faces.M[face] - p_L > 3.1, "the mirror dissipation is the claim"
 
     # (b)
