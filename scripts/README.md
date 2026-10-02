@@ -90,36 +90,46 @@ solver, so it checks the receipt with arithmetic the solver did not supply.
 The solver does not write a receipt yet; `--self-test` builds synthetic files
 with planted closures and planted breaks and checks each verdict.
 
-    python scripts/gates/ledger_check.py RUN.h5 [--stage particles|energy|momentum ...] [--margin M]
+    python scripts/gates/ledger_check.py RUN.h5 [--stage particles|energy|momentum ...] \
+        [--margin M] [--ceiling R]
     python scripts/gates/ledger_check.py --self-test
 
 The receipt (`receipt-v1`) is a `receipt/` group: attrs `schema`, `cadence`
-(`save` or `step`) and `stages_present`; `interval_t0`, `interval_t1` and
-`interval_steps` per interval; `entries/<term>/<quantity>`, the
-volume-integrated amount the term moved in each interval from its `debit`
-account to its `credit` account (attrs `debit`, `credit`, `site`, `units`),
+(`save` or `step`), `stages_present` and optionally `updates_per_step`;
+`interval_t0`, `interval_t1` and `interval_steps` per interval;
+`entries/<term>/<quantity>`, the volume-integrated amount the term moved in
+each interval from its `debit` account to its `credit` account (attrs
+`debit`, `credit`, `site`, `units`, and `sign`, `one-signed` or `signed`),
 with its required companion `entries/<term>/<quantity>_gross`, the summed
 magnitudes of the contributions that made it; `state/<name>`, inventories the
 saved fields do not hold; and `census/<term>` with a `status` of `entered`,
 `zero` or `not_tracked` and a `reason`. Quantities are `particles`,
 `momentum` and `energy_e`, `energy_i`, `energy_k`, `energy_n` (units
 `particles`, `g cm/s`, `erg`), grouped into the stages `particles`, `energy`
-and `momentum`. An exchange computed at two code sites is booked as two
-ordinary entries through a clearing account `exchange:<name>`, each touching
-only the state its own site changed; the clearing account's inventory is
+and `momentum`. An entry whose debit and credit are the same account books
+transport inside it: it adds nothing to the closure and its gross to the
+bound. An exchange computed at two code sites is booked as two ordinary
+entries through a clearing account `exchange:<name>`, each touching only the
+state its own site changed; the clearing account's inventory is
 `state/exchange_<name>` (a declared carried debt) or zero, so its closure is
-the agreement of the two sites. Per stage the checker tests that each
-inventoried account's change, clearing accounts included, equals its entries
-in minus out, and that the stage's summed change equals what crossed its
-boundary (which adds information only where an account is not tracked). It
-then tests every entry's units and gross and the census, including that a
-`zero` or `not_tracked` term books nothing. The bar is a roundoff bound
-`margin * count * 2**-53 * gross`, built from the entries' gross magnitudes,
-the inventories' summand magnitudes and the operations that produced each
-comparison, never from the net change.
-The account lists, the inventory assumptions and the bound's derivation are in
-the module docstring. Exit 0 pass, 1 a failure or census gap, 2 the check
-could not run; a file with no receipt is exit 2, never a pass.
+the agreement of the two sites. Neutral inventories come from the saved
+fields (`nn`, `M_n`, `En` and their annulus `_a` fields) before the kinetic
+neutrals engage and from `state/` after.
+
+Per stage the checker tests that each inventoried account's change, clearing
+accounts included, equals its entries in minus out, and that the stage's
+summed change equals what crossed its boundary (which adds information only
+where an account is not tracked). It then tests every entry's units, sign and
+gross, the file's `steps` attr against `interval_steps`, orphan clearing
+state, and the census, including that a `zero` or `not_tracked` term books
+nothing. The bar is a roundoff bound `margin * count * 2**-53 * gross`, built
+from the entries' gross magnitudes, the inventories' summand magnitudes and
+the operations that produced each comparison, never from the net change; an
+account whose bound exceeds `--ceiling` (default 1e-9) of its inventory is
+CANNOT CERTIFY. The account lists, the inventory rules, what the count
+assumes about the writer's arithmetic and the bound's derivation are in the
+module docstring. Exit 0 pass, 1 a failure or census gap, 2 the check could
+not run; a file with no receipt is exit 2, never a pass.
 
 `reference_coverage.py` records which `cablp/` lines the golden route executes on each kernel route (`capture`) and classifies each hunk of a diff as reached, unreached or import-only against those maps (`check`); it is under evaluation and gates nothing.
 
