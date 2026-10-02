@@ -73,6 +73,9 @@ def save_restart_state(path, sim):
         for group_name in ("cathode", "circuit", "triggers", "ignition",
                            "ledgers", "sample_ema", "run_loop"):
             _write_mapping(h5.create_group(group_name), payload[group_name])
+        # The particle receipt's open-interval accumulators. A payload written
+        # before the receipt existed has no group and loads as empty.
+        _write_mapping(h5.create_group("receipt"), payload.get("receipt", {}))
     return path
 
 
@@ -101,6 +104,9 @@ def load_restart_state(path):
         for group_name in ("cathode", "circuit", "triggers", "ignition",
                            "ledgers", "sample_ema", "run_loop"):
             payload[group_name] = _read_mapping(h5[group_name])
+        payload["receipt"] = (
+            _read_mapping(h5["receipt"]) if "receipt" in h5 else {}
+        )
     return payload
 
 

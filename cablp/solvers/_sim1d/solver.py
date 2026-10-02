@@ -96,6 +96,7 @@ from .physics.kinetic_dvm import (
     GRID_TI_CAP_EV,
     LEDGER_ENERGY_BIRTH_CHANNELS as KINETIC_DVM_ENERGY_BIRTH_CHANNELS,
     LEDGER_ENERGY_BIRTH_KEYS as KINETIC_DVM_ENERGY_BIRTH_KEYS,
+    LEDGER_EXTERNAL_BIRTHS as KINETIC_DVM_EXTERNAL_BIRTHS,
     LEDGER_FLIGHT_CELL_KEY as KINETIC_DVM_FLIGHT_CELL_KEY,
     LEDGER_PARTICLE_FLOW_KEYS as KINETIC_DVM_PARTICLE_FLOW_KEYS,
     LEDGER_SAVED_FRAME_KEYS as KINETIC_DVM_SAVED_FRAME_KEYS,
@@ -176,6 +177,9 @@ from .physics.hot_neutrals import (
     neutral_hot_channel_rhs,
 )
 from .physics.jet_carrier import cathode_jet_carrier_rhs
+from .results.receipt import CHANNEL_CLEARING as RECEIPT_CHANNEL_CLEARING
+from .results.receipt import NEUTRAL as RECEIPT_NEUTRAL_ACCOUNT
+from .results.receipt import ParticleReceipt
 from .physics.sources import (
     CATHODE_JET_ENERGY_CONVENTIONS,
     add_state_rhs,
@@ -588,6 +592,9 @@ class StepAttempt1D:
     # energy density [erg cm^-3] and the window it spans [s]. None whenever
     # the row is not in the heat substep; committed only on accept.
     electrode_sink_booking: dict | None = None
+    # This attempt's particle-receipt tally (term -> [value, gross]); committed
+    # only on accept, so a rejected attempt books nothing.
+    receipt_booking: dict | None = None
 
 
 def _atomic_rate_domain(result):
@@ -2511,6 +2518,7 @@ class LAPDSim1D:
 
     def _init_run_machinery(self):
         """Initialize the run-loop bookkeeping and apply any restart payload."""
+        self._init_particle_receipt()
         self._cathode_solve = None
         # CLAMP CENSUS. A cathode solve whose root sits above the composed
         # ceiling is clamped to the ceiling and tagged
@@ -2552,6 +2560,53 @@ class LAPDSim1D:
         self._load_restart_if_configured()
         if self._flags.get("debug_checks"):
             assert_finite_state(self._state, self._derived)
+
+    def _init_particle_receipt(self):
+        """Build the run's particle conservation receipt.
+
+        Diagnostic only: it reads rows and counts the solver has already
+        formed and writes nothing any step reads. Terms of configuration
+        branches it does not book are declared here, with the account their
+        particle rows would leave unclosed; the account is declared not
+        tracked only if the term actually carries a particle row in the run.
+        """
+        declared = {}
+        if self._cathode_jet_carrier:
+            declared["cathode_jet_hot_carrier"] = (
+                "the directed cathode-jet carrier withholds part of the "
+                "cathode recycle from the nn row and launches it through its "
+                "own term, which this receipt does not book"
+            )
+        if self._neutral_momentum:
+            declared["neutral_wind_advection"] = (
+                "the evolved neutral wind's advection of nn is not booked by "
+                "this receipt"
+            )
+        if self._neutral_energy:
+            for name in ("neutral_hot_channel", "neutral_cx_channel"):
+                declared[name] = (
+                    "the evolved neutral energy closure's channels are not "
+                    "booked by this receipt"
+                )
+        self._receipt_declared_accounts = {
+            name: (
+                RECEIPT_NEUTRAL_ACCOUNT,
+                f"{name} carries neutral particle rows this receipt does not "
+                "book (" + reason + ")",
+            )
+            for name, reason in declared.items()
+        }
+        self._receipt = ParticleReceipt(
+            self._geometry,
+            self._zone_volumes,
+            self._recycle_cells,
+            kinetic=self._dvm is not None,
+            declared=declared,
+        )
+        # The neutral source term's puff and pump halves, from the rhs_terms
+        # evaluation that last built it (a side channel, like
+        # ``_dvm_source_rows``).
+        self._receipt_source_parts = None
 
     def _plasma_active_mask(self):
         """Return the cells the plasma fluid owns: the typed-active cells."""
@@ -3184,6 +3239,12 @@ class LAPDSim1D:
                 state_rhs = add_state_rhs(state_rhs, term)
         self._accumulate_dvm_ion_booking(terms)
         self._accumulate_dvm_source_booking()
+        self._receipt.book_rhs(
+            terms,
+            [name for name in terms if name not in withdrawn],
+            engaged=self._dvm_rows_superseded(),
+            source_parts=self._receipt_source_parts,
+        )
         # With optional fields on, the packed RHS must always match the
         # state vector's width, even when no term touched them (pads zeros).
         return pack_state(
@@ -4028,6 +4089,13 @@ class LAPDSim1D:
 
         starting_cache = self._step_cache_snapshot()
         attempt_floor_ledger = self._empty_floor_ledger()
+        # The particle receipt's tally for THIS attempt: every rhs call the
+        # integration below makes carries the SSPRK2 stage weight dt/2 (one
+        # SSPRK2 step at the full dt integrates the particle rows on both
+        # explicit paths), the floor calls their ledger weight, and the
+        # neutral-only step weight one. Dropped in the ``finally`` below.
+        self._receipt.arm_attempt(0.5 * dt)
+        receipt_engaged = self._dvm_rows_superseded()
         # The implicit heat substeps book their own temperature clip into
         # this same attempt ledger (see operator_split_step); armed here and
         # dropped in the ``finally`` below, so only an accepted attempt's
@@ -4044,6 +4112,13 @@ class LAPDSim1D:
             floored, additions = self._floor_vector_with_ledger(y)
             for name in self._FLOOR_CALL_LEDGER_KEYS:
                 attempt_floor_ledger[name] += weight * float(additions[name])
+            self._receipt.book_floor(
+                self._unpack(y),
+                self._unpack(floored),
+                self._floors,
+                weight,
+                engaged=receipt_engaged,
+            )
             return floored
 
         raw_rejection_reason = ""
@@ -4054,11 +4129,15 @@ class LAPDSim1D:
                     not self._flags.get("Plasma")
                     or self._neutral_prebreakdown_active()
                 ):
+                    receipt_parts = {}
                     raw_next = pack_state(
                         self._implicit_neutral_step(
-                            dt=dt, apply_density_floor=False
+                            dt=dt,
+                            apply_density_floor=False,
+                            receipt_out=receipt_parts,
                         )
                     )
+                    self._receipt.book_neutral_step(receipt_parts)
                     self._validate_raw_stage(raw_next, "implicit_neutral")
                     y_next = floor_with_ledger(raw_next)
                 elif operator_split:
@@ -4103,6 +4182,7 @@ class LAPDSim1D:
             self._dvm_end_wall_jet_energy_stage_accum = None
             attempt_electrode_sink = self._anode_e_sheath_attempt
             self._anode_e_sheath_attempt = None
+            attempt_receipt = self._receipt.drop_attempt()
         return StepAttempt1D(
             y=np.asarray(y_next, dtype=float),
             dt=dt,
@@ -4119,10 +4199,12 @@ class LAPDSim1D:
                 attempt_end_wall_jet_energy_booking
             ),
             electrode_sink_booking=attempt_electrode_sink,
+            receipt_booking=attempt_receipt,
         )
 
     def _implicit_neutral_step(
-        self, dt, state=None, time=None, apply_density_floor=True
+        self, dt, state=None, time=None, apply_density_floor=True,
+        receipt_out=None,
     ):
         """Return a backward-Euler neutral-only state update."""
         if state is None:
@@ -4134,6 +4216,7 @@ class LAPDSim1D:
             state=state,
             time=time,
             apply_density_floor=apply_density_floor,
+            receipt_out=receipt_out,
         )
 
     def _two_zone_implicit_matrix(self, dt, source_kwargs):
@@ -4253,7 +4336,7 @@ class LAPDSim1D:
         return matrix
 
     def _implicit_neutral_step_two_zone(
-        self, dt, state, time, apply_density_floor=True
+        self, dt, state, time, apply_density_floor=True, receipt_out=None
     ):
         """Backward-Euler neutral-only update on the split (nn, nn_a) system.
 
@@ -4269,6 +4352,11 @@ class LAPDSim1D:
         which the system is banded; see :meth:`_two_zone_implicit_matrix`. The
         state and the returned profiles are unaffected: the interleaving lives
         entirely between this right-hand side and the solved vector.
+
+        ``receipt_out``, a dict when given, receives what the particle
+        receipt books the step from: the puff density each zone was given,
+        the pump coefficient ``dt * rate`` at each pump cell, the solved
+        (unfloored) densities, and the exchange conductances.
         """
         geometry = self._geometry
         cells = geometry.cells
@@ -4307,16 +4395,51 @@ class LAPDSim1D:
                 geometry.neutral_volume_cm3, dtype=float
             )
             into_annulus = V_ann > 0.0
-            rhs[1::2] += dt * np.where(
+            puff_a = dt * np.where(
                 into_annulus, particles / np.maximum(V_ann, 1e-300), 0.0
             )
-            rhs[0::2] += dt * np.where(
+            puff_c = dt * np.where(
                 into_annulus, 0.0, particles / np.maximum(V_col, 1e-300)
             )
+            rhs[1::2] += puff_a
+            rhs[0::2] += puff_c
+        else:
+            puff_a = np.zeros(cells, dtype=float)
+            puff_c = np.zeros(cells, dtype=float)
 
         solution = solve_banded((2, 2), matrix, rhs)
         nn_next = np.ascontiguousarray(solution[0::2])
         nn_a_next = np.ascontiguousarray(solution[1::2])
+        if receipt_out is not None:
+            pumps = []
+            if source_kwargs["pump_enabled"]:
+                elbow = source_kwargs["pump_elbow_conductance_lps"]
+                for index, speed in zip(
+                    pump_cell_indices(geometry),
+                    (source_kwargs["S_pump_L"], source_kwargs["S_pump_R"]),
+                ):
+                    if index is None:
+                        continue
+                    rate = pump_rate(
+                        _effective_pump_speed(
+                            speed,
+                            elbow if is_plenum_cell(geometry, index) else None,
+                        ),
+                        geometry.neutral_volume_cm3[index],
+                    )
+                    pumps.append((index, dt * rate))
+            column_coeff, annulus_coeff = self._zone_axial_coeffs
+            receipt_out.update(
+                dt=float(dt),
+                puff_c=puff_c,
+                puff_a=puff_a,
+                pump=pumps,
+                nn_next=nn_next,
+                nn_a_next=nn_a_next,
+                column_coeff=column_coeff,
+                annulus_coeff=annulus_coeff,
+                zone_exchange=self._zone_exchange_cm3_s,
+            )
         return ConservativeState1D(
             n=state.n.copy(),
             nn=(
@@ -4728,6 +4851,8 @@ class LAPDSim1D:
         self._accumulate_floor_ledger(
             getattr(attempt, "floor_ledger", self._empty_floor_ledger())
         )
+        # The particle receipt: this accepted step's tally, and one step.
+        self._receipt.commit(getattr(attempt, "receipt_booking", None))
         # The step's start time, held exactly: the phase this step ran under
         # is read here, never at ``self._time - dt``, which can round below a
         # boundary the step started on.
@@ -5435,6 +5560,7 @@ class LAPDSim1D:
             "ledgers": ledgers,
             "sample_ema": sample_ema,
             "run_loop": dict(self._restart_run_loop_state()),
+            "receipt": self._receipt.restart_members(),
         }
 
     def _restart_run_loop_state(self):
@@ -5669,6 +5795,8 @@ class LAPDSim1D:
         run_loop = dict(payload["run_loop"])
         run_loop["resumed"] = True
         self._restart_run_loop = run_loop
+        # The particle receipt's open interval; empty on an older payload.
+        self._receipt.load_restart_members(payload.get("receipt"))
 
     def advance_one_step(self, dt=None, operator_split=None):
         """Advance the conservative state by one explicit or split step."""
@@ -8510,14 +8638,22 @@ class LAPDSim1D:
         )
 
     def neutral_source_sink_rhs(self, y=None, state=None, time=None):
-        """Return conservative neutral gas puff and pump sources."""
+        """Return conservative neutral gas puff and pump sources.
+
+        The puff and pump halves of the rows are left on
+        ``_receipt_source_parts`` for the particle receipt.
+        """
         if state is None:
             state = self.state if y is None else self._unpack(y)
-        return neutral_source_sink_rhs(
+        parts = {}
+        term = neutral_source_sink_rhs(
             state=state,
             geometry=self._geometry,
+            parts_out=parts,
             **self._neutral_source_kwargs(time=time),
         )
+        self._receipt_source_parts = parts
+        return term
 
     def reaction_rhs(self, y=None, state=None):
         """Return conservative bulk reaction sources."""
@@ -9467,7 +9603,45 @@ class LAPDSim1D:
             snapshot["dvm_neutral_moments"] = (
                 self._dvm_neutral_moment_sample(time=time)
             )
+        # The particle receipt closes its interval at every save.
+        self._receipt.save(self._receipt_state_rows())
         return snapshot
+
+    def _receipt_state_rows(self):
+        """Return the particle receipt's state rows at a save [particles].
+
+        Only a run that built the kinetic engine has any: whether it has
+        engaged, its inventory once it has, and what each clearing account
+        holds -- ionization the plasma booked that the engine has not yet
+        debited (the committed tally since the last tick plus the engine's
+        carried debt, entered with the sign the clearing account carries,
+        which the plasma's ionization debits first) and, per counted source
+        channel, the particles the plasma removed that the engine has not yet
+        born (the committed tally since the last tick).
+        """
+        if self._dvm is None:
+            return {}
+        engaged = bool(self._dvm_engaged)
+        rows = {
+            "neutral_kinetic_engaged": 1.0 if engaged else 0.0,
+            "neutral_particles_kinetic": (
+                float(self._dvm.total_inventory()) if engaged else 0.0
+            ),
+            "exchange_ionization": 0.0,
+        }
+        for channel, account in RECEIPT_CHANNEL_CLEARING.items():
+            rows["exchange_" + account.split(":", 1)[1]] = 0.0
+        if engaged:
+            volume = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+            rows["exchange_ionization"] = -(
+                float(np.sum(self._dvm_ion_booked * volume))
+                + float(np.sum(self._dvm.ion_debt))
+            )
+            for channel, account in RECEIPT_CHANNEL_CLEARING.items():
+                rows["exchange_" + account.split(":", 1)[1]] = float(
+                    np.sum(self._dvm_source_booked[channel])
+                )
+        return rows
 
     def _drain_cathode_e_climb_realised(self):
         """Return and reset the save-interval mean realised cathode climb.
@@ -9913,6 +10087,19 @@ class LAPDSim1D:
                 self._dvm_neutral_moment_frames(saved)
             )
             result.dvm_tick_count = int(self._dvm_tick_count)
+        # The particle conservation receipt (``results/receipt.py``), read by
+        # scripts/gates/ledger_check.py.
+        result.receipt = self._receipt.result(
+            rhs_keys=saved[0]["rhs_terms"].keys() if saved else ()
+        )
+        result.receipt["census"].update(
+            {
+                account: ("not_tracked", reason)
+                for term, (account, reason)
+                in self._receipt_declared_accounts.items()
+                if term in self._receipt.unbooked
+            }
+        )
         # Cathode clamp census: how many accepted cathode solves were clamped
         # to the composed ceiling, and when the first and last of them were.
         # Carried on every result, because zero-of-N is itself the statement a
@@ -12031,6 +12218,16 @@ class LAPDSim1D:
             np.maximum(np.asarray(state.nn, dtype=float), 0.0),
             np.maximum(np.asarray(state.nn_a, dtype=float), 0.0),
         )
+        # The particle receipt's measurement of the handover: the engine's
+        # inventory as seeded against the fluid inventory it was seeded from,
+        # on the volumes the receipt closes the fluid account on.
+        V_col, V_ann = self._zone_volumes
+        fluid_inventory = float(
+            np.sum(np.asarray(state.nn, dtype=float) * V_col)
+            + np.sum(np.asarray(state.nn_a, dtype=float) * V_ann)
+        )
+        seeded = float(self._dvm.total_inventory())
+        self._receipt.handover = (seeded - fluid_inventory, fluid_inventory)
         self._dvm_engaged = True
         self._dvm_last_s = self._time
         self._dvm_next_s = self._time + self._dvm_cadence_s
@@ -12186,6 +12383,8 @@ class LAPDSim1D:
         # beside the tick count and for the same reason: it is a fact about
         # what the run DID that the saved trajectory cannot recover.
         self._dvm_accumulate_particle_ledger(tick_ledger)
+        # The particle receipt's engine-side entries, from the same ledger.
+        self._receipt.book_tick(tick_ledger, KINETIC_DVM_EXTERNAL_BIRTHS)
         # Freeze the hold's tick state against the SAME accepted rows the
         # transfer above was booked against, before the republish below
         # rewrites anything.
