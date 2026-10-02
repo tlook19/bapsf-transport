@@ -2049,10 +2049,11 @@ def _case_electrode_sample_smoothing(m3_params):
     # The state is built so the sample checks below can see the quantities
     # they test: an ion temperature far off its floor (Ti0, against the
     # floor of 0.02585 eV), a nonzero ion velocity in every cell (u0, so M is
-    # not identically zero), and a gas dense enough (nn0) that the
-    # presheath is not many cell lengths long and alpha_eff responds to Ti.
+    # not identically zero), and a gas (nn0) at which the presheath is about
+    # a cell length: thin enough that alpha_eff is not pinned at exp(-1/2),
+    # dense enough that it responds to Ti.
     ss_sim = LAPDSim1D(
-        dict(m3_params, nn0=1.0e14, Ti0=1.0, u0=1.0e5),
+        dict(m3_params, nn0=5.0e12, Ti0=1.0, u0=1.0e5),
         resolved_cathode_flags,
     )
     ss_cath = cathode_sample_indices(ss_sim.geometry)[0]
