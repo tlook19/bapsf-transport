@@ -315,7 +315,9 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         [run_result.total_rhs[field_name] for field_name in STATE_NAMES_1D],
         axis=1,
     )
-    # Barred by the terms' gross magnitude, not by the total they cancel to.
+    # Barred by the gross of the terms, not by the total: the terms cancel
+    # elementwise, so a bar against the total would demand more than floating
+    # point delivers where the total is small.
     _assert_terms_sum_to_total(
         saved_term_rows, packed_total_rhs, "saved rhs_terms against total_rhs"
     )

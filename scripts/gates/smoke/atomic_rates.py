@@ -188,7 +188,9 @@ def _case_helium_only_reaction_rates(dt_default):
         for field_name in STATE_NAMES_1D:
             assert np.all(np.isfinite(getattr(term, field_name)))
         term_rows.append(pack_state(term, neutral_two_zone=True))
-    # Barred by the terms' gross magnitude, not by the total they cancel to.
+    # Barred by the gross of the terms, not by the total: the terms cancel
+    # elementwise, so a bar against the total would demand more than floating
+    # point delivers where the total is small.
     _assert_terms_sum_to_total(term_rows, full_rhs, "rhs_terms against rhs")
     nonheat_terms = sim.rhs_terms(
         pack_state(heat_state, neutral_two_zone=True),
