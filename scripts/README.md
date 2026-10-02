@@ -83,6 +83,60 @@ each leg in its own process on its own tree, and compares each pair;
         --head <rev-or-tree> --outdir <dir outside the repo> [--compiled]
     python scripts/gates/result_bitdiff.py --self-test --outdir <dir outside the repo>
 
+`ledger_check.py` reads a result file's conservation receipt and decides
+whether every account closes. It is written from the conservation laws in
+`MODEL.md` and the result file's layout alone and imports nothing from the
+solver, so it checks the receipt with arithmetic the solver did not supply.
+The solver does not write a receipt yet; `--self-test` builds synthetic files
+with planted closures and planted breaks and checks each verdict.
+
+    python scripts/gates/ledger_check.py RUN.h5 [--stage particles|energy|momentum ...] \
+        [--margin M] [--ceiling R]
+    python scripts/gates/ledger_check.py --self-test
+
+The receipt (`receipt-v1`) is a `receipt/` group: attrs `schema`, `cadence`
+(`save` or `step`), `stages_present` and optionally `updates_per_step`;
+`interval_t0`, `interval_t1` and `interval_steps` per interval;
+`entries/<term>/<quantity>`, the volume-integrated amount the term moved in
+each interval from its `debit` account to its `credit` account (attrs
+`debit`, `credit`, `site`, `units`, and `sign`, `one-signed` or `signed`),
+with its required companion `entries/<term>/<quantity>_gross`, the summed
+magnitudes of the contributions that made it; `state/<name>`, inventories the
+saved fields do not hold; and `census/<term>` with a `status` of `entered`,
+`zero` or `not_tracked` and a `reason`. Quantities are `particles`,
+`momentum` and `energy_e`, `energy_i`, `energy_k`, `energy_n` (units
+`particles`, `g cm/s`, `erg`), grouped into the stages `particles`, `energy`
+and `momentum`. An entry whose debit and credit are the same plasma or
+neutral account books transport inside it: it adds nothing to the closure and
+its gross to the bound; on any other account it fails. An exchange computed at
+two code sites is booked as two ordinary entries through a clearing account
+`exchange:<name>`, each touching only the state its own site changed; the
+clearing account's inventory is `state/exchange_<name>` (a declared carried
+debt) or zero, so its closure is the agreement of the two sites. Neutral
+inventories come from the saved fields before the kinetic neutrals engage and
+from `state/` after: `nn` with `nn_a` on the column and annulus volumes (or
+`nn` alone on the neutral volume); `M_n` with `M_n_a` on the column and
+annulus volumes, or `M_n` alone as a chamber mean on the neutral volume; `En`,
+a column field, on the plasma volume in a two-zone file and on the neutral
+volume in a single-zone one. Neutral momentum and energy, the circuit and the
+cathode surface need an inventory or a `not_tracked` census declaration.
+
+Per stage the checker tests that each inventoried account's change, clearing
+accounts included, equals its entries in minus out, and that the stage's
+summed change equals what crossed its boundary (which adds information only
+where an account is not tracked). It then tests every entry's units, sign and
+gross, the file's `steps` attr against `interval_steps`, orphan clearing
+state, and the census, including that a `zero` or `not_tracked` term books
+nothing. The bar is a roundoff bound `margin * count * 2**-53 * gross`, built
+from the entries' gross magnitudes, the inventories' summand magnitudes and
+the operations that produced each comparison, never from the net change; an
+account whose bound exceeds `--ceiling` (default 1e-9) of its inventory (for
+a clearing account with no carried debt, of its site accounts' inventories) is
+CANNOT CERTIFY. The account lists, the inventory rules, what the count
+assumes about the writer's arithmetic and the bound's derivation are in the
+module docstring. Exit 0 pass, 1 a failure or census gap, 2 the check could
+not run; a file with no receipt is exit 2, never a pass.
+
 `reference_coverage.py` records which `cablp/` lines the golden route executes on each kernel route (`capture`) and classifies each hunk of a diff as reached, unreached or import-only against those maps (`check`); it is under evaluation and gates nothing.
 
 **`run/`** — the drivers that build a `LAPDSim1D` and run it.
