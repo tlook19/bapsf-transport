@@ -97,17 +97,26 @@ The receipt (`receipt-v1`) is a `receipt/` group: attrs `schema`, `cadence`
 (`save` or `step`) and `stages_present`; `interval_t0`, `interval_t1` and
 `interval_steps` per interval; `entries/<term>/<quantity>`, the
 volume-integrated amount the term moved in each interval from its `debit`
-account to its `credit` account (attrs `debit`, `credit`, `site`, optional
-`leg_of`, `units`); `state/<name>`, inventories the saved fields do not hold;
-and `census/<term>` with a `status` of `entered`, `zero` or `not_tracked` and
-a `reason`. Quantities are `particles`, `momentum` and `energy_e`, `energy_i`,
-`energy_k`, `energy_n`, grouped into the stages `particles`, `energy` and
-`momentum`. Per stage the checker tests that each inventoried account's
-change equals its entries in minus out, that the legs of an exchange computed
-at two sites agree, and that the stage's summed change equals what crossed its
-boundary; it then tests the census. The bar is a roundoff bound
-`margin * count * 2**-53 * gross`, built from the magnitudes entering each
-comparison and the operations that produced it, never from the net change.
+account to its `credit` account (attrs `debit`, `credit`, `site`, `units`),
+with its required companion `entries/<term>/<quantity>_gross`, the summed
+magnitudes of the contributions that made it; `state/<name>`, inventories the
+saved fields do not hold; and `census/<term>` with a `status` of `entered`,
+`zero` or `not_tracked` and a `reason`. Quantities are `particles`,
+`momentum` and `energy_e`, `energy_i`, `energy_k`, `energy_n` (units
+`particles`, `g cm/s`, `erg`), grouped into the stages `particles`, `energy`
+and `momentum`. An exchange computed at two code sites is booked as two
+ordinary entries through a clearing account `exchange:<name>`, each touching
+only the state its own site changed; the clearing account's inventory is
+`state/exchange_<name>` (a declared carried debt) or zero, so its closure is
+the agreement of the two sites. Per stage the checker tests that each
+inventoried account's change, clearing accounts included, equals its entries
+in minus out, and that the stage's summed change equals what crossed its
+boundary (which adds information only where an account is not tracked). It
+then tests every entry's units and gross and the census, including that a
+`zero` or `not_tracked` term books nothing. The bar is a roundoff bound
+`margin * count * 2**-53 * gross`, built from the entries' gross magnitudes,
+the inventories' summand magnitudes and the operations that produced each
+comparison, never from the net change.
 The account lists, the inventory assumptions and the bound's derivation are in
 the module docstring. Exit 0 pass, 1 a failure or census gap, 2 the check
 could not run; a file with no receipt is exit 2, never a pass.
