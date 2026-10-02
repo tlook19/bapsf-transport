@@ -1032,7 +1032,8 @@ the sheath solve reads — at the cathode cell and at the two cells flanking the
 anode face — is an exponential moving average, seeded from the initial state
 and advanced on accepted steps only, its per-cell time constant the ion
 transit $l_\text{cell}/c_s$ across that cell. Only $(n,T_e)$ are averaged: the
-sample carries each sampled cell's own instantaneous $T_i$ and $u$. So $I_i$, $I_{i,a}$, $\phi_a$, the
+sample carries each sampled cell's own instantaneous $T_i$ and $u$. So $I_i$,
+$I_{i,a}$, $\phi_a$, the
 cathode's $\alpha_\text{se}$ and the $T_e$ inside $Q_e^\text{elec}$ are
 evaluated on that average, while the fluid rows — including
 $S_\text{an}$, the split weights that distribute the anode row over its two
@@ -1340,7 +1341,9 @@ formed from the same counted (particles, incident energy) pair the birth is
 formed from, so what the surface gives up is what the gas receives. At the
 cathode the thermal re-emission is debited too, as its own term
 $P_\text{reemit}$ of the surface balance above, from the energy the launched
-spectrum carried.
+spectrum carried. Only the cathode-face recycle channel is debited: the
+cathode-side closed faces and the left end-plane return also re-emit at $T_s$
+and are not charged to the surface by this term.
 
 A monoenergetic launch has to be represented on a discrete grid: the spectrum
 is placed at a temperature tied to the axial bin containing the launch speed,

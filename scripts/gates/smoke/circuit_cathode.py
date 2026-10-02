@@ -2129,6 +2129,10 @@ def _case_electrode_sample_smoothing(m3_params):
     # (three times the seed here), and the sample's derived Ti and u
     # still read back as the cell's. Roundoff: Ei and M are rebuilt as
     # 1.5 n Ti and m n u and divided by the same n again.
+    # Measured separation under the defect: with Ei passed through
+    # unchanged the sample's Ti reads 0.3333 eV against the cell's 1.0 eV,
+    # and with M passed through its u reads 3.333e4 cm/s against 1.0e5 cm/s,
+    # each a relative difference of 2/3 against the 1e-12 tolerance.
     ss_live = derive_state(ss_sim.state, ss_sim.floors, ss_sim.ion_mass_g)
     ss_smoothed = ss_sim._smoothed_sample_state(ss_sim.state)
     ss_sample = derive_state(ss_smoothed, ss_sim.floors, ss_sim.ion_mass_g)
@@ -2143,7 +2147,10 @@ def _case_electrode_sample_smoothing(m3_params):
     # EMA's), Ti and u (the cell's own) and the neutral density unchanged, so
     # the collisional presheath factor alpha_eff does not move and I_i is
     # exactly linear in the sampled n: it triples. Roundoff: the same
-    # expression evaluated on n and on 3 n.
+    # expression evaluated on n and on 3 n. Measured separation under the
+    # defect (Ei passed through, so the sample's Ti falls to a third when its
+    # density triples): alpha_eff 0.8462 against 0.7804, a relative
+    # difference of 8.4e-2 against the 1e-12 tolerance.
     assert np.isclose(ss_alpha_c, ss_alpha_b, **_TOL_ROUNDOFF), (
         ss_alpha_c, ss_alpha_b,
     )

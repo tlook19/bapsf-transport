@@ -2233,18 +2233,18 @@ class LAPDSim1D:
         # the energy the floor at CATHODE_ENV_T_K adds when it fires, so the
         # signed sum (heater + ion - rad - emis - cond - backscatter
         # - thermal_reemit + clamp) is C_th times the surface temperature
-        # change over the steps the warming update runs.
+        # change over the steps the warming update runs. The net is the
+        # shot's unreturned energy into the emitting skin; cond is what the
+        # heater-held substrate absorbed -- the quantity the open-loop-heater
+        # drift hypothesis makes checkable against the ES1 trim cadence (a
+        # ~sub-kW net imbalance corresponds to ±8 K per 20-30 min).
         #
         # ``thermal_reemit`` is the kinetic energy the kinetic neutral engine
         # launched from the cathode face as thermal re-emission at T_s (the
         # recycled ions not backscattered), read from the engine's own
         # energy ledger on the accepted step whose neutral tick launched it.
-        # The fluid neutral route launches no counted spectrum, so there the
-        # row is booked nothing and stays exactly zero. The net is the shot's unreturned energy into
-        # the emitting skin; cond is what the heater-held substrate
-        # absorbed -- the quantity the open-loop-heater drift hypothesis
-        # makes checkable against the ES1 trim cadence (a ~sub-kW net
-        # imbalance corresponds to ±8 K per 20-30 min).
+        # The fluid neutral route launches no counted spectrum, so nothing is
+        # booked into the row there and it stays exactly zero.
         self._cathode_energy_ledger_J = {
             "heater": 0.0, "ion": 0.0, "rad": 0.0, "emis": 0.0, "cond": 0.0,
             "clamp": 0.0, "thermal_reemit": 0.0,
@@ -5153,9 +5153,9 @@ class LAPDSim1D:
             # The backscatter and thermal_reemit rows are booked above from
             # the same step_backscatter_erg and step_thermal_reemit_erg that
             # P_back and P_reemit are formed from, so on every step this
-            # branch runs their increments are dt*P_back and dt*P_reemit. The clamp
-            # row is the energy the floor at CATHODE_ENV_T_K adds when it
-            # fires (exactly zero otherwise), which closes
+            # branch runs their increments are dt*P_back and dt*P_reemit.
+            # The clamp row is the energy the floor at CATHODE_ENV_T_K adds
+            # when it fires (exactly zero otherwise), which closes
             #     C_th*(T_s_new - T_s_old) = the signed sum of the rows.
             dt_step = float(attempt.dt)
             ledger = self._cathode_energy_ledger_J
@@ -12351,6 +12351,9 @@ class LAPDSim1D:
         surface by the accept that fired the tick: it is booked into the
         ledger's ``thermal_reemit`` row and, where that accept's warming
         update runs, subtracted from the surface temperature increment.
+        Only the ``cathode_face`` channel is debited: the cathode-side closed
+        faces and the left end-plane return also re-emit at ``T_s`` and are
+        not charged to the surface by this row.
         """
         state = self.state
         derived = self.derived
