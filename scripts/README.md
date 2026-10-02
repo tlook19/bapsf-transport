@@ -83,6 +83,35 @@ each leg in its own process on its own tree, and compares each pair;
         --head <rev-or-tree> --outdir <dir outside the repo> [--compiled]
     python scripts/gates/result_bitdiff.py --self-test --outdir <dir outside the repo>
 
+`ledger_check.py` reads a result file's conservation receipt and decides
+whether every account closes. It is written from the conservation laws in
+`MODEL.md` and the result file's layout alone and imports nothing from the
+solver, so it checks the receipt with arithmetic the solver did not supply.
+The solver does not write a receipt yet; `--self-test` builds synthetic files
+with planted closures and planted breaks and checks each verdict.
+
+    python scripts/gates/ledger_check.py RUN.h5 [--stage particles|energy|momentum ...] [--margin M]
+    python scripts/gates/ledger_check.py --self-test
+
+The receipt (`receipt-v1`) is a `receipt/` group: attrs `schema`, `cadence`
+(`save` or `step`) and `stages_present`; `interval_t0`, `interval_t1` and
+`interval_steps` per interval; `entries/<term>/<quantity>`, the
+volume-integrated amount the term moved in each interval from its `debit`
+account to its `credit` account (attrs `debit`, `credit`, `site`, optional
+`leg_of`, `units`); `state/<name>`, inventories the saved fields do not hold;
+and `census/<term>` with a `status` of `entered`, `zero` or `not_tracked` and
+a `reason`. Quantities are `particles`, `momentum` and `energy_e`, `energy_i`,
+`energy_k`, `energy_n`, grouped into the stages `particles`, `energy` and
+`momentum`. Per stage the checker tests that each inventoried account's
+change equals its entries in minus out, that the legs of an exchange computed
+at two sites agree, and that the stage's summed change equals what crossed its
+boundary; it then tests the census. The bar is a roundoff bound
+`margin * count * 2**-53 * gross`, built from the magnitudes entering each
+comparison and the operations that produced it, never from the net change.
+The account lists, the inventory assumptions and the bound's derivation are in
+the module docstring. Exit 0 pass, 1 a failure or census gap, 2 the check
+could not run; a file with no receipt is exit 2, never a pass.
+
 `reference_coverage.py` records which `cablp/` lines the golden route executes on each kernel route (`capture`) and classifies each hunk of a diff as reached, unreached or import-only against those maps (`check`); it is under evaluation and gates nothing.
 
 **`run/`** — the drivers that build a `LAPDSim1D` and run it.
