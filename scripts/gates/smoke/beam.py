@@ -934,8 +934,9 @@ def _case_beam_plateau_multigroup(k7_local_dep, k7_local_diag, k7_params):
             )
 
     # (b) THE DERIVED SPECTRUM. The edge solve is a genuine root of a MONOTONE
-    # residual, the E^2-uniform edges are equal-power by construction, and the
-    # two shares partition the bank exactly.
+    # residual, and the E^2-uniform edges are equal-power by construction.
+    # (That the wave and streaming shares partition the bank is checked on
+    # the solver's own deposit in (c).)
     _mg_ne, _mg_Te, _mg_Eb = 4.6e12, 9.6, 177.0
     _mg_E1, _mg_clamp = _beam_deposition_mod.plateau_edge_energy_eV(
         _mg_Eb, 1.17e19, _mg_ne, _mg_Te
@@ -975,10 +976,6 @@ def _case_beam_plateau_multigroup(k7_local_dep, k7_local_diag, k7_params):
     assert _mg_edges[0] == _mg_E1 and _mg_edges[-1] == _mg_Eb
     assert np.allclose(_mg_w, 1.0 / _mg_N, rtol=0.0, atol=1e-14), _mg_w
     assert np.all(_mg_edges[:-1] < _mg_mids) and np.all(_mg_mids < _mg_edges[1:])
-    assert (
-        (_mg_Eb + _mg_E1) / (2.0 * _mg_Eb)
-        + (_mg_Eb - _mg_E1) / (2.0 * _mg_Eb)
-    ) == 1.0
 
     # (c) THE CLOSURE THROUGH THE SOLVER: it conserves, and it carries BOTH
     # heirs. The withheld bank is measured independently as the anomalous
@@ -3285,7 +3282,11 @@ def _case_beam_l_b_profile_at_fed_back_cross(
     # the attenuation cross section the solve FEEDS BACK -- the launch cell's
     # beam_atten_cross after the CSDA gap-transmission inversion overwrote
     # it -- not at the ionization cross section the beam assembly started
-    # from. Same function, same inputs, so the comparison is exact.
+    # from. This is a SAVE-PATH check: it establishes that the saved field
+    # is compute_l_b of the solve's own inputs (phi_c, the smoothed sample,
+    # the fed-back cross section), not that compute_l_b is right; the
+    # expectation calls the same function on inputs read from the same
+    # result, so the comparison is exact.
     from cablp.cathode.circuit_common import compute_l_b
     from cablp.solvers._sim1d.core.state import derive_state
 
