@@ -50,6 +50,7 @@ from cablp.solvers._sim1d.physics.reactions import particle_inventory_rate
 from cablp.solvers._sim1d.physics.sources import velocity_divergence
 
 from ._harness import (
+    _TOL_ROUNDOFF,
     _base_config,
     _base_sim,
     _case,
@@ -109,7 +110,7 @@ def _case_shipped_defaults_and_base_geometry():
     assert geom.neutral_face_area_cm2.shape == (geom.cells + 1,)
     assert geom.center_distance_cm.shape == (geom.cells - 1,)
     assert geom.z_edges_cm[0] < 0.0
-    assert np.isclose(geom.z_edges_cm[-1], params["Lm"])
+    assert np.isclose(geom.z_edges_cm[-1], params["Lm"], **_TOL_ROUNDOFF)
     assert geom.cell_role[0] == "plenum"
     assert geom.cell_role[-1] == "end_wall"
     assert np.all(geom.plasma_volume_cm3 > 0.0)
@@ -124,7 +125,7 @@ def _case_shipped_defaults_and_base_geometry():
     ):
         assert face_array.shape == (geom.cells + 1,)
     assert not geom.plasma_open[0] and not geom.plasma_open[-1]
-    assert np.allclose(geom.neutral_hydraulic_radius_cm, geom.Rm_cm)
+    assert np.allclose(geom.neutral_hydraulic_radius_cm, geom.Rm_cm, **_TOL_ROUNDOFF)
     assert np.all(np.isnan(geom.neutral_face_conductance_cm3_s))
 
     # Resolved typed-segment geometry is the only live machine.
@@ -170,22 +171,27 @@ def _case_shipped_defaults_and_base_geometry():
     # cathode surface, so the plenum lives at negative z and the mesh is longer.
     (cathode_face,) = resolved_geom.cathode_face_indices
     (anode_face,) = resolved_geom.anode_face_indices
-    assert np.isclose(resolved_geom.z_edges_cm[cathode_face], 0.0)
+    assert np.isclose(resolved_geom.z_edges_cm[cathode_face], 0.0, **_TOL_ROUNDOFF)
     assert np.isclose(
         resolved_geom.z_edges_cm[anode_face],
         resolved_params["cathode_anode_gap_cm"],
+        **_TOL_ROUNDOFF,
     )
-    assert np.isclose(resolved_geom.z_edges_cm[-1], resolved_params["Lm"])
+    assert np.isclose(
+        resolved_geom.z_edges_cm[-1], resolved_params["Lm"], **_TOL_ROUNDOFF,
+    )
     assert resolved_geom.z_edges_cm[0] < 0.0
     assert np.isclose(
-        resolved_geom.z_edges_cm[0], -resolved_params["plenum_length_cm"]
+        resolved_geom.z_edges_cm[0], -resolved_params["plenum_length_cm"],
+        **_TOL_ROUNDOFF,
     )
     assert resolved_geom.length_cm.sum() > resolved_params["Lm"]
     # Two cell counts: nx_gap across the gap, nx from the anode to the end wall.
     assert anode_face - cathode_face == resolved_params["nx_gap"]
     gap_dz = resolved_params["cathode_anode_gap_cm"] / resolved_params["nx_gap"]
     assert np.allclose(
-        resolved_geom.length_cm[cathode_face:anode_face], gap_dz
+        resolved_geom.length_cm[cathode_face:anode_face], gap_dz,
+        **_TOL_ROUNDOFF,
     )
     # The smallest cell in the mesh sets the explicit CFL, and it is either a
     # gap cell or the end wall block -- every other segment (plenum, fixed
@@ -197,6 +203,7 @@ def _case_shipped_defaults_and_base_geometry():
     assert np.isclose(
         resolved_geom.length_cm.min(),
         min(gap_dz, resolved_params["end_wall_length_cm"]),
+        **_TOL_ROUNDOFF,
     )
 
     # The cathode surface is a plasma wall; the anode face is interior and open.
@@ -260,7 +267,9 @@ def _case_shipped_defaults_and_base_geometry():
         baffle_params, baffle_flags
     ).get_initial_snapshot().geometry
     assert baffle_geom.neutral_baffle_face_indices.shape == (1,)
-    assert np.allclose(baffle_geom.neutral_baffle_clear_radius_cm, [40.0])
+    assert np.allclose(
+        baffle_geom.neutral_baffle_clear_radius_cm, [40.0], **_TOL_ROUNDOFF,
+    )
     baffle_face = int(baffle_geom.neutral_baffle_face_indices[0])
     baffle_interior = baffle_face - 1
     assert abs(baffle_geom.z_edges_cm[baffle_face] - 150.0) <= (
@@ -271,7 +280,8 @@ def _case_shipped_defaults_and_base_geometry():
         )
     )
     assert np.isclose(
-        baffle_geom.neutral_face_area_cm2[baffle_face], np.pi * 40.0**2
+        baffle_geom.neutral_face_area_cm2[baffle_face], np.pi * 40.0**2,
+        **_TOL_ROUNDOFF,
     )
     for name in (
         "plasma_area_cm2",
@@ -310,10 +320,11 @@ def _case_shipped_defaults_and_base_geometry():
     expected_single = 1.0 / (
         1.0 / base_single[baffle_interior] + 1.0 / baffle_orifice
     )
-    assert np.isclose(baffle_single[baffle_interior], expected_single)
+    assert np.isclose(baffle_single[baffle_interior], expected_single, **_TOL_ROUNDOFF)
     assert np.allclose(
         np.delete(baffle_single, baffle_interior),
         np.delete(base_single, baffle_interior),
+        **_TOL_ROUNDOFF,
     )
 
     base_col, base_ann = two_zone_knudsen_coefficients(
@@ -339,10 +350,11 @@ def _case_shipped_defaults_and_base_geometry():
     expected_annulus = 1.0 / (
         1.0 / base_ann[baffle_interior] + 1.0 / annulus_orifice
     )
-    assert np.isclose(baffle_ann[baffle_interior], expected_annulus)
+    assert np.isclose(baffle_ann[baffle_interior], expected_annulus, **_TOL_ROUNDOFF)
     assert np.allclose(
         np.delete(baffle_ann, baffle_interior),
         np.delete(base_ann, baffle_interior),
+        **_TOL_ROUNDOFF,
     )
 
     for bad_params, bad_flags, expected in (
@@ -690,8 +702,10 @@ def _case_variable_area_well_balancedness(
     assert len(twin_resolved_geom.cathode_face_indices) == 2
     assert len(twin_resolved_geom.anode_face_indices) == 2
     twin_near, twin_far = twin_resolved_geom.cathode_face_indices
-    assert np.isclose(twin_resolved_geom.z_edges_cm[twin_near], 0.0)
-    assert np.isclose(twin_resolved_geom.z_edges_cm[twin_far], resolved_params["Lm"])
+    assert np.isclose(twin_resolved_geom.z_edges_cm[twin_near], 0.0, **_TOL_ROUNDOFF)
+    assert np.isclose(
+        twin_resolved_geom.z_edges_cm[twin_far], resolved_params["Lm"], **_TOL_ROUNDOFF,
+    )
     for face in twin_resolved_geom.cathode_face_indices:
         assert not twin_resolved_geom.plasma_open[face]
     assert len(cathode_adjacent_cells(twin_resolved_geom)) == 2
@@ -720,7 +734,7 @@ def _case_variable_area_well_balancedness(
     # non-positive) returns the raw speed unchanged -- the legacy limit.
     assert _effective_pump_speed(2000.0, None) == 2000.0
     assert _effective_pump_speed(2000.0, 0.0) == 2000.0
-    assert np.isclose(_effective_pump_speed(2000.0, 2000.0), 1000.0)
+    assert np.isclose(_effective_pump_speed(2000.0, 2000.0), 1000.0, **_TOL_ROUNDOFF)
     assert _effective_pump_speed(2000.0, 1e12) < 2000.0
 
     # M2: the cathode-structure obstruction is a real annular cell (decision 1),
@@ -739,24 +753,33 @@ def _case_variable_area_well_balancedness(
     ]
     assert obstruction_geom.cells == resolved_geom.cells + 1
     obstruction_cell = 1
-    assert np.isclose(obstruction_geom.length_cm[obstruction_cell], 25.0)
+    assert np.isclose(
+        obstruction_geom.length_cm[obstruction_cell], 25.0, **_TOL_ROUNDOFF,
+    )
     # The duct sits behind the cathode surface, so it occupies negative z and
     # pushes the mesh further back without changing where the cathode sits.
     (obstruction_cathode_face,) = obstruction_geom.cathode_face_indices
-    assert np.isclose(obstruction_geom.z_edges_cm[obstruction_cathode_face], 0.0)
-    assert np.isclose(obstruction_geom.z_edges_cm[-1], obstruction_params["Lm"])
+    assert np.isclose(
+        obstruction_geom.z_edges_cm[obstruction_cathode_face], 0.0, **_TOL_ROUNDOFF,
+    )
+    assert np.isclose(
+        obstruction_geom.z_edges_cm[-1], obstruction_params["Lm"], **_TOL_ROUNDOFF,
+    )
     assert np.isclose(
         obstruction_geom.z_edges_cm[0],
         -(obstruction_params["plenum_length_cm"] + 25.0),
+        **_TOL_ROUNDOFF,
     )
     # Annular duct: open area and hydraulic radius reduce independently.
     assert np.isclose(
         obstruction_geom.neutral_area_cm2[obstruction_cell],
         np.pi * (obstruction_params["Rm"] ** 2 - 25.0**2),
+        **_TOL_ROUNDOFF,
     )
     assert np.isclose(
         obstruction_geom.neutral_hydraulic_radius_cm[obstruction_cell],
         obstruction_params["Rm"] - 25.0,
+        **_TOL_ROUNDOFF,
     )
     # The plasma wall moves to the obstruction<->cathode face: everything behind
     # the cathode is plasma-dead.
@@ -767,6 +790,7 @@ def _case_variable_area_well_balancedness(
     assert np.isclose(
         obstruction_geom.neutral_face_area_cm2[obstruction_cell],
         obstruction_geom.neutral_area_cm2[obstruction_cell],
+        **_TOL_ROUNDOFF,
     )
     obstruction_coeff = neutral_exchange_coefficients(
         geometry=obstruction_geom,
@@ -785,8 +809,11 @@ def _case_variable_area_well_balancedness(
     assert np.isclose(
         rod_geom.neutral_area_cm2[rod_plenum],
         np.pi * (rod_params["Rm"] ** 2 - 10.0**2),
+        **_TOL_ROUNDOFF,
     )
-    assert np.isclose(rod_geom.neutral_hydraulic_radius_cm[rod_plenum], rod_params["Rm"])
+    assert np.isclose(
+        rod_geom.neutral_hydraulic_radius_cm[rod_plenum], rod_params["Rm"], **_TOL_ROUNDOFF,
+    )
 
     # M3: heat and neutrals are throttled by the transparency (1-eta), but the
     # advective plasma face stays OPEN -- the anode removes plasma through the
@@ -794,10 +821,13 @@ def _case_variable_area_well_balancedness(
     # same particles twice. The cathode surface blocks everything.
     transparency = 1.0 - resolved_params["eta"]
     assert resolved_geom.plasma_transmission[anode_face] == 1.0
-    assert np.isclose(resolved_geom.heat_transmission[anode_face], transparency)
+    assert np.isclose(
+        resolved_geom.heat_transmission[anode_face], transparency, **_TOL_ROUNDOFF,
+    )
     assert np.isclose(
         resolved_geom.neutral_face_area_cm2[anode_face],
         transparency * np.pi * resolved_params["Rm"] ** 2,
+        **_TOL_ROUNDOFF,
     )
     assert resolved_geom.plasma_transmission[cathode_face] == 0.0
     assert resolved_geom.heat_transmission[cathode_face] == 0.0
@@ -807,7 +837,9 @@ def _case_variable_area_well_balancedness(
         for f in range(1, resolved_geom.cells)
         if f not in (cathode_face, anode_face)
     ]
-    assert np.allclose(resolved_geom.plasma_transmission[open_faces], 1.0)
+    assert np.allclose(
+        resolved_geom.plasma_transmission[open_faces], 1.0, **_TOL_ROUNDOFF,
+    )
 
     # M3: eta = 0 is the legacy limit -- a fully transparent anode.
     transparent_params = dict(resolved_params)
@@ -819,6 +851,7 @@ def _case_variable_area_well_balancedness(
     assert np.isclose(
         transparent_geom.neutral_face_area_cm2[anode_face],
         np.pi * transparent_params["Rm"] ** 2,
+        **_TOL_ROUNDOFF,
     )
     # The anode's plasma face is always fully open: the mesh removes plasma
     # through the Bohm sheath flux at its wires, so shrinking the face too
@@ -847,7 +880,7 @@ def _case_variable_area_well_balancedness(
     untouched = [
         c for c in range(resolved_geom.cells) if c not in (anode_face - 1, anode_face)
     ]
-    assert np.allclose(collected.n[untouched], 0.0)
+    assert np.allclose(collected.n[untouched], 0.0, **_TOL_ROUNDOFF)
     collected_scale = np.sum(
         np.abs(collected.n * resolved_geom.plasma_volume_cm3)
         + np.abs(collected.nn * resolved_geom.neutral_volume_cm3)
@@ -857,6 +890,7 @@ def _case_variable_area_well_balancedness(
         particle_inventory_rate(collected, resolved_geom),
         0.0,
         atol=1e-12 * collected_scale,
+        rtol=1e-12,
     )
     # Bohm collection is set by the sheath, not the drift: it is unchanged when
     # the bulk flow is switched off, which the old directed-flux model got wrong.
@@ -869,12 +903,13 @@ def _case_variable_area_well_balancedness(
         ion_mass_g=resolved_sim.ion_mass_g,
     )
     still_collected = resolved_sim.anode_collection_rhs(state=still_state)
-    assert np.allclose(still_collected.n, collected.n)
+    assert np.allclose(still_collected.n, collected.n, **_TOL_ROUNDOFF)
     assert still_collected.n[anode_face] < 0.0
     # A transparent anode collects nothing.
     transparent_sim = LAPDSim1D(transparent_params, resolved_flags)
     assert np.allclose(
-        pack_state(transparent_sim.anode_collection_rhs(state=flowing_state)), 0.0
+        pack_state(transparent_sim.anode_collection_rhs(state=flowing_state)), 0.0,
+        **_TOL_ROUNDOFF,
     )
 
     # M4a: the cathode surface and end wall are absorbing Bohm faces.
@@ -902,8 +937,8 @@ def _case_variable_area_well_balancedness(
     assert absorbed.M[-1] < 0.0
     # Plasma-dead cells are untouched: an interior absorbing face must not hand
     # anything to the plenum behind it.
-    assert np.allclose(absorbed.n[0], 0.0)
-    assert np.allclose(absorbed.M[0], 0.0)
+    assert np.allclose(absorbed.n[0], 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(absorbed.M[0], 0.0, **_TOL_ROUNDOFF)
     absorbed_scale = np.sum(
         np.abs(absorbed.n * resolved_geom.plasma_volume_cm3)
         + np.abs(absorbed.nn * resolved_geom.neutral_volume_cm3)
@@ -913,6 +948,7 @@ def _case_variable_area_well_balancedness(
         particle_inventory_rate(absorbed, resolved_geom),
         0.0,
         atol=1e-12 * absorbed_scale,
+        rtol=1e-12,
     )
 
     # M4b: the cathode circuit samples the plasma against the cathode surface, not
@@ -968,7 +1004,7 @@ def _case_variable_area_well_balancedness(
             * m5_geom.plasma_volume_cm3
         )
     ) * qe_SI
-    assert np.isclose(m5_result.I_i_a, m5_fluid_A, rtol=1e-12)
+    assert np.isclose(m5_result.I_i_a, m5_fluid_A, rtol=1e-12, atol=0.0)
     # The gap is hotter and denser than the column here, so the historical
     # cathode-scaled estimate is far off -- which is the point of the split.
     assert m5_result.I_i_a > 10.0 * (2.0 * resolved_params["eta"] * m5_result.I_i)
@@ -1380,6 +1416,7 @@ def _case_anode_disc_radius(build_geometry):
         disc_geom.neutral_face_area_cm2[disc_face],
         np.pi * 50.0**2 * (1.0 - eta_cfg * (40.0 / 50.0) ** 2),
         rtol=1e-12,
+        atol=0.0,
     )
     assert disc_geom.heat_transmission[disc_face] == 1.0 - eta_cfg
     try:
@@ -1584,6 +1621,7 @@ def _case_prescribed_area_trivial_profile_identity(
     assert np.isclose(
         float(_pa_step_geom.neutral_face_area_cm2[_pa_cells - 3]),
         np.pi * float(_pa_Rm[0]) ** 2,
+        **_TOL_ROUNDOFF,
     ), "the face at a bore step must restrict to the narrow side"
     # The plasma is untouched by a vessel-only change.
     assert np.array_equal(
@@ -2035,16 +2073,21 @@ def _case_mirror_field_loader():
         # and mesh gradients agree there).
         _mf_ramp = _mf.z_cm > 1910.0
         assert np.allclose(
-            _mf.dBdz_native_cell_gauss_per_cm[_mf_ramp], -2.0, atol=1e-9
+            _mf.dBdz_native_cell_gauss_per_cm[_mf_ramp], -2.0, atol=1e-9,
+            rtol=1e-12,
         ), "dB/dz must be gauss per CM"
         assert np.allclose(
-            _mf.dBdz_mesh_cell_gauss_per_cm[_mf_ramp], -2.0, atol=1e-9
+            _mf.dBdz_mesh_cell_gauss_per_cm[_mf_ramp], -2.0, atol=1e-9,
+            rtol=1e-12,
         )
         # Mirror ratio is a pure ratio of the same array.
         assert np.allclose(
-            _mf.mirror_ratio_cell, _mf.B_cell_gauss / _mf.B_min_gauss
+            _mf.mirror_ratio_cell, _mf.B_cell_gauss / _mf.B_min_gauss,
+            **_TOL_ROUNDOFF,
         )
-        assert np.allclose(_mf.mirror_ratio_bulk_cell, _mf.B_cell_gauss / 1400.0)
+        assert np.allclose(
+            _mf.mirror_ratio_bulk_cell, _mf.B_cell_gauss / 1400.0, **_TOL_ROUNDOFF,
+        )
         assert _mf.B_min_gauss == _mf.B_cell_gauss.min()
         assert _mf.B_max_gauss == _mf.B_cell_gauss.max()
         # The flux surface is NaN outside the trace and masked past first
@@ -2068,7 +2111,8 @@ def _case_mirror_field_loader():
         # the flat interior it equals the point sample.
         _mf_flat = _mf.z_cm < 1800.0
         assert np.allclose(
-            _mf.B_cell_average_gauss[_mf_flat], _mf.B_cell_gauss[_mf_flat]
+            _mf.B_cell_average_gauss[_mf_flat], _mf.B_cell_gauss[_mf_flat],
+            **_TOL_ROUNDOFF,
         )
         # The two end-coil cases are NOT small perturbations of each other,
         # which is why 'case' has no default reading.
@@ -2077,7 +2121,8 @@ def _case_mirror_field_loader():
         )
         _mf_solved = ~_mf.interior_fill_cell
         assert np.allclose(
-            _mf_off.B_cell_gauss[_mf_solved], 0.5 * _mf.B_cell_gauss[_mf_solved]
+            _mf_off.B_cell_gauss[_mf_solved], 0.5 * _mf.B_cell_gauss[_mf_solved],
+            **_TOL_ROUNDOFF,
         )
 
 
@@ -2258,10 +2303,11 @@ def _case_mirror_half_column_mesh():
     assert str(wall.cell_role[-1]) == "end_wall"
     far = np.asarray(geom.length_cm[-128:], dtype=float)
     assert np.all(far == far[0]), far
-    assert math.isclose(float(far[0]), 7.466015625000001, rel_tol=1e-14)
+    assert math.isclose(float(far[0]), 7.466015625000001, rel_tol=1e-14, abs_tol=0.0)
     assert float(geom.length_cm[-129]) == 10.0  # the source region's last
     assert math.isclose(
-        float(np.sum(geom.length_cm[-128:])), 1058.9 - 103.25, rel_tol=1e-13
+        float(np.sum(geom.length_cm[-128:])), 1058.9 - 103.25, rel_tol=1e-13,
+        abs_tol=0.0,
     )
     # The absorbing faces are the cathode face alone.
     assert list(np.flatnonzero(geom.plasma_absorbing)) == list(
@@ -2578,7 +2624,7 @@ def _case_mirror_puff_row_reflection():
     assert np.allclose(small_mirror, image, rtol=0.0, atol=1.0e-12), float(
         np.max(np.abs(small_mirror - image))
     )
-    assert math.isclose(float(np.sum(small_mirror)), 1.0, rel_tol=1e-12)
+    assert math.isclose(float(np.sum(small_mirror)), 1.0, rel_tol=1e-12, abs_tol=0.0)
 
     # (c) The end wall and twin geometries take the unmirrored row.
     wall = build_geometry(params, flags)
