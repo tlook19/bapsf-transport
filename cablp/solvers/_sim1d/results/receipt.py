@@ -239,7 +239,12 @@ class ParticleReceipt:
                 self._unbooked(name, xp, w)
             elif name == "neutral_sources":
                 self._unbooked(name, xp, w)
-                self._book_sources(tally, name, site, source_parts, w)
+                if engaged:
+                    # The engine owns the neutrals: the term's rows are
+                    # stripped and the puff and pumps are the engine's own.
+                    self._unbooked(name, xn, w)
+                else:
+                    self._book_sources(tally, name, site, source_parts, w)
             elif name in _EXCHANGE_TERMS:
                 clearing, sign = _EXCHANGE_TERMS[name]
                 if sign > 0:
@@ -401,17 +406,26 @@ class ParticleReceipt:
             v = float(ledger[f"loss_pump_{side}"])
             self._add_scalar(f"kinetic_neutrals.pump_{side}", NEUTRAL, PUMP,
                              "one-signed", _ENGINE_SITE, v, abs(v))
-        internal = 0.0
+        # Everything else moves atoms inside the engine's inventory: the
+        # charge-exchange, elastic, wall, mesh, baffle and closed-face pairs,
+        # and the end planes' outflow into the lagged return buffers (the
+        # buffers are part of the inventory) less the pumped share, against
+        # the buffers' release. Net, it is the change of the buffers.
+        net = 0.0
+        gross = 0.0
         for key, value in ledger.items():
             if key.startswith("birth_"):
                 if key[len("birth_"):] not in external_births:
-                    internal += abs(float(value))
+                    net += float(value)
+                    gross += abs(float(value))
             elif key.startswith("loss_") and key not in (
                 "loss_ionization", "loss_pump_L", "loss_pump_R"
             ):
-                internal += abs(float(value))
+                net -= float(value)
+                gross += abs(float(value))
+        net += float(ledger["loss_pump_L"]) + float(ledger["loss_pump_R"])
         self._add_scalar("kinetic_neutrals.internal", NEUTRAL, NEUTRAL,
-                         "signed", _ENGINE_SITE, 0.0, internal)
+                         "signed", _ENGINE_SITE, net, gross)
 
     # ------------------------------------------------------------ saves
 
@@ -592,6 +606,26 @@ _PART_REASON = {
     "floor_neutral_density": "column and annulus neutral density floor "
     "additions at the floor ledger's weights, before engagement",
 }
+_PART_REASON.update({
+    "kinetic_neutrals.ionization": "the engine's ionization debit at its "
+    "tick, the side of exchange:ionization opposite the plasma's births",
+    "kinetic_neutrals.recombination": "recombination births at the tick, "
+    "from the counted recombination channel",
+    "kinetic_neutrals.cathode_face": "cathode-face recycle births at the "
+    "tick (thermal and jet shares), from the counted channel",
+    "kinetic_neutrals.end_wall": "end wall recycle births at the tick "
+    "(thermal and jet shares), from the counted channel",
+    "kinetic_neutrals.anode": "anode return births at the tick (thermal and "
+    "jet shares), from the counted channel",
+    "kinetic_neutrals.puff": "the gas puff the engine births at its tick",
+    "kinetic_neutrals.pump_L": "the pumped share of the left end plane's "
+    "outflow",
+    "kinetic_neutrals.pump_R": "the pumped share of the right end plane's "
+    "outflow",
+    "kinetic_neutrals.internal": "transport inside the engine's inventory "
+    "(collision rebirths, wall, mesh, baffle and closed-face returns, end "
+    "buffers): a self-entry on neutral_particles",
+})
 _OUTSIDE_RHS = {
     "floor_density": _PART_REASON["floor_density"],
     "floor_neutral_density": _PART_REASON["floor_neutral_density"],
