@@ -235,6 +235,7 @@ _CASE_ORDER = (
     "anode-pinned-share-knife-edge",
     "anode-pinned-share-tolerance-decades",
     "phase-boundary-one-ulp-above-step",
+    "handoff-surface-emission-solver-site",
 )
 
 
