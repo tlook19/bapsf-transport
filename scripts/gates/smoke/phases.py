@@ -2228,3 +2228,149 @@ def _case_phase_boundary_one_ulp_above_step():
         afterglow_start + params["tau_afterglow"],
         **_TOL_ROUNDOFF,
     )
+
+
+# --------------------------------------------------------------------
+# handoff-surface-emission-solver-site
+# --------------------------------------------------------------------
+@_case("handoff-surface-emission-solver-site", historical_stance=True)
+def _case_handoff_surface_emission_solver_site():
+    """The solver's own warming update books emission cooling on open circuit.
+
+    Guards the accepted-step surface-warming update in the solver, not the
+    term function: an open circuit is zero NET current, not zero emission, so
+    every accepted open-circuit step still books
+    ``dt * I_eth_star * (phi_wf,eff + 2 k_B T_s)`` into the surface ledger's
+    ``emis`` row. Mutation it catches: the retired
+    ``I_emis = 0.0 if floating else I_eth_star`` form at the solver site.
+
+    REGIME: the reference template with current-mode phases, no neutral fill
+    and no puff or pump, at dt = 1e-10 s (the configuration of
+    ``phase-boundary-one-ulp-above-step``). The discharge hands on a loop
+    current of about 0.01 A, so the hand-off opens the circuit, and the last
+    two accepted steps run their cathode solve on the open circuit with
+    ``I_eth_star`` near 0.28 A at ``T_s`` near the 1910 K base temperature.
+
+    OBSERVATION: two read-only spies, removed before any assertion. A
+    method-level wrapper on this instance's ``_accept_step_attempt`` reads,
+    before each accepted step, the step's dispatched solve's ``floating``
+    label, ``dt``, the pre-update ``T_s`` and coverage ``theta`` and the
+    ledger's ``emis`` row, and after it the row again. The honest
+    accepted-state re-solve the warming update consumes is a local of that
+    method, so its result is read where it leaves
+    ``idriven_result_evaluator`` (the solver module's own reference to it,
+    which the accept path calls once per step and nothing else in the solver
+    module calls).
+
+    EXPECTATION, constructed from the cathode surface power balance in
+    ``MODEL.md``: ``P_emis = I_eth_star (phi_wf + 2 k_B T_s)`` with the
+    work function the coverage-weighted
+    ``phi_wf,eff = phi_clean + (phi_wf - phi_clean) theta`` and
+    ``k_B = 8.617333262e-5 eV/K``, so the ledger [J] gains ``dt * P_emis``.
+
+    NOT ASSERTED: continuity of the solver's own emission power from the last
+    driven step to the first open-circuit step. ``I_eth_star`` moves between
+    them (0.28606 A at a 0.0112 A loop current, 0.28080 A at zero) because
+    the sheath solve responds to the loop current, and that response has no
+    expectation this case can construct outside the solve.
+    """
+    import cablp.solvers._sim1d.solver as _hs_solver_mod
+
+    _hs_p, _hs_f = _base_config()
+    _hs_dt = 1.0e-10
+    _hs_p.update({
+        "gas_puff_enabled": False,
+        "pump_enabled": False,
+        "dt_save": 0.0,
+        "phase_transition_mode": "current",
+        "tau_prebreakdown": 5.0e-10,
+        "tau_discharge": 5.0e-10,
+        "tau_afterglow": 1.0e-10,
+        "I_prebreakdown": 1.0e-9,
+        "I_breakdown": 1.0e-9,
+        # run() is called directly, so no equilibration seed is asked for.
+        "initial_neutral_state": "fill",
+    })
+    _hs_f["cathode_coupling"] = True
+    _hs_sim = LAPDSim1D(_hs_p, _hs_f)
+
+    _hs_steps = []
+    _hs_honest = []
+    _hs_eval = _hs_solver_mod.idriven_result_evaluator
+    _hs_accept = _hs_sim._accept_step_attempt
+
+    def _hs_eval_spy(*args, **kwargs):
+        solve_at = _hs_eval(*args, **kwargs)
+
+        def _hs_solve_at(I_A):
+            out = solve_at(I_A)
+            _hs_honest.append((float(I_A), out))
+            return out
+
+        return _hs_solve_at
+
+    def _hs_accept_spy(attempt):
+        dispatched = attempt.solver_cache.cathode_solve
+        row = {
+            "floating": (
+                dispatched is not None
+                and bool(dispatched.metadata.get("floating", False))
+            ),
+            "dt": float(attempt.dt),
+            "T_s": float(_hs_sim._cathode_Ts_K),
+            "theta": float(_hs_sim._cathode_theta),
+            "emis_before": float(_hs_sim._cathode_energy_ledger_J["emis"]),
+        }
+        del _hs_honest[:]
+        out = _hs_accept(attempt)
+        row["emis_after"] = float(_hs_sim._cathode_energy_ledger_J["emis"])
+        row["honest"] = list(_hs_honest)
+        _hs_steps.append(row)
+        return out
+
+    _hs_sim._accept_step_attempt = _hs_accept_spy
+    _hs_solver_mod.idriven_result_evaluator = _hs_eval_spy
+    try:
+        _hs_sim.run(dt=_hs_dt)
+    finally:
+        _hs_solver_mod.idriven_result_evaluator = _hs_eval
+        del _hs_sim._accept_step_attempt
+
+    _hs_kB_eV_per_K = 8.617333262e-5
+    _hs_phi_clean = float(_hs_p["cathode_phiwf_clean_eV"])
+    _hs_phi_dirty = float(_hs_p["phi_wf"])
+    _hs_floating = [r for r in _hs_steps if r["floating"]]
+    # LIVENESS: accepted open-circuit warming updates were observed (two at
+    # this configuration), each with exactly one honest re-solve, read at
+    # zero loop current, and a positive released current.
+    assert _hs_floating, [r["floating"] for r in _hs_steps]
+    for _hs_row in _hs_floating:
+        assert len(_hs_row["honest"]) == 1, _hs_row
+        _hs_I_loop, _hs_res = _hs_row["honest"][0]
+        assert _hs_I_loop == 0.0, _hs_row
+        _hs_I_eth_star = float(_hs_res.I_eth_star)
+        assert _hs_I_eth_star > 0.0, _hs_row
+
+        _hs_phi_eff = _hs_phi_clean + (
+            _hs_phi_dirty - _hs_phi_clean
+        ) * _hs_row["theta"]
+        _hs_expected_J = _hs_row["dt"] * (
+            _hs_I_eth_star
+            * (_hs_phi_eff + 2.0 * _hs_kB_eV_per_K * _hs_row["T_s"])
+        )
+        _hs_booked_J = _hs_row["emis_after"] - _hs_row["emis_before"]
+        # The expected step (8.98e-11 J on both steps) is resolved by the
+        # cumulative row: measured 8.7e14 times spacing(emis_after), so a
+        # booking at roundoff is distinguishable from no booking. The measured
+        # booked/expected ratio is 1 to within 3.4e-16; under the retired form
+        # the booked step is exactly 0.0, a ratio of 0.
+        assert _hs_expected_J > 1.0e6 * np.spacing(_hs_row["emis_after"]), (
+            _hs_expected_J, _hs_row,
+        )
+        # Roundoff class: the expression repeats the solver's arithmetic
+        # (dt times I times (phi + 2 k_B T)); the only extra rounding is the
+        # difference of the cumulative row, bounded by
+        # spacing(emis_after) / expected = 1.2e-15 relative here.
+        assert np.isclose(_hs_booked_J, _hs_expected_J, **_TOL_ROUNDOFF), (
+            _hs_booked_J, _hs_expected_J, _hs_row,
+        )
