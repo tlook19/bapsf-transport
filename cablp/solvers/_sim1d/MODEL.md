@@ -481,7 +481,14 @@ much of the active plasma sat below the table edge at each save.
 **Recombination is a sink on every field**, at the local plasma moments: it
 removes $S_\text{rec}$ particles, $m_i u S_\text{rec}$ of momentum, and
 $\tfrac32T_eS_\text{rec}$, $\tfrac32T_iS_\text{rec}$ of electron and ion
-energy, returning the particle to the gas.
+energy, returning the particle to the gas. The ion's share is handed to the
+neutral it becomes where the neutral energy is evolved; the electron's
+$\tfrac32T_eS_\text{rec}$ has no receiving row in the model and leaves as an
+external sink, which the power ledger labels radiation
+(`recombination_rad_loss`). The ionization energy $I_\text{ion}$ paid at each
+ionization is not returned at recombination in the standard booking; the
+default-off `recombination_energy_return` adds the pair
+$I_\text{ion}S_\text{rec}-P_\text{PRB}$ to the electrons.
 
 $Q_\text{inel}$ is the electron inelastic cooling, three named channels — a
 POSITIVE loss, which is why it enters the electron equations above as
@@ -1287,11 +1294,13 @@ The **surface jets** split a counted stream by a particle reflection fraction
 $R_N$ and a **total** reflected energy fraction $R_E$, so the $R_N$
 backscattered atoms carry all of $R_E$ and each leaves with
 
-$$\varepsilon_\text{back}=\frac{R_E}{R_N}\left(\phi+T_i\right),$$
+$$\varepsilon_\text{back}=\frac{R_E}{R_N}\,\varepsilon_\text{inc},\qquad \varepsilon_\text{inc}=\begin{cases}\max\left(\max(\phi_c,0)+\tfrac12T_e,\ 0\right)&\text{cathode}\\\max\left(\phi_a+T_i,\ 0\right)&\text{anode}\end{cases}$$
 
-$\phi=\phi_c$ at the cathode (clamped at zero before the sum) and $\phi_a$ at
-the anode, the sum clamped at zero in both; the end wall jet reads its arrival
-energy from $T_e$ and $T_i$ alone. **The three channels handle a zero clamped
+the per-ion incident energy: at the cathode the circuit's own per-ion energy, a
+Bohm ion's half-$T_e$ directed energy from the presheath plus the clamped
+cathode drop, which is the energy $P_\text{ion}$ credits the surface with; at
+the anode the unclamped anode drop plus $T_i$. The end wall jet reads its
+arrival energy from $T_e$ and $T_i$ alone. **The three channels handle a zero clamped
 incident energy differently**: the anode and end wall jets launch nothing from
 such a cell, while the cathode jet is governed by its arming latch and its
 launch builder REFUSES a counted launch at or below zero energy rather than

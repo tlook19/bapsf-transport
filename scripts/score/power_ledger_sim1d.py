@@ -377,8 +377,10 @@ CHANNEL_PHASE = {
          "recombination, which recombination_rad_loss books"),
     "recombination_energy_return":
         ("AFTERGLOW-ACTIVE",
-         "the (3/2) k Ti the recombining ion hands to the neutral it "
-         "becomes; follows the recombination rate"),
+         "the electron-energy pair I_ion*S_rec - P_PRB (the binding "
+         "energy credited per recombination less the ADAS recombination "
+         "radiation) when recombination_energy_return is on; zero when it "
+         "is off; follows the recombination rate"),
     "recombination_rad_loss":
         ("AFTERGLOW-ACTIVE",
          "energy radiated away in radiative recombination; follows the same "
