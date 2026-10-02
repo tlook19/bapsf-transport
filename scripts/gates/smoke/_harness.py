@@ -111,6 +111,35 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
         sys.path.insert(0, _dir)
 
 
+# ----------------------------------------------------------------------
+# Named comparison tolerances. numpy's isclose/allclose default to
+# rtol=1e-5, atol=1e-8, which silently passes any two numbers smaller than
+# 1e-8 (a time in seconds, a rate in s^-1 cm^3) and checks identities the
+# code holds to roundoff at five digits. Every comparison in a case module
+# states both tolerances, either explicitly with its origin beside it or by
+# unpacking one of these classes; ``_assert_comparisons_carry_tolerances``
+# enforces that at import.
+# ----------------------------------------------------------------------
+# Roundoff: identities the code holds through the same floating-point
+# arithmetic up to reordering. 1e-12 relative is a few thousand ulps of
+# float64 (eps = 2.2e-16), room for reordered sums over a few hundred
+# cells, and atol=0.0 so a small expected value is still compared
+# relatively.
+_TOL_ROUNDOFF = {"rtol": 1e-12, "atol": 0.0}
+
+# Unadjudicated: numpy's defaults written out. Marks a comparison whose
+# tolerance has no stated numerical origin yet; it is the value the
+# comparison already ran at, kept so the assertion's strength is unchanged.
+_TOL_UNADJUDICATED = {"rtol": 1e-5, "atol": 1e-8}
+
+#: The classes a case module may unpack (``**NAME``) in place of explicit
+#: tolerances.
+_TOLERANCE_CLASSES = {
+    "_TOL_ROUNDOFF": _TOL_ROUNDOFF,
+    "_TOL_UNADJUDICATED": _TOL_UNADJUDICATED,
+}
+
+
 def _cov_blank_rhs_term(cells, n_row):
     """Return a fresh 5-row RHS bundle carrying ``n_row`` and zeros elsewhere.
 
@@ -597,6 +626,97 @@ def _assert_case_bodies_reachable():
             "smoke case body has unreachable statements -- those assertions "
             f"are silently not running: {where}. Move the terminating "
             "statement to the END of the case body."
+        )
+
+
+# ----------------------------------------------------------------------
+# Comparison tolerances, asserted at import.
+#
+# A bare ``np.isclose(a, b)`` compares at numpy's defaults, rtol=1e-5 and
+# atol=1e-8, and nothing on the call says so: two times of order 1e-10 s pass
+# whatever their values, and an identity held to roundoff is checked at five
+# digits. So every closeness comparison in a case module must state both
+# tolerances on the call (``rtol`` and ``atol``; ``rel_tol`` and ``abs_tol``
+# for ``math.isclose``) or unpack one of ``_TOLERANCE_CLASSES``. Like the
+# reachability check this is decided from the parse tree alone, so it holds
+# for every line of a module, whether or not a run reaches it.
+# ----------------------------------------------------------------------
+_NUMPY_CLOSENESS_CALLS = ("isclose", "allclose", "assert_allclose")
+
+
+def _dotted_name(node):
+    """Return the dotted text of a Name/Attribute chain, else None."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def _untoleranced_comparisons(source):
+    """Return one ``(line, call, missing)`` per closeness call lacking tolerances.
+
+    Takes the SOURCE rather than reading a file, so the check can be pointed
+    at any revision of a module. A call passes when it names both tolerances
+    as keywords or unpacks (``**NAME``) one of ``_TOLERANCE_CLASSES``.
+    """
+    findings = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _dotted_name(node.func)
+        if name is None:
+            continue
+        if name == "math.isclose":
+            required = ("rel_tol", "abs_tol")
+        elif name.split(".")[-1] in _NUMPY_CLOSENESS_CALLS and (
+            name.split(".")[0] in ("np", "numpy")
+        ):
+            required = ("rtol", "atol")
+        else:
+            continue
+        named = {k.arg for k in node.keywords if k.arg is not None}
+        unpacked = {
+            _dotted_name(k.value).split(".")[-1]
+            for k in node.keywords
+            if k.arg is None and _dotted_name(k.value) is not None
+        }
+        if unpacked & set(_TOLERANCE_CLASSES) and name != "math.isclose":
+            continue
+        missing = [t for t in required if t not in named]
+        if missing:
+            findings.append((node.lineno, name, missing))
+    return sorted(findings)
+
+
+def _assert_comparisons_carry_tolerances():
+    """Fail at import if a case module compares without explicit tolerances.
+
+    Each module that registers a case is parsed whole, helpers included.
+    """
+    files = sorted({inspect.getsourcefile(entry.fn) for entry in _CASES})
+    where = []
+    for source_file in files:
+        for line, name, missing in _untoleranced_comparisons(
+            Path(source_file).read_text(encoding="utf-8")
+        ):
+            where.append(
+                f"{Path(source_file).name}:{line} {name} without "
+                f"{' and '.join(missing)}"
+            )
+    for name, tolerance in _TOLERANCE_CLASSES.items():
+        if set(tolerance) != {"rtol", "atol"}:
+            where.append(f"_harness.py: {name} must hold exactly rtol and atol")
+    if where:
+        raise AssertionError(
+            "smoke comparison without explicit tolerances -- numpy's defaults "
+            "(rtol=1e-5, atol=1e-8) are not a stated tolerance: "
+            + "; ".join(where)
+            + ". Pass both tolerances on the call with their origin beside "
+            "them, or unpack one of _TOLERANCE_CLASSES in smoke/_harness.py."
         )
 
 

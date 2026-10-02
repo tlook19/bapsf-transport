@@ -20,7 +20,14 @@ from cablp.solvers._sim1d.physics.sources import (
     ion_neutral_collision_frequency,
 )
 
-from ._harness import _base_config, _base_sim, _case, _resolved_cathode_flags
+from ._harness import (
+    _TOL_ROUNDOFF,
+    _TOL_UNADJUDICATED,
+    _base_config,
+    _base_sim,
+    _case,
+    _resolved_cathode_flags,
+)
 
 
 # --------------------------------------------------------------------
@@ -47,7 +54,7 @@ def _case_helium_only_reaction_rates(dt_default):
     )
     heat_rhs = sim.heat_conduction_rhs(state=heat_state)
     for values in (heat_rhs.n, heat_rhs.nn, heat_rhs.M):
-        assert np.allclose(values, 0.0)
+        assert np.allclose(values, 0.0, **_TOL_ROUNDOFF)
     assert np.all(np.isfinite(heat_rhs.Ee))
     assert np.all(np.isfinite(heat_rhs.Ei))
     assert np.min(heat_rhs.Ee) < 0.0 < np.max(heat_rhs.Ee)
@@ -59,6 +66,7 @@ def _case_helium_only_reaction_rates(dt_default):
         np.sum(heat_rhs.Ee * geom.plasma_volume_cm3),
         0.0,
         atol=heat_energy_tol,
+        rtol=1e-12,
     )
     heat_ion_energy_tol = 1e-12 * np.sum(
         np.abs(heat_rhs.Ei * geom.plasma_volume_cm3)
@@ -67,6 +75,7 @@ def _case_helium_only_reaction_rates(dt_default):
         np.sum(heat_rhs.Ei * geom.plasma_volume_cm3),
         0.0,
         atol=heat_ion_energy_tol,
+        rtol=1e-12,
     )
     heat_dt = sim.suggest_timestep(y=pack_state(heat_state, neutral_two_zone=True))
     assert np.isfinite(heat_dt.dt_heat_conduction)
@@ -80,8 +89,8 @@ def _case_helium_only_reaction_rates(dt_default):
         geometry=geom,
         heat_conduction=False,
     )
-    assert np.allclose(disabled_heat.Ee, 0.0)
-    assert np.allclose(disabled_heat.Ei, 0.0)
+    assert np.allclose(disabled_heat.Ee, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(disabled_heat.Ei, 0.0, **_TOL_ROUNDOFF)
 
     implicit_heat_state = sim.implicit_heat_conduction_step(
         dt=heat_dt.dt_heat_conduction,
@@ -102,11 +111,13 @@ def _case_helium_only_reaction_rates(dt_default):
         np.sum((implicit_heat_state.Ee - heat_state.Ee) * geom.plasma_volume_cm3),
         0.0,
         atol=heat_energy_tol,
+        rtol=1e-12,
     )
     assert np.isclose(
         np.sum((implicit_heat_state.Ei - heat_state.Ei) * geom.plasma_volume_cm3),
         0.0,
         atol=heat_ion_energy_tol,
+        rtol=1e-12,
     )
 
     disabled_implicit = implicit_heat_conduction_step(
@@ -118,13 +129,19 @@ def _case_helium_only_reaction_rates(dt_default):
         dt=heat_dt.dt_heat_conduction,
         heat_conduction=False,
     )
-    assert np.allclose(disabled_implicit.Ee, heat_state.Ee)
-    assert np.allclose(disabled_implicit.Ei, heat_state.Ei)
+    assert np.allclose(disabled_implicit.Ee, heat_state.Ee, **_TOL_ROUNDOFF)
+    assert np.allclose(disabled_implicit.Ei, heat_state.Ei, **_TOL_ROUNDOFF)
 
     nonheat_rhs = sim.rhs(pack_state(heat_state, neutral_two_zone=True), include_heat_conduction=False)
     full_rhs = sim.rhs(pack_state(heat_state, neutral_two_zone=True), include_heat_conduction=True)
     heat_rhs_y = pack_state(heat_rhs, neutral_two_zone=True)
-    assert np.allclose(full_rhs - nonheat_rhs, heat_rhs_y)
+    # full_rhs - nonheat_rhs cancels every non-heat row, so its roundoff is a
+    # few ulps of |full_rhs| element by element, not of the heat row it leaves.
+    heat_cancellation_atol = 1e-12 * np.abs(full_rhs)
+    assert np.allclose(
+        full_rhs - nonheat_rhs, heat_rhs_y,
+        rtol=1e-12, atol=heat_cancellation_atol,
+    )
     rhs_terms = sim.rhs_terms(pack_state(heat_state, neutral_two_zone=True), include_heat_conduction=True)
     expected_rhs_terms = {
         # The column/annulus zone exchange: the two-zone split is
@@ -171,27 +188,42 @@ def _case_helium_only_reaction_rates(dt_default):
         for field_name in STATE_NAMES_1D:
             assert np.all(np.isfinite(getattr(term, field_name)))
         term_sum = term_sum + pack_state(term, neutral_two_zone=True)
-    assert np.allclose(term_sum, full_rhs)
+    assert np.allclose(term_sum, full_rhs, **_TOL_ROUNDOFF)
     nonheat_terms = sim.rhs_terms(
         pack_state(heat_state, neutral_two_zone=True),
         include_heat_conduction=False,
     )
-    assert np.allclose(pack_state(nonheat_terms["heat_conduction"], neutral_two_zone=True), 0.0)
+    assert np.allclose(
+        pack_state(nonheat_terms["heat_conduction"], neutral_two_zone=True), 0.0, **_TOL_ROUNDOFF,
+    )
     assert np.allclose(
         pack_state(rhs_terms["heat_conduction"], neutral_two_zone=True),
         full_rhs - nonheat_rhs,
+        rtol=1e-12,
+        atol=heat_cancellation_atol,
     )
     # The electrode electron sheath pair: with no cathode solve BOTH rows are
     # zero, and the anode row is energy-only (Ee) in every configuration.
-    assert np.allclose(pack_state(rhs_terms["cathode_surface_loss"], neutral_two_zone=True), 0.0)
-    assert np.allclose(pack_state(rhs_terms["anode_e_sheath_loss"], neutral_two_zone=True), 0.0)
+    assert np.allclose(
+        pack_state(rhs_terms["cathode_surface_loss"], neutral_two_zone=True), 0.0, **_TOL_ROUNDOFF,
+    )
+    assert np.allclose(
+        pack_state(rhs_terms["anode_e_sheath_loss"], neutral_two_zone=True), 0.0, **_TOL_ROUNDOFF,
+    )
     for _zero_field in ("n", "nn", "M", "Ei"):
         assert np.allclose(
-            getattr(rhs_terms["anode_e_sheath_loss"], _zero_field), 0.0
+            getattr(rhs_terms["anode_e_sheath_loss"], _zero_field), 0.0,
+            **_TOL_ROUNDOFF,
         )
-    assert np.allclose(pack_state(rhs_terms["beam_ionization_birth"], neutral_two_zone=True), 0.0)
-    assert np.allclose(pack_state(rhs_terms["beam_power_deposition"], neutral_two_zone=True), 0.0)
-    assert np.allclose(pack_state(rhs_terms["beam_ionization_cost"], neutral_two_zone=True), 0.0)
+    assert np.allclose(
+        pack_state(rhs_terms["beam_ionization_birth"], neutral_two_zone=True), 0.0, **_TOL_ROUNDOFF,
+    )
+    assert np.allclose(
+        pack_state(rhs_terms["beam_power_deposition"], neutral_two_zone=True), 0.0, **_TOL_ROUNDOFF,
+    )
+    assert np.allclose(
+        pack_state(rhs_terms["beam_ionization_cost"], neutral_two_zone=True), 0.0, **_TOL_ROUNDOFF,
+    )
 
     split_dt = min(1.0e-10, 0.1 * heat_dt.dt_heat_conduction)
     manual_explicit_y = ssprk2_step(
@@ -206,7 +238,10 @@ def _case_helium_only_reaction_rates(dt_default):
     )
     manual_split_y = sim.floor_state_vector(pack_state(manual_heat_state, neutral_two_zone=True))
     split_y = sim.operator_split_step(y=pack_state(heat_state, neutral_two_zone=True), dt=split_dt)
-    assert np.allclose(split_y, manual_split_y)
+    # Unadjudicated: the stance splits Strang (B/2, A, B/2) while the manual
+    # composition above is Lie (A, B); they agree to about 1e-9 relative in
+    # Ee at this dt, which this tolerance admits.
+    assert np.allclose(split_y, manual_split_y, **_TOL_UNADJUDICATED)
 
     no_heat_bound_dt = sim.suggest_timestep(
         y=pack_state(heat_state, neutral_two_zone=True),
@@ -256,6 +291,7 @@ def _case_sigma_in_phelps(knob_floors, knob_mass, knob_state):
                 0.5 * (Ti_probe + 0.025851)
             ),
             rtol=0.0,
+            atol=0.0,
         )
 
     # Reference state the ADAS cooling checks downstream read.
@@ -299,15 +335,16 @@ def _case_adas_atomic_rate_model():
     assert set(scd_stages) == {1, 2}
     # Interpolation at a grid node returns the tabulated value exactly.
     node = _adas.he_ionization_rate(10.0 ** scd_ne[10], 10.0 ** scd_te[15])
-    assert np.isclose(node, 10.0 ** scd_stages[1][15, 10], rtol=1e-12)
+    assert np.isclose(node, 10.0 ** scd_stages[1][15, 10], rtol=1e-12, atol=0.0)
     # Edge clamping: below/above the Te grid returns the edge value.
     lo = _adas.he_ionization_rate(1e12, 10.0 ** scd_te[0])
-    assert np.isclose(_adas.he_ionization_rate(1e12, 0.05), lo, rtol=1e-12)
+    assert np.isclose(_adas.he_ionization_rate(1e12, 0.05), lo, rtol=1e-12, atol=0.0)
     # Stepwise/metastable enhancement: effective SCD exceeds the direct
     # ground-state rate at low Te and converges toward it at high Te.
     assert _adas.he_ionization_rate(1e13, 5.0) > 2.0 * He_ion_rate_lkup(5.0)
     assert np.isclose(
-        _adas.he_ionization_rate(1e12, 100.0), He_ion_rate_lkup(100.0), rtol=0.1
+        _adas.he_ionization_rate(1e12, 100.0), He_ion_rate_lkup(100.0), rtol=0.1,
+        atol=0.0,
     )
     # Radiation-only cooling sits well below the IAEA fit (which carries the
     # ionization-potential loss).
@@ -337,6 +374,7 @@ def _case_adas_atomic_rate_model():
             _he_2p_excitation_cross_cm2(eps_probe),
             float(He_EIE_cross_DA(eps_probe, _b21p)),
             rtol=1e-12,
+            atol=0.0,
         )
     return locals()
 
@@ -414,6 +452,7 @@ def _case_he_singlet_manifold_registry(_b21p, _he_2p_excitation_cross_cm2):
             ),
             _he_2p_excitation_cross_cm2(eps_probe),
             rtol=1e-4,
+            atol=0.0,
         )
 
     # Every fitted level: zero at/below threshold, finite and non-negative

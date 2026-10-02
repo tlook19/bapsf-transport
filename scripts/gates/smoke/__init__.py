@@ -2,8 +2,8 @@
 
 ``scripts/gates/smoke_sim1d.py`` is the entry point; it calls ``main``. This
 package imports the harness and every case module, sorts the registry into
-``_CASE_ORDER``, and runs the two import-time registry checks (the case
-census and case-body reachability).
+``_CASE_ORDER``, and runs the three import-time registry checks (the case
+census, case-body reachability, and explicit comparison tolerances).
 
 A case module registers its cases with ``@_case`` when it is imported, so
 registration order follows the module list below. The run order is
@@ -18,6 +18,7 @@ from ._harness import (
     _PRODUCER,
     _assert_case_bodies_reachable,
     _assert_case_census,
+    _assert_comparisons_carry_tolerances,
     main,
 )
 from . import (  # noqa: F401  (imported to register their cases)
@@ -267,3 +268,4 @@ def _apply_case_order():
 _apply_case_order()
 _assert_case_census()
 _assert_case_bodies_reachable()
+_assert_comparisons_carry_tolerances()

@@ -58,6 +58,8 @@ from ._harness import (
     _CAPFIX_ESCAPE_I_A,
     _CAPFIX_ESCAPE_KWARGS,
     _CAPFIX_ESCAPE_PLASMA,
+    _TOL_ROUNDOFF,
+    _TOL_UNADJUDICATED,
     _anode_sink_config,
     _anode_sink_sim,
     _base_config,
@@ -196,10 +198,10 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     # lnLambda LITERAL PIN, against an independent literal, so a
     # transcription error shared by the helper and its consumers cannot
     # cancel out of a comparison built from both.
-    assert np.isclose(c_log_ei(3.0, 4.0e12), 10.1392, rtol=1e-5), c_log_ei(
+    assert np.isclose(c_log_ei(3.0, 4.0e12), 10.1392, rtol=1e-5, atol=0.0), c_log_ei(
         3.0, 4.0e12
     )
-    assert np.isclose(c_log_ei(12.0, 4.0e12), 11.9762, rtol=1e-5), c_log_ei(
+    assert np.isclose(c_log_ei(12.0, 4.0e12), 11.9762, rtol=1e-5, atol=0.0), c_log_ei(
         12.0, 4.0e12
     )
 
@@ -225,13 +227,13 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
         )
     # Knudsen: identical diffusivity at 30.8 cm and 10 cm cells, and it equals the
     # physical free-molecular value (2/3)*v_th*R.
-    assert np.isclose(knudsen_D[0], knudsen_D[1], rtol=1e-12)
+    assert np.isclose(knudsen_D[0], knudsen_D[1], rtol=1e-12, atol=0.0)
     expected_D = (
         (2.0 / 3.0)
         * neutral_thermal_speed(Tn_K=resolved_params["Tn_K"], mu_neutral=4)
         * resolved_params["Rm"]
     )
-    assert np.isclose(knudsen_D[0], expected_D, rtol=1e-12)
+    assert np.isclose(knudsen_D[0], expected_D, rtol=1e-12, atol=0.0)
 
     # M3: no parallel heat conduction crosses a cathode surface into the plenum.
     resolved_q = conductive_face_flux(
@@ -268,7 +270,7 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     assert dt_default.dt > 0.0
     assert dt_default.dt <= params["dt_max"]
     assert dt_default.dt >= params["dt_min"]
-    assert np.isclose(dt_default.time, 0.0)
+    assert np.isclose(dt_default.time, 0.0, **_TOL_ROUNDOFF)
     assert dt_default.phase == "pre_breakdown"
     assert dt_default.phase_cathode_enabled == 0.0
     assert dt_default.phase_gas_puff_enabled == 1.0
@@ -317,7 +319,7 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
         assert key in params
         assert key in cathode_boundary.circuit
         assert np.isfinite(cathode_boundary.circuit[key])
-        assert np.isclose(cathode_boundary.circuit[key], params[key])
+        assert np.isclose(cathode_boundary.circuit[key], params[key], **_TOL_ROUNDOFF)
     for cell in (cathode_boundary.source, cathode_boundary.end):
         for value in (
             cell.n,
@@ -339,7 +341,9 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     assert cathode_terms.metadata["source_index"] == cathode_face
     assert cathode_terms.metadata["end_index"] == geom.cells - 1
     for key, value in cathode_boundary.circuit.items():
-        assert np.isclose(cathode_terms.metadata["circuit"][key], value)
+        assert np.isclose(
+            cathode_terms.metadata["circuit"][key], value, **_TOL_ROUNDOFF,
+        )
     for values in (
         cathode_terms.rhs.n,
         cathode_terms.rhs.nn,
@@ -347,8 +351,8 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
         cathode_terms.rhs.Ee,
         cathode_terms.rhs.Ei,
     ):
-        assert np.allclose(values, 0.0)
-    assert np.allclose(pack_state(cathode_terms.rhs), 0.0)
+        assert np.allclose(values, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(pack_state(cathode_terms.rhs), 0.0, **_TOL_ROUNDOFF)
     disabled_cathode_solve = sim.solve_cathode_boundary()
     assert not disabled_cathode_solve.boundary.enabled
     assert disabled_cathode_solve.beam_result is None
@@ -371,10 +375,12 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     assert np.isclose(
         sim.next_phase_boundary_after(0.0),
         params["tau_prebreakdown"],
+        **_TOL_ROUNDOFF,
     )
     assert np.isclose(
         sim.next_phase_boundary_after(params["tau_prebreakdown"]),
         params["tau_prebreakdown"] + params["tau_discharge"],
+        **_TOL_ROUNDOFF,
     )
     neutral_phase_flags = dict(flags)
     neutral_phase_flags["Plasma"] = False
@@ -387,10 +393,13 @@ def _case_cathode_spitzer_and_base_boundary(cathode_face):
     neutral_phase_sim = LAPDSim1D(neutral_phase_params, neutral_phase_flags)
     assert neutral_phase_sim.phase_at_time(0.0) == "equilibrium_puff"
     assert neutral_phase_sim.phase_at_time(3.0e-10) == "equilibrium_off"
-    assert np.isclose(neutral_phase_sim.next_phase_boundary_after(0.0), 2.0e-10)
+    assert np.isclose(
+        neutral_phase_sim.next_phase_boundary_after(0.0), 2.0e-10, **_TOL_ROUNDOFF,
+    )
     assert np.isclose(
         neutral_phase_sim.next_phase_boundary_after(2.0e-10),
         5.0e-10,
+        **_TOL_ROUNDOFF,
     )
     neutral_puff_source = neutral_phase_sim.neutral_source_sink_rhs(time=0.0)
     neutral_off_source = neutral_phase_sim.neutral_source_sink_rhs(time=3.0e-10)
@@ -471,10 +480,13 @@ def _case_cathode_boundary_beam_terms(cathode_face):
     assert cathode_solve.metadata["enabled"] is True
     assert cathode_solve.metadata["floating"] is False
     assert cathode_solve.metadata["result_twin"] is None
-    assert np.isclose(cathode_solve.device_config.R_cath, params["R_cath"])
+    assert np.isclose(
+        cathode_solve.device_config.R_cath, params["R_cath"], **_TOL_ROUNDOFF,
+    )
     assert np.isclose(
         cathode_solve.device_config.A_c,
         np.pi * params["R_cath"] ** 2,
+        **_TOL_ROUNDOFF,
     )
     assert np.isfinite(cathode_solve.x0_next)
     assert cathode_solve.x0_twin_next is None
@@ -493,6 +505,7 @@ def _case_cathode_boundary_beam_terms(cathode_face):
     assert np.isclose(
         cached_cathode_solve.metadata["result"]["I_tot"],
         cathode_solve.metadata["result"]["I_tot"],
+        **_TOL_ROUNDOFF,
     )
     afterglow_time = params["tau_prebreakdown"] + params["tau_discharge"]
     floating_cathode_solve = cathode_sim.solve_cathode_boundary(
@@ -542,7 +555,8 @@ def _case_cathode_boundary_beam_terms(cathode_face):
     assert not np.any((_cath_Ee != 0.0) & (_an_Ee != 0.0))
     for _zero_field in ("n", "nn", "M", "Ei"):
         assert np.allclose(
-            getattr(cathode_loss_terms.anode_rhs, _zero_field), 0.0
+            getattr(cathode_loss_terms.anode_rhs, _zero_field), 0.0,
+            **_TOL_ROUNDOFF,
         )
     # THE ELECTRODE ROWS ARE CONTINUOUS ACROSS THE HAND-OFF. The open-circuit
     # afterglow is the current-driven solve read at I_tot = 0, so the same
@@ -557,7 +571,9 @@ def _case_cathode_boundary_beam_terms(cathode_face):
     assert np.all(
         np.isfinite(pack_state(afterglow_cathode_loss_terms.anode_rhs))
     )
-    assert not np.allclose(pack_state(afterglow_cathode_loss_terms.rhs), 0.0)
+    assert not np.allclose(
+        pack_state(afterglow_cathode_loss_terms.rhs), 0.0, **_TOL_UNADJUDICATED
+    )
     # Same row structure as the driven phase: disjoint Ee supports, and the
     # anode row carries Ee alone.
     _ag_cath_Ee = np.asarray(afterglow_cathode_loss_terms.rhs.Ee, dtype=float)
@@ -567,7 +583,8 @@ def _case_cathode_boundary_beam_terms(cathode_face):
     assert not np.any((_ag_cath_Ee != 0.0) & (_ag_an_Ee != 0.0))
     for _zero_field in ("n", "nn", "M", "Ei"):
         assert np.allclose(
-            getattr(afterglow_cathode_loss_terms.anode_rhs, _zero_field), 0.0
+            getattr(afterglow_cathode_loss_terms.anode_rhs, _zero_field), 0.0,
+            **_TOL_ROUNDOFF,
         )
     beam_birth_terms = cathode_sim.beam_ionization_rhs(
         cathode_solve=cathode_solve,
@@ -595,7 +612,8 @@ def _case_cathode_boundary_beam_terms(cathode_face):
                 continue
             split_beam_sum = split_beam_sum + getattr(split_term, split_field)
         assert np.allclose(
-            split_beam_sum, getattr(beam_birth_terms, split_field)
+            split_beam_sum, getattr(beam_birth_terms, split_field),
+            **_TOL_ROUNDOFF,
         ), split_field
     for split_name, split_term in split_beam_terms.items():
         if getattr(split_term, "nn_a", None) is not None:
@@ -603,17 +621,21 @@ def _case_cathode_boundary_beam_terms(cathode_face):
     assert np.all(beam_birth_terms.n >= 0.0)
     assert np.any(beam_birth_terms.n > 0.0)
     assert np.all(beam_birth_terms.nn <= 0.0)
-    assert np.allclose(beam_birth_terms.M, 0.0)
+    assert np.allclose(beam_birth_terms.M, 0.0, **_TOL_ROUNDOFF)
     assert np.all(beam_birth_terms.Ei >= 0.0)
     assert np.allclose(
         split_beam_terms["beam_ionization_birth"].n,
         beam_birth_terms.n,
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         split_beam_terms["beam_ionization_birth"].nn,
         beam_birth_terms.nn,
+        **_TOL_ROUNDOFF,
     )
-    assert np.allclose(split_beam_terms["beam_ionization_birth"].Ee, 0.0)
+    assert np.allclose(
+        split_beam_terms["beam_ionization_birth"].Ee, 0.0, **_TOL_ROUNDOFF,
+    )
     assert np.all(split_beam_terms["beam_power_deposition"].Ee >= 0.0)
     assert np.any(split_beam_terms["beam_power_deposition"].Ee > 0.0)
     assert np.all(split_beam_terms["beam_ionization_cost"].Ee <= 0.0)
@@ -622,10 +644,10 @@ def _case_cathode_boundary_beam_terms(cathode_face):
         split_beam_terms["beam_power_deposition"],
         split_beam_terms["beam_ionization_cost"],
     ):
-        assert np.allclose(zero_particle_term.n, 0.0)
-        assert np.allclose(zero_particle_term.nn, 0.0)
-        assert np.allclose(zero_particle_term.M, 0.0)
-        assert np.allclose(zero_particle_term.Ei, 0.0)
+        assert np.allclose(zero_particle_term.n, 0.0, **_TOL_ROUNDOFF)
+        assert np.allclose(zero_particle_term.nn, 0.0, **_TOL_ROUNDOFF)
+        assert np.allclose(zero_particle_term.M, 0.0, **_TOL_ROUNDOFF)
+        assert np.allclose(zero_particle_term.Ei, 0.0, **_TOL_ROUNDOFF)
     # Under the two-zone split nn is the COLUMN density, booked on V_col.
     beam_Vc, _beam_Va = neutral_zone_volumes(geom)
     beam_inventory_scale = np.sum(
@@ -641,6 +663,7 @@ def _case_cathode_boundary_beam_terms(cathode_face):
         ),
         0.0,
         atol=1e-12 * beam_inventory_scale,
+        rtol=1e-12,
     )
     return locals()
 
@@ -690,9 +713,9 @@ def _case_cathode_annular_solve_fixtures():
     r_one = solve_idriven(
         one_annulus, plasma_probe, I_tot_A=2823.3497327720015
     )
-    assert np.isclose(r_one.I_tot, r_uni.I_tot, rtol=1e-10)
-    assert np.isclose(r_one.phi_c, r_uni.phi_c, rtol=1e-10)
-    assert np.isclose(one_annulus.I_eth, uni_cfg.I_eth, rtol=1e-12)
+    assert np.isclose(r_one.I_tot, r_uni.I_tot, rtol=1e-10, atol=0.0)
+    assert np.isclose(r_one.phi_c, r_uni.phi_c, rtol=1e-10, atol=0.0)
+    assert np.isclose(one_annulus.I_eth, uni_cfg.I_eth, rtol=1e-12, atol=0.0)
 
     def _annular_cfg(T_s, R_cath=19.0, Rp=15.0, fwhm=28.0, n_annuli=10):
         """A ten-annulus device whose Richardson footprint is a gaussian of
@@ -777,7 +800,7 @@ def _case_cathode_current_driven_sheath_solve(
         ri = solve_idriven(id_cfg, id_plasmas[id_k], I_tot_A=id_I)
         id_regimes.add(ri.regime)
         assert ri.regime == id_regime, (id_k, ri.regime, id_regime)
-        assert np.isclose(ri.I_tot, id_I, rtol=1e-8), (id_k, ri.I_tot, id_I)
+        assert np.isclose(ri.I_tot, id_I, rtol=1e-8, atol=0.0), (id_k, ri.I_tot, id_I)
         # V_b contract: the I-driven V_b is the device voltage.
         id_v_dev = ri.phi_c + ri.V_p - ri.phi_a
         assert np.isclose(ri.V_b, id_v_dev, rtol=1e-8, atol=1e-8)
@@ -793,8 +816,8 @@ def _case_cathode_current_driven_sheath_solve(
     id_deg_ri = solve_idriven(gauss_cfg, id_plasmas[1], I_tot_A=id_deg_I)
     assert id_deg_ri.regime in ("virtual_cathode", "capability_limited")
     assert np.isfinite(id_deg_ri.phi_c) and np.isfinite(id_deg_ri.V_b)
-    assert np.isclose(id_deg_ri.I_tot, id_deg_I, rtol=1e-8)
-    assert np.isclose(id_deg_ri.I_eth_star, 1650.5947226668688, rtol=1e-6)
+    assert np.isclose(id_deg_ri.I_tot, id_deg_I, rtol=1e-8, atol=0.0)
+    assert np.isclose(id_deg_ri.I_eth_star, 1650.5947226668688, rtol=1e-6, atol=0.0)
     id_deg_repeat = solve_idriven(gauss_cfg, id_plasmas[1], I_tot_A=id_deg_I)
     assert id_deg_repeat.phi_c == id_deg_ri.phi_c  # deterministic
 
@@ -824,7 +847,7 @@ def _case_cathode_current_driven_sheath_solve(
     assert id_cap.I_tot >= 0.0
     # The kick is reported *at* the net-sheath ceiling, not wherever the
     # bracket expansion happened to land.
-    assert np.isclose(id_cap.phi_c, 1000.0, rtol=1e-9), id_cap.phi_c
+    assert np.isclose(id_cap.phi_c, 1000.0, rtol=1e-9, atol=0.0), id_cap.phi_c
     try:
         solve_idriven(uni_cfg, plasma_probe, I_tot_A=-1.0)
     except ValueError:
@@ -1185,7 +1208,7 @@ def _case_circuit_current_driven_integration():
     m3_solve = m3_sim.solve_cathode_boundary(update_cache=False)
     assert m3_solve.metadata["cathode_solver_model"] == "current_driven"
     assert np.isclose(
-        m3_solve.beam_result.result.I_tot, 800.0, rtol=1e-6
+        m3_solve.beam_result.result.I_tot, 800.0, rtol=1e-6, atol=0.0
     ) or m3_solve.beam_result.result.regime == "capability_limited"
     assert m3_solve.beam_result.result_twin is None
     m3_float = m3_sim.solve_cathode_boundary(floating=True, update_cache=False)
@@ -1266,7 +1289,7 @@ def _case_circuit_current_driven_integration():
         - 6.6e-6 * np.diff(m3_Iloop) / 1.0e-10
         - m3_params["R_comp"] * 0.5 * (m3_Iloop[1:] + m3_Iloop[:-1])
     )
-    assert np.allclose(m3_Vstep[1:], m3_recon, atol=0.5), (
+    assert np.allclose(m3_Vstep[1:], m3_recon, atol=0.5, rtol=1e-12), (
         m3_Vstep[1:], m3_recon
     )
     return locals()
@@ -1417,6 +1440,7 @@ def _case_cathode_power_balance_under_current_drive(
         sf_phieff,
         2.75 + (float(sf_params["phi_wf"]) - 2.75) * sf_theta,
         rtol=1e-12,
+        atol=0.0,
     )
     # phi_eff reaches the solve: the dispatched device config's Richardson
     # ceiling must grow as the surface cleans (regime-independent -- a
@@ -1435,6 +1459,7 @@ def _case_cathode_power_balance_under_current_drive(
         sf_lo.device_config.I_eth / sf_hi.device_config.I_eth,
         np.exp(sf_dphi / sf_kT),
         rtol=1e-9,
+        atol=0.0,
     )
 
     # M5a' energy-dependent yield: with cathode_cleaning_E_th_eV set, the
@@ -1488,6 +1513,7 @@ def _case_cathode_power_balance_under_current_drive(
         m3_vdis(m3_run_sim._circuit_I_loop),
         m3_direct.beam_result.result.V_b,
         rtol=1e-10,
+        atol=0.0,
     )
 
 
@@ -1586,7 +1612,9 @@ def _case_cathode_power_balance_warming(
     assert pb_Ts[0] == T_base
     assert np.all(np.isfinite(pb_Ts))
     assert np.any(pb_Ts != T_base)  # the accepted-step update actually runs
-    assert np.allclose(pb_Ts, T_base, atol=1e-6)  # near standby, barely moves
+    assert np.allclose(
+        pb_Ts, T_base, atol=1e-6, rtol=1e-12,
+    )  # near standby, barely moves
     _pb_sb, _pb_kb = 5.670374419e-12, 8.617333262e-5
     _pb_area = np.pi * float(pb_params["R_cath"]) ** 2
     _pb_eps = float(pb_params["cathode_emissivity"])
@@ -1630,7 +1658,7 @@ def _case_cathode_power_balance_warming(
     assert np.all(np.isfinite(cathode_diag["n_beam"]))
     assert np.all(np.isfinite(cathode_diag["v_beam"]))
     assert np.all(np.isfinite(cathode_diag["l_b_profile"]))
-    assert np.allclose(cathode_diag["l_b_profile_twin"], 0.0)
+    assert np.allclose(cathode_diag["l_b_profile_twin"], 0.0, **_TOL_ROUNDOFF)
     assert np.all(
         np.isfinite(cathode_run_result.rhs_terms["cathode_surface_loss"]["n"])
     )
@@ -1710,6 +1738,7 @@ def _case_cathode_power_balance_warming(
         assert np.allclose(
             cathode_run_result.electron_energy_terms_W_cm3[term_name],
             1.0e-7 * term_fields["Ee"],
+            **_TOL_ROUNDOFF,
         )
         cathode_saved_sum = cathode_saved_sum + np.concatenate(
             [term_fields[field_name] for field_name in STATE_NAMES_1D],
@@ -1722,7 +1751,7 @@ def _case_cathode_power_balance_warming(
         ],
         axis=1,
     )
-    assert np.allclose(cathode_saved_sum, cathode_packed_total_rhs)
+    assert np.allclose(cathode_saved_sum, cathode_packed_total_rhs, **_TOL_ROUNDOFF)
     cathode_run_summary = summarize_result(cathode_run_result)
     assert cathode_run_summary.finite
     assert cathode_run_summary.n_min >= cathode_run_params["ne_floor"]
@@ -1788,6 +1817,7 @@ def _case_cathode_power_balance_warming(
         assert np.allclose(
             loaded_cathode_result.phase_cathode_enabled,
             cathode_run_result.phase_cathode_enabled,
+            **_TOL_ROUNDOFF,
         )
         # The circuit solve arms the emitting cathode face's three sheath
         # rows on top of the circuit-off term set.
@@ -1797,14 +1827,17 @@ def _case_cathode_power_balance_warming(
         assert np.allclose(
             loaded_cathode_result.rhs_terms["cathode_surface_loss"]["n"],
             cathode_run_result.rhs_terms["cathode_surface_loss"]["n"],
+            **_TOL_ROUNDOFF,
         )
         assert np.allclose(
             loaded_cathode_result.rhs_terms["beam_power_deposition"]["Ee"],
             cathode_run_result.rhs_terms["beam_power_deposition"]["Ee"],
+            **_TOL_ROUNDOFF,
         )
         assert np.allclose(
             loaded_cathode_result.cathode_diagnostics["source_I_tot"],
             cathode_run_result.cathode_diagnostics["source_I_tot"],
+            **_TOL_ROUNDOFF,
         )
         # cathode.I_tot / S_ion_beam / Qeb round-tripped here through the
         # retired _sim3 aliases. Each was a view of a row the two assertions
@@ -1813,14 +1846,17 @@ def _case_cathode_power_balance_warming(
         assert np.allclose(
             loaded_cathode_result.cathode_diagnostics["solve_enabled"],
             cathode_run_result.cathode_diagnostics["solve_enabled"],
+            **_TOL_ROUNDOFF,
         )
         assert np.allclose(
             loaded_cathode_result.cathode_diagnostics["floating"],
             cathode_run_result.cathode_diagnostics["floating"],
+            **_TOL_ROUNDOFF,
         )
         assert np.allclose(
             loaded_cathode_result.cathode_diagnostics["beam_cross"],
             cathode_run_result.cathode_diagnostics["beam_cross"],
+            **_TOL_ROUNDOFF,
         )
         assert np.all(
             loaded_cathode_result.cathode_diagnostics["source_regime"]
@@ -1833,6 +1869,7 @@ def _case_cathode_power_balance_warming(
             cathode_run_result.electron_energy_terms_W_cm3[
                 "beam_ionization_cost"
             ],
+            **_TOL_ROUNDOFF,
         )
 
     sparse_params = dict(no_source_params)
@@ -1843,14 +1880,16 @@ def _case_cathode_power_balance_warming(
     sparse_result = sparse_sim.run(t_end=4.0e-10, dt=1.0e-10)
     assert sparse_result.steps == 4
     assert sparse_result.time.shape == (2,)
-    assert np.allclose(sparse_result.time, [1.0e-10, 2.0e-10])
+    assert np.allclose(sparse_result.time, [1.0e-10, 2.0e-10], **_TOL_ROUNDOFF)
 
     adaptive_params = dict(no_source_params)
     adaptive_params["dt_save"] = 1.0e-10
     adaptive_sim = LAPDSim1D(adaptive_params, flags)
     adaptive_result = adaptive_sim.run(t_end=2.5e-10)
     assert adaptive_result.steps == 3
-    assert np.allclose(adaptive_result.time, [0.0, 1.0e-10, 2.0e-10, 2.5e-10])
+    assert np.allclose(
+        adaptive_result.time, [0.0, 1.0e-10, 2.0e-10, 2.5e-10], **_TOL_ROUNDOFF,
+    )
     assert [diag.active_constraint for diag in adaptive_result.diagnostics] == [
         "heat_conduction",
         "heat_conduction",
@@ -1864,12 +1903,13 @@ def _case_cathode_power_balance_warming(
     assert np.allclose(
         [diag.accepted_dt for diag in adaptive_result.diagnostics],
         [1.0e-10, 1.0e-10, 0.5e-10],
+        **_TOL_ROUNDOFF,
     )
     adaptive_summary = summarize_result(adaptive_result)
     assert adaptive_summary.constraint_counts == {"heat_conduction": 3}
     assert adaptive_summary.step_cap_counts == {"save_time": 2, "t_end": 1}
-    assert np.isclose(adaptive_summary.accepted_dt_min, 0.5e-10)
-    assert np.isclose(adaptive_summary.accepted_dt_max, 1.0e-10)
+    assert np.isclose(adaptive_summary.accepted_dt_min, 0.5e-10, **_TOL_ROUNDOFF)
+    assert np.isclose(adaptive_summary.accepted_dt_max, 1.0e-10, **_TOL_ROUNDOFF)
 
     growth_params = dict(no_source_params)
     growth_params["dt_save"] = 0.0
@@ -1961,7 +2001,7 @@ def _case_electrode_sample_smoothing(m3_params):
     # Seeded from the initial state: the patched state is initially identical.
     ss_state0 = ss_sim.state
     ss_patched0 = ss_sim._smoothed_sample_state(ss_state0)
-    assert np.allclose(ss_patched0.n, ss_state0.n, rtol=1e-14)
+    assert np.allclose(ss_patched0.n, ss_state0.n, rtol=1e-14, atol=0.0)
     # Hand-check the EMA blend: perturb the state, accept one step, verify
     # ema' = ema + (1 - exp(-dt/tau)) * (x - ema) with tau = l / c_s(Te_ema).
     ss_n_old, ss_Te_old = ss_sim._sample_ema[ss_cath]
@@ -1979,6 +2019,7 @@ def _case_electrode_sample_smoothing(m3_params):
         ss_sim._sample_ema[ss_cath][0],
         ss_n_old + ss_alpha * (ss_n_new - ss_n_old),
         rtol=1e-12,
+        atol=0.0,
     )
     # The solve consumes the smoothed sample: with the EMA pinned at the
     # unperturbed density, doubling the instantaneous cathode-cell density
@@ -1992,6 +2033,7 @@ def _case_electrode_sample_smoothing(m3_params):
         ss_res_b2.beam_result.result.I_i,
         ss_res_b.beam_result.result.I_i,
         rtol=1e-12,
+        atol=0.0,
     )
     ss_sim._sample_ema[ss_cath][0] = ss_n_old * 3.0  # the EMA moves the solve
     ss_res_c = ss_sim.solve_cathode_boundary(update_cache=False)
@@ -1999,6 +2041,10 @@ def _case_electrode_sample_smoothing(m3_params):
         ss_res_c.beam_result.result.I_i,
         3.0 * ss_res_b.beam_result.result.I_i,
         rtol=1e-9,
+        # Unadjudicated: numpy's default atol, kept. The ratio holds to
+        # about 1.4e-8 relative here, not 1e-9; at I_i ~ 0.11 A the
+        # comparison passes on this atol, not on the rtol beside it.
+        atol=1e-8,
     )
 
     # R1a: one authoritative active-plasma topology. Every closed face has at
@@ -2314,8 +2360,12 @@ def _case_cathode_closed_audit_export():
         ce_old_dg = load_result_hdf5(ce_old_path).cathode_diagnostics
         for ce_name in RETIRED_CATHODE_DIAGNOSTIC_KEYS:
             assert ce_name in ce_old_dg, ce_name
-            assert np.allclose(ce_old_dg[ce_name], ce_sentinel), ce_name
-            assert np.allclose(ce_old_dg.get(ce_name), ce_sentinel), ce_name
+            assert np.allclose(
+                ce_old_dg[ce_name], ce_sentinel, **_TOL_ROUNDOFF,
+            ), ce_name
+            assert np.allclose(
+                ce_old_dg.get(ce_name), ce_sentinel, **_TOL_ROUNDOFF,
+            ), ce_name
 
     # (f) THE FLOATING PATH EXPORTS NaN, NOT ZERO. A solve that leaves the
     # audit set at its dataclass defaults would export zeros, and a zero in a
@@ -2501,7 +2551,9 @@ def _case_ts_retirement_successor_key():
     _ts_dev = _ts_sim.solve_cathode_boundary(update_cache=False).device_config
     assert _ts_dev.T_s == 1873.0, _ts_dev.T_s
     _ts_res = _ts_sim.run(t_end=3.0e-10, dt=1.0e-10)
-    assert np.allclose(_ts_res.cathode_diagnostics["T_s_surface"], 1873.0)
+    assert np.allclose(
+        _ts_res.cathode_diagnostics["T_s_surface"], 1873.0, **_TOL_ROUNDOFF,
+    )
 
     # (g) THE SUCCESSOR IS REQUIRED, AND REFUSED AT CONSTRUCTION WHEN UNSET:
     # with the retired key gone there is nothing to fall back on, so None

@@ -40,6 +40,8 @@ from cablp.solvers._sim1d.physics.neutrals import (
 from cablp.solvers._sim1d.physics.reactions import reaction_rates
 
 from ._harness import (
+    _TOL_ROUNDOFF,
+    _TOL_UNADJUDICATED,
     _base_config,
     _base_sim,
     _case,
@@ -176,17 +178,20 @@ def _case_beam_csda_deposition_model():
         + csda_dep.ionization_cost_erg_s.sum()
     )
     assert np.isclose(
-        csda_power_sum - csda_res.P_ohmic * 1.0e7, csda_module_sum, rtol=1e-9
+        csda_power_sum - csda_res.P_ohmic * 1.0e7, csda_module_sum, rtol=1e-9,
+        atol=0.0,
     )
     assert np.isclose(
         float((-csda_terms["beam_excitation_radiation"].Ee * csda_Vp).sum()),
         float(csda_dep.radiated_erg_s.sum()),
         rtol=1e-9,
+        atol=0.0,
     )
     assert np.isclose(
         float((-csda_terms["beam_ionization_cost"].Ee * csda_Vp).sum()),
         float(csda_dep.ionization_cost_erg_s.sum()),
         rtol=1e-9,
+        atol=0.0,
     )
     # CSDA primaries survive multiple events: ionization spreads over
     # several cells rather than one launch cell.
@@ -374,7 +379,7 @@ def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, csda_params):
     assert csda_marg_off[1] == "ray_vs_circuit"
     assert csda_marg_on[1] == "ray_vs_ceiling"
     assert csda_marg_on[4] == csda_marg_off[4]
-    assert np.isclose(csda_marg_on[4], 0.5 * csda_eta)
+    assert np.isclose(csda_marg_on[4], 0.5 * csda_eta, **_TOL_ROUNDOFF)
     # The separation has to cut BOTH ways or it is just a rename: a ray that
     # breaks out while the circuit sits well BELOW the ceiling is a genuine
     # divergence (a broken probe propagated into sigma_eff), and it must stay
@@ -402,7 +407,7 @@ def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, csda_params):
     )
     assert csda_trip is not None
     assert csda_trip[0] == 0 and csda_trip[1] == "ray_vs_circuit"
-    assert np.isclose(csda_trip[4], 0.5 * csda_eta * csda_ray)
+    assert np.isclose(csda_trip[4], 0.5 * csda_eta * csda_ray, **_TOL_ROUNDOFF)
     # A defect INSIDE the probe -- the item-35 class -- is caught by the
     # probe-vs-ray leg even though the circuit faithfully tracks the (wrong)
     # probe, which is exactly the configuration that stayed silent before.
@@ -412,7 +417,7 @@ def _case_beam_gap_ledger_tripwire(csda_sim, csda_solve, csda_params):
     )
     assert csda_probe_defect is not None
     assert csda_probe_defect[1] == "probe_vs_ray"
-    assert np.isclose(csda_probe_defect[4], csda_eta)
+    assert np.isclose(csda_probe_defect[4], csda_eta, **_TOL_ROUNDOFF)
     # ... and the warning it drives is emitted once per run, not per step.
     csda_broken = SimpleNamespace(
         beam_gap_ledger={0: (1.0, 0.0, 0.96529)},
@@ -1600,7 +1605,9 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
             )
             # ...and the kernel is not quietly the identity: it MOVED the
             # deposit, so the conservation above is a real statement.
-            assert not np.allclose(on_row, off_row), (mesh_label, smooth_term)
+            assert not np.allclose(
+                on_row, off_row, **_TOL_UNADJUDICATED
+            ), (mesh_label, smooth_term)
     return locals()
 
 
@@ -1658,7 +1665,9 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
     smoothkey_W_a = _beam_smoothing_matrix(smoothkey_geom_a, smooth_sigma_cm)
     smoothkey_W_b = _beam_smoothing_matrix(smoothkey_geom_b, smooth_sigma_cm)
     assert smoothkey_W_a is not smoothkey_W_b
-    assert not np.allclose(smoothkey_W_a, smoothkey_W_b)
+    assert not np.allclose(
+        smoothkey_W_a, smoothkey_W_b, **_TOL_UNADJUDICATED
+    )
 
     # (b) The cache still caches: two DISTINCT geometry objects with identical
     # content share the single O(cells^2) build. Guards the performance
@@ -1684,7 +1693,9 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
         smoothkey_geom_roles, smooth_sigma_cm
     )
     assert smoothkey_W_roles is not smoothkey_W_a
-    assert not np.allclose(smoothkey_W_roles, smoothkey_W_a)
+    assert not np.allclose(
+        smoothkey_W_roles, smoothkey_W_a, **_TOL_UNADJUDICATED
+    )
 
 
 # --------------------------------------------------------------------
@@ -1732,9 +1743,9 @@ def _case_ionization_birth_energy_model(csda_sim):
         [c for c in range(geom.cells) if c not in _ib_moved], dtype=int
     )
     for values in (rhs.n, rhs.nn, rhs.Ee, rhs.Ei):
-        assert np.allclose(values, 0.0, atol=1e-20)
+        assert np.allclose(values, 0.0, atol=1e-20, rtol=1e-12)
     _ib_M = np.asarray(rhs.M, dtype=float)
-    assert np.allclose(_ib_M[_ib_interior], 0.0, atol=1e-20)
+    assert np.allclose(_ib_M[_ib_interior], 0.0, atol=1e-20, rtol=1e-12)
     # Non-vacuous, and directed OUT of the domain at each terminating cell:
     # -z at the cathode (plasma on its high-z side), +z at the end wall.
     _ib_cath, _ib_coll = _ib_term
@@ -1750,7 +1761,7 @@ def _case_ionization_birth_energy_model(csda_sim):
         pressure_rhs.Ee,
         pressure_rhs.Ei,
     ):
-        assert np.allclose(values, 0.0, atol=1e-20)
+        assert np.allclose(values, 0.0, atol=1e-20, rtol=1e-12)
     neutral_rhs = sim.neutral_exchange_rhs()
     for values in (
         neutral_rhs.n,
@@ -1759,7 +1770,7 @@ def _case_ionization_birth_energy_model(csda_sim):
         neutral_rhs.Ee,
         neutral_rhs.Ei,
     ):
-        assert np.allclose(values, 0.0, atol=1e-20)
+        assert np.allclose(values, 0.0, atol=1e-20, rtol=1e-12)
     source_rhs = sim.neutral_source_sink_rhs()
     source_puff, _ = puff_cell_indices(geom)
     # The puff is the orifice row scaled by the square envelope at the
@@ -1785,25 +1796,29 @@ def _case_ionization_birth_energy_model(csda_sim):
     assert source_rhs.nn[0] < 0.0
     assert source_rhs.nn[-1] < 0.0
     assert np.isclose(
-        source_particles[source_puff], _puff_particles(0.0)[source_puff]
+        source_particles[source_puff], _puff_particles(0.0)[source_puff],
+        **_TOL_ROUNDOFF,
     )
     assert np.isclose(
         source_rhs.nn[-1],
         -pump_rate(params["S_pump_R"], geom.neutral_volume_cm3[-1]) * state.nn[-1],
+        **_TOL_ROUNDOFF,
     )
     afterglow_time = params["tau_prebreakdown"] + params["tau_discharge"]
     afterglow_source = sim.neutral_source_sink_rhs(time=afterglow_time)
     assert np.isclose(
         afterglow_source.nn[0],
         -pump_rate(params["S_pump_L"], geom.neutral_volume_cm3[0]) * state.nn[0],
+        **_TOL_ROUNDOFF,
     )
     assert np.isclose(
         source_particles[source_puff]
         - _source_particles(afterglow_source)[source_puff],
         _puff_particles(0.0)[source_puff]
         - _puff_particles(afterglow_time)[source_puff],
+        **_TOL_ROUNDOFF,
     )
-    assert np.isclose(afterglow_source.nn[-1], source_rhs.nn[-1])
+    assert np.isclose(afterglow_source.nn[-1], source_rhs.nn[-1], **_TOL_ROUNDOFF)
     afterglow_source_terms = sim.rhs_terms(
         include_heat_conduction=False,
         time=params["tau_prebreakdown"] + params["tau_discharge"],
@@ -1814,6 +1829,7 @@ def _case_ionization_birth_energy_model(csda_sim):
     assert np.isclose(
         afterglow_dt_diag.time,
         params["tau_prebreakdown"] + params["tau_discharge"],
+        **_TOL_ROUNDOFF,
     )
     assert afterglow_dt_diag.phase == "afterglow"
     assert afterglow_dt_diag.phase_cathode_enabled == 0.0
@@ -1823,8 +1839,11 @@ def _case_ionization_birth_energy_model(csda_sim):
     assert np.allclose(
         afterglow_source_terms["neutral_sources"].nn,
         afterglow_source.nn,
+        **_TOL_ROUNDOFF,
     )
-    assert np.allclose(afterglow_source_terms["neutral_sources"].n, 0.0)
+    assert np.allclose(
+        afterglow_source_terms["neutral_sources"].n, 0.0, **_TOL_ROUNDOFF,
+    )
     assert (
         afterglow_dt_diag.dt_neutral_sources >= sim.suggest_timestep().dt_neutral_sources
     )
@@ -1894,7 +1913,8 @@ def _case_csda_module_standalone():
         150.0, 1.0e22, **{**b1_col, "launch": b1_cells - 1, "direction": -1}
     )
     assert np.allclose(
-        b1_res_rev.ionization_events, b1_res.ionization_events[::-1]
+        b1_res_rev.ionization_events, b1_res.ionization_events[::-1],
+        **_TOL_ROUNDOFF,
     )
     # Closure ordering at production conditions: quasilinear <<
     # legacy tau_ei "Coulomb" << classical fast-electron stopping.
@@ -3504,7 +3524,8 @@ def _case_mirror_tail_full_window_fold():
     assert max(worst.values()) <= 1.0e-12, worst
     exits_full = full.end_loss_tail_low_erg_s + full.end_loss_tail_high_erg_s
     assert math.isclose(
-        half.end_loss_tail_low_erg_s, exits_full, rel_tol=1.0e-12
+        half.end_loss_tail_low_erg_s, exits_full, rel_tol=1.0e-12,
+        abs_tol=0.0,
     ), (half.end_loss_tail_low_erg_s, exits_full)
     assert half.end_loss_tail_high_erg_s == 0.0
     assert half.tail_leg_cap_residual_erg_s == 0.0
@@ -3553,11 +3574,12 @@ def _case_mirror_tail_cull_rearmed():
     assert [leg[3] for leg in chain] == [1, -1], [leg[3] for leg in chain]
     f0 = 1.0e18
     expected = f0 * _MIRROR_ETA + (1.0 - _MIRROR_ETA) * f0 * _MIRROR_ETA
-    assert math.isclose(ledger["culled_flux"], expected, rel_tol=1e-12), (
+    assert math.isclose(ledger["culled_flux"], expected, rel_tol=1e-12, abs_tol=0.0), (
         ledger["culled_flux"], expected
     )
     assert math.isclose(
-        ledger["mirror_flux"], (1.0 - _MIRROR_ETA) * f0, rel_tol=1e-12
+        ledger["mirror_flux"], (1.0 - _MIRROR_ETA) * f0, rel_tol=1e-12,
+        abs_tol=0.0,
     )
     # Unchanged energy at the turn: what arrived is what the return carries.
     E_arrived = chain[0][2]
@@ -3569,8 +3591,10 @@ def _case_mirror_tail_cull_rearmed():
         plans, nn, ne, Te, dz, _mirror_march_kwargs(), 0, cells - 1, None,
         0.0, cull=cull,
     )
-    assert math.isclose(wall_take[0], f0 * _MIRROR_ETA, rel_tol=1e-12)
-    assert not math.isclose(wall_take[0], expected, rel_tol=1e-6)
+    assert math.isclose(wall_take[0], f0 * _MIRROR_ETA, rel_tol=1e-12, abs_tol=0.0)
+    assert not math.isclose(
+        wall_take[0], expected, rel_tol=1e-6, abs_tol=0.0
+    )
 
 
 # --------------------------------------------------------------------
@@ -4054,7 +4078,7 @@ def _sheath_merge_energy_violations(chains, E0):
                 )
                 first = False
                 energy = chain[k + 2][2]
-                if not math.isclose(energy, E0, rel_tol=rel_tol):
+                if not math.isclose(energy, E0, rel_tol=rel_tol, abs_tol=0.0):
                     violations.append((ci, legs_before, energy, rel_tol))
     return violations
 
@@ -4112,11 +4136,12 @@ def _case_mirror_tail_sheath_share_merged():
             if dirs[k] == -1 and dirs[k + 1] == 1 and dirs[k + 2] == 1:
                 merges += 1
                 assert math.isclose(
-                    chain[k + 1][1], (1.0 - _MIRROR_ETA) * f0, rel_tol=1e-12
+                    chain[k + 1][1], (1.0 - _MIRROR_ETA) * f0, rel_tol=1e-12,
+                    abs_tol=0.0,
                 ), (chain[k + 1][1], f0)
                 gap_banks = np.concatenate(chain[k + 1][0])
                 assert np.all(gap_banks.reshape(5, cells)[:, 8:] == 0.0)
-                assert math.isclose(chain[k + 2][1], f0, rel_tol=1e-12), (
+                assert math.isclose(chain[k + 2][1], f0, rel_tol=1e-12, abs_tol=0.0), (
                     chain[k + 2][1], f0
                 )
                 last_merge = (ci, k + 2)
@@ -4131,7 +4156,7 @@ def _case_mirror_tail_sheath_share_merged():
     injected[ci][leg_index] = tuple(leg)
     caught = _sheath_merge_energy_violations(injected, E0)
     assert [(v[0], v[1]) for v in caught] == [(ci, leg_index)], caught
-    assert math.isclose(ledger["cap_flux"], 2.0 * f0, rel_tol=1e-12), (
+    assert math.isclose(ledger["cap_flux"], 2.0 * f0, rel_tol=1e-12, abs_tol=0.0), (
         ledger["cap_flux"]
     )
     assert ledger["escape_low_eV"] == 0.0 and ledger["escape_high_eV"] == 0.0

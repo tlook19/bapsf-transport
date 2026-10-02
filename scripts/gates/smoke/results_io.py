@@ -59,6 +59,7 @@ from ._harness import (
     _CAPFIX_ESCAPE_I_A,
     _CAPFIX_ESCAPE_KWARGS,
     _CAPFIX_ESCAPE_PLASMA,
+    _TOL_ROUNDOFF,
     _base_config,
     _base_sim,
     _case,
@@ -130,12 +131,14 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     no_source_sim = LAPDSim1D(no_source_params, flags)
     y_before = no_source_sim.get_initial_snapshot().y.copy()
     explicit_attempt = no_source_sim._attempt_step(dt=1e-10)
-    assert np.isclose(explicit_attempt.dt, 1e-10)
+    assert np.isclose(explicit_attempt.dt, 1e-10, **_TOL_ROUNDOFF)
     assert not explicit_attempt.operator_split
-    assert np.isclose(no_source_sim.time, 0.0)
-    assert np.allclose(no_source_sim.get_initial_snapshot().y, y_before)
+    assert np.isclose(no_source_sim.time, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(
+        no_source_sim.get_initial_snapshot().y, y_before, **_TOL_ROUNDOFF,
+    )
     explicit_attempt_after = no_source_sim._accept_step_attempt(explicit_attempt)
-    assert np.isclose(no_source_sim.time, 1e-10)
+    assert np.isclose(no_source_sim.time, 1e-10, **_TOL_ROUNDOFF)
     assert np.all(np.isfinite(explicit_attempt_after.y))
 
     no_source_sim = LAPDSim1D(no_source_params, flags)
@@ -149,10 +152,12 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     split_before = no_source_split_sim.get_initial_snapshot().y.copy()
     split_attempt = no_source_split_sim._attempt_step(dt=1e-10)
     assert split_attempt.operator_split
-    assert np.isclose(no_source_split_sim.time, 0.0)
-    assert np.allclose(no_source_split_sim.get_initial_snapshot().y, split_before)
+    assert np.isclose(no_source_split_sim.time, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(
+        no_source_split_sim.get_initial_snapshot().y, split_before, **_TOL_ROUNDOFF,
+    )
     split_attempt_after = no_source_split_sim._accept_step_attempt(split_attempt)
-    assert np.isclose(no_source_split_sim.time, 1e-10)
+    assert np.isclose(no_source_split_sim.time, 1e-10, **_TOL_ROUNDOFF)
     assert np.all(np.isfinite(split_attempt_after.y))
 
     no_source_split_sim = LAPDSim1D(no_source_params, split_flags)
@@ -173,23 +178,25 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     run_result = run_sim.run(t_end=3.0e-10, dt=1.0e-10)
     assert run_sim.get_results() is run_result
     assert run_result.steps == 3
-    assert np.isclose(run_result.final_time, 3.0e-10)
+    assert np.isclose(run_result.final_time, 3.0e-10, **_TOL_ROUNDOFF)
     assert run_result.time.shape == (4,)
     assert run_result.phase.shape == (4,)
     assert np.all(run_result.phase == "pre_breakdown")
-    assert np.allclose(run_result.phase_elapsed, run_result.time)
-    assert np.allclose(run_result.phase_cathode_enabled, 0.0)
-    assert np.allclose(run_result.phase_gas_puff_enabled, 0.0)
-    assert np.allclose(run_result.phase_floating, 0.0)
+    assert np.allclose(run_result.phase_elapsed, run_result.time, **_TOL_ROUNDOFF)
+    assert np.allclose(run_result.phase_cathode_enabled, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(run_result.phase_gas_puff_enabled, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(run_result.phase_floating, 0.0, **_TOL_ROUNDOFF)
     assert np.isnan(run_result.t_prebreakdown_trigger)
     assert np.isnan(run_result.t_breakdown_trigger)
-    assert np.allclose(run_result.phase_events["time"], [0.0])
+    assert np.allclose(run_result.phase_events["time"], [0.0], **_TOL_ROUNDOFF)
     assert list(run_result.phase_events["phase"]) == ["pre_breakdown"]
     assert list(run_result.phase_events["reason"]) == ["initial"]
-    assert np.allclose(run_result.timestep_rejection_events["time"], [])
+    assert np.allclose(
+        run_result.timestep_rejection_events["time"], [], **_TOL_ROUNDOFF,
+    )
     assert list(run_result.timestep_rejection_events["reason"]) == []
-    assert np.allclose(run_result.current_trigger_samples["time"], [])
-    assert np.allclose(run_result.current_trigger_samples["I_tot"], [])
+    assert np.allclose(run_result.current_trigger_samples["time"], [], **_TOL_ROUNDOFF)
+    assert np.allclose(run_result.current_trigger_samples["I_tot"], [], **_TOL_ROUNDOFF)
     assert run_result.y.shape == (4, run_before.size)
     assert run_result.n.shape == (4, geom.cells)
     assert len(run_result.diagnostics) == 3
@@ -198,7 +205,9 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         "pre_breakdown",
         "pre_breakdown",
     ]
-    assert np.allclose([diag.accepted_dt for diag in run_result.diagnostics], 1.0e-10)
+    assert np.allclose(
+        [diag.accepted_dt for diag in run_result.diagnostics], 1.0e-10, **_TOL_ROUNDOFF,
+    )
     assert [diag.step_cap for diag in run_result.diagnostics] == [
         "fixed_dt",
         "fixed_dt",
@@ -207,6 +216,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.allclose(
         [diag.time for diag in run_result.diagnostics],
         [0.0, 1.0e-10, 2.0e-10],
+        **_TOL_ROUNDOFF,
     )
 
     capped_params = dict(run_params)
@@ -227,14 +237,17 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.allclose(
         [diag.phase_cathode_enabled for diag in run_result.diagnostics],
         0.0,
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         [diag.phase_gas_puff_enabled for diag in run_result.diagnostics],
         0.0,
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         [diag.phase_floating for diag in run_result.diagnostics],
         0.0,
+        **_TOL_ROUNDOFF,
     )
     assert set(run_result.rhs_terms) == expected_rhs_terms
     assert set(run_result.electron_energy_terms_W_cm3) == expected_rhs_terms
@@ -244,15 +257,27 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         expected_rhs_terms - set(END_SHEATH_DEBIT_ROWS)
     )
     assert run_result.cathode_diagnostics["enabled"].shape == (4,)
-    assert np.allclose(run_result.cathode_diagnostics["enabled"], 0.0)
-    assert np.allclose(run_result.cathode_diagnostics["configured"], 0.0)
-    assert np.allclose(run_result.cathode_diagnostics["phase_enabled"], 0.0)
-    assert np.allclose(run_result.cathode_diagnostics["rhs_enabled"], 0.0)
-    assert np.allclose(run_result.cathode_diagnostics["solve_enabled"], 0.0)
-    assert np.allclose(run_result.cathode_diagnostics["floating"], 0.0)
-    assert np.allclose(run_result.cathode_diagnostics["has_solution"], 0.0)
+    assert np.allclose(run_result.cathode_diagnostics["enabled"], 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(
+        run_result.cathode_diagnostics["configured"], 0.0, **_TOL_ROUNDOFF,
+    )
+    assert np.allclose(
+        run_result.cathode_diagnostics["phase_enabled"], 0.0, **_TOL_ROUNDOFF,
+    )
+    assert np.allclose(
+        run_result.cathode_diagnostics["rhs_enabled"], 0.0, **_TOL_ROUNDOFF,
+    )
+    assert np.allclose(
+        run_result.cathode_diagnostics["solve_enabled"], 0.0, **_TOL_ROUNDOFF,
+    )
+    assert np.allclose(run_result.cathode_diagnostics["floating"], 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(
+        run_result.cathode_diagnostics["has_solution"], 0.0, **_TOL_ROUNDOFF,
+    )
     assert run_result.cathode_diagnostics["beam_cross"].shape == (4, geom.cells)
-    assert np.allclose(run_result.cathode_diagnostics["beam_cross"], 0.0)
+    assert np.allclose(
+        run_result.cathode_diagnostics["beam_cross"], 0.0, **_TOL_ROUNDOFF,
+    )
     assert np.all(np.isnan(run_result.cathode_diagnostics["source_phi_c"]))
     assert np.all(run_result.cathode_diagnostics["source_regime"] == "none")
     # The ``end_*`` cathode-result block is presence-gated on TwinCathode:
@@ -271,6 +296,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         assert np.allclose(
             run_result.electron_energy_terms_W_cm3[term_name],
             1.0e-7 * term_fields["Ee"],
+            **_TOL_ROUNDOFF,
         )
         if term_name in END_SHEATH_DEBIT_ROWS:
             # Electron-only: Ei is exactly zero and the row is absent from
@@ -280,6 +306,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             assert np.allclose(
                 run_result.ion_energy_terms_W_cm3[term_name],
                 1.0e-7 * term_fields["Ei"],
+                **_TOL_ROUNDOFF,
             )
         saved_term_sum = saved_term_sum + np.concatenate(
             [term_fields[field_name] for field_name in STATE_NAMES_1D],
@@ -289,9 +316,11 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         [run_result.total_rhs[field_name] for field_name in STATE_NAMES_1D],
         axis=1,
     )
-    assert np.allclose(saved_term_sum, packed_total_rhs)
+    assert np.allclose(saved_term_sum, packed_total_rhs, **_TOL_ROUNDOFF)
     assert np.all(np.isfinite(run_result.y))
-    assert np.allclose(run_result.time, [0.0, 1.0e-10, 2.0e-10, 3.0e-10])
+    assert np.allclose(
+        run_result.time, [0.0, 1.0e-10, 2.0e-10, 3.0e-10], **_TOL_ROUNDOFF,
+    )
     # The _sim3 compatibility aliases are RETIRED with results/compat.py. What
     # used to stand here asserted that each alias equalled the field it aliased
     # -- ``Qei == -electron_ion_cooling``, ``S_ion_bulk == ionization_birth``,
@@ -319,8 +348,8 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     entry_sim.start_simulation(t_end=3.0e-10, dt=1.0e-10)
     entry_result = entry_sim.get_results()
     assert entry_result.steps == run_result.steps
-    assert np.isclose(entry_result.final_time, run_result.final_time)
-    assert np.allclose(entry_result.time, run_result.time)
+    assert np.isclose(entry_result.final_time, run_result.final_time, **_TOL_ROUNDOFF)
+    assert np.allclose(entry_result.time, run_result.time, **_TOL_ROUNDOFF)
     assert np.allclose(entry_result.y, run_result.y, rtol=0.0, atol=1e-20)
 
     progress_fractions = []
@@ -333,11 +362,13 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         progress_tracker=progress_snapshots.append,
     )
     assert progress_result.steps == 3
-    assert np.allclose(progress_fractions, [1 / 3, 1.0])
+    assert np.allclose(progress_fractions, [1 / 3, 1.0], **_TOL_ROUNDOFF)
     assert len(progress_snapshots) == 2
     assert all(isinstance(progress, SimulationProgress1D) for progress in progress_snapshots)
-    assert np.isclose(progress_snapshots[-1].fraction, 1.0)
-    assert np.isclose(progress_snapshots[-1].time, progress_result.final_time)
+    assert np.isclose(progress_snapshots[-1].fraction, 1.0, **_TOL_ROUNDOFF)
+    assert np.isclose(
+        progress_snapshots[-1].time, progress_result.final_time, **_TOL_ROUNDOFF,
+    )
     assert progress_snapshots[-1].step == progress_result.steps
     assert progress_snapshots[-1].saved_samples == len(progress_result.time)
     assert progress_snapshots[-1].step_cap == "fixed_dt"
@@ -383,7 +414,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         progress_callback=every_step_progress.append,
         progress_interval_s=0.0,
     )
-    assert np.allclose(every_step_progress, [1 / 3, 2 / 3, 1.0])
+    assert np.allclose(every_step_progress, [1 / 3, 2 / 3, 1.0], **_TOL_ROUNDOFF)
 
     default_end_params = dict(run_params)
     default_end_params["tau_prebreakdown"] = 1.0e-10
@@ -391,12 +422,13 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     default_end_params["tau_discharge"] = 1.0e-10
     default_end_params["tau_afterglow"] = 1.0e-10
     default_end_sim = LAPDSim1D(default_end_params, flags)
-    assert np.isclose(default_end_sim.default_t_end(), 4.0e-10)
+    assert np.isclose(default_end_sim.default_t_end(), 4.0e-10, **_TOL_ROUNDOFF)
     default_end_result = default_end_sim.run(dt=1.0e-10)
-    assert np.isclose(default_end_result.final_time, 4.0e-10)
+    assert np.isclose(default_end_result.final_time, 4.0e-10, **_TOL_ROUNDOFF)
     assert np.allclose(
         default_end_result.time,
         [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10],
+        **_TOL_ROUNDOFF,
     )
     run_summary = summarize_result(run_result)
     run_summary_from_solver = LAPDSim1D.summarize_result(run_result)
@@ -404,7 +436,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         assert summary.finite
         assert summary.samples == 4
         assert summary.steps == run_result.steps
-        assert np.isclose(summary.final_time, run_result.final_time)
+        assert np.isclose(summary.final_time, run_result.final_time, **_TOL_ROUNDOFF)
         assert summary.n_min >= no_source_params["ne_floor"]
         assert summary.nn_min >= no_source_params["nn_floor"]
         assert summary.Te_min >= no_source_params["Te_floor"]
@@ -413,6 +445,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             summary.total_particle_inventory_relative_drift,
             0.0,
             atol=1e-14,
+            rtol=1e-12,
         )
         assert np.isfinite(summary.thermal_energy_relative_drift)
         assert summary.phase_counts == {"pre_breakdown": 4}
@@ -437,8 +470,8 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
         assert summary.cathode_diagnostic_fractions["has_solution"] == 0.0
         assert summary.constraint_counts == {"heat_conduction": 3}
         assert summary.step_cap_counts == {"fixed_dt": 3}
-        assert np.isclose(summary.accepted_dt_min, 1.0e-10)
-        assert np.isclose(summary.accepted_dt_max, 1.0e-10)
+        assert np.isclose(summary.accepted_dt_min, 1.0e-10, **_TOL_ROUNDOFF)
+        assert np.isclose(summary.accepted_dt_max, 1.0e-10, **_TOL_ROUNDOFF)
         assert summary.retrying_step_count == 0
         assert summary.total_retry_count == 0
         assert summary.max_retry_count == 0
@@ -455,7 +488,9 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             assert h5.attrs["format"] == "sim1d-hdf5-v1"
             assert h5.attrs["solver"] == "LAPDSim1D"
             assert h5.attrs["steps"] == run_result.steps
-            assert np.isclose(h5.attrs["final_time"], run_result.final_time)
+            assert np.isclose(
+                h5.attrs["final_time"], run_result.final_time, **_TOL_ROUNDOFF,
+            )
             assert np.isnan(h5.attrs["t_prebreakdown_trigger"])
             assert np.isnan(h5.attrs["t_breakdown_trigger"])
             saved_params = json.loads(h5.attrs["params_json"])
@@ -922,7 +957,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             assert loaded.compiled_kernels == _kernel_selector.PROVENANCE
             assert loaded.path == output_path
             assert loaded.steps == run_result.steps
-            assert np.isclose(loaded.final_time, run_result.final_time)
+            assert np.isclose(loaded.final_time, run_result.final_time, **_TOL_ROUNDOFF)
             assert np.isnan(loaded.t_prebreakdown_trigger)
             assert np.isnan(loaded.t_breakdown_trigger)
             # The LOAD path is the second of the two sites that attached the
@@ -932,27 +967,39 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             # one that came straight off a run.
             for _retired_alias in _RETIRED_SIM3_COMPAT_ALIASES:
                 assert not hasattr(loaded, _retired_alias), _retired_alias
-            assert np.allclose(loaded.phase_events["time"], [0.0])
+            assert np.allclose(loaded.phase_events["time"], [0.0], **_TOL_ROUNDOFF)
             assert list(loaded.phase_events["phase"]) == ["pre_breakdown"]
             assert list(loaded.phase_events["reason"]) == ["initial"]
-            assert np.allclose(loaded.timestep_rejection_events["time"], [])
+            assert np.allclose(
+                loaded.timestep_rejection_events["time"], [], **_TOL_ROUNDOFF,
+            )
             assert list(loaded.timestep_rejection_events["reason"]) == []
-            assert np.allclose(loaded.current_trigger_samples["time"], [])
-            assert np.allclose(loaded.current_trigger_samples["I_tot"], [])
+            assert np.allclose(
+                loaded.current_trigger_samples["time"], [], **_TOL_ROUNDOFF,
+            )
+            assert np.allclose(
+                loaded.current_trigger_samples["I_tot"], [], **_TOL_ROUNDOFF,
+            )
             assert loaded.params["dt_save"] == run_params["dt_save"]
             assert loaded.flags["cathode_coupling"] == flags["cathode_coupling"]
-            assert np.allclose(loaded.time, run_result.time)
+            assert np.allclose(loaded.time, run_result.time, **_TOL_ROUNDOFF)
             assert np.all(loaded.phase == run_result.phase)
-            assert np.allclose(loaded.phase_elapsed, run_result.phase_elapsed)
+            assert np.allclose(
+                loaded.phase_elapsed, run_result.phase_elapsed, **_TOL_ROUNDOFF,
+            )
             assert np.allclose(
                 loaded.phase_cathode_enabled,
                 run_result.phase_cathode_enabled,
+                **_TOL_ROUNDOFF,
             )
             assert np.allclose(
                 loaded.phase_gas_puff_enabled,
                 run_result.phase_gas_puff_enabled,
+                **_TOL_ROUNDOFF,
             )
-            assert np.allclose(loaded.phase_floating, run_result.phase_floating)
+            assert np.allclose(
+                loaded.phase_floating, run_result.phase_floating, **_TOL_ROUNDOFF,
+            )
             assert set(loaded.gas_puff_diagnostics) == set(
                 GAS_PUFF_DIAGNOSTIC_FIELDS
             )
@@ -961,28 +1008,31 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
                     loaded.gas_puff_diagnostics[_gp_field],
                     run_result.gas_puff_diagnostics[_gp_field],
                 ), _gp_field
-            assert np.allclose(loaded.y, run_result.y)
-            assert np.allclose(loaded.n, run_result.n)
+            assert np.allclose(loaded.y, run_result.y, **_TOL_ROUNDOFF)
+            assert np.allclose(loaded.n, run_result.n, **_TOL_ROUNDOFF)
             # The alias round-trips that stood here (ne, v_plasma, Ne_flux,
             # S_ion_bulk, Qie, Qeb, and the cathode namespace's shape) were
             # views of rows this same block round-trips directly a few lines
             # down: the rhs_terms key set and one of its fields, the electron
             # energy-term dict, and four cathode_diagnostics keys. Retiring
             # them costs the file format no coverage it does not still have.
-            assert np.allclose(loaded.Te, run_result.Te)
+            assert np.allclose(loaded.Te, run_result.Te, **_TOL_ROUNDOFF)
             assert np.all(loaded.cell_role == run_result.cell_role)
             assert set(loaded.rhs_terms) == expected_rhs_terms
             assert np.allclose(
                 loaded.cathode_diagnostics["has_solution"],
                 run_result.cathode_diagnostics["has_solution"],
+                **_TOL_ROUNDOFF,
             )
             assert np.allclose(
                 loaded.cathode_diagnostics["solve_enabled"],
                 run_result.cathode_diagnostics["solve_enabled"],
+                **_TOL_ROUNDOFF,
             )
             assert np.allclose(
                 loaded.cathode_diagnostics["floating"],
                 run_result.cathode_diagnostics["floating"],
+                **_TOL_ROUNDOFF,
             )
             assert np.all(
                 loaded.cathode_diagnostics["source_regime"]
@@ -991,30 +1041,38 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             assert np.allclose(
                 loaded.rhs_terms["pressure_work"]["Ee"],
                 run_result.rhs_terms["pressure_work"]["Ee"],
+                **_TOL_ROUNDOFF,
             )
             assert np.allclose(
                 loaded.total_rhs["Ee"],
                 run_result.total_rhs["Ee"],
+                **_TOL_ROUNDOFF,
             )
             assert np.allclose(
                 loaded.electron_energy_terms_W_cm3["pressure_work"],
                 run_result.electron_energy_terms_W_cm3["pressure_work"],
+                **_TOL_ROUNDOFF,
             )
             assert len(loaded.diagnostics) == len(run_result.diagnostics)
-            assert np.isclose(loaded.diagnostics[0].dt, run_result.diagnostics[0].dt)
+            assert np.isclose(
+                loaded.diagnostics[0].dt, run_result.diagnostics[0].dt, **_TOL_ROUNDOFF,
+            )
             assert np.isclose(
                 loaded.diagnostics[0].accepted_dt,
                 run_result.diagnostics[0].accepted_dt,
+                **_TOL_ROUNDOFF,
             )
             assert loaded.diagnostics[0].step_cap == run_result.diagnostics[0].step_cap
             assert np.isclose(
                 loaded.diagnostics[0].time,
                 run_result.diagnostics[0].time,
+                **_TOL_ROUNDOFF,
             )
             assert loaded.diagnostics[0].phase == run_result.diagnostics[0].phase
             assert np.isclose(
                 loaded.diagnostics[0].phase_gas_puff_enabled,
                 run_result.diagnostics[0].phase_gas_puff_enabled,
+                **_TOL_ROUNDOFF,
             )
             assert (
                 loaded.diagnostics[0].active_constraint
@@ -1035,7 +1093,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
             legacy_values = legacy_loaded.gas_puff_diagnostics[_gp_field]
             assert legacy_values.shape == run_result.time.shape
             assert np.all(np.isnan(legacy_values)), _gp_field
-        assert np.allclose(legacy_loaded.y, run_result.y)
+        assert np.allclose(legacy_loaded.y, run_result.y, **_TOL_ROUNDOFF)
 
     cathode_run_params = dict(no_source_params)
     cathode_run_params["dt_save"] = 0.0
@@ -1050,7 +1108,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     cathode_run_sim = LAPDSim1D(cathode_run_params, cathode_run_flags)
     cathode_run_result = cathode_run_sim.run(t_end=3.0e-10, dt=1.0e-10)
     assert cathode_run_result.steps == 3
-    assert np.isclose(cathode_run_result.final_time, 3.0e-10)
+    assert np.isclose(cathode_run_result.final_time, 3.0e-10, **_TOL_ROUNDOFF)
     assert cathode_run_result.time.shape == (4,)
     assert np.all(np.isfinite(cathode_run_result.y))
     # With the circuit solve running, the emitting cathode face books its
@@ -1058,19 +1116,19 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert set(cathode_run_result.rhs_terms) == (
         expected_rhs_terms | set(END_SHEATH_CATHODE_ROWS)
     )
-    assert np.allclose(cathode_run_result.phase_cathode_enabled, 1.0)
-    assert np.allclose(cathode_run_result.phase_gas_puff_enabled, 0.0)
-    assert np.allclose(cathode_run_result.phase_floating, 0.0)
+    assert np.allclose(cathode_run_result.phase_cathode_enabled, 1.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cathode_run_result.phase_gas_puff_enabled, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cathode_run_result.phase_floating, 0.0, **_TOL_ROUNDOFF)
     cathode_diag = cathode_run_result.cathode_diagnostics
     assert cathode_diag["enabled"].shape == (4,)
-    assert np.allclose(cathode_diag["enabled"], 1.0)
-    assert np.allclose(cathode_diag["configured"], 1.0)
-    assert np.allclose(cathode_diag["phase_enabled"], 1.0)
-    assert np.allclose(cathode_diag["rhs_enabled"], 1.0)
-    assert np.allclose(cathode_diag["solve_enabled"], 1.0)
-    assert np.allclose(cathode_diag["floating"], 0.0)
-    assert np.allclose(cathode_diag["has_solution"], 1.0)
-    assert np.allclose(cathode_diag["has_twin_solution"], 0.0)
+    assert np.allclose(cathode_diag["enabled"], 1.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cathode_diag["configured"], 1.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cathode_diag["phase_enabled"], 1.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cathode_diag["rhs_enabled"], 1.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cathode_diag["solve_enabled"], 1.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cathode_diag["floating"], 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cathode_diag["has_solution"], 1.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cathode_diag["has_twin_solution"], 0.0, **_TOL_ROUNDOFF)
     assert np.all(np.isfinite(cathode_diag["source_phi_c"]))
     assert np.all(cathode_diag["source_I_i"] >= 0.0)
     # source_I_tot's FIRST sample is the initial state's solve, whose net
@@ -1117,6 +1175,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     assert np.allclose(
         cathode_diag["T_s_surface"],
         float(cathode_run_params["cathode_Ts_base_K"]),
+        **_TOL_ROUNDOFF,
     )
     return locals()
 
