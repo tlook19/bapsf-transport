@@ -2042,12 +2042,18 @@ def _case_electrode_sample_smoothing(m3_params):
     # (n, Te) at the presheath transit time, accepted-steps only; the solve
     # reads the smoothed state.
     resolved_cathode_flags = _resolved_cathode_flags()
-    # I_i is not exactly linear in the sampled n: the collisional presheath
-    # factor alpha_eff reads the sample's Ti through the ion-neutral
-    # collision frequency, so it moves with n when Ei is held. The tripling
-    # check below divides alpha_eff out.
+    # The collisional presheath factor alpha_eff reads the sample's Ti
+    # through the ion-neutral collision frequency; the sample carries the
+    # cell's own Ti, so alpha_eff does not move with the sampled n alone.
+    #
+    # The state is built so the sample checks below can see the quantities
+    # they test: an ion temperature far off its floor (Ti0, against the
+    # floor of 0.02585 eV), a nonzero ion velocity in every cell (u0, so M is
+    # not identically zero), and a gas (nn0) at which the presheath is about
+    # a cell length: thin enough that alpha_eff is not pinned at exp(-1/2),
+    # dense enough that it responds to Ti.
     ss_sim = LAPDSim1D(
-        dict(m3_params, nn0=1.0e9),
+        dict(m3_params, nn0=5.0e12, Ti0=1.0, u0=1.0e5),
         resolved_cathode_flags,
     )
     ss_cath = cathode_sample_indices(ss_sim.geometry)[0]
@@ -2079,12 +2085,19 @@ def _case_electrode_sample_smoothing(m3_params):
     # The solve consumes the smoothed sample: with the EMA pinned at the
     # unperturbed density, a state whose instantaneous cathode-cell density
     # is far off the EMA, handed to the solve as the state it reads, must NOT
-    # move the solve, and forcing the EMA must move it.
+    # move the solve, and forcing the EMA must move it. The far state moves
+    # the density at the cell's own Ti and u (Ei and M scaled with n): the
+    # sample carries the cell's own Ti, so a far state that also moved the
+    # cell's Ti would rightly move the solve.
     ss_sim._circuit_I_loop = 800.0
     ss_sim._sample_ema[ss_cath][0] = ss_n_old  # pin the EMA
     ss_res_b = ss_sim.solve_cathode_boundary(update_cache=False)
     ss_state_far = ss_sim.state
-    ss_state_far.n[ss_cath] = ss_n_new * 4.0  # instantaneous state ignored
+    # A power of two, so Ti = Ei/(1.5 n) and u = M/(m n) are bit-unchanged.
+    ss_far_scale = 8.0
+    ss_state_far.n[ss_cath] *= ss_far_scale  # density ignored
+    ss_state_far.Ei[ss_cath] *= ss_far_scale
+    ss_state_far.M[ss_cath] *= ss_far_scale
     assert not ss_state_far.n[ss_cath] == ss_sim.state.n[ss_cath]
     ss_res_b2 = ss_sim.solve_cathode_boundary(
         state=ss_state_far, update_cache=False
@@ -2093,7 +2106,7 @@ def _case_electrode_sample_smoothing(m3_params):
         ss_res_b2.beam_result.result.I_i,
         ss_res_b.beam_result.result.I_i,
         **_TOL_ROUNDOFF,
-    )
+    ), (ss_res_b2.beam_result.result.I_i, ss_res_b.beam_result.result.I_i)
 
     def _ss_alpha_eff():
         # The cathode presheath factor n_se/n at the sample the solve reads.
@@ -2111,17 +2124,41 @@ def _case_electrode_sample_smoothing(m3_params):
     ss_sim._sample_ema[ss_cath][0] = ss_n_old * 3.0  # the EMA moves the solve
     ss_res_c = ss_sim.solve_cathode_boundary(update_cache=False)
     ss_alpha_c = _ss_alpha_eff()
-    # I_i = A_c e n c_s(Te) alpha_eff. Tripling the sampled n leaves Te (the
-    # EMA's) unchanged but divides the sample's Ti = Ei/(1.5 n) by three,
-    # since the smoothed sample keeps Ei; that moves the collisional
-    # presheath factor alpha_eff. Divided out, the remaining factors are
-    # linear in n.
-    assert not ss_alpha_c == ss_alpha_b
+    # The sample carries the cell's OWN ion temperature and velocity: the
+    # live state's cathode cell density differs from the sampled EMA density
+    # (three times the seed here), and the sample's derived Ti and u
+    # still read back as the cell's. Roundoff: Ei and M are rebuilt as
+    # 1.5 n Ti and m n u and divided by the same n again.
+    # Measured separation under the defect: with Ei passed through
+    # unchanged the sample's Ti reads 0.3333 eV against the cell's 1.0 eV,
+    # and with M passed through its u reads 3.333e4 cm/s against 1.0e5 cm/s,
+    # each a relative difference of 2/3 against the 1e-12 tolerance.
+    ss_live = derive_state(ss_sim.state, ss_sim.floors, ss_sim.ion_mass_g)
+    ss_smoothed = ss_sim._smoothed_sample_state(ss_sim.state)
+    ss_sample = derive_state(ss_smoothed, ss_sim.floors, ss_sim.ion_mass_g)
+    assert ss_smoothed.n[ss_cath] != ss_sim.state.n[ss_cath]
     assert np.isclose(
-        ss_res_c.beam_result.result.I_i / ss_alpha_c,
-        3.0 * ss_res_b.beam_result.result.I_i / ss_alpha_b,
-        **_TOL_ROUNDOFF,
+        ss_sample.Ti[ss_cath], ss_live.Ti[ss_cath], **_TOL_ROUNDOFF
+    ), (ss_sample.Ti[ss_cath], ss_live.Ti[ss_cath])
+    assert np.isclose(
+        ss_sample.u[ss_cath], ss_live.u[ss_cath], **_TOL_ROUNDOFF
+    ), (ss_sample.u[ss_cath], ss_live.u[ss_cath])
+    # I_i = A_c e n c_s(Te) alpha_eff. Tripling the sampled n leaves Te (the
+    # EMA's), Ti and u (the cell's own) and the neutral density unchanged, so
+    # the collisional presheath factor alpha_eff does not move and I_i is
+    # exactly linear in the sampled n: it triples. Roundoff: the same
+    # expression evaluated on n and on 3 n. Measured separation under the
+    # defect (Ei passed through, so the sample's Ti falls to a third when its
+    # density triples): alpha_eff 0.8462 against 0.7804, a relative
+    # difference of 8.4e-2 against the 1e-12 tolerance.
+    assert np.isclose(ss_alpha_c, ss_alpha_b, **_TOL_ROUNDOFF), (
+        ss_alpha_c, ss_alpha_b,
     )
+    assert np.isclose(
+        ss_res_c.beam_result.result.I_i,
+        3.0 * ss_res_b.beam_result.result.I_i,
+        **_TOL_ROUNDOFF,
+    ), (ss_res_c.beam_result.result.I_i, ss_res_b.beam_result.result.I_i)
 
     # R1a: one authoritative active-plasma topology. Every closed face has at
     # most one live-side cell, pressure work is invariant to the dead-side
@@ -3653,7 +3690,7 @@ def _case_anode_e_sheath_row_reported_not_applied():
 #: Sign of each cathode surface ledger row in C_th dT_s/dt.
 _SURFACE_ROW_SIGNS = {
     "heater": 1.0, "ion": 1.0, "rad": -1.0, "emis": -1.0, "cond": -1.0,
-    "backscatter": -1.0, "clamp": 1.0,
+    "backscatter": -1.0, "thermal_reemit": -1.0, "clamp": 1.0,
 }
 
 
@@ -3698,11 +3735,65 @@ def _case_cathode_surface_book_closes():
     # (read off the surface state, not the ledger) equals the signed sum of
     # the booked row increments.
     sim = LAPDSim1D(*_anode_sink_config())
+    assert sim._dvm is None
     for _ in range(8):
         stored, signed, budget, increments = _surface_step_closure(sim)
         # Not vacuous: the surface moves and the loss rows are booked.
         assert stored != 0.0 and increments["rad"] > 0.0, increments
         assert abs(stored - signed) <= budget, (stored, signed, budget)
+        # The fluid neutral route launches no counted thermal spectrum from
+        # the cathode face, so the thermal re-emission row books nothing.
+        assert increments["thermal_reemit"] == 0.0, increments
+
+    # THE KINETIC ROUTE: the engine launches the cathode face's thermal
+    # recycle on the surface spectrum at T_s, and the surface pays for it.
+    # A cadence below every step, so each accepted step after the one that
+    # engages the engine fires one neutral tick.
+    kp, kf = default_config()
+    for space, key, value, _why in KINETIC_DVM_INCOMPATIBLE_DEFAULTS:
+        (kf if space == "flags" else kp)[key] = value
+    kp["initial_neutral_state"] = "fill"
+    kf["cathode_coupling"] = True
+    kp.update({
+        "neutral_model": "kinetic_dvm",
+        "neutral_kinetic_dvm_cadence_s": 1.0e-12,
+        # The shipped velocity grid, pinned wide enough to carry the launch
+        # band this jet's coefficients can produce.
+        "neutral_kinetic_dvm_vmax_cm_s": 3.0e7,
+        "neutral_kinetic_dvm_cathode_jet": True,
+        "max_steps_action": "stop",
+    })
+    kin = LAPDSim1D(kp, kf)
+    launched_key = "energy_birth_cathode_face"
+    tick_steps = 0
+    for _ in range(5):
+        ticks_before = int(kin._dvm_tick_count)
+        stored, signed, budget, increments = _surface_step_closure(kin)
+        # (a) The book closes with the row in it, on every step.
+        assert abs(stored - signed) <= budget, (stored, signed, budget)
+        if int(kin._dvm_tick_count) > ticks_before:
+            tick_steps += 1
+            # Liveness: the row on a ticking step stands well above the
+            # closure budget (a factor of ten; a row left out of dT leaves a
+            # residual of about the row itself, so any factor above one
+            # exposes it), so the omission could not hide in the budget.
+            assert increments["thermal_reemit"] > 10.0 * budget, (
+                increments["thermal_reemit"], budget,
+            )
+        else:
+            assert increments["thermal_reemit"] == 0.0, increments
+    assert tick_steps >= 3, tick_steps
+    # (b) The row is the engine's counted launch from the cathode face: the
+    # surface ledger's row [J] against the run's accumulated tick ledgers
+    # [erg], the per-save sums no frame has drained yet. Roundoff: the same
+    # per-tick values summed in the same order, one scaled by 1e-7 per term.
+    launched_erg = float(kin._dvm_particle_accum[launched_key])
+    assert launched_erg > 0.0, launched_erg
+    assert np.isclose(
+        kin._cathode_energy_ledger_J["thermal_reemit"] * 1.0e7,
+        launched_erg,
+        **_TOL_ROUNDOFF,
+    ), (kin._cathode_energy_ledger_J["thermal_reemit"], launched_erg)
 
     # The clamp forced to fire: the radiation row at the old temperature is
     # inflated by 1 GW, so the semi-implicit update falls below the 300 K
