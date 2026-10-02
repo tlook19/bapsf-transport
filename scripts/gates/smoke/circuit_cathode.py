@@ -2042,10 +2042,9 @@ def _case_electrode_sample_smoothing(m3_params):
     # (n, Te) at the presheath transit time, accepted-steps only; the solve
     # reads the smoothed state.
     resolved_cathode_flags = _resolved_cathode_flags()
-    # I_i is not exactly linear in the sampled n: the collisional presheath
-    # factor alpha_eff reads the sample's Ti through the ion-neutral
-    # collision frequency, so it moves with n when Ei is held. The tripling
-    # check below divides alpha_eff out.
+    # The collisional presheath factor alpha_eff reads the sample's Ti
+    # through the ion-neutral collision frequency; the sample carries the
+    # cell's own Ti, so alpha_eff does not move with the sampled n alone.
     ss_sim = LAPDSim1D(
         dict(m3_params, nn0=1.0e9),
         resolved_cathode_flags,
@@ -2079,12 +2078,19 @@ def _case_electrode_sample_smoothing(m3_params):
     # The solve consumes the smoothed sample: with the EMA pinned at the
     # unperturbed density, a state whose instantaneous cathode-cell density
     # is far off the EMA, handed to the solve as the state it reads, must NOT
-    # move the solve, and forcing the EMA must move it.
+    # move the solve, and forcing the EMA must move it. The far state moves
+    # the density at the cell's own Ti and u (Ei and M scaled with n): the
+    # sample carries the cell's own Ti, so a far state that also moved the
+    # cell's Ti would rightly move the solve.
     ss_sim._circuit_I_loop = 800.0
     ss_sim._sample_ema[ss_cath][0] = ss_n_old  # pin the EMA
     ss_res_b = ss_sim.solve_cathode_boundary(update_cache=False)
     ss_state_far = ss_sim.state
-    ss_state_far.n[ss_cath] = ss_n_new * 4.0  # instantaneous state ignored
+    # A power of two, so Ti = Ei/(1.5 n) and u = M/(m n) are bit-unchanged.
+    ss_far_scale = 8.0
+    ss_state_far.n[ss_cath] *= ss_far_scale  # density ignored
+    ss_state_far.Ei[ss_cath] *= ss_far_scale
+    ss_state_far.M[ss_cath] *= ss_far_scale
     assert not ss_state_far.n[ss_cath] == ss_sim.state.n[ss_cath]
     ss_res_b2 = ss_sim.solve_cathode_boundary(
         state=ss_state_far, update_cache=False
@@ -2093,7 +2099,7 @@ def _case_electrode_sample_smoothing(m3_params):
         ss_res_b2.beam_result.result.I_i,
         ss_res_b.beam_result.result.I_i,
         **_TOL_ROUNDOFF,
-    )
+    ), (ss_res_b2.beam_result.result.I_i, ss_res_b.beam_result.result.I_i)
 
     def _ss_alpha_eff():
         # The cathode presheath factor n_se/n at the sample the solve reads.
@@ -2111,17 +2117,34 @@ def _case_electrode_sample_smoothing(m3_params):
     ss_sim._sample_ema[ss_cath][0] = ss_n_old * 3.0  # the EMA moves the solve
     ss_res_c = ss_sim.solve_cathode_boundary(update_cache=False)
     ss_alpha_c = _ss_alpha_eff()
-    # I_i = A_c e n c_s(Te) alpha_eff. Tripling the sampled n leaves Te (the
-    # EMA's) unchanged but divides the sample's Ti = Ei/(1.5 n) by three,
-    # since the smoothed sample keeps Ei; that moves the collisional
-    # presheath factor alpha_eff. Divided out, the remaining factors are
-    # linear in n.
-    assert not ss_alpha_c == ss_alpha_b
+    # The sample carries the cell's OWN ion temperature and velocity: the
+    # live state's cathode cell density differs from the sampled EMA density
+    # (three times the seed here), and the sample's derived Ti and u
+    # still read back as the cell's. Roundoff: Ei and M are rebuilt as
+    # 1.5 n Ti and m n u and divided by the same n again.
+    ss_live = derive_state(ss_sim.state, ss_sim.floors, ss_sim.ion_mass_g)
+    ss_smoothed = ss_sim._smoothed_sample_state(ss_sim.state)
+    ss_sample = derive_state(ss_smoothed, ss_sim.floors, ss_sim.ion_mass_g)
+    assert ss_smoothed.n[ss_cath] != ss_sim.state.n[ss_cath]
     assert np.isclose(
-        ss_res_c.beam_result.result.I_i / ss_alpha_c,
-        3.0 * ss_res_b.beam_result.result.I_i / ss_alpha_b,
-        **_TOL_ROUNDOFF,
+        ss_sample.Ti[ss_cath], ss_live.Ti[ss_cath], **_TOL_ROUNDOFF
+    ), (ss_sample.Ti[ss_cath], ss_live.Ti[ss_cath])
+    assert np.isclose(
+        ss_sample.u[ss_cath], ss_live.u[ss_cath], **_TOL_ROUNDOFF
+    ), (ss_sample.u[ss_cath], ss_live.u[ss_cath])
+    # I_i = A_c e n c_s(Te) alpha_eff. Tripling the sampled n leaves Te (the
+    # EMA's), Ti and u (the cell's own) and the neutral density unchanged, so
+    # the collisional presheath factor alpha_eff does not move and I_i is
+    # exactly linear in the sampled n: it triples. Roundoff: the same
+    # expression evaluated on n and on 3 n.
+    assert np.isclose(ss_alpha_c, ss_alpha_b, **_TOL_ROUNDOFF), (
+        ss_alpha_c, ss_alpha_b,
     )
+    assert np.isclose(
+        ss_res_c.beam_result.result.I_i,
+        3.0 * ss_res_b.beam_result.result.I_i,
+        **_TOL_ROUNDOFF,
+    ), (ss_res_c.beam_result.result.I_i, ss_res_b.beam_result.result.I_i)
 
     # R1a: one authoritative active-plasma topology. Every closed face has at
     # most one live-side cell, pressure work is invariant to the dead-side

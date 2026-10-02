@@ -9013,22 +9013,39 @@ class LAPDSim1D:
         """Return ``state`` with the sampled electrode cells' (n, Te)
         replaced by their supply-averaged EMA values.
 
+        In each sampled cell the returned state carries the EMA density and
+        the EMA electron temperature, and the cell's OWN instantaneous ion
+        temperature and ion velocity: ``Ei`` and ``M`` are rebuilt on the
+        EMA density from the cell's ``Ti`` and ``u`` as ``derive_state``
+        forms them from ``state`` (density floor, ``Ti`` floor), so the
+        sample's derived ``Ti`` and ``u`` equal the cell's own to roundoff
+        rather than scaling with ``n / n_ema``. Every other cell and every
+        neutral field is ``state``'s own.
+
         This is the ONLY substitution site, so the smoothed sample reaches
         exactly its callers: the RHS/beam-side sheath solve and the
         accepted-state surface-update re-solve. Described in full on
         ``_init_sample_smoothing``."""
         n = np.asarray(state.n, dtype=float).copy()
         Ee = np.asarray(state.Ee, dtype=float).copy()
+        Ei = np.asarray(state.Ei, dtype=float).copy()
+        M = np.asarray(state.M, dtype=float).copy()
+        cell_derived = derive_state(state, self._floors, self._ion_mass_g)
         for c in self._sample_smooth_cells:
             n_ema, Te_ema = self._sample_ema[c]
             n[c] = n_ema
             Ee[c] = 1.5 * n_ema * Te_ema * ev_to_erg
+            # On the density derive_state will divide by, so the sample's
+            # Ti and u read back as the cell's own.
+            n_safe = max(n_ema, self._floors["n"])
+            Ei[c] = 1.5 * n_safe * float(cell_derived.Ti[c]) * ev_to_erg
+            M[c] = self._ion_mass_g * n_safe * float(cell_derived.u[c])
         return ConservativeState1D(
             n=n,
             nn=state.nn,
-            M=state.M,
+            M=M,
             Ee=Ee,
-            Ei=state.Ei,
+            Ei=Ei,
             M_n=state.M_n,
             nn_a=state.nn_a,
             M_n_a=state.M_n_a,

@@ -1025,7 +1025,8 @@ ohmic. $Q_e^\text{elec}$ is the plasma-thermal electron term of that split.
 the sheath solve reads — at the cathode cell and at the two cells flanking the
 anode face — is an exponential moving average, seeded from the initial state
 and advanced on accepted steps only, its per-cell time constant the ion
-transit $l_\text{cell}/c_s$ across that cell. So $I_i$, $I_{i,a}$, $\phi_a$, the
+transit $l_\text{cell}/c_s$ across that cell. Only $(n,T_e)$ are averaged: the
+sample carries each sampled cell's own instantaneous $T_i$ and $u$. So $I_i$, $I_{i,a}$, $\phi_a$, the
 cathode's $\alpha_\text{se}$ and the $T_e$ inside $Q_e^\text{elec}$ are
 evaluated on that average, while the fluid rows — including
 $S_\text{an}$, the split weights that distribute the anode row over its two
