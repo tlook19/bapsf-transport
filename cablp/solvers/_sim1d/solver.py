@@ -4683,6 +4683,10 @@ class LAPDSim1D:
         self._accumulate_floor_ledger(
             getattr(attempt, "floor_ledger", self._empty_floor_ledger())
         )
+        # The step's start time, held exactly: the phase this step ran under
+        # is read here, never at ``self._time - dt``, which can round below a
+        # boundary the step started on.
+        step_start_time = self._time
         self._time += float(attempt.dt)
         # Electrode sample smoothing: fold the newly accepted state into the
         # supply-average EMA before any accepted-state consumer reads it.
@@ -4803,7 +4807,7 @@ class LAPDSim1D:
                 geometry=self._geometry,
                 input_dict=self._input_dict,
                 input_flags=self._effective_cathode_flags(
-                    time=self._time - float(attempt.dt)
+                    time=step_start_time
                 ),
                 beam_cross_prev=self._cathode_beam_cross,
                 T_s_override_K=self._cathode_Ts_K,
@@ -4986,7 +4990,7 @@ class LAPDSim1D:
         # other circuit state. The capacitor is advanced inside the same
         # call (trapezoidal).
         step_phase = self._cathode_phase_options(
-            time=self._time - float(attempt.dt)
+            time=step_start_time
         )
         if not step_phase["solve_enabled"] or step_phase["floating"]:
             # Open circuit: no loop; the stored inductor energy is dropped.
@@ -5042,7 +5046,7 @@ class LAPDSim1D:
                 # actually runs -- then cleared ``cathode_coupling`` for a
                 # configuration that supplies one.
                 input_flags=self._effective_cathode_flags(
-                    time=self._time - float(attempt.dt),
+                    time=step_start_time,
                     active_only=False, floating=False
                 ),
                 beam_cross_prev=self._cathode_beam_cross,
@@ -6914,7 +6918,9 @@ class LAPDSim1D:
         if time is None:
             time = self._time
         duration = self._neutral_prebreakdown_duration()
-        return duration > 0.0 and float(time) < duration
+        return duration > 0.0 and not self._phase_boundary_reached(
+            float(time), duration
+        )
 
     def _plasma_phase_time_origin(self):
         return self._neutral_prebreakdown_duration()
@@ -6986,14 +6992,41 @@ class LAPDSim1D:
             cycle_time = puff_on
         return cycle_index, cycle_time
 
+    @staticmethod
+    def _phase_boundary_reached(time, boundary):
+        """Return whether ``time`` [s] has reached the phase boundary ``boundary`` [s].
+
+        The single boundary rule of the plasma phase machine. ``_phase_info``
+        (which phase holds at ``time``), ``_neutral_prebreakdown_active`` and
+        ``next_phase_boundary_after`` (which boundary the run loop steps to
+        next) all read it, so a boundary the run loop treats as passed is one
+        the phase lookup has crossed, and the reverse.
+
+        A boundary is reached when ``time >= boundary - tol`` with
+        ``tol = 1e-12 * max(|time|, |boundary|)``. A time a hair BELOW a
+        boundary -- the ordinary result of forming the boundary as a sum of
+        phase durations, or of stepping onto it in floating point -- is
+        therefore ON it. The tolerance is relative to the two times, as on the
+        equilibration lattice (``_equilibration_cycle_position``), and is not
+        the run loop's ``t_end``-scaled ``time_tol``, so the rule does not
+        depend on how long the run is.
+        """
+        tol = 1e-12 * max(abs(time), abs(boundary))
+        return time >= boundary - tol
+
     def next_phase_boundary_after(self, time, t_end=None, time_tol=0.0):
-        """Return the next diagnostic phase boundary after ``time`` [s]."""
+        """Return the next diagnostic phase boundary after ``time`` [s].
+
+        A plasma-phase boundary is offered only while ``time`` has not reached
+        it under ``_phase_boundary_reached``; ``time_tol`` [s] widens only the
+        ``t_end`` window.
+        """
         time = max(float(time), 0.0)
         time_tol = max(float(time_tol), 0.0)
         t_end = None if t_end is None else float(t_end)
 
         def in_run_window(boundary):
-            if boundary <= time + time_tol:
+            if self._phase_boundary_reached(time, boundary):
                 return False
             return t_end is None or boundary <= t_end + time_tol
 
@@ -9950,55 +9983,65 @@ class LAPDSim1D:
         tau_breakdown = max(float(self._input_dict.get("tau_breakdown")), 0.0)
         tau_afterglow = max(float(self._input_dict.get("tau_afterglow")), 0.0)
         plasma_origin = self._plasma_phase_time_origin()
-        if plasma_origin > 0.0 and time < plasma_origin:
+
+        # Every boundary below is compared through the one rule the run loop's
+        # ``next_phase_boundary_after`` also applies; an elapsed time is never
+        # negative, since a time a hair below a boundary is ON it.
+        def reached(boundary):
+            return self._phase_boundary_reached(time, boundary)
+
+        def since(boundary):
+            return max(time - boundary, 0.0)
+
+        if plasma_origin > 0.0 and not reached(plasma_origin):
             return "neutral_prebreakdown", time
         # Switch-open abort (ignition_stalled / prebreakdown_timeout): from the
         # abort instant the run is in the ordinary afterglow -- drive off,
         # cathode floating -- and then post_afterglow. Inert (None) on every
         # run that ignites, which is what keeps the golden bit-exact.
         abort = self._t_ignition_abort
-        if abort is not None and time >= abort:
+        if abort is not None and reached(abort):
             post_afterglow_start = abort + tau_afterglow
-            if time < post_afterglow_start:
-                return "afterglow", time - abort
-            return "post_afterglow", time - post_afterglow_start
+            if not reached(post_afterglow_start):
+                return "afterglow", since(abort)
+            return "post_afterglow", since(post_afterglow_start)
         if self._phase_transition_mode() == "current":
             if self._t_breakdown_trigger is not None:
                 main_start = self._t_breakdown_trigger
                 afterglow_start = main_start + tau_discharge
                 post_afterglow_start = afterglow_start + tau_afterglow
-                if time < main_start:
+                if not reached(main_start):
                     if (
                         self._t_prebreakdown_trigger is not None
-                        and time >= self._t_prebreakdown_trigger
+                        and reached(self._t_prebreakdown_trigger)
                     ):
-                        return "breakdown", time - self._t_prebreakdown_trigger
-                    return "pre_breakdown", time - plasma_origin
-                if time < afterglow_start:
-                    return "main_discharge", time - main_start
-                if time < post_afterglow_start:
-                    return "afterglow", time - afterglow_start
-                return "post_afterglow", time - post_afterglow_start
+                        return "breakdown", since(self._t_prebreakdown_trigger)
+                    return "pre_breakdown", since(plasma_origin)
+                if not reached(afterglow_start):
+                    return "main_discharge", since(main_start)
+                if not reached(post_afterglow_start):
+                    return "afterglow", since(afterglow_start)
+                return "post_afterglow", since(post_afterglow_start)
             if (
                 self._t_prebreakdown_trigger is not None
-                and time >= self._t_prebreakdown_trigger
+                and reached(self._t_prebreakdown_trigger)
             ):
-                return "breakdown", time - self._t_prebreakdown_trigger
-            return "pre_breakdown", time - plasma_origin
+                return "breakdown", since(self._t_prebreakdown_trigger)
+            return "pre_breakdown", since(plasma_origin)
 
         breakdown_start = plasma_origin + tau_prebreakdown
         main_start = breakdown_start + tau_breakdown
         afterglow_start = main_start + tau_discharge
         post_afterglow_start = afterglow_start + tau_afterglow
-        if time < breakdown_start:
+        if not reached(breakdown_start):
             return "pre_breakdown", time
-        if time < main_start:
-            return "breakdown", time - breakdown_start
-        if time < afterglow_start:
-            return "main_discharge", time - main_start
-        if time < post_afterglow_start:
-            return "afterglow", time - afterglow_start
-        return "post_afterglow", time - post_afterglow_start
+        if not reached(main_start):
+            return "breakdown", since(breakdown_start)
+        if not reached(afterglow_start):
+            return "main_discharge", since(main_start)
+        if not reached(post_afterglow_start):
+            return "afterglow", since(afterglow_start)
+        return "post_afterglow", since(post_afterglow_start)
 
     def _phase_switches(self, phase):
         discharge_phases = {"pre_breakdown", "breakdown", "main_discharge"}

@@ -479,22 +479,56 @@ def _case_breakdown_retry_near_vacuum(
         neutral_prebreakdown_flags,
     )
     neutral_prebreakdown_result = neutral_prebreakdown_sim.run(dt=1.0e-10)
-    # Unadjudicated: these three times are of order 1e-10 s, so atol=1e-8
-    # admits any value; the run's times differ from the expected ones by one
-    # to two 1e-10 s steps.
-    assert np.isclose(
-        neutral_prebreakdown_result.final_time, 6.0e-10, **_TOL_UNADJUDICATED
-    )
-    assert np.isclose(
-        neutral_prebreakdown_result.t_prebreakdown_trigger,
-        2.0e-10,
-        **_TOL_UNADJUDICATED,
+    # Expected schedule, built from the parameters. The plasma phases start at
+    # tau_neutral_prebreakdown; the first driven step runs from there to one
+    # dt later and ends with the loop current above I_prebreakdown, so the
+    # pre-breakdown trigger interpolates between the trigger samples at those
+    # two times; the breakdown trigger is the next accepted step (its previous
+    # sample is already above I_breakdown, so it is not interpolated); the
+    # run ends tau_discharge + tau_afterglow after breakdown.
+    _np_dt = 1.0e-10
+    _np_origin = neutral_prebreakdown_params["tau_neutral_prebreakdown"]
+    _np_I_pre = neutral_prebreakdown_params["I_prebreakdown"]
+    _np_expected_breakdown = _np_origin + 2.0 * _np_dt
+    _np_expected_end = (
+        _np_expected_breakdown
+        + neutral_prebreakdown_params["tau_discharge"]
+        + neutral_prebreakdown_params["tau_afterglow"]
     )
     assert np.isclose(
         neutral_prebreakdown_result.t_breakdown_trigger,
-        3.0e-10,
-        **_TOL_UNADJUDICATED,
+        _np_expected_breakdown,
+        **_TOL_ROUNDOFF,
     )
+    assert np.isclose(
+        neutral_prebreakdown_result.final_time, _np_expected_end, **_TOL_ROUNDOFF
+    )
+    _np_samples_t = neutral_prebreakdown_result.current_trigger_samples["time"]
+    _np_samples_I = neutral_prebreakdown_result.current_trigger_samples["I_tot"]
+    assert np.allclose(
+        _np_samples_t[:2], [_np_origin, _np_origin + _np_dt], **_TOL_ROUNDOFF
+    ), _np_samples_t
+    assert _np_samples_I[0] < _np_I_pre <= _np_samples_I[1], _np_samples_I
+    _np_expected_prebreakdown = _np_samples_t[0] + (
+        (_np_I_pre - _np_samples_I[0]) / (_np_samples_I[1] - _np_samples_I[0])
+    ) * (_np_samples_t[1] - _np_samples_t[0])
+    assert np.isclose(
+        neutral_prebreakdown_result.t_prebreakdown_trigger,
+        _np_expected_prebreakdown,
+        **_TOL_ROUNDOFF,
+    )
+    # One frame per accepted step: the neutral fill, the first driven step
+    # (pre-breakdown), one breakdown step, then the discharge and afterglow
+    # at tau / dt steps each, and the closing frame.
+    assert list(neutral_prebreakdown_result.phase) == (
+        ["neutral_prebreakdown"] * round(_np_origin / _np_dt)
+        + ["pre_breakdown", "breakdown"]
+        + ["main_discharge"]
+        * round(neutral_prebreakdown_params["tau_discharge"] / _np_dt)
+        + ["afterglow"]
+        * round(neutral_prebreakdown_params["tau_afterglow"] / _np_dt)
+        + ["post_afterglow"]
+    ), list(neutral_prebreakdown_result.phase)
     assert list(neutral_prebreakdown_result.phase[:2]) == [
         "neutral_prebreakdown",
         "neutral_prebreakdown",
@@ -2127,3 +2161,71 @@ def _case_tail_handoff_surface_continuity():
         _sc_P0 - _sc_P_old, _sc_I0 * _sc_per_electron, rtol=1e-12, atol=0.0
     ), (_sc_P0, _sc_I0, _sc_per_electron)
     assert _sc_P0 - _sc_P_old > 100.0, _sc_P0 - _sc_P_old
+
+
+# --------------------------------------------------------------------
+# phase-boundary-one-ulp-above-step
+# --------------------------------------------------------------------
+@_case("phase-boundary-one-ulp-above-step", historical_stance=True)
+def _case_phase_boundary_one_ulp_above_step():
+    """A boundary that lands an ulp above a step time is reached at that step.
+
+    Current-driven phases with no neutral fill, dt = 1e-10 s: the triggers
+    latch at the first two accepted steps, so the discharge starts at
+    t_bd = 2e-10 s, and tau_discharge = 5e-10 s puts the afterglow boundary at
+    fl(2e-10 + 5e-10) = 7.000000000000001e-10 s, one ulp above the step time
+    7e-10 s that five 1e-10 s steps reach from t_bd. The run loop and the phase
+    lookup must agree that the boundary is reached there: the discharge then
+    runs exactly tau_discharge / dt steps, the frame after it starts the
+    afterglow, and that afterglow step runs on the open circuit.
+    """
+    params, flags = _base_config()
+    dt = 1.0e-10
+    params.update({
+        "gas_puff_enabled": False,
+        "pump_enabled": False,
+        "dt_save": 0.0,
+        "phase_transition_mode": "current",
+        "tau_prebreakdown": 5.0e-10,
+        "tau_discharge": 5.0e-10,
+        "tau_afterglow": 1.0e-10,
+        "I_prebreakdown": 1.0e-9,
+        "I_breakdown": 1.0e-9,
+    })
+    flags["cathode_coupling"] = True
+    result = LAPDSim1D(params, flags).run(dt=dt)
+    t_bd = 2.0 * dt
+    afterglow_start = t_bd + params["tau_discharge"]
+    # The premise: the boundary sum is not the step time it should coincide
+    # with, but lies within an ulp above it.
+    t_steps = t_bd
+    for _ in range(round(params["tau_discharge"] / dt)):
+        t_steps += dt
+    assert afterglow_start != t_steps, (afterglow_start, t_steps)
+    assert 0.0 < afterglow_start - t_steps <= np.spacing(t_steps), (
+        afterglow_start, t_steps,
+    )
+    assert np.isclose(result.t_breakdown_trigger, t_bd, **_TOL_ROUNDOFF)
+
+    phase = list(result.phase)
+    # One frame per accepted step at dt_save = 0, so the main-discharge frames
+    # count the driven steps.
+    driven = [i for i, p in enumerate(phase) if p == "main_discharge"]
+    assert len(driven) == round(params["tau_discharge"] / dt), phase
+    first_after = driven[-1] + 1
+    assert phase[first_after] == "afterglow", phase
+    assert np.isclose(result.time[first_after], t_steps, **_TOL_ROUNDOFF)
+    assert result.phase_floating[first_after] == 1.0
+    assert result.phase_cathode_enabled[first_after] == 0.0
+    # The afterglow's circuit state. The loop current the discharge hands on
+    # is at most 1 A, so the hand-off rule opens the circuit for the
+    # afterglow step and the loop carries exactly zero at its end.
+    I_loop = np.asarray(result.cathode_diagnostics["circuit_I_loop"], float)
+    assert 0.0 < I_loop[first_after] <= 1.0, I_loop
+    assert I_loop[first_after + 1] == 0.0, I_loop
+    assert phase[first_after + 1:] == ["post_afterglow"], phase
+    assert np.isclose(
+        result.final_time,
+        afterglow_start + params["tau_afterglow"],
+        **_TOL_ROUNDOFF,
+    )

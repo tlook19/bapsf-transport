@@ -234,6 +234,7 @@ _CASE_ORDER = (
     "anode-fast-term-sheath-rule",
     "anode-pinned-share-knife-edge",
     "anode-pinned-share-tolerance-decades",
+    "phase-boundary-one-ulp-above-step",
 )
 
 
