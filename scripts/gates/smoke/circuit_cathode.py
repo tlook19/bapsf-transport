@@ -60,7 +60,6 @@ from ._harness import (
     _CAPFIX_ESCAPE_KWARGS,
     _CAPFIX_ESCAPE_PLASMA,
     _TOL_ROUNDOFF,
-    _TOL_UNADJUDICATED,
     _anode_sink_config,
     _anode_sink_sim,
     _base_config,
@@ -572,9 +571,18 @@ def _case_cathode_boundary_beam_terms(cathode_face):
     assert np.all(
         np.isfinite(pack_state(afterglow_cathode_loss_terms.anode_rhs))
     )
-    assert not np.allclose(
-        pack_state(afterglow_cathode_loss_terms.rhs), 0.0, **_TOL_UNADJUDICATED
+    # Floor: at I_tot = 0 the cathode collects electrons I_i + I_eth* >= I_i,
+    # each debiting 2 Te from the cell, so |Ee row| >= 2 Te I_i / V_cell.
+    _ag_result = floating_cathode_solve.beam_result.result
+    _ag_Te_eV = float(cathode_sim.derived.Te[cathode_face])
+    _ag_floor_erg_cm3_s = (
+        2.0 * _ag_Te_eV * _ag_result.I_i * 1.0e7
+        / float(cathode_sim.geometry.plasma_volume_cm3[cathode_face])
     )
+    assert _ag_floor_erg_cm3_s > 0.0
+    assert (
+        afterglow_cathode_loss_terms.rhs.Ee[cathode_face] < -_ag_floor_erg_cm3_s
+    ), (afterglow_cathode_loss_terms.rhs.Ee[cathode_face], _ag_floor_erg_cm3_s)
     # Same row structure as the driven phase: disjoint Ee supports, and the
     # anode row carries Ee alone.
     _ag_cath_Ee = np.asarray(afterglow_cathode_loss_terms.rhs.Ee, dtype=float)

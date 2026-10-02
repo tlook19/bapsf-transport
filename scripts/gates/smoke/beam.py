@@ -41,7 +41,6 @@ from cablp.solvers._sim1d.physics.reactions import reaction_rates
 
 from ._harness import (
     _TOL_ROUNDOFF,
-    _TOL_UNADJUDICATED,
     _base_config,
     _base_sim,
     _case,
@@ -1605,8 +1604,12 @@ def _case_beam_deposition_smoothing_conservation(csda_params):
             )
             # ...and the kernel is not quietly the identity: it MOVED the
             # deposit, so the conservation above is a real statement.
-            assert not np.allclose(
-                on_row, off_row, **_TOL_UNADJUDICATED
+            # Scale: sigma = 50 cm against live cells of 7.8-33.5 cm keeps at
+            # most dz/(sqrt(2 pi) sigma) ~ 0.27 of a cell's deposit in place
+            # (x2 beside the reflecting face), so a peaked profile moves by
+            # a fraction of order 0.1-1 of its peak; 0.05 is the floor.
+            assert np.max(np.abs(on_row - off_row)) > 0.05 * np.max(
+                np.abs(off_row)
             ), (mesh_label, smooth_term)
     return locals()
 
@@ -1665,8 +1668,14 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
     smoothkey_W_a = _beam_smoothing_matrix(smoothkey_geom_a, smooth_sigma_cm)
     smoothkey_W_b = _beam_smoothing_matrix(smoothkey_geom_b, smooth_sigma_cm)
     assert smoothkey_W_a is not smoothkey_W_b
-    assert not np.allclose(
-        smoothkey_W_a, smoothkey_W_b, **_TOL_UNADJUDICATED
+    # Scale: some cell centre moves by more than one kernel width between the
+    # meshes, so a Gaussian weight in that column changes by a fraction of
+    # order one of the largest weight; 0.1 is the floor.
+    assert np.max(
+        np.abs(smoothkey_geom_a.z_cm - smoothkey_geom_b.z_cm)
+    ) > smooth_sigma_cm
+    assert np.max(np.abs(smoothkey_W_a - smoothkey_W_b)) > 0.1 * np.max(
+        np.abs(smoothkey_W_a)
     )
 
     # (b) The cache still caches: two DISTINCT geometry objects with identical
@@ -1693,8 +1702,12 @@ def _case_beam_smoothing_matrix_cache(csda_params, smooth_sigma_cm):
         smoothkey_geom_roles, smooth_sigma_cm
     )
     assert smoothkey_W_roles is not smoothkey_W_a
-    assert not np.allclose(
-        smoothkey_W_roles, smoothkey_W_a, **_TOL_UNADJUDICATED
+    # Scale: the flipped cell leaves the support, so its row in W_a, which
+    # holds its own diagonal weight (of order dz/(sqrt(2 pi) sigma) ~ 0.4 for
+    # a 50 cm cell at sigma = 50 cm), drops to zero; 0.1 of the largest
+    # weight is the floor.
+    assert np.max(np.abs(smoothkey_W_roles - smoothkey_W_a)) > 0.1 * np.max(
+        np.abs(smoothkey_W_a)
     )
 
 
