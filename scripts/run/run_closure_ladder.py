@@ -106,7 +106,10 @@ owns the driver and every arm it launches. Subagents must not run ``run`` or
 
 ``census``
     The afterglow tail hand-off census with
-    ``--assert-no-handoff-before-ms 21.5`` over each finished arm.
+    ``--assert-no-handoff-before-ms 21.5`` over each finished arm, each
+    reported PASS, FAIL or DID NOT RUN (census exit 2: no afterglow, or the
+    record ends before 21.5 ms without a hand-off). The subcommand exits 1
+    if any arm FAILED, else 2 if any DID NOT RUN, else 0.
 
 ``status`` / ``tabulate``
     Per-arm state, and the per-rung plateau stage-(ii) summary, band
@@ -914,7 +917,17 @@ def cmd_score(args):
                   f"{'PASS' if chk and chk['PASS'] else 'FAIL' if chk else '-'}")
 
 
+CENSUS_VERDICT = {0: "PASS", 2: "DID NOT RUN"}
+
+
 def cmd_census(args):
+    """Census every finished arm; exit 1 if any FAILED, else 2 if any DID NOT RUN.
+
+    The census exits 0 PASS, 1 FAIL, 2 DID NOT RUN (the record has no
+    afterglow, or ends before the assertion time without a hand-off); any
+    other nonzero status is reported as FAIL.
+    """
+    failed = did_not_run = False
     for es in args.es:
         for name, *_ in ARMS:
             if args.only and name not in args.only:
@@ -924,7 +937,14 @@ def cmd_census(args):
                 continue
             r = run_wt([PY, "scripts/verify/census_afterglow_tail_handoff.py", "--from-h5", p["h5"],
                         "--assert-no-handoff-before-ms", "21.5"], p["census"])
-            print(f"census {p['id']} rc={r.returncode} {'PASS' if r.returncode == 0 else 'FAIL'}")
+            verdict = CENSUS_VERDICT.get(r.returncode, "FAIL")
+            failed |= verdict == "FAIL"
+            did_not_run |= verdict == "DID NOT RUN"
+            print(f"census {p['id']} rc={r.returncode} {verdict}")
+    if failed:
+        sys.exit(1)
+    if did_not_run:
+        sys.exit(2)
 
 
 def cmd_status(args):

@@ -31,8 +31,14 @@ entry point.
 
 Run without ``--assert-no-handoff-before-ms`` the census measures and asserts
 nothing, so its exit status carries no verdict. With the flag: exit 0 = the
-assertion holds; exit 1 = it does not; exit 2 = the record contains no
-afterglow, so the assertion examined nothing.
+record covers the window up to the assertion time and the hand-off did not
+fire before it; exit 1 = the hand-off fired before it; exit 2 = DID NOT RUN,
+either because the record contains no afterglow or because it ends before the
+assertion time without a firing, so the window the assertion names was not
+all examined.
+
+``--self-test`` builds synthetic saved records in a temporary directory and
+checks the exit status of the ``--from-h5`` route on each.
 """
 
 import argparse
@@ -113,13 +119,14 @@ class _StepCensus:
 
 
 def _report(times_s, floating, driven_tail, I_loop, V_dis, resolution,
-            assert_before_ms, T_s=None):
+            assert_before_ms, T_s=None, end_s=None):
     """Print the census and return the exit status.
 
     ``floating`` and ``driven_tail`` are boolean arrays over the same lattice
     as ``times_s``; the first is the open-circuit phase, the second the driven
     freewheel. ``I_loop`` and ``V_dis`` are per-entry circuit readings, used
-    only to describe the firing.
+    only to describe the firing. ``end_s`` is the last time the record covers
+    [s]; it defaults to the last entry of ``times_s``.
     """
     times_ms = np.asarray(times_s, dtype=float) * 1.0e3
     floating = np.asarray(floating, dtype=bool)
@@ -187,6 +194,20 @@ def _report(times_s, floating, driven_tail, I_loop, V_dis, resolution,
             f"before the registered {assert_before_ms:.4f} ms"
         )
         return 1
+    if end_s is not None:
+        end_ms = float(end_s) * 1.0e3
+    elif times_ms.size:
+        end_ms = float(times_ms[-1])
+    else:
+        end_ms = float("-inf")
+    if first_ms is None and end_ms < assert_before_ms:
+        print(
+            f"tail census: DID NOT RUN -- the record ends at {end_ms:.4f} ms "
+            "without a hand-off, before the assertion time "
+            f"{assert_before_ms:.4f} ms, so the window up to it was not all "
+            "examined"
+        )
+        return 2
     print(
         f"tail census: PASS -- zero hand-off firings before "
         f"{assert_before_ms:.4f} ms"
@@ -271,15 +292,76 @@ def _run_live(args):
     floating = np.array([r[3] for r in rows], dtype=bool)
     tail = np.array([r[4] for r in rows], dtype=bool)
     T_s = np.array([r[6] for r in rows], dtype=float)
+    # The rows hold each accepted step's START time; the run covers up to the
+    # end of its last step.
     return _report(
         times, floating, tail, I_prev, V_dis,
         "accepted step", args.assert_no_handoff_before_ms,
         T_s=None if np.all(np.isnan(T_s)) else T_s,
+        end_s=float(sim._time),
     )
+
+
+def _self_test():
+    """Check the ``--from-h5`` exit status on constructed records.
+
+    Each record is written with only the datasets ``_run_from_h5`` reads, on
+    a 1 ms save lattice from 0 ms. Its expected status follows from how it is
+    built: a firing is a save with ``floating`` set, the afterglow is
+    ``phase_floating``, and the record ends at its last save.
+    """
+    import contextlib
+    import io
+    import tempfile
+
+    import h5py
+
+    def write(path, end_ms, afterglow_from_ms, floating_from_ms):
+        t_ms = np.arange(0.0, end_ms + 0.5, 1.0)
+        pf = (np.zeros(t_ms.size, bool) if afterglow_from_ms is None
+              else t_ms >= afterglow_from_ms)
+        fl = (np.zeros(t_ms.size, bool) if floating_from_ms is None
+              else t_ms >= floating_from_ms)
+        with h5py.File(path, "w") as h:
+            h["time"] = t_ms * 1.0e-3
+            h["phase_floating"] = pf.astype(float)
+            d = h.create_group("cathode_diagnostics")
+            d["floating"] = fl.astype(float)
+            d["circuit_I_loop"] = np.linspace(2000.0, 0.1, t_ms.size)
+            d["circuit_V_dis_step"] = np.linspace(60.0, -1.0, t_ms.size)
+            h.attrs["configuration_name"] = "synthetic"
+
+    # (name, record end [ms], afterglow from [ms], open circuit from [ms],
+    #  assertion time [ms], expected exit status)
+    cases = (
+        ("tail-ends-before-T", 21.0, 20.0, None, 21.5, 2),
+        ("tail-reaches-past-T", 25.0, 20.0, None, 21.5, 0),
+        ("tail-ends-exactly-at-T", 21.0, 20.0, None, 21.0, 0),
+        ("fires-before-T", 25.0, 10.0, 15.0, 21.5, 1),
+        ("no-afterglow", 25.0, None, None, 21.5, 2),
+    )
+    bad = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, end_ms, ag_ms, fl_ms, T_ms, want in cases:
+            path = Path(tmp) / f"{name}.h5"
+            write(path, end_ms, ag_ms, fl_ms)
+            with contextlib.redirect_stdout(io.StringIO()):
+                got = main(["--from-h5", str(path),
+                            "--assert-no-handoff-before-ms", repr(T_ms)])
+            ok = got == want
+            bad += not ok
+            print(f"census self-test {name}: end={end_ms} ms T={T_ms} ms "
+                  f"expected exit {want}, got {got} -- "
+                  f"{'ok' if ok else 'MISMATCH'}")
+    print("census self-test: "
+          + ("PASS" if bad == 0 else f"FAIL ({bad} mismatch)"))
+    return 0 if bad == 0 else 1
 
 
 def main(argv=None):
     args = _parse_args(argv)
+    if args.self_test:
+        return _self_test()
     if args.from_h5 is not None:
         return _run_from_h5(args)
     return _run_live(args)
@@ -314,9 +396,14 @@ def _parse_args(argv):
         "--assert-no-handoff-before-ms", type=float, default=None,
         metavar="MS",
         help="Fail (exit 1) if the hand-off fires before this time [ms]; exit "
-             "2 if the record contains no afterglow to examine. The "
+             "2 (did not run) if the record contains no afterglow, or ends "
+             "before this time without a firing. The "
              "registered value for the LAPD reference configuration is 21.5, "
              "the end of the scored window.",
+    )
+    parser.add_argument(
+        "--self-test", action="store_true",
+        help="Check the exit status on synthetic saved records and exit.",
     )
     return parser.parse_args(argv)
 
