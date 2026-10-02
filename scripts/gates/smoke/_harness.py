@@ -127,17 +127,54 @@ for _sub in ("atomic", "gates", "kinetic", "run", "score", "stance",
 # relatively.
 _TOL_ROUNDOFF = {"rtol": 1e-12, "atol": 0.0}
 
-# Unadjudicated: numpy's defaults written out. Marks a comparison whose
-# tolerance has no stated numerical origin yet; it is the value the
-# comparison already ran at, kept so the assertion's strength is unchanged.
-_TOL_UNADJUDICATED = {"rtol": 1e-5, "atol": 1e-8}
-
 #: The classes a case module may unpack (``**NAME``) in place of explicit
-#: tolerances.
+#: tolerances. No class holds numpy's default tolerances: a comparison
+#: whose tolerance has no stated numerical origin writes its value on the
+#: call, where it can be seen and adjudicated.
 _TOLERANCE_CLASSES = {
     "_TOL_ROUNDOFF": _TOL_ROUNDOFF,
-    "_TOL_UNADJUDICATED": _TOL_UNADJUDICATED,
 }
+
+
+def _assert_terms_sum_to_total(terms, total, what):
+    """Assert that named terms sum to their total, barred by the terms' size.
+
+    ``terms`` is a sequence of arrays and ``total`` an array or scalar that
+    broadcasts against them. Elementwise, the residual
+    ``|sum(terms) - total|`` must not exceed ``rtol * sum(|term_i|)``, with
+    ``rtol`` the roundoff class's (1e-12).
+
+    The bar scales with the terms' gross magnitude, not with the total: a
+    sum of N float64 terms carries a rounding error of at most
+    ``(N - 1) * eps * sum(|term_i|)`` (eps = 2.2e-16), whatever the order, and
+    the total the code forms by its own order carries the same bound, so
+    ``2 * (N - 1) * eps`` stays below 1e-12 for N up to about 2000 terms.
+    Scaling by ``|total|`` instead demands that accuracy relative to what is
+    left after the terms cancel, which floating point cannot deliver, and
+    demands exact zeros where the total is zero. ``what`` names the
+    comparison in the failure message.
+    """
+    rows = [np.asarray(term, dtype=float) for term in terms]
+    term_sum = np.zeros(np.broadcast_shapes(*(r.shape for r in rows)))
+    gross = np.zeros_like(term_sum)
+    for row in rows:
+        term_sum = term_sum + row
+        gross = gross + np.abs(row)
+    residual = np.abs(term_sum - np.asarray(total, dtype=float))
+    bar = _TOL_ROUNDOFF["rtol"] * gross
+    over = ~(residual <= bar)  # a NaN anywhere fails rather than passes
+    if np.any(over):
+        worst = np.unravel_index(
+            np.argmax(np.where(over, np.nan_to_num(residual - bar, nan=np.inf),
+                               -np.inf)),
+            residual.shape,
+        )
+        raise AssertionError(
+            f"{what}: the terms do not sum to the total at "
+            f"{int(np.count_nonzero(over))} element(s); worst at {worst}: "
+            f"|sum - total| = {residual[worst]:.6e} against the bar "
+            f"{bar[worst]:.6e} = {_TOL_ROUNDOFF['rtol']:g} * sum(|term|)"
+        )
 
 
 def _cov_blank_rhs_term(cells, n_row):
@@ -635,13 +672,43 @@ def _assert_case_bodies_reachable():
 # A bare ``np.isclose(a, b)`` compares at numpy's defaults, rtol=1e-5 and
 # atol=1e-8, and nothing on the call says so: two times of order 1e-10 s pass
 # whatever their values, and an identity held to roundoff is checked at five
-# digits. So every closeness comparison in a case module must state both
-# tolerances on the call (``rtol`` and ``atol``; ``rel_tol`` and ``abs_tol``
-# for ``math.isclose``) or unpack one of ``_TOLERANCE_CLASSES``. Like the
+# digits. So every closeness comparison in a case module, and in this module's
+# own helpers, must state both tolerances as keywords on a direct call
+# (``rtol`` and ``atol``; ``rel_tol`` and ``abs_tol`` for ``math.isclose``)
+# or, on a numpy call, unpack one of ``_TOLERANCE_CLASSES``. Like the
 # reachability check this is decided from the parse tree alone, so it holds
 # for every line of a module, whether or not a run reaches it.
+#
+# Names are resolved through the module's own import statements, so an alias
+# (``import numpy as npy``) or a direct import (``from numpy import isclose``,
+# ``from math import isclose``) is seen as the function it binds. What cannot
+# be resolved statically is refused outright rather than guessed: a closeness
+# function or its module referenced other than by a direct call or attribute
+# (rebound, wrapped in ``functools.partial``, passed as an argument), a star
+# import from numpy or math, tolerances passed positionally, and a tolerance
+# class name bound, mutated or used anywhere but as ``**NAME`` on a call.
 # ----------------------------------------------------------------------
 _NUMPY_CLOSENESS_CALLS = ("isclose", "allclose", "assert_allclose")
+
+#: Each closeness function's tolerance keywords and the defaults a call
+#: falls back to when it omits them, keyed by the function's last name.
+#: ``math`` is ``math.isclose``; the other three are numpy's.
+_CLOSENESS_KEYWORDS = {
+    "isclose": ("rtol", "atol", "rtol=1e-05, atol=1e-08"),
+    "allclose": ("rtol", "atol", "rtol=1e-05, atol=1e-08"),
+    "assert_allclose": ("rtol", "atol", "rtol=1e-07, atol=0"),
+    "math": ("rel_tol", "abs_tol", "rel_tol=1e-09, abs_tol=0.0"),
+}
+
+#: Modules a closeness function is reached through by attribute. Binding one
+#: of these to another name, or passing it on, hides the call from the lint.
+_CLOSENESS_MODULES = frozenset({"numpy", "numpy.testing", "numpy.ma", "math"})
+
+_ALLOWED_FORMS = (
+    "np.isclose(a, b, rtol=..., atol=...), np.allclose(...), "
+    "np.testing.assert_allclose(...) and math.isclose(a, b, rel_tol=..., "
+    "abs_tol=...), called directly"
+)
 
 
 def _dotted_name(node):
@@ -656,69 +723,341 @@ def _dotted_name(node):
     return ".".join(reversed(parts))
 
 
-def _untoleranced_comparisons(source):
-    """Return one ``(line, call, missing)`` per closeness call lacking tolerances.
+def _import_bindings(tree):
+    """Map each name a module's imports bind to the dotted targets it names.
+
+    Every import in the module counts, at any depth, so a name bound to a
+    closeness function anywhere is treated as that function everywhere.
+    Relative imports bind the package's own modules and are left out.
+    """
+    bindings = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname is not None:
+                    bindings.setdefault(alias.asname, set()).add(alias.name)
+                else:
+                    root = alias.name.split(".")[0]
+                    bindings.setdefault(root, set()).add(root)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                bindings.setdefault(alias.asname or alias.name, set()).add(
+                    f"{node.module}.{alias.name}"
+                )
+    return bindings
+
+
+def _resolved_targets(node, bindings):
+    """Return the dotted targets a Name/Attribute chain resolves to."""
+    dotted = _dotted_name(node)
+    if dotted is None:
+        return set()
+    head, _, rest = dotted.partition(".")
+    return {
+        target + ("." + rest if rest else "")
+        for target in bindings.get(head, ())
+    }
+
+
+def _closeness_kind(targets):
+    """Return the ``_CLOSENESS_KEYWORDS`` key a set of targets names, else None."""
+    for target in sorted(targets):
+        parts = target.split(".")
+        if target == "math.isclose":
+            return "math"
+        if parts[0] == "numpy" and len(parts) > 1 and (
+            parts[-1] in _NUMPY_CLOSENESS_CALLS
+        ):
+            return parts[-1]
+    return None
+
+
+def _untoleranced_comparisons(source, defines_classes=False):
+    """Return one ``(line, message)`` per closeness comparison the lint refuses.
 
     Takes the SOURCE rather than reading a file, so the check can be pointed
-    at any revision of a module. A call passes when it names both tolerances
-    as keywords or unpacks (``**NAME``) one of ``_TOLERANCE_CLASSES``.
+    at any revision of a module, and at the constructed sources of its own
+    self-test. ``defines_classes`` is True for this module only, which assigns
+    each tolerance class once at top level and lists it in the registry.
     """
+    tree = ast.parse(source)
+    parents = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+    bindings = _import_bindings(tree)
     findings = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Call):
-            continue
-        name = _dotted_name(node.func)
-        if name is None:
-            continue
-        if name == "math.isclose":
-            required = ("rel_tol", "abs_tol")
-        elif name.split(".")[-1] in _NUMPY_CLOSENESS_CALLS and (
-            name.split(".")[0] in ("np", "numpy")
-        ):
-            required = ("rtol", "atol")
-        else:
-            continue
-        named = {k.arg for k in node.keywords if k.arg is not None}
-        unpacked = {
-            _dotted_name(k.value).split(".")[-1]
-            for k in node.keywords
-            if k.arg is None and _dotted_name(k.value) is not None
-        }
-        if unpacked & set(_TOLERANCE_CLASSES) and name != "math.isclose":
-            continue
-        missing = [t for t in required if t not in named]
+
+    def refuse(node, message):
+        findings.append((node.lineno, message))
+
+    def check_call(call, kind, shown):
+        rel_kw, abs_kw, defaults = _CLOSENESS_KEYWORDS[kind]
+        if any(isinstance(arg, ast.Starred) for arg in call.args):
+            refuse(call, f"{shown} unpacks its positional arguments, so its "
+                         "tolerances cannot be read; pass them as keywords")
+            return
+        if len(call.args) > 2:
+            refuse(call, f"{shown} passes its tolerances positionally; pass "
+                         f"{rel_kw}= and {abs_kw}= as keywords")
+            return
+        named = {k.arg for k in call.keywords if k.arg is not None}
+        classed = False
+        for keyword in call.keywords:
+            if keyword.arg is not None:
+                continue
+            value = keyword.value
+            if isinstance(value, ast.Name) and value.id in _TOLERANCE_CLASSES:
+                if kind == "math":
+                    refuse(call, f"{shown} unpacks {value.id}, whose rtol/atol "
+                                 "keywords are numpy's; math.isclose takes "
+                                 "rel_tol= and abs_tol=, stated on the call")
+                    return
+                classed = True
+            else:
+                refuse(call, f"{shown} unpacks "
+                             f"{_dotted_name(value) or 'an expression'}, which "
+                             "is not a name from _TOLERANCE_CLASSES")
+                return
+        if classed:
+            return
+        missing = [kw for kw in (rel_kw, abs_kw) if kw not in named]
         if missing:
-            findings.append((node.lineno, name, missing))
-    return sorted(findings)
+            refuse(call, f"{shown} without {' and '.join(missing)}: its "
+                         f"defaults ({defaults}) are not a stated tolerance")
+
+    for node in ast.walk(tree):
+        parent = parents.get(node)
+        # -- closeness functions and the modules that hold them --------------
+        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(
+            node.ctx, ast.Load
+        ):
+            if isinstance(parent, ast.Attribute) and parent.value is node:
+                pass  # an inner link of a longer chain; the chain is judged
+            else:
+                targets = _resolved_targets(node, bindings)
+                kind = _closeness_kind(targets)
+                shown = _dotted_name(node)
+                if kind is not None:
+                    if isinstance(parent, ast.Call) and parent.func is node:
+                        check_call(parent, kind, shown)
+                    else:
+                        refuse(node, f"{shown} is referenced without being "
+                                     "called (rebound, wrapped or passed on), "
+                                     "so the tolerances it runs at cannot be "
+                                     f"read; the allowed forms are "
+                                     f"{_ALLOWED_FORMS}")
+                elif targets & _CLOSENESS_MODULES:
+                    refuse(node, f"module {shown} is bound to another name or "
+                                 "passed on, which hides the closeness calls "
+                                 "made through it; reach them by attribute "
+                                 "on the imported module name")
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and (
+            (node.module or "").split(".")[0] in ("numpy", "math")
+        ) and any(alias.name == "*" for alias in node.names):
+            refuse(node, f"from {node.module} import * binds closeness "
+                         "functions the lint cannot name; import them by name")
+        # -- tolerance class names -------------------------------------------
+        if isinstance(node, ast.Name) and node.id in _TOLERANCE_CLASSES:
+            if isinstance(node.ctx, ast.Load):
+                unpacked = (
+                    isinstance(parent, ast.keyword)
+                    and parent.arg is None
+                    and isinstance(parents.get(parent), ast.Call)
+                    and _closeness_kind(_resolved_targets(
+                        parents[parent].func, bindings)) is not None
+                )
+                if not (unpacked or defines_classes):
+                    refuse(node, f"{node.id} is used other than unpacked "
+                                 "(**NAME) into a closeness call; a tolerance "
+                                 "class is read only that way")
+            else:
+                defining = (
+                    defines_classes
+                    and isinstance(parent, ast.Assign)
+                    and parent.targets == [node]
+                    and isinstance(parents.get(parent), ast.Module)
+                )
+                if not defining:
+                    refuse(node, f"{node.id} is rebound or deleted; a "
+                                 "tolerance class is defined once, in "
+                                 "smoke/_harness.py")
+        bound = None
+        if isinstance(node, ast.arg):
+            bound = node.arg
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)):
+            bound = node.name
+        if bound in _TOLERANCE_CLASSES:
+            refuse(node, f"{bound} is rebound as a parameter or definition; "
+                         "a tolerance class is defined once, in "
+                         "smoke/_harness.py")
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                binds = alias.asname or alias.name.split(".")[0]
+                if binds not in _TOLERANCE_CLASSES:
+                    continue
+                from_harness = (
+                    isinstance(node, ast.ImportFrom)
+                    and node.level == 1
+                    and node.module == "_harness"
+                    and alias.name == binds
+                    and not defines_classes
+                )
+                if not from_harness:
+                    refuse(node, f"{binds} is bound by an import other than "
+                                 "'from ._harness import " + binds + "'")
+    return sorted(set(findings))
+
+
+def _comparison_lint_files():
+    """Return ``(path, defines_classes)`` for every module the lint scans.
+
+    Each module that registers a case, and this module itself, whose helpers
+    the cases call.
+    """
+    harness = Path(__file__).resolve()
+    files = {Path(inspect.getsourcefile(entry.fn)).resolve() for entry in _CASES}
+    files.add(harness)
+    return [(path, path == harness) for path in sorted(files)]
+
+
+#: The lint's self-test: one constructed source per spelling, with whether the
+#: lint must refuse it. Each refused source holds exactly one offence, so a
+#: lint that stops resolving that spelling finds nothing and the self-test
+#: names the spelling it lost.
+_LINT_SELF_TEST = (
+    # -- refused ----------------------------------------------------------
+    ("from-numpy-import", True,
+     "from numpy import isclose\nisclose(a, b)\n"),
+    ("from-numpy-import-alias", True,
+     "from numpy import allclose as close\nclose(a, b)\n"),
+    ("from-numpy-testing-import", True,
+     "from numpy.testing import assert_allclose\nassert_allclose(a, b)\n"),
+    ("numpy-alias", True,
+     "import numpy as npy\nnpy.isclose(a, b)\n"),
+    ("numpy-testing-alias", True,
+     "import numpy.testing as npt\nnpt.assert_allclose(a, b)\n"),
+    ("from-math-import", True,
+     "from math import isclose\nisclose(a, b)\n"),
+    ("math-alias", True,
+     "import math as m\nm.isclose(a, b)\n"),
+    ("rebound-function", True,
+     "import numpy as np\nclose = np.isclose\n"),
+    ("partial-function", True,
+     "import functools\nimport numpy as np\n"
+     "close = functools.partial(np.isclose, rtol=1e-12, atol=0.0)\n"),
+    ("function-passed-as-argument", True,
+     "import numpy as np\nlist(map(np.isclose, a, b))\n"),
+    ("rebound-module", True,
+     "import numpy as np\nnpy = np\n"),
+    ("star-import", True,
+     "from numpy import *\n"),
+    ("class-rebound", True,
+     "import numpy as np\nfrom ._harness import _TOL_ROUNDOFF\n"
+     "_TOL_ROUNDOFF = {'rtol': 1.0, 'atol': 1.0}\n"),
+    ("class-mutated", True,
+     "from ._harness import _TOL_ROUNDOFF\n_TOL_ROUNDOFF['rtol'] = 1.0\n"),
+    ("class-defined-in-case-module", True,
+     "_TOL_ROUNDOFF = {'rtol': 1.0, 'atol': 1.0}\n"),
+    ("class-imported-under-its-name-from-elsewhere", True,
+     "from tolerances import loose as _TOL_ROUNDOFF\n"),
+    ("class-unpacked-into-math", True,
+     "import math\nfrom ._harness import _TOL_ROUNDOFF\n"
+     "math.isclose(a, b, **_TOL_ROUNDOFF)\n"),
+    ("unpacked-non-class", True,
+     "import numpy as np\nnp.isclose(a, b, **tolerances)\n"),
+    ("positional-tolerances", True,
+     "import numpy as np\nnp.isclose(a, b, 1e-12, 0.0)\n"),
+    ("bare-numpy", True,
+     "import numpy as np\nnp.allclose(a, b, rtol=1e-12)\n"),
+    ("bare-math", True,
+     "import math\nmath.isclose(a, b, rel_tol=1e-12)\n"),
+    # -- accepted ---------------------------------------------------------
+    ("numpy-keywords", False,
+     "import numpy as np\nnp.isclose(a, b, rtol=1e-12, atol=0.0)\n"
+     "np.testing.assert_allclose(a, b, rtol=1e-12, atol=0.0)\n"),
+    ("numpy-class", False,
+     "import numpy as np\nfrom ._harness import _TOL_ROUNDOFF\n"
+     "np.allclose(a, b, **_TOL_ROUNDOFF)\n"),
+    ("aliases-with-keywords", False,
+     "import numpy as npy\nfrom numpy import isclose\nfrom math import isclose "
+     "as mclose\nnpy.allclose(a, b, rtol=1e-12, atol=0.0)\n"
+     "isclose(a, b, rtol=1e-12, atol=0.0)\n"
+     "mclose(a, b, rel_tol=1e-12, abs_tol=0.0)\n"),
+    ("math-keywords", False,
+     "import math\nmath.isclose(a, b, rel_tol=1e-12, abs_tol=0.0)\n"),
+    ("other-numpy-use", False,
+     "import numpy as np\nisinstance(x, np.ndarray)\ny = np.zeros(3)\n"),
+)
+
+#: Text each listed refusal's message must carry: the positional refusal says
+#: to use keywords, and math.isclose's refusal quotes math's own defaults.
+_LINT_SELF_TEST_MESSAGES = {
+    "positional-tolerances": "as keywords",
+    "bare-math": "rel_tol=1e-09, abs_tol=0.0",
+}
+
+
+def _assert_tolerance_lint_self_test():
+    """Fail at import unless the lint refuses and accepts what it claims to.
+
+    Runs the checker on each source of ``_LINT_SELF_TEST``, checks the
+    messages ``_LINT_SELF_TEST_MESSAGES`` names, and checks that this module
+    is among the files the lint scans.
+    """
+    wrong = []
+    for label, refused, source in _LINT_SELF_TEST:
+        findings = _untoleranced_comparisons(source)
+        if bool(findings) != refused:
+            wrong.append(
+                f"{label}: expected {'a refusal' if refused else 'no finding'}"
+                f", got {findings}"
+            )
+        expected_text = _LINT_SELF_TEST_MESSAGES.get(label)
+        if expected_text is not None and not any(
+            expected_text in message for _, message in findings
+        ):
+            wrong.append(f"{label}: no message carries {expected_text!r}")
+        if label == "bare-math" and any(
+            "1e-05" in message or "1e-08" in message for _, message in findings
+        ):
+            wrong.append(f"{label}: the message quotes numpy's defaults")
+    if (Path(__file__).resolve(), True) not in _comparison_lint_files():
+        wrong.append("smoke/_harness.py is not among the scanned modules")
+    if wrong:
+        raise AssertionError(
+            "smoke tolerance lint self-test failed: " + "; ".join(wrong)
+        )
 
 
 def _assert_comparisons_carry_tolerances():
-    """Fail at import if a case module compares without explicit tolerances.
+    """Fail at import if a scanned module compares without stated tolerances.
 
-    Each module that registers a case is parsed whole, helpers included.
+    Runs the lint's self-test first, then parses each module of
+    ``_comparison_lint_files`` whole, helpers included.
     """
-    files = sorted({inspect.getsourcefile(entry.fn) for entry in _CASES})
+    _assert_tolerance_lint_self_test()
     where = []
-    for source_file in files:
-        for line, name, missing in _untoleranced_comparisons(
-            Path(source_file).read_text(encoding="utf-8")
+    for source_file, defines_classes in _comparison_lint_files():
+        for line, message in _untoleranced_comparisons(
+            source_file.read_text(encoding="utf-8"),
+            defines_classes=defines_classes,
         ):
-            where.append(
-                f"{Path(source_file).name}:{line} {name} without "
-                f"{' and '.join(missing)}"
-            )
+            where.append(f"{source_file.name}:{line} {message}")
     for name, tolerance in _TOLERANCE_CLASSES.items():
         if set(tolerance) != {"rtol", "atol"}:
             where.append(f"_harness.py: {name} must hold exactly rtol and atol")
     if where:
         raise AssertionError(
-            "smoke comparison without explicit tolerances -- numpy's defaults "
-            "(rtol=1e-5, atol=1e-8) are not a stated tolerance: "
+            "smoke comparison without a stated tolerance: "
             + "; ".join(where)
-            + ". Pass both tolerances on the call with their origin beside "
-            "them, or unpack one of _TOLERANCE_CLASSES in smoke/_harness.py."
+            + ". State both tolerances as keywords on a direct call, with "
+            "their origin beside them (" + _ALLOWED_FORMS + "), or unpack "
+            "one of _TOLERANCE_CLASSES in smoke/_harness.py into a numpy call."
         )
-
 
 def main(argv=None):
     """Run the suite. No arguments = the full gate, in registration order."""

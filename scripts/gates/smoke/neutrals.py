@@ -404,7 +404,8 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     hot_e_exchange = sim.energy_exchange_rhs(state=hot_e_state)
     assert np.all(hot_e_exchange.Ee < 0.0)
     assert np.all(hot_e_exchange.Ei > 0.0)
-    assert np.allclose(hot_e_exchange.Ee + hot_e_exchange.Ei, 0.0, **_TOL_ROUNDOFF)
+    # The pair is built as Ee = -q, Ei = q, so it is exact, not a roundoff identity.
+    assert np.all(hot_e_exchange.Ee == -hot_e_exchange.Ei)
     hot_e_dt = sim.suggest_timestep(y=pack_state(hot_e_state))
     assert np.isfinite(hot_e_dt.dt_energy_exchange)
 
@@ -420,7 +421,8 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     hot_i_exchange = sim.energy_exchange_rhs(state=hot_i_state)
     assert np.all(hot_i_exchange.Ee > 0.0)
     assert np.all(hot_i_exchange.Ei < 0.0)
-    assert np.allclose(hot_i_exchange.Ee + hot_i_exchange.Ei, 0.0, **_TOL_ROUNDOFF)
+    # The pair is built as Ee = -q, Ei = q, so it is exact, not a roundoff identity.
+    assert np.all(hot_i_exchange.Ee == -hot_i_exchange.Ei)
 
     equal_temp_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),

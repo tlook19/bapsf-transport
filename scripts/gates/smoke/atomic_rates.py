@@ -22,6 +22,7 @@ from cablp.solvers._sim1d.physics.sources import (
 
 from ._harness import (
     _TOL_ROUNDOFF,
+    _assert_terms_sum_to_total,
     _base_config,
     _base_sim,
     _case,
@@ -182,12 +183,15 @@ def _case_helium_only_reaction_rates(dt_default):
         "heat_conduction",
     }
     assert set(rhs_terms) == expected_rhs_terms
-    term_sum = np.zeros_like(full_rhs)
+    term_rows = []
     for term in rhs_terms.values():
         for field_name in STATE_NAMES_1D:
             assert np.all(np.isfinite(getattr(term, field_name)))
-        term_sum = term_sum + pack_state(term, neutral_two_zone=True)
-    assert np.allclose(term_sum, full_rhs, **_TOL_ROUNDOFF)
+        term_rows.append(pack_state(term, neutral_two_zone=True))
+    # Barred by the gross of the terms, not by the total: the terms cancel
+    # elementwise, so a bar against the total would demand more than floating
+    # point delivers where the total is small.
+    _assert_terms_sum_to_total(term_rows, full_rhs, "rhs_terms against rhs")
     nonheat_terms = sim.rhs_terms(
         pack_state(heat_state, neutral_two_zone=True),
         include_heat_conduction=False,
