@@ -2563,3 +2563,189 @@ def _case_mirror_fluid_march():
         wall_loaded = load_result_hdf5(path)
     assert not hasattr(wall_loaded, "mirror_face_indices")
     assert not hasattr(wall_loaded, "mirror_face_z_cm")
+
+
+def _energy_book_config(split, **overrides):
+    """A small scheduled-discharge configuration for the floor-ledger cases.
+
+    ``split`` sets ``implicit_heat_conduction``; ``overrides`` updates the
+    parameters.
+    """
+    params, flags = default_config()
+    params.update({
+        "nx": 16,
+        "nx_gap": 2,
+        "ne0": 5.0e11,
+        "nn0": 2.0e13,
+        "Te0": 3.0,
+        "Ti0": 1.0,
+        "phase_transition_mode": "scheduled",
+        "tau_prebreakdown": 0.0,
+        "tau_breakdown": 0.0,
+        "tau_discharge": 1.0e-3,
+        "initial_neutral_state": "fill",
+    })
+    params.update(overrides)
+    flags["implicit_heat_conduction"] = bool(split)
+    return params, flags
+
+
+# ----------------------------------------------------------------------
+# floor-ledger-stage-weights
+# ----------------------------------------------------------------------
+@_case("floor-ledger-stage-weights")
+def _case_floor_ledger_stage_weights():
+    # The floor ledger books what the accepted state received from the floors.
+    # Under SSPRK2 the first stage's floored vector y1 enters
+    # y2_raw = y0/2 + (y1 + dt k1)/2 at half weight, so the energy the state
+    # gained from the floors is
+    #     [Ee(y) - Ee(y2_raw)] + [Ee(floor(y1_raw)) - Ee(y1_raw)] / 2,
+    # constructed here from the stage vectors alone (y2_raw minus the
+    # stage-1 floor's half share is the unfloored combination), never from
+    # the ledger. Three far-column cells start at half their electron floor
+    # energy, so both stages floor them.
+    sim = LAPDSim1D(*_energy_book_config(split=False))
+    for _ in range(5):
+        sim.advance_one_step()
+    state = sim.state
+    Vp = np.asarray(sim.geometry.plasma_volume_cm3, dtype=float)
+    n = np.asarray(state.n, dtype=float)
+    Ee_floor = (
+        1.5 * np.maximum(n, sim.floors["n"]) * sim.floors["Te"] * ev_to_erg
+    )
+    Ee = np.array(state.Ee, dtype=float, copy=True)
+    cells = [18, 19, 20]
+    Ee[cells] = 0.5 * Ee_floor[cells]
+    sub_floor = dataclasses.replace(state, Ee=Ee)
+    # Installed directly: an accepted state is always floored, so the only
+    # way to hand the integrator a sub-floor y0 is to bypass the commit.
+    sim._y = pack_state(sub_floor)
+    sim._state = sim._unpack(sim._y)
+    sim._derived = derive_state(sim._state, sim.floors, sim.ion_mass_g)
+    raws = {}
+    validate = sim._validate_raw_stage
+
+    def record(y, stage):
+        raws[stage] = np.array(y, dtype=float, copy=True)
+        return validate(y, stage)
+
+    sim._validate_raw_stage = record
+    attempt = sim._attempt_step(dt=1.0e-10, operator_split=False)
+    assert not attempt.raw_rejection_reason, attempt.raw_rejection_reason
+    y1_raw = raws["ssprk_stage_1"]
+    y2_raw = raws["ssprk_stage_2"]
+    stage1_added = sim.floor_state_vector(y1_raw) - y1_raw
+    stage2_added = attempt.y - y2_raw
+
+    def Ee_total(vector):
+        return float(np.sum(np.asarray(sim._unpack(vector).Ee) * Vp))
+
+    d1 = Ee_total(stage1_added)
+    d2 = Ee_total(stage2_added)
+    # Both stages floor (the case is not vacuous): each addition is at least
+    # a tenth of the energy the three cells were lowered by.
+    lowered = float(np.sum(0.5 * Ee_floor[cells] * Vp[cells]))
+    assert d1 > 0.1 * lowered and d2 > 0.1 * lowered, (d1, d2, lowered)
+    received = Ee_total(stage2_added + 0.5 * stage1_added)
+    booked = attempt.floor_ledger["Ee_energy_added_erg"]
+    # Roundoff: the same per-cell differences, summed in a different order
+    # (cells off the floor contribute rebuild residue of order 1e-10 erg
+    # against an addition of order 1e4 erg).
+    assert np.isclose(booked, received, **_TOL_ROUNDOFF), (
+        booked, received, booked / received,
+    )
+    before = dict(sim._floor_ledger)
+    sim._accept_step_attempt(attempt)
+    assert np.isclose(
+        sim._floor_ledger["Ee_energy_added_erg"]
+        - before["Ee_energy_added_erg"],
+        received,
+        **_TOL_ROUNDOFF,
+    )
+
+
+# ----------------------------------------------------------------------
+# heat-clip-booked-in-floor-ledger
+# ----------------------------------------------------------------------
+@_case("heat-clip-booked-in-floor-ledger")
+def _case_heat_clip_booked_in_floor_ledger():
+    # The implicit heat substep's own temperature clip is booked in the floor
+    # ledger. A 20 eV cell in a 0.15 eV column under Crank-Nicolson rings at
+    # a large step, and the substep clips the undershoot. The clipped energy
+    # is constructed from two solves of each substep the attempt made, on the
+    # same input: one at the solver's floors and one with both temperature
+    # floors at -inf (the input sits above the floors, so the floors enter
+    # those solves only through the final clip).
+    params, flags = _energy_book_config(
+        split=True, implicit_heat_scheme="crank_nicolson"
+    )
+    flags["cathode_coupling"] = False
+    sim = LAPDSim1D(params, flags)
+    state = sim.state
+    cells = sim.geometry.cells
+    Te = np.full(cells, 1.5 * sim.floors["Te"])
+    Te[12] = 20.0
+    hot = dataclasses.replace(
+        state, Ee=1.5 * np.asarray(state.n, dtype=float) * Te * ev_to_erg
+    )
+    sim._set_state_vector(pack_state(hot))
+    substeps = []
+    heat_step = sim.implicit_heat_conduction_step
+
+    def record(*args, **kwargs):
+        substeps.append(dict(kwargs))
+        return heat_step(*args, **kwargs)
+
+    sim.implicit_heat_conduction_step = record
+    attempt = sim._attempt_step(dt=3.0e-6)
+    assert not attempt.raw_rejection_reason, attempt.raw_rejection_reason
+    assert len(substeps) == 2, len(substeps)
+    Vp = np.asarray(sim.geometry.plasma_volume_cm3, dtype=float)
+    no_floor = dict(sim.floors, Te=-np.inf, Ti=-np.inf)
+    solve_kwargs = dict(
+        ion_mass_g=sim.ion_mass_g,
+        mu=sim._mu,
+        geometry=sim._plasma_geometry(),
+        implicit_heat_scheme="crank_nicolson",
+        heat_picard_iterations=int(params["heat_picard_iterations"]),
+        heat_picard_tol=float(params["heat_picard_tol"]),
+        **sim._heat_conduction_kwargs(),
+    )
+    clipped = {"Ee": 0.0, "Ei": 0.0}
+    for call in substeps:
+        substep_state = (
+            call["state"] if call.get("state") is not None
+            else sim._unpack(call["y"])
+        )
+        # The substep's own terms, where the attempt handed it any.
+        terms = {
+            key: call[key] for key in ("ee_source", "ee_sink_rate")
+            if call.get(key) is not None
+        }
+        floored = implicit_heat_conduction_step(
+            state=substep_state, floors=sim.floors, dt=call["dt"],
+            **terms, **solve_kwargs,
+        )
+        bare = implicit_heat_conduction_step(
+            state=substep_state, floors=no_floor, dt=call["dt"],
+            **terms, **solve_kwargs,
+        )
+        for field in clipped:
+            clipped[field] += float(np.sum(
+                (np.asarray(getattr(floored, field))
+                 - np.asarray(getattr(bare, field))) * Vp
+            ))
+    # Not vacuous: the first substep's undershoot reaches far below the floor.
+    assert clipped["Ee"] > 1.0e5, clipped
+    booked = attempt.floor_ledger.get("Ee_heat_clip_energy_added_erg", 0.0)
+    # Roundoff: the same per-cell energies summed in a different order.
+    assert np.isclose(booked, clipped["Ee"], **_TOL_ROUNDOFF), (
+        booked, clipped["Ee"],
+    )
+    booked_i = attempt.floor_ledger.get("Ei_heat_clip_energy_added_erg", 0.0)
+    # The ion solve clips nothing here: the ledger row is exactly zero, and
+    # the constructed difference is roundoff of the two solves, bounded at
+    # the roundoff class (1e-12) of the column's ion energy store.
+    ion_store = float(np.sum(np.asarray(hot.Ei, dtype=float) * Vp))
+    assert booked_i == 0.0, booked_i
+    assert abs(clipped["Ei"]) <= 1.0e-12 * ion_store, (clipped, ion_store)

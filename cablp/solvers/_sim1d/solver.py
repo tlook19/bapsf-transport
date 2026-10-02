@@ -2040,6 +2040,10 @@ class LAPDSim1D:
             "Ti": float(self._input_dict["Ti_floor"]),
         }
         self._floor_ledger = self._empty_floor_ledger()
+        # The current attempt's floor ledger while ``_attempt_step`` runs, into
+        # which the implicit heat substeps book their own clip; None outside
+        # an attempt, so a substep called directly books nothing.
+        self._heat_clip_attempt_ledger = None
         # Shaped initial neutral fill (default off, bit-exact off). Armed
         # HERE, before the initial condition is built, because the initial
         # condition is the only thing it touches.
@@ -3767,15 +3771,31 @@ class LAPDSim1D:
             neutral_energy=self._neutral_energy,
         )
 
-    @staticmethod
-    def _empty_floor_ledger():
+    #: The floor ledger's rows filled by the state floors
+    #: (``_floor_additions``), each booked at the weight with which the floor
+    #: call's addition enters the accepted state.
+    _FLOOR_CALL_LEDGER_KEYS = (
+        "n_particles_added",
+        "nn_particles_added",
+        "nn_a_particles_added",
+        "Ee_energy_added_erg",
+        "Ei_energy_added_erg",
+        "En_energy_added_erg",
+    )
+    #: The floor ledger's rows filled by the implicit heat substep's own
+    #: temperature clip, which acts before any state floor sees the substep's
+    #: result: the energy the clip added to the electron and ion stores [erg].
+    _HEAT_CLIP_LEDGER_KEYS = (
+        "Ee_heat_clip_energy_added_erg",
+        "Ei_heat_clip_energy_added_erg",
+    )
+
+    @classmethod
+    def _empty_floor_ledger(cls):
         return {
-            "n_particles_added": 0.0,
-            "nn_particles_added": 0.0,
-            "nn_a_particles_added": 0.0,
-            "Ee_energy_added_erg": 0.0,
-            "Ei_energy_added_erg": 0.0,
-            "En_energy_added_erg": 0.0,
+            name: 0.0
+            for name in cls._FLOOR_CALL_LEDGER_KEYS
+            + cls._HEAT_CLIP_LEDGER_KEYS
         }
 
     def _floor_additions(self, raw, floored):
@@ -3995,11 +4015,22 @@ class LAPDSim1D:
 
         starting_cache = self._step_cache_snapshot()
         attempt_floor_ledger = self._empty_floor_ledger()
+        # The implicit heat substeps book their own temperature clip into
+        # this same attempt ledger (see operator_split_step); armed here and
+        # dropped in the ``finally`` below, so only an accepted attempt's
+        # clip reaches the cumulative ledger.
+        self._heat_clip_attempt_ledger = attempt_floor_ledger
 
-        def floor_with_ledger(y):
+        def floor_with_ledger(y, weight=1.0):
+            # ``weight`` is the coefficient with which this call's additions
+            # enter the accepted state: 1/2 for SSPRK2's first stage, whose
+            # floored vector enters the second stage's combination at half
+            # weight, and 1 for every other floor call (SSPRK2's second
+            # stage, the implicit heat substeps' floors and the neutral-only
+            # step's). The floored vector itself does not depend on it.
             floored, additions = self._floor_vector_with_ledger(y)
-            for name in attempt_floor_ledger:
-                attempt_floor_ledger[name] += float(additions[name])
+            for name in self._FLOOR_CALL_LEDGER_KEYS:
+                attempt_floor_ledger[name] += weight * float(additions[name])
             return floored
 
         raw_rejection_reason = ""
@@ -4020,7 +4051,7 @@ class LAPDSim1D:
                 elif operator_split:
                     y_next = self.operator_split_step(
                         dt=dt,
-                        floor_func=floor_with_ledger,
+                        weighted_floor_func=floor_with_ledger,
                         raw_stage_func=self._validate_raw_stage,
                     )
                 else:
@@ -4028,7 +4059,7 @@ class LAPDSim1D:
                         y0=self._y,
                         dt=dt,
                         rhs_func=self._explicit_stage_rhs(dt),
-                        floor_func=floor_with_ledger,
+                        weighted_floor_func=floor_with_ledger,
                         time=self._time,
                         raw_stage_func=self._validate_raw_stage,
                     )
@@ -4038,6 +4069,7 @@ class LAPDSim1D:
                 raw_rejection_detail = error.detail
             candidate_cache = self._step_cache_snapshot()
         finally:
+            self._heat_clip_attempt_ledger = None
             self._restore_step_cache(starting_cache)
             attempt_ion_booking = self._dvm_ion_stage_accum
             self._dvm_ion_stage_accum = None
@@ -5532,8 +5564,12 @@ class LAPDSim1D:
         ]
         monitor._stalled = bool(ignition["stalled"])
         ledgers = payload["ledgers"]
-        for name in self._floor_ledger:
+        for name in self._FLOOR_CALL_LEDGER_KEYS:
             self._floor_ledger[name] = float(ledgers[name])
+        for name in self._HEAT_CLIP_LEDGER_KEYS:
+            # Defaulted, not required: a payload written before the heat
+            # substep's clip was booked carries neither key.
+            self._floor_ledger[name] = float(ledgers.get(name, 0.0))
         for key in self._cathode_energy_ledger_J:
             self._cathode_energy_ledger_J[key] = float(
                 ledgers[f"cathode_energy_{key}_J"]
@@ -5594,6 +5630,7 @@ class LAPDSim1D:
         splitting=None,
         floor_func=None,
         raw_stage_func=None,
+        weighted_floor_func=None,
     ):
         """Return one explicit-nonheat plus implicit-heat split step.
 
@@ -5644,7 +5681,21 @@ class LAPDSim1D:
 
         Each is booked once either way. One read-only cathode solve per
         substep serves every builder.
+
+        ``floor_func(y)`` or ``weighted_floor_func(y, weight)`` (at most one;
+        neither means the solver's own floor) floors each sub-operator's
+        result. The weighted form is told the weight with which that call's
+        additions enter the returned vector: 1/2 for operator A's first
+        SSPRK2 stage and 1 for its second stage and for every heat substep,
+        whose floored result is the next sub-operator's input or the step's
+        result. Inside ``_attempt_step`` each heat substep also books its own
+        temperature clip into the attempt's floor ledger.
         """
+        if floor_func is not None and weighted_floor_func is not None:
+            raise ValueError(
+                "operator_split_step takes at most one of floor_func and "
+                "weighted_floor_func"
+            )
         y0 = self._y if y is None else np.asarray(y, dtype=float)
         if dt is None:
             dt = self.suggest_timestep(
@@ -5655,12 +5706,32 @@ class LAPDSim1D:
             splitting = self._operator_splitting()
         else:
             splitting = validate_operator_splitting(splitting)
-        if floor_func is None:
+        if floor_func is None and weighted_floor_func is None:
             floor_func = self.floor_state_vector
         if raw_stage_func is None:
             raw_stage_func = self._validate_raw_stage
+        clip_ledger = self._heat_clip_attempt_ledger
+
+        def heat_floor(raw):
+            if weighted_floor_func is not None:
+                return weighted_floor_func(raw, 1.0)
+            return floor_func(raw)
+
+        def book_heat_clip(clip):
+            # The energy the substep's own temperature clip added [erg],
+            # read-only: the clipped state is the substep's return value.
+            if clip_ledger is None:
+                return
+            Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)
+            clip_ledger["Ee_heat_clip_energy_added_erg"] += float(
+                np.sum(clip["Ee_clip_erg_cm3"] * Vp)
+            )
+            clip_ledger["Ei_heat_clip_energy_added_erg"] += float(
+                np.sum(clip["Ei_clip_erg_cm3"] * Vp)
+            )
 
         def heat(y_in, sub_dt, source_time=None):
+            clip = {} if clip_ledger is not None else None
             if self._heat_substep_terms or self._cathode_climb_in_heat_substep:
                 substep_state = self._unpack(y_in)
                 cathode_solve = None
@@ -5714,6 +5785,7 @@ class LAPDSim1D:
                     ee_source=ee_source,
                     ee_sink_rate=ee_sink_rate,
                     ledger_out=ledger,
+                    clip_out=clip,
                 )
                 if ledger is not None:
                     self._book_electrode_sink_substep(
@@ -5722,11 +5794,15 @@ class LAPDSim1D:
                         sub_dt=sub_dt,
                     )
             else:
-                state = self.implicit_heat_conduction_step(dt=sub_dt, y=y_in)
+                state = self.implicit_heat_conduction_step(
+                    dt=sub_dt, y=y_in, clip_out=clip
+                )
+            if clip is not None:
+                book_heat_clip(clip)
             raw = pack_state(state)
             if raw_stage_func is not None:
                 raw_stage_func(raw, "implicit_heat")
-            return floor_func(raw)
+            return heat_floor(raw)
 
         def explicit(y_in, sub_dt):
             # The explicit operator spans the WHOLE step under both splittings
@@ -5742,6 +5818,7 @@ class LAPDSim1D:
                 floor_func=floor_func,
                 time=self._time,
                 raw_stage_func=raw_stage_func,
+                weighted_floor_func=weighted_floor_func,
             )
 
         # The source times below matter only where the substep carries a
@@ -8302,16 +8379,16 @@ class LAPDSim1D:
 
     def implicit_heat_conduction_step(
         self, dt, y=None, state=None, ee_source=None, ee_sink_rate=None,
-        ledger_out=None,
+        ledger_out=None, clip_out=None,
     ):
         """Return state after one frozen-conductivity implicit heat substep.
 
         ``ee_source`` (default ``None``, the historical path) is an electron-
         energy source density held constant over the substep and solved with
         the conduction operator; ``ee_sink_rate`` is the matching per-cell
-        first-order electron-energy loss rate, and ``ledger_out`` collects the
-        substep's realised per-cell increments. See the module function of the
-        same name.
+        first-order electron-energy loss rate, ``ledger_out`` collects the
+        substep's realised per-cell increments and ``clip_out`` the energy its
+        temperature clip added. See the module function of the same name.
         """
         if state is None:
             state = self.state if y is None else self._unpack(y)
@@ -8320,6 +8397,7 @@ class LAPDSim1D:
             ee_source=ee_source,
             ee_sink_rate=ee_sink_rate,
             ledger_out=ledger_out,
+            clip_out=clip_out,
             floors=self._floors,
             ion_mass_g=self._ion_mass_g,
             mu=self._mu,

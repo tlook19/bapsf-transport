@@ -1385,10 +1385,12 @@ energies, so the neutral energy floor is taken against the already-floored
 density and the implied neutral temperature cannot fall below the wall's. On the
 kinetic path the published $n_n^\text{col}$ and $n_n^\text{ann}$ fields are a one-sided
 $\max(\text{moment},\text{floor})$ rather than a ledgered clip. Clipping up to
-a floor injects mass or energy; every accepted repair records its exact
-extensive debit — plasma and neutral particles added, electron and ion energy
-added — in `floor_ledger`, and a trajectory that never clips carries an exactly
-zero ledger.
+a floor injects mass or energy; `floor_ledger` records the plasma and neutral
+particles and the electron, ion and neutral energy the accepted state received
+from the floors and clips, each addition at the weight with which it enters
+that state (a first-stage floor under SSPRK2 at one half), the implicit heat
+substep's own temperature clip in rows of its own (NUMERICS.md, Floors), and a
+trajectory that never clips carries an exactly zero ledger.
 
 ## Where each term is implemented
 

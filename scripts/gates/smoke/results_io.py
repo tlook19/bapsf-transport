@@ -1266,6 +1266,8 @@ def _case_restart_saved_evidence_r1b(r1a_flags, r1a_params):
                 "Ee_energy_added_erg",
                 "Ei_energy_added_erg",
                 "En_energy_added_erg",
+                "Ee_heat_clip_energy_added_erg",
+                "Ei_heat_clip_energy_added_erg",
             }
             assert all(
                 float(value) == 0.0

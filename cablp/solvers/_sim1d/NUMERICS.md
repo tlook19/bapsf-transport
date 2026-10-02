@@ -654,8 +654,19 @@ the optional fields, the neutral energy floor taken last against the
 already-floored $n_n$. Momenta are not clipped — $u$ is recovered with the
 floored density and $M$ rebuilt from it, which leaves $M$ unchanged to roundoff
 and bit-identical on every state probed, though $(m n)(M/(m n))$ carries no IEEE
-guarantee of exactness. Each accepted repair books its exact extensive debit in
-`floor_ledger`; `scripts/gates/audit_sim1d_floor_activation.py` instruments the
+guarantee of exactness. `floor_ledger` holds the plasma and neutral particles
+and the electron, ion and neutral energy the ACCEPTED state received from the
+floors and clips, at the weight with which each addition enters that state.
+Under SSPRK2 the first stage's floored vector enters the second stage's
+combination at half weight, so its additions are booked at $\tfrac12$; the
+second stage's floor acts on the result and is booked at 1. Every other floor
+call is booked at 1: the floors after each implicit heat substep (under Lie
+and under both Strang halves) and the floor after the neutral-only step, each
+of whose results is the next operator's input or the step's result. The
+implicit heat substep's own temperature clip acts before any of those floors
+sees its result and is booked separately, from its pre-clip value, as
+`Ee_heat_clip_energy_added_erg` and `Ei_heat_clip_energy_added_erg`. A
+rejected attempt books nothing. `scripts/gates/audit_sim1d_floor_activation.py` instruments the
 clip sites at run time, which cannot be done post-hoc. Between about 22 and
 24 ms of the discharge cycle, depending on the drive, the far column reaches
 the 0.1 eV electron-temperature floor, and it reaches it smoothly. Because of
