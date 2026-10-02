@@ -1421,10 +1421,12 @@ def _case_neutral_wind_advection(
 def _case_gas_puff_orifice_profile():
     # --- Tube-beamed injection row (the puff's axial shape): the SAME row
     # the kinetic instruments launch, read by the fluid solver as its
-    # deposition profile. Three things are owned here: the row the shared
-    # implementation returns is bit-for-bit the row scripts/stance/puff_orifice.py
-    # derives on the same inputs (one derivation, not two), it conserves the
-    # total inflow exactly, and every misconfiguration raises at CONSTRUCTION.
+    # deposition profile. Three things are owned here: the fluid profile is
+    # bit-for-bit the shared launch_row on the same inputs
+    # (scripts/stance/puff_orifice.py re-exports that one function, so this
+    # is a wiring check, not an independent derivation), it conserves the
+    # stated total inflow exactly (the constructed check), and every
+    # misconfiguration raises at CONSTRUCTION.
     from cablp.solvers._sim1d.core.geometry import build_geometry
 
     import puff_orifice as _porf
@@ -1443,9 +1445,12 @@ def _case_gas_puff_orifice_profile():
         orifice_id_cm=ORF_ID,
         orifice_length_cm=ORF_LEN,
     )
-    # BIT-FOR-BIT against the scripts-side derivation, at the port cell the
-    # kinetic instruments index (searchsorted on the edges, clipped). The
-    # comparison is on raw bytes: "close" would not catch a re-derivation.
+    # BIT-FOR-BIT against the shared launch_row (reached through its
+    # scripts-side re-export), at the port cell the kinetic instruments index
+    # (searchsorted on the edges, clipped): the fluid profile is that row
+    # scaled by the inflow over the neutral volume. The comparison is on raw
+    # bytes: "close" would not catch a re-derivation. The row's own values
+    # are not checked here; the inflow conservation below is.
     orf_i = int(np.searchsorted(orf_geom.z_edges_cm, orf_z) - 1)
     orf_i = min(max(orf_i, 0), int(orf_geom.Rm_cm.size) - 1)
     orf_ref_row, orf_meta = _porf.launch_row(
@@ -3340,7 +3345,6 @@ def _case_ionization_birth_neutral_temperature():
                 for _name in IONIZATION_BIRTH_DEFICIT_DIAGNOSTIC_FIELDS[1:]
             ),
         )
-        _nb_live = 0
         for _nb_term_name, _nb_field in zip(
             (
                 "ionization_birth",
@@ -3362,6 +3366,11 @@ def _case_ionization_birth_neutral_temperature():
                 <= 1.0e-12 * _nb_scale
             ), (_nb_birth, _nb_term_name)
             _nb_hot = (_nb_Tn > _nb_sim.floors["Ti"]) & (_nb_S > 0.0)
+            if _nb_term_name in ("ionization_birth", "beam_ionization_birth"):
+                # The bulk and beam channels are exercised: they have births
+                # in gas hotter than the ion floor. (This state has no
+                # puff-local births, so that channel's mask is empty.)
+                assert _nb_hot.any(), (_nb_birth, _nb_term_name)
             if _nb_birth == "neutral":
                 # (b) THE PAIR CLOSES. Booked at the neutral temperature the
                 # sink debits, the two sides cancel to roundoff per cell...
@@ -3376,10 +3385,6 @@ def _case_ionization_birth_neutral_temperature():
                 # (c) ...and at the floor it is POSITIVE wherever the gas is
                 # hotter than the ion floor: energy leaving the model.
                 assert np.all(_nb_rows[_nb_field][_nb_hot] > 0.0), _nb_term_name
-            if _nb_hot.any():
-                _nb_live += 1
-        # Both the bulk and the beam channel were actually exercised.
-        assert _nb_live >= 2, _nb_live
 
     # The two selectors are not the same run: "floor" really does delete power
     # here, so the block above is not vacuous.
