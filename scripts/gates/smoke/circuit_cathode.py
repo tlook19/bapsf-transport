@@ -1386,7 +1386,11 @@ def _case_cathode_power_balance_under_current_drive(
             raise AssertionError(f"expected ValueError for {sf_bad}")
     # ads_des is the subject here; run it on the simple cathode/fluid stance
     # (the theta reproduction spies the exact evaluator call sequence) with the
-    # M3 circuit specifics.
+    # M3 circuit specifics. The cleaning cross section depletes theta by
+    # 4.7e-6 over the three steps (measured), six decades above the roundoff
+    # tolerance the hand reproduction is compared at; 1e-16 cm^2 gave 4.7e-12,
+    # below any tolerance a comparison of theta near 1 can resolve.
+    sf_sigma_cm2 = 1.0e-10
     sf_cu_params, sf_cu_flags = _cathode_unit_config()
     sf_params = dict(
         sf_cu_params,
@@ -1396,7 +1400,7 @@ def _case_cathode_power_balance_under_current_drive(
         cathode_solver_model="current_driven",
         dt_save=0.0,
         cathode_phiwf_clean_eV=2.75,
-        cathode_cleaning_sigma_cm2=1.0e-16,
+        cathode_cleaning_sigma_cm2=sf_sigma_cm2,
     )
     sf_flags = dict(
         sf_cu_flags, cathode_coupling=True,
@@ -1416,8 +1420,7 @@ def _case_cathode_power_balance_under_current_drive(
 
     # This coverage test spies the exact evaluator I_i CALL SEQUENCE and replays
     # the backward-Euler update once per call, so the exact match couples to the
-    # solver's internal call count; run it on the simple stance (sf_flags) and
-    # assert the backward-Euler FORM to 1e-11 rather than 1e-15.
+    # solver's internal call count; run it on the simple stance (sf_flags).
     _solver_mod.idriven_result_evaluator = _sf_spy
     try:
         sf_sim = LAPDSim1D(sf_params, sf_flags)
@@ -1434,18 +1437,21 @@ def _case_cathode_power_balance_under_current_drive(
     )
     assert np.all(np.isfinite(sf_theta)) and np.all(sf_theta <= 1.0)
     assert np.all(np.diff(sf_theta) <= 0.0)  # ion-stimulated cleaning only
-    # Reproduce the backward-Euler update exactly from the spy's honest
-    # I_i sequence (run() starts I_loop at 0, so the accepted honest
-    # solves carry the near-floating I_i -- the form is what's tested).
+    # The fluence limit (E_th = None, factor 1): reproduce the backward-Euler
+    # trajectory by hand from the spy's honest I_i sequence (run() starts
+    # I_loop at 0, so the accepted honest solves carry the near-floating I_i
+    # -- the form is what's tested), theta /= 1 + dt sigma I_i/(e pi R^2).
+    assert sf_params["cathode_cleaning_E_th_eV"] is None
     sf_area = np.pi * float(sf_params["R_cath"]) ** 2
-    sf_th = 1.0
     assert len(sf_calls) == 3, len(sf_calls)  # one per accepted step
+    sf_expected = [1.0]
     for sf_Ii in sf_calls:
         sf_G = max(sf_Ii, 0.0) / (1.602176634e-19 * sf_area)
-        sf_loss = 1.0e-16 * sf_G
-        sf_th = sf_th / (1.0 + 1.0e-10 * sf_loss)
-    assert np.isclose(sf_theta[-1], sf_th, rtol=0.0, atol=1e-11), (
-        sf_theta[-1], sf_th
+        sf_expected.append(
+            sf_expected[-1] / (1.0 + 1.0e-10 * sf_sigma_cm2 * sf_G)
+        )
+    assert np.allclose(sf_theta, sf_expected, **_TOL_ROUNDOFF), (
+        sf_theta, sf_expected
     )
     assert np.allclose(
         sf_phieff,
@@ -1477,8 +1483,7 @@ def _case_cathode_power_balance_under_current_drive(
     # coverage update scales sigma by the Bohdansky near-threshold factor
     # at E = P_cathode_i/I_i. Below threshold nothing cleans (theta
     # frozen); above it the factor is reproduced by hand below. The
-    # fluence limit (E_th = None) is sf_params itself, checked above.
-    assert sf_params["cathode_cleaning_E_th_eV"] is None
+    # fluence limit (E_th = None) is the sf run's hand reproduction above.
     sfE_params = dict(sf_params, cathode_cleaning_E_th_eV=1.0e6)
     sfE_sim = LAPDSim1D(sfE_params, sf_flags)
     sfE_sim._circuit_I_loop = 800.0
@@ -1491,7 +1496,7 @@ def _case_cathode_power_balance_under_current_drive(
     # solve), with a cross section that depletes theta by ~1e-6 over the run,
     # six decades above the roundoff tolerance it is compared at.
     sfT_E_th_eV = 300.0
-    sfT_sigma_cm2 = 1.0e-10
+    sfT_sigma_cm2 = sf_sigma_cm2
     sfT_calls = []
 
     def _sfT_spy(**kw):
