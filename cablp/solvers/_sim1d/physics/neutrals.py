@@ -940,6 +940,7 @@ def neutral_source_sink_rhs(
     gas_puff_delivery_fraction=1.0,
     gas_puff_orifice_id_cm=None,
     gas_puff_orifice_length_cm=None,
+    parts_out=None,
 ):
     """Return conservative RHS for neutral gas puff and pump terms.
 
@@ -967,6 +968,13 @@ def neutral_source_sink_rhs(
     time. The PUMP removes gas at the local energy per atom, so pumping is
     temperature-preserving. On a two-zone state the puff feeds the annulus,
     which carries no energy field, so nothing is booked there.
+
+    ``parts_out``, a dict when given, receives the two halves the ``nn`` and
+    ``nn_a`` rows are the sum of, as non-negative rates [cm^-3 s^-1]:
+    ``puff_nn``/``puff_nn_a`` (what the puff adds) and ``pump_nn``/
+    ``pump_nn_a`` (what the pumps remove), ``*_nn_a`` None on a one-zone
+    state. They are copies formed from the same expressions; the returned
+    rows do not depend on whether it is given.
     """
     dnn = np.zeros(geometry.cells, dtype=float)
     dEn = None if state.En is None else np.zeros(geometry.cells, dtype=float)
@@ -974,6 +982,18 @@ def neutral_source_sink_rhs(
     dnn_a = np.zeros(geometry.cells, dtype=float) if two_zone else None
     pump_left_index, pump_right_index = pump_cell_indices(geometry)
     right_pump = pump_right_index is not None
+    parts = None
+    if parts_out is not None:
+        parts = {
+            "puff_nn": np.zeros(geometry.cells, dtype=float),
+            "pump_nn": np.zeros(geometry.cells, dtype=float),
+            "puff_nn_a": (
+                np.zeros(geometry.cells, dtype=float) if two_zone else None
+            ),
+            "pump_nn_a": (
+                np.zeros(geometry.cells, dtype=float) if two_zone else None
+            ),
+        }
     if gas_puff_enabled:
         puff = gas_puff_rate_profile(
             geometry,
@@ -1008,8 +1028,17 @@ def neutral_source_sink_rhs(
             dnn += np.where(
                 into_annulus, 0.0, particles / np.maximum(V_col, 1e-300)
             )
+            if parts is not None:
+                parts["puff_nn_a"] += np.where(
+                    into_annulus, particles / np.maximum(V_ann, 1e-300), 0.0
+                )
+                parts["puff_nn"] += np.where(
+                    into_annulus, 0.0, particles / np.maximum(V_col, 1e-300)
+                )
         else:
             dnn += puff
+            if parts is not None:
+                parts["puff_nn"] += puff
             if dEn is not None:
                 dEn += neutral_energy_floor(puff)
     if pump_enabled:
@@ -1022,6 +1051,14 @@ def neutral_source_sink_rhs(
         )
         rate_left = pump_rate(S_left, geometry.neutral_volume_cm3[pump_left_index])
         dnn[pump_left_index] -= rate_left * state.nn[pump_left_index]
+        if parts is not None:
+            parts["pump_nn"][pump_left_index] += (
+                rate_left * state.nn[pump_left_index]
+            )
+            if two_zone:
+                parts["pump_nn_a"][pump_left_index] += (
+                    rate_left * state.nn_a[pump_left_index]
+                )
         if dEn is not None:
             dEn[pump_left_index] -= rate_left * state.En[pump_left_index]
         if two_zone:
@@ -1039,6 +1076,14 @@ def neutral_source_sink_rhs(
                 S_right, geometry.neutral_volume_cm3[pump_right_index]
             )
             dnn[pump_right_index] -= rate_right * state.nn[pump_right_index]
+            if parts is not None:
+                parts["pump_nn"][pump_right_index] += (
+                    rate_right * state.nn[pump_right_index]
+                )
+                if two_zone:
+                    parts["pump_nn_a"][pump_right_index] += (
+                        rate_right * state.nn_a[pump_right_index]
+                    )
             if dEn is not None:
                 dEn[pump_right_index] -= (
                     rate_right * state.En[pump_right_index]
@@ -1047,6 +1092,8 @@ def neutral_source_sink_rhs(
                 dnn_a[pump_right_index] -= (
                     rate_right * state.nn_a[pump_right_index]
                 )
+    if parts is not None:
+        parts_out.update(parts)
     zeros = np.zeros(geometry.cells, dtype=float)
     # An evolved neutral wind (state carries M_n) leaves through the pump at
     # the same rate as the gas, so the pumped-out neutrals take their

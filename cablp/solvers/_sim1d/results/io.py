@@ -524,8 +524,96 @@ def save_result_hdf5(path, result, params=None, flags=None):
                     group.attrs[key] = value
                 else:
                     group.attrs[key] = float(value)
+        # The particle conservation receipt (schema ``receipt-v1``; the
+        # checker scripts/gates/ledger_check.py documents it and closes it
+        # against the saved state). Present on every result a run produced;
+        # absent on a file written before the receipt existed.
+        receipt = getattr(result, "receipt", None)
+        if receipt:
+            _write_receipt(h5.create_group("receipt"), receipt, result.time)
         _write_diagnostics(h5.create_group("diagnostics"), result.diagnostics)
     return path
+
+
+def _write_receipt(group, receipt, time):
+    """Write a receipt mapping (``results/receipt.py``) as ``receipt-v1``."""
+    time = np.asarray(time, dtype=float)
+    group.attrs["schema"] = receipt["schema"]
+    group.attrs["cadence"] = receipt["cadence"]
+    group.attrs["stages_present"] = np.array(
+        receipt["stages_present"], dtype=h5py.string_dtype()
+    )
+    group.attrs["updates_per_step"] = int(receipt["updates_per_step"])
+    group.attrs["leading_steps_not_covered"] = int(
+        receipt["leading_steps_not_covered"]
+    )
+    group.create_dataset("interval_t0", data=time[:-1])
+    group.create_dataset("interval_t1", data=time[1:])
+    group.create_dataset(
+        "interval_steps",
+        data=np.asarray(receipt["interval_steps"], dtype=np.int64),
+    )
+    entries = group.create_group("entries")
+    for term, entry in receipt["entries"].items():
+        tg = entries.create_group(term)
+        ds = tg.create_dataset(
+            "particles", data=np.asarray(entry["values"], dtype=float)
+        )
+        for key in ("debit", "credit", "site", "sign"):
+            ds.attrs[key] = str(entry[key])
+        ds.attrs["units"] = "particles"
+        tg.create_dataset(
+            "particles_gross", data=np.asarray(entry["gross"], dtype=float)
+        )
+    state = group.create_group("state")
+    for name, values in receipt["state"].items():
+        state.create_dataset(name, data=np.asarray(values, dtype=float))
+    census = group.create_group("census")
+    for term, (status, reason) in receipt["census"].items():
+        cg = census.create_group(term)
+        cg.attrs["status"] = str(status)
+        cg.attrs["reason"] = str(reason)
+
+
+def _read_receipt(group):
+    """Read a ``receipt-v1`` group back into the mapping the writer takes."""
+    entries = {}
+    for term, tg in group["entries"].items():
+        ds = tg["particles"]
+        entries[term] = {
+            "values": np.asarray(ds[()], dtype=float),
+            "gross": np.asarray(tg["particles_gross"][()], dtype=float),
+            **{
+                key: _decode_string(ds.attrs[key])
+                for key in ("debit", "credit", "site", "sign")
+            },
+        }
+    return {
+        "schema": _decode_string(group.attrs["schema"]),
+        "cadence": _decode_string(group.attrs["cadence"]),
+        "stages_present": [
+            _decode_string(v) for v in group.attrs["stages_present"]
+        ],
+        "updates_per_step": int(group.attrs["updates_per_step"]),
+        "leading_steps_not_covered": int(
+            group.attrs.get("leading_steps_not_covered", 0)
+        ),
+        "interval_steps": np.asarray(
+            group["interval_steps"][()], dtype=np.int64
+        ),
+        "entries": entries,
+        "state": {
+            name: np.asarray(ds[()], dtype=float)
+            for name, ds in group["state"].items()
+        },
+        "census": {
+            term: (
+                _decode_string(cg.attrs["status"]),
+                _decode_string(cg.attrs["reason"]),
+            )
+            for term, cg in group["census"].items()
+        },
+    }
 
 
 def load_result_hdf5(path):
@@ -707,6 +795,8 @@ def load_result_hdf5(path):
             result.dvm_tick_count = int(h5["dvm_tick_count"][()])
         if "jet_arming" in h5:
             result.jet_arming = _read_census(h5["jet_arming"])
+        if "receipt" in h5:
+            result.receipt = _read_receipt(h5["receipt"])
         if "ignition_abort" in h5:
             result.ignition_abort = {
                 key: (

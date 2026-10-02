@@ -1359,6 +1359,44 @@ def _build_small(path, mode, factor=None):
     return bound_cx
 
 
+def _build_clearing_fallback(path, factor):
+    """A clearing account with no carried debt and no tracked site account.
+
+    30 cells, one step, momentum only: two signed legs of 1 each through
+    ``exchange:cx`` (plasma_momentum -> exchange:cx -> neutral_momentum), the
+    two legs agreeing exactly, with BOTH site accounts declared not_tracked,
+    so the ceiling falls back to the entries' summed |net| (2). Each leg's
+    gross is ``factor``. The clearing bound is 4 * count * 2**-53 * 2*factor
+    with count = 1*3 + 0 + 2*(1 + 30 + 1) + 2 + 2 = 71, so bound/|net| =
+    4 * 71 * 2**-53 * factor = 3.2e-14 * factor, which crosses the 1e-9
+    ceiling at factor = 3.2e4.
+    """
+    n_cells = 30
+    with h5py.File(path, "w") as f:
+        f.attrs["format"] = "sim1d-hdf5-v1"
+        f.attrs["steps"] = 1
+        f["time"] = np.array([0.0, 1e-6])
+        f["momentum"] = np.full((2, n_cells), 1.0)
+        geo = f.create_group("geometry")
+        geo["plasma_volume_cm3"] = np.ones(n_cells)
+        geo["neutral_volume_cm3"] = 2.0 * np.ones(n_cells)
+        geo["plasma_active"] = np.ones(n_cells, bool)
+        rc = f.create_group("receipt")
+        rc.attrs["schema"] = SCHEMA
+        rc.attrs["cadence"] = "save"
+        rc.attrs["stages_present"] = np.array(["momentum"], dtype=object)
+        rc["interval_t0"], rc["interval_t1"] = np.array([0.0]), np.array([1e-6])
+        rc["interval_steps"] = np.array([1], np.int64)
+        eg = rc.create_group("entries")
+        for term, debit, credit in (("cx_plasma", "plasma_momentum", "exchange:cx"),
+                                    ("cx_neutral", "exchange:cx", "neutral_momentum")):
+            _write_entry(eg, term, "momentum", debit, credit, np.array([1.0]),
+                         np.array([float(factor)]), sign="signed")
+        _write_census(rc, {"cx_plasma": "entered", "cx_neutral": "entered",
+                           "plasma_momentum": "not_tracked",
+                           "neutral_momentum": "not_tracked"})
+
+
 def self_test(verbose=False):
     # (name, builder call, requested stages, expected exit, expected failures,
     #  extra expectations). A failure is (kind, name, interval); interval None
@@ -1475,6 +1513,13 @@ def self_test(verbose=False):
         ("not_tracked account (circuit, its state corrupted)", M({"not_tracked": "circuit"}), None, 0, [],
          {"not_tracked": ["circuit"], "closed_excludes": "energy/circuit",
           "closed_includes": "energy/electron_energy"}),
+        # Both site accounts of a no-debt clearing account not tracked, its
+        # legs agreeing but each carrying a signed gross of 1e6 (31 x the
+        # 3.2e4 at which bound/|net| crosses the ceiling; see the builder):
+        # the fallback reference, the entries' summed |net|, refuses it.
+        ("clearing ceiling fallback: no tracked site account, inflated signed gross",
+         lambda p: _build_clearing_fallback(p, 1e6), None, 1,
+         [("bound-ceiling", "momentum/exchange:cx", 0)], {}),
     ]
     bad = 0
     with tempfile.TemporaryDirectory(prefix="ledger_selftest_") as tmp:

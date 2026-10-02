@@ -240,6 +240,8 @@ _CASE_ORDER = (
     "heat-clip-booked-in-floor-ledger",
     "cathode-surface-book-closes",
     "circuit-handoff-dropped-inductor-energy",
+    "receipt-fluid-particles-closes",
+    "receipt-kinetic-particles-verdict",
 )
 
 

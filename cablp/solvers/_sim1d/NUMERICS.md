@@ -1025,6 +1025,72 @@ conservation drift over a saved trajectory. `TimestepDiagnostics` records every
 candidate, the active constraint that set $\Delta t$, and accept/reject
 bookkeeping.
 
+### Recomputing an inventory from a result file
+
+The saved state is CGS per
+cubic centimetre: `n`, `nn`, `nn_a` in cm$^{-3}$, `momentum` and `M_n` in
+g cm$^{-2}$ s$^{-1}$, `Ee`, `Ei`, `En` in erg cm$^{-3}$, one row per save at
+`time` [s]. The volumes are `geometry/plasma_volume_cm3` (the column,
+$V_\text{col}=A\Delta z$) and `geometry/neutral_volume_cm3` (column plus
+annulus), and `geometry/plasma_active` marks the cells the plasma lives in.
+The plasma inventory is $\sum n\,V_\text{col}$ over the plasma-active cells
+(the inactive cells' rows are written but evolve under no term). In a
+two-zone result (it carries `nn_a`, as every result written since the annulus
+was introduced does) `nn` is the column density on $V_\text{col}$ and `nn_a`
+the annulus density on `neutral_volume_cm3 - plasma_volume_cm3`, both over
+ALL cells; a single-zone result (no `nn_a`) holds `nn` on the neutral volume.
+Once the kinetic neutrals engage the saved `nn` and `nn_a` are the
+republished moments, one-sided at the floor, and the neutral inventory is
+the engine's own, saved as `receipt/state/neutral_particles_kinetic` with
+`receipt/state/neutral_kinetic_engaged` marking the saves it holds.
+
+### The conservation receipt
+
+Every result carries a `receipt/` group
+(`results/receipt.py`; schema `receipt-v1`, whose definition is the module
+docstring of `scripts/gates/ledger_check.py`, the independent checker that
+closes it). For the `particles` stage it holds, per pair of consecutive saves,
+the amount each term moved between two accounts, with the summed magnitude of
+the contributions that made it. Each code site books only what it applied:
+
+- the explicit stages, once per `rhs` call inside a step attempt, at the
+  call's weight in the accepted state ($\Delta t/2$ for each SSPRK2 stage,
+  on both explicit paths), from the very rows the stage sums;
+- the floors, at the floor ledger's weights (above), the plasma density floor
+  on the active cells, the neutral floors before engagement only (after it
+  they land on the republished rows, not on the engine's inventory);
+- the neutral-only backward-Euler step: the puff density each zone was given,
+  the pumped $\Delta t\,r\,n_n^\text{next}$ at the pump cells, and the
+  exchange as transport inside the neutral account;
+- the kinetic engine's tick, from its own particle ledger: ionization debit,
+  recombination, recycle and anode-return births, puff, the two pumped
+  shares, and everything internal to its inventory as transport.
+
+Attempt tallies commit only on acceptance, so a rejected attempt books
+nothing. Transport inside one account (the plasma advective flux, the fluid
+neutral exchanges, the engine's internal channels) is a self-entry. Where two
+sites compute the two sides of one exchange both book through a clearing
+account: `exchange:ionization` (bulk and beam births against the neutral
+loss), `exchange:recombination`, `exchange:anode_return`,
+`exchange:cathode_face_recycle` and `exchange:end_wall_recycle`, the plasma
+side booking its whole $n$-row removal and the other side the fluid
+$n_n$ rows before engagement or the engine's births after. What the engine
+has not yet settled (the ionization and source tallies committed since its
+last tick, and its carried ionization debt) is each clearing account's state,
+`receipt/state/exchange_<name>`. The handover at engagement is measured, not
+booked: the seeded engine's inventory against the fluid inventory it was
+seeded from, written in the census. `updates_per_step` is 2: one SSPRK2 step
+updates each cell's particle rows twice and the heat substeps copy them; the
+neutral-only step and an engine tick are one update each. The census names
+every `rhs_terms` key and every state change made outside it, entered, zero
+or not tracked, with the reason; a term of a configuration branch the receipt
+does not book (the jet carrier, the evolved neutral wind and energy closures)
+is declared not tracked, and the neutral account with it when the term carried
+a particle row. Two cases cannot be closed and are declared rather than
+guessed: a run stopped at `max_steps` between saves leaves its trailing steps
+in no interval, and a resumed run, whose leading save is suppressed, leaves
+the steps before its first save in none (`leading_steps_not_covered`).
+
 ## Where each method is implemented
 
 | method | implementation |
