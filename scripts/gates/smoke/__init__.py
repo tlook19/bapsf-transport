@@ -238,6 +238,7 @@ _CASE_ORDER = (
     "handoff-surface-emission-solver-site",
     "floor-ledger-stage-weights",
     "heat-clip-booked-in-floor-ledger",
+    "cathode-surface-book-closes",
 )
 
 

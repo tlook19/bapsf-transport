@@ -3648,3 +3648,81 @@ def _case_anode_e_sheath_row_reported_not_applied():
             "a non-split step on a split stance silently dropped the anode "
             "electron-sheath debit"
         )
+
+
+#: Sign of each cathode surface ledger row in C_th dT_s/dt.
+_SURFACE_ROW_SIGNS = {
+    "heater": 1.0, "ion": 1.0, "rad": -1.0, "emis": -1.0, "cond": -1.0,
+    "backscatter": -1.0, "clamp": 1.0,
+}
+
+
+def _surface_step_closure(sim):
+    """Advance one accepted step; return (C_th dT_s, signed rows, budget).
+
+    The budget is one ulp of the new surface temperature times C_th (the
+    update rounds T_s + dT once, to half an ulp) plus 16 eps of the summed
+    row magnitudes (the rows' own products and sums).
+    """
+    C_th = float(sim._input_dict["cathode_heat_capacity_J_per_K"])
+    T_before = float(sim._cathode_Ts_K)
+    rows_before = dict(sim._cathode_energy_ledger_J)
+    sim.advance_one_step()
+    T_after = float(sim._cathode_Ts_K)
+    rows_after = sim._cathode_energy_ledger_J
+    increments = {
+        key: rows_after.get(key, 0.0) - rows_before.get(key, 0.0)
+        for key in _SURFACE_ROW_SIGNS
+    }
+    signed = sum(_SURFACE_ROW_SIGNS[k] * v for k, v in increments.items())
+    magnitude = sum(abs(v) for v in increments.values())
+    budget = (
+        C_th * float(np.spacing(T_after))
+        + 16.0 * np.finfo(float).eps * magnitude
+    )
+    return C_th * (T_after - T_before), signed, budget, increments
+
+
+# ----------------------------------------------------------------------
+# cathode-surface-book-closes
+# ----------------------------------------------------------------------
+@_case("cathode-surface-book-closes")
+def _case_cathode_surface_book_closes():
+    # The surface temperature advances semi-implicitly,
+    #     dT = dt (P_heat + P_ion - P_rad - P_emis - P_cond - P_back)
+    #          / (C_th + dt G),
+    # so C_th dT equals the explicit rows dt P_k only up to the factor
+    # C_th/(C_th + dt G). The ledger books each loss row at its linearised
+    # end-of-step value, P_k + G_k dT, and a clamp row for the 300 K floor,
+    # so over every accepted warming step C_th times the CHANGE in T_s
+    # (read off the surface state, not the ledger) equals the signed sum of
+    # the booked row increments.
+    sim = LAPDSim1D(*_anode_sink_config())
+    for _ in range(8):
+        stored, signed, budget, increments = _surface_step_closure(sim)
+        # Not vacuous: the surface moves and the loss rows are booked.
+        assert stored != 0.0 and increments["rad"] > 0.0, increments
+        assert abs(stored - signed) <= budget, (stored, signed, budget)
+
+    # The clamp forced to fire: the radiation row at the old temperature is
+    # inflated by 1 GW, so the semi-implicit update falls below the 300 K
+    # chamber wall from a surface standing 1 K above it, and the floor lifts
+    # it back. The clamp row is what closes the book.
+    from cablp.solvers._sim1d import solver as _solver_mod
+
+    real_terms = _solver_mod.cathode_power_balance_terms_W
+
+    def cold_terms(*args, **kwargs):
+        P_heat, P_ion, P_rad, P_emis, P_cond = real_terms(*args, **kwargs)
+        return P_heat, P_ion, P_rad + 1.0e9, P_emis, P_cond
+
+    cold = LAPDSim1D(*_anode_sink_config())
+    cold._cathode_Ts_K = 301.0
+    _solver_mod.cathode_power_balance_terms_W = cold_terms
+    try:
+        stored, signed, budget, increments = _surface_step_closure(cold)
+    finally:
+        _solver_mod.cathode_power_balance_terms_W = real_terms
+    assert cold._cathode_Ts_K == 300.0, cold._cathode_Ts_K
+    assert increments["clamp"] > 0.0, increments
+    assert abs(stored - signed) <= budget, (stored, signed, budget)

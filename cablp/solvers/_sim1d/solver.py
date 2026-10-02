@@ -2213,14 +2213,20 @@ class LAPDSim1D:
         self._cathode_theta = 1.0
         # Per-shot surface energy ledger [J]: running integrals of the
         # balance terms over accepted steps (the presence-gated backscatter
-        # row added just below has its own note). The net
-        # (heater + ion - rad - emis - cond) is the shot's unreturned
-        # energy into the emitting skin; cond is what the heater-held
-        # substrate absorbed -- the quantity the open-loop-heater drift
-        # hypothesis makes checkable against the ES1 trim cadence
-        # (a ~sub-kW net imbalance corresponds to ±8 K per 20-30 min).
+        # row added just below has its own note). The loss rows rad, emis
+        # and cond are booked at their linearised end-of-step values, the
+        # same linearisation the semi-implicit update uses, and ``clamp`` is
+        # the energy the floor at CATHODE_ENV_T_K adds when it fires, so the
+        # signed sum (heater + ion - rad - emis - cond - backscatter + clamp)
+        # is C_th times the surface temperature change over the steps the
+        # warming update runs. The net is the shot's unreturned energy into
+        # the emitting skin; cond is what the heater-held substrate
+        # absorbed -- the quantity the open-loop-heater drift hypothesis
+        # makes checkable against the ES1 trim cadence (a ~sub-kW net
+        # imbalance corresponds to ±8 K per 20-30 min).
         self._cathode_energy_ledger_J = {
             "heater": 0.0, "ion": 0.0, "rad": 0.0, "emis": 0.0, "cond": 0.0,
+            "clamp": 0.0,
         }
         if self._dvm_cathode_jet is not None:
             # The DVM cathode jet's own named loss row: the R_E share of the
@@ -4928,21 +4934,24 @@ class LAPDSim1D:
             # + dt*dP_loss/dT). At production dt/tau ~ 5e-5 this is the
             # explicit update to 4 decimal places; for tiny C_th it
             # cannot overshoot the radiative equilibrium and ring.
+            # G_lin is the sum of the three loss rows' own linearisation
+            # coefficients [W/K]; each row is booked below at its
+            # linearised END-of-step value, row + G_row*dT, so C_th*dT
+            # equals the booked rows' sum.
             eps = float(self._input_dict.get("cathode_emissivity"))
             area = math.pi * float(self._input_dict["R_cath"]) ** 2
-            G_lin = (
+            G_rad = (
                 4.0
                 * eps
                 * 5.670374419e-12
                 * float(area)
                 * self._cathode_Ts_K**3
-                + max(I_emis, 0.0) * 2.0 * 8.617333262e-5
-                + float(
-                    self._input_dict.get(
-                        "cathode_conduction_W_per_K"
-                    )
-                )
             )
+            G_emis = max(I_emis, 0.0) * 2.0 * 8.617333262e-5
+            G_cond = float(
+                self._input_dict.get("cathode_conduction_W_per_K")
+            )
+            G_lin = G_rad + G_emis + G_cond
             # B5 BACKSCATTER DEBIT: the energy the R_E share left with,
             # formed from the counted (particles, incident energy) pair
             # this same accepted step committed -- NOT from a retention
@@ -4962,16 +4971,28 @@ class LAPDSim1D:
                 * (P_heat + P_ion - P_rad - P_emis - P_cond - P_back)
                 / (C_th + float(attempt.dt) * G_lin)
             )
-            self._cathode_Ts_K = max(
-                self._cathode_Ts_K + dT,
-                CATHODE_ENV_T_K,
-            )
+            T_unclamped = self._cathode_Ts_K + dT
+            self._cathode_Ts_K = max(T_unclamped, CATHODE_ENV_T_K)
+            # The book: heater and ion are sources independent of T_s and
+            # are booked as dt*P; the three loss rows at their linearised
+            # end-of-step values, the row at the old temperature plus its
+            # own G_row*dT, so that in exact arithmetic
+            #     C_th*dT = heater + ion - rad - emis - cond - dt*P_back.
+            # The backscatter row is booked above from the same
+            # step_backscatter_erg that P_back is formed from, so on every
+            # step this branch runs its increment is dt*P_back. The clamp
+            # row is the energy the floor at CATHODE_ENV_T_K adds when it
+            # fires (exactly zero otherwise), which closes
+            #     C_th*(T_s_new - T_s_old) = the signed sum of the rows.
+            dt_step = float(attempt.dt)
             ledger = self._cathode_energy_ledger_J
-            ledger["heater"] += float(attempt.dt) * P_heat
-            ledger["ion"] += float(attempt.dt) * P_ion
-            ledger["rad"] += float(attempt.dt) * P_rad
-            ledger["emis"] += float(attempt.dt) * P_emis
-            ledger["cond"] += float(attempt.dt) * P_cond
+            ledger["heater"] += dt_step * P_heat
+            ledger["ion"] += dt_step * P_ion
+            ledger["rad"] += dt_step * (P_rad + G_rad * dT)
+            ledger["emis"] += dt_step * (P_emis + G_emis * dT)
+            ledger["cond"] += dt_step * (P_cond + G_cond * dT)
+            if self._cathode_Ts_K != T_unclamped:
+                ledger["clamp"] += C_th * (self._cathode_Ts_K - T_unclamped)
         # Surface-state coverage, accepted steps only. Ion flux from the
         # honest accepted-state solve, which is now built in every phase; the
         # cached solve's I_i is the fallback for the phases that build none
@@ -5571,6 +5592,13 @@ class LAPDSim1D:
             # substep's clip was booked carries neither key.
             self._floor_ledger[name] = float(ledgers.get(name, 0.0))
         for key in self._cathode_energy_ledger_J:
+            if key == "clamp":
+                # Defaulted, not required: a payload written before the
+                # clamp row existed carries no such key.
+                self._cathode_energy_ledger_J[key] = float(
+                    ledgers.get(f"cathode_energy_{key}_J", 0.0)
+                )
+                continue
             self._cathode_energy_ledger_J[key] = float(
                 ledgers[f"cathode_energy_{key}_J"]
             )
@@ -10260,9 +10288,10 @@ class LAPDSim1D:
                 self._circuit_V_dis_time_integral
             ),
             # Cumulative surface energy ledger [J]. The heater/ion/rad/emis/
-            # cond rows are booked by the power-balance warming update; the
-            # presence-gated backscatter row is booked on every accepted step
-            # the DVM cathode jet counted on. See _cathode_energy_ledger_J.
+            # cond/clamp rows are booked by the power-balance warming update;
+            # the presence-gated backscatter row is booked on every accepted
+            # step the DVM cathode jet counted on. See
+            # _cathode_energy_ledger_J.
             **{
                 f"warming_E_{k}_J": float(v)
                 for k, v in self._cathode_energy_ledger_J.items()
@@ -12009,13 +12038,14 @@ class LAPDSim1D:
 
         DISCLOSED CONVENTION, cathode jet armed. Only the ``R_E`` energy the
         BACKSCATTER carries is debited from the surface. The ``1 - R_N``
-        implanted share desorbs at the surface temperature and its
-        ``(3/2) k T_s`` per atom is NOT taken off the cathode's balance --
-        the same convention the fluid channel ships, and at the production
-        recycle rate it is tens of watts against a kilowatt-class
-        ``P_cathode_i``. It is a convention, not a measurement: the surface
-        energy ledger's ``backscatter`` row is what the surface actually gave
-        up, and this share is deliberately outside it.
+        implanted share is re-emitted on the cosine-wall spectrum at the
+        surface temperature, which carries ``2 k T_s`` of kinetic energy per
+        atom in the continuum limit (the spectrum's discrete mean on the
+        velocity grid differs from it at the grid's resolution), and that
+        energy is NOT taken off the cathode's balance -- the same convention
+        the fluid channel ships. It is a convention, not a measurement: the
+        surface energy ledger's ``backscatter`` row is what the surface
+        actually gave up, and this share is deliberately outside it.
         """
         state = self.state
         derived = self.derived

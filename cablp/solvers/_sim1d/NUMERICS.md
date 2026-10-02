@@ -700,6 +700,19 @@ as the root attributes `cathode_clamped_solves`, `cathode_total_solves` and
 `cathode_clamp_first_t_s`; the windowed share is read per save from
 `source_regime`.
 
+**The surface temperature update** (MODEL.md, the emitting surface) is
+semi-implicit in the linearised loss, once per accepted step:
+$\Delta T_s=\Delta t\,P_\text{net}/(C_\text{th}+\Delta t\,G)$, $P_\text{net}$
+the right-hand side at the step's old $T_s$ and
+$G=G_\text{rad}+G_\text{emis}+G_\text{cond}$ the three loss rows' own
+linearisation coefficients, followed by a floor at the 300 K environment. The
+surface ledger books the heater and ion rows as $\Delta t\,P$, each loss row at
+its linearised end-of-step value $\Delta t\,(P_k+G_k\Delta T_s)$, the
+backscatter row from the same counted energy $P_\text{back}$ is formed from,
+and a `clamp` row with the energy the 300 K floor adds when it fires, so
+$C_\text{th}$ times the change in $T_s$ equals the signed sum of the rows to
+round-off over the steps the update runs.
+
 The loop current is advanced by an L-stable TR-BDF2 stage split over
 $LdI/dt=V_\text{src}-IxR_\text{comp}-V_\text{dis}(I)$ — the external share
 of the compliance resistance only, the rest being inside $V_\text{dis}$ — with
