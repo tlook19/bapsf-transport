@@ -1079,7 +1079,12 @@ account: `exchange:ionization` (bulk and beam births against the neutral
 loss), `exchange:recombination`, `exchange:anode_return`,
 `exchange:cathode_face_recycle` and `exchange:end_wall_recycle`, the plasma
 side booking its whole $n$-row removal and the other side the fluid
-$n_n$ rows before engagement or the engine's births after. What the engine
+$n_n$ rows before engagement or the engine's births after. The engine's
+counted recycle, recombination and anode-return channels are those terms'
+neutral rows on the plasma-active cells only, the cells on which the
+plasma-topology mask leaves the plasma's own rows, so each birth has its
+plasma-side removal. On a geometry without an end wall face (a mirror) neither
+side books on `exchange:end_wall_recycle`. What the engine
 has not yet settled (the ionization and source tallies committed since its
 last tick, and its carried ionization debt) is each clearing account's state,
 `receipt/state/exchange_<name>`. The handover at engagement is measured, not

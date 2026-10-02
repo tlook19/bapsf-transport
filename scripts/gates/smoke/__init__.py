@@ -242,6 +242,7 @@ _CASE_ORDER = (
     "circuit-handoff-dropped-inductor-energy",
     "receipt-fluid-particles-closes",
     "receipt-kinetic-particles-verdict",
+    "receipt-kinetic-mirror-particles-closes",
 )
 
 

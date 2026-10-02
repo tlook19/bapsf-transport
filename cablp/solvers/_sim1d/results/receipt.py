@@ -393,6 +393,13 @@ class ParticleReceipt:
         for channel in external_births:
             term, source = mapping[channel]
             v = float(ledger[f"birth_{channel}"])
+            if source == X_END_WALL and "end_wall" not in self._role_masks and (
+                v == 0.0
+            ):
+                # No end wall face on this geometry (a mirror or twin): the
+                # plasma books nothing on the channel, so neither side does.
+                # A non-zero birth is still booked, and fails the check.
+                continue
             s = sums.setdefault(term, [source, 0.0, 0.0])
             s[1] += v
             s[2] += abs(v)

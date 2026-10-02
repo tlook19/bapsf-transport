@@ -11109,6 +11109,15 @@ class LAPDSim1D:
         zone volume that row was written against, so the row IS a particle
         rate and its integral over an interval is particles.
 
+        Every row is zero on the plasma-inactive cells, where the
+        plasma-topology mask zeroes the plasma's own rows of the same terms:
+        a channel counts only what the plasma's masked rows remove, so no
+        atom is sourced where the plasma books no loss. The wall-return rows
+        are placed in the absorbing faces' live cells and the anode row in
+        the cells flanking the anode faces, all plasma-active, so the mask
+        leaves those two channels unchanged; it zeroes the recombination row
+        on the inactive cells.
+
         One expression, two consumers: the tick-time snapshot
         (:meth:`_kinetic_channel_rates`) and the transient arm's counted
         handshake (:meth:`_dvm_source_channel_rows`). The counted path is
@@ -11116,6 +11125,7 @@ class LAPDSim1D:
         samples, rather than a second formula for the same channel.
         """
         V_col, V_ann = self._zone_volumes
+        active = self._plasma_active_mask()
         recycle = np.clip(boundary.nn, 0.0, None) * V_col
         cath_cells = np.zeros(self._geometry.cells)
         coll_cells = np.zeros(self._geometry.cells)
@@ -11134,10 +11144,10 @@ class LAPDSim1D:
         if anode.nn_a is not None:
             an_gain = an_gain + np.clip(anode.nn_a, 0.0, None) * V_ann
         return {
-            "cathode_face": cath_cells,
-            "end_wall_face": coll_cells,
-            "recombination": rec_cells,
-            "anode": an_gain,
+            "cathode_face": np.where(active, cath_cells, 0.0),
+            "end_wall_face": np.where(active, coll_cells, 0.0),
+            "recombination": np.where(active, rec_cells, 0.0),
+            "anode": np.where(active, an_gain, 0.0),
         }
 
     def _kinetic_channel_rates(self, state, derived, time):
@@ -11244,10 +11254,10 @@ class LAPDSim1D:
         same expression the tick-time snapshot uses, so a channel cannot
         drift between the counted and the sampled path.
 
-        Unmasked by the plasma topology, exactly as the snapshot is: these
-        rows are the arm's sources rather than fluid rows the mask decides
-        the fate of, and masking one path but not the other would make the
-        counted channel the integral of something the snapshot never sampled.
+        Read from the terms before the plasma-topology mask is applied to
+        them, and masked inside the shared expression instead, so the counted
+        path and the snapshot both carry exactly the cells the plasma's
+        masked rows remove particles from.
         """
         boundary = terms["characteristic_boundary"]
         return self._kinetic_source_channel_rows(

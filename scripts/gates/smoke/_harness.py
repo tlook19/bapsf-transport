@@ -573,7 +573,7 @@ def _anode_sink_sim(steps=60):
 # a mismatch, so
 # adding or removing a case cannot leave a stale number behind.
 # ----------------------------------------------------------------------
-_CASE_CENSUS = {"total": 203, "historical_stance": 71}
+_CASE_CENSUS = {"total": 204, "historical_stance": 72}
 
 
 def _assert_case_census():
