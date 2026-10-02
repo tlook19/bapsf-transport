@@ -489,6 +489,20 @@ def _case_breakdown_retry_near_vacuum(
     _np_dt = 1.0e-10
     _np_origin = neutral_prebreakdown_params["tau_neutral_prebreakdown"]
     _np_I_pre = neutral_prebreakdown_params["I_prebreakdown"]
+    _np_expected_breakdown = _np_origin + 2.0 * _np_dt
+    _np_expected_end = (
+        _np_expected_breakdown
+        + neutral_prebreakdown_params["tau_discharge"]
+        + neutral_prebreakdown_params["tau_afterglow"]
+    )
+    assert np.isclose(
+        neutral_prebreakdown_result.t_breakdown_trigger,
+        _np_expected_breakdown,
+        **_TOL_ROUNDOFF,
+    )
+    assert np.isclose(
+        neutral_prebreakdown_result.final_time, _np_expected_end, **_TOL_ROUNDOFF
+    )
     _np_samples_t = neutral_prebreakdown_result.current_trigger_samples["time"]
     _np_samples_I = neutral_prebreakdown_result.current_trigger_samples["I_tot"]
     assert np.allclose(
@@ -498,24 +512,10 @@ def _case_breakdown_retry_near_vacuum(
     _np_expected_prebreakdown = _np_samples_t[0] + (
         (_np_I_pre - _np_samples_I[0]) / (_np_samples_I[1] - _np_samples_I[0])
     ) * (_np_samples_t[1] - _np_samples_t[0])
-    _np_expected_breakdown = _np_origin + 2.0 * _np_dt
-    _np_expected_end = (
-        _np_expected_breakdown
-        + neutral_prebreakdown_params["tau_discharge"]
-        + neutral_prebreakdown_params["tau_afterglow"]
-    )
     assert np.isclose(
         neutral_prebreakdown_result.t_prebreakdown_trigger,
         _np_expected_prebreakdown,
         **_TOL_ROUNDOFF,
-    )
-    assert np.isclose(
-        neutral_prebreakdown_result.t_breakdown_trigger,
-        _np_expected_breakdown,
-        **_TOL_ROUNDOFF,
-    )
-    assert np.isclose(
-        neutral_prebreakdown_result.final_time, _np_expected_end, **_TOL_ROUNDOFF
     )
     # One frame per accepted step: the neutral fill, the first driven step
     # (pre-breakdown), one breakdown step, then the discharge and afterglow
