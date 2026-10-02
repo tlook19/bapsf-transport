@@ -1216,9 +1216,10 @@ def _case_circuit_current_driven_integration():
     m3_sim._circuit_I_loop = 800.0
     m3_solve = m3_sim.solve_cathode_boundary(update_cache=False)
     assert m3_solve.metadata["cathode_solver_model"] == "current_driven"
-    assert np.isclose(
-        m3_solve.beam_result.result.I_tot, 800.0, rtol=1e-6, atol=0.0
-    ) or m3_solve.beam_result.result.regime == "capability_limited"
+    # 800 A is past what this unit cathode can carry: the solve returns the
+    # ceiling solution, tagged as such, at a current below the demand.
+    assert m3_solve.beam_result.result.regime == "capability_limited"
+    assert m3_solve.beam_result.result.I_tot < 800.0
     assert m3_solve.beam_result.result_twin is None
     m3_float = m3_sim.solve_cathode_boundary(floating=True, update_cache=False)
     # The open-circuit phase is the current-driven solve at I_tot = 0, so the
@@ -1438,6 +1439,7 @@ def _case_cathode_power_balance_under_current_drive(
     # solves carry the near-floating I_i -- the form is what's tested).
     sf_area = np.pi * float(sf_params["R_cath"]) ** 2
     sf_th = 1.0
+    assert len(sf_calls) == 3, len(sf_calls)  # one per accepted step
     for sf_Ii in sf_calls:
         sf_G = max(sf_Ii, 0.0) / (1.602176634e-19 * sf_area)
         sf_loss = 1.0e-16 * sf_G
@@ -1474,8 +1476,9 @@ def _case_cathode_power_balance_under_current_drive(
     # M5a' energy-dependent yield: with cathode_cleaning_E_th_eV set, the
     # coverage update scales sigma by the Bohdansky near-threshold factor
     # at E = P_cathode_i/I_i. Below threshold nothing cleans (theta
-    # frozen); with E_th = None the M5a fluence limit is reproduced
-    # bit-for-bit (default-compat gate).
+    # frozen); above it the factor is reproduced by hand below. The
+    # fluence limit (E_th = None) is sf_params itself, checked above.
+    assert sf_params["cathode_cleaning_E_th_eV"] is None
     sfE_params = dict(sf_params, cathode_cleaning_E_th_eV=1.0e6)
     sfE_sim = LAPDSim1D(sfE_params, sf_flags)
     sfE_sim._circuit_I_loop = 800.0
@@ -1484,13 +1487,56 @@ def _case_cathode_power_balance_under_current_drive(
         sfE_result.cathode_diagnostics["surface_theta"], float
     )
     assert np.all(sfE_theta == 1.0), sfE_theta  # far below threshold
-    sfN_params = dict(sf_params, cathode_cleaning_E_th_eV=None)
-    sfN_sim = LAPDSim1D(sfN_params, sf_flags)
-    sfN_sim._circuit_I_loop = 800.0
-    sfN_result = sfN_sim.run(t_end=3.0e-10, dt=1.0e-10)
-    assert np.array_equal(
-        np.asarray(sfN_result.cathode_diagnostics["surface_theta"], float),
-        sf_theta,
+    # A finite threshold below the ion energy (E ~ 1 keV on this ceiling-bound
+    # solve), with a cross section that depletes theta by ~1e-6 over the run,
+    # six decades above the roundoff tolerance it is compared at.
+    sfT_E_th_eV = 300.0
+    sfT_sigma_cm2 = 1.0e-10
+    sfT_calls = []
+
+    def _sfT_spy(**kw):
+        f = _sf_orig(**kw)
+
+        def g(I):
+            res = f(I)
+            sfT_calls.append((float(res.I_i), float(res.P_cathode_i)))
+            return res
+
+        return g
+
+    _solver_mod.idriven_result_evaluator = _sfT_spy
+    try:
+        sfT_sim = LAPDSim1D(
+            dict(
+                sf_params,
+                cathode_cleaning_E_th_eV=sfT_E_th_eV,
+                cathode_cleaning_sigma_cm2=sfT_sigma_cm2,
+            ),
+            sf_flags,
+        )
+        sfT_sim._circuit_I_loop = 800.0
+        sfT_result = sfT_sim.run(t_end=3.0e-10, dt=1.0e-10)
+    finally:
+        _solver_mod.idriven_result_evaluator = _sf_orig
+    sfT_theta = np.asarray(
+        sfT_result.cathode_diagnostics["surface_theta"], float
+    )
+    # Hand reproduction from the documented form: per accepted step,
+    # theta /= 1 + dt sigma f(E) Gamma_i with Gamma_i = I_i/(e pi R_cath^2)
+    # and f(E) = (1 - (E_th/E)^(2/3)) (1 - E_th/E)^2 at E = P_cathode_i/I_i.
+    assert len(sfT_calls) == 3, len(sfT_calls)  # one per accepted step
+    sfT_expected = [1.0]
+    for sfT_Ii, sfT_Pi in sfT_calls:
+        sfT_E = max(sfT_Pi, 0.0) / sfT_Ii
+        assert sfT_E > sfT_E_th_eV, (sfT_E, sfT_E_th_eV)
+        sfT_r = sfT_E_th_eV / sfT_E
+        sfT_f = (1.0 - sfT_r ** (2.0 / 3.0)) * (1.0 - sfT_r) ** 2
+        sfT_G = max(sfT_Ii, 0.0) / (1.602176634e-19 * sf_area)
+        sfT_expected.append(
+            sfT_expected[-1] / (1.0 + 1.0e-10 * sfT_sigma_cm2 * sfT_f * sfT_G)
+        )
+    assert np.allclose(sfT_theta, sfT_expected, **_TOL_ROUNDOFF), (
+        sfT_theta, sfT_expected
     )
 
     # Saved diagnostics are refreshed post-accept, so the recorded solve
