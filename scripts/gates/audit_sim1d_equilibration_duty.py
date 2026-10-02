@@ -13,6 +13,8 @@ once per step, at the step's start time, so recording its ``time`` argument
 reconstructs the exact step grid.  The phase at each step start is the phase
 that step's RHS runs under.
 
+The script measures and asserts nothing, so its exit status carries no verdict.
+
 Usage (from <checkout>/cablp, PYTHONPATH set to the same cablp/):
 
     python scripts/gates/audit_sim1d_equilibration_duty.py
@@ -228,6 +230,8 @@ def main(argv=None):
         print(
             f"  seed: mean_nn={out['mean_nn']:.9e} max_nn={out['max_nn']:.9e}"
         )
+    print("audit_sim1d_equilibration_duty: measurement only -- nothing was "
+          "asserted, so the exit status carries no verdict")
     return 0
 
 

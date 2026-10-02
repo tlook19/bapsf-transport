@@ -26,6 +26,9 @@ prints the name, the base chain and the resolved ``config_identity`` so a
 reading can be compared with another one. ``default_config()`` is the template
 of keys, never an implied plasma.
 
+**This audit measures and asserts nothing**, so its exit status carries no
+verdict.
+
 Usage::
 
     # the golden gate's own configuration (the reference stance at nx = 60)
@@ -513,6 +516,8 @@ def main(argv=None):
         restore()
 
     report(recorder, sim, result)
+    print("floor activation audit: measurement only -- nothing was asserted, "
+          "so the exit status carries no verdict")
     return 0
 
 

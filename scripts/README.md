@@ -42,7 +42,9 @@ pin the configuration surface, with `audit_sim1d_configs_delta.py` as the
 rotation record that says which snapshot case moved and in which resolved
 values; `preflight_diffcfg.py` is the no-solve config
 diff every campaign arm runs before spending compute. A file belongs here when
-a merge is blocked by its verdict.
+a merge is blocked by its verdict. Two audits here are not gates:
+`audit_sim1d_equilibration_duty.py` and `audit_sim1d_floor_activation.py`
+measure and assert nothing, so their exit status carries no verdict.
 
 `smoke_sim1d.py` is the entry point of the smoke suite, and it keeps the
 command line: no arguments for the full gate, `--list`, `--only <case>` and
@@ -134,11 +136,14 @@ mirror-branch corpus's (`deposit_beam_mirror_reference.py`, pinning
 `scripts/data/deposit_beam_mirror_reference.npz`). The rest split
 into four kinds: read-only audits/censuses of a saved run or build
 (`audit_sim1d_afterglow_ion_channel.py`, `census_afterglow_tail_handoff.py`,
-`t23c_pairwise_audit.py`); a lane-equivalence check
+`t23c_pairwise_audit.py`, and the geometric zone-exchange measurement
+`k2_dvm_exchange_measure.py`; of these, the ion-channel audit, the census
+without `--assert-no-handoff-before-ms` and the zone-exchange measurement
+measure and assert nothing, as does `bench_wall_return.py`, so their exit
+status carries no verdict); a lane-equivalence check
 (`r3lane_equivalence.py`); one fixed-point/underflow fence
 (`r3fma_underflow_fence.py`); and one-build acceptance instruments not named
 `verify_sim1d_*.py` (`k2_dvm_exchange_acceptance.py`,
-`k2_dvm_exchange_measure.py`,
 `verify_beam_deposition.py`,
 `verify_phase3_source_capture.py`,
 `verify_twin_mirror_equivalence.py` — the `far_end = "mirror"` half column

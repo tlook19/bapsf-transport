@@ -8,7 +8,8 @@ statistic a contended machine cannot inflate.
 
 One process, no threads, and the corpus is loaded once before timing starts, so
 what is timed is the chain and nothing around it. Every arm is reported; the
-stance arm is the registered number.
+stance arm is the registered number. The bench measures and asserts nothing, so
+its exit status carries no verdict.
 
 Usage (from the repo root, PYTHONPATH set to the repo root):
 
@@ -97,6 +98,8 @@ def main(argv=None):
             f"{L.shape[0]} rows -- min wall {best * 1e3:.3f} ms, "
             f"per call {per_call * 1e3:.4f} ms"
         )
+    print("bench_wall_return: measurement only -- nothing was asserted, so the "
+          "exit status carries no verdict")
     return 0
 
 

@@ -11,7 +11,8 @@ the measured rates against the shipped expression.
 probe never sees the E2 comparison, the plasma background's collision channels
 or any deviation being scored: it is a free-flight billiard on the geometry
 alone, so every number it produces is a property of ``(Rp, Rm)`` and of the
-velocity, and of nothing else.
+velocity, and of nothing else.  It measures and asserts nothing, so its exit
+status carries no verdict.
 
 The probe
 ---------
@@ -363,6 +364,8 @@ def main(argv=None):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n")
     print(f"wrote {out_path}", flush=True)
+    print("K2 measurement: measurement only -- nothing was asserted, so the "
+          "exit status carries no verdict", flush=True)
     return 0
 
 
