@@ -22,7 +22,14 @@ from cablp.solvers._sim1d import (
 )
 from cablp.solvers._sim1d.core.state import STATE_NAMES_1D
 
-from ._harness import _base_config, _base_sim, _case, _cathode_unit_config
+from ._harness import (
+    _TOL_ROUNDOFF,
+    _TOL_UNADJUDICATED,
+    _base_config,
+    _base_sim,
+    _case,
+    _cathode_unit_config,
+)
 
 
 # --------------------------------------------------------------------
@@ -59,7 +66,7 @@ def _case_breakdown_retry_near_vacuum(
     retry_sim = LAPDSim1D(retry_params, retry_flags)
     retry_result = retry_sim.run(t_end=1.0e-6)
     assert retry_result.steps >= 2
-    assert np.isclose(retry_result.time[-1], 1.0e-6)
+    assert np.isclose(retry_result.time[-1], 1.0e-6, **_TOL_ROUNDOFF)
     assert retry_result.diagnostics[0].retry_count >= 1
     assert retry_result.diagnostics[0].rejection_reason == "neutral_step_fraction"
     assert retry_result.diagnostics[0].step_cap == "retry"
@@ -87,6 +94,7 @@ def _case_breakdown_retry_near_vacuum(
         assert np.allclose(
             loaded_retry.timestep_rejection_events["attempted_dt"],
             retry_result.timestep_rejection_events["attempted_dt"],
+            **_TOL_ROUNDOFF,
         )
         assert list(loaded_retry.timestep_rejection_events["reason"]) == list(
             retry_result.timestep_rejection_events["reason"]
@@ -106,13 +114,15 @@ def _case_breakdown_retry_near_vacuum(
     except TimestepRejectionError as exc:
         assert exc.reason == "neutral_step_fraction"
         assert exc.retry_count == 1
-        assert np.isclose(exc.time, 0.0)
-        assert np.isclose(exc.attempted_dt, 0.5e-6)
-        assert np.isclose(exc.dt_min, failed_retry_params["dt_min"])
+        assert np.isclose(exc.time, 0.0, **_TOL_ROUNDOFF)
+        assert np.isclose(exc.attempted_dt, 0.5e-6, **_TOL_ROUNDOFF)
+        assert np.isclose(exc.dt_min, failed_retry_params["dt_min"], **_TOL_ROUNDOFF)
         assert exc.phase == "equilibrium_puff"
         assert exc.active_constraint == "dt_max"
-        assert np.isclose(failed_retry_sim.time, 0.0)
-        assert np.allclose(failed_retry_sim.get_initial_snapshot().y, failed_retry_y0)
+        assert np.isclose(failed_retry_sim.time, 0.0, **_TOL_ROUNDOFF)
+        assert np.allclose(
+            failed_retry_sim.get_initial_snapshot().y, failed_retry_y0, **_TOL_ROUNDOFF,
+        )
     else:
         raise AssertionError("expected TimestepRejectionError")
 
@@ -146,7 +156,7 @@ def _case_breakdown_retry_near_vacuum(
     split_run_sim = LAPDSim1D(run_params, split_flags)
     split_run_result = split_run_sim.run(t_end=2.0e-10, dt=1.0e-10)
     assert split_run_result.steps == 2
-    assert np.isclose(split_run_result.final_time, 2.0e-10)
+    assert np.isclose(split_run_result.final_time, 2.0e-10, **_TOL_ROUNDOFF)
     assert np.all(np.isfinite(split_run_result.y))
 
     phase_params = dict(no_source_params)
@@ -159,6 +169,7 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         phase_result.time,
         [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert list(phase_result.phase) == [
         "pre_breakdown",
@@ -170,18 +181,22 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         phase_result.phase_elapsed,
         [0.0, 0.0, 1.0e-10, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_result.phase_cathode_enabled,
         [0.0, 0.0, 0.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_result.phase_gas_puff_enabled,
         [0.0, 0.0, 0.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_result.phase_floating,
         [0.0, 0.0, 0.0, 1.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     phase_summary = summarize_result(phase_result)
     assert phase_summary.phase_counts == {
@@ -207,6 +222,7 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         phase_capped_result.time,
         [0.0, 1.0e-10, 3.0e-10, 4.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert list(phase_capped_result.phase) == [
         "pre_breakdown",
@@ -217,6 +233,7 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         phase_capped_result.phase_elapsed,
         [0.0, 0.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
 
     phase_cathode_flags = dict(flags)
@@ -226,38 +243,47 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         phase_cathode_result.phase_cathode_enabled,
         [1.0, 1.0, 1.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_cathode_result.cathode_diagnostics["configured"],
         [1.0, 1.0, 1.0, 1.0, 1.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_cathode_result.cathode_diagnostics["phase_enabled"],
         [1.0, 1.0, 1.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_cathode_result.cathode_diagnostics["rhs_enabled"],
         [1.0, 1.0, 1.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_cathode_result.cathode_diagnostics["solve_enabled"],
         [1.0, 1.0, 1.0, 1.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_cathode_result.cathode_diagnostics["floating"],
         [0.0, 0.0, 0.0, 1.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_cathode_result.cathode_diagnostics["has_solution"],
         [1.0, 1.0, 1.0, 1.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_cathode_result.rhs_terms["cathode_surface_loss"]["n"][3:],
         0.0,
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         phase_cathode_result.rhs_terms["beam_ionization_birth"]["n"][3:],
         0.0,
+        **_TOL_ROUNDOFF,
     )
 
     breakdown_params = dict(phase_params)
@@ -271,15 +297,18 @@ def _case_breakdown_retry_near_vacuum(
     assert np.isclose(
         breakdown_sim.next_phase_boundary_after(0.0),
         1.0e-10,
+        **_TOL_ROUNDOFF,
     )
     assert np.isclose(
         breakdown_sim.next_phase_boundary_after(1.0e-10),
         2.0e-10,
+        **_TOL_ROUNDOFF,
     )
     breakdown_result = breakdown_sim.run(t_end=5.0e-10, dt=1.0e-10)
     assert np.allclose(
         breakdown_result.time,
         [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert list(breakdown_result.phase) == [
         "pre_breakdown",
@@ -292,22 +321,27 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         breakdown_result.phase_elapsed,
         [0.0, 0.0, 0.0, 1.0e-10, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         breakdown_result.phase_cathode_enabled,
         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         breakdown_result.phase_gas_puff_enabled,
         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         breakdown_result.phase_floating,
         [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         breakdown_result.phase_events["time"],
         [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert list(breakdown_result.phase_events["phase"]) == [
         "pre_breakdown",
@@ -367,6 +401,7 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         breakdown_capped_result.time,
         [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert list(breakdown_capped_result.phase) == [
         "pre_breakdown",
@@ -378,10 +413,12 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         breakdown_capped_result.phase_elapsed,
         [0.0, 0.0, 0.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         breakdown_capped_result.phase_events["time"],
         [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+        **_TOL_ROUNDOFF,
     )
 
     breakdown_mid_sim = LAPDSim1D(breakdown_params, flags)
@@ -390,6 +427,7 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         breakdown_mid_result.phase_events["time"],
         [1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert list(breakdown_mid_result.phase_events["phase"]) == [
         "breakdown",
@@ -417,6 +455,7 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         breakdown_cathode_result.phase_cathode_enabled,
         [1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
 
     current_phase_params = dict(no_source_params)
@@ -440,21 +479,36 @@ def _case_breakdown_retry_near_vacuum(
         neutral_prebreakdown_flags,
     )
     neutral_prebreakdown_result = neutral_prebreakdown_sim.run(dt=1.0e-10)
-    assert np.isclose(neutral_prebreakdown_result.final_time, 6.0e-10)
+    # Unadjudicated: these three times are of order 1e-10 s, so atol=1e-8
+    # admits any value; the run's times differ from the expected ones by one
+    # to two 1e-10 s steps.
+    assert np.isclose(
+        neutral_prebreakdown_result.final_time, 6.0e-10, **_TOL_UNADJUDICATED
+    )
     assert np.isclose(
         neutral_prebreakdown_result.t_prebreakdown_trigger,
         2.0e-10,
+        **_TOL_UNADJUDICATED,
     )
-    assert np.isclose(neutral_prebreakdown_result.t_breakdown_trigger, 3.0e-10)
+    assert np.isclose(
+        neutral_prebreakdown_result.t_breakdown_trigger,
+        3.0e-10,
+        **_TOL_UNADJUDICATED,
+    )
     assert list(neutral_prebreakdown_result.phase[:2]) == [
         "neutral_prebreakdown",
         "neutral_prebreakdown",
     ]
-    assert np.allclose(neutral_prebreakdown_result.phase_cathode_enabled[:2], 0.0)
-    assert np.allclose(neutral_prebreakdown_result.phase_gas_puff_enabled[:2], 1.0)
+    assert np.allclose(
+        neutral_prebreakdown_result.phase_cathode_enabled[:2], 0.0, **_TOL_ROUNDOFF,
+    )
+    assert np.allclose(
+        neutral_prebreakdown_result.phase_gas_puff_enabled[:2], 1.0, **_TOL_ROUNDOFF,
+    )
     assert np.allclose(
         neutral_prebreakdown_result.n[1],
         neutral_prebreakdown_result.n[0],
+        **_TOL_ROUNDOFF,
     )
     dynamic_current_phase_sim = LAPDSim1D(current_phase_params, current_phase_flags)
     dynamic_progress_snapshots = []
@@ -464,27 +518,38 @@ def _case_breakdown_retry_near_vacuum(
         progress_tracker=dynamic_progress_snapshots.append,
         progress_interval_s=1.0,
     )
-    assert np.isclose(dynamic_current_phase_result.final_time, 5.0e-10)
-    assert np.isclose(dynamic_current_phase_result.t_breakdown_trigger, 2.0e-10)
+    assert np.isclose(dynamic_current_phase_result.final_time, 5.0e-10, **_TOL_ROUNDOFF)
+    assert np.isclose(
+        dynamic_current_phase_result.t_breakdown_trigger, 2.0e-10, **_TOL_ROUNDOFF,
+    )
     assert len(dynamic_progress_snapshots) == 3
     assert np.isclose(
         dynamic_progress_snapshots[0].t_end,
         dynamic_current_phase_initial_t_end,
+        **_TOL_ROUNDOFF,
     )
-    assert np.isclose(dynamic_progress_snapshots[1].time, 2.0e-10)
-    assert np.isclose(dynamic_progress_snapshots[1].t_end, 5.0e-10)
-    assert np.isclose(dynamic_progress_snapshots[-1].fraction, 1.0)
+    assert np.isclose(dynamic_progress_snapshots[1].time, 2.0e-10, **_TOL_ROUNDOFF)
+    assert np.isclose(dynamic_progress_snapshots[1].t_end, 5.0e-10, **_TOL_ROUNDOFF)
+    assert np.isclose(dynamic_progress_snapshots[-1].fraction, 1.0, **_TOL_ROUNDOFF)
     assert np.allclose(
         dynamic_current_phase_result.phase_events["time"],
         [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+        **_TOL_ROUNDOFF,
     )
-    assert np.isclose(current_phase_sim._t_prebreakdown_trigger, 1.0e-10)
-    assert np.isclose(current_phase_sim._t_breakdown_trigger, 2.0e-10)
-    assert np.isclose(current_phase_result.t_prebreakdown_trigger, 1.0e-10)
-    assert np.isclose(current_phase_result.t_breakdown_trigger, 2.0e-10)
+    assert np.isclose(
+        current_phase_sim._t_prebreakdown_trigger, 1.0e-10, **_TOL_ROUNDOFF,
+    )
+    assert np.isclose(current_phase_sim._t_breakdown_trigger, 2.0e-10, **_TOL_ROUNDOFF)
+    assert np.isclose(
+        current_phase_result.t_prebreakdown_trigger, 1.0e-10, **_TOL_ROUNDOFF,
+    )
+    assert np.isclose(
+        current_phase_result.t_breakdown_trigger, 2.0e-10, **_TOL_ROUNDOFF,
+    )
     assert np.allclose(
         current_phase_result.time,
         [0.0, 1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
+        **_TOL_ROUNDOFF,
     )
     # t_breakdown / t_breakdown_ms / time_since_breakdown /
     # time_ms_since_breakdown were retired _sim3 aliases: a copy of
@@ -503,14 +568,17 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         current_phase_result.phase_elapsed,
         [0.0, 0.0, 0.0, 1.0e-10, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         current_phase_result.phase_cathode_enabled,
         [1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         current_phase_result.phase_floating,
         [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     # Sample 0 is the PRE-BREAKDOWN solve, whose net current is zero by
     # construction, so what is stored there is the residual of the root the
@@ -552,23 +620,28 @@ def _case_breakdown_retry_near_vacuum(
     assert np.allclose(
         current_phase_result.phase_events["time"],
         [0.0, 1.0e-10, 2.0e-10, 4.0e-10, 5.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         current_phase_result.current_trigger_samples["time"],
         [1.0e-10, 2.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         current_phase_result.current_trigger_samples["I_tot"],
         current_phase_result.cathode_diagnostics["source_I_tot"][1:3],
+        **_TOL_ROUNDOFF,
     )
     assert current_phase_summary.current_trigger_sample_count == 2
     assert np.isclose(
         current_phase_summary.last_current_trigger_sample["time"],
         current_phase_result.current_trigger_samples["time"][-1],
+        **_TOL_ROUNDOFF,
     )
     assert np.isclose(
         current_phase_summary.last_current_trigger_sample["I_tot"],
         current_phase_result.current_trigger_samples["I_tot"][-1],
+        **_TOL_ROUNDOFF,
     )
     assert list(current_phase_result.phase_events["phase"]) == [
         "pre_breakdown",
@@ -605,10 +678,12 @@ def _case_breakdown_retry_near_vacuum(
     assert np.isclose(
         interpolated_current_phase_result.t_prebreakdown_trigger,
         1.0e-10,
+        **_TOL_ROUNDOFF,
     )
     assert np.isclose(
         interpolated_current_phase_result.t_breakdown_trigger,
         expected_breakdown_time,
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         interpolated_current_phase_result.phase_events["time"],
@@ -621,6 +696,7 @@ def _case_breakdown_retry_near_vacuum(
             + current_phase_params["tau_discharge"]
             + current_phase_params["tau_afterglow"],
         ],
+        **_TOL_ROUNDOFF,
     )
     with tempfile.TemporaryDirectory() as tmpdir:
         current_phase_output = current_phase_sim.save_result(
@@ -628,24 +704,32 @@ def _case_breakdown_retry_near_vacuum(
             current_phase_result,
         )
         with h5py.File(current_phase_output, "r") as h5:
-            assert np.isclose(h5.attrs["t_prebreakdown_trigger"], 1.0e-10)
-            assert np.isclose(h5.attrs["t_breakdown_trigger"], 2.0e-10)
+            assert np.isclose(
+                h5.attrs["t_prebreakdown_trigger"], 1.0e-10, **_TOL_ROUNDOFF,
+            )
+            assert np.isclose(h5.attrs["t_breakdown_trigger"], 2.0e-10, **_TOL_ROUNDOFF)
             assert h5["phase_events/time"].shape == (5,)
             assert h5["current_trigger_samples/time"].shape == (2,)
             assert h5["current_trigger_samples/I_tot"].shape == (2,)
         loaded_current_phase = load_result_hdf5(current_phase_output)
-        assert np.isclose(loaded_current_phase.t_prebreakdown_trigger, 1.0e-10)
-        assert np.isclose(loaded_current_phase.t_breakdown_trigger, 2.0e-10)
+        assert np.isclose(
+            loaded_current_phase.t_prebreakdown_trigger, 1.0e-10, **_TOL_ROUNDOFF,
+        )
+        assert np.isclose(
+            loaded_current_phase.t_breakdown_trigger, 2.0e-10, **_TOL_ROUNDOFF,
+        )
         # Same four retired aliases as on the run path; the trigger they were
         # derived from is asserted on the line above, on both the raw HDF5
         # attribute and the loaded result.
         assert np.allclose(
             loaded_current_phase.time,
             current_phase_result.time,
+            **_TOL_ROUNDOFF,
         )
         assert np.allclose(
             loaded_current_phase.phase_events["time"],
             current_phase_result.phase_events["time"],
+            **_TOL_ROUNDOFF,
         )
         assert np.all(
             loaded_current_phase.phase_events["phase"]
@@ -658,10 +742,12 @@ def _case_breakdown_retry_near_vacuum(
         assert np.allclose(
             loaded_current_phase.current_trigger_samples["time"],
             current_phase_result.current_trigger_samples["time"],
+            **_TOL_ROUNDOFF,
         )
         assert np.allclose(
             loaded_current_phase.current_trigger_samples["I_tot"],
             current_phase_result.current_trigger_samples["I_tot"],
+            **_TOL_ROUNDOFF,
         )
 
     direct_current_phase_params = dict(current_phase_params)
@@ -675,12 +761,17 @@ def _case_breakdown_retry_near_vacuum(
         dt=1.0e-10,
     )
     assert direct_current_phase_sim._t_prebreakdown_trigger is None
-    assert np.isclose(direct_current_phase_sim._t_breakdown_trigger, 1.0e-10)
+    assert np.isclose(
+        direct_current_phase_sim._t_breakdown_trigger, 1.0e-10, **_TOL_ROUNDOFF,
+    )
     assert np.isnan(direct_current_phase_result.t_prebreakdown_trigger)
-    assert np.isclose(direct_current_phase_result.t_breakdown_trigger, 1.0e-10)
+    assert np.isclose(
+        direct_current_phase_result.t_breakdown_trigger, 1.0e-10, **_TOL_ROUNDOFF,
+    )
     assert np.allclose(
         direct_current_phase_result.phase_events["time"],
         [0.0, 1.0e-10, 3.0e-10, 4.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert list(direct_current_phase_result.phase_events["phase"]) == [
         "pre_breakdown",
@@ -730,14 +821,19 @@ def _case_current_phase_raise_on_timeout(
     except BreakdownError as exc:
         assert "plasma failed to break down" in str(exc)
         assert exc.phase == "pre_breakdown"
-        assert np.isclose(exc.time, failed_current_phase_params["tau_prebreakdown"])
+        assert np.isclose(
+            exc.time, failed_current_phase_params["tau_prebreakdown"], **_TOL_ROUNDOFF,
+        )
         assert np.isfinite(exc.I_tot)
         assert exc.I_tot < failed_current_phase_params["I_prebreakdown"]
-        assert np.isclose(exc.threshold, failed_current_phase_params["I_prebreakdown"])
+        assert np.isclose(
+            exc.threshold, failed_current_phase_params["I_prebreakdown"], **_TOL_ROUNDOFF,
+        )
         assert exc.threshold_name == "I_prebreakdown"
         assert np.isclose(
             exc.tau_prebreakdown,
             failed_current_phase_params["tau_prebreakdown"],
+            **_TOL_ROUNDOFF,
         )
         assert exc.details == {
             "phase": exc.phase,
@@ -747,12 +843,13 @@ def _case_current_phase_raise_on_timeout(
             "threshold_name": exc.threshold_name,
             "tau_prebreakdown": exc.tau_prebreakdown,
         }
-        assert np.allclose(exc.phase_events["time"], [0.0])
+        assert np.allclose(exc.phase_events["time"], [0.0], **_TOL_ROUNDOFF)
         assert list(exc.phase_events["phase"]) == ["pre_breakdown"]
         assert list(exc.phase_events["reason"]) == ["initial"]
         assert np.allclose(
             exc.current_trigger_samples["time"],
             [1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
+            **_TOL_ROUNDOFF,
         )
         assert exc.current_trigger_samples["I_tot"].shape == (5,)
         assert np.all(np.isfinite(exc.current_trigger_samples["I_tot"]))
@@ -773,11 +870,15 @@ def _case_current_phase_raise_on_timeout(
     except BreakdownError as exc:
         assert "plasma failed to reach breakdown current" in str(exc)
         assert exc.phase == "breakdown"
-        assert np.isclose(exc.time, failed_breakdown_phase_params["tau_prebreakdown"])
+        assert np.isclose(
+            exc.time, failed_breakdown_phase_params["tau_prebreakdown"], **_TOL_ROUNDOFF,
+        )
         assert exc.I_tot > 0.0
-        assert np.isclose(exc.threshold, failed_breakdown_phase_params["I_breakdown"])
+        assert np.isclose(
+            exc.threshold, failed_breakdown_phase_params["I_breakdown"], **_TOL_ROUNDOFF,
+        )
         assert exc.threshold_name == "I_breakdown"
-        assert np.allclose(exc.phase_events["time"], [0.0, 1.0e-10])
+        assert np.allclose(exc.phase_events["time"], [0.0, 1.0e-10], **_TOL_ROUNDOFF)
         assert list(exc.phase_events["phase"]) == [
             "pre_breakdown",
             "breakdown",
@@ -789,6 +890,7 @@ def _case_current_phase_raise_on_timeout(
         assert np.allclose(
             exc.current_trigger_samples["time"],
             [1.0e-10, 2.0e-10, 3.0e-10, 4.0e-10, 5.0e-10],
+            **_TOL_ROUNDOFF,
         )
         assert exc.current_trigger_samples["I_tot"].shape == (5,)
         assert np.all(np.isfinite(exc.current_trigger_samples["I_tot"]))
@@ -934,6 +1036,7 @@ def _case_ignition_failure_diagnostics(
         stall_trip,
         IGNITION_STALL_WINDOW_S + IGNITION_RATE_WINDOW_S,
         atol=2.0e-5,
+        rtol=1e-12,
     ), stall_trip
     # Disarming clears the buffer, so a window can never straddle beam-off.
     straddle_monitor = IgnitionMonitor()
@@ -963,7 +1066,7 @@ def _case_ignition_failure_diagnostics(
     timeout_params["I_breakdown"] = 1.0e30
     timeout_params["tau_prebreakdown"] = 3.0e-10
     timeout_sim = LAPDSim1D(timeout_params, current_phase_flags)
-    assert np.isclose(timeout_sim.default_t_end(), 6.0e-10)
+    assert np.isclose(timeout_sim.default_t_end(), 6.0e-10, **_TOL_ROUNDOFF)
     with warnings.catch_warnings(record=True) as timeout_warnings:
         warnings.simplefilter("always")
         timeout_result = timeout_sim.run(dt=1.0e-10)
@@ -974,7 +1077,7 @@ def _case_ignition_failure_diagnostics(
     ), [str(entry.message) for entry in timeout_warnings]
     # It is a real phase transition, not an exception: the run winds down
     # through the ordinary afterglow and STOPS at abort + tau_afterglow.
-    assert np.isclose(timeout_result.final_time, 4.0e-10)
+    assert np.isclose(timeout_result.final_time, 4.0e-10, **_TOL_ROUNDOFF)
     assert list(timeout_result.phase_events["reason"]) == [
         "initial",
         "prebreakdown_timeout",
@@ -986,7 +1089,8 @@ def _case_ignition_failure_diagnostics(
         "post_afterglow",
     ]
     assert np.allclose(
-        timeout_result.phase_events["time"], [0.0, 3.0e-10, 4.0e-10]
+        timeout_result.phase_events["time"], [0.0, 3.0e-10, 4.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert "main_discharge" not in set(timeout_result.phase)
     assert list(timeout_result.phase) == [
@@ -1004,12 +1108,15 @@ def _case_ignition_failure_diagnostics(
     # post_afterglow -- the ordinary end-of-discharge switch state.
     assert np.array_equal(timeout_result.phase_floating, [0.0, 0.0, 0.0, 1.0, 0.0])
     assert timeout_result.ignition_abort["reason"] == "prebreakdown_timeout"
-    assert np.isclose(timeout_result.ignition_abort["time_s"], 3.0e-10)
+    assert np.isclose(timeout_result.ignition_abort["time_s"], 3.0e-10, **_TOL_ROUNDOFF)
     assert np.isclose(
-        timeout_result.ignition_abort["window_s"], IGNITION_STALL_WINDOW_S
+        timeout_result.ignition_abort["window_s"], IGNITION_STALL_WINDOW_S,
+        **_TOL_ROUNDOFF,
     )
     assert timeout_result.ignition_abort["threshold_name"] == "I_prebreakdown"
-    assert np.isclose(timeout_result.ignition_abort["threshold_A"], 1.0e30)
+    assert np.isclose(
+        timeout_result.ignition_abort["threshold_A"], 1.0e30, **_TOL_ROUNDOFF,
+    )
     for power_key in (
         "P_beam_W",
         "P_conduction_W",
@@ -1038,7 +1145,9 @@ def _case_ignition_failure_diagnostics(
         _save_result_hdf5_ignition(ignition_path, timeout_result)
         loaded_timeout = load_result_hdf5(ignition_path)
         assert loaded_timeout.ignition_abort["reason"] == "prebreakdown_timeout"
-        assert np.isclose(loaded_timeout.ignition_abort["time_s"], 3.0e-10)
+        assert np.isclose(
+            loaded_timeout.ignition_abort["time_s"], 3.0e-10, **_TOL_ROUNDOFF,
+        )
         assert set(loaded_timeout.ignition_diagnostics) == set(
             IGNITION_DIAGNOSTIC_FIELDS
         )
@@ -1115,7 +1224,8 @@ def _case_non_ignition_guards(
         # The accepted-step cap is deterministic: it trips ON the capped step.
         if budget_key == "ignition_accepted_step_cap":
             assert np.isclose(
-                budget_result.ignition_abort["time_s"], 3.0e-10
+                budget_result.ignition_abort["time_s"], 3.0e-10,
+                **_TOL_ROUNDOFF,
             ), budget_result.ignition_abort["time_s"]
             assert budget_result.ignition_abort["accepted_steps"] == 3.0
     # Misconfiguration is loud, and at CONSTRUCTION -- not hours into the very
@@ -1180,7 +1290,9 @@ def _case_non_ignition_guards(
                 f"{caller} must refuse to score a non-ignited run"
             )
         ignited_origin = origin_fn(direct_current_phase_result)
-        assert np.isclose(ignited_origin, 1.0e-10), (caller, ignited_origin)
+        assert np.isclose(
+            ignited_origin, 1.0e-10, **_TOL_ROUNDOFF,
+        ), (caller, ignited_origin)
 
     # Scorer hard-fail (scripts), stage (iii): a run whose trace ends before
     # the decay window closes must RAISE, not have the window quietly clipped
@@ -1257,10 +1369,12 @@ def _case_non_ignition_guards(
     assert np.allclose(
         neutral_phase_result.phase_gas_puff_enabled,
         [0.0, 0.0, 0.0, 0.0, 0.0],
+        **_TOL_ROUNDOFF,
     )
     assert np.allclose(
         neutral_phase_result.phase_events["time"],
         [0.0, 2.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert list(neutral_phase_result.phase_events["phase"]) == [
         "equilibrium_puff",
@@ -1291,14 +1405,15 @@ def _case_non_ignition_guards(
         neutral_phase_run_params,
         neutral_phase_run_flags,
     )
-    assert np.isclose(neutral_cycles_sim.default_t_end(), 1.0e-9)
+    assert np.isclose(neutral_cycles_sim.default_t_end(), 1.0e-9, **_TOL_ROUNDOFF)
     neutral_cycles_sim.start_simulation(dt=1.0e-9)
     neutral_cycles_result = neutral_cycles_sim.get_results()
     assert neutral_cycles_result.steps == 4
-    assert np.isclose(neutral_cycles_result.final_time, 1.0e-9)
+    assert np.isclose(neutral_cycles_result.final_time, 1.0e-9, **_TOL_ROUNDOFF)
     assert np.allclose(
         neutral_cycles_result.time,
         [0.0, 2.0e-10, 5.0e-10, 7.0e-10, 1.0e-9],
+        **_TOL_ROUNDOFF,
     )
     assert [diag.step_cap for diag in neutral_cycles_result.diagnostics] == [
         "phase_boundary",
@@ -1325,9 +1440,13 @@ def _case_non_ignition_guards(
     assert equilibration_result is equilibration_sim.get_neutral_equilibration_results()
     assert equilibration_result.neutral_equilibration_summary is equilibration_summary
     assert equilibration_summary.cycles == 2
-    assert np.isclose(equilibration_summary.final_time, 1.0e-9)
-    assert np.isclose(equilibration_summary.mean_nn, np.mean(equilibration_result.nn[-1]))
-    assert np.isclose(equilibration_summary.std_nn, np.std(equilibration_result.nn[-1]))
+    assert np.isclose(equilibration_summary.final_time, 1.0e-9, **_TOL_ROUNDOFF)
+    assert np.isclose(
+        equilibration_summary.mean_nn, np.mean(equilibration_result.nn[-1]), **_TOL_ROUNDOFF,
+    )
+    assert np.isclose(
+        equilibration_summary.std_nn, np.std(equilibration_result.nn[-1]), **_TOL_ROUNDOFF,
+    )
     assert not hasattr(equilibration_result, "neutral_equilibration")
 
     launch_flags = dict(equilibration_flags)
@@ -1335,12 +1454,13 @@ def _case_non_ignition_guards(
     launch_sim = LAPDSim1D(launch_params, launch_flags)
     launch_sim.start_simulation(t_end=2.0e-10, dt=1.0e-10)
     launch_result = launch_sim.get_results()
-    assert np.isclose(launch_result.final_time, 2.0e-10)
+    assert np.isclose(launch_result.final_time, 2.0e-10, **_TOL_ROUNDOFF)
     assert hasattr(launch_result, "neutral_equilibration")
     assert launch_result.neutral_equilibration_summary.cycles == 2
     assert np.allclose(
         launch_result.nn[0],
         launch_result.neutral_equilibration.nn[-1],
+        **_TOL_ROUNDOFF,
     )
     neutral_phase_capped_sim = LAPDSim1D(
         neutral_phase_run_params,
@@ -1354,6 +1474,7 @@ def _case_non_ignition_guards(
     assert np.allclose(
         neutral_phase_capped_result.time,
         [0.0, 2.0e-10, 5.0e-10, 6.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert list(neutral_phase_capped_result.phase) == [
         "equilibrium_puff",
@@ -1364,6 +1485,7 @@ def _case_non_ignition_guards(
     assert np.allclose(
         neutral_phase_capped_result.phase_events["time"],
         [0.0, 2.0e-10, 5.0e-10],
+        **_TOL_ROUNDOFF,
     )
     assert list(neutral_phase_capped_result.phase_events["phase"]) == [
         "equilibrium_puff",
