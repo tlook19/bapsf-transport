@@ -3368,8 +3368,8 @@ def _case_ionization_birth_neutral_temperature():
             _nb_hot = (_nb_Tn > _nb_sim.floors["Ti"]) & (_nb_S > 0.0)
             if _nb_term_name in ("ionization_birth", "beam_ionization_birth"):
                 # The bulk and beam channels are exercised: they have births
-                # in gas hotter than the ion floor. (This state has no
-                # puff-local births, so that channel's mask is empty.)
+                # in gas hotter than the ion floor. (The puff-local channel
+                # is a permanent zero row, so its mask is always empty.)
                 assert _nb_hot.any(), (_nb_birth, _nb_term_name)
             if _nb_birth == "neutral":
                 # (b) THE PAIR CLOSES. Booked at the neutral temperature the
