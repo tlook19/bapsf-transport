@@ -55,6 +55,7 @@ from cablp.solvers._sim1d.physics.sources import (
 )
 
 from ._harness import (
+    _TOL_ROUNDOFF,
     _base_config,
     _base_sim,
     _case,
@@ -229,10 +230,10 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
             atol=0.0,
         ), (_neg_name, _neg_delta)
 
-    assert np.allclose(source_rhs.n, 0.0)
-    assert np.allclose(source_rhs.M, 0.0)
-    assert np.allclose(source_rhs.Ee, 0.0)
-    assert np.allclose(source_rhs.Ei, 0.0)
+    assert np.allclose(source_rhs.n, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(source_rhs.M, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(source_rhs.Ee, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(source_rhs.Ei, 0.0, **_TOL_ROUNDOFF)
 
     disabled_params = dict(params)
     disabled_params["gas_puff_enabled"] = False
@@ -246,7 +247,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         disabled_source.Ee,
         disabled_source.Ei,
     ):
-        assert np.allclose(values, 0.0, atol=1e-20)
+        assert np.allclose(values, 0.0, atol=1e-20, rtol=1e-12)
 
     reaction_rhs = sim.reaction_rhs()
     for values in (
@@ -267,6 +268,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         _zone_particle_rate(reaction_rhs, geom),
         0.0,
         atol=reaction_inventory_tol,
+        rtol=1e-12,
     )
     reaction_terms = sim.reaction_rhs_terms()
     assert set(reaction_terms) == {
@@ -281,9 +283,10 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
             _zone_particle_rate(term, geom),
             0.0,
             atol=reaction_inventory_tol,
+            rtol=1e-12,
         )
         reaction_term_sum = reaction_term_sum + pack_state(term)
-    assert np.allclose(reaction_term_sum, pack_state(reaction_rhs))
+    assert np.allclose(reaction_term_sum, pack_state(reaction_rhs), **_TOL_ROUNDOFF)
     recomb_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
         nn=state.nn,
@@ -323,7 +326,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         for field_name in STATE_NAMES_1D:
             assert np.all(np.isfinite(getattr(term, field_name)))
         ramp_flux_sum = ramp_flux_sum + pack_state(term)
-    assert np.allclose(ramp_flux_sum, pack_state(ramp_rhs))
+    assert np.allclose(ramp_flux_sum, pack_state(ramp_rhs), **_TOL_ROUNDOFF)
 
     nn_ramp_state = conservative_from_primitives(
         n=state.n,
@@ -343,12 +346,13 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     )
     inventory_tol = 1e-12 * np.sum(np.abs(inventory_terms))
     assert np.isclose(
-        _zone_particle_rate(nn_ramp_rhs, geom), 0.0, atol=inventory_tol
+        _zone_particle_rate(nn_ramp_rhs, geom), 0.0, atol=inventory_tol,
+        rtol=1e-12,
     )
-    assert np.allclose(nn_ramp_rhs.n, 0.0)
-    assert np.allclose(nn_ramp_rhs.M, 0.0)
-    assert np.allclose(nn_ramp_rhs.Ee, 0.0)
-    assert np.allclose(nn_ramp_rhs.Ei, 0.0)
+    assert np.allclose(nn_ramp_rhs.n, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(nn_ramp_rhs.M, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(nn_ramp_rhs.Ee, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(nn_ramp_rhs.Ei, 0.0, **_TOL_ROUNDOFF)
 
     nn_ramp_dt = sim.suggest_timestep(y=pack_state(nn_ramp_state))
     assert np.isfinite(nn_ramp_dt.dt_neutral_exchange)
@@ -400,7 +404,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     hot_e_exchange = sim.energy_exchange_rhs(state=hot_e_state)
     assert np.all(hot_e_exchange.Ee < 0.0)
     assert np.all(hot_e_exchange.Ei > 0.0)
-    assert np.allclose(hot_e_exchange.Ee + hot_e_exchange.Ei, 0.0)
+    assert np.allclose(hot_e_exchange.Ee + hot_e_exchange.Ei, 0.0, **_TOL_ROUNDOFF)
     hot_e_dt = sim.suggest_timestep(y=pack_state(hot_e_state))
     assert np.isfinite(hot_e_dt.dt_energy_exchange)
 
@@ -416,7 +420,7 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     hot_i_exchange = sim.energy_exchange_rhs(state=hot_i_state)
     assert np.all(hot_i_exchange.Ee > 0.0)
     assert np.all(hot_i_exchange.Ei < 0.0)
-    assert np.allclose(hot_i_exchange.Ee + hot_i_exchange.Ei, 0.0)
+    assert np.allclose(hot_i_exchange.Ee + hot_i_exchange.Ei, 0.0, **_TOL_ROUNDOFF)
 
     equal_temp_state = conservative_from_primitives(
         n=np.full(geom.cells, params["ne0"]),
@@ -428,8 +432,8 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         ion_mass_g=sim.ion_mass_g,
     )
     equal_temp_exchange = sim.energy_exchange_rhs(state=equal_temp_state)
-    assert np.allclose(equal_temp_exchange.Ee, 0.0, atol=1e-30)
-    assert np.allclose(equal_temp_exchange.Ei, 0.0, atol=1e-30)
+    assert np.allclose(equal_temp_exchange.Ee, 0.0, atol=1e-30, rtol=1e-12)
+    assert np.allclose(equal_temp_exchange.Ei, 0.0, atol=1e-30, rtol=1e-12)
     cooling_state = conservative_from_primitives(
         n=np.full(geom.cells, 1.0e12),
         nn=np.full(geom.cells, 1.0e12),
@@ -449,15 +453,15 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
     cooling_term_sum = np.zeros_like(pack_state(cooling_rhs))
     for term in cooling_terms.values():
         cooling_term_sum = cooling_term_sum + pack_state(term)
-    assert np.allclose(cooling_term_sum, pack_state(cooling_rhs))
+    assert np.allclose(cooling_term_sum, pack_state(cooling_rhs), **_TOL_ROUNDOFF)
     assert np.any(cooling_terms["ionization_energy_cost"].Ee < 0.0)
     assert np.any(cooling_terms["electron_ion_cooling"].Ee < 0.0)
     assert np.any(cooling_terms["electron_neutral_cooling"].Ee < 0.0)
     assert np.all(cooling_rhs.Ee < 0.0)
-    assert np.allclose(cooling_rhs.n, 0.0)
-    assert np.allclose(cooling_rhs.nn, 0.0)
-    assert np.allclose(cooling_rhs.M, 0.0)
-    assert np.allclose(cooling_rhs.Ei, 0.0)
+    assert np.allclose(cooling_rhs.n, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cooling_rhs.nn, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cooling_rhs.M, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(cooling_rhs.Ei, 0.0, **_TOL_ROUNDOFF)
     cooling_dt = sim.suggest_timestep(y=pack_state(cooling_state))
     assert np.isfinite(cooling_dt.dt_electron_cooling)
 
@@ -475,7 +479,9 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         b_ionization_energy_cost=0.0,
         ionization_energy_cost=True,
     )
-    assert np.allclose(costless_terms["ionization_energy_cost"].Ee, 0.0)
+    assert np.allclose(
+        costless_terms["ionization_energy_cost"].Ee, 0.0, **_TOL_ROUNDOFF,
+    )
     assert np.all(cooling_terms["ionization_energy_cost"].Ee < 0.0)
     for _cool_name in ("electron_ion_cooling", "electron_neutral_cooling"):
         assert np.array_equal(
@@ -502,10 +508,10 @@ def _case_gas_puff_diagnostics_and_fluid_operators(
         Tn_fit=params["Tn_fit"],
     )
     assert np.all(hot_ion_cx.Ei < 0.0)
-    assert np.allclose(hot_ion_cx.n, 0.0)
-    assert np.allclose(hot_ion_cx.nn, 0.0)
-    assert np.allclose(hot_ion_cx.M, 0.0)
-    assert np.allclose(hot_ion_cx.Ee, 0.0)
+    assert np.allclose(hot_ion_cx.n, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(hot_ion_cx.nn, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(hot_ion_cx.M, 0.0, **_TOL_ROUNDOFF)
+    assert np.allclose(hot_ion_cx.Ee, 0.0, **_TOL_ROUNDOFF)
     hot_ion_cx_dt = sim.suggest_timestep(
         y=pack_state(
             ConservativeState1D(
@@ -569,7 +575,7 @@ def _case_equilibration_puff_duty(
     duty_on = float(
         np.sum(np.diff(duty_times)[duty_phases[:-1] == "equilibrium_puff"])
     )
-    assert np.isclose(duty_on, 2.0 * 1.0e-10, rtol=1e-12), duty_on
+    assert np.isclose(duty_on, 2.0 * 1.0e-10, rtol=1e-12, atol=0.0), duty_on
     # Same assertion where the period DOES divide the step: 1e-10 windows on a
     # 5e-10 cycle stepped at exactly 1e-10 must not lose or gain a step either.
     duty_div_params = dict(duty_params)
@@ -580,7 +586,7 @@ def _case_equilibration_puff_duty(
     duty_div_on = float(
         np.sum(np.diff(duty_div_times)[duty_div_phases[:-1] == "equilibrium_puff"])
     )
-    assert np.isclose(duty_div_on, 2.0 * 1.0e-10, rtol=1e-12), duty_div_on
+    assert np.isclose(duty_div_on, 2.0 * 1.0e-10, rtol=1e-12, atol=0.0), duty_div_on
 
 
 # --------------------------------------------------------------------
@@ -639,7 +645,9 @@ def _case_equilibration_puff_width(
     )
     assert puffw_phase_sim.phase_at_time(0.5e-10) == "equilibrium_puff"
     assert puffw_phase_sim.phase_at_time(1.0e-10) == "equilibrium_off"
-    assert np.isclose(puffw_phase_sim.next_phase_boundary_after(0.0), 1.0e-10)
+    assert np.isclose(
+        puffw_phase_sim.next_phase_boundary_after(0.0), 1.0e-10, **_TOL_ROUNDOFF,
+    )
     puffw_phase_result = puffw_phase_sim.run(t_end=4.0e-10, dt=1.0e-10)
     assert list(puffw_phase_result.phase) == [
         "equilibrium_puff",
@@ -915,6 +923,7 @@ def _case_neutral_momentum_sources(
         neutral_wind_velocity(mn_state, knob_floors, knob_mass),
         0.3 * knob_u,
         rtol=1e-14,
+        atol=0.0,
     )
     assert np.all(
         neutral_wind_velocity(knob_state, knob_floors, knob_mass) == 0.0
@@ -929,7 +938,8 @@ def _case_neutral_momentum_sources(
     )
     mn_vbar = np.sqrt(8.0 * 0.1 * ev_to_erg / (np.pi * knob_mass))
     assert np.allclose(
-        mn_wall.M_n, -mn_state.M_n * mn_vbar / knob_Rm, rtol=1e-14
+        mn_wall.M_n, -mn_state.M_n * mn_vbar / knob_Rm, rtol=1e-14,
+        atol=0.0,
     )
     for mn_field in STATE_NAMES_1D:
         assert np.all(getattr(mn_wall, mn_field) == 0.0)
@@ -962,16 +972,19 @@ def _case_neutral_momentum_sources(
             mn_term.M * mn_geom.plasma_volume_cm3,
             -mn_term.M_n * mn_geom.neutral_volume_cm3,
             rtol=1e-12,
+            atol=0.0,
         )
     assert np.allclose(
         mn_reactions["ionization_birth"].M,
         knob_mass * 0.3 * knob_u * mn_reactions["ionization_birth"].n,
         rtol=1e-12,
+        atol=0.0,
     )
     mn_rec = mn_reactions["recombination_rad_loss"]
     mn_u = derive_state(mn_state, knob_floors, knob_mass).u
     assert np.allclose(
-        mn_rec.M, knob_mass * mn_u * mn_rec.n, rtol=1e-12
+        mn_rec.M, knob_mass * mn_u * mn_rec.n, rtol=1e-12,
+        atol=0.0,
     )
     # Without M_n the reaction terms stay 5-field with zero-drift birth.
     assert reaction_rhs_terms(
@@ -1015,6 +1028,7 @@ def _case_neutral_momentum_sources(
         * mn_pump_state.M_n[mn_pump_mask]
         / mn_pump_state.nn[mn_pump_mask],
         rtol=1e-12,
+        atol=0.0,
     )
     # Puff-only sources add cold gas: no momentum contribution at all.
     assert np.all(
@@ -1056,8 +1070,8 @@ def _case_neutral_momentum_sources(
         mn_path = Path(mn_dir) / "mn_smoke.h5"
         mn_sim.save_result(mn_path, mn_result)
         mn_loaded = load_result_hdf5(mn_path)
-        assert np.allclose(mn_loaded.M_n, mn_result.M_n)
-        assert np.allclose(mn_loaded.u_n, mn_result.u_n)
+        assert np.allclose(mn_loaded.M_n, mn_result.M_n, **_TOL_ROUNDOFF)
+        assert np.allclose(mn_loaded.u_n, mn_result.u_n, **_TOL_ROUNDOFF)
 
     # Plasma-phase end-to-end: with a flowing plasma the collision operator
     # pumps the wind up from zero through the full step machinery (explicit
@@ -1111,7 +1125,8 @@ def _case_neutral_two_zone_particle_channel(mn_plasma_flags, mn_plasma_params):
     assert p2z_sim.rhs().size == 6 * p2z_sim.geometry.cells
     p2z_Vc, p2z_Va = neutral_zone_volumes(p2z_sim.geometry)
     assert np.allclose(
-        p2z_Vc + p2z_Va, p2z_sim.geometry.neutral_volume_cm3, rtol=1e-13
+        p2z_Vc + p2z_Va, p2z_sim.geometry.neutral_volume_cm3, rtol=1e-13,
+        atol=0.0,
     )
     # Conductance arithmetic against the closed forms.
     p2z_vth = neutral_thermal_speed(
@@ -1130,6 +1145,7 @@ def _case_neutral_two_zone_particle_channel(mn_plasma_flags, mn_plasma_params):
         * p2z_geom.Rp_cm[p2z_mid]
         * p2z_geom.length_cm[p2z_mid],
         rtol=1e-13,
+        atol=0.0,
     )
     p2z_cc, p2z_ca = two_zone_knudsen_coefficients(
         p2z_geom, float(p2z_params.get("Tn_K", 300.0)), p2z_sim.mu
@@ -1149,6 +1165,7 @@ def _case_neutral_two_zone_particle_channel(mn_plasma_flags, mn_plasma_params):
         )
         / p2z_geom.center_distance_cm[p2z_mid],
         rtol=1e-13,
+        atol=0.0,
     )
     p2z_ann_area = (
         p2z_geom.neutral_area_cm2 - p2z_geom.plasma_area_cm2
@@ -1161,6 +1178,7 @@ def _case_neutral_two_zone_particle_channel(mn_plasma_flags, mn_plasma_params):
         * min(p2z_ann_area[p2z_mid], p2z_ann_area[p2z_mid + 1])
         / p2z_geom.center_distance_cm[p2z_mid],
         rtol=1e-13,
+        atol=0.0,
     )
     # Detailed balance: the uniform initial state gives exactly zero for
     # both exchange terms.
@@ -1229,7 +1247,7 @@ def _case_neutral_two_zone_particle_channel(mn_plasma_flags, mn_plasma_params):
     p2z_inv1 = float(
         (p2z_next.nn * p2z_eq_Vc + p2z_next.nn_a * p2z_eq_Va).sum()
     )
-    assert np.isclose(p2z_inv1 - p2z_inv0, p2z_dt * p2z_inflow, rtol=1e-9)
+    assert np.isclose(p2z_inv1 - p2z_inv0, p2z_dt * p2z_inflow, rtol=1e-9, atol=0.0)
     # Plasma-phase e2e through the full step machinery, two-zone alone and
     # combined with the evolved wind (7-field state).
     for _ in range(5):
@@ -1308,7 +1326,7 @@ def _case_neutral_wind_advection(
     mw_expected = np.zeros(mw_cells)
     mw_expected[:-1] -= mw_flux / mw_geom.neutral_volume_cm3[:-1]
     mw_expected[1:] += mw_flux / mw_geom.neutral_volume_cm3[1:]
-    assert np.allclose(mw_adv.nn, mw_expected, rtol=1e-14)
+    assert np.allclose(mw_adv.nn, mw_expected, rtol=1e-14, atol=0.0)
     # Particle inventory closes (to summation rounding): the ends are
     # walls, not sinks.
     mw_nn_scale = np.max(np.abs(mw_adv.nn * mw_geom.neutral_volume_cm3))
@@ -1323,6 +1341,7 @@ def _case_neutral_wind_advection(
         np.sum(mw_adv.M_n * mw_geom.neutral_volume_cm3),
         -mw_end_sink,
         rtol=1e-12,
+        atol=0.0,
     )
     # A uniform field under a uniform wind does not change in the interior
     # (pure translation); only the end cells feel the walls.
@@ -1385,6 +1404,7 @@ def _case_neutral_wind_advection(
         ),
         0.4 * 30.0 / mw_un,
         rtol=1e-14,
+        atol=0.0,
     )
     mw_diag = mn_plasma_sim.suggest_timestep()
     assert np.isfinite(mw_diag.dt_neutral_wind)
@@ -1445,10 +1465,11 @@ def _case_gas_puff_orifice_profile():
     assert orf_expected.tobytes() == orf_row.tobytes()
     # exact inflow conservation, same bar as the other distributed profiles
     assert np.isclose(
-        np.sum(orf_row * orf_geom.neutral_volume_cm3), orf_total_in, rtol=1e-12
+        np.sum(orf_row * orf_geom.neutral_volume_cm3), orf_total_in, rtol=1e-12,
+        atol=0.0,
     )
     assert np.all(orf_row >= 0.0)
-    assert np.isclose(orf_ref_row.sum(), 1.0, rtol=1e-12)
+    assert np.isclose(orf_ref_row.sum(), 1.0, rtol=1e-12, atol=0.0)
     # the row is run-constant and memoised; a second call must return the same
     # values, not a re-derivation that could drift
     orf_again = gas_puff_rate_profile(
@@ -1714,6 +1735,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
             mesh_diff[mesh_hit],
             -abs(mesh_un) * 3.0e3 * mesh_state.M_n[mesh_hit] / 2.0e5,
             rtol=1e-13,
+            atol=0.0,
         )
         # The sink always relaxes M_n toward zero.
         assert mesh_diff[mesh_hit] * mesh_state.M_n[mesh_hit] < 0.0
@@ -1730,6 +1752,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
             np.asarray(jet_geom.anode_face_indices, dtype=int)
         ] * jet_eta / jet_T,
         rtol=1e-13,
+        atol=0.0,
     )
 
     # Surface-debit sensitivity arm: power_balance receives (1 - R_E) * P_i
@@ -1742,6 +1765,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         jet_debit_sim._cathode_surface_ion_retention,
         1.0 - float(jet_params.get("cathode_jet_R_E", 0.2)),
         rtol=1e-13,
+        atol=0.0,
     )
 
     # Reflected-energy CONVENTION. The debit above is written in the TRIM
@@ -1869,6 +1893,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
             1.0 - jet_en_sim._cathode_surface_ion_retention,
             jet_RE,
             rtol=1e-13,
+            atol=0.0,
         )
         # The term itself is the excess over the wall credit the generic
         # surface booking already granted, on the cathode cells alone.
@@ -2020,7 +2045,7 @@ def _case_cathode_jet_hot_carrier():
     hc_led = hc_on._jet_carrier_diagnostics
     hc_launched = float(np.sum(hc_launch))
     assert hc_launched > 0.0
-    assert np.isclose(hc_led["launch_per_s"], hc_launched, rtol=1e-13)
+    assert np.isclose(hc_led["launch_per_s"], hc_launched, rtol=1e-13, atol=0.0)
 
     # (i) the cathode cell's nn rebirth <-> the launch rate
     assert np.isclose(
@@ -2174,6 +2199,7 @@ def _case_cathode_jet_hot_carrier():
         hc_led["u_dM_ion_total_W"],
         hc_led["u_dM_partner_exchange_W"] + hc_led["u_dM_jet_ionization_W"],
         rtol=1e-12,
+        atol=0.0,
     )
     # Q_mix is a squared magnitude summed over births: never negative, and
     # strictly positive wherever the beam deposited anything at all.
@@ -2215,6 +2241,7 @@ def _case_square_gas_puff_waveform(m3_params):
     assert np.isclose(
         sq_sim._effective_gas_puff_sccm(time=sq_t0 + 5e-3)[0], sq_Sgp,
         rtol=1e-6,
+        atol=0.0,
     )
     # Emulate a triggered breakdown to exercise the close anchor: the flow
     # still runs at S_gp late in the drive, decays through the close lag,
@@ -2226,6 +2253,7 @@ def _case_square_gas_puff_waveform(m3_params):
     assert np.isclose(
         sq_sim._effective_gas_puff_sccm(time=sq_end - 2e-3)[0], sq_Sgp,
         rtol=1e-6,
+        atol=0.0,
     )
     sq_mid_close = sq_sim._effective_gas_puff_sccm(
         time=sq_end + float(sq_sim._input_dict.get("gas_puff_close_lag_s", 5e-4))
