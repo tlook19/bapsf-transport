@@ -737,7 +737,13 @@ the previous accepted step's loop current has fallen to $1$ A or below, or that
 step's step-integrated $V_\text{dis}$ is non-positive. Both readings are of the
 last ACCEPTED step, so the phase a step runs under is fixed before the step is
 attempted and no rejected attempt can move it; the loop current is set to
-exactly zero at the hand-off. An open circuit is solved as the CURRENT-DRIVEN
+exactly zero at the hand-off. The tail can end on the voltage criterion at a
+loop current well above 1 A, and the inductor's stored energy
+$\tfrac12LI^2$ at the hand-off leaves the model there, booked by no plasma or
+electrode row. It is recorded instead: the cathode diagnostics carry
+`circuit_handoff_I_A`, the loop current on entry to the most recent hand-off
+that dropped one, and `circuit_handoff_dropped_inductor_J`, the run's
+cumulative dropped energy. An open circuit is solved as the CURRENT-DRIVEN
 form at $I_\text{tot}=0$ — the same monotone root at the same tolerances,
 returning the same electrode power split — so no discretization changes across
 the hand-off and the electrode terms are the same formulas evaluated at zero

@@ -239,6 +239,7 @@ _CASE_ORDER = (
     "floor-ledger-stage-weights",
     "heat-clip-booked-in-floor-ledger",
     "cathode-surface-book-closes",
+    "circuit-handoff-dropped-inductor-energy",
 )
 
 

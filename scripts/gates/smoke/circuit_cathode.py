@@ -3726,3 +3726,47 @@ def _case_cathode_surface_book_closes():
     assert cold._cathode_Ts_K == 300.0, cold._cathode_Ts_K
     assert increments["clamp"] > 0.0, increments
     assert abs(stored - signed) <= budget, (stored, signed, budget)
+
+
+# ----------------------------------------------------------------------
+# circuit-handoff-dropped-inductor-energy
+# ----------------------------------------------------------------------
+@_case("circuit-handoff-dropped-inductor-energy")
+def _case_circuit_handoff_dropped_inductor_energy():
+    # The first open-circuit step sets the loop current to zero and drops
+    # the inductor's stored energy. The saved circuit diagnostics record the
+    # loop current on entry to that step and 0.5*L*I^2, hand-computed here
+    # from the loop current read before the step. A 2 us scheduled
+    # discharge hands off within a few steps, at tens of amperes.
+    params, flags = _anode_sink_config()
+    params["tau_discharge"] = 2.0e-6
+    params["tau_afterglow"] = 1.0e-3
+    sim = LAPDSim1D(params, flags)
+    L_H = float(params["L_parasitic_H"])
+    assert L_H > 0.0, L_H
+    I_entry = None
+    for _ in range(200):
+        I_before = float(sim._circuit_I_loop)
+        sim.advance_one_step()
+        if I_before != 0.0 and sim._circuit_I_loop == 0.0:
+            I_entry = I_before
+            break
+    assert I_entry is not None and I_entry > 1.0, I_entry
+    expected_J = 0.5 * L_H * I_entry * I_entry
+    saved = sim._cathode_diagnostic_snapshot()
+    assert saved["circuit_handoff_I_A"] == I_entry, (
+        saved["circuit_handoff_I_A"], I_entry,
+    )
+    # Roundoff: I**2 against I*I.
+    assert np.isclose(
+        saved["circuit_handoff_dropped_inductor_J"], expected_J,
+        **_TOL_ROUNDOFF,
+    ), (saved["circuit_handoff_dropped_inductor_J"], expected_J)
+    # Later open-circuit steps enter at zero current and drop nothing.
+    sim.advance_one_step()
+    assert sim._circuit_I_loop == 0.0
+    again = sim._cathode_diagnostic_snapshot()
+    assert (
+        again["circuit_handoff_dropped_inductor_J"]
+        == saved["circuit_handoff_dropped_inductor_J"]
+    )

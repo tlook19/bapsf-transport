@@ -2151,6 +2151,13 @@ class LAPDSim1D:
         # (time, integral) pair at the previous trajectory save anchors it.
         self._circuit_V_dis_time_integral = 0.0
         self._circuit_V_dis_prev_save = None
+        # The open-circuit hand-off sets the loop current to zero, and the
+        # inductor's stored energy 0.5*L*I^2 at that instant leaves the model
+        # unbooked by any plasma or electrode row. Recorded, not booked: the
+        # loop current on entry to the most recent hand-off that dropped one
+        # [A] (0.0 while none has), and the run-cumulative energy dropped [J].
+        self._circuit_handoff_I_A = 0.0
+        self._circuit_handoff_dropped_J = 0.0
 
     def _init_cathode_surface_state(self):
         """Arm the evolving cathode surface state.
@@ -5046,7 +5053,18 @@ class LAPDSim1D:
             time=step_start_time
         )
         if not step_phase["solve_enabled"] or step_phase["floating"]:
-            # Open circuit: no loop; the stored inductor energy is dropped.
+            # Open circuit: no loop; the stored inductor energy is dropped,
+            # and recorded (only a step entering with a nonzero loop current,
+            # the first open-circuit step after a driven or tail phase, drops
+            # any).
+            if self._circuit_I_loop != 0.0:
+                I_dropped = float(self._circuit_I_loop)
+                self._circuit_handoff_I_A = I_dropped
+                self._circuit_handoff_dropped_J += (
+                    0.5
+                    * float(self._input_dict.get("L_parasitic_H"))
+                    * I_dropped**2
+                )
             self._circuit_I_loop = 0.0
             self._circuit_V_dis_step = 0.0
             # An open circuit carries no measured discharge either, so the
@@ -5331,6 +5349,12 @@ class LAPDSim1D:
         circuit["V_dis_prev_save_integral"] = (
             None if prev_save is None else float(prev_save[1])
         )
+        # The hand-off record, outside the strict inventory so a payload
+        # written before it existed still loads (see the loader).
+        circuit["handoff_I_A"] = float(self._circuit_handoff_I_A)
+        circuit["handoff_dropped_inductor_J"] = float(
+            self._circuit_handoff_dropped_J
+        )
         triggers = {
             name: getattr(self, name) for name in self._RESTART_TRIGGER_ATTRS
         }
@@ -5551,6 +5575,12 @@ class LAPDSim1D:
         circuit = payload["circuit"]
         for name in self._RESTART_CIRCUIT_ATTRS:
             setattr(self, name, circuit[name])
+        # Defaulted, not required: a payload written before the hand-off
+        # record existed resumes with none recorded.
+        self._circuit_handoff_I_A = float(circuit.get("handoff_I_A", 0.0))
+        self._circuit_handoff_dropped_J = float(
+            circuit.get("handoff_dropped_inductor_J", 0.0)
+        )
         prev_save_t = circuit["V_dis_prev_save_t"]
         self._circuit_V_dis_prev_save = (
             None
@@ -8545,8 +8575,7 @@ class LAPDSim1D:
         # circuit. Both are read off the LAST ACCEPTED step, which is the
         # only circuit state a phase decision may consult:
         #
-        #   I_prev <= 1 A          -- the current has decayed to ~0.03% of
-        #                             peak, carrying negligible stored energy.
+        #   I_prev <= 1 A          -- the current has decayed to 1 A or below.
         #   V_dis_step <= 0        -- the device voltage the loop integrated
         #                             has turned non-positive, i.e. the load
         #                             would have to DRIVE the loop to keep the
@@ -8566,6 +8595,12 @@ class LAPDSim1D:
         # nor the freewheel diode's forward drop, each of which is larger and
         # of the opposite sign, so it is an artifact of what the loop model
         # omits rather than a prediction.
+        #
+        # Neither condition bounds the current at the hand-off: the tail can
+        # end on the second while the loop still carries well over 1 A. The
+        # inductor energy 0.5*L*I^2 that the hand-off drops is recorded in
+        # the circuit diagnostics (circuit_handoff_I_A,
+        # circuit_handoff_dropped_inductor_J), not booked.
         inductive_tail = (
             configured
             and floating
@@ -10286,6 +10321,14 @@ class LAPDSim1D:
             # snapshot cadence (and on pre-fix files).
             "circuit_V_dis_dt_integral": float(
                 self._circuit_V_dis_time_integral
+            ),
+            # The open-circuit hand-off's dropped inductor energy, as of this
+            # save: the loop current on entry to the most recent hand-off
+            # that dropped one [A] (0.0 while none has) and the cumulative
+            # 0.5*L*I^2 dropped [J], which no plasma or electrode row books.
+            "circuit_handoff_I_A": float(self._circuit_handoff_I_A),
+            "circuit_handoff_dropped_inductor_J": float(
+                self._circuit_handoff_dropped_J
             ),
             # Cumulative surface energy ledger [J]. The heater/ion/rad/emis/
             # cond/clamp rows are booked by the power-balance warming update;
