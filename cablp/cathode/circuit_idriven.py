@@ -249,6 +249,7 @@ def solve_idriven(
     anode_gap_walker_fraction: float = 0.0,
     anode_balance_probe: bool = False,
     primary_return_coefficient: float = 0.0,
+    cathode_ion_removal_W: float = 0.0,
 ) -> SolverResult:
     """Solve the cathode sheath for an *imposed* loop current.
 
@@ -298,6 +299,14 @@ def solve_idriven(
     ``anode_balance_probe`` marks the circuit advance's bracket probe at the
     lower endpoint ``I = 0``, which keeps the floored endpoint value under
     either booking and is never counted.
+    ``cathode_ion_removal_W`` is the energy per second [W] the plasma fluid
+    removes with the ions it delivers to the cathode face, supplied by the
+    caller (0.0, the default, for a caller with no fluid). It is the cathode
+    ion member of the plasma-thermal book, ``P_cathode_i_thermal``; the ion
+    power the surface receives is ``P_cathode_i = I_i*phi_c`` (the sheath
+    field work, ``P_cathode_i_phi``) plus it. ``phi_c`` is referenced to the
+    sampled cell, so the presheath's work on the ions is inside
+    ``I_i*phi_c``.
     ``anode_electron_saturation_A`` is the EXPLICIT electron saturation current
     the mesh wires can draw -- the electron random flux ``n <v_e> / 4`` on the
     wire area the two faces present, ``2 eta A``, at the anode sample's own
@@ -755,9 +764,12 @@ def solve_idriven(
     )
     P_cathode_e_thermal = I_i * (2.0 * T_e) * fe_c
     P_cathode_e_phi = P_cathode_e - P_cathode_e_thermal
-    P_cathode_i = P_ion(phi_c, T_e, I_i)
-    P_cathode_i_thermal = I_i * (T_e / 2.0)
-    P_cathode_i_phi = P_cathode_i - P_cathode_i_thermal
+    # The cathode's ion power: the sheath field work on the collected ions,
+    # phi_c referenced to the sampled cell, plus the energy the fluid itself
+    # removes with them at the face (the caller's ``cathode_ion_removal_W``).
+    P_cathode_i_phi = I_i * phi_c
+    P_cathode_i_thermal = float(cathode_ion_removal_W)
+    P_cathode_i = P_cathode_i_phi + P_cathode_i_thermal
     P_cathode_i_pl = P_ion(phi_c, T_e, I_i_a, pl=True)
     P_anode_e = (
         I_i_a
@@ -940,6 +952,7 @@ def solve_beam_system_idriven(
     tail_anode_coefficient: float = 0.0,
     anode_gap_walker_fraction: float = 0.0,
     primary_return_coefficient: float = 0.0,
+    cathode_ion_removal_W: float = 0.0,
 ) -> BeamResult:
     """Current-driven, single-cathode sheath solve plus its beam arrays.
 
@@ -969,6 +982,7 @@ def solve_beam_system_idriven(
         tail_anode_coefficient=tail_anode_coefficient,
         anode_gap_walker_fraction=anode_gap_walker_fraction,
         primary_return_coefficient=primary_return_coefficient,
+        cathode_ion_removal_W=cathode_ion_removal_W,
     )
     return assemble_beam_arrays(
         result=result,

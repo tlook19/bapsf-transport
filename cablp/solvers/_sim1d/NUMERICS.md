@@ -716,7 +716,13 @@ an accept with no tick and on the fluid neutral route; like the backscatter
 row it is booked on every accepted step and is not linearised), and a `clamp`
 row with the energy the 300 K floor adds when it fires, so
 $C_\text{th}$ times the change in $T_s$ equals the signed sum of the rows to
-round-off over the steps the update runs.
+round-off over the steps the update runs. The ion row is built from two parts:
+$\Delta t\,I_i\phi_c$ of the accepted-state re-solve, and the ion energy the
+characteristic boundary rows removed at the cathode face over the step, each
+explicit stage's removal booked at its SSPRK2 weight $\Delta t/2$ on the
+attempt and committed on acceptance, so a rejected attempt adds nothing. The
+committed removal, divided by $\Delta t$, is handed to the re-solve that step
+and to the next step's stage solves as the circuit's cathode ion member.
 
 The loop current is advanced by an L-stable TR-BDF2 stage split over
 $LdI/dt=V_\text{src}-IxR_\text{comp}-V_\text{dis}(I)$ — the external share

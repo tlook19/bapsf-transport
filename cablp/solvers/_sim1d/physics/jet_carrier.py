@@ -327,6 +327,7 @@ def cathode_jet_carrier_rhs(
     geometry,
     cathode_jet,
     launch_per_s,
+    removal_eV,
     ionization_rate_per_neutral,
     I_ion,
     eta=0.0,
@@ -337,7 +338,10 @@ def cathode_jet_carrier_rhs(
     WITHHELD from its cold rebirth for this carrier -- ``R_N`` times the
     cathode faces' own recycle flux, taken from the same evaluation, so the
     launch here and the withdrawal there are one number rather than two
-    estimates of it.
+    estimates of it. ``removal_eV`` is the per-cell ion energy [eV] the same
+    evaluation's boundary rows remove per ion at the cathode face, the
+    incident energy's fluid part
+    (:func:`~.sources.cathode_face_ion_removal_per_ion_eV`).
 
     ``ionization_rate_per_neutral`` is the per-neutral ionization frequency
     the bulk reaction term is using on this same evaluation, threaded in so
@@ -356,6 +360,7 @@ def cathode_jet_carrier_rhs(
     cells = int(geometry.cells)
     zeros = np.zeros(cells, dtype=float)
     launch = np.asarray(launch_per_s, dtype=float)
+    removal_eV = np.asarray(removal_eV, dtype=float)
     roles = np.asarray(geometry.cell_role)
     absorbing = np.asarray(
         getattr(geometry, "plasma_absorbing", np.zeros(0)), dtype=bool
@@ -368,7 +373,6 @@ def cathode_jet_carrier_rhs(
     )
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     Ti = np.asarray(derived.Ti, dtype=float)
-    Te = np.asarray(derived.Te, dtype=float)
     u_i = np.asarray(derived.u, dtype=float)
     length = np.asarray(geometry.length_cm, dtype=float)
 
@@ -414,7 +418,7 @@ def cathode_jet_carrier_rhs(
         direction = 1.0 if live == face else -1.0
         v_fast = float(
             cathode_jet_backscatter_speed(
-                cathode_jet, float(Te[live]), ion_mass_g
+                cathode_jet, float(removal_eV[live]), ion_mass_g
             )
         )
         if not np.isfinite(v_fast) or v_fast <= 0.0:

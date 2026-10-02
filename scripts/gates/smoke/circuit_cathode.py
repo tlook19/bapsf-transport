@@ -50,6 +50,7 @@ from cablp.solvers._sim1d.physics.neutrals import (
 )
 from cablp.solvers._sim1d.physics.sources import (
     add_state_rhs,
+    cathode_jet_incident_energy_eV,
     velocity_divergence,
 )
 from cablp.solvers._sim1d.results import restart as _restart_mod
@@ -3121,10 +3122,12 @@ def _case_cathode_face_one_ion_current():
 def _case_cathode_jet_incident_power_one_book():
     """The jet's incident power and the surface's ion credit are one book.
 
-    The DVM cathode jet's incident-energy row is the circuit's own per-ion
-    incident energy ``phi_c + Te/2`` on the fluid's delivered count, so the
-    power the surface is debited (``R_E`` of that row) is a share of the very
-    power ``P_cathode_i`` credits it with.
+    The DVM cathode jet's incident-energy row carries, per counted ion, the
+    clamped cathode drop ``phi_c`` plus the ion energy the fluid's own
+    characteristic_boundary rows remove per ion at the cathode face, floored
+    at ``phi_c``; the circuit's ``P_cathode_i`` is ``I_i*phi_c`` plus the
+    removal rate the solver hands it. The surface is debited ``R_E`` of the
+    row.
     """
     _cp_params, _cp_flags = _base_config()
     _cp_params = dict(_cp_params, max_steps_action="stop")
@@ -3137,52 +3140,75 @@ def _case_cathode_jet_incident_power_one_book():
     )
     _cp_row = np.zeros(_cp_sim.geometry.cells, dtype=float)
     _cp_row[_cp_cell] = 1.0
+    _cp_m = float(_cp_sim.ion_mass_g)
 
     def _cp_read():
-        """Return ``(result, Te, per_ion_erg)`` at the current state."""
-        # The electrode sample re-seeded from the current state, so the
-        # circuit and the row read ONE state and the only thing the
-        # comparison can see is the per-ion ENERGY.
+        """Return ``(result, removal_eV, per_ion_erg)`` at the current state.
+
+        ``removal_eV`` is built here from the boundary rows at the cathode
+        live cell, ``(Ei + u M - (m u^2/2) n) / n`` with ``u = M/(m n)`` of the
+        state, in eV.
+        """
         _cp_sim._init_sample_smoothing()
-        _cp_sim.rhs_terms()
+        terms = _cp_sim.rhs_terms()
         solve = _cp_sim._cathode_solve
         assert solve is not None and solve.beam_result is not None
-        der = derive_state(
-            _cp_sim.state, floors=_cp_sim.floors,
-            ion_mass_g=_cp_sim.ion_mass_g,
-        )
+        st = _cp_sim.state
+        b = terms["characteristic_boundary"]
+        u = float(st.M[_cp_cell]) / (_cp_m * float(st.n[_cp_cell]))
+        bn = float(b.n[_cp_cell])
+        assert bn < 0.0, bn
+        removal = (
+            float(b.Ei[_cp_cell]) + u * float(b.M[_cp_cell])
+            - 0.5 * _cp_m * u * u * bn
+        ) / bn / ev_to_erg
         per_ion = float(
             _cp_sim._dvm_cathode_jet_incident_energy_row(
-                _cp_row, _cp_sim.state, solve
+                _cp_row, st, solve, b
             )[_cp_cell]
         )
-        return solve.beam_result.result, float(der.Te[_cp_cell]), per_ion
+        return solve.beam_result.result, removal, per_ion
 
     # (a) AN INVERTED SHEATH accelerates no ion into the surface, so the row
-    # clamps the fall at zero and carries the presheath half-Te alone. The
-    # circuit's own P_cathode_i does NOT clamp -- it is a signed power, and
-    # this is the one state at which the two per-ion numbers differ.
-    _cp_res, _cp_Te, _cp_per_ion = _cp_read()
+    # clamps the fall at zero and carries the fluid's removal per ion alone
+    # (floored at the zero fall).
+    _cp_res, _cp_removal, _cp_per_ion = _cp_read()
     assert _cp_res.phi_c < 0.0, _cp_res.phi_c
+    assert _cp_removal > 0.0, _cp_removal
+    # Roundoff: the same four products and a division in another order.
     assert abs(
-        _cp_per_ion / (0.5 * _cp_Te * ev_to_erg) - 1.0
-    ) <= 1.0e-14, _cp_per_ion
+        _cp_per_ion / (_cp_removal * ev_to_erg) - 1.0
+    ) <= 1.0e-12, (_cp_per_ion, _cp_removal)
 
-    # (b) AT AN ACCELERATING SHEATH the two are ONE number: the row's per-ion
-    # incident energy is exactly P_cathode_i per collected ion.
+    # (b) AT AN ACCELERATING SHEATH the row is phi_c plus the removal per
+    # ion, and the circuit's ion power is I_i*phi_c plus the removal rate
+    # the solver handed the solve; no T_e/2 enters either.
     for _ in range(12):
         _cp_sim.run(t_end=None, dt=None, max_steps=4)
-        _cp_res, _cp_Te, _cp_per_ion = _cp_read()
+        _cp_res, _cp_removal, _cp_per_ion = _cp_read()
         if _cp_res.phi_c > 0.0:
             break
     assert _cp_res.phi_c > 0.0, _cp_res.phi_c
-    _cp_circuit_eV = float(_cp_res.P_cathode_i) / float(_cp_res.I_i)
     assert abs(
-        _cp_circuit_eV / (float(_cp_res.phi_c) + 0.5 * _cp_Te) - 1.0
-    ) <= 1.0e-12, (_cp_circuit_eV, _cp_res.phi_c, _cp_Te)
+        _cp_per_ion
+        / ((float(_cp_res.phi_c) + max(_cp_removal, 0.0)) * ev_to_erg)
+        - 1.0
+    ) <= 1.0e-12, (_cp_per_ion, _cp_res.phi_c, _cp_removal)
+    _cp_lag_W = float(_cp_sim._cathode_ion_removal_W)
+    assert _cp_lag_W != 0.0, _cp_lag_W
+    # Roundoff: one product and one sum, as the circuit forms them.
     assert abs(
-        _cp_per_ion / (_cp_circuit_eV * ev_to_erg) - 1.0
-    ) <= 1.0e-12, (_cp_per_ion, _cp_circuit_eV)
+        float(_cp_res.P_cathode_i)
+        / (float(_cp_res.I_i) * float(_cp_res.phi_c) + _cp_lag_W)
+        - 1.0
+    ) <= 1.0e-15, (_cp_res.P_cathode_i, _cp_res.I_i, _cp_res.phi_c, _cp_lag_W)
+    assert float(_cp_res.P_cathode_i_thermal) == _cp_lag_W
+
+    # (c) THE FLOOR: a removal below zero (a cell flowing away from the face)
+    # delivers the fall alone; a positive one adds to it.
+    assert cathode_jet_incident_energy_eV(5.0, -2.0) == 5.0
+    assert cathode_jet_incident_energy_eV(5.0, 2.0) == 7.0
+    assert cathode_jet_incident_energy_eV(0.0, -1.0) == 0.0
 
     # THE SURFACE DEBIT IS R_E OF THAT BOOKED POWER, exactly. Armed, with a
     # cadence no step of this run reaches, the cathode ledger's backscatter
@@ -3817,6 +3843,120 @@ def _case_cathode_surface_book_closes():
     assert cold._cathode_Ts_K == 300.0, cold._cathode_Ts_K
     assert increments["clamp"] > 0.0, increments
     assert abs(stored - signed) <= budget, (stored, signed, budget)
+
+
+# ----------------------------------------------------------------------
+# cathode-surface-ion-row-two-parts
+# ----------------------------------------------------------------------
+@_case("cathode-surface-ion-row-two-parts")
+def _case_cathode_surface_ion_row_two_parts():
+    # The surface's ion row over accepted steps is the sheath field work,
+    # dt * I_i * phi_c of each step's accepted-state re-solve, plus the ion
+    # energy the plasma fluid removed at the cathode face over the step:
+    # each explicit stage's characteristic_boundary rows at the cathode live
+    # cell, -(Ei + u M - (m u^2 / 2) n) * V_plasma with u = M/(m n) of the
+    # stage state, at the SSPRK2 stage weight dt/2, on accepted attempts
+    # only. Both parts are rebuilt here from what the solver hands its
+    # consumers (the stage rows, the re-solve's I_i and phi_c), not from the
+    # ion row or the solver's tally. No other part enters: in particular no
+    # T_e/2 per ion.
+    from cablp.solvers._sim1d import solver as _solver_mod
+
+    params, flags = _anode_sink_config()
+    # The surface keeps the whole ion power: no fluid jet, so no backscatter
+    # retention factor on the ion row.
+    params["cathode_neutral_jet"] = False
+    params["cathode_jet_surface_debit"] = False
+    params["cathode_jet_energy_convention"] = "legacy"
+    sim = LAPDSim1D(params, flags)
+    assert sim._cathode_surface_ion_retention == 1.0
+    cell = int(absorbing_live_cells_by_role(sim.geometry)["cathode"][0])
+    Vp = float(np.asarray(sim.geometry.plasma_volume_cm3, dtype=float)[cell])
+    mass = float(sim.ion_mass_g)
+    open_stages = []
+    attempts = {}
+    field_J = []
+    removal_J = []
+    real_rhs = sim.rhs
+    real_rhs_terms = sim.rhs_terms
+    real_attempt = sim._attempt_step
+    real_accept = sim._accept_step_attempt
+    real_evaluator = _solver_mod.idriven_result_evaluator
+    inside_rhs = [False]
+
+    def rhs(y=None, **kwargs):
+        inside_rhs[0] = True
+        try:
+            return real_rhs(y, **kwargs)
+        finally:
+            inside_rhs[0] = False
+
+    def rhs_terms(y=None, **kwargs):
+        terms = real_rhs_terms(y=y, **kwargs)
+        if inside_rhs[0]:
+            st = sim.state if y is None else sim._unpack(y)
+            n = float(st.n[cell])
+            u = float(st.M[cell]) / (mass * n)
+            b = terms["characteristic_boundary"]
+            open_stages.append(
+                -(
+                    float(b.Ei[cell])
+                    + u * float(b.M[cell])
+                    - 0.5 * mass * u * u * float(b.n[cell])
+                )
+                * Vp
+            )
+        return terms
+
+    def attempt_step(*args, **kwargs):
+        open_stages.clear()
+        attempt = real_attempt(*args, **kwargs)
+        attempts[id(attempt)] = list(open_stages)
+        return attempt
+
+    def accept(attempt):
+        stages = attempts.pop(id(attempt))
+        removal_J.append(0.5 * float(attempt.dt) * sum(stages) * 1.0e-7)
+        dt_box.append(float(attempt.dt))
+        return real_accept(attempt)
+
+    def evaluator(*args, **kwargs):
+        solve_at = real_evaluator(*args, **kwargs)
+
+        def recorded(I_A):
+            res = solve_at(I_A)
+            field_J.append(dt_box[-1] * float(res.I_i) * float(res.phi_c))
+            return res
+
+        return recorded
+
+    dt_box = []
+    sim.rhs = rhs
+    sim.rhs_terms = rhs_terms
+    sim._attempt_step = attempt_step
+    sim._accept_step_attempt = accept
+    _solver_mod.idriven_result_evaluator = evaluator
+    ion_before = float(sim._cathode_energy_ledger_J["ion"])
+    try:
+        for _ in range(8):
+            sim.advance_one_step()
+    finally:
+        _solver_mod.idriven_result_evaluator = real_evaluator
+    ion_row = float(sim._cathode_energy_ledger_J["ion"]) - ion_before
+    # One re-solve and one removal per accepted step, and both parts live.
+    assert len(field_J) == len(removal_J) == len(dt_box) == 8, (
+        len(field_J), len(removal_J), len(dt_box)
+    )
+    assert sum(field_J) > 0.0 and sum(removal_J) != 0.0, (field_J, removal_J)
+    expected = sum(field_J) + sum(removal_J)
+    # Budget: the solver books dt * (I_i phi_c + E / dt) per step, a
+    # division and a multiplication by dt plus the sums, against the same
+    # parts summed here in another order -- 16 eps of the summed part
+    # magnitudes.
+    budget = 16.0 * np.finfo(float).eps * (
+        sum(abs(v) for v in field_J) + sum(abs(v) for v in removal_J)
+    )
+    assert abs(ion_row - expected) <= budget, (ion_row, expected, budget)
 
 
 # ----------------------------------------------------------------------

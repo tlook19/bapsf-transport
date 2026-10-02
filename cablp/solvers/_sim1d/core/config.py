@@ -890,8 +890,10 @@ def model_mode_defaults():
         the live surface temperature, which is the shipped reading. On, the
         ``neutral_kinetic_dvm_cathode_jet_R_N`` share is instead born as a
         directed volume birth in the cell the recycle was counted into,
-        carrying ``(R_E/R_N)(phi_c + Te/2)`` of kinetic energy per atom -- the
-        ``"total_reflected"`` reading of the reflection coefficients -- and
+        carrying ``(R_E/R_N) E_inc`` of kinetic energy per atom -- the
+        ``"total_reflected"`` reading of the reflection coefficients, with
+        ``E_inc`` the per-ion incident energy (the cathode drop plus the ion
+        energy the fluid removes per ion at the face) -- and
         the remainder keeps the thermal inflow. The energy the share carries
         is DEBITED from the cathode surface's own power balance in the same
         accepted step that counted it, as the named ``backscatter`` row of
@@ -915,7 +917,7 @@ def model_mode_defaults():
         TOTAL reflected energy fraction of that same channel: reflected
         energy over incident energy, summed over all particles. The
         ``R_N`` backscattered atoms carry all of it, so each leaves with
-        ``R_E/R_N`` of the incident ``phi_c + Te/2``, and the cathode surface
+        ``R_E/R_N`` of the incident energy ``E_inc``, and the cathode surface
         is debited exactly ``R_E`` of the ion bombardment energy the same
         particles delivered. Read only when
         ``neutral_kinetic_dvm_cathode_jet`` is on.

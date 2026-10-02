@@ -185,6 +185,8 @@ from .physics.sources import (
     add_state_rhs,
     anode_collection_rhs,
     cathode_jet_backscatter_speed,
+    cathode_face_ion_energy_removal,
+    cathode_face_ion_removal_per_ion_eV,
     cathode_jet_incident_energy_eV,
     characteristic_boundary_rhs,
     ion_neutral_collision_rhs,
@@ -434,7 +436,8 @@ _CATHODE_RESULT_KEYS = (
     # carried under a cathode name.
     "I_i_a",
     # The one-control-surface split (A16): each electrode power splits into the
-    # PLASMA-THERMAL part (2Te per electron, Te/2 per ion -- drawn from the
+    # PLASMA-THERMAL part (2Te per electron; Te/2 per ion at the anode, the
+    # fluid's own face removal at the cathode -- drawn from the
     # plasma thermal store) and the SHEATH-FALL phi part (drawn from the
     # circuit and deposited on the electrode). ``*_thermal + *_phi == P_*`` to
     # machine zero, and the thermal members are what the fluid boundary
@@ -595,6 +598,10 @@ class StepAttempt1D:
     # This attempt's particle-receipt tally (term -> [value, gross]); committed
     # only on accept, so a rejected attempt books nothing.
     receipt_booking: dict | None = None
+    # This attempt's ion energy removed at the cathode face [erg]: the
+    # characteristic boundary rows as applied, summed at the SSPRK2 stage
+    # weights; committed only on accept.
+    cathode_face_removal_erg: float = 0.0
 
 
 def _atomic_rate_domain(result):
@@ -1283,7 +1290,8 @@ class LAPDSim1D:
         # the recycle count accrues on every step, the incident energy only
         # on armed ones -- and the directed share has to be drawn from the
         # armed counts for the per-atom launch energy to be the (R_E/R_N)
-        # (phi_c + Te/2) the channel asserts. Zero here is what makes a fully
+        # times the incident energy the channel asserts. Zero here is what
+        # makes a fully
         # censored tick route its whole stream thermally.
         self._dvm_cathode_jet_count_booked = np.zeros(
             self._geometry.cells, dtype=float
@@ -1857,6 +1865,13 @@ class LAPDSim1D:
         # _attempt_step and dropped in its finally, so a rejected attempt
         # books nothing.
         self._anode_e_sheath_attempt = None
+        # The cathode face's ion energy removal: the open attempt's tally
+        # [erg] and its stage weight [s] (None outside an attempt), and the
+        # last accepted step's removal rate [W], which the circuit books as
+        # the cathode ion member of the plasma-thermal book.
+        self._cathode_face_removal_attempt = None
+        self._cathode_face_removal_weight = 0.0
+        self._cathode_ion_removal_W = 0.0
         # The cathode climb's pair, on the anode pair's discipline: committed
         # on ACCEPTED steps only, ``circuit_booked`` what the circuit solve
         # states, ``realised`` what the implicit substep removed. Both 0.0
@@ -3014,11 +3029,13 @@ class LAPDSim1D:
 
         The band. ``e_max`` is the largest per-atom launch energy the
         CONFIGURATION can ask for. The CATHODE's per-ion arrival energy is
-        ``phi_c + Te/2``, so its ``e_max`` is ``(R_E/R_N)(phi + Te/2)`` at the
-        raw ``cathode_phi_c_cap_V`` -- resolvable here, unlike the circuit's
+        ``phi_c`` plus the ion energy the fluid removes per ion at the face;
+        its ``e_max`` is ``(R_E/R_N)(phi + Te/2)`` at the raw
+        ``cathode_phi_c_cap_V`` -- resolvable here, unlike the circuit's
         tighter ``min(cap, V_avail(I))`` bound, which is current-dependent --
         with the engine's own 10 eV allowance read as the electron
-        temperature, and its ``e_min`` is the ``Te`` floor's own half. The
+        temperature, an allowance for the fluid part rather than a bound on
+        it, and its ``e_min`` is the ``Te`` floor's own half. The
         ANODE's arrival energy is ``phi_a + Ti``, so its band is formed on the
         ion-temperature allowance and the ``Ti`` floor, and it borrows the
         cathode ceiling as a stated allowance rather than as a bound on
@@ -3252,6 +3269,14 @@ class LAPDSim1D:
             engaged=self._dvm_rows_superseded(),
             source_parts=self._receipt_source_parts,
         )
+        if self._cathode_face_removal_attempt is not None:
+            self._cathode_face_removal_attempt += (
+                self._cathode_face_removal_weight
+                * self._cathode_face_removal_rate_erg_s(
+                    terms["characteristic_boundary"],
+                    self.state if y is None else self._unpack(y),
+                )
+            )
         # With optional fields on, the packed RHS must always match the
         # state vector's width, even when no term touched them (pads zeros).
         return pack_state(
@@ -3594,6 +3619,9 @@ class LAPDSim1D:
                     state=state,
                     cathode_solve=cathode_solve,
                     recycle_nn_row=recycle,
+                    removal_eV=self._cathode_face_removal_per_ion_eV(
+                        terms["characteristic_boundary"], state
+                    ),
                 )
             )
         if self._cathode_jet_carrier:
@@ -3602,6 +3630,7 @@ class LAPDSim1D:
                     state=state,
                     cathode_solve=cathode_solve,
                     launch_per_s=carrier_out.get("launch_per_s"),
+                    removal_eV=carrier_out.get("removal_eV"),
                     ionization_rate=ionization_rate_per_neutral,
                 )
             )
@@ -3645,6 +3674,7 @@ class LAPDSim1D:
                             self._dvm_source_rows["cathode_face"],
                             state,
                             cathode_solve,
+                            terms["characteristic_boundary"],
                         )
                     )
                 if self._dvm_anode_jet is not None:
@@ -4103,6 +4133,10 @@ class LAPDSim1D:
         # neutral-only step weight one. Dropped in the ``finally`` below.
         self._receipt.arm_attempt(0.5 * dt)
         receipt_engaged = self._dvm_rows_superseded()
+        # The cathode face's ion energy removal, on the same stage weight and
+        # the same attempt lifetime.
+        self._cathode_face_removal_attempt = 0.0
+        self._cathode_face_removal_weight = 0.5 * dt
         # The implicit heat substeps book their own temperature clip into
         # this same attempt ledger (see operator_split_step); armed here and
         # dropped in the ``finally`` below, so only an accepted attempt's
@@ -4190,6 +4224,9 @@ class LAPDSim1D:
             attempt_electrode_sink = self._anode_e_sheath_attempt
             self._anode_e_sheath_attempt = None
             attempt_receipt = self._receipt.drop_attempt()
+            attempt_cathode_removal = self._cathode_face_removal_attempt
+            self._cathode_face_removal_attempt = None
+            self._cathode_face_removal_weight = 0.0
         return StepAttempt1D(
             y=np.asarray(y_next, dtype=float),
             dt=dt,
@@ -4207,6 +4244,7 @@ class LAPDSim1D:
             ),
             electrode_sink_booking=attempt_electrode_sink,
             receipt_booking=attempt_receipt,
+            cathode_face_removal_erg=float(attempt_cathode_removal or 0.0),
         )
 
     def _implicit_neutral_step(
@@ -4930,6 +4968,16 @@ class LAPDSim1D:
             )
         else:
             self._circuit_I_prev = 0.0
+        # The accepted step's cathode-face ion energy removal, as a rate [W].
+        # Set before the re-solve below, so the surface's ion power on this
+        # step is I_i*phi_c plus exactly what the fluid removed at the face
+        # over it; the next step's stage solves read it one step lagged.
+        if attempt.dt > 0.0:
+            self._cathode_ion_removal_W = (
+                float(attempt.cathode_face_removal_erg)
+                * 1.0e-7
+                / float(attempt.dt)
+            )
         # Shared honest accepted-state solve for the surface updates
         # (power_balance warming and the coverage model): one re-solve at
         # the accepted state, the step's frozen I_loop, and the CURRENT
@@ -5467,6 +5515,9 @@ class LAPDSim1D:
         # inventory above so a payload taken before the cull existed stays
         # readable: it restores to 0.0, which is what an unarmed run carries.
         cathode["_cathode_tail_anode_I"] = float(self._cathode_tail_anode_I)
+        # The last accepted step's cathode-face ion energy removal rate, the
+        # circuit's lagged cathode ion member.
+        cathode["_cathode_ion_removal_W"] = float(self._cathode_ion_removal_W)
         # The emission-fraction booking's lagged pair, presence-gated on the
         # selector so a default payload keeps exactly its historical keys.
         if (
@@ -5674,6 +5725,9 @@ class LAPDSim1D:
             setattr(self, name, _copy_cache_value(cathode[name]))
         self._cathode_tail_anode_I = float(
             cathode.get("_cathode_tail_anode_I", 0.0)
+        )
+        self._cathode_ion_removal_W = float(
+            cathode.get("_cathode_ion_removal_W", 0.0)
         )
         self._cathode_tail_anode_coef = float(
             cathode.get("_cathode_tail_anode_coef", 0.0)
@@ -7168,6 +7222,7 @@ class LAPDSim1D:
                     state=state,
                     cathode_solve=cathode_solve,
                     launch_per_s=carrier_out.get("launch_per_s"),
+                    removal_eV=carrier_out.get("removal_eV"),
                     ionization_rate=np.asarray(
                         reaction["ionization_birth"].n, dtype=float
                     )
@@ -7444,7 +7499,7 @@ class LAPDSim1D:
         )
 
     def cathode_jet_neutral_energy_rhs(
-        self, state, cathode_solve, recycle_nn_row
+        self, state, cathode_solve, recycle_nn_row, removal_eV
     ):
         """Return the ``En`` the cathode jet's recycled atoms actually carry.
 
@@ -7463,7 +7518,10 @@ class LAPDSim1D:
         with ``v_back`` from
         :func:`~cablp.solvers._sim1d.physics.sources.cathode_jet_backscatter_speed`
         -- the same one spec the momentum booking reads, so the energy here and
-        the momentum there describe atoms moving at one speed.
+        the momentum there describe atoms moving at one speed. ``removal_eV``
+        is the per-cell ion energy the boundary term removes per ion at the
+        cathode face (:meth:`_cathode_face_removal_per_ion_eV`), the incident
+        energy's fluid part.
 
         The generic surface booking has already credited every recycled atom
         the wall energy ``(3/2) k T_wall``, so this term supplies only the
@@ -7477,9 +7535,10 @@ class LAPDSim1D:
 
         WHICH ``R_E`` LEAVES depends on ``cathode_jet_energy_convention``, and
         only one of the two settings matches that debit. Under
-        ``"total_reflected"`` the backscatter carries ``R_E (phi_c + Ti)`` per
-        RECYCLED particle, exactly the per-particle share the debit takes off
-        the surface. Under ``"legacy"`` it carries ``R_N R_E (phi_c + Ti)``,
+        ``"total_reflected"`` the backscatter carries ``R_E E_inc`` per
+        RECYCLED particle (``E_inc`` the incident energy per ion), exactly the
+        per-particle share the debit takes off the surface. Under
+        ``"legacy"`` it carries ``R_N R_E E_inc``,
         so the ``(1 - R_N) R_E`` remainder is debited from the surface and
         received by nobody.
 
@@ -7513,9 +7572,6 @@ class LAPDSim1D:
         spec = self._cathode_jet_spec(cathode_solve)
         if spec is None:
             return zeros
-        derived = derive_state(
-            state, floors=self._floors, ion_mass_g=self._ion_mass_g
-        )
         roles = np.asarray(self._geometry.cell_role)
         cathode = roles == "cathode"
         if not np.any(cathode):
@@ -7528,7 +7584,7 @@ class LAPDSim1D:
             e_jet = 1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
         else:
             v_back = cathode_jet_backscatter_speed(
-                spec, derived.Te, self._ion_mass_g
+                spec, removal_eV, self._ion_mass_g
             )
             e_jet = R_N * 0.5 * self._ion_mass_g * v_back**2 + (1.0 - R_N) * (
                 1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
@@ -7665,6 +7721,7 @@ class LAPDSim1D:
         state,
         cathode_solve,
         launch_per_s,
+        removal_eV,
         ionization_rate=None,
         cache_diagnostics=True,
     ):
@@ -7677,7 +7734,8 @@ class LAPDSim1D:
         :mod:`~cablp.solvers._sim1d.physics.jet_carrier`.
 
         ``launch_per_s`` is the per-cell rate the boundary term withheld for
-        this carrier on this same evaluation; ``ionization_rate`` is the
+        this carrier on this same evaluation, and ``removal_eV`` the per-ion
+        fluid removal its launch speed was built from; ``ionization_rate`` is the
         per-neutral ionization frequency the bulk reaction term is using, so
         the beam and the bulk cannot disagree about it. The named ledger rows
         land on ``self._jet_carrier_diagnostics`` as a side channel, exactly
@@ -7702,6 +7760,7 @@ class LAPDSim1D:
             geometry=self._geometry,
             cathode_jet=spec,
             launch_per_s=launch_per_s,
+            removal_eV=removal_eV,
             ionization_rate_per_neutral=(
                 np.zeros_like(np.asarray(state.nn, dtype=float))
                 if ionization_rate is None
@@ -8322,14 +8381,18 @@ class LAPDSim1D:
 
         Under ``anode_tail_booking = "emission_fraction"`` the two evaluators
         book the anode exactly as the dispatched solve does, from the same
-        three lagged coefficients. Under ``"lagged_current"`` nothing is
-        passed: both evaluators then book the anode with no tail current
+        three lagged coefficients. Under ``"lagged_current"`` no anode tail
+        input is passed: both evaluators then book the anode with no tail current
         while the dispatched solve reads the lagged one (a standing
         difference of that booking, kept so its trajectories do not move).
+        Both evaluators book the cathode-face ion energy removal rate the
+        dispatched solve books, ``_cathode_ion_removal_W``.
         """
+        removal = dict(cathode_ion_removal_prev_W=self._cathode_ion_removal_W)
         if self._input_dict.get("anode_tail_booking") != "emission_fraction":
-            return {}
+            return removal
         return dict(
+            removal,
             tail_anode_coefficient_prev=self._cathode_tail_anode_coef,
             anode_gap_walker_fraction_prev=(
                 self._cathode_anode_gap_walker_frac
@@ -8368,6 +8431,7 @@ class LAPDSim1D:
             _memo_key_part(self._cathode_tail_anode_coef),
             _memo_key_part(self._cathode_anode_gap_walker_frac),
             _memo_key_part(self._cathode_primary_return_coef),
+            _memo_key_part(self._cathode_ion_removal_W),
             _memo_key_part(self._cathode_x0),
             _memo_key_part(self._cathode_x0_twin),
             _memo_key_part(self._cathode_Ts_K),
@@ -8453,6 +8517,7 @@ class LAPDSim1D:
             primary_return_coefficient_prev=(
                 self._cathode_primary_return_coef
             ),
+            cathode_ion_removal_prev_W=self._cathode_ion_removal_W,
             I_ion=self._I_ion,
             x0=self._cathode_x0,
             x0_twin=self._cathode_x0_twin,
@@ -11312,39 +11377,86 @@ class LAPDSim1D:
             + np.asarray(terms["beam_ionization_birth"].n, dtype=float)
         )
 
+    def _cathode_face_rows(self, boundary, state):
+        """Return the cathode-live cells' boundary rows and cell velocity.
+
+        ``(cells, n, M, Ei, u)``: the live cells of the cathode faces, the
+        characteristic boundary term's particle, momentum and ion-energy rows
+        there, and the cell velocity the boundary operator reads.
+        """
+        cells = np.asarray(self._recycle_cells.get("cathode", ()), dtype=int)
+        u = derive_state(
+            state, floors=self._floors, ion_mass_g=self._ion_mass_g
+        ).u
+        return (
+            cells,
+            np.asarray(boundary.n, dtype=float)[cells],
+            np.asarray(boundary.M, dtype=float)[cells],
+            np.asarray(boundary.Ei, dtype=float)[cells],
+            np.asarray(u, dtype=float)[cells],
+        )
+
+    def _cathode_face_removal_rate_erg_s(self, boundary, state):
+        """Return the ion energy the boundary removes at the cathode [erg/s].
+
+        Summed over the cathode faces' live cells: the characteristic
+        boundary term's ion-energy row plus the kinetic energy its density
+        and momentum rows imply (:func:`cathode_face_ion_energy_removal`),
+        times the plasma volume. Positive for energy leaving; not
+        sign-definite.
+        """
+        cells, n, M, Ei, u = self._cathode_face_rows(boundary, state)
+        if cells.size == 0:
+            return 0.0
+        Vp = np.asarray(self._geometry.plasma_volume_cm3, dtype=float)[cells]
+        return float(
+            np.sum(
+                cathode_face_ion_energy_removal(n, M, Ei, u, self._ion_mass_g)
+                * Vp
+            )
+        )
+
+    def _cathode_face_removal_per_ion_eV(self, boundary, state):
+        """Return the per-cell ion energy removed per ion at the cathode [eV].
+
+        :func:`cathode_face_ion_removal_per_ion_eV` on the cathode faces'
+        live cells, zero on every other cell.
+        """
+        cells, n, M, Ei, u = self._cathode_face_rows(boundary, state)
+        out = np.zeros(self._geometry.cells, dtype=float)
+        out[cells] = cathode_face_ion_removal_per_ion_eV(
+            n, M, Ei, u, self._ion_mass_g
+        )
+        return out
+
     def _dvm_cathode_jet_incident_energy_row(
-        self, cathode_row, state, cathode_solve
+        self, cathode_row, state, cathode_solve, boundary
     ):
         """Return the cathode recycle's INCIDENT ion-energy row [erg/s].
 
-        ``phi_c + Te/2`` per collected ion, clamped at zero, times the counted
-        recycle rate. That is the CIRCUIT's per-ion incident energy -- a Bohm
-        ion enters the sheath with the half-``Te`` directed energy the
-        presheath gave it and falls through the cathode drop
-        (:func:`~cablp.cathode.circuit_common.P_ion`) -- so the power this
-        row books and the power ``P_cathode_i`` credits the surface with are ONE
-        per-ion energy on ONE count, and the backscatter debit taken from
-        this row is the share of the very power the surface was credited.
+        The incident energy per collected ion times the counted recycle rate:
+        ``phi_c`` plus the ion energy the characteristic boundary term
+        ``boundary`` removes per ion at the cathode face, floored at ``phi_c``
+        (:func:`cathode_jet_incident_energy_eV`). That is the per-ion share of
+        the ion power the surface is credited with, so the backscatter debit
+        taken from this row is a share of the very power the surface was
+        credited.
 
         ``phi_c`` comes from the solve THIS evaluation built, clamped at
-        zero exactly as :meth:`_cathode_jet_spec` clamps it. The ``Te``-only
-        branch is reachable only where there is no solve to read: a
-        configuration with cathode coupling unconfigured -- which
+        zero exactly as :meth:`_cathode_jet_spec` clamps it, and is zero where
+        there is no solve to read: a configuration with cathode coupling
+        unconfigured -- which
         :func:`~cablp.solvers._sim1d.core.validation.refuse_dvm_cathode_jet_without_cathode_coupling`
-        now refuses at construction, so it cannot hold for a whole run -- or
-        a driven solve that returned a non-finite sheath potential.
+        refuses at construction, so it cannot hold for a whole run -- or a
+        driven solve that returned a non-finite sheath potential.
 
-        A CONFIGURED run's afterglow does NOT take that branch: it rides the
-        floating cathode solve like every other phase. What that solve
-        returns there is measured, not assumed -- at the 1910 K emitting
-        surface the Richardson current dwarfs the afterglow Bohm current, so
-        the floating output is the EMISSION-DOMINATED one, ``phi_c`` of order
-        zero to slightly inverted, rather than the classical non-emitting
-        ``Lambda * Te``. The channel therefore self-extinguishes in afterglow
-        twice over: by FLUX, since the counted recycle rate follows
-        ``n * Te^1.5``, and by LAUNCH ENERGY, since ``phi_c + Te/2`` falls to
-        the ``Te`` scale on its own. Both limits are the physics, not a
-        fallback path.
+        A CONFIGURED run's afterglow rides the floating cathode solve like
+        every other phase. At the emitting surface the Richardson current
+        dwarfs the afterglow Bohm current, so the floating output is the
+        EMISSION-DOMINATED one, ``phi_c`` of order zero to slightly inverted,
+        rather than the classical non-emitting ``Lambda * Te``; the channel
+        then falls away with the counted recycle rate and with the incident
+        energy.
 
         The row is a RATE because its partner (the counted source row) is,
         and the stage accumulator integrates both over the step at one
@@ -11356,11 +11468,11 @@ class LAPDSim1D:
             candidate = float(cathode_solve.beam_result.result.phi_c)
             if np.isfinite(candidate):
                 phi_c = max(candidate, 0.0)
-        Te = derive_state(
-            state, floors=self._floors, ion_mass_g=self._ion_mass_g
-        ).Te
         per_ion_erg = (
-            cathode_jet_incident_energy_eV(phi_c, Te) * ev_to_erg
+            cathode_jet_incident_energy_eV(
+                phi_c, self._cathode_face_removal_per_ion_eV(boundary, state)
+            )
+            * ev_to_erg
         )
         return np.asarray(cathode_row, dtype=float) * per_ion_erg
 
