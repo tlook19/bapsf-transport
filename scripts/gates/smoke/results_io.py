@@ -60,6 +60,7 @@ from ._harness import (
     _CAPFIX_ESCAPE_KWARGS,
     _CAPFIX_ESCAPE_PLASMA,
     _TOL_ROUNDOFF,
+    _assert_terms_sum_to_total,
     _base_config,
     _base_sim,
     _case,
@@ -285,9 +286,7 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
     # cathode it was a second copy of the block that never carried a number.
     assert "end_regime" not in run_result.cathode_diagnostics
     # Summed over the five base rows; the packed y also carries nn_a.
-    saved_term_sum = np.zeros(
-        (run_result.y.shape[0], len(STATE_NAMES_1D) * geom.cells)
-    )
+    saved_term_rows = []
     for term_name in expected_rhs_terms:
         term_fields = run_result.rhs_terms[term_name]
         for field_name in STATE_NAMES_1D:
@@ -308,15 +307,18 @@ def _case_no_source_run_and_results(expected_rhs_terms, no_source_params):
                 1.0e-7 * term_fields["Ei"],
                 **_TOL_ROUNDOFF,
             )
-        saved_term_sum = saved_term_sum + np.concatenate(
+        saved_term_rows.append(np.concatenate(
             [term_fields[field_name] for field_name in STATE_NAMES_1D],
             axis=1,
-        )
+        ))
     packed_total_rhs = np.concatenate(
         [run_result.total_rhs[field_name] for field_name in STATE_NAMES_1D],
         axis=1,
     )
-    assert np.allclose(saved_term_sum, packed_total_rhs, **_TOL_ROUNDOFF)
+    # Barred by the terms' gross magnitude, not by the total they cancel to.
+    _assert_terms_sum_to_total(
+        saved_term_rows, packed_total_rhs, "saved rhs_terms against total_rhs"
+    )
     assert np.all(np.isfinite(run_result.y))
     assert np.allclose(
         run_result.time, [0.0, 1.0e-10, 2.0e-10, 3.0e-10], **_TOL_ROUNDOFF,

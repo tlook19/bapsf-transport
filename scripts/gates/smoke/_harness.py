@@ -136,6 +136,47 @@ _TOLERANCE_CLASSES = {
 }
 
 
+def _assert_terms_sum_to_total(terms, total, what):
+    """Assert that named terms sum to their total, barred by the terms' size.
+
+    ``terms`` is a sequence of arrays and ``total`` an array or scalar that
+    broadcasts against them. Elementwise, the residual
+    ``|sum(terms) - total|`` must not exceed ``rtol * sum(|term_i|)``, with
+    ``rtol`` the roundoff class's (1e-12).
+
+    The bar scales with the terms' gross magnitude, not with the total: a
+    sum of N float64 terms carries a rounding error of at most
+    ``(N - 1) * eps * sum(|term_i|)`` (eps = 2.2e-16), whatever the order, and
+    the total the code forms by its own order carries the same bound, so
+    ``2 * (N - 1) * eps`` stays below 1e-12 for N up to about 2000 terms.
+    Scaling by ``|total|`` instead demands that accuracy relative to what is
+    left after the terms cancel, which floating point cannot deliver, and
+    demands exact zeros where the total is zero. ``what`` names the
+    comparison in the failure message.
+    """
+    rows = [np.asarray(term, dtype=float) for term in terms]
+    term_sum = np.zeros(np.broadcast_shapes(*(r.shape for r in rows)))
+    gross = np.zeros_like(term_sum)
+    for row in rows:
+        term_sum = term_sum + row
+        gross = gross + np.abs(row)
+    residual = np.abs(term_sum - np.asarray(total, dtype=float))
+    bar = _TOL_ROUNDOFF["rtol"] * gross
+    over = ~(residual <= bar)  # a NaN anywhere fails rather than passes
+    if np.any(over):
+        worst = np.unravel_index(
+            np.argmax(np.where(over, np.nan_to_num(residual - bar, nan=np.inf),
+                               -np.inf)),
+            residual.shape,
+        )
+        raise AssertionError(
+            f"{what}: the terms do not sum to the total at "
+            f"{int(np.count_nonzero(over))} element(s); worst at {worst}: "
+            f"|sum - total| = {residual[worst]:.6e} against the bar "
+            f"{bar[worst]:.6e} = {_TOL_ROUNDOFF['rtol']:g} * sum(|term|)"
+        )
+
+
 def _cov_blank_rhs_term(cells, n_row):
     """Return a fresh 5-row RHS bundle carrying ``n_row`` and zeros elsewhere.
 
