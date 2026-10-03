@@ -107,9 +107,14 @@ WHAT IT CHECKS, per requested stage (default: every stage in
 2. Bound ceiling: an account whose bound exceeds ``CEILING`` times its
    inventory's summand magnitudes at the two saves is CANNOT CERTIFY; a bound
    that loose decides nothing, and the ceiling caps what an inflated gross or
-   step count can buy. A clearing account with no carried debt is held against
-   the inventory magnitudes of its tracked site accounts, or, with none, its
-   entries' summed |net|.
+   step count can buy. A clearing account is always held against the summed
+   inventory magnitudes of its tracked site accounts (the inventoried,
+   tracked accounts on the other side of its non-self entries), or, with none,
+   its entries' summed |net|; a declared carried debt's magnitude is added to
+   that reference but never stands alone, since a debt can be zero over
+   intervals in which large amounts pass through the account. The debt enters
+   the clearing account's closure (check 1) as its inventory either way. The
+   ``CANNOT CERTIFY`` line names the reference used.
 3. Stage total: summed over the stage's tracked inventoried accounts, the
    change equals the entries from accounts outside that set minus the entries
    to them. When every account is tracked this is the sum of the closures of
@@ -752,22 +757,26 @@ def check(path, stages=None, margin=MARGIN, ceiling=CEILING):
             tracked.append(acct)
             inv[acct] = I
             debt = "declared carried debt" if I.summands else "no carried debt"
-            ref, ref_name = None, "inventory magnitude"
-            if not I.summands:
-                # A zero-inventory clearing account has no inventory of its own to
-                # set the ceiling against: use the summed inventory magnitudes of
-                # the tracked site accounts on the other side of its entries. If
-                # every such account is not tracked or external, fall back to the
-                # entries' summed |net|: CANNOT CERTIFY only when the bound exceeds
-                # the ceiling times what the sites declared they moved.
-                sites = {e.debit if e.credit == acct else e.credit for e in sided}
-                sites = [s for s in sites if s in inv and s not in not_tracked and not _is_exchange(s)]
-                if sites:
-                    ref = sum(inv[s].gross[:-1] + inv[s].gross[1:] for s in sites)
-                    ref_name = f"site inventory magnitude ({', '.join(sorted(sites))})"
-                else:
-                    ref = sum(np.abs(e.values) for e in sided) if sided else np.zeros(len(groups))
-                    ref_name = "entries' summed |net| (no tracked site account)"
+            # The ceiling reference of a clearing account is the summed inventory
+            # magnitudes of the tracked site accounts on the other side of its
+            # entries, whether or not it declares a debt: a declared debt can be
+            # zero or tiny over intervals in which large amounts pass through the
+            # account, and on its own it would refuse a closure that holds. The
+            # debt's magnitude is added to that sum but never stands alone. If
+            # every site account is not tracked or external, fall back to the
+            # entries' summed |net| (plus the debt): CANNOT CERTIFY only when the
+            # bound exceeds the ceiling times what the sites declared they moved.
+            sites = {e.debit if e.credit == acct else e.credit for e in sided}
+            sites = [s for s in sites if s in inv and s not in not_tracked and not _is_exchange(s)]
+            if sites:
+                ref = sum(inv[s].gross[:-1] + inv[s].gross[1:] for s in sites)
+                ref_name = f"site inventory magnitude ({', '.join(sorted(sites))})"
+            else:
+                ref = sum(np.abs(e.values) for e in sided) if sided else np.zeros(len(groups))
+                ref_name = "entries' summed |net| (no tracked site account)"
+            if I.summands:
+                ref = ref + I.gross[:-1] + I.gross[1:]
+                ref_name += " plus declared debt magnitude"
             n_fail, over, worst = certify(acct, f"exchange {acct} ({debt}; {sides})", I, touching,
                                           ref, ref_name)
             if n_fail:
@@ -1397,6 +1406,57 @@ def _build_clearing_fallback(path, factor):
                            "neutral_momentum": "not_tracked"})
 
 
+def _build_clearing_zero_debt(path):
+    """A clearing account whose declared carried debt is zero or subnormal while
+    large amounts pass through it.
+
+    10 cells, 4 save intervals of 3 steps, particles only, single-zone
+    neutrals on unit volumes. Each step moves 1e11 per cell from the neutrals
+    (1e16 per cell) to the plasma (1e15 per cell) through
+    ``exchange:ionization``, both legs booking the same amount; every value is
+    an integer below 2**53, so the site inventories close exactly. The
+    declared debt ``state/exchange_ionization`` is 0 at saves 0, 1, 3, 4 and
+    1e-40 at save 2 (a residue left by a cancelled carry), so the clearing
+    closure's residual is at most 1e-40. The clearing bound is
+    4 * count * 2**-53 * gross with count = 3*3 + 4 + 2*(3 + 10 + 1) + 2 + 2
+    = 45 and gross = 2 * 3e12 (+ the debt), about 0.12; against the site
+    inventories (plasma 1e16 + neutrals 1e17 at each of the two saves, ~2.2e17)
+    that is ~5e-19, far under the 1e-9 ceiling, while against the debt alone
+    it is ~1e39 in intervals 1 and 2 (and the zero reference of intervals 0 and
+    3 sets no ratio).
+    """
+    n_cells, S, n_int = 10, 3, 4
+    x = 1e11
+    n0, nn0 = 1e15, 1e16
+    plasma = np.array([n0 + k * S * x for k in range(n_int + 1)])
+    neutral = np.array([nn0 - k * S * x for k in range(n_int + 1)])
+    debt = np.array([0.0, 0.0, 1e-40, 0.0, 0.0])
+    leg = np.full(n_int, S * x * n_cells)
+    time = np.arange(n_int + 1) * 1e-6
+    with h5py.File(path, "w") as f:
+        f.attrs["format"] = "sim1d-hdf5-v1"
+        f.attrs["steps"] = S * n_int
+        f["time"] = time
+        f["n"] = np.repeat(plasma[:, None], n_cells, axis=1)
+        f["nn"] = np.repeat(neutral[:, None], n_cells, axis=1)
+        geo = f.create_group("geometry")
+        geo["plasma_volume_cm3"] = np.ones(n_cells)
+        geo["neutral_volume_cm3"] = np.ones(n_cells)
+        geo["plasma_active"] = np.ones(n_cells, bool)
+        rc = f.create_group("receipt")
+        rc.attrs["schema"] = SCHEMA
+        rc.attrs["cadence"] = "save"
+        rc.attrs["stages_present"] = np.array(["particles"], dtype=object)
+        rc["interval_t0"], rc["interval_t1"] = time[:-1], time[1:]
+        rc["interval_steps"] = np.full(n_int, S, np.int64)
+        rc.create_group("state")["exchange_ionization"] = debt
+        eg = rc.create_group("entries")
+        for term, debit, credit in (("ionization_neutral", "neutral_particles", "exchange:ionization"),
+                                    ("ionization_plasma", "exchange:ionization", "plasma_particles")):
+            _write_entry(eg, term, "particles", debit, credit, leg, leg.copy())
+        _write_census(rc, {"ionization_neutral": "entered", "ionization_plasma": "entered"})
+
+
 def self_test(verbose=False):
     # (name, builder call, requested stages, expected exit, expected failures,
     #  extra expectations). A failure is (kind, name, interval); interval None
@@ -1520,6 +1580,13 @@ def self_test(verbose=False):
         ("clearing ceiling fallback: no tracked site account, inflated signed gross",
          lambda p: _build_clearing_fallback(p, 1e6), None, 1,
          [("bound-ceiling", "momentum/exchange:cx", 0)], {}),
+        # A declared debt of 0 or 1e-40 while 3e12 per interval passes through
+        # the clearing account: the ceiling is held against the site
+        # inventories (bound/reference ~5e-19, see the builder), so the account
+        # closes; a debt-only reference would refuse it at ~1e39.
+        ("clearing account with a zero or subnormal declared debt and large flows",
+         _build_clearing_zero_debt, None, 0, [],
+         {"closed_includes": "particles/exchange:ionization"}),
     ]
     bad = 0
     with tempfile.TemporaryDirectory(prefix="ledger_selftest_") as tmp:
