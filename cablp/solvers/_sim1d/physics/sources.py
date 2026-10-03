@@ -304,29 +304,65 @@ def electrode_sheath_alpha(
 CATHODE_JET_ENERGY_CONVENTIONS = ("legacy", "total_reflected")
 
 
-def cathode_jet_incident_energy_eV(phi_c_V, Te_eV):
+def cathode_face_ion_energy_removal(n_row, M_row, Ei_row, u, ion_mass_g):
+    """Return the ion energy the boundary rows remove [erg cm^-3 s^-1].
+
+    ``n_row``, ``M_row`` and ``Ei_row`` are the particle, momentum and
+    ion-energy rows of the characteristic boundary term at a cell, ``u`` the
+    cell velocity [cm s^-1] and ``ion_mass_g`` the ion mass [g]. The removal
+    is the rate of loss of the ion thermal store plus the kinetic energy the
+    density and momentum rows imply,
+    ``-(Ei_row + u*M_row - (m u^2/2)*n_row)``, positive for energy leaving.
+    It is not sign-definite: where the cell flows away from the face the
+    kinetic part can be negative. Scalar or per-cell.
+    """
+    u = np.asarray(u, dtype=float)
+    return -(
+        np.asarray(Ei_row, dtype=float)
+        + u * np.asarray(M_row, dtype=float)
+        - 0.5 * ion_mass_g * u * u * np.asarray(n_row, dtype=float)
+    )
+
+
+def cathode_face_ion_removal_per_ion_eV(n_row, M_row, Ei_row, u, ion_mass_g):
+    """Return the ion energy the boundary rows remove per ion [eV].
+
+    :func:`cathode_face_ion_energy_removal` divided by the particles the same
+    ``n_row`` removes (``-n_row``), zero where it removes none. Scalar or
+    per-cell; the cell volume cancels.
+    """
+    n_row = np.asarray(n_row, dtype=float)
+    removal = cathode_face_ion_energy_removal(
+        n_row, M_row, Ei_row, u, ion_mass_g
+    )
+    lost = -n_row
+    safe = np.where(lost != 0.0, lost, 1.0)
+    return np.where(lost != 0.0, removal / safe, 0.0) / ev_to_erg
+
+
+def cathode_jet_incident_energy_eV(phi_c_V, removal_eV):
     """Return the per-ion INCIDENT energy [eV] at the cathode face.
 
     THE ONE DEFINITION, read by the fluid jet's launch speed below and by
     the kinetic channel's incident-energy row, so the two arms cannot
     describe ions arriving with different energies.
 
-    ``phi_c + Te/2``, clamped at zero: a Bohm ion enters the sheath with the
-    half-``Te`` directed energy the presheath gave it and then falls through
-    the cathode drop. That sum is exactly the circuit's own per-ion energy
-    (``cablp.cathode.circuit_common.P_ion``), so the power the jet launches
-    and the power ``P_cathode_i`` credits the surface with are one energy on
-    one count.
+    ``phi_c + removal_eV``, floored at ``phi_c``: each ion falls through the
+    cathode drop ``phi_c`` (referenced to the sampled cell, so the presheath
+    is inside it) and brings the energy the fluid removed with it at the face,
+    ``removal_eV`` (:func:`cathode_face_ion_removal_per_ion_eV`). That sum is
+    the per-ion share of the ion power the surface is credited with. The
+    floor binds where the removal is negative (the cell flowing away from the
+    face): the sheath fall is always delivered.
 
-    ``phi_c_V`` is the CLAMPED sheath drop the jet spec carries; ``Te_eV``
-    the local electron temperature, scalar or per-cell.
+    ``phi_c_V`` is the CLAMPED (non-negative) sheath drop the jet spec
+    carries; ``removal_eV`` scalar or per-cell.
     """
-    return np.maximum(
-        float(phi_c_V) + 0.5 * np.asarray(Te_eV, dtype=float), 0.0
-    )
+    phi_c = float(phi_c_V)
+    return np.maximum(phi_c + np.asarray(removal_eV, dtype=float), phi_c)
 
 
-def cathode_jet_backscatter_speed(cathode_jet, Te_eV, ion_mass_g):
+def cathode_jet_backscatter_speed(cathode_jet, removal_eV, ion_mass_g):
     """Return the cathode jet's backscatter launch speed [cm s^-1].
 
     THE ONE SPEC. Every consumer of the backscattered atoms' kinetic energy
@@ -337,18 +373,18 @@ def cathode_jet_backscatter_speed(cathode_jet, Te_eV, ion_mass_g):
     moving at two different speeds.
 
     ``cathode_jet`` is the jet spec dict (``R_N``, ``R_E``, ``phi_c_V``,
-    ``T_s_K``, and optionally ``energy_convention``); ``Te_eV`` is the local
-    electron temperature [eV], scalar or per-cell; ``ion_mass_g`` the ion mass
-    [g]. The incident per-particle energy is
-    :func:`cathode_jet_incident_energy_eV`, the circuit's own ``phi_c + Te/2``
-    -- the SAME number the kinetic channel's incident-energy row reads.
+    ``T_s_K``, and optionally ``energy_convention``); ``removal_eV`` is the
+    ion energy the fluid removes per ion at the cathode face [eV], scalar or
+    per-cell; ``ion_mass_g`` the ion mass [g]. The incident per-particle
+    energy ``E_inc`` is :func:`cathode_jet_incident_energy_eV` -- the SAME
+    number the kinetic channel's incident-energy row reads.
 
     ``energy_convention`` fixes what ``R_E`` means, and therefore how much
     energy one backscattered atom leaves with:
 
     ``"legacy"`` (the default when the key is absent)
         ``R_E`` is read PER BACKSCATTERED PARTICLE:
-        ``v_back = sqrt(2 R_E (phi_c + Te/2)/m)``. Only the ``R_N`` reflected
+        ``v_back = sqrt(2 R_E E_inc/m)``. Only the ``R_N`` reflected
         fraction carries it, so the gas receives ``R_N R_E`` of the incident
         ion power.
     ``"total_reflected"``
@@ -357,7 +393,7 @@ def cathode_jet_backscatter_speed(cathode_jet, Te_eV, ion_mass_g):
         convention :func:`~cablp.solvers._sim1d.solver.LAPDSim1D` debits the
         cathode surface by. The ``R_N`` reflected particles carry all of it,
         so each leaves with ``R_E/R_N`` of the incident energy:
-        ``v_back = sqrt(2 (R_E/R_N)(phi_c + Te/2)/m)`` and the gas receives
+        ``v_back = sqrt(2 (R_E/R_N) E_inc/m)`` and the gas receives
         ``R_E`` of the incident ion power.
 
     Raises ``ValueError`` for any other ``energy_convention`` string.
@@ -376,7 +412,7 @@ def cathode_jet_backscatter_speed(cathode_jet, Te_eV, ion_mass_g):
     return np.sqrt(
         2.0
         * energy_fraction
-        * cathode_jet_incident_energy_eV(cathode_jet["phi_c_V"], Te_eV)
+        * cathode_jet_incident_energy_eV(cathode_jet["phi_c_V"], removal_eV)
         * ev_to_erg
         / ion_mass_g
     )
@@ -591,8 +627,10 @@ def characteristic_boundary_rhs(
     ``M_n``, the recycle flux rebirthed at a *cathode* face is a directed jet
     instead of gas at rest: the reflected fraction ``R_N`` backscatters at the
     ``v_back`` of :func:`cathode_jet_backscatter_speed` (which is also what the
-    solver's ``En`` term books, so momentum and energy describe the same atoms)
-    and the implanted remainder ``1 - R_N`` desorbs as a directed effusive flux
+    solver's ``En`` term books, so momentum and energy describe the same atoms),
+    its fluid part the ion energy this face's own rows remove per ion at the
+    live cell's velocity (:func:`cathode_face_ion_removal_per_ion_eV`), and
+    the implanted remainder ``1 - R_N`` desorbs as a directed effusive flux
     off the hot disc at ``v_eff = sqrt(pi k T_s / (2 m))`` (the per-particle
     directed momentum of a cosine-law effusive flux). The momentum rides in the
     SAME term that rebirths the particles, so the two are consistent by
@@ -612,7 +650,9 @@ def characteristic_boundary_rhs(
     ``R_N v_back + (1 - R_N) v_eff`` to ``(1 - R_N) v_eff``. The withheld
     particle rate [s^-1] per cell is written back into the dict as
     ``"launch_per_s"``, so the carrier's launch and this withdrawal are ONE
-    number rather than two estimates of it. ``None`` leaves both bookings
+    number rather than two estimates of it, and the per-ion fluid removal
+    [eV] each cathode cell's launch speed was built from as ``"removal_eV"``.
+    ``None`` leaves both bookings
     unchanged, bit for bit. The PLASMA sink is untouched either way: the
     surface absorbs the same flux, only its re-emission changes.
     """
@@ -650,6 +690,9 @@ def characteristic_boundary_rhs(
     jet_M_n = np.zeros(cells, dtype=float) if jet_active else None
     carrier_active = jet_active and cathode_carrier_out is not None
     withheld_abs = np.zeros(cells, dtype=float) if carrier_active else None
+    carrier_removal_eV = (
+        np.zeros(cells, dtype=float) if carrier_active else None
+    )
     climb_active = end_wall_sheath_climb_out is not None
     climb_Ee = np.zeros(cells, dtype=float) if climb_active else None
     # The sheath lift is a property of the ion mass alone, so it is read once
@@ -722,11 +765,20 @@ def characteristic_boundary_rhs(
         cell_loss = -scale * f_n * Vp[live]
         loss_abs[live] += cell_loss
         if jet_active and roles[live] == "cathode":
+            # The ion energy this face's own rows remove, per ion, at the
+            # live cell's velocity: the incident energy's fluid part.
+            removal_eV = float(
+                cathode_face_ion_removal_per_ion_eV(
+                    scale * f_n, scale * f_M, scale * f_Ei,
+                    derived.u[live], ion_mass_g,
+                )
+            )
             v_back = cathode_jet_backscatter_speed(
-                cathode_jet, Te_l, ion_mass_g
+                cathode_jet, removal_eV, ion_mass_g
             )
             R_N = float(cathode_jet["R_N"])
             if carrier_active:
+                carrier_removal_eV[live] = removal_eV
                 # The carrier owns the backscatter share (see this function's
                 # ``cathode_carrier_out``).
                 withheld_abs[live] += R_N * cell_loss
@@ -761,6 +813,7 @@ def characteristic_boundary_rhs(
     if carrier_active:
         withheld_abs *= scale_b
         cathode_carrier_out["launch_per_s"] = withheld_abs
+        cathode_carrier_out["removal_eV"] = carrier_removal_eV
 
     # Neutral return: the absorbed plasma flux is rebirthed as neutrals on the
     # column (two-zone) or chamber-mean volume.

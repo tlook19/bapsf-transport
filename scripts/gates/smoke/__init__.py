@@ -239,9 +239,11 @@ _CASE_ORDER = (
     "floor-ledger-stage-weights",
     "heat-clip-booked-in-floor-ledger",
     "cathode-surface-book-closes",
+    "cathode-surface-ion-row-two-parts",
     "circuit-handoff-dropped-inductor-energy",
     "receipt-fluid-particles-closes",
     "receipt-kinetic-particles-verdict",
+    "receipt-kinetic-mirror-particles-closes",
 )
 
 

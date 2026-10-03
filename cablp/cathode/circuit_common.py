@@ -265,8 +265,10 @@ class SolverResult:
     # here rather than having to guess which sample the solve used.
     T_e_anode: float = 0.0
     # R3.2 (A16) one-control-surface split. Each electrode
-    # power splits into a PLASMA-THERMAL part (Te/2 per ion, 2Te per electron --
-    # sourced from the plasma thermal store) and a SHEATH-FALL phi part (sourced
+    # power splits into a PLASMA-THERMAL part (2Te per electron; Te/2 per ion
+    # at the anode, and at the cathode the energy the fluid removes with the
+    # ions it delivers, which the caller supplies -- sourced from the plasma
+    # thermal store) and a SHEATH-FALL phi part (sourced
     # from the sheath field / circuit, deposited on the electrode, never through
     # the plasma thermal store). ``*_thermal + *_phi == P_*_e/_i`` by construction.
     # These are the values the repaired fluid boundary reads so fluid == circuit.
@@ -345,7 +347,7 @@ class SolverResult:
     # recovers it: I_tot = I_eth_star + I_i - I_e_ret. The sheath phi work is drawn
     # from the CIRCUIT (it circulates: the cathode sheath accelerates carriers, the
     # anode recovers), NOT from the plasma thermal store -- which is exactly why
-    # R3.2 routes phi to the electrode book and 2Te/Te/2 to the plasma book. The
+    # R3.2 routes phi to the electrode book and the thermal parts to the plasma book. The
     # beam plasma deposition P_prim and the bulk-current ohmic are a SEPARATE
     # plasma-heating book, not the circuit field work.
     I_e_ret: float = 0.0           # returning plasma-electron current to cathode [A]

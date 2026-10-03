@@ -820,7 +820,12 @@ $$C_\text{th}\frac{dT_s}{dt}=P_\text{heater}+P_\text{ion}-P_\text{rad}-P_\text{e
 
 with $P_\text{heater}$ pinned by the standby equilibrium (at the base
 temperature the heater exactly balances radiation, so it is not free),
-$P_\text{ion}$ the accepted solve's ion bombardment power,
+$P_\text{ion}=I_i\phi_c+P_{i,\text{face}}$ the ion bombardment power: the
+sheath field work on the collected ions at the accepted solve's $I_i$ and
+$\phi_c$ ($\phi_c$ is referenced to the sampled cell, so the presheath's work
+on the ions is inside it), plus $P_{i,\text{face}}$, the energy the plasma
+fluid removed with the ions it delivered to the cathode face over the step
+(the plasma-thermal book below),
 $P_\text{rad}=\varepsilon\sigma_{SB}A_c(T_s^4-T_\text{env}^4)$ gray-body
 radiation, $P_\text{emis}=I_\text{eth}^\star(\phi_\text{wf,eff}+2k_BT_s)$
 evaporative emission cooling, with the coverage-weighted work function
@@ -1023,9 +1028,9 @@ evaluated there unchanged, at zero loop current.
 Electrode energy is booked to three distinct sources: **circuit field work**
 (sheath fall and work function, sourced from the bank and deposited on the
 electrode, never through the plasma thermal store); the **plasma-thermal**
-book, through the boxed transmission coefficients $\gamma_e=2+\phi/T_e$ and
-$\gamma_i=\tfrac12+\phi/T_e$; and **plasma heating**, the beam and the gap
-ohmic. $Q_e^\text{elec}$ is the plasma-thermal electron term of that split.
+book, through the boxed transmission coefficients $\gamma_e=2+\phi/T_e$ and,
+at the anode, $\gamma_i=\tfrac12+\phi/T_e$; and **plasma heating**, the beam
+and the gap ohmic. $Q_e^\text{elec}$ is the plasma-thermal electron term of that split.
 
 **The electrode rows ride a SMOOTHED sample of the plasma.** Every $(n,T_e)$
 the sheath solve reads — at the cathode cell and at the two cells flanking the
@@ -1042,10 +1047,23 @@ state.
 
 **The two transmission coefficients are not both charged to the plasma
 store.** The electron one is: $2T_e$ per collected electron, at both
-electrodes. The ion one is not a plasma-store term at the cathode at all —
-$T_e/2$ per collected ion is computed there and EXPORTED as a surface-power
-diagnostic, and no electron-energy row carries it, the cathode cell's
-boundary operator booking zero on $E_e$. At the anode the same $\tfrac12T_e$
+electrodes. At the cathode the ion member is what the fluid itself removes
+at the face: the boundary operator's ion-energy row plus
+the kinetic energy its density and momentum rows imply, at the live cell's
+velocity $u$,
+
+$$P_{i,\text{face}}=-\left[E_{i,\text{row}}+u\,M_\text{row}-\tfrac12m_iu^2\,n_\text{row}\right]V,$$
+
+summed over the explicit stages at their SSPRK2 weights and committed on
+acceptance. It is not sign-definite (a cell flowing away from the face can
+return kinetic energy) and is not clamped. The plasma pays it through those
+rows and the cathode surface receives it in $P_\text{ion}$. The circuit books
+it as `P_cathode_i_thermal`, the cathode member of `P_plasma_thermal_loss`,
+at the last accepted step's rate, since its solve runs before the step's
+tally exists; the accepted-state re-solve that feeds the surface and the
+coverage reads the step's own. No electron-energy row carries a cathode ion
+term, the cathode cell's boundary operator booking zero on $E_e$. At the
+anode the $\tfrac12T_e$
 per collected ion IS a live electron-energy term, but it is the $E_e$ member of
 the `anode_collection` row, formed on the fluid's own $S_\text{an}$ below,
 not on the circuit's ion current.
@@ -1278,9 +1296,8 @@ expression above evaluated on the smoothed sample, to round-off, at every
 sampled step. The
 current-driven path's thermionic remainder — the emission the cathode Kirchhoff
 $I_\text{eth}^\star+I_i-I_{e,\text{ret}}=I_\text{tot}$ leaves to be
-supplied — is built on that one number, and so is the ion power
-$I_i(T_e/2+\phi_c)$ the surface balance is credited with and the incident
-power the cathode recycle jet carries away from it. The anode is booked the
+supplied — is built on that one number, and so is the field work $I_i\phi_c$
+in the ion power the surface balance is credited with. The anode is booked the
 same way: `anode_circuit_sample` hands the circuit the very Bohm collection
 `anode_collection_rhs` removes from the fluid.
 
@@ -1325,12 +1342,14 @@ The **surface jets** split a counted stream by a particle reflection fraction
 $R_N$ and a **total** reflected energy fraction $R_E$, so the $R_N$
 backscattered atoms carry all of $R_E$ and each leaves with
 
-$$\varepsilon_\text{back}=\frac{R_E}{R_N}\,\varepsilon_\text{inc},\qquad \varepsilon_\text{inc}=\begin{cases}\max\left(\max(\phi_c,0)+\tfrac12T_e,\ 0\right)&\text{cathode}\\\max\left(\phi_a+T_i,\ 0\right)&\text{anode}\end{cases}$$
+$$\varepsilon_\text{back}=\frac{R_E}{R_N}\,\varepsilon_\text{inc},\qquad \varepsilon_\text{inc}=\begin{cases}\max\left(\phi_c^++e_{i,\text{face}},\ \phi_c^+\right),\quad\phi_c^+=\max(\phi_c,0)&\text{cathode}\\\max\left(\phi_a+T_i,\ 0\right)&\text{anode}\end{cases}$$
 
-the per-ion incident energy: at the cathode the circuit's own per-ion energy, a
-Bohm ion's half-$T_e$ directed energy from the presheath plus the clamped
-cathode drop, which is the energy $P_\text{ion}$ credits the surface with; at
-the anode the unclamped anode drop plus $T_i$. The end wall jet reads its
+the per-ion incident energy: at the cathode the clamped cathode drop plus
+$e_{i,\text{face}}$, the energy the fluid's boundary rows remove per ion at
+the face in the same evaluation ($P_{i,\text{face}}$ over the particles the
+density row removes), the per-ion form of what $P_\text{ion}$ credits the
+surface with, floored at the drop, which is always delivered, where the
+removal is negative; at the anode the unclamped anode drop plus $T_i$. The end wall jet reads its
 arrival energy from $T_e$ and $T_i$ alone. **The three channels handle a zero clamped
 incident energy differently**: the anode and end wall jets launch nothing from
 such a cell, while the cathode jet is governed by its arming latch and its

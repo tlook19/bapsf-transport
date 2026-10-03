@@ -716,7 +716,13 @@ an accept with no tick and on the fluid neutral route; like the backscatter
 row it is booked on every accepted step and is not linearised), and a `clamp`
 row with the energy the 300 K floor adds when it fires, so
 $C_\text{th}$ times the change in $T_s$ equals the signed sum of the rows to
-round-off over the steps the update runs.
+round-off over the steps the update runs. The ion row is built from two parts:
+$\Delta t\,I_i\phi_c$ of the accepted-state re-solve, and the ion energy the
+characteristic boundary rows removed at the cathode face over the step, each
+explicit stage's removal booked at its SSPRK2 weight $\Delta t/2$ on the
+attempt and committed on acceptance, so a rejected attempt adds nothing. The
+committed removal, divided by $\Delta t$, is handed to the re-solve that step
+and to the next step's stage solves as the circuit's cathode ion member.
 
 The loop current is advanced by an L-stable TR-BDF2 stage split over
 $LdI/dt=V_\text{src}-IxR_\text{comp}-V_\text{dis}(I)$ — the external share
@@ -1079,7 +1085,12 @@ account: `exchange:ionization` (bulk and beam births against the neutral
 loss), `exchange:recombination`, `exchange:anode_return`,
 `exchange:cathode_face_recycle` and `exchange:end_wall_recycle`, the plasma
 side booking its whole $n$-row removal and the other side the fluid
-$n_n$ rows before engagement or the engine's births after. What the engine
+$n_n$ rows before engagement or the engine's births after. The engine's
+counted recycle, recombination and anode-return channels are those terms'
+neutral rows on the plasma-active cells only, the cells on which the
+plasma-topology mask leaves the plasma's own rows, so each birth has its
+plasma-side removal. On a geometry without an end wall face (a mirror) neither
+side books on `exchange:end_wall_recycle`. What the engine
 has not yet settled (the ionization and source tallies committed since its
 last tick, and its carried ionization debt) is each clearing account's state,
 `receipt/state/exchange_<name>`. The handover at engagement is measured, not

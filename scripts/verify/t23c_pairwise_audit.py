@@ -179,8 +179,14 @@ def build_context(sim):
     )
     boundary_off = boundary(state=state, cathode_solve=solve)
     launch_per_s = carrier_out.get("launch_per_s")
+    # The ion energy the boundary removes per ion at the cathode face, the
+    # incident energy's fluid part, as the solver reads it on a live step.
+    removal_eV = sim._cathode_face_removal_per_ion_eV(boundary_on, state)
     jet_energy_on = sim.cathode_jet_neutral_energy_rhs(
-        state=state, cathode_solve=solve, recycle_nn_row=boundary_on.nn
+        state=state,
+        cathode_solve=solve,
+        recycle_nn_row=boundary_on.nn,
+        removal_eV=removal_eV,
     )
     # The per-neutral ionization frequency the bulk reaction term is using --
     # the same array the solver threads into the carrier on a live step.
@@ -192,6 +198,7 @@ def build_context(sim):
         state=state,
         cathode_solve=solve,
         launch_per_s=launch_per_s,
+        removal_eV=carrier_out.get("removal_eV"),
         ionization_rate=ionization_rate,
     )
     ledger = dict(sim._jet_carrier_diagnostics)
@@ -213,6 +220,7 @@ def build_context(sim):
         boundary_off=boundary_off,
         jet_energy_on=jet_energy_on,
         launch_per_s=launch_per_s,
+        removal_eV=removal_eV,
         cathode_mask=np.asarray(geometry.cell_role) == "cathode",
         plasma_active=np.asarray(geometry.plasma_active, dtype=bool),
     )
@@ -241,7 +249,7 @@ def _v1_jet_excess_off(ctx):
     spec = ctx.cathode_jet_spec
     R_N = float(spec["R_N"])
     v_back = cathode_jet_backscatter_speed(
-        spec, ctx.derived.Te, ctx.sim.ion_mass_g
+        spec, ctx.removal_eV, ctx.sim.ion_mass_g
     )
     e_jet = R_N * 0.5 * ctx.sim.ion_mass_g * v_back**2 + (1.0 - R_N) * (
         1.5 * kb_cgs * max(float(spec["T_s_K"]), 0.0)
@@ -278,19 +286,17 @@ def _pair_surface_debit(ctx):
     convention = spec.get("energy_convention", "legacy")
     share = R_E if convention == "total_reflected" else R_N * R_E
     cell = int(np.flatnonzero(ctx.cathode_mask)[0])
-    # THE ONE INCIDENT ENERGY: phi_c + Te/2, read from
-    # ``cathode_jet_incident_energy_eV`` rather than restated here, and the
-    # SAME temperature the launch speed below is evaluated at. Restating it
-    # as phi_c + Ti opened the pair by the difference between the two
-    # temperatures, which is not a physical shortfall.
-    Te = float(ctx.derived.Te[cell])
+    # THE ONE INCIDENT ENERGY: phi_c plus the fluid removal per ion, read
+    # from ``cathode_jet_incident_energy_eV`` rather than restated here, at
+    # the SAME removal the launch speed below is evaluated at.
+    removal = float(ctx.removal_eV[cell])
     v_back = float(
-        cathode_jet_backscatter_speed(spec, Te, ctx.sim.ion_mass_g)
+        cathode_jet_backscatter_speed(spec, removal, ctx.sim.ion_mass_g)
     )
     income = R_N * 0.5 * ctx.sim.ion_mass_g * v_back**2
     debit = (
         share
-        * float(cathode_jet_incident_energy_eV(spec["phi_c_V"], Te))
+        * float(cathode_jet_incident_energy_eV(spec["phi_c_V"], removal))
         * ev_to_erg
     )
     return debit, income

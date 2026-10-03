@@ -136,6 +136,7 @@ def solve_prescribed(
     alpha_sheath_anode: float | None = None,
     tail_anode_current_A: float = 0.0,
     anode_electron_saturation_A: float | None = None,
+    cathode_ion_removal_W: float = 0.0,
 ) -> SolverResult:
     """Solve the cathode sheath for a MEASURED current and device voltage.
 
@@ -160,6 +161,9 @@ def solve_prescribed(
     member is carried because it states the cap as what it is, an electron
     random flux on the wire area, and because a caller whose ``I_i_a`` is not
     that analytic form has no other way to say so.
+    ``cathode_ion_removal_W`` is the energy per second [W] the plasma fluid
+    removes with the ions it delivers to the cathode face, as in
+    ``solve_idriven``.
 
     Returns a ``SolverResult`` field-for-field compatible with the
     current-driven solve's; see the module docstring for the ``I_eth``, ``regime`` and
@@ -335,9 +339,11 @@ def solve_prescribed(
     P_cathode_e = I_i * (2.0 * T_e + phi_c) * fe_c
     P_cathode_e_thermal = I_i * (2.0 * T_e) * fe_c
     P_cathode_e_phi = P_cathode_e - P_cathode_e_thermal
-    P_cathode_i = P_ion(phi_c, T_e, I_i)
-    P_cathode_i_thermal = I_i * (T_e / 2.0)
-    P_cathode_i_phi = P_cathode_i - P_cathode_i_thermal
+    # The cathode's ion power, as solve_idriven builds it: the sheath field
+    # work plus the energy the fluid removes with the ions at the face.
+    P_cathode_i_phi = I_i * phi_c
+    P_cathode_i_thermal = float(cathode_ion_removal_W)
+    P_cathode_i = P_cathode_i_phi + P_cathode_i_thermal
     P_cathode_i_pl = P_ion(phi_c, T_e, I_i_a, pl=True)
     P_anode_e = I_i_a * (2.0 * T_e_anode + phi_a) * fe_a
     P_anode_e_thermal = I_i_a * (2.0 * T_e_anode) * fe_a
@@ -471,6 +477,7 @@ def solve_beam_system_prescribed(
     alpha_sheath_anode: float | None = None,
     tail_anode_current_A: float = 0.0,
     anode_electron_saturation_A: float | None = None,
+    cathode_ion_removal_W: float = 0.0,
 ) -> BeamResult:
     """Prescribed-measured counterpart of ``solve_beam_system_idriven``.
 
@@ -497,6 +504,7 @@ def solve_beam_system_prescribed(
         alpha_sheath_anode=alpha_sheath_anode,
         tail_anode_current_A=tail_anode_current_A,
         anode_electron_saturation_A=anode_electron_saturation_A,
+        cathode_ion_removal_W=cathode_ion_removal_W,
     )
     return assemble_beam_arrays(
         result=result,

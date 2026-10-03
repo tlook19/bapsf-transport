@@ -1627,7 +1627,6 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     jet_geom = jet_sim.geometry
     jet_roles = np.asarray(jet_geom.cell_role)
     jet_m = jet_sim.ion_mass_g
-    jet_derived = derive_state(jet_sim.state, jet_sim.floors, jet_m)
     jet_kb = 1.380649e-16
 
     # Cathode channel: momentum only at the cathode cell, directed into the
@@ -1642,15 +1641,23 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     jet_RE = float(jet_params.get("cathode_jet_R_E", 0.2))
     jet_Ts = float(jet_params["cathode_Ts_base_K"])
     jet_veff = np.sqrt(np.pi * jet_kb * jet_Ts / (2.0 * jet_m))
-    # The incident per-ion energy is the CIRCUIT's own phi_c + Te/2 -- the
-    # half-Te the presheath gave the Bohm ion plus the fall it drops through
-    # -- restated here rather than read from the helper, so a change to the
+    # The incident per-ion energy is the clamped fall phi_c plus the ion
+    # energy the boundary term's own rows remove per ion at the cathode cell,
+    # (Ei + u M - (m u^2/2) n) / n with u = M/(m n), floored at the fall --
+    # restated here rather than read from the helper, so a change to the
     # helper has to be made twice to pass.
+    jet_u = float(jet_sim.state.M[jet_cath]) / (
+        jet_m * float(jet_sim.state.n[jet_cath])
+    )
+    jet_removal = (
+        float(jet_ba.Ei[jet_cath])
+        + jet_u * float(jet_ba.M[jet_cath])
+        - 0.5 * jet_m * jet_u**2 * float(jet_ba.n[jet_cath])
+    ) / float(jet_ba.n[jet_cath]) / ev_to_erg
+    jet_fall = max(jet_res.phi_c, 0.0)
     jet_vback = np.sqrt(
         2.0 * jet_RE
-        * max(
-            max(jet_res.phi_c, 0.0) + 0.5 * jet_derived.Te[jet_cath], 0.0
-        )
+        * max(jet_fall + jet_removal, jet_fall)
         * ev_to_erg / jet_m
     )
     jet_vmix = jet_RN * jet_vback + (1.0 - jet_RN) * jet_veff
@@ -1828,15 +1835,17 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
     assert np.array_equal(jet_legacy_ba.M_n, jet_ba.M_n)
 
     # THE CONSERVATION IDENTITY, on a short jet-armed run with the En field
-    # present. Per RECYCLED particle the surface debit gives up
-    # R_E*(phi_c + Ti) and, under "total_reflected", the backscatter share of
-    # the jet's En term delivers exactly that -- to machine precision, on the
-    # evolved state, from the term's own rebirthed flux. Under "legacy" the
-    # same read returns R_N times it, which is the energy hole this convention
-    # closes. NAMED RESIDUAL, and it is not closed by this identity: the
-    # cathode solve debits R_E * P_cathode_i, whose ion flux is the solve's
-    # own Bohm current and whose per-ion energy is (phi_c + Te/2), while the
-    # jet rides the fluid boundary term's recycle flux at (phi_c + Ti).
+    # present. Per RECYCLED particle the surface debit gives up R_E times the
+    # incident energy, phi_c plus the ion energy the boundary rows remove per
+    # ion (floored at phi_c), and, under "total_reflected", the backscatter
+    # share of the jet's En term delivers exactly that -- to machine
+    # precision, on the evolved state, from the term's own rebirthed flux.
+    # Under "legacy" the same read returns R_N times it, which is the energy
+    # hole this convention closes. NAMED RESIDUAL, and it is not closed by
+    # this identity: the cathode solve debits R_E * P_cathode_i, whose ion
+    # flux is the solve's own Bohm current and whose fluid part is the last
+    # accepted step's removal rate, while the jet rides the fluid boundary
+    # term's recycle flux at this evaluation's removal per ion.
     jet_en_flags = dict(jet_flags, neutral_energy=True)
     jet_en_ref = None
     for jet_conv, jet_conv_share in (
@@ -1863,17 +1872,33 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
         jet_en_ba = jet_en_sim.characteristic_boundary_rhs(
             state=jet_en_state, cathode_solve=jet_en_solve
         )
+        jet_en_cath = np.asarray(jet_en_sim.geometry.cell_role) == "cathode"
+        # The ion energy the boundary rows remove per ion at the cathode
+        # cells, (Ei + u M - (m u^2/2) n) / n with u = M/(m n), in eV.
+        jet_en_m = jet_en_sim.ion_mass_g
+        jet_en_u = np.asarray(jet_en_state.M, dtype=float) / (
+            jet_en_m * np.asarray(jet_en_state.n, dtype=float)
+        )
+        jet_en_bn = np.asarray(jet_en_ba.n, dtype=float)
+        jet_en_removal = np.where(
+            jet_en_cath,
+            (
+                np.asarray(jet_en_ba.Ei, dtype=float)
+                + jet_en_u * np.asarray(jet_en_ba.M, dtype=float)
+                - 0.5 * jet_en_m * jet_en_u**2 * jet_en_bn
+            )
+            / np.where(jet_en_cath, jet_en_bn, 1.0)
+            / ev_to_erg,
+            0.0,
+        )
         jet_en_term = jet_en_sim.cathode_jet_neutral_energy_rhs(
             state=jet_en_state,
             cathode_solve=jet_en_solve,
             recycle_nn_row=jet_en_ba.nn,
+            removal_eV=jet_en_removal,
         )
-        jet_en_derived = derive_state(
-            jet_en_state, jet_en_sim.floors, jet_en_sim.ion_mass_g
-        )
-        jet_en_cath = np.asarray(jet_en_sim.geometry.cell_role) == "cathode"
         jet_en_vback = cathode_jet_backscatter_speed(
-            jet_en_spec, jet_en_derived.Te, jet_en_sim.ion_mass_g
+            jet_en_spec, jet_en_removal, jet_en_sim.ion_mass_g
         )
         # Per-particle: what the backscattered share actually carries, and
         # what the surface debit gave up for it.
@@ -1884,7 +1909,7 @@ def _case_directed_recycle_jets(knob_mass, m3_cathode_flags, m3_params):
             jet_RE
             * (
                 jet_en_spec["phi_c_V"]
-                + 0.5 * jet_en_derived.Te[jet_en_cath]
+                + np.maximum(jet_en_removal[jet_en_cath], 0.0)
             )
             * ev_to_erg
         )
@@ -2042,6 +2067,7 @@ def _case_cathode_jet_hot_carrier():
         state=hc_state,
         cathode_solve=hc_solve,
         launch_per_s=hc_launch,
+        removal_eV=hc_out["removal_eV"],
         ionization_rate=np.asarray(
             hc_reaction["ionization_birth"].n, dtype=float
         )
@@ -2071,9 +2097,11 @@ def _case_cathode_jet_hot_carrier():
     # (iii) the v1 En pair (surface wall credit + jet excess) <-> the launch
     # power, with the v1 side rebuilt from the documented formula.
     hc_spec = hc_on._cathode_jet_spec(hc_solve)
-    hc_der = derive_state(hc_state, hc_on.floors, hc_on.ion_mass_g)
     hc_RN = float(hc_spec["R_N"])
-    hc_vback = _hc_vback(hc_spec, hc_der.Te, hc_on.ion_mass_g)
+    # The per-ion fluid removal both bookings read: the boundary term's own
+    # write-back, the same evaluation's.
+    hc_removal = np.asarray(hc_out["removal_eV"], dtype=float)
+    hc_vback = _hc_vback(hc_spec, hc_removal, hc_on.ion_mass_g)
     hc_ejet = hc_RN * 0.5 * hc_on.ion_mass_g * hc_vback**2 + (
         1.0 - hc_RN
     ) * (1.5 * hc_kb * max(float(hc_spec["T_s_K"]), 0.0))
@@ -2095,6 +2123,7 @@ def _case_cathode_jet_hot_carrier():
                 state=hc_state,
                 cathode_solve=hc_solve,
                 recycle_nn_row=hc_on_bnd.nn,
+                removal_eV=hc_removal,
             ).En
             * hc_Vnn
         )

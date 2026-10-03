@@ -507,6 +507,7 @@ def idriven_result_evaluator(
     tail_anode_coefficient_prev=0.0,
     anode_gap_walker_fraction_prev=0.0,
     primary_return_coefficient_prev=0.0,
+    cathode_ion_removal_prev_W=0.0,
 ):
     """Return an ``I [A] -> SolverResult`` evaluator at this frozen state.
 
@@ -527,6 +528,11 @@ def idriven_result_evaluator(
     accepted-state re-solve) do not pass it: under that booking both evaluate
     the anode with NO tail current, while the dispatched solve reads the
     lagged one.
+
+    ``cathode_ion_removal_prev_W`` [W] is the energy the fluid removes with
+    the ions it delivers to the cathode face, handed to the circuit as
+    ``cathode_ion_removal_W`` (see
+    :func:`~cablp.cathode.circuit_idriven.solve_idriven`).
     """
     derived = derive_state(state, floors=floors, ion_mass_g=ion_mass_g)
     anode_A, anode_Te, anode_e_sat = anode_circuit_sample(
@@ -583,6 +589,7 @@ def idriven_result_evaluator(
             alpha_sheath=alpha_sheath,
             **booking_kwargs,
             anode_balance_probe=bool(anode_balance_probe),
+            cathode_ion_removal_W=float(cathode_ion_removal_prev_W),
         )
 
     return solve_at
@@ -603,6 +610,7 @@ def idriven_vdis_evaluator(
     tail_anode_coefficient_prev=0.0,
     anode_gap_walker_fraction_prev=0.0,
     primary_return_coefficient_prev=0.0,
+    cathode_ion_removal_prev_W=0.0,
 ):
     """Return a ``V_dis(I) [V]`` evaluator at this frozen plasma state.
 
@@ -626,6 +634,7 @@ def idriven_vdis_evaluator(
         tail_anode_coefficient_prev=tail_anode_coefficient_prev,
         anode_gap_walker_fraction_prev=anode_gap_walker_fraction_prev,
         primary_return_coefficient_prev=primary_return_coefficient_prev,
+        cathode_ion_removal_prev_W=cathode_ion_removal_prev_W,
     )
 
     # Internal series drop on the plasma side of the V_dis probe (R5 ES1 tuning
@@ -803,6 +812,7 @@ def solve_cathode_boundary(
     tail_anode_coefficient_prev=0.0,
     anode_gap_walker_fraction_prev=0.0,
     primary_return_coefficient_prev=0.0,
+    cathode_ion_removal_prev_W=0.0,
 ):
     """Call the cathode/beam solver and return raw diagnostics only.
 
@@ -822,6 +832,11 @@ def solve_cathode_boundary(
     ``primary_return_coefficient_prev`` under ``"emission_fraction"``, whose
     successors this solve's deposition produces (see
     :func:`anode_tail_booking_coefficients`).
+
+    ``cathode_ion_removal_prev_W`` [W] is the energy the fluid removed with
+    the ions it delivered to the cathode face over the last accepted step,
+    per second; the circuit books it as the cathode ion member of the
+    plasma-thermal book and adds it to the surface's ion power.
     """
     boundary = cathode_boundary_state(
         state=state,
@@ -936,6 +951,7 @@ def solve_cathode_boundary(
             # The prescribed drive books the lagged absolute tail current
             # only; ``"emission_fraction"`` is refused with it at construction.
             tail_anode_current_A=float(tail_anode_current_prev_A),
+            cathode_ion_removal_W=float(cathode_ion_removal_prev_W),
         )
     else:
         # The circuit is explicit solver state: no inductive fold, no
@@ -973,6 +989,7 @@ def solve_cathode_boundary(
             schottky=True,
             phi_c_cap_V=float(input_dict.get("cathode_phi_c_cap_V", 1000.0)),
             **circuit_tail_kwargs,
+            cathode_ion_removal_W=float(cathode_ion_removal_prev_W),
         )
     (
         beam_deposition,
