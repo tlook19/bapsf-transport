@@ -4,7 +4,8 @@ Static gates for R3.2, from the R3 physics map and its pre-registered
 gate list (audit A16). R3.2 makes ONE sheath control
 surface feed both the circuit power and the fluid boundary sink, with the
 sheath-fall ``phi`` routed to the electrode and only the plasma-thermal part
-(2Te per electron, Te/2 per ion) taken from the plasma. These gates prove the
+(2Te per electron; at the cathode, the ion energy the fluid removes at the
+face, which the caller hands the circuit) taken from the plasma. These gates prove the
 routing/consistency properties on a controlled state; the settled-window closure
 and u->c_s are the run gate (verify_sim1d_r3_boundary_startup.py).
 
@@ -12,9 +13,11 @@ Gates:
   G1 circuit power split is exact: P_*_e/i_thermal + P_*_e/i_phi == P_*_e/i to
      machine zero (the phi part is the remainder, so the historical P_* -- which
      feeds the golden -- is byte-for-byte unchanged);
-  G2 boxed transmission coefficients (Stangeby; NOT fitted): the electron thermal
-     part is exactly 2*Te per electron and the ion thermal part exactly Te/2 per
-     ion, at the circuit's own currents;
+  G2 the electron thermal part is the boxed transmission coefficient (Stangeby;
+     NOT fitted), exactly 2*Te per electron at the circuit's own current; the
+     cathode ion phi part is exactly I_i*phi_c and its thermal part exactly the
+     fluid's face removal passed as ``cathode_ion_removal_W`` (checked at zero
+     and at a nonzero removal);
   G3 the useful surface audit is self-consistent: P_into_plasma == P_prim+P_ohmic
      - P_plasma_thermal_loss, and P_cathode_surface == P_cathode_e + P_cathode_i;
   G4 fluid == circuit BY CONSTRUCTION at the cathode: the fluid electron energy
@@ -86,18 +89,31 @@ def main():
     )
     print(f"G1 circuit power split exact (thermal+phi==P_*)   : {g1}")
 
-    # G2 boxed coefficients: electron 2Te, ion Te/2 (per particle at the
-    # electrode's own current). Recompute the electron flux factor from the
-    # solved potentials to confirm the 2Te coefficient.
+    # G2 electron: the boxed 2Te per electron at the electrode's own current.
+    # Recompute the electron flux factor from the solved potentials to confirm
+    # the 2Te coefficient.
     fe_c = math.exp(min(cfg.Lambda + 0.5 - max(r.phi_c_plus, 0.0) / Te, 0.0))
     exp_e = r.I_i * 2.0 * Te * fe_c
-    exp_i = r.I_i * (Te / 2.0)
-    g2 = (
-        math.isclose(r.P_cathode_e_thermal, exp_e, rel_tol=1e-12)
-        and math.isclose(r.P_cathode_i_thermal, exp_i, rel_tol=1e-12)
-    )
-    print(f"G2 boxed gamma: e-thermal==2Te*I, i-thermal==Te/2*I: {g2}")
+    g2 = math.isclose(r.P_cathode_e_thermal, exp_e, rel_tol=1e-12)
+    print(f"G2 boxed gamma: e-thermal==2Te*I*fe                : {g2}")
     print(f"   P_cathode_e_thermal={r.P_cathode_e_thermal:.4e} vs 2Te*I*fe={exp_e:.4e}")
+    # G2 cathode ion: the field work I_i*phi_c is the phi part, and the
+    # thermal part is exactly the face removal the caller passes, at zero and
+    # at a nonzero removal. Same operations as the circuit, so equality is
+    # exact.
+    for removal_W in (0.0, 1234.5):
+        ri = solve_idriven(
+            cfg, pl, I_tot_A=2800.0, anode_current_A=300.0, anode_T_e=Te,
+            cathode_ion_removal_W=removal_W,
+        )
+        leg = (
+            ri.P_cathode_i_phi == ri.I_i * ri.phi_c
+            and ri.P_cathode_i_thermal == removal_W
+        )
+        g2 = g2 and leg
+        print(f"G2 cathode ion: phi==I_i*phi_c, thermal==removal "
+              f"({removal_W:g} W): {leg}  (P_cathode_i_thermal="
+              f"{ri.P_cathode_i_thermal:.6g} W)")
 
     # G3 audit self-consistency
     g3 = (
