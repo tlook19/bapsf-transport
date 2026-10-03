@@ -134,8 +134,8 @@ nothing. The bar is a roundoff bound `margin * count * 2**-53 * gross`, built
 from the entries' gross magnitudes, the inventories' summand magnitudes and
 the operations that produced each comparison, never from the net change; an
 account whose bound exceeds `--ceiling` (default 1e-9) of its inventory (for
-a clearing account with no carried debt, of its site accounts' inventories) is
-CANNOT CERTIFY. The account lists, the inventory rules, what the count
+a clearing account, of its tracked site accounts' inventories plus any
+declared carried debt, never the debt alone) is CANNOT CERTIFY. The account lists, the inventory rules, what the count
 assumes about the writer's arithmetic and the bound's derivation are in the
 module docstring. Exit 0 pass, 1 a failure or census gap, 2 the check could
 not run; a file with no receipt is exit 2, never a pass.
