@@ -3175,10 +3175,13 @@ def _case_cathode_jet_incident_power_one_book():
     _cp_res, _cp_removal, _cp_per_ion = _cp_read()
     assert _cp_res.phi_c < 0.0, _cp_res.phi_c
     assert _cp_removal > 0.0, _cp_removal
-    # Roundoff: the same four products and a division in another order.
+    # Roundoff: the same products, a sum of three terms and a division,
+    # some in another order. The sum Ei + u M - (m u^2/2) n does not cancel
+    # at these states (the summed term magnitudes over |sum| is about 1.01),
+    # so the error stays at a few ulp; 1e-14 is about 45 ulp.
     assert abs(
         _cp_per_ion / (_cp_removal * ev_to_erg) - 1.0
-    ) <= 1.0e-12, (_cp_per_ion, _cp_removal)
+    ) <= 1.0e-14, (_cp_per_ion, _cp_removal)
 
     # (b) AT AN ACCELERATING SHEATH the row is phi_c plus the removal per
     # ion, and the circuit's ion power is I_i*phi_c plus the removal rate
@@ -3193,7 +3196,7 @@ def _case_cathode_jet_incident_power_one_book():
         _cp_per_ion
         / ((float(_cp_res.phi_c) + max(_cp_removal, 0.0)) * ev_to_erg)
         - 1.0
-    ) <= 1.0e-12, (_cp_per_ion, _cp_res.phi_c, _cp_removal)
+    ) <= 1.0e-14, (_cp_per_ion, _cp_res.phi_c, _cp_removal)
     _cp_lag_W = float(_cp_sim._cathode_ion_removal_W)
     assert _cp_lag_W != 0.0, _cp_lag_W
     # Roundoff: one product and one sum, as the circuit forms them.

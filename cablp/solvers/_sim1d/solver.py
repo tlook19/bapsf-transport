@@ -3035,7 +3035,8 @@ class LAPDSim1D:
         tighter ``min(cap, V_avail(I))`` bound, which is current-dependent --
         with the engine's own 10 eV allowance read as the electron
         temperature, an allowance for the fluid part rather than a bound on
-        it, and its ``e_min`` is the ``Te`` floor's own half. The
+        it, and its ``e_min`` is ``(R_E/R_N)`` times the ``Te`` floor's own
+        half (see below for what that lower end does and does not cover). The
         ANODE's arrival energy is ``phi_a + Ti``, so its band is formed on the
         ion-temperature allowance and the ``Ti`` floor, and it borrows the
         cathode ceiling as a stated allowance rather than as a bound on
@@ -3059,16 +3060,22 @@ class LAPDSim1D:
         remains the backstop, and this band only decides what construction
         time can rule out.
 
-        ``e_min`` is the SMALLEST such energy, and it is set by the
-        temperature floor alone: ``phi`` is clamped non-negative before the
-        sum is formed
-        (:meth:`_dvm_cathode_jet_incident_energy_row`), and the arming latch
-        gates the channel on the booked ion CURRENT, not on the sheath, so no
-        current threshold puts a floor under the potential -- the
-        emission-dominated afterglow solve reaches ``phi_c`` of order zero
-        while the latch is still armed. The tick divides a summed incident
-        energy by a summed count, so its per-atom result is a count-weighted
-        average over the tick's armed steps and lies inside the same bracket.
+        The cathode's ``e_min`` is NOT a lower bound on its launch energy.
+        The incident energy is ``max(phi_c+ + e, phi_c+)``, ``phi_c+`` the
+        drop clamped non-negative
+        (:meth:`_dvm_cathode_jet_incident_energy_row`) and ``e`` the fluid's
+        removal per ion, which can be negative; the arming latch gates the
+        channel on the booked ion CURRENT, not on the sheath, so no current
+        threshold puts a floor under the potential -- the emission-dominated
+        afterglow solve reaches ``phi_c`` of order zero while the latch is
+        still armed. The incident energy can therefore fall below
+        ``(R_E/R_N) Te_floor/2`` and reach zero. The grid is sized from
+        ``e_max`` alone, and the construction-time reachability check covers
+        only the band; a launch energy below it is never truncated, but is
+        checked at the tick, where the launch builder's moment check refuses
+        a spectrum it cannot place and refuses any energy at or below zero. The tick divides a summed incident energy by a summed count,
+        so its per-atom result is a count-weighted average over the tick's
+        armed steps.
 
         The extent. A named ``neutral_kinetic_dvm_vmax_cm_s`` is taken as
         given, subject to the two refusals below. Unset, it is sized to the
