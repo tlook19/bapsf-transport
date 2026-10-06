@@ -13,7 +13,7 @@ the committed ``scripts/data/he_lines_atomic.json``, which records its NIST
 ASD source and conventions.
 
 Four tables are written, each as a ``tabular`` body only (booktabs rules, no
-``table`` environment, no caption, a leading ``% TODO(Tom): caption`` line),
+``table`` environment, no caption, a leading ``% TODO: caption`` line),
 with a Markdown twin of each:
 
     he2_lines.tex         He II transitions: wavelength, region, photon energy,
@@ -310,7 +310,7 @@ class Table:
         self.blocks.append([])
 
     def tex(self):
-        out = ["% TODO(Tom): caption"]
+        out = ["% TODO: caption"]
         out += [f"% {c}" for c in self.comments]
         out.append(rf"\begin{{tabular}}{{{self.colspec}}}")
         out.append(r"\toprule")
