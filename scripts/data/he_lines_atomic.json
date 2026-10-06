@@ -1,0 +1,2335 @@
+{
+ "description": "Atomic data for the He II and He I transitions the line-power tables report: every EXCIT transition in the two OPEN-ADAS adf15 files the model's line decomposition reads, two He II transitions those files lack, and the two He I metastables.",
+ "source": {
+  "database": "NIST Atomic Spectra Database",
+  "version": "5.12",
+  "citation": "Kramida, A., Ralchenko, Yu., Reader, J., and NIST ASD Team (2024). NIST Atomic Spectra Database (ver. 5.12). National Institute of Standards and Technology, Gaithersburg, MD.",
+  "doi": "https://doi.org/10.18434/T4W30F",
+  "retrieved": "2026-10-06",
+  "queries": {
+   "He I lines": "https://physics.nist.gov/cgi-bin/ASD/lines1.pl?spectra=He+I&limits_type=0&low_w=20&upp_w=1100&unit=1&de=0&format=3&line_out=0&remove_js=on&en_unit=1&output=0&page_size=15&show_obs_wl=1&show_calc_wl=1&order_out=0&show_av=3&tsb_value=0&A_out=0&allowed_out=1&forbid_out=1&conf_out=on&term_out=on&enrg_out=on&J_out=on&g_out=on&submit=Retrieve+Data",
+   "He II lines": "https://physics.nist.gov/cgi-bin/ASD/lines1.pl?spectra=He+II&limits_type=0&low_w=20&upp_w=1100&unit=1&de=0&format=3&line_out=0&remove_js=on&en_unit=1&output=0&page_size=15&show_obs_wl=1&show_calc_wl=1&order_out=0&show_av=3&tsb_value=0&A_out=0&allowed_out=1&forbid_out=1&conf_out=on&term_out=on&enrg_out=on&J_out=on&g_out=on&submit=Retrieve+Data",
+   "He I levels": "https://physics.nist.gov/cgi-bin/ASD/energy1.pl?de=0&spectrum=He+I&submit=Retrieve+Data&units=1&format=3&output=0&page_size=15&multiplet_ordered=0&conf_out=on&term_out=on&level_out=on&unc_out=1&j_out=on&g_out=on&lande_out=on&perc_out=on&biblio=on&temp=",
+   "He II levels": "https://physics.nist.gov/cgi-bin/ASD/energy1.pl?de=0&spectrum=He+II&submit=Retrieve+Data&units=1&format=3&output=0&page_size=15&multiplet_ordered=0&conf_out=on&term_out=on&level_out=on&unc_out=1&j_out=on&g_out=on&lande_out=on&perc_out=on&biblio=on&temp="
+  }
+ },
+ "conventions": {
+  "wavelength_vac_nm": "vacuum; the g_k A_ki-weighted mean of the multiplet's component Ritz wavelengths (observed where ASD gives no Ritz value)",
+  "photon_eV": "h c / wavelength_vac_nm, CODATA h, c, e (scipy.constants)",
+  "einstein_A_s": "sum over the lower components and statistical-weight average over the upper ones: sum_k sum_i g_k A_ki / g_upper, with g_upper the summed weight of every component of the upper term (2 n^2 for a He II shell, so orbital states with no decay to the lower shell count in g_upper)",
+  "upper_level_eV": "g-weighted centroid of the upper term's (He II: shell's) ASD levels, above the species' own ground state",
+  "metastable_offset_eV": "He I only: upper_level_eV minus the level of the same-spin metastable (2 3S for triplets, 2 1S for singlets)",
+  "he2_einstein_A": "NIST ASD's own He II entries (accuracy class AA), not Z^4-scaled hydrogen values"
+ },
+ "transitions": [
+  {
+   "key": "HeII_2-1",
+   "species": "He II",
+   "upper": {
+    "n": 2
+   },
+   "lower": {
+    "n": 1
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he1.dat",
+    "isel": 1,
+    "wavelength_A": 303.8
+   },
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 40.813408515895,
+   "lower_level_eV": 0.0,
+   "upper_statistical_weight": 8,
+   "n_components": 2,
+   "components": [
+    {
+     "lower": "1s 2S J=1/2",
+     "upper": "2p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 30.3780409484,
+     "wavelength_kind": "ritz",
+     "A_s": 10029000000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s 2S J=1/2",
+     "upper": "2p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 30.3785814724,
+     "wavelength_kind": "ritz",
+     "A_s": 10030000000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 7522000000.0,
+   "wavelength_vac_nm": 30.37822113504318,
+   "photon_eV": 40.81351501196912
+  },
+  {
+   "key": "HeII_3-1",
+   "species": "He II",
+   "upper": {
+    "n": 3
+   },
+   "lower": {
+    "n": 1
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he1.dat",
+    "isel": 2,
+    "wavelength_A": 256.3
+   },
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 48.37149044537045,
+   "lower_level_eV": 0.0,
+   "upper_statistical_weight": 18,
+   "n_components": 2,
+   "components": [
+    {
+     "lower": "1s 2S J=1/2",
+     "upper": "3p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 25.6316562565,
+     "wavelength_kind": "ritz",
+     "A_s": 2677800000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s 2S J=1/2",
+     "upper": "3p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 25.6317702737,
+     "wavelength_kind": "ritz",
+     "A_s": 2677700000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 892588888.8888888,
+   "wavelength_vac_nm": 25.631694261287127,
+   "photon_eV": 48.37144090800896
+  },
+  {
+   "key": "HeII_4-1",
+   "species": "He II",
+   "upper": {
+    "n": 4
+   },
+   "lower": {
+    "n": 1
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he1.dat",
+    "isel": 3,
+    "wavelength_A": 243.0
+   },
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 51.01676367734812,
+   "lower_level_eV": 0.0,
+   "upper_statistical_weight": 32,
+   "n_components": 2,
+   "components": [
+    {
+     "lower": "1s 2S J=1/2",
+     "upper": "4p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 24.3026444338,
+     "wavelength_kind": "ritz",
+     "A_s": 1091700000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s 2S J=1/2",
+     "upper": "4p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 24.3026876757,
+     "wavelength_kind": "ritz",
+     "A_s": 1091700000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 204693750.0,
+   "wavelength_vac_nm": 24.30265884776667,
+   "photon_eV": 51.016721754539205
+  },
+  {
+   "key": "HeII_5-1",
+   "species": "He II",
+   "upper": {
+    "n": 5
+   },
+   "lower": {
+    "n": 1
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he1.dat",
+    "isel": 4,
+    "wavelength_A": 237.3
+   },
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 52.24113370428168,
+   "lower_level_eV": 0.0,
+   "upper_statistical_weight": 50,
+   "n_components": 2,
+   "components": [
+    {
+     "lower": "1s 2S J=1/2",
+     "upper": "5p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 23.733066392,
+     "wavelength_kind": "ritz",
+     "A_s": 550360000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s 2S J=1/2",
+     "upper": "5p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 23.7330875061,
+     "wavelength_kind": "ritz",
+     "A_s": 550330000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 66042000.0,
+   "wavelength_vac_nm": 23.73307342977757,
+   "photon_eV": 52.24110513964826
+  },
+  {
+   "key": "HeII_3-2",
+   "species": "He II",
+   "upper": {
+    "n": 3
+   },
+   "lower": {
+    "n": 2
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he1.dat",
+    "isel": 5,
+    "wavelength_A": 1640.3
+   },
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 48.37149044537045,
+   "lower_level_eV": 40.813408515895,
+   "upper_statistical_weight": 18,
+   "n_components": 7,
+   "components": [
+    {
+     "lower": "2p 2P* J=1/2",
+     "upper": "3d 2D J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 164.033212853,
+     "wavelength_kind": "ritz",
+     "A_s": 862680000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2s 2S J=1/2",
+     "upper": "3p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 164.034465424,
+     "wavelength_kind": "ritz",
+     "A_s": 359390000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=1/2",
+     "upper": "3s 2S J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 164.03749939,
+     "wavelength_kind": "ritz",
+     "A_s": 33700000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2s 2S J=1/2",
+     "upper": "3p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 164.039135215,
+     "wavelength_kind": "ritz",
+     "A_s": 359460000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=3/2",
+     "upper": "3d 2D J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 164.047417525,
+     "wavelength_kind": "ritz",
+     "A_s": 1035100000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=3/2",
+     "upper": "3d 2D J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 164.048974189,
+     "wavelength_kind": "ritz",
+     "A_s": 172520000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=3/2",
+     "upper": "3s 2S J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 164.05326155,
+     "wavelength_kind": "ritz",
+     "A_s": 67430000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 706118888.8888888,
+   "wavelength_vac_nm": 164.04172158295867,
+   "photon_eV": 7.558089322447116
+  },
+  {
+   "key": "HeII_4-2",
+   "species": "He II",
+   "upper": {
+    "n": 4
+   },
+   "lower": {
+    "n": 2
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he1.dat",
+    "isel": 6,
+    "wavelength_A": 1215.0
+   },
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 51.01676367734812,
+   "lower_level_eV": 40.813408515895,
+   "upper_statistical_weight": 32,
+   "n_components": 7,
+   "components": [
+    {
+     "lower": "2p 2P* J=1/2",
+     "upper": "4d 2D J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 121.508809287,
+     "wavelength_kind": "ritz",
+     "A_s": 275230000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2s 2S J=1/2",
+     "upper": "4p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 121.509499015,
+     "wavelength_kind": "ritz",
+     "A_s": 154790000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=1/2",
+     "upper": "4s 2S J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 121.509801355,
+     "wavelength_kind": "ritz",
+     "A_s": 13762000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2s 2S J=1/2",
+     "upper": "4p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 121.510580003,
+     "wavelength_kind": "ritz",
+     "A_s": 154810000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=3/2",
+     "upper": "4d 2D J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 121.517097314,
+     "wavelength_kind": "ritz",
+     "A_s": 330230000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=3/2",
+     "upper": "4d 2D J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 121.517457655,
+     "wavelength_kind": "ritz",
+     "A_s": 55036000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=3/2",
+     "upper": "4s 2S J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 121.518449864,
+     "wavelength_kind": "ritz",
+     "A_s": 27534000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 134806750.0,
+   "wavelength_vac_nm": 121.51341289348498,
+   "photon_eV": 10.203334387610452
+  },
+  {
+   "key": "HeII_5-2",
+   "species": "He II",
+   "upper": {
+    "n": 5
+   },
+   "lower": {
+    "n": 2
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he1.dat",
+    "isel": 7,
+    "wavelength_A": 1084.8
+   },
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 52.24113370428168,
+   "lower_level_eV": 40.813408515895,
+   "upper_statistical_weight": 50,
+   "n_components": 7,
+   "components": [
+    {
+     "lower": "2p 2P* J=1/2",
+     "upper": "5d 2D J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 108.490747093,
+     "wavelength_kind": "ritz",
+     "A_s": 125770000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=1/2",
+     "upper": "5s 2S J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 108.491151976,
+     "wavelength_kind": "ritz",
+     "A_s": 6878200.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2s 2S J=1/2",
+     "upper": "5p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 108.491297643,
+     "wavelength_kind": "ritz",
+     "A_s": 79227000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2s 2S J=1/2",
+     "upper": "5p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 108.491738863,
+     "wavelength_kind": "ritz",
+     "A_s": 79234000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=3/2",
+     "upper": "5d 2D J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 108.497494482,
+     "wavelength_kind": "ritz",
+     "A_s": 150910000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=3/2",
+     "upper": "5d 2D J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 108.497641561,
+     "wavelength_kind": "ritz",
+     "A_s": 25150000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "2p 2P* J=3/2",
+     "upper": "5s 2S J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 108.498046495,
+     "wavelength_kind": "ritz",
+     "A_s": 13762000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 40515928.0,
+   "wavelength_vac_nm": 108.49437094695968,
+   "photon_eV": 11.427707940148636
+  },
+  {
+   "key": "HeII_4-3",
+   "species": "He II",
+   "upper": {
+    "n": 4
+   },
+   "lower": {
+    "n": 3
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he1.dat",
+    "isel": 8,
+    "wavelength_A": 4686.5
+   },
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 51.01676367734812,
+   "lower_level_eV": 48.37149044537045,
+   "upper_statistical_weight": 32,
+   "n_components": 13,
+   "components": [
+    {
+     "lower": "3p 2P* J=1/2",
+     "upper": "4d 2D J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 468.66881681,
+     "wavelength_kind": "ritz",
+     "A_s": 93899000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3s 2S J=1/2",
+     "upper": "4p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 468.67185522,
+     "wavelength_kind": "ritz",
+     "A_s": 49070000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=1/2",
+     "upper": "4s 2S J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 468.68357619,
+     "wavelength_kind": "ritz",
+     "A_s": 9796800.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3s 2S J=1/2",
+     "upper": "4p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 468.68793756,
+     "wavelength_kind": "ritz",
+     "A_s": 49080000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=3/2",
+     "upper": "4f 2F* J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 468.70152546,
+     "wavelength_kind": "ritz",
+     "A_s": 206050000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=3/2",
+     "upper": "4d 2D J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 468.70157852,
+     "wavelength_kind": "ritz",
+     "A_s": 112680000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=3/2",
+     "upper": "4p 2P* J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 468.706849891,
+     "wavelength_kind": "ritz",
+     "A_s": 556460.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=3/2",
+     "upper": "4d 2D J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 468.70693939,
+     "wavelength_kind": "ritz",
+     "A_s": 18780000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=5/2",
+     "upper": "4f 2F* J=7/2",
+     "g_lower": 6,
+     "g_upper": 8,
+     "wavelength_vac_nm": 468.7115524,
+     "wavelength_kind": "ritz",
+     "A_s": 220760000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=5/2",
+     "upper": "4f 2F* J=5/2",
+     "g_lower": 6,
+     "g_upper": 6,
+     "wavelength_vac_nm": 468.71423286,
+     "wavelength_kind": "ritz",
+     "A_s": 14717000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=5/2",
+     "upper": "4p 2P* J=3/2",
+     "g_lower": 6,
+     "g_upper": 4,
+     "wavelength_vac_nm": 468.719557578,
+     "wavelength_kind": "ritz",
+     "A_s": 5009100.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=3/2",
+     "upper": "4s 2S J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 468.72170117,
+     "wavelength_kind": "ritz",
+     "A_s": 19602000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=3/2",
+     "upper": "4p 2P* J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 468.722934627,
+     "wavelength_kind": "ritz",
+     "A_s": 5568000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 143878557.5,
+   "wavelength_vac_nm": 468.70171684828296,
+   "photon_eV": 2.645268706650236
+  },
+  {
+   "key": "HeII_5-3",
+   "species": "He II",
+   "upper": {
+    "n": 5
+   },
+   "lower": {
+    "n": 3
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he1.dat",
+    "isel": 9,
+    "wavelength_A": 3203.7
+   },
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 52.24113370428168,
+   "lower_level_eV": 48.37149044537045,
+   "upper_statistical_weight": 50,
+   "n_components": 13,
+   "components": [
+    {
+     "lower": "3p 2P* J=1/2",
+     "upper": "5d 2D J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 320.38725141,
+     "wavelength_kind": "ritz",
+     "A_s": 45253000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3s 2S J=1/2",
+     "upper": "5p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 320.3886774,
+     "wavelength_kind": "ritz",
+     "A_s": 26220000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=1/2",
+     "upper": "5s 2S J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 320.39078241,
+     "wavelength_kind": "ritz",
+     "A_s": 4828800.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3s 2S J=1/2",
+     "upper": "5p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 320.3925253,
+     "wavelength_kind": "ritz",
+     "A_s": 26224000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=3/2",
+     "upper": "5f 2F* J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 320.40375694,
+     "wavelength_kind": "ritz",
+     "A_s": 67879000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=3/2",
+     "upper": "5d 2D J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 320.40378392,
+     "wavelength_kind": "ritz",
+     "A_s": 54301000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=3/2",
+     "upper": "5p 2P* J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 320.4050308009,
+     "wavelength_kind": "ritz",
+     "A_s": 239440.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=3/2",
+     "upper": "5d 2D J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 320.40506656,
+     "wavelength_kind": "ritz",
+     "A_s": 9050200.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=3/2",
+     "upper": "5s 2S J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 320.40859795,
+     "wavelength_kind": "ritz",
+     "A_s": 9661200.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=3/2",
+     "upper": "5p 2P* J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 320.408879095,
+     "wavelength_kind": "ritz",
+     "A_s": 2395800.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=5/2",
+     "upper": "5f 2F* J=7/2",
+     "g_lower": 6,
+     "g_upper": 8,
+     "wavelength_vac_nm": 320.40905382,
+     "wavelength_kind": "ritz",
+     "A_s": 72724000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=5/2",
+     "upper": "5f 2F* J=5/2",
+     "g_lower": 6,
+     "g_upper": 6,
+     "wavelength_vac_nm": 320.40969514,
+     "wavelength_kind": "ritz",
+     "A_s": 4848100.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=5/2",
+     "upper": "5p 2P* J=3/2",
+     "g_lower": 6,
+     "g_upper": 4,
+     "wavelength_vac_nm": 320.4109690558,
+     "wavelength_kind": "ritz",
+     "A_s": 2155300.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 35237039.2,
+   "wavelength_vac_nm": 320.40274009817585,
+   "photon_eV": 3.869636021065543
+  },
+  {
+   "key": "HeII_6-3",
+   "species": "He II",
+   "upper": {
+    "n": 6
+   },
+   "lower": {
+    "n": 3
+   },
+   "in_adf15": false,
+   "adf15": null,
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 52.90621943944555,
+   "lower_level_eV": 48.37149044537045,
+   "upper_statistical_weight": 72,
+   "n_components": 13,
+   "components": [
+    {
+     "lower": "3p 2P* J=1/2",
+     "upper": "6d 2D J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 273.39937976,
+     "wavelength_kind": "ritz",
+     "A_s": 25056000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3s 2S J=1/2",
+     "upper": "6p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 273.40042009,
+     "wavelength_kind": "ritz",
+     "A_s": 15291000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=1/2",
+     "upper": "6s 2S J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 273.400867626,
+     "wavelength_kind": "ritz",
+     "A_s": 2707000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3s 2S J=1/2",
+     "upper": "6p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 273.4020416,
+     "wavelength_kind": "ritz",
+     "A_s": 15293000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=3/2",
+     "upper": "6f 2F* J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 273.411791599,
+     "wavelength_kind": "ritz",
+     "A_s": 32071000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=3/2",
+     "upper": "6d 2D J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 273.41181196,
+     "wavelength_kind": "ritz",
+     "A_s": 30065000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=3/2",
+     "upper": "6p 2P* J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 273.412328368,
+     "wavelength_kind": "ritz",
+     "A_s": 125270.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=3/2",
+     "upper": "6d 2D J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 273.41235247,
+     "wavelength_kind": "ritz",
+     "A_s": 5010900.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3p 2P* J=3/2",
+     "upper": "6s 2S J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 273.413840471,
+     "wavelength_kind": "ritz",
+     "A_s": 5416000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=3/2",
+     "upper": "6p 2P* J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 273.413950023,
+     "wavelength_kind": "ritz",
+     "A_s": 1253500.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=5/2",
+     "upper": "6f 2F* J=7/2",
+     "g_lower": 6,
+     "g_upper": 8,
+     "wavelength_vac_nm": 273.415845425,
+     "wavelength_kind": "ritz",
+     "A_s": 34360000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=5/2",
+     "upper": "6f 2F* J=5/2",
+     "g_lower": 6,
+     "g_upper": 6,
+     "wavelength_vac_nm": 273.416115677,
+     "wavelength_kind": "ritz",
+     "A_s": 2290500.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "3d 2D J=5/2",
+     "upper": "6p 2P* J=3/2",
+     "g_lower": 6,
+     "g_upper": 4,
+     "wavelength_vac_nm": 273.416652463,
+     "wavelength_kind": "ritz",
+     "A_s": 1127700.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 12461409.444444444,
+   "wavelength_vac_nm": 273.4106119674134,
+   "photon_eV": 4.534725171822423
+  },
+  {
+   "key": "HeII_5-4",
+   "species": "He II",
+   "upper": {
+    "n": 5
+   },
+   "lower": {
+    "n": 4
+   },
+   "in_adf15": false,
+   "adf15": null,
+   "metastable": null,
+   "metastable_offset_eV": null,
+   "einstein_A_origin": "NIST ASD He II line list (the ion's own entries)",
+   "upper_level_eV": 52.24113370428168,
+   "lower_level_eV": 51.01676367734812,
+   "upper_statistical_weight": 50,
+   "n_components": 19,
+   "components": [
+    {
+     "lower": "4p 2P* J=1/2",
+     "upper": "5d 2D J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 1012.5628261,
+     "wavelength_kind": "ritz",
+     "A_s": 19822000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4s 2S J=1/2",
+     "upper": "5p 2P* J=3/2",
+     "g_lower": 2,
+     "g_upper": 4,
+     "wavelength_vac_nm": 1012.56881068,
+     "wavelength_kind": "ritz",
+     "A_s": 11801000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4p 2P* J=1/2",
+     "upper": "5s 2S J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 1012.5980957,
+     "wavelength_kind": "ritz",
+     "A_s": 3443100.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4s 2S J=1/2",
+     "upper": "5p 2P* J=1/2",
+     "g_lower": 2,
+     "g_upper": 2,
+     "wavelength_vac_nm": 1012.60724595,
+     "wavelength_kind": "ritz",
+     "A_s": 11804000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4d 2D J=3/2",
+     "upper": "5f 2F* J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 1012.6249836,
+     "wavelength_kind": "ritz",
+     "A_s": 38621000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4p 2P* J=3/2",
+     "upper": "5d 2D J=5/2",
+     "g_lower": 4,
+     "g_upper": 6,
+     "wavelength_vac_nm": 1012.6250853,
+     "wavelength_kind": "ritz",
+     "A_s": 23789000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4d 2D J=3/2",
+     "upper": "5p 2P* J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 1012.6377078,
+     "wavelength_kind": "ritz",
+     "A_s": 301750.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4p 2P* J=3/2",
+     "upper": "5d 2D J=3/2",
+     "g_lower": 4,
+     "g_upper": 4,
+     "wavelength_vac_nm": 1012.6378971,
+     "wavelength_kind": "ritz",
+     "A_s": 3964900.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4f 2F* J=5/2",
+     "upper": "5g 2G J=7/2",
+     "g_lower": 6,
+     "g_upper": 8,
+     "wavelength_vac_nm": 1012.6435681,
+     "wavelength_kind": "ritz",
+     "A_s": 65681000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4d 2D J=5/2",
+     "upper": "5f 2F* J=7/2",
+     "g_lower": 6,
+     "g_upper": 8,
+     "wavelength_vac_nm": 1012.6436011,
+     "wavelength_kind": "ritz",
+     "A_s": 41378000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4f 2F* J=5/2",
+     "upper": "5d 2D J=5/2",
+     "g_lower": 6,
+     "g_upper": 6,
+     "wavelength_vac_nm": 1012.6499386,
+     "wavelength_kind": "ritz",
+     "A_s": 38486.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4d 2D J=5/2",
+     "upper": "5f 2F* J=5/2",
+     "g_lower": 6,
+     "g_upper": 6,
+     "wavelength_vac_nm": 1012.650007,
+     "wavelength_kind": "ritz",
+     "A_s": 2758700.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4f 2F* J=7/2",
+     "upper": "5g 2G J=9/2",
+     "g_lower": 8,
+     "g_upper": 10,
+     "wavelength_vac_nm": 1012.6522361,
+     "wavelength_kind": "ritz",
+     "A_s": 68113000.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4f 2F* J=7/2",
+     "upper": "5g 2G J=7/2",
+     "g_lower": 8,
+     "g_upper": 8,
+     "wavelength_vac_nm": 1012.6560797,
+     "wavelength_kind": "ritz",
+     "A_s": 2432600.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4f 2F* J=7/2",
+     "upper": "5d 2D J=5/2",
+     "g_lower": 8,
+     "g_upper": 6,
+     "wavelength_vac_nm": 1012.6624504,
+     "wavelength_kind": "ritz",
+     "A_s": 769790.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4d 2D J=5/2",
+     "upper": "5p 2P* J=3/2",
+     "g_lower": 6,
+     "g_upper": 4,
+     "wavelength_vac_nm": 1012.6627318,
+     "wavelength_kind": "ritz",
+     "A_s": 2716100.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4f 2F* J=5/2",
+     "upper": "5d 2D J=3/2",
+     "g_lower": 6,
+     "g_upper": 4,
+     "wavelength_vac_nm": 1012.662751,
+     "wavelength_kind": "ritz",
+     "A_s": 808370.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4p 2P* J=3/2",
+     "upper": "5s 2S J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 1012.673172,
+     "wavelength_kind": "ritz",
+     "A_s": 6888700.0,
+     "accuracy": "AA",
+     "type": "E1"
+    },
+    {
+     "lower": "4d 2D J=3/2",
+     "upper": "5p 2P* J=1/2",
+     "g_lower": 4,
+     "g_upper": 2,
+     "wavelength_vac_nm": 1012.6761483,
+     "wavelength_kind": "ritz",
+     "A_s": 3019100.0,
+     "accuracy": "AA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 43217818.72,
+   "wavelength_vac_nm": 1012.6385171882959,
+   "photon_eV": 1.2243677909611443
+  },
+  {
+   "key": "HeI_1s2p_1Po-1s2_1S",
+   "species": "He I",
+   "upper": {
+    "config": "1s.2p",
+    "term": "1P*",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "P"
+   },
+   "lower": {
+    "config": "1s2",
+    "term": "1S",
+    "n": 1,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 1,
+    "wavelength_A": 584.4
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "metastable_offset_eV": 0.6022478882000009,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 21.2180227112,
+   "lower_level_eV": 0.0,
+   "upper_statistical_weight": 3,
+   "n_components": 1,
+   "components": [
+    {
+     "lower": "1s2 1S J=0",
+     "upper": "1s.2p 1P* J=1",
+     "g_lower": 1,
+     "g_upper": 3,
+     "wavelength_vac_nm": 58.4334366,
+     "wavelength_kind": "ritz",
+     "A_s": 1798900000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 1798900000.0,
+   "wavelength_vac_nm": 58.43343660000001,
+   "photon_eV": 21.218022701954215
+  },
+  {
+   "key": "HeI_1s3p_1Po-1s2_1S",
+   "species": "He I",
+   "upper": {
+    "config": "1s.3p",
+    "term": "1P*",
+    "n": 3,
+    "multiplicity": 1,
+    "L": "P"
+   },
+   "lower": {
+    "config": "1s2",
+    "term": "1S",
+    "n": 1,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 2,
+    "wavelength_A": 537.0
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "metastable_offset_eV": 2.471243706600003,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.0870185296,
+   "lower_level_eV": 0.0,
+   "upper_statistical_weight": 3,
+   "n_components": 1,
+   "components": [
+    {
+     "lower": "1s2 1S J=0",
+     "upper": "1s.3p 1P* J=1",
+     "g_lower": 1,
+     "g_upper": 3,
+     "wavelength_vac_nm": 53.7029926,
+     "wavelength_kind": "ritz",
+     "A_s": 566340000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 566340000.0,
+   "wavelength_vac_nm": 53.7029926,
+   "photon_eV": 23.08701851248421
+  },
+  {
+   "key": "HeI_1s4p_1Po-1s2_1S",
+   "species": "He I",
+   "upper": {
+    "config": "1s.4p",
+    "term": "1P*",
+    "n": 4,
+    "multiplicity": 1,
+    "L": "P"
+   },
+   "lower": {
+    "config": "1s2",
+    "term": "1S",
+    "n": 1,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 3,
+    "wavelength_A": 522.2
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "metastable_offset_eV": 3.1262952458000015,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.7420700688,
+   "lower_level_eV": 0.0,
+   "upper_statistical_weight": 3,
+   "n_components": 1,
+   "components": [
+    {
+     "lower": "1s2 1S J=0",
+     "upper": "1s.4p 1P* J=1",
+     "g_lower": 1,
+     "g_upper": 3,
+     "wavelength_vac_nm": 52.2213093,
+     "wavelength_kind": "ritz",
+     "A_s": 243560000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 243560000.0,
+   "wavelength_vac_nm": 52.221309299999994,
+   "photon_eV": 23.742070065868738
+  },
+  {
+   "key": "HeI_1s3p_1Po-1s2s_1S",
+   "species": "He I",
+   "upper": {
+    "config": "1s.3p",
+    "term": "1P*",
+    "n": 3,
+    "multiplicity": 1,
+    "L": "P"
+   },
+   "lower": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 4,
+    "wavelength_A": 5017.1
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "metastable_offset_eV": 2.471243706600003,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.0870185296,
+   "lower_level_eV": 20.615774823,
+   "upper_statistical_weight": 3,
+   "n_components": 1,
+   "components": [
+    {
+     "lower": "1s.2s 1S J=0",
+     "upper": "1s.3p 1P* J=1",
+     "g_lower": 1,
+     "g_upper": 3,
+     "wavelength_vac_nm": 501.70769515,
+     "wavelength_kind": "ritz",
+     "A_s": 13372000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 13372000.0,
+   "wavelength_vac_nm": 501.70769515000006,
+   "photon_eV": 2.4712437068785955
+  },
+  {
+   "key": "HeI_1s4p_1Po-1s2s_1S",
+   "species": "He I",
+   "upper": {
+    "config": "1s.4p",
+    "term": "1P*",
+    "n": 4,
+    "multiplicity": 1,
+    "L": "P"
+   },
+   "lower": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 5,
+    "wavelength_A": 3965.7
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "metastable_offset_eV": 3.1262952458000015,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.7420700688,
+   "lower_level_eV": 20.615774823,
+   "upper_statistical_weight": 3,
+   "n_components": 1,
+   "components": [
+    {
+     "lower": "1s.2s 1S J=0",
+     "upper": "1s.4p 1P* J=1",
+     "g_lower": 1,
+     "g_upper": 3,
+     "wavelength_vac_nm": 396.58505891,
+     "wavelength_kind": "ritz",
+     "A_s": 6950700.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 6950700.0,
+   "wavelength_vac_nm": 396.58505891,
+   "photon_eV": 3.126295246068181
+  },
+  {
+   "key": "HeI_1s3p_3Po-1s2s_3S",
+   "species": "He I",
+   "upper": {
+    "config": "1s.3p",
+    "term": "3P*",
+    "n": 3,
+    "multiplicity": 3,
+    "L": "P"
+   },
+   "lower": {
+    "config": "1s.2s",
+    "term": "3S",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 6,
+    "wavelength_A": 3889.7
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "3S",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "metastable_offset_eV": 3.187463561416667,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.007078086416666,
+   "lower_level_eV": 19.819614525,
+   "upper_statistical_weight": 9,
+   "n_components": 3,
+   "components": [
+    {
+     "lower": "1s.2s 3S J=1",
+     "upper": "1s.3p 3P* J=0",
+     "g_lower": 3,
+     "g_upper": 1,
+     "wavelength_vac_nm": 388.97065567,
+     "wavelength_kind": "ritz",
+     "A_s": 9474600.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2s 3S J=1",
+     "upper": "1s.3p 3P* J=1",
+     "g_lower": 3,
+     "g_upper": 3,
+     "wavelength_vac_nm": 388.97475124,
+     "wavelength_kind": "ritz",
+     "A_s": 9474600.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2s 3S J=1",
+     "upper": "1s.3p 3P* J=2",
+     "g_lower": 3,
+     "g_upper": 5,
+     "wavelength_vac_nm": 388.97508392,
+     "wavelength_kind": "ritz",
+     "A_s": 9474600.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 9474600.0,
+   "wavelength_vac_nm": 388.97448099888885,
+   "photon_eV": 3.1874635609721254
+  },
+  {
+   "key": "HeI_1s4p_3Po-1s2s_3S",
+   "species": "He I",
+   "upper": {
+    "config": "1s.4p",
+    "term": "3P*",
+    "n": 4,
+    "multiplicity": 3,
+    "L": "P"
+   },
+   "lower": {
+    "config": "1s.2s",
+    "term": "3S",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 7,
+    "wavelength_A": 3188.7
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "3S",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "metastable_offset_eV": 3.8882787185000005,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.7078932435,
+   "lower_level_eV": 19.819614525,
+   "upper_statistical_weight": 9,
+   "n_components": 3,
+   "components": [
+    {
+     "lower": "1s.2s 3S J=1",
+     "upper": "1s.4p 3P* J=0",
+     "g_lower": 3,
+     "g_upper": 1,
+     "wavelength_vac_nm": 318.86549283,
+     "wavelength_kind": "ritz",
+     "A_s": 5636100.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2s 3S J=1",
+     "upper": "1s.4p 3P* J=1",
+     "g_lower": 3,
+     "g_upper": 3,
+     "wavelength_vac_nm": 318.86661458,
+     "wavelength_kind": "ritz",
+     "A_s": 5636100.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2s 3S J=1",
+     "upper": "1s.4p 3P* J=2",
+     "g_lower": 3,
+     "g_upper": 5,
+     "wavelength_vac_nm": 318.86670605,
+     "wavelength_kind": "ritz",
+     "A_s": 5636100.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 5636100.0,
+   "wavelength_vac_nm": 318.8665407577778,
+   "photon_eV": 3.88827871806666
+  },
+  {
+   "key": "HeI_1s3s_3S-1s2p_3Po",
+   "species": "He I",
+   "upper": {
+    "config": "1s.3s",
+    "term": "3S",
+    "n": 3,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "lower": {
+    "config": "1s.2p",
+    "term": "3P*",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "P"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 8,
+    "wavelength_A": 7067.6
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "3S",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "metastable_offset_eV": 2.898851894,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 22.718466419,
+   "lower_level_eV": 20.96410470998111,
+   "upper_statistical_weight": 3,
+   "n_components": 3,
+   "components": [
+    {
+     "lower": "1s.2p 3P* J=2",
+     "upper": "1s.3s 3S J=1",
+     "g_lower": 5,
+     "g_upper": 3,
+     "wavelength_vac_nm": 706.712523,
+     "wavelength_kind": "ritz",
+     "A_s": 15474000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=1",
+     "upper": "1s.3s 3S J=1",
+     "g_lower": 3,
+     "g_upper": 3,
+     "wavelength_vac_nm": 706.71634,
+     "wavelength_kind": "ritz",
+     "A_s": 9284400.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=0",
+     "upper": "1s.3s 3S J=1",
+     "g_lower": 1,
+     "g_upper": 3,
+     "wavelength_vac_nm": 706.765685,
+     "wavelength_kind": "ritz",
+     "A_s": 3094800.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 27853200.0,
+   "wavelength_vac_nm": 706.7197022222222,
+   "photon_eV": 1.7543617086568
+  },
+  {
+   "key": "HeI_1s3d_3D-1s2p_3Po",
+   "species": "He I",
+   "upper": {
+    "config": "1s.3d",
+    "term": "3D",
+    "n": 3,
+    "multiplicity": 3,
+    "L": "D"
+   },
+   "lower": {
+    "config": "1s.2p",
+    "term": "3P*",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "P"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 9,
+    "wavelength_A": 5877.5
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "3S",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "metastable_offset_eV": 3.2540374455226697,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.07365197052267,
+   "lower_level_eV": 20.96410470998111,
+   "upper_statistical_weight": 15,
+   "n_components": 6,
+   "components": [
+    {
+     "lower": "1s.2p 3P* J=2",
+     "upper": "1s.3d 3D J=1",
+     "g_lower": 5,
+     "g_upper": 3,
+     "wavelength_vac_nm": 587.72271752,
+     "wavelength_kind": "ritz",
+     "A_s": 1964100.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=2",
+     "upper": "1s.3d 3D J=2",
+     "g_lower": 5,
+     "g_upper": 5,
+     "wavelength_vac_nm": 587.7242442,
+     "wavelength_kind": "ritz",
+     "A_s": 17673000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=2",
+     "upper": "1s.3d 3D J=3",
+     "g_lower": 5,
+     "g_upper": 7,
+     "wavelength_vac_nm": 587.72433092,
+     "wavelength_kind": "ritz",
+     "A_s": 70708000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=1",
+     "upper": "1s.3d 3D J=1",
+     "g_lower": 3,
+     "g_upper": 3,
+     "wavelength_vac_nm": 587.72535741,
+     "wavelength_kind": "ritz",
+     "A_s": 29462000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=1",
+     "upper": "1s.3d 3D J=2",
+     "g_lower": 3,
+     "g_upper": 5,
+     "wavelength_vac_nm": 587.7268841,
+     "wavelength_kind": "ritz",
+     "A_s": 53019000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=0",
+     "upper": "1s.3d 3D J=1",
+     "g_lower": 1,
+     "g_upper": 3,
+     "wavelength_vac_nm": 587.75948406,
+     "wavelength_kind": "ritz",
+     "A_s": 39282000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 70702686.66666667,
+   "wavelength_vac_nm": 587.7289446530982,
+   "photon_eV": 2.1095472591771167
+  },
+  {
+   "key": "HeI_1s4s_3S-1s2p_3Po",
+   "species": "He I",
+   "upper": {
+    "config": "1s.4s",
+    "term": "3S",
+    "n": 4,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "lower": {
+    "config": "1s.2p",
+    "term": "3P*",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "P"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 10,
+    "wavelength_A": 4714.8
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "3S",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "metastable_offset_eV": 3.774344187999997,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.593958712999996,
+   "lower_level_eV": 20.96410470998111,
+   "upper_statistical_weight": 3,
+   "n_components": 3,
+   "components": [
+    {
+     "lower": "1s.2p 3P* J=2",
+     "upper": "1s.4s 3S J=1",
+     "g_lower": 5,
+     "g_upper": 3,
+     "wavelength_vac_nm": 471.4457842,
+     "wavelength_kind": "ritz",
+     "A_s": 5289400.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=1",
+     "upper": "1s.4s 3S J=1",
+     "g_lower": 3,
+     "g_upper": 3,
+     "wavelength_vac_nm": 471.4474829,
+     "wavelength_kind": "ritz",
+     "A_s": 3173600.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=0",
+     "upper": "1s.4s 3S J=1",
+     "g_lower": 1,
+     "g_upper": 3,
+     "wavelength_vac_nm": 471.4694416,
+     "wavelength_kind": "ritz",
+     "A_s": 1057900.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 9520900.0,
+   "wavelength_vac_nm": 471.44897908260344,
+   "photon_eV": 2.629854001899891
+  },
+  {
+   "key": "HeI_1s4d_3D-1s2p_3Po",
+   "species": "He I",
+   "upper": {
+    "config": "1s.4d",
+    "term": "3D",
+    "n": 4,
+    "multiplicity": 3,
+    "L": "D"
+   },
+   "lower": {
+    "config": "1s.2p",
+    "term": "3P*",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "P"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 11,
+    "wavelength_A": 4472.9
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "3S",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "metastable_offset_eV": 3.916476203717334,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.736090728717333,
+   "lower_level_eV": 20.96410470998111,
+   "upper_statistical_weight": 15,
+   "n_components": 6,
+   "components": [
+    {
+     "lower": "1s.2p 3P* J=2",
+     "upper": "1s.4d 3D J=1",
+     "g_lower": 5,
+     "g_upper": 3,
+     "wavelength_vac_nm": 447.27251598,
+     "wavelength_kind": "ritz",
+     "A_s": 682750.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=2",
+     "upper": "1s.4d 3D J=2",
+     "g_lower": 5,
+     "g_upper": 5,
+     "wavelength_vac_nm": 447.27288647,
+     "wavelength_kind": "ritz",
+     "A_s": 6144000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=2",
+     "upper": "1s.4d 3D J=3",
+     "g_lower": 5,
+     "g_upper": 7,
+     "wavelength_vac_nm": 447.27291049,
+     "wavelength_kind": "ritz",
+     "A_s": 24579000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=1",
+     "upper": "1s.4d 3D J=1",
+     "g_lower": 3,
+     "g_upper": 3,
+     "wavelength_vac_nm": 447.2740449,
+     "wavelength_kind": "ritz",
+     "A_s": 10241000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=1",
+     "upper": "1s.4d 3D J=2",
+     "g_lower": 3,
+     "g_upper": 5,
+     "wavelength_vac_nm": 447.27441539,
+     "wavelength_kind": "ritz",
+     "A_s": 18432000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    },
+    {
+     "lower": "1s.2p 3P* J=0",
+     "upper": "1s.4d 3D J=1",
+     "g_lower": 1,
+     "g_upper": 3,
+     "wavelength_vac_nm": 447.29380942,
+     "wavelength_kind": "ritz",
+     "A_s": 13655000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 24577950.0,
+   "wavelength_vac_nm": 447.2756992302607,
+   "photon_eV": 2.771986017719516
+  },
+  {
+   "key": "HeI_1s3s_1S-1s2p_1Po",
+   "species": "He I",
+   "upper": {
+    "config": "1s.3s",
+    "term": "1S",
+    "n": 3,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "lower": {
+    "config": "1s.2p",
+    "term": "1P*",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "P"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 12,
+    "wavelength_A": 7283.3
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "metastable_offset_eV": 2.3045425359999996,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 22.920317359,
+   "lower_level_eV": 21.2180227112,
+   "upper_statistical_weight": 1,
+   "n_components": 1,
+   "components": [
+    {
+     "lower": "1s.2p 1P* J=1",
+     "upper": "1s.3s 1S J=0",
+     "g_lower": 3,
+     "g_upper": 1,
+     "wavelength_vac_nm": 728.3357121,
+     "wavelength_kind": "ritz",
+     "A_s": 18299000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 18299000.0,
+   "wavelength_vac_nm": 728.3357121,
+   "photon_eV": 1.702294647556391
+  },
+  {
+   "key": "HeI_1s3d_1D-1s2p_1Po",
+   "species": "He I",
+   "upper": {
+    "config": "1s.3d",
+    "term": "1D",
+    "n": 3,
+    "multiplicity": 1,
+    "L": "D"
+   },
+   "lower": {
+    "config": "1s.2p",
+    "term": "1P*",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "P"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 13,
+    "wavelength_A": 6680.0
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "metastable_offset_eV": 2.45829997477,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.07407479777,
+   "lower_level_eV": 21.2180227112,
+   "upper_statistical_weight": 5,
+   "n_components": 1,
+   "components": [
+    {
+     "lower": "1s.2p 1P* J=1",
+     "upper": "1s.3d 1D J=2",
+     "g_lower": 3,
+     "g_upper": 5,
+     "wavelength_vac_nm": 667.9995639,
+     "wavelength_kind": "ritz",
+     "A_s": 63705000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 63705000.0,
+   "wavelength_vac_nm": 667.9995639,
+   "photon_eV": 1.856052086461553
+  },
+  {
+   "key": "HeI_1s4s_1S-1s2p_1Po",
+   "species": "He I",
+   "upper": {
+    "config": "1s.4s",
+    "term": "1S",
+    "n": 4,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "lower": {
+    "config": "1s.2p",
+    "term": "1P*",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "P"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 14,
+    "wavelength_A": 5049.0
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "metastable_offset_eV": 3.0577957670000018,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.67357059,
+   "lower_level_eV": 21.2180227112,
+   "upper_statistical_weight": 1,
+   "n_components": 1,
+   "components": [
+    {
+     "lower": "1s.2p 1P* J=1",
+     "upper": "1s.4s 1S J=0",
+     "g_lower": 3,
+     "g_upper": 1,
+     "wavelength_vac_nm": 504.9146038,
+     "wavelength_kind": "ritz",
+     "A_s": 6771200.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 6771200.0,
+   "wavelength_vac_nm": 504.91460380000007,
+   "photon_eV": 2.4555478787916223
+  },
+  {
+   "key": "HeI_1s4d_1D-1s2p_1Po",
+   "species": "He I",
+   "upper": {
+    "config": "1s.4d",
+    "term": "1D",
+    "n": 4,
+    "multiplicity": 1,
+    "L": "D"
+   },
+   "lower": {
+    "config": "1s.2p",
+    "term": "1P*",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "P"
+   },
+   "in_adf15": true,
+   "adf15": {
+    "file": "pec96_he_pju_he0.dat",
+    "isel": 15,
+    "wavelength_A": 4923.2
+   },
+   "metastable": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "metastable_offset_eV": 3.120560212360001,
+   "einstein_A_origin": "NIST ASD He I line list",
+   "upper_level_eV": 23.73633503536,
+   "lower_level_eV": 21.2180227112,
+   "upper_statistical_weight": 5,
+   "n_components": 1,
+   "components": [
+    {
+     "lower": "1s.2p 1P* J=1",
+     "upper": "1s.4d 1D J=2",
+     "g_lower": 3,
+     "g_upper": 5,
+     "wavelength_vac_nm": 492.3305074,
+     "wavelength_kind": "ritz",
+     "A_s": 19863000.0,
+     "accuracy": "AAA",
+     "type": "E1"
+    }
+   ],
+   "einstein_A_s": 19863000.0,
+   "wavelength_vac_nm": 492.3305074,
+   "photon_eV": 2.5183123241328564
+  }
+ ],
+ "metastables": [
+  {
+   "species": "He I",
+   "level": {
+    "config": "1s.2s",
+    "term": "3S",
+    "n": 2,
+    "multiplicity": 3,
+    "L": "S"
+   },
+   "level_eV": 19.819614525,
+   "decay_to": {
+    "config": "1s2",
+    "term": "1S",
+    "n": 1,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "einstein_A_s": 0.0001272,
+   "wavelength_vac_nm": 62.5563117,
+   "n_components": 1,
+   "components": [
+    {
+     "lower": "1s2 1S J=0",
+     "upper": "1s.2s 3S J=1",
+     "g_lower": 1,
+     "g_upper": 3,
+     "wavelength_vac_nm": 62.5563117,
+     "wavelength_kind": "ritz",
+     "A_s": 0.0001272,
+     "accuracy": "AA",
+     "type": "M1"
+    }
+   ]
+  },
+  {
+   "species": "He I",
+   "level": {
+    "config": "1s.2s",
+    "term": "1S",
+    "n": 2,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "level_eV": 20.615774823,
+   "decay_to": {
+    "config": "1s2",
+    "term": "1S",
+    "n": 1,
+    "multiplicity": 1,
+    "L": "S"
+   },
+   "einstein_A_s": null,
+   "wavelength_vac_nm": null,
+   "n_components": 0,
+   "components": [],
+   "einstein_A_note": "null: the ASD line list returned no 1s.2s 1S - 1s2 1S entry (the decay is two-photon and carries no single wavelength)"
+  }
+ ]
+}
