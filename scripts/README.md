@@ -185,8 +185,10 @@ means.
 
 **`atomic/`** — cross sections, rate tables and the ADAS comparisons. Table
 generators (`generate_eii_tables.py`, `generate_he_ion_rate_table.py`) write
-into `cablp/atomic/data/`; the rest check the packaged data against its
-sources. A file belongs here when its subject is atomic data rather than the
+into `cablp/atomic/data/`; `build_he_lines_atomic.py` writes
+`data/he_lines_atomic.json` from the four NIST ASD tables (He I and He II
+lines and levels) passed as arguments, recording the queries that produced
+them; the rest check the packaged data against its sources. A file belongs here when its subject is atomic data rather than the
 solver.
 
 **`verify/`** — the per-build acceptance instruments. Every
