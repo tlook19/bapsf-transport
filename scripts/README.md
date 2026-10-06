@@ -156,7 +156,14 @@ when its job is to *produce a trajectory*.
 drive-side regression check (in the prescribed-drive mode it also prints the
 response rows an imposed drive does not fix); the plotters render
 comparison-to-data figures, and the radiation and power-ledger tools read a
-trajectory and report physics from it. A file belongs here when it *consumes*
+trajectory and report physics from it. `line_tables_sim1d.py` writes the
+line-power tables of a saved run as LaTeX `tabular` bodies with Markdown
+twins (the He II and He I lines with their atomic data, power and share; the
+Maxwellian fraction above the excitation thresholds per port; the axial line
+power per port with the machine totals), reusing `line_radiation_sim1d.py`'s
+per-line evaluation and the port law of `port_radiance_sim1d.py`, with a
+`--self-test` that checks the line list against the atomic data and the table
+sums against the machine totals. A file belongs here when it *consumes*
 an h5 and says how the model did.
 
 **`stance/`** — everything that decides what the operating point IS.
@@ -246,6 +253,12 @@ configuration set `stance_config.available_stances()` offers by name is
 `stances/*.toml` and nothing below it, so an example is reached by path and can
 never be mistaken for a base. `stances/examples/g1atrim_es4_fill_linear.toml`
 moves only `S_gp`, to the ES4 rung's piezo-drive fill.
+`data/he_lines_atomic.json` holds the atomic data of the He II and He I
+transitions the line-power tables report (every EXCIT line of the two adf15
+files, the He II 6 → 3 and 5 → 4 lines those files lack, and the two He I
+metastables): vacuum wavelength, levels, photon energy and multiplet Einstein
+A, with each component as NIST ASD 5.12 lists it, the query URLs, the
+retrieval date and the averaging conventions in the file itself.
 
 ## Run artifacts do not live here
 
